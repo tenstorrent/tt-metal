@@ -1,0 +1,203 @@
+2026-08-18 02:57:11.243 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-18 02:57:12.738 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-18 02:57:12.738 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-18 02:57:12.738 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-18 02:57:12.738 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-18 02:57:12.750 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-18 02:57:12.751 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-18 02:57:12.835 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-18 02:57:12.835 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-18 02:57:12.835 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-18 02:57:12.835 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-18 02:57:12.837 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-18 02:57:12.977 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-18 02:57:13.104 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-18 02:57:13.104 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-18 02:57:13.104 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-18 02:57:13.104 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-18 02:57:13.104 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-18 02:57:13.141 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331393_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 02:57:13.142 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331392_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 02:57:13.142 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331105_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 02:57:13.142 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331104_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 02:57:13.147 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-18 02:57:13.179 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-18 02:57:13.179 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+slots=32 active= 1  model_trace 263.078 ms  token_out 262.562 ms  3.809 t/s/u  3.81 tok/s aggregate
+slots=32 active= 2  model_trace 262.557 ms  token_out 262.606 ms  3.808 t/s/u  7.62 tok/s aggregate
+slots=32 active= 4  model_trace 262.854 ms  token_out 262.619 ms  3.808 t/s/u  15.23 tok/s aggregate
+slots=32 active= 8  model_trace 262.855 ms  token_out 262.810 ms  3.805 t/s/u  30.44 tok/s aggregate
+slots=32 active=16  model_trace 262.221 ms  token_out 262.583 ms  3.808 t/s/u  60.93 tok/s aggregate
+slots=32 active=32  model_trace 268.827 ms  token_out 268.556 ms  3.724 t/s/u  119.16 tok/s aggregate
+{
+  "what": "standalone traced decode at a fixed configured slot count, sweeping how many of those slots carry a live request. No vLLM, no profiler.",
+  "slots": 32,
+  "layers": 48,
+  "prompt_len": 128,
+  "context": 4096,
+  "mesh": "1x4 P300_X2, FABRIC_1D_RING",
+  "sampling": "device, greedy (top_k=1), split-sampling trace, tt_out_tok feedback",
+  "rows": [
+    {
+      "active": 1,
+      "model_trace": {
+        "ms": 263.07831249869196,
+        "min_ms": 260.21470699924976,
+        "max_ms": 265.470466001716,
+        "reps": 32
+      },
+      "model_trace_tps_user": 3.8011495151466432,
+      "token_out": {
+        "ms": 262.5615384968114,
+        "min_ms": 260.3971150019788,
+        "max_ms": 265.34995500696823,
+        "reps": 32
+      },
+      "token_out_tps_user": 3.8086309431499017,
+      "aggregate_tps": 3.8086309431499017
+    },
+    {
+      "active": 2,
+      "model_trace": {
+        "ms": 262.55696949738194,
+        "min_ms": 259.3169489991851,
+        "max_ms": 265.0218170019798,
+        "reps": 32
+      },
+      "model_trace_tps_user": 3.808697220699645,
+      "token_out": {
+        "ms": 262.60618250307743,
+        "min_ms": 260.3213290058193,
+        "max_ms": 265.64777299790876,
+        "reps": 32
+      },
+      "token_out_tps_user": 3.8079834620355184,
+      "aggregate_tps": 7.615966924071037
+    },
+    {
+      "active": 4,
+      "model_trace": {
+        "ms": 262.8539854995324,
+        "min_ms": 260.293865998392,
+        "max_ms": 265.41369399637915,
+        "reps": 32
+      },
+      "model_trace_tps_user": 3.8043935232695145,
+      "token_out": {
+        "ms": 262.6192105017253,
+        "min_ms": 260.58992100297473,
+        "max_ms": 264.3253830028698,
+        "reps": 32
+      },
+      "token_out_tps_user": 3.807794555811561,
+      "aggregate_tps": 15.231178223246244
+    },
+    {
+      "active": 8,
+      "model_trace": {
+        "ms": 262.85525700222934,
+        "min_ms": 260.71756499732146,
+        "max_ms": 268.63087500532856,
+        "reps": 32
+      },
+      "model_trace_tps_user": 3.8043751203785847,
+      "token_out": {
+        "ms": 262.8101294976659,
+        "min_ms": 261.4441030018497,
+        "max_ms": 265.208940996672,
+        "reps": 32
+      },
+      "token_out_tps_user": 3.805028375091156,
+      "aggregate_tps": 30.440227000729248
+    },
+    {
+      "active": 16,
+      "model_trace": {
+        "ms": 262.22132350085303,
+        "min_ms": 260.79644299898064,
+        "max_ms": 264.41779699962353,
+        "reps": 32
+      },
+      "model_trace_tps_user": 3.8135723923944993,
+      "token_out": {
+        "ms": 262.5828035015729,
+        "min_ms": 261.1608700026409,
+        "max_ms": 264.36769100109814,
+        "reps": 32
+      },
+      "token_out_tps_user": 3.8083225049960663,
+      "aggregate_tps": 60.93316007993706
+    },
+    {
+      "active": 32,
+      "model_trace": {
+        "ms": 268.8267499979702,
+        "min_ms": 266.6009189997567,
+        "max_ms": 270.2272719980101,
+        "reps": 32
+      },
+      "model_trace_tps_user": 3.7198679075186925,
+      "token_out": {
+        "ms": 268.55603649892146,
+        "min_ms": 267.0200610009488,
+        "max_ms": 270.51387000392424,
+        "reps": 32
+      },
+      "token_out_tps_user": 3.723617659229254,
+      "aggregate_tps": 119.15576509533612
+    }
+  ],
+  "model_max_batch_size": 32,
+  "pages_per_user": 128,
+  "trace_stats": {
+    "captures": 6,
+    "replays": 6,
+    "releases": 5,
+    "decode_warmups": 1,
+    "token_host_copies": 0,
+    "token_device_copies": 14,
+    "position_host_copies": 14,
+    "rotary_position_host_copies": 14,
+    "page_table_host_copies": 14,
+    "sampling_param_host_copies": 0,
+    "penalty_host_copies": 0,
+    "caller_token_readbacks": 0,
+    "explicit_synchronizations": 37,
+    "resets": 6
+  }
+}
+nanobind: leaked 1 instances!
+ - leaked instance 0x7a225f9ba868 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 37 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function "__getitem__"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "get_current_command_queue_id_for_thread"
+ - leaked function ""
+ - leaked function "contains"
+ - leaked function ""
+ - leaked function "create_sub_device_manager"
+ - leaked function "__repr__"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-18 03:02:02.872 | info     |    BuildKernels | JIT cache stats: 569/577 hits (98.6%) [569 cached, 307 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-18 03:02:02.872 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-18 03:02:02.894 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-18 03:02:02.894 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-18 03:02:03.501 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-18 03:02:03.501 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-18 03:02:03.501 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

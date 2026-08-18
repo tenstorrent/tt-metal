@@ -837,7 +837,20 @@ class Qwen3CoderGenerator(Generator):
         Without the length in the key, ``_decode_compiled_keys`` would claim the
         graph was already warm and skip the eager pass that compiles them.
         """
-        return (id(kv_cache), active_batch, self._sampling_stochastic, self._penalty_mode, self.model.rope_cache_len)
+        return (
+            id(kv_cache),
+            active_batch,
+            self._sampling_stochastic,
+            self._penalty_mode,
+            self.model.rope_cache_len,
+            # ``Qwen3CoderModel.active_row_gating`` adds four small ops per step
+            # and one broadcast multiply per layer; flipping it is a different
+            # program set, so a stale "already compiled" claim would try to load
+            # binaries inside an open capture. Same failure mode
+            # ``rope_cache_len`` was added for -- see the docstring above and
+            # ``doc/vllm_integration/work_log.md`` §12.
+            self.model.active_row_gating,
+        )
 
     def _warm_decode_graphs(self, host_inputs, kv_cache, *, active_batch: int, initial_token_device=None) -> None:
         """Compile every program once eagerly.

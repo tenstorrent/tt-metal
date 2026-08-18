@@ -1,0 +1,137 @@
+{
+  "what": "standalone traced decode at a fixed configured slot count, sweeping how many of those slots carry a live request. No vLLM, no profiler.",
+  "slots": 32,
+  "layers": 48,
+  "prompt_len": 128,
+  "context": 4096,
+  "mesh": "1x4 P300_X2, FABRIC_1D_RING",
+  "sampling": "device, greedy (top_k=1), split-sampling trace, tt_out_tok feedback",
+  "rows": [
+    {
+      "active": 1,
+      "model_trace": {
+        "ms": 263.07831249869196,
+        "min_ms": 260.21470699924976,
+        "max_ms": 265.470466001716,
+        "reps": 32
+      },
+      "model_trace_tps_user": 3.8011495151466432,
+      "token_out": {
+        "ms": 262.5615384968114,
+        "min_ms": 260.3971150019788,
+        "max_ms": 265.34995500696823,
+        "reps": 32
+      },
+      "token_out_tps_user": 3.8086309431499017,
+      "aggregate_tps": 3.8086309431499017
+    },
+    {
+      "active": 2,
+      "model_trace": {
+        "ms": 262.55696949738194,
+        "min_ms": 259.3169489991851,
+        "max_ms": 265.0218170019798,
+        "reps": 32
+      },
+      "model_trace_tps_user": 3.808697220699645,
+      "token_out": {
+        "ms": 262.60618250307743,
+        "min_ms": 260.3213290058193,
+        "max_ms": 265.64777299790876,
+        "reps": 32
+      },
+      "token_out_tps_user": 3.8079834620355184,
+      "aggregate_tps": 7.615966924071037
+    },
+    {
+      "active": 4,
+      "model_trace": {
+        "ms": 262.8539854995324,
+        "min_ms": 260.293865998392,
+        "max_ms": 265.41369399637915,
+        "reps": 32
+      },
+      "model_trace_tps_user": 3.8043935232695145,
+      "token_out": {
+        "ms": 262.6192105017253,
+        "min_ms": 260.58992100297473,
+        "max_ms": 264.3253830028698,
+        "reps": 32
+      },
+      "token_out_tps_user": 3.807794555811561,
+      "aggregate_tps": 15.231178223246244
+    },
+    {
+      "active": 8,
+      "model_trace": {
+        "ms": 262.85525700222934,
+        "min_ms": 260.71756499732146,
+        "max_ms": 268.63087500532856,
+        "reps": 32
+      },
+      "model_trace_tps_user": 3.8043751203785847,
+      "token_out": {
+        "ms": 262.8101294976659,
+        "min_ms": 261.4441030018497,
+        "max_ms": 265.208940996672,
+        "reps": 32
+      },
+      "token_out_tps_user": 3.805028375091156,
+      "aggregate_tps": 30.440227000729248
+    },
+    {
+      "active": 16,
+      "model_trace": {
+        "ms": 262.22132350085303,
+        "min_ms": 260.79644299898064,
+        "max_ms": 264.41779699962353,
+        "reps": 32
+      },
+      "model_trace_tps_user": 3.8135723923944993,
+      "token_out": {
+        "ms": 262.5828035015729,
+        "min_ms": 261.1608700026409,
+        "max_ms": 264.36769100109814,
+        "reps": 32
+      },
+      "token_out_tps_user": 3.8083225049960663,
+      "aggregate_tps": 60.93316007993706
+    },
+    {
+      "active": 32,
+      "model_trace": {
+        "ms": 268.8267499979702,
+        "min_ms": 266.6009189997567,
+        "max_ms": 270.2272719980101,
+        "reps": 32
+      },
+      "model_trace_tps_user": 3.7198679075186925,
+      "token_out": {
+        "ms": 268.55603649892146,
+        "min_ms": 267.0200610009488,
+        "max_ms": 270.51387000392424,
+        "reps": 32
+      },
+      "token_out_tps_user": 3.723617659229254,
+      "aggregate_tps": 119.15576509533612
+    }
+  ],
+  "model_max_batch_size": 32,
+  "pages_per_user": 128,
+  "trace_stats": {
+    "captures": 6,
+    "replays": 6,
+    "releases": 5,
+    "decode_warmups": 1,
+    "token_host_copies": 0,
+    "token_device_copies": 14,
+    "position_host_copies": 14,
+    "rotary_position_host_copies": 14,
+    "page_table_host_copies": 14,
+    "sampling_param_host_copies": 0,
+    "penalty_host_copies": 0,
+    "caller_token_readbacks": 0,
+    "explicit_synchronizations": 37,
+    "resets": 6
+  }
+}

@@ -1,0 +1,86 @@
+{
+ "stage": "09-optimized-vllm",
+ "workload": {
+  "profile": "single_user_decode",
+  "prompt_len": 128,
+  "gen_len": 128,
+  "batch": 1,
+  "max_num_seqs": 1,
+  "concurrency": 1,
+  "max_model_len": 262144,
+  "mesh": "1x4 P300_X2, FABRIC_1D_RING",
+  "sample_on_device_mode": "all",
+  "generation_config": "vllm",
+  "temperature": 0.0,
+  "ignore_eos": true,
+  "decode_trace": true
+ },
+ "ttft_ms": 299.142,
+ "decode_ms_per_token_e2e": 19.801,
+ "decode_tps_user": 50.503,
+ "decode_ms_per_token_device": null,
+ "roofline_ms_per_token_estimate": null,
+ "device_time_reason": "vllm_serving_profiler_disabled_to_protect_hardware",
+ "roofline_reason": "roofline was computed in doc/optimized_full_model; recomputing it needs a profiler-backed device-time term this stage may not collect",
+ "before": {
+  "ttft_ms": 309.81,
+  "decode_ms_per_token_e2e": 19.808,
+  "decode_tps_user": 50.484,
+  "note": "same server binary with QWEN3_DECODE_ACTIVE_ROW_GATING=0, i.e. the stage-08 decode graph"
+ },
+ "standalone_reference": {
+  "token_out_ms": 19.213,
+  "token_out_tps_user": 52.049,
+  "source": "doc/datatype_sweep (stage 07) shipped standalone traced token-out, prompt 128",
+  "serving_overhead_ms_per_token": 0.588,
+  "serving_overhead_pct": 3.06,
+  "host_cost_ms_per_token_without_async_split": 1.0241,
+  "share_of_host_cost_hidden_by_async_split_pct": 42.7
+ },
+ "secondary": {
+  "ci_serving_burst_100_100_32_max_num_seqs_32": {
+   "output_throughput_tok_per_s_before": 105.589,
+   "output_throughput_tok_per_s_after": 105.471,
+   "tpot_mean_ms_before": 261.196,
+   "tpot_mean_ms_after": 261.33
+  },
+  "single_user_128_128_1_at_max_num_seqs_32": {
+   "tpot_mean_ms_before": 263.445,
+   "tpot_mean_ms_after": 230.079,
+   "tps_user_before": 3.796,
+   "tps_user_after": 4.346,
+   "note": "the stage-08 open item; the improvement is inactive-row expert gating"
+  },
+  "async_scheduling_ab_single_user": {
+   "measurement": "re-measured 2026-08-18 with per-token ITLs retained (--save-detailed), 3 repeats per leg at 128 output tokens plus one at 512",
+   "steady_state_itl_median_ms_on": 19.7993,
+   "steady_state_itl_median_ms_off": 20.2371,
+   "gain_ms_per_token": 0.4378,
+   "gain_pct": 2.16,
+   "tps_user_on": 50.507,
+   "tps_user_off": 49.414,
+   "ttft_ms_on": 300.796,
+   "ttft_ms_off": 141.592,
+   "e2e_ms_on_128": 2816.667,
+   "e2e_ms_off_128": 2881.932,
+   "e2e_gain_pct_128": 2.26,
+   "e2e_gain_pct_512": 2.4,
+   "one_off_cost_ms": 159.2,
+   "one_off_note": "a fixed ~159 ms per-request cost (the eager prefill's decode-trace capture) that async scheduling only relabels: TTFT+ITL[0] is 320.490 ms async-on against 320.770 ms async-off",
+   "retracted": {
+    "on_default_tpot_mean_ms": 19.801,
+    "off_tpot_mean_ms": 21.555,
+    "off_ttft_ms": 145.763,
+    "published_gain_ms_per_token": 1.754,
+    "why_retracted": "derived from the async-off leg's MEAN TPOT, which carries a deterministic ~179 ms stall at ITL index 0 (std_itl 14.1009 against the async-on leg's 0.4025). The median-based gain above is the honest figure; see README 'Why the first A/B had to be redone'"
+   },
+   "note": "vLLM 0.24.0 enables async scheduling by default; --no-async-scheduling is the off leg. Async on is faster end-to-end at every output length measured."
+  }
+ },
+ "named_limitations": [
+  "No profiler evidence in this stage by rule: no Tracy, tt-perf-report, TT_METAL_DEVICE_PROFILER, live-server device profiling or ReadDeviceProfiler. Device-time and roofline fields are null for that reason, not because they were not attempted.",
+  "Per-user decode at max_num_seqs=32 is still ~11.6x slower than at max_num_seqs=1 (230.079 ms against 19.801 ms). The standalone control shows ~229 ms of that is the fixed cost of a decode graph configured 32 rows wide and is independent of how many rows hold requests; removing it needs a variable-width decode graph, which this stage did not attempt.",
+  "Async scheduling buys 1.754 ms/token of decode and costs 153.4 ms of TTFT. The shipped configuration keeps vLLM's default (on); a TTFT-sensitive deployment should pass --no-async-scheduling.",
+  "A penalised request still pays host-side full-vocabulary operand staging (+14.2%/+25.6% TPOT, stage 08). The 'incremental operand update' stage 08 proposed was re-examined and not taken: the missing slot key turns out to be available, but stage 08's own measurement shows the staging cost is the fixed 9.7 MB operand rather than the history re-derivation, so the incremental update cannot reach it. See README, 'The penalised path'."
+ ]
+}

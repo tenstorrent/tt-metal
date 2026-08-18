@@ -623,3 +623,51 @@ is the entire point of the set. `teardown()` does clear it, because teardown
 deallocates the KV cache and the key holds `id(kv_cache)`: a later allocation
 could land on the same address with a different geometry and falsely claim to be
 warm.
+
+---
+
+## Errata — 2026-08-18 (raised by the stage-09 review)
+
+*Append-only. Nothing above this line has been altered; no stage-08 number is
+withdrawn. See [`../optimized_vllm/`](../optimized_vllm/) for the re-measurement.*
+
+§8 above concludes, from the plugin's `Using custom scheduler class … you will
+see degraded performance due to async scheduling being disabled` log line, that
+`TTScheduler` is not an `AsyncScheduler` subclass, that no real overlap occurs,
+that async scheduling is "safe but inert", and that "the shipped command leaves
+it off".
+
+**That conclusion is wrong in every part.** Verified at source:
+
+* `vllm-tt-plugin/src/vllm_tt_plugin/scheduler.py:31` — `class TTScheduler(AsyncScheduler):`.
+* `vllm/config/scheduler.py:190-198` emits that warning **unconditionally** for
+  any custom `scheduler_cls`; its text is conditional ("**If** you have
+  subclassed Scheduler instead of AsyncScheduler"). It was read as a fact.
+* `vllm/config/vllm.py:964-1004` turns async scheduling **on by default** in
+  vLLM 0.24.0.
+* `readiness_vllm/server.log:21` and `:80` — `Asynchronous scheduling is enabled.`,
+  twice, in this stage's own retained server log.
+
+Consequence for §8's reasoning: the identical TPOT that was read as "async
+scheduling buys nothing" came from two runs that **both had async scheduling
+on**. The comparison was never capable of showing a difference. The A/B that was
+actually missing — async **off** — was run in stage 09.
+
+Consequence for the TTFT attribution: the ~182 ms serving-vs-standalone gap is
+real, but only ~12-16 ms of it is the request-side cost this log attributes it
+to. The other ~159 ms is a **fixed one-off per-request cost** -- the eager
+prefill's decode-trace capture -- which async scheduling bills to TTFT. Turning
+async scheduling off does not remove it: stage 09's re-measurement, retaining
+per-token ITLs, finds it reappearing in full as the first inter-token latency
+(~179 ms against a ~20 ms steady state), with `TTFT + ITL[0]` equal to 320.5 ms
+async-on and 320.8 ms async-off. Same cost, different bucket.
+
+The steady-state per-token difference between the two modes is about **0.44 ms**,
+not the larger figure stage 09 first published. Take it from
+[`../optimized_vllm/README.md`](../optimized_vllm/README.md); do not derive a
+per-token number from the ~182 ms.
+
+What this does **not** change: the adapter was already built to be correct under
+overlap (`_merge_scheduler_view`), §9's contract probe already exercised it, and
+every measurement in this log was taken on the configuration that actually
+shipped. The error was in the explanation, not in the evidence.

@@ -64,6 +64,7 @@ from __future__ import annotations
 import gc
 import json
 import math
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -900,6 +901,14 @@ class Qwen3CoderModel:
         assert self.vocab_size % (32 * NUM_DEVICES) == 0, self.vocab_size
         self.local_vocab_size = self.vocab_size // NUM_DEVICES
 
+        #: Skip the expert work of decode rows that hold no live request. On by
+        #: default and a no-op at ``max_batch_size == 1``; see
+        #: ``_decode_active_mask``. ``QWEN3_DECODE_ACTIVE_ROW_GATING=0`` restores
+        #: the stage-08 graph exactly, which is what
+        #: ``doc/optimized_vllm/probes/inactive_row_gating_probe.py`` A/Bs
+        #: against for the token-equality leg.
+        self.active_row_gating = os.getenv("QWEN3_DECODE_ACTIVE_ROW_GATING", "1") not in ("0", "", "false", "no")
+
         self.ctx: MeshContext = mesh_context(mesh_device)
         self.config = MeshDecoderConfig.from_hf(hf_config)
         self.global_config: DecoderLayerConfig = self.config.global_config
@@ -1346,6 +1355,45 @@ class Qwen3CoderModel:
         ttnn.deallocate(flat, True)
         return sliced
 
+    def _decode_active_mask(self, current_pos: ttnn.Tensor):
+        """``[1, 1, batch, 1]`` of 1.0 for live slots and 0.0 for inactive ones.
+
+        A serving decode batch is always the configured ``max_num_seqs`` rows --
+        vLLM pads it so the trace shape is constant -- with inactive slots
+        carrying ``current_pos = -1``. Those rows still embed a token, still run
+        attention, and, critically, still route to a full top-8 of experts, so
+        their ``(row, expert)`` pairs land in ``sparse_matmul``'s sparsity and
+        cost real expert weight reads and real math. Multiplying the routing
+        vector by this mask takes them out of the sparsity instead
+        (``decoder_layer_decode_multichip``).
+
+        **Why it is derived on device rather than passed in.** ``current_pos`` is
+        already a persistent trace input, and the traced graph advances it with
+        ``ttnn.plus_one(..., skip_negative_entries=True)`` -- an inactive row
+        stays at ``-1`` through any number of replays, and a slot only becomes
+        active through a host reinstall of ``current_pos``. So a mask computed
+        from it inside the same graph is correct by construction on every replay,
+        with no extra trace input to refresh and no way for it to go stale. A
+        host-supplied mask would be one more thing that has to be right.
+
+        Returns ``None`` at ``max_batch_size == 1``, where there is no inactive
+        row to skip: the graph is then byte-for-byte the one stage 08 shipped and
+        the single-user headline cannot be perturbed by this change.
+        """
+        if self.max_batch_size <= 1 or not self.active_row_gating:
+            return None
+        row = ttnn.to_layout(ttnn.reshape(current_pos, (1, 1, 1, self.max_batch_size)), ttnn.TILE_LAYOUT)
+        # bf16 cannot represent every position exactly at 262144, but it
+        # represents every position's *sign* exactly, and ``gez`` only reads the
+        # sign. -1 -> 0.0, everything >= 0 -> 1.0.
+        as_float = ttnn.typecast(row, ttnn.bfloat16)
+        ttnn.deallocate(row, True)
+        live_row = ttnn.gez(as_float)
+        ttnn.deallocate(as_float, True)
+        mask = ttnn.transpose(live_row, -2, -1)
+        ttnn.deallocate(live_row, True)
+        return mask
+
     def decode_hidden(
         self,
         tokens: ttnn.Tensor,
@@ -1359,6 +1407,8 @@ class Qwen3CoderModel:
             raise ValueError(f"kv_cache has {len(caches)} layers, expected {self.num_layers}")
         hidden = self.embed_decode(tokens)
         cos, sin = self.rope_decode_tables(rotary_position)
+        # Computed once per decode step and shared by all 48 layers.
+        active_mask = self._decode_active_mask(current_pos)
         for layer_idx in range(self.num_layers):
             hidden = decoder_layer_decode_multichip(
                 hidden,
@@ -1372,9 +1422,12 @@ class Qwen3CoderModel:
                 0,  # token_index: unused by the rope seam below, see _rope_decode
                 rope=self._rope_decode,
                 precision=self.precision,
+                active_mask=active_mask,
             )
         ttnn.deallocate(cos, True)
         ttnn.deallocate(sin, True)
+        if active_mask is not None:
+            ttnn.deallocate(active_mask, True)
         return hidden
 
     def decode_terminal(self, hidden: ttnn.Tensor) -> ttnn.Tensor:

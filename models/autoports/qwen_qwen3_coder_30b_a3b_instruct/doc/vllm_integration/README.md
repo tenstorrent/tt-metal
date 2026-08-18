@@ -905,3 +905,72 @@ Source:
 | `tt/generator_vllm.py` | the adapter |
 | `tt/generator.py` | `configure_paging`, `decode_device_state`, `read_sampled_tokens`, `preserve_decode_traces`, `validate_page_coverage`, `_decode_compiled_keys` |
 | `vllm_bundle/qwen3_coder_30b_a3b_instruct/` | the `EXTRA_MODELS_DIR` bundle |
+
+---
+
+## Errata — 2026-08-18 (raised by the stage-09 review)
+
+*Appended after stage 08 was committed. **Nothing above this line has been
+changed**: every stage-08 number, table and sentence stands as published. This
+block records where the stage-08 **interpretation** was wrong, so a reader who
+stops at stage 08 is not left with the disproven claim. The full re-measurement
+lives in [`../optimized_vllm/`](../optimized_vllm/).*
+
+**1. `TTScheduler` *is* an `AsyncScheduler`, and async scheduling was ON for
+every measurement in this document.**
+
+The passages at lines 657–661 and limitation 8 conclude that `--async-scheduling`
+is "inert" and that "the shipped command therefore leaves it off". Both halves
+are wrong, and they were inferred from a log line that does not say what it was
+read to say:
+
+* `vllm-tt-plugin/src/vllm_tt_plugin/scheduler.py:31` is literally
+  `class TTScheduler(AsyncScheduler):`, with a docstring that says "Inherits from
+  AsyncScheduler to get num_output_placeholders support."
+* The warning quoted above — "*If* you have subclassed Scheduler instead of
+  AsyncScheduler, you will see degraded performance" — is emitted by
+  `vllm/config/scheduler.py:190-198` **unconditionally, for any non-`None`
+  `scheduler_cls`**. Its own wording is conditional. It is a warning about a
+  hypothetical, and this document read it as a statement of fact.
+* vLLM 0.24.0 **enables async scheduling by default** (`vllm/config/vllm.py:964-1004`).
+* This stage's own retained evidence agrees: `readiness_vllm/server.log:21` and
+  `:80` both read `Asynchronous scheduling is enabled.`
+
+So async scheduling was not "safe but inert" here — it was **on, by default, in
+every stage-08 run**, including the two runs whose identical TPOT was offered as
+proof that it "buys nothing". Those two runs both had it on, so they could not
+have shown otherwise. Stage 09 ran the A/B that was missing, by turning it
+**off**.
+
+**2. The ~182 ms TTFT gap is real, but it is not what this document attributes
+it to.**
+
+The serving-vs-standalone TTFT gap (312.367 ms serving against 129.941 ms
+standalone) is attributed above to "tokenisation, scheduling, detokenisation and
+the HTTP round trip". Measured with async scheduling off, serving TTFT is
+**145.763 ms** against the same standalone 129.941 ms. So the gap decomposes as:
+
+| Component | ms |
+|---|---|
+| genuine request-side cost (tokenisation, scheduling, detokenisation, HTTP) | ~12–16 |
+| a fixed **one-off per-request cost** that async scheduling bills to TTFT | ~159 |
+
+The larger part was never request-side overhead, and it is not removed by
+turning async scheduling off — it is only **moved**. Stage 09's re-measurement,
+which retains per-token inter-token latencies, shows the mechanism directly: with
+async scheduling off the ~159 ms reappears in full as the **first inter-token
+latency** (~179 ms against a ~20 ms steady state), and the sum
+`TTFT + ITL[0]` is **320.5 ms with async on against 320.8 ms with it off** — the
+same total, relabelled.
+
+So this document's ~182 ms is real, but it is one fixed per-request cost (the
+eager prefill's decode-trace capture) landing in whichever bucket the scheduling
+mode puts it in, not a recurring overhead. The steady-state per-token difference
+between the two modes is about **0.44 ms**. See
+[`../optimized_vllm/README.md`](../optimized_vllm/README.md) for the full A/B;
+do not derive a per-token figure from the ~182 ms.
+
+**Scope of this erratum:** interpretation only. No stage-08 measurement is
+withdrawn. The adapter's correctness under overlap — `_merge_scheduler_view`,
+and the `stale_host_input_ignored` contract check — was already right, and is
+the reason the mistaken belief cost nothing but the explanation.

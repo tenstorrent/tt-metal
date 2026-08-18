@@ -1,0 +1,92 @@
+{
+  "what": "non-aligned prompt lengths through the optimized serving path",
+  "server_url": "http://localhost:8100",
+  "rows": [
+    {
+      "requested_prompt_tokens": 37,
+      "reported_prompt_tokens": 37,
+      "not_divisible_by": {
+        "8": true,
+        "32": true,
+        "64": true,
+        "128": true,
+        "1024": true
+      },
+      "completion_tokens": 12,
+      "text": "\n\n\n\n\n\n\n\n\n\n\n\n",
+      "passed": true
+    },
+    {
+      "requested_prompt_tokens": 131,
+      "reported_prompt_tokens": 131,
+      "not_divisible_by": {
+        "8": true,
+        "32": true,
+        "64": true,
+        "128": true,
+        "1024": true
+      },
+      "completion_tokens": 12,
+      "text": "\ns\ns\ns\ns\ns\ns",
+      "passed": true
+    },
+    {
+      "requested_prompt_tokens": 333,
+      "reported_prompt_tokens": 333,
+      "not_divisible_by": {
+        "8": true,
+        "32": true,
+        "64": true,
+        "128": true,
+        "1024": true
+      },
+      "completion_tokens": 12,
+      "text": "uteclass\n// 100000",
+      "passed": true
+    },
+    {
+      "requested_prompt_tokens": 1025,
+      "reported_prompt_tokens": 1025,
+      "not_divisible_by": {
+        "8": true,
+        "32": true,
+        "64": true,
+        "128": true,
+        "1024": true
+      },
+      "completion_tokens": 12,
+      "text": "uerecognized\nsion\nsion\n",
+      "passed": true
+    },
+    {
+      "requested_prompt_tokens": 4097,
+      "reported_prompt_tokens": 4097,
+      "not_divisible_by": {
+        "8": true,
+        "32": true,
+        "64": true,
+        "128": true,
+        "1024": true
+      },
+      "completion_tokens": 12,
+      "text": ". 1000000000",
+      "passed": true
+    },
+    {
+      "requested_prompt_tokens": null,
+      "natural_language_prompt": "Explain in two sentences why paged attention needs a block table.",
+      "reported_prompt_tokens": 14,
+      "not_divisible_by": {
+        "8": true,
+        "32": true,
+        "64": true,
+        "128": true,
+        "1024": true
+      },
+      "completion_tokens": 48,
+      "text": " A block table is needed to track the memory blocks that store the attention weights and values for each sequence in paged attention. This allows the system to efficiently manage and access the attention computation results for multiple sequences without requiring all data to be loaded",
+      "passed": true
+    }
+  ],
+  "all_passed": true
+}

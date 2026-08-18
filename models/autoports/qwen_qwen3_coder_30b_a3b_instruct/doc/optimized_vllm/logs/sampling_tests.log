@@ -1,0 +1,931 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/raahem/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/raahem/vllm-tt-plugin
+configfile: pyproject.toml
+plugins: dash-2.15.0, timeout-2.4.0, split-0.11.0, github-actions-annotate-failures-0.3.0, cov-7.0.0, anyio-4.14.2, benchmark-5.2.3
+collecting ... collected 73 items
+
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_basic_shape PASSED [  1%]
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_token_at_col0 PASSED [  2%]
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_top_n_at_cols_1_to_n PASSED [  4%]
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_selected_token_ranks PASSED [  5%]
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_at_rank0 PASSED [  6%]
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_max_num_logprobs_zero PASSED [  8%]
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_dtypes PASSED [  9%]
+../vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_per_user_different_sampled PASSED [ 10%]
+../vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_config_reads_additional_config PASSED [ 12%]
+../vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_per_lane_max_num_seqs_derives_lane_capacity_from_global_cap PASSED [ 13%]
+../vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_per_lane_max_num_seqs_requires_divisible_global_cap PASSED [ 15%]
+../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p PASSED [ 16%]
+../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_bad_words PASSED [ 17%]
+../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_logit_bias PASSED [ 19%]
+../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_allowed_token_ids PASSED [ 20%]
+../vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_tokens PASSED [ 21%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-0] PASSED [ 23%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-0.5] PASSED [ 24%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-1] PASSED [ 26%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-1.5] PASSED [ 27%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-0] PASSED [ 28%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-0.5] PASSED [ 30%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-1] PASSED [ 31%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-1.5] PASSED [ 32%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-0] PASSED [ 34%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-0.5] PASSED [ 35%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-1] PASSED [ 36%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-1.5] PASSED [ 38%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-0] PASSED [ 39%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-0.5] PASSED [ 41%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1] PASSED [ 42%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1.5] PASSED [ 43%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-0] PASSED [ 45%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-0.5] PASSED [ 46%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-1] PASSED [ 47%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-1.5] PASSED [ 49%]
+../vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab SKIPPED [ 50%]
+../vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch FAILED [ 52%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_seeding FAILED [ 53%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_different_seeds_produce_different_outputs PASSED [ 54%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_same_seeds_reproduce_across_batches FAILED [ 56%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[42] FAILED [ 57%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[123] FAILED [ 58%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[999] FAILED [ 60%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[0] FAILED [ 61%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[1] PASSED [ 63%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[0] PASSED [ 64%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_no_seed_varied FAILED [ 65%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-1] FAILED [ 67%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-0] FAILED [ 68%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-1] FAILED [ 69%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-0] FAILED [ 71%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[1-1] PASSED [ 72%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[1-0] PASSED [ 73%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_noseed_varied PASSED [ 75%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_negative_seed_does_not_crash PASSED [ 76%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[7] PASSED [ 78%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[10] PASSED [ 79%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[19] PASSED [ 80%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[32] PASSED [ 82%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[37] PASSED [ 83%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_between_batches FAILED [ 84%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[15] PASSED [ 86%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[19] PASSED [ 87%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[32] PASSED [ 89%]
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy PASSED [ 90%]
+../vllm-tt-plugin/tests/tt/test_structured_output_dp1.py::test_dp1_full_capacity_mixes_structured_and_plain_requests PASSED [ 91%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestRepetitionPenalty::test_different_repetition_penalties PASSED [ 93%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestRepetitionPenalty::test_repetition_penalty_mixed_batch PASSED [ 94%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_different_presence_penalties FAILED [ 95%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_mixed_batch FAILED [ 97%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_different_frequency_penalties PASSED [ 98%]
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_mixed_batch PASSED [100%]
+
+=================================== FAILURES ===================================
+__________________ TestBatchIsolation.test_mixed_params_batch __________________
+
+self = <tests.tt.test_request_isolation.TestBatchIsolation object at 0x78c863ce0a70>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct', max_batch_size = 32
+
+    def test_mixed_params_batch(self, tt_server, tt_model_name, max_batch_size):
+        """
+        Batch where each request has completely different parameters.
+        """
+        configs = [
+            # Greedy
+            RequestConfig(prompt="Count: ", max_tokens=5, temperature=0),
+            # High temp with seed
+            RequestConfig(
+                prompt="Random: ", max_tokens=5, temperature=2.0, top_k=100, seed=42
+            ),
+            # With repetition penalty
+            RequestConfig(
+                prompt="test test. Say: ",
+                max_tokens=5,
+                temperature=0.5,
+                repetition_penalty=3.0,
+                seed=42,
+            ),
+            # With presence penalty
+            RequestConfig(
+                prompt="List: ",
+                max_tokens=10,
+                temperature=0.5,
+                presence_penalty=2.0,
+                seed=42,
+            ),
+            # top_k=1 (should be greedy-like)
+            RequestConfig(
+                prompt="Word: ", max_tokens=3, temperature=2.0, top_k=1, seed=99
+            ),
+            # Low temp
+            RequestConfig(prompt="Letter: ", max_tokens=3, temperature=0.01, seed=42),
+            # High temp low top_k
+            RequestConfig(
+                prompt="Number: ", max_tokens=3, temperature=2.0, top_k=5, seed=42
+            ),
+            # With frequency penalty
+            RequestConfig(
+                prompt="a a a. Next: ",
+                max_tokens=5,
+                temperature=0.5,
+                frequency_penalty=2.0,
+                seed=42,
+            ),
+            # Combined penalties
+            RequestConfig(
+                prompt="All: ",
+                max_tokens=8,
+                temperature=0.5,
+                repetition_penalty=1.5,
+                presence_penalty=1.0,
+                frequency_penalty=1.0,
+                seed=6,
+            ),
+            # Top-p variation
+            RequestConfig(
+                prompt="TopP: ", max_tokens=8, temperature=1.0, top_p=0.5, seed=7
+            ),
+        ][:max_batch_size]
+
+        # Run twice, with random batch order on second run
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        # Shuffle configs and results1 together for the second run
+        indices = list(range(len(configs)))
+        random.shuffle(indices)
+        configs = [configs[i] for i in indices]
+        results1 = [results1[i] for i in indices]
+
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        # Each deterministic config should reproduce
+        for i, (r1, r2) in enumerate(zip(results1, results2)):
+            if configs[i].temperature == 0 or configs[i].seed is not None:
+>               assert r1 == r2, (
+                    f"Request {i} should be deterministic/reproducible.\n"
+                    f"Config:"
+                    f"temp={configs[i].temperature},"
+                    f"seed={configs[i].seed}\n"
+                    f"Run 1: {r1!r}\n"
+                    f"Run 2: {r2!r}"
+                )
+E               AssertionError: Request 0 should be deterministic/reproducible.
+E                 Config:temp=2.0,seed=42
+E                 Run 1: '2019,'
+E                 Run 2: '1.577'
+E               assert '2019,' == '1.577'
+E
+E                 - 1.577
+E                 + 2019,
+
+../vllm-tt-plugin/tests/tt/test_request_isolation.py:88: AssertionError
+______________________ TestSeedingAndVariety.test_seeding ______________________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x78c863ce1340>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct', max_batch_size = 32
+
+    def test_seeding(self, tt_server, tt_model_name, max_batch_size):
+        """
+        Batch with mix of greedy (temp=0) and sampling requests.
+        Greedy should be deterministic, sampling should vary.
+        """
+        prompt = "Random word: "
+
+        # greedy, seeds, seeds
+        seeds = max_batch_size // 3
+        greedy_count = max_batch_size - seeds - seeds
+        configs = []
+        # Greedy requests
+        for i in range(greedy_count):
+            configs.append(RequestConfig(prompt=prompt, max_tokens=10, temperature=0))
+
+        # Sampling requests with different seeds
+        for _ in range(2):
+            for i in range(seeds):
+                configs.append(
+                    RequestConfig(
+                        prompt=prompt,
+                        max_tokens=10,
+                        temperature=1.5,
+                        top_k=50,
+                        seed=i * 100,
+                    )
+                )
+
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        # This tests both prefill and decode
+        all_greedy = results1[:greedy_count] + results2[:greedy_count]
+        assert_deterministic(
+            all_greedy,
+            "Greedy requests should produce the same output across positions and runs.",
+        )
+
+        # Check answers overall
+        different_seeds = []
+        for i in range(seeds):
+            results_for_seed = [
+                results1[greedy_count + i],
+                results2[greedy_count + i],
+                results1[greedy_count + seeds + i],
+                results2[greedy_count + seeds + i],
+            ]
+>           assert_deterministic(
+                results_for_seed,
+                "Seeded requests should produce the same output"
+                "across positions and runs.",
+            )
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:64:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['1.1.1.1\n1.', '\tPartridge\n\n\nComplete all five following word challenge', '3141592653', ' The words are randomly chosen, and their meaning and']
+explanation = 'Seeded requests should produce the same outputacross positions and runs.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: Seeded requests should produce the same outputacross positions and runs.
+E       Expected reproducible outputs.
+E       Got 4 unique results out of 4.
+E       Results: ['1.1.1.1\n1.', '\tPartridge\n\n\nComplete all five following word challenge', '3141592653', ' The words are randomly chosen, and their meaning and']
+
+../vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+________ TestSeedingAndVariety.test_same_seeds_reproduce_across_batches ________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x78c863ce1310>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct', max_batch_size = 32
+
+    def test_same_seeds_reproduce_across_batches(
+        self, tt_server, tt_model_name, max_batch_size
+    ):
+        """
+        Same seeds should reproduce even when in different batch positions.
+        """
+        prompt = "Generate: "
+        seeds = list(range(100, 100 + max_batch_size))
+
+        configs = [
+            RequestConfig(
+                prompt=prompt,
+                max_tokens=15,
+                temperature=1.0,
+                top_k=50,
+                seed=seed,
+            )
+            for seed in seeds
+        ]
+
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        shuffled_indices = list(range(max_batch_size))
+        random.Random(42).shuffle(shuffled_indices)
+        shuffled_configs = [configs[i] for i in shuffled_indices]
+
+        results2 = run_concurrent_batch(tt_server, tt_model_name, shuffled_configs)
+
+        results_per_seed: list[list[str]] = [[] for _ in range(max_batch_size)]
+        for i in range(max_batch_size):
+            results_per_seed[i].append(results1[i])
+        for i, result in enumerate(results2):
+            results_per_seed[shuffled_indices[i]].append(result)
+
+        for i in range(max_batch_size):
+>           assert_deterministic(
+                results_per_seed[i],
+                "Seed should produce the same output in different batches.",
+            )
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:146:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['5 ways to get better at tennis\n1. Practice your fundamental techniques consistently', '439-0895, a standard specification, can be']
+explanation = 'Seed should produce the same output in different batches.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: Seed should produce the same output in different batches.
+E       Expected reproducible outputs.
+E       Got 2 unique results out of 2.
+E       Results: ['5 ways to get better at tennis\n1. Practice your fundamental techniques consistently', '439-0895, a standard specification, can be']
+
+../vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+__________ TestSeedingAndVariety.test_specific_seed_reproducible[42] ___________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x78c863ce17c0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct', max_batch_size = 32
+seed = 42
+
+    @pytest.mark.parametrize("seed", [42, 123, 999, 0])
+    def test_specific_seed_reproducible(
+        self, tt_server, tt_model_name, max_batch_size, seed
+    ):
+        """
+        A specific seed should produce same result across batch runs.
+        """
+        # Create batch where one request has our test seed
+        configs = [
+            RequestConfig(
+                prompt=f"Text {i}:",
+                max_tokens=10,
+                temperature=1.0,
+                top_k=50,
+                seed=seed if i == 0 else i * 1000,
+            )
+            for i in range(max_batch_size)
+        ]
+
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        # The test seed request should reproduce
+>       assert results1[0] == results2[0], (
+            f"Seed {seed} should reproduce.\n"
+            f"Run 1: {results1[0]!r}\n"
+            f"Run 2: {results2[0]!r}"
+        )
+E       AssertionError: Seed 42 should reproduce.
+E         Run 1: ' 100000000'
+E         Run 2: " [00:00] I'm going"
+E       assert ' 100000000' == " [00:00] I'm going"
+E
+E         -  [00:00] I'm going
+E         +  100000000
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:174: AssertionError
+__________ TestSeedingAndVariety.test_specific_seed_reproducible[123] __________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x78c863ce1a00>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct', max_batch_size = 32
+seed = 123
+
+    @pytest.mark.parametrize("seed", [42, 123, 999, 0])
+    def test_specific_seed_reproducible(
+        self, tt_server, tt_model_name, max_batch_size, seed
+    ):
+        """
+        A specific seed should produce same result across batch runs.
+        """
+        # Create batch where one request has our test seed
+        configs = [
+            RequestConfig(
+                prompt=f"Text {i}:",
+                max_tokens=10,
+                temperature=1.0,
+                top_k=50,
+                seed=seed if i == 0 else i * 1000,
+            )
+            for i in range(max_batch_size)
+        ]
+
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        # The test seed request should reproduce
+>       assert results1[0] == results2[0], (
+            f"Seed {seed} should reproduce.\n"
+            f"Run 1: {results1[0]!r}\n"
+            f"Run 2: {results2[0]!r}"
+        )
+E       AssertionError: Seed 123 should reproduce.
+E         Run 1: ' Let  $\\{x\\}=\\frac1'
+E         Run 2: ' The 1990s were a decade'
+E       assert ' Let  $\\{x\\}=\\frac1' == ' The 1990s were a decade'
+E
+E         -  The 1990s were a decade
+E         +  Let  $\{x\}=\frac1
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:174: AssertionError
+__________ TestSeedingAndVariety.test_specific_seed_reproducible[999] __________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x78c863ce1ac0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct', max_batch_size = 32
+seed = 999
+
+    @pytest.mark.parametrize("seed", [42, 123, 999, 0])
+    def test_specific_seed_reproducible(
+        self, tt_server, tt_model_name, max_batch_size, seed
+    ):
+        """
+        A specific seed should produce same result across batch runs.
+        """
+        # Create batch where one request has our test seed
+        configs = [
+            RequestConfig(
+                prompt=f"Text {i}:",
+                max_tokens=10,
+                temperature=1.0,
+                top_k=50,
+                seed=seed if i == 0 else i * 1000,
+            )
+            for i in range(max_batch_size)
+        ]
+
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        # The test seed request should reproduce
+>       assert results1[0] == results2[0], (
+            f"Seed {seed} should reproduce.\n"
+            f"Run 1: {results1[0]!r}\n"
+            f"Run 2: {results2[0]!r}"
+        )
+E       AssertionError: Seed 999 should reproduce.
+E         Run 1: ' This text discusses the implementation of the bubble sort algorithm'
+E         Run 2: ' The 1990s were a decade'
+E       assert ' This text d...ort algorithm' == ' The 1990s were a decade'
+E
+E         -  The 1990s were a decade
+E         +  This text discusses the implementation of the bubble sort algorithm
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:174: AssertionError
+___________ TestSeedingAndVariety.test_specific_seed_reproducible[0] ___________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x78c863ce1b80>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct', max_batch_size = 32
+seed = 0
+
+    @pytest.mark.parametrize("seed", [42, 123, 999, 0])
+    def test_specific_seed_reproducible(
+        self, tt_server, tt_model_name, max_batch_size, seed
+    ):
+        """
+        A specific seed should produce same result across batch runs.
+        """
+        # Create batch where one request has our test seed
+        configs = [
+            RequestConfig(
+                prompt=f"Text {i}:",
+                max_tokens=10,
+                temperature=1.0,
+                top_k=50,
+                seed=seed if i == 0 else i * 1000,
+            )
+            for i in range(max_batch_size)
+        ]
+
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        # The test seed request should reproduce
+>       assert results1[0] == results2[0], (
+            f"Seed {seed} should reproduce.\n"
+            f"Run 1: {results1[0]!r}\n"
+            f"Run 2: {results2[0]!r}"
+        )
+E       AssertionError: Seed 0 should reproduce.
+E         Run 1: ' [00:00] Hello, I'
+E         Run 2: ' The 1990s were a decade'
+E       assert ' [00:00] Hello, I' == ' The 1990s were a decade'
+E
+E         -  The 1990s were a decade
+E         +  [00:00] Hello, I
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:174: AssertionError
+_______________ TestSeedingAndVariety.test_batch1_no_seed_varied _______________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x78c863ce2390>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct'
+
+    def test_batch1_no_seed_varied(self, tt_server, tt_model_name):
+        """
+        Batch with 1 user without seed should produce varied outputs.
+        """
+        prompt = "Random story: "
+        configs = [
+            RequestConfig(prompt=prompt, max_tokens=20, temperature=2.0, top_k=50)
+        ]
+        results = []
+        for _ in range(10):
+            results.extend(run_concurrent_batch(tt_server, tt_model_name, configs))
+>       assert_varied(
+            results, 2, "Batch with 1 user with no seed should produce varied outputs."
+        )
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:209:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ["550 AD - a Germanic chieftain who's also a former slave gets the", "550 AD - a Germanic chieftain who's also a forme...chieftain who's also a former slave gets the", "550 AD - a Germanic chieftain who's also a former slave gets the", ...]
+min_varied = 2
+explanation = 'Batch with 1 user with no seed should produce varied outputs.'
+
+    def assert_varied(results, min_varied, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) >= min_varied, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected at least {min_varied} unique results.\n"
+            f"Only {len(unique_results)}/{len(results)} were varied.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: Batch with 1 user with no seed should produce varied outputs.
+E       Expected at least 2 unique results.
+E       Only 1/10 were varied.
+E       Results: ["550 AD - a Germanic chieftain who's also a former slave gets the", "550 AD - a Germanic chieftain who's also a former slave gets the", "550 AD - a Germanic chieftain who's also a former slave gets the", "550 AD - a Germanic chieftain who's also a former slave gets the", "550 AD - a Germanic chieftain who's also a former slave gets the", "550 AD - a Germanic chieftain who's also a former slave gets the", "550 AD - a Germanic chieftain who's also a former slave gets the", "550 AD - a Germanic chieftain who's also a former slave gets the", "550 AD - a Germanic chieftain who's also a former slave gets the", "550 AD - a Germanic chieftain who's also a former slave gets the"]
+
+../vllm-tt-plugin/tests/tt/utils.py:164: AssertionError
+_________ TestSeedingAndVariety.test_uniform_seed_deterministic[32-1] __________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x78c863ce28a0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct', batch_size = 32, seed = 1
+
+    @pytest.mark.parametrize("seed", [1, 0])
+    @pytest.mark.parametrize("batch_size", [32, 10, 1])
+    def test_uniform_seed_deterministic(
+        self, tt_server, tt_model_name, batch_size, seed
+    ):
+        """
+        Batches with uniform seed should produce deterministic outputs.
+        """
+        prompt = "Random story: "
+        configs = [
+            RequestConfig(
+                prompt=prompt, max_tokens=20, temperature=1.0, top_k=50, seed=seed
+            )
+            for _ in range(batch_size)
+        ]
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)
+>       assert_deterministic(results, "Seed should produce deterministic outputs.")
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:229:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['2017, 12:00AM, the 2nd of October,', '2000s anime girl with a pet dragon, but the dragon is actually a demon in', '2... The', '5th graders go on a field trip to the National Gallery of Art, where they have a', '47.61699110820529478', ...]
+explanation = 'Seed should produce deterministic outputs.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: Seed should produce deterministic outputs.
+E       Expected reproducible outputs.
+E       Got 22 unique results out of 32.
+E       Results: ['2017, 12:00AM, the 2nd of October,', '2000s anime girl with a pet dragon, but the dragon is actually a demon in', '2015: The Day the Earth Stopped (A Short Story)\n==Story==\nIt', '2015: The day I discovered I was a clone\n\n2015: The', '5th graders go on a field trip to the National Gallery of Art, where they have a', '47.61699110820529478', '1000 years ago, a young man named John was a knight in the service of a', '69-086\nTitle: “Eating Up My Brain” \n\nMy mom got', '1000 years ago, a man named James was a famous explorer. He discovered the continent', '2015: The Day the Earth Stopped (A Short Story)\n==Story==\nIt', '69-834, an Android in the Wild. What do they think?\n== Part', '2015: The day the internet was created. The day after: 201', '1000 years ago, a young man named John was a knight in the service of a', '2015: The day I was in a car accident with a semi truck, and the', '1000 years ago, a young man named John was a knight in the service of a', '2015: The day I was in a car accident with a man who had just gotten', '550 BC - a 21-year-old girl, whose family is so poor that they', '35 years old, female, married with two kids, worked as a receptionist, is an', '1985, a young man named James, who is a student at a university, is', '1000 years ago, a young man named John was a knight in the service of a', '1000 years ago, a young man named Jax was a member of a group of', '4 kids playing outside\n\nA story that goes for around 3 pages long and about 60', '1985, a young man named James, 19 years old, is a member', '4 kids playing outside\n\nA story that goes for around 3 pages long and about 60', '2015: The day the internet was created. The day after: 201', '522:041-48455-56041:', '5-year-old gets 50,000 for "unfair" TV game show.\n', '4 kids playing outside\n\nA story that goes for around 3 pages long and about 60', '1000 years ago, a young man named John was a knight in the service of a', '3 men walk into a bar, the bartender looks up and says "What is this, a joke', '1000 years ago, a young man named John was a knight in the service of a', '1000 years ago, a young man named John was a knight in the service of a']
+
+../vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+_________ TestSeedingAndVariety.test_uniform_seed_deterministic[32-0] __________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x78c863ce2ae0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct', batch_size = 32, seed = 0
+
+    @pytest.mark.parametrize("seed", [1, 0])
+    @pytest.mark.parametrize("batch_size", [32, 10, 1])
+    def test_uniform_seed_deterministic(
+        self, tt_server, tt_model_name, batch_size, seed
+    ):
+        """
+        Batches with uniform seed should produce deterministic outputs.
+        """
+        prompt = "Random story: "
+        configs = [
+            RequestConfig(
+                prompt=prompt, max_tokens=20, temperature=1.0, top_k=50, seed=seed
+            )
+            for _ in range(batch_size)
+        ]
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)
+>       assert_deterministic(results, "Seed should produce deterministic outputs.")
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:229:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['2015: The day the internet was created. The day after: 201', '5th graders go on a field trip to the National Gallery...he Day the Earth Stopped (A Short Story)\n==Story==\nIt', '2015: The day I discovered I was a clone\n\n2015: The', ...]
+explanation = 'Seed should produce deterministic outputs.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: Seed should produce deterministic outputs.
+E       Expected reproducible outputs.
+E       Got 22 unique results out of 32.
+E       Results: ['2015: The day the internet was created. The day after: 201', '5th graders go on a field trip to the National Gallery of Art, where they have a', '1000 years ago, a man named James was a famous explorer. He discovered the continent', '2000s anime girl with a pet dragon, but the dragon is actually a demon in', '2015: The Day the Earth Stopped (A Short Story)\n==Story==\nIt', '2015: The day I discovered I was a clone\n\n2015: The', '1000 years ago, a young man named John was a knight in the service of a', '47.61699110820529478', '2015: The Day the Earth Stopped (A Short Story)\n==Story==\nIt', '69-086\nTitle: “Eating Up My Brain” \n\nMy mom got', '69-834, an Android in the Wild. What do they think?\n== Part', '1000 years ago, a young man named John was a knight in the service of a', '2015: The day I was in a car accident with a semi truck, and the', '1000 years ago, a young man named John was a knight in the service of a', '2015: The day the internet was created. The day after: 201', '2015: The day I was in a car accident with a man who had just gotten', '35 years old, female, married with two kids, worked as a receptionist, is an', '1985, a young man named James, who is a student at a university, is', '550 BC - a 21-year-old girl, whose family is so poor that they', '1000 years ago, a young man named Jax was a member of a group of', '4 kids playing outside\n\nA story that goes for around 3 pages long and about 60', '1000 years ago, a young man named John was a knight in the service of a', '2017, 12:00AM, the 2nd of October,', '1985, a young man named James, 19 years old, is a member', '4 kids playing outside\n\nA story that goes for around 3 pages long and about 60', '522:041-48455-56041:', '1000 years ago, a young man named John was a knight in the service of a', '5-year-old gets 50,000 for "unfair" TV game show.\n', '4 kids playing outside\n\nA story that goes for around 3 pages long and about 60', '3 men walk into a bar, the bartender looks up and says "What is this, a joke', '1000 years ago, a young man named John was a knight in the service of a', '1000 years ago, a young man named John was a knight in the service of a']
+
+../vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+_________ TestSeedingAndVariety.test_uniform_seed_deterministic[10-1] __________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x78c863ce2bd0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct', batch_size = 10, seed = 1
+
+    @pytest.mark.parametrize("seed", [1, 0])
+    @pytest.mark.parametrize("batch_size", [32, 10, 1])
+    def test_uniform_seed_deterministic(
+        self, tt_server, tt_model_name, batch_size, seed
+    ):
+        """
+        Batches with uniform seed should produce deterministic outputs.
+        """
+        prompt = "Random story: "
+        configs = [
+            RequestConfig(
+                prompt=prompt, max_tokens=20, temperature=1.0, top_k=50, seed=seed
+            )
+            for _ in range(batch_size)
+        ]
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)
+>       assert_deterministic(results, "Seed should produce deterministic outputs.")
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:229:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['2015: The day I discovered I was a clone\n\n2015: The', "2000s pop star gets a new album, but it's a surprise album ...e they have a', '1000 years ago, a young man named John was a knight in the service of a', '47.61699110820529478', ...]
+explanation = 'Seed should produce deterministic outputs.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: Seed should produce deterministic outputs.
+E       Expected reproducible outputs.
+E       Got 9 unique results out of 10.
+E       Results: ['2015: The day I discovered I was a clone\n\n2015: The', "2000s pop star gets a new album, but it's a surprise album that's", '2015: The Day the Earth Stopped (A Short Story)\n==Story==\nIt', '5th graders go on a field trip to the National Gallery of Art, where they have a', '1000 years ago, a young man named John was a knight in the service of a', '47.61699110820529478', '1000 years ago, a man named James was a famous explorer. He discovered the continent', '69-086\nTitle: “Eating Up My Brain” \n\nMy mom got', '2015: The Day the Earth Stopped (A Short Story)\n==Story==\nIt', '69-834, an Android in the Wild. What do they think?\n== Part']
+
+../vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+_________ TestSeedingAndVariety.test_uniform_seed_deterministic[10-0] __________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x78c863ce2cc0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct', batch_size = 10, seed = 0
+
+    @pytest.mark.parametrize("seed", [1, 0])
+    @pytest.mark.parametrize("batch_size", [32, 10, 1])
+    def test_uniform_seed_deterministic(
+        self, tt_server, tt_model_name, batch_size, seed
+    ):
+        """
+        Batches with uniform seed should produce deterministic outputs.
+        """
+        prompt = "Random story: "
+        configs = [
+            RequestConfig(
+                prompt=prompt, max_tokens=20, temperature=1.0, top_k=50, seed=seed
+            )
+            for _ in range(batch_size)
+        ]
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)
+>       assert_deterministic(results, "Seed should produce deterministic outputs.")
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:229:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ["2000s pop star gets a new album, but it's a surprise album that's", '2015: The Day the Earth Stopped (A Short Story)...\n\n2015: The', '1000 years ago, a young man named John was a knight in the service of a', '47.61699110820529478', ...]
+explanation = 'Seed should produce deterministic outputs.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: Seed should produce deterministic outputs.
+E       Expected reproducible outputs.
+E       Got 9 unique results out of 10.
+E       Results: ["2000s pop star gets a new album, but it's a surprise album that's", '2015: The Day the Earth Stopped (A Short Story)\n==Story==\nIt', '5th graders go on a field trip to the National Gallery of Art, where they have a', '2015: The day I discovered I was a clone\n\n2015: The', '1000 years ago, a young man named John was a knight in the service of a', '47.61699110820529478', '2015: The Day the Earth Stopped (A Short Story)\n==Story==\nIt', '1000 years ago, a man named James was a famous explorer. He discovered the continent', '69-086\nTitle: “Eating Up My Brain” \n\nMy mom got', '69-834, an Android in the Wild. What do they think?\n== Part']
+
+../vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+________ TestSeedingAndVariety.test_temperature_varied_between_batches _________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x78c863ce3500>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct'
+
+    def test_temperature_varied_between_batches(self, tt_server, tt_model_name):
+        prompt = "Random letter: "
+
+        configs = [RequestConfig(prompt=prompt, max_tokens=10, temperature=2.0)]
+
+        tries = 10
+
+        # Overall
+        results = [
+            run_concurrent_batch(tt_server, tt_model_name, configs)[0]
+            for _ in range(tries)
+        ]
+>       assert_varied(
+            results, 2, "With temperature=2.0, outputs should vary on re-runs."
+        )
+
+../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:290:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ["84\nI notice you've given me the", "84\nI notice you've given me the", "84\nI notice you've given me the", "84\nI notice you've given me the", "84\nI notice you've given me the", "84\nI notice you've given me the", ...]
+min_varied = 2
+explanation = 'With temperature=2.0, outputs should vary on re-runs.'
+
+    def assert_varied(results, min_varied, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) >= min_varied, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected at least {min_varied} unique results.\n"
+            f"Only {len(unique_results)}/{len(results)} were varied.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: With temperature=2.0, outputs should vary on re-runs.
+E       Expected at least 2 unique results.
+E       Only 1/10 were varied.
+E       Results: ["84\nI notice you've given me the", "84\nI notice you've given me the", "84\nI notice you've given me the", "84\nI notice you've given me the", "84\nI notice you've given me the", "84\nI notice you've given me the", "84\nI notice you've given me the", "84\nI notice you've given me the", "84\nI notice you've given me the", "84\nI notice you've given me the"]
+
+../vllm-tt-plugin/tests/tt/utils.py:164: AssertionError
+____________ TestPresencePenalty.test_different_presence_penalties _____________
+
+self = <tests.tt.test_tt_penalties.TestPresencePenalty object at 0x78c863b09100>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct', max_batch_size = 32
+
+    def test_different_presence_penalties(
+        self, tt_server, tt_model_name, max_batch_size
+    ):
+        prompt = "a b c a b c a b c"
+        penalties = [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0][:max_batch_size]
+
+        configs = [
+            RequestConfig(
+                prompt=prompt,
+                max_tokens=40,
+                temperature=0,
+                presence_penalty=penalty,
+            )
+            for penalty in penalties
+        ]
+
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)
+>       assert_varied(
+            results, 2, "Different presence penalties should produce different outputs."
+        )
+
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py:104:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = [' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a... c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ...]
+min_varied = 2
+explanation = 'Different presence penalties should produce different outputs.'
+
+    def assert_varied(results, min_varied, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) >= min_varied, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected at least {min_varied} unique results.\n"
+            f"Only {len(unique_results)}/{len(results)} were varied.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: Different presence penalties should produce different outputs.
+E       Expected at least 2 unique results.
+E       Only 1/8 were varied.
+E       Results: [' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a']
+
+../vllm-tt-plugin/tests/tt/utils.py:164: AssertionError
+____________ TestPresencePenalty.test_presence_penalty_mixed_batch _____________
+
+self = <tests.tt.test_tt_penalties.TestPresencePenalty object at 0x78c863b09460>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x78c863ce3650>
+tt_model_name = 'Qwen/Qwen3-Coder-30B-A3B-Instruct', max_batch_size = 32
+
+    def test_presence_penalty_mixed_batch(
+        self, tt_server, tt_model_name, max_batch_size
+    ):
+        # Presence penalty is only applied once regardless of the repetition,
+        # so we use a weaker prompt for more even logits
+        prompt = "a b c a b c a b c"
+        configs = []
+        for i in range(max_batch_size):
+            configs.append(
+                RequestConfig(
+                    prompt=prompt,
+                    max_tokens=40,
+                    temperature=0,
+                    presence_penalty=0.0 if i % 2 == 0 else 2.0,
+                )
+            )
+
+        results = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        no_penalty = [results[i] for i in range(0, max_batch_size, 2)]
+        with_penalty = [results[i] for i in range(1, max_batch_size, 2)]
+
+        assert_deterministic(no_penalty, "No penalty requests should be identical.")
+        assert_deterministic(with_penalty, "With penalty requests should be identical.")
+>       assert_varied(
+            [no_penalty[0], with_penalty[0]], 2, "Penalty should change output."
+        )
+
+../vllm-tt-plugin/tests/tt/test_tt_penalties.py:132:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = [' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a']
+min_varied = 2, explanation = 'Penalty should change output.'
+
+    def assert_varied(results, min_varied, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) >= min_varied, (
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            f"{explanation}\n"
+            f"Expected at least {min_varied} unique results.\n"
+            f"Only {len(unique_results)}/{len(results)} were varied.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: Penalty should change output.
+E       Expected at least 2 unique results.
+E       Only 1/2 were varied.
+E       Results: [' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a', ' a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a b c a']
+
+../vllm-tt-plugin/tests/tt/utils.py:164: AssertionError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED ../vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_seeding
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_same_seeds_reproduce_across_batches
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[42]
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[123]
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[999]
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[0]
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_no_seed_varied
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-1]
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-0]
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-1]
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-0]
+FAILED ../vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_between_batches
+FAILED ../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_different_presence_penalties
+FAILED ../vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_mixed_batch
+======= 15 failed, 57 passed, 1 skipped, 2 warnings in 569.13s (0:09:29) =======
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 1 instances!
+ - leaked instance 0x78c877af79a8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 13 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulProgramConfig"
+ - ... skipped remainder
+nanobind: leaked 202 functions!
+ - leaked function "from_json"
+ - leaked function "push_current_command_queue_id_for_thread"
+ - leaked function ""
+ - leaked function "unpad"
+ - leaked function "compute_output_specs"
+ - leaked function "pop_current_command_queue_id_for_thread"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

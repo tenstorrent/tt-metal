@@ -206,13 +206,6 @@ class Qwen3CoderForCausalLM:
             )
 
         precision = os.getenv("QWEN3_PRECISION_CONFIG") or str(SELECTED_PRECISION_CONFIG)
-        logger.info(
-            "Qwen3-Coder-30B-A3B vLLM init: max_num_seqs={} max_model_len={} precision={} optimizations={}",
-            max_batch_size,
-            max_seq_len,
-            precision,
-            optimizations,
-        )
         generator = build_generator(
             MODEL_DIR,
             mesh_device,
@@ -226,6 +219,20 @@ class Qwen3CoderForCausalLM:
             rope_cache_len=max_seq_len,
             precision=precision,
             **({} if n_layers is None else {"override_num_layers": int(n_layers)}),
+        )
+        # Logged after the generator exists so ``active_row_gating`` is read off
+        # the model that was actually built rather than re-parsed from the
+        # environment here. Every leg of an A/B then carries its own
+        # configuration in its own server log, instead of the two legs being
+        # distinguishable only by the work-log prose that says which was which.
+        logger.info(
+            "Qwen3-Coder-30B-A3B vLLM init: max_num_seqs={} max_model_len={} precision={} "
+            "active_row_gating={} optimizations={}",
+            max_batch_size,
+            max_seq_len,
+            precision,
+            generator.model.active_row_gating,
+            optimizations,
         )
         return cls(generator, max_model_len=max_seq_len, max_num_seqs=max_batch_size)
 
@@ -255,6 +262,13 @@ class Qwen3CoderForCausalLM:
             "top_k_clamped_requests": 0,
             "penalised_decode_steps": 0,
             "ignored_seed_requests": 0,
+            #: Steps on which vLLM actually took the async split -- i.e. called
+            #: ``read_decode_output(async_read=True)`` rather than reading the
+            #: device handle synchronously inside ``execute_model``. This is what
+            #: makes ``supports_async_decode`` a measurement instead of a claim;
+            #: see the one-time log line in ``read_decode_output``.
+            "async_decode_reads": 0,
+            "sync_decode_reads": 0,
         }
         self._warned: set[str] = set()
 
@@ -737,7 +751,23 @@ class Qwen3CoderForCausalLM:
             & pages_unchanged
         )
         merged_tokens = torch.where(continuing, device_tokens, host_tokens)
-        merged_positions = torch.where(continuing, device_positions, torch.clamp(host_positions, min=0))
+        # ``host_positions`` is the scheduler's view, and the plugin pads rows it
+        # is not serving with ``-1`` (``model_runner.py`` pads decode positions
+        # with ``-1`` "to indicate no position"). That ``-1`` is exactly the
+        # inactive sentinel the traced graph relies on: ``ttnn.plus_one(...,
+        # skip_negative_entries=True)`` leaves it alone across replays, and
+        # ``_decode_active_mask`` derives the expert-gating mask from
+        # ``current_pos >= 0``.
+        #
+        # Clamping it to 0 here would install an inactive row as position 0, the
+        # mask would read it as live, and inactive-row expert gating would
+        # silently become a no-op for that slot until the next prefill released
+        # the traces. Single-request runs never expose it -- every row is either
+        # continuing or genuinely live -- but a server churning 4 of 32 slots
+        # would see the gating win appear and disappear with request turnover.
+        # So preserve the sentinel and only clamp what is not already a sentinel.
+        host_positions_kept = torch.where(host_positions < 0, torch.full_like(host_positions, -1), host_positions)
+        merged_positions = torch.where(continuing, device_positions, host_positions_kept)
         return merged_tokens, merged_positions
 
     # -- async split ----------------------------------------------------------
@@ -754,6 +784,13 @@ class Qwen3CoderForCausalLM:
             return tt_out, []
         if not async_read:
             return tt_out.cpu()
+        self._audit["async_decode_reads"] += 1
+        self._warn_once(
+            "async_split",
+            "vLLM took the async decode split: read_decode_output(async_read=True) on a device "
+            "handle returned by decode_forward(read_from_device=False). supports_async_decode is "
+            "being exercised, not merely declared.",
+        )
         host = tt_out.cpu(blocking=False)
         return host, [ttnn.record_event(self.mesh_device, 0)]
 
@@ -768,6 +805,19 @@ class Qwen3CoderForCausalLM:
             return tt_out
         if not is_tokens:
             raise ValueError("host-sampled decode already returns torch logits; nothing to format")
+        if ttnn.is_tensor_storage_on_device(tt_out):
+            # Only a *device*-resident handle means the plugin skipped
+            # ``read_decode_output`` -- its synchronous path -- so the readback
+            # happens now, inside ``execute_model``, rather than after the async
+            # boundary. Counted so the async/sync split is evidence, not prose.
+            #
+            # The discriminator has to be device residency, not
+            # ``not isinstance(tt_out, torch.Tensor)``: the torch case already
+            # returned above, so that test was dead and fired on every step, and
+            # the async path's ``read_decode_output`` hands us
+            # ``tt_out.cpu(blocking=False)`` -- a ttnn *host* tensor, not a
+            # ``torch.Tensor`` -- so async reads were being counted as sync.
+            self._audit["sync_decode_reads"] += 1
         tokens = self.generator.read_sampled_tokens(tt_out, self.max_num_seqs)
         return tokens.reshape(-1, 1)
 

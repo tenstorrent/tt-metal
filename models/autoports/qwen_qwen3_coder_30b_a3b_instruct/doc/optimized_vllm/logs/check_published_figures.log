@@ -1,0 +1,124 @@
+[ ok ] single-user before: profile and workload shape match the cited JSON
+[ ok ] single-user after: profile and workload shape match the cited JSON
+[ ok ] single-user async-off: profile and workload shape match the cited JSON
+[ ok ] 128/128/1 @ max_num_seqs=32 before: profile and workload shape match the cited JSON
+[ ok ] 128/128/1 @ max_num_seqs=32 after: profile and workload shape match the cited JSON
+[ ok ] CI burst before: profile and workload shape match the cited JSON
+[ ok ] CI burst after: profile and workload shape match the cited JSON
+[ ok ] single-user before: 7 figures re-derived from the JSON
+[ ok ] single-user after: 7 figures re-derived from the JSON
+[ ok ] 128/128/1 @ 32 before: 6 figures re-derived from the JSON
+[ ok ] 128/128/1 @ 32 after: 6 figures re-derived from the JSON
+[ ok ] CI burst before: 8 figures re-derived from the JSON
+[ ok ] CI burst after: 8 figures re-derived from the JSON
+[ ok ] headline deltas equal the difference of the two benchmark files
+[ ok ] headline decode t/s/u 50.503 == 1000 / 19.801, re-derived
+[ ok ] 8 retained A/B runs: per-run mean/median ITL and every stall re-derived from the JSONs
+[ ok ] the ~179 ms stall is present once in all 4 async-off runs and absent from all 4 async-on runs
+[ ok ] per-token ITLs retained for every run (127 at 128 output tokens, 511 at 512)
+[ ok ] TTFT + ITL[0] agrees across legs to 0.280 ms — the one-off is relabelled, not removed
+[ ok ] corrected async A/B re-derived: median-ITL, t/s/u, host-cost share and both e2e framings
+[ ok ] re-measured async A/B: mean-based delta 1.747 is published, but so is the median-based 0.438 and the 19.1x dispersion is disclosed — admissible
+[ ok ] original async-off leg: p99 < mean confirmed, which is the tell the README cites
+[ ok ] original legs really do keep only moments — the reason the stall had to be inferred
+[ ok ] corrected gain 0.438 ms agrees with the original median row 0.436 ms
+[ ok ] the stall inferred from the original moments (179.8 ms) agrees with the re-measured 179.2 ms
+[ ok ] original stage-09 async A/B: mean-based delta 1.754 is published, but so is the median-based 0.436 and the 35.0x dispersion is disclosed — admissible
+[ ok ] server_b1_after.log.gz: async-split log line present, as the README says
+[ ok ] server_bench_after.log.gz: async-split log line present, as the README says
+[ ok ] server_b1_noasync.log.gz: async-split log line absent, as the README says
+[ ok ] stage-08 readiness_vllm/server.log confirms async scheduling was already enabled there
+[ ok ] both control curves re-derived from their JSONs
+[ ok ] adapter overhead re-derived as served minus standalone on both legs
+[ ok ] after-curve fit re-derived: 227.9 + 1.28 x live rows
+[ ok ] 32-slot before/after deltas re-derived
+[ ok ] CI burst neutral: 0.1% throughput, 0.05% TPOT
+[ ok ] README states the CI burst is not the headline decode number
+[ ok ] gating probe: 4 checks, 0 failed, re-derived against the README table
+[ ok ] adapter contract: 13/13 pass, 0 failed
+[ ok ] stage-09 archived: 58/14/1, all 14 failures in the two declared classes
+[ ok ] isolation (merge fix reverted): 58/14/1, all 14 failures in the two declared classes
+[ ok ] shipped run 1: 57/15/1, all 15 failures in the two declared classes
+[ ok ] shipped run 2: 56/16/1, all 16 failures in the two declared classes
+[ ok ] shipped failure counts [15, 16] exceed the baseline [14, 14], and the README flags it as an unresolved open item rather than claiming a clean pass
+[ ok ] every test id the README names as failing appears in at least one retained run (10 names)
+[ ok ] model suite 158 passed / 16 deselected matches the log
+[ ok ] 6 non-aligned prompt rows re-derived, divisibility recomputed
+[ ok ] all 6 greedy qualitative completions are byte-identical to stage 08, verified by diff
+[ ok ] context contract 262144, capability_reduction false
+[ ok ] KV cache 263168 tokens == ceil((262144 + 32*32)/32) x 32, and is quoted from the log
+[ ok ] churn control: legacy clamp drifts +32.619 ms on the first recycle (gating win lost), fixed drifts 0.045 ms (held)
+[ ok ] legacy leg after turnover (264.791 ms) is within 3.9 ms of full occupancy
+[ ok ] async/sync decode reads partition the decode steps exactly: 19 + 1 == 20
+
+coverage boundary: 251 distinct numeric tokens in README.md — 184 re-derived only, 47 declared uncovered only, 20 both, 0 neither (this is the number that gates)
+       uncovered: 0 — gating env value / greedy temperature / assorted
+       uncovered: 1 — max_num_seqs, request counts, assorted
+       uncovered: 2 — assorted ordinals and small counts
+       uncovered: 3 — assorted ordinals and small counts
+       uncovered: 4 — dies in the 1x4 mesh; also the contract probe's max_num_seqs
+       uncovered: 5 — the lower bound of the suggested 5-10 run repeat-count study, and assorted small counts
+       uncovered: 6 — assorted ordinals and small counts
+       uncovered: 8 — page-alignment divisor in the non-aligned table / top-8 experts
+       uncovered: 9 — the -9 in pkill -9
+       uncovered: 01 — stage range in 'stages 01-08'
+       uncovered: 07 — stage number
+       uncovered: 08 — stage number
+       uncovered: 09 — stage number
+       uncovered: 10 — the upper bound of the suggested 5-10 run repeat-count study, and top_k=10 in test_topk
+       uncovered: 11 — the token [1,1,batch,1] with its commas stripped by this script's number regex, not a figure
+       uncovered: 12 — seeding-class size, also checked as a class size above
+       uncovered: 13 — adapter-contract check count, checked above; also an ordinal
+       uncovered: 14 — sampling failed count, checked above; also the natural-language prompt length
+       uncovered: 16 — the ~16 ms of genuine request-side TTFT cost, and a control-curve active-row count
+       uncovered: 18 — the day in the dated correction notice
+       uncovered: 24 — tokens per row in the gating probe (checked via the probe JSON) and assorted
+       uncovered: 26 — the 14-26 % penalised-TPOT band quoted from stage 08
+       uncovered: 31 — vllm_tt_plugin/scheduler.py source line for `class TTScheduler(AsyncScheduler)`; also the control-curve divisor
+       uncovered: 40 — the users' share of a full 32-row step, checked above as a formatted string
+       uncovered: 42 — a test_specific_seed_reproducible seed parametrisation named in the sampling table
+       uncovered: 48 — decoder layers
+       uncovered: 56 — stage-08 sampling passed count, quoted
+       uncovered: 64 — page-alignment divisor in the non-aligned table
+       uncovered: 75 — share of host cost hidden by the async split, checked above as a percentage string
+       uncovered: 153 — the 153 ms figure the first pass published, quoted in order to show it cannot be a scheduler step
+       uncovered: 2.3 — the before-curve flatness figure, also re-derived above as a percentage string
+       uncovered: 230 — the ~230 ms 32-slot step, re-derived above at full precision; this is the rounded prose form
+       uncovered: 256 — history length stage 08 re-timed its penalty staging at
+       uncovered: 8.9 — async decode t/s/u gain %, checked above as a percentage string
+       uncovered: 9.7 — MB of the full-vocabulary penalty operand, quoted from stage 08
+       uncovered: 955 — vllm-tt-plugin platform.py source line citation
+       uncovered: 964 — vllm/config/vllm.py source line citation
+       uncovered: 968 — vllm-tt-plugin platform.py source line citation
+       uncovered: 969 — vllm-tt-plugin model_runner.py source line citation for the -1 inactive-position pad
+       uncovered: 970 — vllm-tt-plugin model_runner.py source line citation for the -1 inactive-position pad
+       uncovered: 999 — a test_specific_seed_reproducible seed parametrisation named in the sampling table
+       uncovered: 1004 — vllm/config/vllm.py source line citation
+       uncovered: 1024 — page-alignment divisor in the non-aligned table
+       uncovered: 2026 — the year in the dated correction notice
+       uncovered: 4096 — the standalone control's context, stated beside the adapter-overhead estimate
+       uncovered: 8100 — serving port (8000 is held by a process outside this session)
+       uncovered: 8192 — the [1, 8192] int32 page-table shape at the served context
+       uncovered: 8224 — stage-08's derived block count, now confirmed by this stage's log
+       uncovered: 0.588 — serving overhead with async, checked above as a formatted string
+       uncovered: 1.754 — async gain per token, checked above as a formatted string
+       uncovered: 11132 — the token [1,1,32,1] with its commas stripped by this script's number regex, not a figure
+       uncovered: 153.4 — async TTFT cost, checked above as a formatted string
+       uncovered: 2.342 — serving overhead without async, checked above as a formatted string
+       uncovered: 3.796 — stage-08 32-slot t/s/u, quoted; also re-derived here from this stage's before leg
+       uncovered: 1.5351 — stage-08 penalty staging on the correctness batch, quoted
+       uncovered: 1.5674 — stage-08 penalty staging at a 256-token history, quoted
+       uncovered: 11.579 — end-to-end delta of the headline pair, stated inline
+       uncovered: 19.213 — stage-07 standalone token-out ms, checked above as a formatted string
+       uncovered: 262144 — max_model_len; the contract value itself is checked above, this is the CLI echo
+       uncovered: 3.3894 — stage-08 penalty staging on the correctness batch, quoted
+       uncovered: 3.7624 — stage-08 penalty staging at a 256-token history, quoted
+       uncovered: 40.079 — stage-08 penalised t/s/u (all three), quoted
+       uncovered: 44.049 — stage-08 penalised t/s/u (repetition only), quoted
+       uncovered: 50.321 — stage-08 unpenalised in-situ t/s/u, quoted
+       uncovered: 50.560 — stage-08 headline t/s/u, quoted for comparison; re-derived by stage 08's own checker
+       uncovered: 52.049 — stage-07 standalone token-out t/s/u, quoted
+       uncovered: 50331648 — trace_region_size passed in --tt-config
+[note] UNCOVERED entries no longer present in the README: ['129.941', '182', '312.367']
+
+all published figures re-derived from their artifacts

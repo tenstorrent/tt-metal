@@ -1,0 +1,175 @@
+=== legacy-clamp leg (expected to FAIL) ===
+2026-08-18 05:52:44.715 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-18 05:52:46.198 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-18 05:52:46.198 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-18 05:52:46.198 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-18 05:52:46.198 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-18 05:52:46.211 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-18 05:52:46.211 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-18 05:52:46.296 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-18 05:52:46.296 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-18 05:52:46.296 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-18 05:52:46.296 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-18 05:52:46.298 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-18 05:52:46.300 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-18 05:52:46.425 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-18 05:52:46.425 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-18 05:52:46.425 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-18 05:52:46.425 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-18 05:52:46.425 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-18 05:52:46.537 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331393_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:52:46.538 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331392_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:52:46.538 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331105_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:52:46.538 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331104_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:52:46.543 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-18 05:52:46.572 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-18 05:52:46.572 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+[initial_install] live=4/32  inactive at -1: 28/28  inactive positions [-1]  token_out 232.171 ms
+2026-08-18 05:55:53.024 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:123)
+[turnover_1_row0] live=4/32  inactive at -1: 0/28  inactive positions [1]  token_out 264.791 ms
+[turnover_2_row1] live=4/32  inactive at -1: 0/28  inactive positions [1]  token_out 264.730 ms
+[turnover_3_row2] live=4/32  inactive at -1: 0/28  inactive positions [1]  token_out 264.703 ms
+{
+  "inactive_rows_keep_sentinel_across_turnover": {
+    "pass": false,
+    "detail": "every unoccupied slot still reads current_pos == -1 after each re-install",
+    "per_round": {
+      "initial_install": "28/28",
+      "turnover_1_row0": "0/28",
+      "turnover_2_row1": "0/28",
+      "turnover_3_row2": "0/28"
+    }
+  },
+  "gating_win_survives_turnover": {
+    "pass": false,
+    "initial_ms": 232.17131499768584,
+    "worst_turnover_ms": 264.790550001635,
+    "drift_ms": 32.61923500394914,
+    "detail": "traced step cost after slot recycling stays within 5 ms of the cost at the same occupancy before any recycling; the shipped clamp regressed it toward the full-occupancy cost instead"
+  }
+}
+all_pass=False  ->  /home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_vllm/probes/churn_occupancy_control_legacy.json
+nanobind: leaked 1 instances!
+ - leaked instance 0x75ab9f0f7528 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 37 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function "__repr__"
+ - leaked function "logical_volume"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__eq__"
+ - leaked function "__init__"
+ - leaked function "memory_config"
+ - leaked function "device"
+ - leaked function ""
+ - leaked function "host_buffer"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-18 05:56:15.023 | info     |    BuildKernels | JIT cache stats: 566/566 hits (100.0%) [566 cached, 279 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-18 05:56:15.023 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-18 05:56:15.044 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-18 05:56:15.044 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-18 05:56:15.536 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-18 05:56:15.536 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-18 05:56:15.536 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+LEGACY_EXIT=1
+=== fixed leg (expected to PASS) ===
+2026-08-18 05:56:17.118 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-18 05:56:18.616 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-18 05:56:18.616 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-18 05:56:18.616 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-18 05:56:18.616 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-18 05:56:18.627 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-18 05:56:18.627 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-18 05:56:18.712 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-18 05:56:18.712 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-18 05:56:18.712 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-18 05:56:18.712 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-18 05:56:18.714 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-18 05:56:18.925 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-18 05:56:19.048 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-18 05:56:19.048 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-18 05:56:19.048 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-18 05:56:19.048 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-18 05:56:19.048 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-18 05:56:19.085 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331393_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:56:19.086 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331392_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:56:19.086 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331105_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:56:19.086 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331104_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:56:19.091 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-18 05:56:19.119 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-18 05:56:19.119 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+[initial_install] live=4/32  inactive at -1: 28/28  inactive positions [-1]  token_out 232.147 ms
+2026-08-18 05:59:27.537 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:123)
+[turnover_1_row0] live=4/32  inactive at -1: 28/28  inactive positions [-1]  token_out 232.192 ms
+[turnover_2_row1] live=4/32  inactive at -1: 28/28  inactive positions [-1]  token_out 232.171 ms
+[turnover_3_row2] live=4/32  inactive at -1: 28/28  inactive positions [-1]  token_out 232.164 ms
+{
+  "inactive_rows_keep_sentinel_across_turnover": {
+    "pass": true,
+    "detail": "every unoccupied slot still reads current_pos == -1 after each re-install",
+    "per_round": {
+      "initial_install": "28/28",
+      "turnover_1_row0": "28/28",
+      "turnover_2_row1": "28/28",
+      "turnover_3_row2": "28/28"
+    }
+  },
+  "gating_win_survives_turnover": {
+    "pass": true,
+    "initial_ms": 232.14745050427155,
+    "worst_turnover_ms": 232.19216899815365,
+    "drift_ms": 0.04471849388210103,
+    "detail": "traced step cost after slot recycling stays within 5 ms of the cost at the same occupancy before any recycling; the shipped clamp regressed it toward the full-occupancy cost instead"
+  }
+}
+all_pass=True  ->  /home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_vllm/probes/churn_occupancy_control_fixed.json
+nanobind: leaked 1 instances!
+ - leaked instance 0x782e457bb588 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 37 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function "__repr__"
+ - leaked function "ranges"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "create_sub_device_manager"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-18 05:59:46.978 | info     |    BuildKernels | JIT cache stats: 566/566 hits (100.0%) [566 cached, 279 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-18 05:59:46.978 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-18 05:59:47.000 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-18 05:59:47.000 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-18 05:59:47.466 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-18 05:59:47.466 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-18 05:59:47.466 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+FIXED_EXIT=0
+=== CHURN DONE ===

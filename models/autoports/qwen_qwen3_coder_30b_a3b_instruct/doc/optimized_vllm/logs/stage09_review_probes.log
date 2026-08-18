@@ -1,0 +1,204 @@
+=== adapter contract probe (max_num_seqs=4, gated graph) ===
+INFO 08-18 05:03:24 [__init__.py:44] Available plugins for group vllm.platform_plugins:
+INFO 08-18 05:03:24 [__init__.py:46] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 08-18 05:03:24 [__init__.py:49] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+2026-08-18 05:03:25.227 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+INFO 08-18 05:03:25 [__init__.py:237] Platform plugin tt is activated
+INFO 08-18 05:03:27 [importing.py:46] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-18 05:03:27 [importing.py:81] Triton not installed or not compatible; certain GPU-related functions will not be available.
+2026-08-18 05:03:27.839 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-18 05:03:27.839 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-18 05:03:27.840 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-18 05:03:27.840 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-18 05:03:27.851 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-18 05:03:27.851 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-18 05:03:27.935 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-18 05:03:27.935 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-18 05:03:27.935 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-18 05:03:27.935 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-18 05:03:27.937 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-18 05:03:28.200 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-18 05:03:28.324 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-18 05:03:28.324 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-18 05:03:28.324 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-18 05:03:28.324 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-18 05:03:28.324 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-18 05:03:28.361 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331393_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:03:28.361 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331392_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:03:28.361 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331105_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:03:28.362 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331104_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:03:28.367 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-18 05:03:28.399 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-18 05:03:28.399 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-18 05:03:29.059 | WARNING  | models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm:initialize_vllm_model:202 - QWEN3_VLLM_NUM_LAYERS=2 -- REDUCED serving target, bring-up inner loop only. Do not report accuracy or performance from this server.
+2026-08-18 05:03:39.658 | INFO     | models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm:initialize_vllm_model:228 - Qwen3-Coder-30B-A3B vLLM init: max_num_seqs=4 max_model_len=4096 precision=/home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/datatype_sweep/selected_precision_config.json active_row_gating=True optimizations=None
+model built in 10.6s
+[PASS] vllm_owns_cache: raised: vLLM has not called allocate_kv_cache; there is no serving cache to use
+2026-08-18 05:03:39.658 | WARNING  | models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm:allocate_kv_cache:332 - Reduced target: allocating 2 layer caches, vLLM planned for 48
+2026-08-18 05:03:39.658 | INFO     | models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm:allocate_kv_cache:349 - vLLM-owned KV cache: 512 blocks x 32 tokens = 16384 tokens, 1 local KV heads, dtype DataType.BFLOAT16 (from the selected precision config; vLLM asked for torch.bfloat16)
+2026-08-18 05:03:39.858 | INFO     | models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm:warmup_model_prefill:386 - Prefill warmup done (lengths 129, 128; 129 is deliberately non-page-aligned)
+2026-08-18 05:03:39.957 | INFO     | models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm:warmup_model_decode:424 - Decode warmup done (batch 4, enable_trace=True)
+[PASS] non_aligned_prefill: prompt_len=131 (not divisible by 8/32/64/128) -> tokens [5206, 14421, 82, 95167]
+2026-08-18 05:03:40.025 | WARNING  | models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm:_warn_once:278 - vLLM took the async decode split: read_decode_output(async_read=True) on a device handle returned by decode_forward(read_from_device=False). supports_async_decode is being exercised, not merely declared.
+[PASS] async_split_returns_device_tensor: decode_forward(read_from_device=False) returned a ttnn.Tensor; read_decode_output recorded an event and process_decode_output_host did the host formatting
+[PASS] steady_replays: replays +8 over 8 steps
+[PASS] steady_no_token_host_copies: token_host_copies +0
+[PASS] steady_no_position_host_copies: position +0, rotary +0
+[PASS] steady_no_page_table_copies: page_table_host_copies +0 for an unchanged table
+[PASS] steady_no_recapture: captures +0, releases +0, warmups +0
+[PASS] one_readback_per_token: caller_token_readbacks +8 (the sampled-token tensor only)
+[PASS] sampler_is_the_full_model_sampler: _WatcherCleanSampling1D from tt/model.py, unchanged across the run
+[PASS] stale_host_input_ignored: steady decode with token=12345 and position-1 on every step reproduced the clean run ([1112, 54492]... vs [1112, 54492]...)
+[PASS] changed_page_table_is_copied: page_table_host_copies +1 when every slot moved to fresh blocks
+[PASS] current_position_reinstalled_on_layout_change: device current_pos after the reset step = 132 (host asked for 131, the trace advanced it once)
+
+wrote models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_vllm/probes/adapter_contract_probe_after.json
+all 13 checks passed
+nanobind: leaked 1 instances!
+ - leaked instance 0x7185d38efa08 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 37 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function "CloseDevice"
+ - leaked function "cpu"
+ - leaked function "devices"
+ - leaked function "__iter__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "tensor_topology"
+ - leaked function "__repr__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-18 05:03:41.402 | info     |    BuildKernels | JIT cache stats: 707/707 hits (100.0%) [707 cached, 575 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-18 05:03:41.403 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-18 05:03:41.422 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-18 05:03:41.422 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-18 05:03:41.897 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-18 05:03:41.898 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-18 05:03:41.898 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+CONTRACT_EXIT=0
+=== inactive-row gating token identity (re-verified after the merge fix) ===
+2026-08-18 05:03:43.450 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-18 05:03:44.954 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-18 05:03:44.954 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-18 05:03:44.954 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-18 05:03:44.954 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-18 05:03:44.966 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-18 05:03:44.966 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-18 05:03:45.050 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-18 05:03:45.050 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-18 05:03:45.050 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-18 05:03:45.051 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-18 05:03:45.052 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-18 05:03:45.302 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-18 05:03:45.421 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-18 05:03:45.421 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-18 05:03:45.421 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-18 05:03:45.421 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-18 05:03:45.421 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-18 05:03:45.458 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331393_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:03:45.458 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331392_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:03:45.458 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331105_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:03:45.459 | warning  |           Metal | Failed to create shared memory /tt_device_154095682331104_memory: Permission denied (memory_stats_shm.cpp:60)
+2026-08-18 05:03:45.463 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-18 05:03:45.510 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-18 05:03:45.510 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-18 05:06:56.136 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:123)
+PASS  mask_matches_positions
+PASS  mask_survives_replays
+PASS  outputs_are_varied
+PASS  live_rows_token_identical
+{
+  "what": "inactive-row expert gating: token equality against the ungated graph, plus mask mechanics",
+  "slots": 32,
+  "active": 4,
+  "layers": 48,
+  "steps": 24,
+  "context": 4096,
+  "sampling": "device, greedy (top_k=1) -- so the comparison is exact token equality",
+  "prompt_texts": [
+    "The three laws of thermodynamics are:",
+    "def fibonacci(n):\n    \"\"\"Return the nth Fibonacci number.\"\"\"\n",
+    "Paged attention needs a block table because",
+    "Translate to French: Hello, how are you today?\nFrench:"
+  ],
+  "prompt_len": 13,
+  "runs": {
+    "ungated": {
+      "median_step_ms": 264.3752410003799,
+      "tps_user": 3.782502462091611
+    },
+    "gated": {
+      "median_step_ms": 232.71874200145248,
+      "tps_user": 4.297032509714059
+    }
+  },
+  "speedup": 1.1360290053421216,
+  "trace_stats": {
+    "captures": 2,
+    "replays": 48,
+    "releases": 1,
+    "decode_warmups": 2,
+    "token_host_copies": 0,
+    "token_device_copies": 8,
+    "position_host_copies": 8,
+    "rotary_position_host_copies": 8,
+    "page_table_host_copies": 8,
+    "sampling_param_host_copies": 0,
+    "penalty_host_copies": 0,
+    "caller_token_readbacks": 48,
+    "explicit_synchronizations": 15,
+    "resets": 2
+  },
+  "failed": []
+}
+nanobind: leaked 1 instances!
+ - leaked instance 0x781b65727e28 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 37 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "mesh_size"
+ - leaked function ""
+ - leaked function "buffer_num_pages"
+ - leaked function ""
+ - leaked function "num_program_cache_entries"
+ - leaked function ""
+ - leaked function "get_l1_alignment"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-18 05:06:57.058 | info     |    BuildKernels | JIT cache stats: 571/571 hits (100.0%) [571 cached, 287 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-18 05:06:57.058 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-18 05:06:57.079 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-18 05:06:57.079 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-18 05:06:57.525 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-18 05:06:57.525 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-18 05:06:57.525 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+GATING_EXIT=0
+=== PROBES DONE ===

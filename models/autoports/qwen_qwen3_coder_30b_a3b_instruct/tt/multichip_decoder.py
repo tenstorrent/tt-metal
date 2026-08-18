@@ -1719,6 +1719,7 @@ def decoder_layer_decode_multichip(
     token_index: int,
     rope=None,
     precision: PrecisionConfig = DEFAULT_PRECISION,
+    active_mask: ttnn.Tensor | None = None,
 ) -> ttnn.Tensor:
     """Decode one token per user on the mesh. ``x`` / return ``[1, 1, B, 2048]``.
 
@@ -1789,6 +1790,27 @@ def decoder_layer_decode_multichip(
     routing = router_forward_multichip(
         normed_sharded, weights.router, weights.expert_window, config.global_config.moe, config.local_moe, precision
     )
+    if active_mask is not None:
+        # Zero the routing weights of every slot that holds no live request.
+        #
+        # ``routing`` *is* ``sparse_matmul``'s sparsity tensor, and its nonzero
+        # count is the amount of expert math the op does: with ``nnz=None`` the
+        # kernel reads the sparsity page at runtime and only fetches weights and
+        # multiplies for the live ``(row, expert)`` pairs. A serving decode batch
+        # is padded to the configured ``max_num_seqs`` with inactive rows, and an
+        # inactive row's garbage hidden state still routes to a full top-8 -- so
+        # without this a 32-slot server does 32 rows of expert work no matter how
+        # many users are actually connected. See
+        # ``doc/optimized_vllm/probes/batch_decode_control.py``.
+        #
+        # ``active_mask`` is derived **on device** from ``current_pos`` inside the
+        # same traced graph (``Qwen3CoderModel._decode_active_mask``), so it can
+        # never be stale: ``ttnn.plus_one(..., skip_negative_entries=True)`` leaves
+        # an inactive row at ``-1`` forever, and a row that changes hands only does
+        # so through a host reinstall of ``current_pos``.
+        gated = ttnn.mul(routing, active_mask)
+        ttnn.deallocate(routing)
+        routing = gated
     # ``sparse_matmul``'s in0 is DRAM-interleaved, so the expert path pays one
     # sharded-to-interleaved (0.53 us) rather than the norm paying 15.
     normed = ttnn.sharded_to_interleaved(normed_sharded, ttnn.DRAM_MEMORY_CONFIG)

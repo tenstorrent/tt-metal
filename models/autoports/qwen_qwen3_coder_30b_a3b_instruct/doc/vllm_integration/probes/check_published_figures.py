@@ -899,6 +899,27 @@ else:
 # choose between wiring it up and declaring it.
 
 UNCOVERED: dict[str, str] = {
+    # -- figures introduced by the 2026-08-18 errata block ------------------
+    # The errata is append-only and corrects stage 08's *interpretation* of
+    # async scheduling; its numbers are source-line citations, a date, and
+    # cross-references to the stage-09 re-measurement, all of which are
+    # re-derived in doc/optimized_vllm/ rather than here.
+    "18": "the errata date (2026-08-18)",
+    "2026": "the errata date (2026-08-18)",
+    "21": "server.log line number cited by the errata",
+    "80": "server.log line number cited by the errata",
+    "159": "the fixed per-request trace-capture cost, re-derived in doc/optimized_vllm/",
+    "179": "async-off ITL[0] stall, re-derived in doc/optimized_vllm/",
+    "190": "vllm/config/scheduler.py line number cited by the errata",
+    "198": "vllm/config/scheduler.py line number cited by the errata",
+    "657": "this README's own line number, cited by the errata",
+    "661": "this README's own line number, cited by the errata",
+    "964": "vllm/config/vllm.py line number cited by the errata",
+    "1004": "vllm/config/vllm.py line number cited by the errata",
+    "0.44": "corrected async per-token gain, re-derived in doc/optimized_vllm/",
+    "320.5": "TTFT+ITL[0] async-on, re-derived in doc/optimized_vllm/",
+    "320.8": "TTFT+ITL[0] async-off, re-derived in doc/optimized_vllm/",
+    "145.763": "async-off TTFT, re-derived in doc/optimized_vllm/",
     # -- configuration echoed from the command line, not measured -------------
     "8100": "serving port (8000 was held by a process outside this session)",
     "8000": "the port that was already held; stated only to explain 8100",

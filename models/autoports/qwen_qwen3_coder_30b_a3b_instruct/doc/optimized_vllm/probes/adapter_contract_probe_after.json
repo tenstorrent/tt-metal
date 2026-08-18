@@ -1,0 +1,199 @@
+{
+  "config": {
+    "num_layers": 2,
+    "max_num_seqs": 4,
+    "probe_max_model_len": 4096,
+    "prompt_len": 131,
+    "steady_steps": 8,
+    "block_size": 32
+  },
+  "note": "Reduced-layer target on purpose: every check here is about host-side work per token and cache/page-table/scheduler-input handling, none of which depends on layer count. It is not an accuracy or performance artifact.",
+  "checks": [
+    {
+      "check": "vllm_owns_cache",
+      "pass": true,
+      "detail": "raised: vLLM has not called allocate_kv_cache; there is no serving cache to use"
+    },
+    {
+      "check": "non_aligned_prefill",
+      "pass": true,
+      "detail": "prompt_len=131 (not divisible by 8/32/64/128) -> tokens [5206, 14421, 82, 95167]"
+    },
+    {
+      "check": "async_split_returns_device_tensor",
+      "pass": true,
+      "detail": "decode_forward(read_from_device=False) returned a ttnn.Tensor; read_decode_output recorded an event and process_decode_output_host did the host formatting"
+    },
+    {
+      "check": "steady_replays",
+      "pass": true,
+      "detail": "replays +8 over 8 steps"
+    },
+    {
+      "check": "steady_no_token_host_copies",
+      "pass": true,
+      "detail": "token_host_copies +0"
+    },
+    {
+      "check": "steady_no_position_host_copies",
+      "pass": true,
+      "detail": "position +0, rotary +0"
+    },
+    {
+      "check": "steady_no_page_table_copies",
+      "pass": true,
+      "detail": "page_table_host_copies +0 for an unchanged table"
+    },
+    {
+      "check": "steady_no_recapture",
+      "pass": true,
+      "detail": "captures +0, releases +0, warmups +0"
+    },
+    {
+      "check": "one_readback_per_token",
+      "pass": true,
+      "detail": "caller_token_readbacks +8 (the sampled-token tensor only)"
+    },
+    {
+      "check": "sampler_is_the_full_model_sampler",
+      "pass": true,
+      "detail": "_WatcherCleanSampling1D from tt/model.py, unchanged across the run"
+    },
+    {
+      "check": "stale_host_input_ignored",
+      "pass": true,
+      "detail": "steady decode with token=12345 and position-1 on every step reproduced the clean run ([1112, 54492]... vs [1112, 54492]...)"
+    },
+    {
+      "check": "changed_page_table_is_copied",
+      "pass": true,
+      "detail": "page_table_host_copies +1 when every slot moved to fresh blocks"
+    },
+    {
+      "check": "current_position_reinstalled_on_layout_change",
+      "pass": true,
+      "detail": "device current_pos after the reset step = 132 (host asked for 131, the trace advanced it once)"
+    }
+  ],
+  "trace_stats": {
+    "captures": 3,
+    "replays": 20,
+    "releases": 3,
+    "decode_warmups": 1,
+    "token_host_copies": 9,
+    "token_device_copies": 0,
+    "position_host_copies": 9,
+    "rotary_position_host_copies": 9,
+    "page_table_host_copies": 9,
+    "sampling_param_host_copies": 0,
+    "penalty_host_copies": 0,
+    "caller_token_readbacks": 24,
+    "explicit_synchronizations": 17,
+    "resets": 1
+  },
+  "serving_audit": {
+    "device_sampled_decode_steps": 20,
+    "host_sampled_decode_steps": 0,
+    "device_sampled_prefills": 4,
+    "host_sampled_prefills": 0,
+    "decode_trace_installs": 4,
+    "top_k_clamped_requests": 0,
+    "penalised_decode_steps": 0,
+    "ignored_seed_requests": 0,
+    "async_decode_reads": 19,
+    "sync_decode_reads": 1,
+    "precision_config": "/home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/datatype_sweep/selected_precision_config.json",
+    "max_num_seqs": 4,
+    "page_block_size": 32,
+    "pages_per_user": 128,
+    "kv_cache_blocks": 512,
+    "probe_max_model_len": 4096
+  },
+  "model_runtime_fallbacks": {
+    "batch": 4,
+    "dram_sharded_qkv": [
+      2048,
+      1280
+    ],
+    "dram_sharded_wo": [
+      1024,
+      2048
+    ],
+    "dram_sharded_taken": true,
+    "gate_up_in0_block_w": 64,
+    "down_in0_block_w": 24,
+    "expert_intermediate_buffer": "L1",
+    "local_heads": [
+      8,
+      1
+    ],
+    "local_experts": 32,
+    "norm_shard_cores": 8,
+    "norm_shard_feeds_qkv_directly": true,
+    "decode_ccl_buffers_persistent": true,
+    "device_experts_gate_up_dtype": "DataType.BFLOAT4_B",
+    "device_experts_down_dtype": "DataType.BFLOAT4_B",
+    "device_attention_qkv_dtype": "DataType.BFLOAT8_B",
+    "device_attention_wo_dtype": "DataType.BFLOAT8_B",
+    "device_attention_qkv_decode_dtype": "DataType.BFLOAT8_B",
+    "device_router_dtype": "DataType.BFLOAT16",
+    "device_norm_weight_dtype": "DataType.BFLOAT16",
+    "device_expert_bytes_per_die": 84934656,
+    "expert_math_fidelity": "MathFidelity.LoFi",
+    "attention_math_fidelity": null,
+    "router_window_math_fidelity": "MathFidelity.HiFi4",
+    "ccl_dtype": "DataType.BFLOAT16",
+    "activation_dtype": "DataType.BFLOAT16",
+    "num_layers": 2,
+    "embedding": "replicated_bf16_no_collective",
+    "residual_contract": "replicated [1,1,B,2048] bf16 TILE DRAM, no inter-layer collective",
+    "final_norm": "replicated, width-sharded decode kernel",
+    "lm_head_parallelism": "column_parallel_over_vocab",
+    "lm_head_local_vocab": 37984,
+    "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+    "embedding_weight_dtype": "DataType.BFLOAT16",
+    "precision": {
+      "experts_gate_up_dtype": "bfloat4_b",
+      "experts_down_dtype": "bfloat4_b",
+      "attention_qkv_dtype": "bfloat8_b",
+      "attention_wo_dtype": "bfloat8_b",
+      "lm_head_dtype": "bfloat8_b",
+      "router_dtype": "bfloat16",
+      "embedding_dtype": "bfloat16",
+      "norm_weight_dtype": "bfloat16",
+      "experts_fidelity": "LoFi",
+      "attention_fidelity": null,
+      "router_window_fidelity": "HiFi4",
+      "lm_head_fidelity": "HiFi2",
+      "norm_fidelity": "HiFi4",
+      "experts_gate_up_in0_block_w": 64,
+      "experts_down_in0_block_w": 24,
+      "activation_dtype": "bfloat16",
+      "ccl_dtype": null,
+      "kv_cache_dtype": "bfloat16",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "bfloat16"
+    },
+    "vocab_padding": 0,
+    "decode_rope": "rotary_embedding_hf(is_decode_mode=True), device position gather",
+    "decode_rope_position_source": "device tensor advanced by ttnn.plus_one inside the trace",
+    "sampling_greedy": "Sampling1D force-argmax, distributed: per-die untilize/argmax/gather -> all-gather 4 candidates -> masked-min, traced, writes tt_out_tok",
+    "sampling_topk_topp": "Sampling1D split (local topk -> all-gather 32 candidates -> ttnn.sampling)",
+    "sampling_pad_to_power_of_2": false,
+    "host_logit_readback_on_token_out_path": false,
+    "host_argmax_on_token_out_path": false,
+    "kv_cache_dtype": "bfloat16",
+    "kv_cache_dtype_source": "config_not_yet_allocated",
+    "lm_head_math_fidelity": "MathFidelity.HiFi2",
+    "norm_math_fidelity": "MathFidelity.HiFi4",
+    "logits_dtype_observed": "bfloat16",
+    "sampling_dtype_observed": "bfloat16",
+    "terminal_dtype_source": "device_readback",
+    "kv_cache_paged": true,
+    "page_block_size": 32,
+    "collective_topology": "Topology.Ring",
+    "prefill_num_links": 2,
+    "decode_num_links": 1
+  },
+  "failed": 0
+}

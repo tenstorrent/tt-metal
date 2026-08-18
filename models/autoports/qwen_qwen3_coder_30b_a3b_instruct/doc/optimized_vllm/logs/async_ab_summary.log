@@ -1,0 +1,18 @@
+leg        run            n      mean    median      std      p99  stalls
+async_on   128_r1_res   127   19.8057   19.7991   0.1959  20.1800       0
+async_on   128_r2_res   127   19.8069   19.8036   0.1681  20.1893       0
+async_on   128_r3_res   127   19.8100   19.7993   0.7394  20.1760       0
+async_on   512_r1_res   511   19.8990   19.8918   0.3497  20.6042       0
+async_off  128_r1_res   127   21.5784   20.2574  14.0469  22.1178       1
+async_off  128_r2_res   127   21.5775   20.2371  13.9784  22.3207       1
+async_off  128_r3_res   127   21.5078   20.2145  14.0869  21.0003       1
+async_off  512_r1_res   511   20.7033   20.3205   7.0943  23.5302       1
+
+median_itl_128     off    20.2371  on    19.7993  gain   0.4378 (2.16 %)
+mean_itl_128       off    21.5545  on    19.8075  gain   1.7470 (8.11 %)
+e2e_128            off  2881.9324  on  2816.6670  gain  65.2654 (2.26 %)
+ttft_128           off   141.5923  on   300.7963  gain -159.2041 (-112.44 %)
+median_itl_512     off    20.3205  on    19.8918  gain   0.4287 (2.11 %)
+e2e_512            off 10726.2158  on 10468.3165  gain 257.8993 (2.40 %)
+
+-> /home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_vllm/bench/async_ab_summary.json
