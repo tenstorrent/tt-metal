@@ -88,9 +88,10 @@ class KimiK3Adapter(MLAPrefillAdapter):
     def reference_moe_cls(self):
         """K3's MoE block: DeepSeek-V3's, wrapped in the shared low-rank latent projection pair.
 
-        Note this reference computes **SiTU-GLU**, which no TT kernel implements yet (#51335). It is
-        therefore the truth model for the host-side latent-structure test, not for device PCC -- the
-        device runs SiLU, so device comparisons must use a SiLU-configured reference on both sides.
+        The block applies one activation to routed and shared experts alike, while the device has a
+        SiTU-GLU kernel for the routed expert only (#51351). ``run_reference_moe`` therefore builds
+        it with hidden_act="situ" and pins the shared half back to SiLU, so both sides of a device
+        comparison split the same way.
         """
         from models.demos.deepseek_v3_d_p.reference.kimi_k3.modeling_kimi_moe import KimiSparseMoeBlock
 

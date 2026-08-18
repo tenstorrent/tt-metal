@@ -77,6 +77,13 @@ _TORCH_ROUTED_ACTIVATION = {
     ttnn.RoutedExpertActivation.SituGlu: ACTIVATION_SITU,
 }
 
+# ...and -> the upstream vendored model's hidden_act spelling. None leaves the variant config's own
+# hidden_act alone, which is what every SiLU model wants.
+_UPSTREAM_ACT = {
+    ttnn.RoutedExpertActivation.Silu: None,
+    ttnn.RoutedExpertActivation.SituGlu: "situ",
+}
+
 
 def run_model(
     variant,
@@ -642,6 +649,9 @@ def run_model(
         shared_expert_weights=shared_expert_weights,
         latent_weights=latent_weights,
         x=x,
+        # Same routed/shared split the device runs; see run_reference_moe.
+        hidden_act=_UPSTREAM_ACT[routed_activation],
+        shared_hidden_act="silu" if _UPSTREAM_ACT[routed_activation] is not None else None,
     )
     if ref_out is not None and tt_output is not None:
         logger.info("Running upstream MoE reference")
