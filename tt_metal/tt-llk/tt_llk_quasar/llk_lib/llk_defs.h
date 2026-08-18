@@ -120,6 +120,74 @@ enum class SfpuType : std::uint32_t
     greater_than_zero,
     less_than_equal_zero,
     greater_than_equal_zero,
+    // ─────────────────────────────────────────────────────────────────────────
+    // SFPU parity set: kernels written in pure sfpi:: on Blackhole that are not
+    // yet ported to Quasar. The enumerator names match the Blackhole
+    // llk_sfpu_types.h names exactly, so a ported kernel needs no rename and the
+    // shared test harness resolves SfpuType::<op> identically on both
+    // architectures. Declaring the enumerator does not imply a kernel exists;
+    // the test dispatcher gates each branch on __has_include of the kernel
+    // header (see tests/helpers/include/sfpu_operations_quasar.h).
+    // ─────────────────────────────────────────────────────────────────────────
+    // Unary
+    add1,
+    bitwise_and,
+    bitwise_not,
+    bitwise_or,
+    bitwise_xor,
+    cast_fp32_to_fp16a,
+    cbrt,
+    celu,
+    digamma,
+    elu,
+    erf,
+    erfc,
+    erfinv,
+    exp2,
+    expm1,
+    fmod,
+    hardmish,
+    hardshrink,
+    hardsigmoid,
+    hardtanh,
+    heaviside,
+    i0,
+    i1,
+    identity,
+    left_shift,
+    lgamma,
+    logical_not_unary,
+    polygamma,
+    power,
+    prelu,
+    rdiv,
+    remainder,
+    right_shift,
+    rpow,
+    selu,
+    sign,
+    softshrink,
+    softsign,
+    tanhshrink,
+    unary_eq,
+    unary_ge,
+    unary_gt,
+    unary_le,
+    unary_lt,
+    unary_ne,
+    xielu,
+    // Ternary
+    addcdiv,
+    addcmul,
+    lerp,
+    snake_beta,
+    // Tile-structural / reduction. sum_int_row / sum_int_col have no Blackhole
+    // enumerator (the kernel exposes calculate_sum_int_row / _col directly); the
+    // names follow those entry points.
+    alt_complex_rotate90,
+    sum_int_col,
+    sum_int_row,
+    tiled_prod,
 };
 
 enum class DstSync : std::uint8_t

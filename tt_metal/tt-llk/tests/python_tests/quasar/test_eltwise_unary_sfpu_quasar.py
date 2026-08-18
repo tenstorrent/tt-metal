@@ -27,6 +27,12 @@ from helpers.param_config import (
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
+from helpers.sfpu_domains import for_op_pipeline
+from helpers.sfpu_port_quasar import (
+    Arity,
+    entries,
+    is_ported,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -417,7 +423,11 @@ def prepare_unary_inputs(
     input_format: DataFormat,
     output_format: DataFormat,
 ) -> torch.Tensor:
-    """Dispatch to the op-specific input-preparation routine."""
+    """Dispatch to the op-specific input-preparation routine.
+
+    Parity ops never reach here: their stimuli are already in-domain, because
+    generate_stimuli was handed the spec that sfpu_domains resolved for them.
+    """
     if mathop == MathOperation.Abs:
         return prepare_abs_inputs(src_A, src_B, input_format, output_format)
     if mathop == MathOperation.Square:
@@ -634,6 +644,12 @@ class OpConfig:
     input_dims: tuple  # list of [H, W] dimensions
     dest_sync_modes: tuple  # DestSync values to sweep
     uniform_spec: bool = False
+    # Parity ops (see helpers/sfpu_port_quasar.py) draw their stimuli from the shared
+    # sfpu_domains registry rather than from a bespoke prepare_* routine in this file, and
+    # carry their approximation / integer-format facts from the port table.
+    parity: bool = False
+    has_approx: bool = False
+    int_formats: bool = False
 
 
 TENSOR_DIMS = ([32, 32], [64, 64])
@@ -664,7 +680,41 @@ OP_CONFIGS = [
     ],
 ] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_OPS]
 
+
+# ---------------------------------------------------------------------------
+# SFPU parity set — the Blackhole kernels written in pure sfpi:: that Quasar does not
+# have yet (helpers/sfpu_port_quasar.py). Their configs are generated from the port
+# table rather than listed here, so adding an op to the parity set is a one-line change
+# in one place, and every op is filtered through is_ported(): until its Quasar kernel
+# header exists, the op contributes no variants and the suite stays green. Nothing needs
+# editing when a kernel lands.
+#
+# Stimuli come from sfpu_domains.for_op_pipeline rather than a prepare_* routine above:
+# the registry already carries a safe domain per (op, input format, output format) for
+# every one of these, and duplicating that judgement here for ~46 more ops would be a
+# second copy to drift.
+# ---------------------------------------------------------------------------
+PARITY_OP_CONFIGS = [
+    OpConfig(
+        op,
+        TENSOR_DIMS,
+        DEST_SYNC_MODES,
+        parity=True,
+        has_approx=entry.has_approx,
+        int_formats=entry.int_formats,
+    )
+    for entry in entries(Arity.UNARY)
+    for op in entry.ops
+    if is_ported(op)
+]
+
+OP_CONFIGS += PARITY_OP_CONFIGS
+
 OP_CONFIG_BY_MATHOP = {cfg.mathop: cfg for cfg in OP_CONFIGS}
+
+# Integer formats for the integer-domain parity ops (bitwise, bitwise_not, unary_shift).
+# Int32 is the only width their kernels declare on the I32 Dest layout.
+SFPU_PARITY_INT_FORMATS = input_output_formats([DataFormat.Int32], same=True)
 
 
 def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
@@ -673,6 +723,10 @@ def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
         return [InputOutputFormat(case.src, case.dst) for case in TYPECAST_CASES]
     if cfg.mathop in COMP_OPS:
         return SFPU_UNARY_FORMATS + SFPU_COMP_EXTRA_FORMATS
+    if cfg.parity and cfg.int_formats:
+        # An integer-domain parity op has no float path at all, so it replaces the float
+        # matrix rather than extending it.
+        return SFPU_PARITY_INT_FORMATS
     return SFPU_UNARY_FORMATS
 
 
@@ -730,14 +784,21 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
     for cfg in OP_CONFIGS:
         # Ops that expose both a non-approximate and an approximate kernel are swept over both
         # ApproximationMode values; every other op has a single implementation (ApproximationMode.No).
+        # A parity op sweeps both modes only when its kernel actually branches on
+        # APPROXIMATION_MODE (or forwards it into sfpu_reciprocal); carrying a template
+        # parameter it ignores would double the variant count for an identical result.
+        # The port table records which ones those are.
         approx_modes = (
             (ApproximationMode.No, ApproximationMode.Yes)
-            if cfg.mathop
-            in (
-                MathOperation.Exp,
-                MathOperation.Gelu,
-                MathOperation.Reciprocal,
-                MathOperation.Rsqrt,
+            if (
+                cfg.has_approx
+                or cfg.mathop
+                in (
+                    MathOperation.Exp,
+                    MathOperation.Gelu,
+                    MathOperation.Reciprocal,
+                    MathOperation.Rsqrt,
+                )
             )
             else (ApproximationMode.No,)
         )
@@ -808,6 +869,11 @@ def test_eltwise_unary_sfpu_quasar(
     square, typecast, and the six compare-to-zero modes), validated against the
     UnarySFPUGolden reference. Typecast sweeps explicit (src, dst) format pairs;
     every other op sweeps the shared format matrix.
+
+    Also drives the unary half of the SFPU parity set — the Blackhole kernels written
+    in pure sfpi:: that Quasar has not received yet. Those ops are generated from
+    helpers/sfpu_port_quasar.py and gated on their kernel header existing, so they
+    contribute no variants until the port lands and need no edit when it does.
     """
     (
         mathop,
@@ -822,11 +888,17 @@ def test_eltwise_unary_sfpu_quasar(
     is_typecast = mathop == MathOperation.Typecast
 
     cfg = OP_CONFIG_BY_MATHOP[mathop]
-    spec = (
-        StimuliSpec.uniform(low=0.0, high=1.0)
-        if (cfg.uniform_spec and not is_typecast)
-        else None
-    )
+    if cfg.parity:
+        # The registry resolves the domain across the whole input->output pipeline, so a
+        # narrowing output format tightens the input range rather than being discovered
+        # as an overflow later.
+        spec = for_op_pipeline(
+            mathop, formats.input_format, formats.output_format
+        ).spec_A
+    elif cfg.uniform_spec and not is_typecast:
+        spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    else:
+        spec = None
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -841,7 +913,7 @@ def test_eltwise_unary_sfpu_quasar(
         src_A = _prepare_typecast_input(
             src_A, src_B, formats.input_format, formats.output_format
         )
-    else:
+    elif not cfg.parity:
         src_A = prepare_unary_inputs(
             mathop, src_A, src_B, formats.input_format, formats.output_format
         )

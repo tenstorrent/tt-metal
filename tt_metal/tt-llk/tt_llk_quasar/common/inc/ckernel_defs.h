@@ -76,6 +76,29 @@ enum class BinaryOp : std::uint8_t
     QUANT,
     REQUANT,
     DEQUANT,
+    // ─────────────────────────────────────────────────────────────────────────
+    // SFPU parity set: binary kernels written in pure sfpi:: on Blackhole that
+    // are not yet ported to Quasar. Names match the Blackhole BinaryOp /
+    // SfpuType spellings so a ported kernel needs no rename. Declaring the
+    // enumerator does not imply a kernel exists; the test dispatcher gates each
+    // branch on __has_include of the kernel header.
+    // ─────────────────────────────────────────────────────────────────────────
+    ATAN2,
+    BITWISE_AND,
+    BITWISE_OR,
+    BITWISE_XOR,
+    DIV_INT32,
+    DIV_INT32_FLOOR,
+    FMOD,
+    FMOD_INT32,
+    ISCLOSE,
+    LOGSIGMOID,
+    MASK,
+    POW,
+    REMAINDER,
+    REMAINDER_INT32,
+    REMAINDER_UINT32,
+    RSUB_INT32,
 };
 
 // For instructions that address lower/upper 16 bits of a register
