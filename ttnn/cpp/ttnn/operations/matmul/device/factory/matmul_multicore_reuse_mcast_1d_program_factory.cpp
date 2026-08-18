@@ -1356,6 +1356,18 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
     uint32_t num_cores = num_blocks_total;
 
+    // mcast_in1 reads in1 only on the start_core and multicasts a single per_core_N-wide weight slice
+    // to all cores, so N must fit within per_core_N. Receivers with output_idx_x >= 1 would otherwise
+    // write output columns they never computed the correct weights for (silent wrong output).
+    // Mirrors the symmetric num_blocks_y == 1 guard on the mcast_in0 path.
+    TT_FATAL(
+        num_blocks_x == 1,
+        "matmul_multicore_reuse_mcast_1d requires num_blocks_x == 1 (N <= per_core_N) for mcast_in1. "
+        "Got N={}, per_core_N={}, num_blocks_x={}.",
+        N,
+        per_core_N,
+        num_blocks_x);
+
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
         tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core, num_cores, matmul_core_rect, row_major);
