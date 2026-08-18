@@ -28,10 +28,8 @@ namespace tt::tt_metal {
 template <bool hugepage_write = false>
 class DeviceCommand {
 public:
-    // Prefer DeviceCommand(MetalContext&). Legacy ctors resolve the global singleton and will be
-    // removed once all callers pass a MetalContext (N2c/C3).
-    // TODO(N2c/C3): remove once all callers pass a MetalContext.
-    DeviceCommand();
+    // Prefer DeviceCommand(MetalContext&). Legacy size/region ctors resolve the global singleton and will
+    // be removed once all callers pass a MetalContext (N2c/C3).
     // TODO(N2c/C3): remove once all callers pass a MetalContext.
     DeviceCommand(void* cmd_region, uint32_t cmd_sequence_sizeB);
     // TODO(N2c/C3): remove once all callers pass a MetalContext.
