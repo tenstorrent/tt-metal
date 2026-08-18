@@ -122,6 +122,10 @@ class SweepLog:
         self.line(f"│    dry-run: would run tt-run (up to {retries}×, recover on fail) → {recover_cmd}")
 
     # -- attempts + recover; ``indent`` is the tree prefix ("│    " under a solution, "    " at top level) --
+    def attempt_start(self, indent: str, label: str, n: int, m: int) -> None:
+        """Emit BEFORE the attempt runs, so a long/hung tt-run shows live activity instead of a frozen log."""
+        self.line(f"{indent}{label} {n}/{m} … running")
+
     def attempt(self, indent: str, label: str, n: int, m: int, status: str, seconds: Optional[float]) -> None:
         res = self._STATUS.get(status, status.upper())
         dur = f"  {seconds:.1f}s" if seconds is not None else ""
@@ -533,6 +537,7 @@ def _run_with_retries(
         else:
             header = f"\n# {label} attempt {attempt}/{attempts}\n"
 
+        log.attempt_start(indent, label, attempt, attempts)  # live "… running" before the (maybe long) attempt
         t0 = time.time()
         last_status, last_rc = _run_once(
             cmd,
