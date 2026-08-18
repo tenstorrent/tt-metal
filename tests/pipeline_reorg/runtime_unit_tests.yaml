@@ -8,6 +8,8 @@
 #       timeout: The maximum allowed runtime for this job in minutes on that SKU.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
+#   tags: Optional labels; callers can drop tagged entries via --exclude-tag.
+#   power_report: Optional; upload the tt-power-sidecar report the cmd writes.
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
@@ -442,9 +444,12 @@
 # coverage workflow reads this same list with --exclude-tag profiler.
 - name: runtime_device_profiler
   tags: [profiler]
+  power_report: true
   cmd: |
     export DONT_USE_VIRTUAL_ENVIRONMENT=1
-    bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_device_profiler_test
+    python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+      --backend sysfs --out /work/power_report.json \
+      -- bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_device_profiler_test
   skus:
     wh_n150_civ2:
       timeout: 25
@@ -463,9 +468,12 @@
 
 - name: runtime_realtime_profiler
   tags: [profiler]
+  power_report: true
   cmd: |
     export DONT_USE_VIRTUAL_ENVIRONMENT=1
-    bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_realtime_profiler_test
+    python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+      --backend sysfs --out /work/power_report.json \
+      -- bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_realtime_profiler_test
   skus:
     wh_n150_civ2:
       timeout: 15

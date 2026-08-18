@@ -10,6 +10,7 @@
 #       timeout: The maximum allowed runtime for this job in minutes on that SKU.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
+#   power_report: Optional; upload the tt-power-sidecar report the cmd writes.
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
@@ -143,9 +144,12 @@
 # =============================================================================
 
 - name: runtime_profiler_mid_run_data_dump
+  power_report: true
   cmd: |
     export DONT_USE_VIRTUAL_ENVIRONMENT=1
-    bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_mid_run_data_dump
+    python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+      --backend sysfs --out /work/power_report.json \
+      -- bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_mid_run_data_dump
   skus:
     wh_n150_civ2:
       timeout: 5
@@ -162,9 +166,12 @@
 
 # Kept separate from the _t3k entry, which does not exclude TestOpSupportCount.
 - name: runtime_profiler_perf_op_report
+  power_report: true
   cmd: |
     export DONT_USE_VIRTUAL_ENVIRONMENT=1
-    bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_perf_op_report_test
+    python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+      --backend sysfs --out /work/power_report.json \
+      -- bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_perf_op_report_test
   skus:
     wh_n150_civ2:
       timeout: 8
@@ -188,9 +195,12 @@
   team: runtime
 
 - name: runtime_profiler_l1_accumulate
+  power_report: true
   cmd: |
     export DONT_USE_VIRTUAL_ENVIRONMENT=1
-    bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_accumulate_profiler_test
+    python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+      --backend sysfs --out /work/power_report.json \
+      -- bash tests/scripts/single_card/run_single_card_profiler_tests.sh --full run_accumulate_profiler_test
   skus:
     wh_n150_civ2:
       timeout: 6
