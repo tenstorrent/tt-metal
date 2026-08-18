@@ -11,24 +11,22 @@
 #include "ckernel.h"
 #endif
 
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
 extern thread_local uint32_t hw_thread_idx;
 #endif
 
 namespace internal_ {
 
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
 inline __attribute__((always_inline)) uint32_t read_hw_thread_idx() {
 #if defined(COMPILE_FOR_TRISC)
     uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
     uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
     return NUM_DM_CORES + NUM_TRISC_CORES * neo_id + trisc_id;
-#elif defined(COMPILE_FOR_DM)
+#else
     uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     return static_cast<uint32_t>(hartid);
-#else
-#error "Invalid Quasar compile target."
 #endif
 }
 
@@ -65,7 +63,7 @@ inline __attribute__((always_inline)) void init_hw_thread_idx() { hw_thread_idx 
 // ETH Wormhole: Index 0
 // ETH Blackhole/Quasar: Index 0 to 1
 inline __attribute__((always_inline)) uint32_t get_hw_thread_idx() {
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
     return hw_thread_idx;
 #else
     return PROCESSOR_INDEX;
