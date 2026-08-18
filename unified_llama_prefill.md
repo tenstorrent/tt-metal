@@ -79,13 +79,38 @@ Clones of `AddOp` (`tt/unified/math.hpp:87`) over `mul_binary_tile` /
 `sub_binary_tile` / `div_binary_tile`, plus `operator*` and `operator-` alongside
 the existing `operator+`.
 
-- [ ] `tt/unified/math.hpp` -- op structs + `operator*` / `operator-` (same SFINAE as `operator+`)
-- [ ] `tt/unified/impl_v1.hpp` / `api.h` -- whatever `operator+` needed, mirrored
-- [ ] `unified_selftest.cpp` -- stubs + probe
-- [ ] Decide on `div`. `recip` + `mul` is cheaper on the SFPU and covers softmax;
-      `div` may not be worth carrying.
+- [x] `tt/unified/math.hpp` -- op structs + `operator-` / `operator*` / `operator/`
+- [x] `tt/unified/math.hpp` -- one FPU-fusion guard per operator, message factored
+      into `reject_fpu_operand<A>()` so the four cannot drift
+- [x] `unified_selftest.cpp` -- stubs + probe
+- [x] `unified_kernels/binary.cpp` + `test_unified_binary.py`
+- [x] **`div` decided: kept.** It is ~12 lines, it completes `+ - * /`, and for a
+      genuine elementwise divide it is ONE SFPU pass where `a * recip(b)` is two.
+      Softmax still normalises with `recip` + a broadcast multiply, which is a
+      different shape entirely (phase 5) -- `div` does not serve that.
 
-**Done when:** `(a * b) - c` compiles both ways and matches torch on device.
+**DONE.** Single ops land at 0.0038-0.0058 max relative error across four seeds,
+which is bfloat16's own 2^-8 floor; the mixed chain at 0.025-0.028.
+
+Facts worth keeping:
+
+- **Binaries were far cheaper than the unaries.** No `expr.hpp`, `api.h` or
+  `impl_v1.hpp` work at all: `operator+` is generic over `as_node`, and a binary is
+  not a method, so it never touches the `Fluent` mixin. Three sites each, all in
+  `math.hpp`. **This settles the macro question deferred from phase 1: no.** The
+  duplication did not grow the way the unaries' did.
+- **`tt/unified/impl_v1.hpp` and `api.h` were untouched by this phase**, which the
+  plan had expected to need mirroring. They did not.
+- **Operand order is gated explicitly.** For `sub` and `div` the SWAPPED reference
+  must fail. Swapping the operands inside `operator-` reports
+  `swapped rel err = 0.004 (MATCHES)` and fails -- a test comparing against one
+  reference could not tell that apart from correct.
+- **The chain's tolerance is 0.05 for a reason, not for slack.** `(a + b) - a`
+  cancels, amplifying relative error by `|a + b| / |b|`, which reaches 5 over the
+  input range: `5 * 2^-8 = 0.020` before the mul and div round again. Measured
+  0.025-0.028. Documented in the test so nobody tightens it and gets a flake.
+- **All four FPU-fusion guards verified by compiling a violation** -- `matmul(a,b)`
+  as an operand of each of `+ - * /` fails with the shared message.
 
 ## Phase 3 -- Matmul transpose flag (Q@Kt)
 

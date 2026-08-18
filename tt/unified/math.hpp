@@ -97,6 +97,54 @@ struct AddOp {
     }
 };
 
+// Sub and Div are NOT commutative, and nothing downstream reorders them: the
+// allocator evaluates lhs into `base` and rhs into `base + 1` in that order, and
+// metal's idst0/idst1 are its first and second operand. See the note on the
+// heavier-child optimisation in tt/unified/expr.hpp -- it is left out precisely
+// because it would need commutativity.
+//
+// No apply_in_place: a binary has two operands, so it cannot be a link in a
+// unary epilogue chain the way relu and exp can.
+
+struct SubOp {
+    static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        ckernel::sub_binary_tile_init();
+        ckernel::sub_binary_tile(lhs, rhs, out);
+#else
+        (void)lhs;
+        (void)rhs;
+        (void)out;
+#endif
+    }
+};
+
+struct MulOp {
+    static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        ckernel::mul_binary_tile_init();
+        ckernel::mul_binary_tile(lhs, rhs, out);
+#else
+        (void)lhs;
+        (void)rhs;
+        (void)out;
+#endif
+    }
+};
+
+struct DivOp {
+    static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        ckernel::div_binary_tile_init();
+        ckernel::div_binary_tile(lhs, rhs, out);
+#else
+        (void)lhs;
+        (void)rhs;
+        (void)out;
+#endif
+    }
+};
+
 struct ExpOp {
     static void apply(uint32_t src, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
@@ -374,6 +422,27 @@ auto operator+(const A& a, const B& b) {
     return expr::Bin<AddOp, LN, RN>{{}, as_node(a), as_node(b)};
 }
 
+template <typename A, typename B, typename = std::enable_if_t<is_operand<A>::value && is_operand<B>::value>>
+auto operator-(const A& a, const B& b) {
+    using LN = std::decay_t<decltype(as_node(a))>;
+    using RN = std::decay_t<decltype(as_node(b))>;
+    return expr::Bin<SubOp, LN, RN>{{}, as_node(a), as_node(b)};
+}
+
+template <typename A, typename B, typename = std::enable_if_t<is_operand<A>::value && is_operand<B>::value>>
+auto operator*(const A& a, const B& b) {
+    using LN = std::decay_t<decltype(as_node(a))>;
+    using RN = std::decay_t<decltype(as_node(b))>;
+    return expr::Bin<MulOp, LN, RN>{{}, as_node(a), as_node(b)};
+}
+
+template <typename A, typename B, typename = std::enable_if_t<is_operand<A>::value && is_operand<B>::value>>
+auto operator/(const A& a, const B& b) {
+    using LN = std::decay_t<decltype(as_node(a))>;
+    using RN = std::decay_t<decltype(as_node(b))>;
+    return expr::Bin<DivOp, LN, RN>{{}, as_node(a), as_node(b)};
+}
+
 // relu() on a tree wraps it; relu() on an FPU node folds into that node's
 // epilogue chain instead. This per-kind dispatch is what a CRTP `Derived`
 // parameter would otherwise be threading through every combinator.
@@ -471,12 +540,33 @@ struct always_false : std::false_type {};
 template <typename T>
 struct is_fpu_fusion : std::is_same<expr::kind_of_t<T>, FPUFusion> {};
 
-template <typename A, typename B, typename = std::enable_if_t<is_fpu_fusion<A>::value || is_fpu_fusion<B>::value>>
-void operator+(const A&, const B&) {
+// The message lives in one place so the four guards below cannot drift.
+template <typename A>
+void reject_fpu_operand() {
     static_assert(
         always_false<A>::value,
         "an FPU fusion consumes all of DST, so it cannot be an operand of a binary op; "
         "store it to an intermediate Storage first, then combine");
+}
+
+template <typename A, typename B, typename = std::enable_if_t<is_fpu_fusion<A>::value || is_fpu_fusion<B>::value>>
+void operator+(const A&, const B&) {
+    reject_fpu_operand<A>();
+}
+
+template <typename A, typename B, typename = std::enable_if_t<is_fpu_fusion<A>::value || is_fpu_fusion<B>::value>>
+void operator-(const A&, const B&) {
+    reject_fpu_operand<A>();
+}
+
+template <typename A, typename B, typename = std::enable_if_t<is_fpu_fusion<A>::value || is_fpu_fusion<B>::value>>
+void operator*(const A&, const B&) {
+    reject_fpu_operand<A>();
+}
+
+template <typename A, typename B, typename = std::enable_if_t<is_fpu_fusion<A>::value || is_fpu_fusion<B>::value>>
+void operator/(const A&, const B&) {
+    reject_fpu_operand<A>();
 }
 
 // --- Hardware startup ---
