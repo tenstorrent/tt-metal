@@ -12,6 +12,14 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+    // [#48552] Band-aid: raise the compute MOP timeout so the reduce MOP does not trip a 0x19 (MOP timeout)
+    // on a slow reader/handshake. Mirrors the avg-pool compute kernel. See project_quasar_0x19_mop_timeout.
+    // This masks the symptom, not the root cause. Unconditional here (this kernel is reduce-only, not shared
+    // with a maxpool path).
+#ifndef CSR_TIMEOUT_COUNT
+#define CSR_TIMEOUT_COUNT 0xBD0
+#endif
+    asm volatile("csrw %0, %1" : : "i"(CSR_TIMEOUT_COUNT), "r"(0x100000));
     compute_kernel_hw_startup(dfb::in, dfb::scaler, dfb::out);
 
     uint32_t Ht = get_arg(args::Ht);
