@@ -92,6 +92,7 @@ def run_combine(
     use_store_and_forward=False,
     invocations=1,
     staging_slots_per_stream=16,
+    init_zeros=False,
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
@@ -310,7 +311,7 @@ def run_combine(
         cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
-        init_zeros=False,
+        init_zeros=init_zeros,
         fp8_output=use_fp8_output,
         use_store_and_forward=use_store_and_forward,
         staging_buffer=staging_buffer,
@@ -766,6 +767,77 @@ def test_ttnn_combine_store_and_forward_tight_rings(mesh_device, device_params, 
         is_ci_env,
         is_ci_v2_env,
         use_store_and_forward=True,
-        invocations=3,
+        invocations=10,
         staging_slots_per_stream=2,
+    )
+
+
+# Two things change the kernels' shape rather than just their inputs, and both interact with the
+# relay path in ways the main matrix does not reach:
+#   init_zeros adds runtime args ahead of the store-and-forward ones, so a mis-sized parse shows up
+#     here and nowhere else;
+#   fp8 halves the output page, which moves the routing tail's offset and the staging page stride.
+# fp8 needs random inputs because predictable ones overflow e4m3's range, and TILE layout because the
+# cast happens in the packer during untilize.
+@pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2")
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((4, 2), fabric_to_device_params(ttnn.FabricConfig.FABRIC_2D))],
+    indirect=True,
+)
+@pytest.mark.parametrize("init_zeros", [False, True], ids=["no_init", "init_zeros"])
+@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+def test_ttnn_combine_store_and_forward_variants(
+    mesh_device, device_params, init_zeros, use_fp8_output, is_ci_env, is_ci_v2_env
+):
+    run_combine(
+        mesh_device,
+        128,
+        7168,
+        8,
+        4,
+        4,
+        1,
+        ttnn.Topology.Linear,
+        not use_fp8_output,
+        True,
+        ttnn.TILE_LAYOUT,
+        use_fp8_output,
+        is_ci_env,
+        is_ci_v2_env,
+        use_store_and_forward=True,
+        invocations=2,
+        init_zeros=init_zeros,
+    )
+
+
+# An axis only two devices deep puts every token one hop from home, so no relay level exists and the
+# flag is inert. Worth covering on real hardware because it has its own host-side branch -- the op
+# must accept the flag with no staging buffer rather than demanding one. (2,4) rather than (2,2)
+# because Blackhole only admits mesh configs that use every device.
+@pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4")
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((2, 4), fabric_to_device_params(ttnn.FabricConfig.FABRIC_2D))],
+    indirect=True,
+)
+def test_ttnn_combine_store_and_forward_no_relay_levels(mesh_device, device_params, is_ci_env, is_ci_v2_env):
+    assert combine_sf_levels(mesh_device, ttnn.Topology.Linear, 0) == 0, "a 2-device axis has no relay level"
+    run_combine(
+        mesh_device,
+        128,
+        7168,
+        8,
+        4,
+        4,
+        1,
+        ttnn.Topology.Linear,
+        True,
+        True,
+        ttnn.TILE_LAYOUT,
+        False,
+        is_ci_env,
+        is_ci_v2_env,
+        use_store_and_forward=True,
+        invocations=2,
     )
