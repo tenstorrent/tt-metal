@@ -199,16 +199,23 @@ promotion to `FUNCTIONAL` would require a same-task reference that does not exis
 
 Concurrency points (the meaningful ones):
 
-| isl | conc | Median TTFT | Median TPOT | Output tok/s |
-| ---: | ---: | ---: | ---: | ---: |
-| 128 | 32 | 101 ms | 33.2 ms | 389.8 |
-| 1024 | 32 | 312 ms | 34.4 ms | 223.4 |
-| 2048 | 32 | 610 ms | 34.5 ms | 148.7 |
-| 4096 | 26 | 1.14 s | 34.5 ms | 86.0 |
-| 8192 | 13 | 7.25 s | 35.1 ms | 42.0 |
-| 16384 | 6 | 11.6 s | 35.3 ms | 20.1 |
-| 32768 | 3 | 32.0 s | 36.1 ms | 8.7 |
-| 65536 | 1 | 34.7 s | 74.1 ms | 2.1 |
+| isl | conc | Median TTFT | Median TPOT | Output tok/s | Failed |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 | 32 | 100.75 ms | 33.23 ms | 381.98 | 0 |
+| 1024 | 32 | 311.38 ms | 34.42 ms | 223.36 | 0 |
+| 2048 | 32 | 547.09 ms | 34.49 ms | 159.51 | 0 |
+| 4096 | 26 | 988.32 ms | 34.62 ms | 85.69 | 0 |
+| 8192 | 13 | 9.88 s | 34.72 ms | 38.22 | 0 |
+| 16384 | 6 | 13.34 s | 35.14 ms | 17.93 | 0 |
+| 32768 | 3 | 33.65 s | 35.73 ms | 6.08 | 0 |
+| 65536 | 1 | 37.79 s | 199.45 ms | 0.78 | 0 |
+
+All numbers above are from the single fully green `rc=0` release run of
+2026-08-18, so the eval and benchmark figures in this document describe the same
+run. Points 1-17 all completed with **zero failed requests**; the table shows the
+concurrency points plus the single-request 65536 point. An earlier
+`--workflow benchmarks` validation produced very similar figures (TTFT 101 / 312 /
+610 ms at isl 128 / 1024 / 2048) but was a different run and is not mixed in here.
 
 **The `max_concurrency=1` points are warmup-dominated, not steady state.** They
 run n=4/2/1 requests, so the first request's trace capture (~2.4 s) sits inside

@@ -1,0 +1,173 @@
+2026-08-18 13:23:24,473 - runner.py:31 - INFO: → command=server
+2026-08-18 13:23:26,485 - runner.py:42 - INFO: ✅ command=server rc=0
+2026-08-18 13:23:26,485 - runner.py:31 - INFO: → command=release
+2026-08-18 13:23:27,670 [INFO] workflow_module.runner: → command=workflow
+2026-08-18 13:23:27,670 [INFO] workflow.release: === Workflow start: release | model=gemma-4-31B device=P300X2 port=8000 output=/home/mvasiljevic/tt-inference-server/workflow_logs/reports_output/release/gemma-4-31B_p300x2_release ===
+2026-08-18 13:23:27,682 [INFO] workflow.evals: → task=llm_eval
+2026-08-18 13:39:08,625 [INFO] llm_module.server_control: ✅ Inference server is healthy at http://127.0.0.1:8000/health
+2026-08-18 13:39:08,627 [INFO] test_module.llm_tests.llm_eval_tests: Running eval task=mmlu_generative
+2026-08-18 14:09:56,481 [INFO] test_module.llm_tests.llm_eval_tests: Running eval task=gpqa_diamond_generative_n_shot
+2026-08-18 14:12:12,253 [INFO] workflow.evals: ✅ llm_eval blocks=2 kind=evals (2924.6s)
+2026-08-18 14:12:12,253 [INFO] workflow.benchmarks: → task=llm_benchmark tools=vllm
+2026-08-18 14:12:12,256 [INFO] test_module.llm_tests.llm_benchmark_tests: Running LLM benchmark: tool=vllm over 17 sweep point(s)
+2026-08-18 14:12:12,257 [INFO] llm_module.server_control: ✅ Inference server is healthy at http://127.0.0.1:8000/health
+2026-08-18 14:12:12,258 [INFO] llm_module.runner: Running vllm sweep point 1/17  isl=128 osl=128 max_conc=1 n=8
+Successful requests:                     8
+Failed requests:                         0
+Total generated tokens:                  1024
+Output token throughput (tok/s):         17.74
+Median TTFT (ms):                        100.75
+Median TPOT (ms):                        33.23
+Median ITL (ms):                         29.32
+2026-08-18 14:13:17,030 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=128 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-18 14:13:17,032 [INFO] llm_module.runner: Running vllm sweep point 2/17  isl=128 osl=128 max_conc=32 n=256
+Successful requests:                     256
+Failed requests:                         0
+Total generated tokens:                  32768
+Output token throughput (tok/s):         381.98
+Median TTFT (ms):                        2469.31
+Median TPOT (ms):                        62.87
+Median ITL (ms):                         56.32
+2026-08-18 14:14:52,085 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=128 osl=128 max_concurrency=32; benchmark block is reported as NA (ungraded).
+2026-08-18 14:14:52,087 [INFO] llm_module.runner: Running vllm sweep point 3/17  isl=128 osl=1024 max_conc=1 n=4
+Successful requests:                     4
+Failed requests:                         0
+Total generated tokens:                  4096
+Output token throughput (tok/s):         32.76
+Median TTFT (ms):                        101.35
+Median TPOT (ms):                        30.45
+Median ITL (ms):                         29.95
+2026-08-18 14:17:06,300 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=128 osl=1024 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-18 14:17:06,302 [INFO] llm_module.runner: Running vllm sweep point 4/17  isl=128 osl=1024 max_conc=32 n=128
+Successful requests:                     128
+Failed requests:                         0
+Total generated tokens:                  131072
+Output token throughput (tok/s):         498.20
+Median TTFT (ms):                        2486.17
+Median TPOT (ms):                        61.86
+Median ITL (ms):                         61.09
+2026-08-18 14:21:38,795 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=128 osl=1024 max_concurrency=32; benchmark block is reported as NA (ungraded).
+2026-08-18 14:21:38,797 [INFO] llm_module.runner: Running vllm sweep point 5/17  isl=1024 osl=128 max_conc=1 n=4
+Successful requests:                     4
+Failed requests:                         0
+Total generated tokens:                  512
+Output token throughput (tok/s):         24.46
+Median TTFT (ms):                        311.38
+Median TPOT (ms):                        34.42
+Median ITL (ms):                         30.52
+2026-08-18 14:22:08,858 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=1024 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-18 14:22:08,860 [INFO] llm_module.runner: Running vllm sweep point 6/17  isl=1024 osl=128 max_conc=32 n=128
+Successful requests:                     128
+Failed requests:                         0
+Total generated tokens:                  16384
+Output token throughput (tok/s):         223.36
+Median TTFT (ms):                        9216.62
+Median TPOT (ms):                        71.95
+Median ITL (ms):                         65.31
+2026-08-18 14:23:31,755 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=1024 osl=128 max_concurrency=32; benchmark block is reported as NA (ungraded).
+2026-08-18 14:23:31,757 [INFO] llm_module.runner: Running vllm sweep point 7/17  isl=2048 osl=128 max_conc=1 n=4
+Successful requests:                     4
+Failed requests:                         0
+Total generated tokens:                  512
+Output token throughput (tok/s):         16.78
+Median TTFT (ms):                        547.09
+Median TPOT (ms):                        34.49
+Median ITL (ms):                         30.57
+2026-08-18 14:24:11,434 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=2048 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-18 14:24:11,436 [INFO] llm_module.runner: Running vllm sweep point 8/17  isl=2048 osl=128 max_conc=32 n=128
+Successful requests:                     128
+Failed requests:                         0
+Total generated tokens:                  16384
+Output token throughput (tok/s):         159.51
+Median TTFT (ms):                        16411.40
+Median TPOT (ms):                        72.76
+Median ITL (ms):                         66.37
+2026-08-18 14:26:04,150 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=2048 osl=128 max_concurrency=32; benchmark block is reported as NA (ungraded).
+2026-08-18 14:26:04,152 [INFO] llm_module.runner: Running vllm sweep point 9/17  isl=4096 osl=128 max_conc=1 n=4
+Successful requests:                     4
+Failed requests:                         0
+Total generated tokens:                  512
+Output token throughput (tok/s):         15.95
+Median TTFT (ms):                        988.32
+Median TPOT (ms):                        34.62
+Median ITL (ms):                         30.66
+2026-08-18 14:26:45,640 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=4096 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-18 14:26:45,642 [INFO] llm_module.runner: Running vllm sweep point 10/17  isl=4096 osl=128 max_conc=26 n=104
+Successful requests:                     104
+Failed requests:                         0
+Total generated tokens:                  13312
+Output token throughput (tok/s):         85.69
+Median TTFT (ms):                        25105.38
+Median TPOT (ms):                        69.93
+Median ITL (ms):                         63.35
+2026-08-18 14:29:31,534 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=4096 osl=128 max_concurrency=26; benchmark block is reported as NA (ungraded).
+2026-08-18 14:29:31,536 [INFO] llm_module.runner: Running vllm sweep point 11/17  isl=8192 osl=128 max_conc=1 n=2
+Successful requests:                     2
+Failed requests:                         0
+Total generated tokens:                  256
+Output token throughput (tok/s):         8.96
+Median TTFT (ms):                        9879.72
+Median TPOT (ms):                        34.72
+Median ITL (ms):                         30.86
+2026-08-18 14:30:09,213 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=8192 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-18 14:30:09,215 [INFO] llm_module.runner: Running vllm sweep point 12/17  isl=8192 osl=128 max_conc=13 n=26
+Successful requests:                     26
+Failed requests:                         0
+Total generated tokens:                  3328
+Output token throughput (tok/s):         38.22
+Median TTFT (ms):                        26536.01
+Median TPOT (ms):                        210.14
+Median ITL (ms):                         51.31
+2026-08-18 14:31:46,106 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=8192 osl=128 max_concurrency=13; benchmark block is reported as NA (ungraded).
+2026-08-18 14:31:46,108 [INFO] llm_module.runner: Running vllm sweep point 13/17  isl=16384 osl=128 max_conc=1 n=2
+Successful requests:                     2
+Failed requests:                         0
+Total generated tokens:                  256
+Output token throughput (tok/s):         7.19
+Median TTFT (ms):                        13340.84
+Median TPOT (ms):                        35.14
+Median ITL (ms):                         31.24
+2026-08-18 14:32:30,940 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=16384 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-18 14:32:30,942 [INFO] llm_module.runner: Running vllm sweep point 14/17  isl=16384 osl=128 max_conc=6 n=12
+Successful requests:                     12
+Failed requests:                         0
+Total generated tokens:                  1536
+Output token throughput (tok/s):         17.93
+Median TTFT (ms):                        26424.68
+Median TPOT (ms):                        208.48
+Median ITL (ms):                         44.27
+2026-08-18 14:34:06,238 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=16384 osl=128 max_concurrency=6; benchmark block is reported as NA (ungraded).
+2026-08-18 14:34:06,240 [INFO] llm_module.runner: Running vllm sweep point 15/17  isl=32768 osl=128 max_conc=1 n=1
+Successful requests:                     1
+Failed requests:                         0
+Total generated tokens:                  128
+Output token throughput (tok/s):         3.35
+Median TTFT (ms):                        33650.45
+Median TPOT (ms):                        35.73
+Median ITL (ms):                         32.01
+2026-08-18 14:34:53,627 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=32768 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-18 14:34:53,629 [INFO] llm_module.runner: Running vllm sweep point 16/17  isl=32768 osl=128 max_conc=3 n=3
+Successful requests:                     3
+Failed requests:                         0
+Total generated tokens:                  384
+Output token throughput (tok/s):         6.08
+Median TTFT (ms):                        37790.33
+Median TPOT (ms):                        199.45
+Median ITL (ms):                         41.70
+2026-08-18 14:36:06,296 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=32768 osl=128 max_concurrency=3; benchmark block is reported as NA (ungraded).
+2026-08-18 14:36:06,298 [INFO] llm_module.runner: Running vllm sweep point 17/17  isl=65536 osl=128 max_conc=1 n=1
+Successful requests:                     1
+Failed requests:                         0
+Total generated tokens:                  128
+Output token throughput (tok/s):         0.78
+Median TTFT (ms):                        159758.68
+Median TPOT (ms):                        37.37
+Median ITL (ms):                         33.53
+2026-08-18 14:39:00,087 [WARNING] llm_module.target_checks: No perf targets for sweep point isl=65536 osl=128 max_concurrency=1; benchmark block is reported as NA (ungraded).
+2026-08-18 14:39:00,088 [INFO] test_module.llm_tests.llm_performance_tests: LLM sweep produced 17 Block(s) over 17 sweep point(s)
+2026-08-18 14:39:00,088 [INFO] workflow.benchmarks: ✅ task=llm_benchmark blocks=17 kind=benchmarks (1607.8s)
+2026-08-18 14:39:00,088 [INFO] workflow.spec_tests: → task=spec_tests
+2026-08-18 14:39:00,092 [INFO] workflow.spec_tests: ⏭  task=spec_tests no-op rc=0 (0.0s)
+2026-08-18 14:39:00,095 [INFO] workflow.release: === Workflow done: release (rc=0) ===
+2026-08-18 14:39:00,095 [INFO] workflow_module.runner: ✅ command=workflow rc=0
+2026-08-18 14:39:00,133 - runner.py:42 - INFO: ✅ command=release rc=0

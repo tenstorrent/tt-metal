@@ -1,0 +1,16 @@
+2026-08-18 13:23:28,624 - __main__ - INFO - Set TT_METAL_OPERATION_TIMEOUT_SECONDS=5.0
+2026-08-18 13:23:28,624 - __main__ - INFO - setting env var: EXTRA_MODELS_DIR=../../tt-metal/models/autoports/vllm_bundles
+2026-08-18 13:23:28,624 - __main__ - WARNING - env var TT_METAL_OPERATION_TIMEOUT_SECONDS is already set to 5.0, overriding with 120
+2026-08-18 13:23:28,624 - __main__ - INFO - setting env var: TT_METAL_OPERATION_TIMEOUT_SECONDS=120
+  --chat-template ../../tt-metal/models/autoports/google_gemma_4_31b/doc/vllm_integration/chat_template.jinja \
+  --override_generation_config '{"temperature": 0.0, "top_k": 1}' \
+INFO 08-18 13:23:29 platform.py:327] Registered TT model TTGemma4ForConditionalGeneration -> models.autoports.google_gemma_4_31b.tt.generator_vllm:Gemma4ForCausalLM (from EXTRA_MODELS_DIR/gemma4_31b_autoport)
+(APIServer pid=1594822) INFO 08-18 13:23:29 utils.py:223] non-default args: {'chat_template': '../../tt-metal/models/autoports/google_gemma_4_31b/doc/vllm_integration/chat_template.jinja', 'max_log_len': 32, 'model': 'google/gemma-4-31B', 'seed': 9472, 'max_model_len': 113280, 'override_generation_config': {'temperature': 0.0, 'top_k': 1}, 'block_size': 64, 'max_num_batched_tokens': 113280, 'max_num_seqs': 32, 'async_scheduling': True, 'additional_config': {'tt': {'fabric_config': 'FABRIC_1D', 'trace_region_size': 268435456, 'sample_on_device_mode': 'all', 'trace_mode': 'all', 'enable_model_warmup': True}}}
+(APIServer pid=1594822) INFO 08-18 13:23:36 platform.py:327] Registered TT model TTGemma4ForConditionalGeneration -> models.autoports.google_gemma_4_31b.tt.generator_vllm:Gemma4ForCausalLM (from EXTRA_MODELS_DIR/gemma4_31b_autoport)
+(EngineCore_DP0 pid=1595072) INFO 08-18 13:23:43 platform.py:327] Registered TT model TTGemma4ForConditionalGeneration -> models.autoports.google_gemma_4_31b.tt.generator_vllm:Gemma4ForCausalLM (from EXTRA_MODELS_DIR/gemma4_31b_autoport)
+(EngineCore_DP0 pid=1595072) INFO 08-18 13:23:43 platform.py:327] Registered TT model TTGemma4ForConditionalGeneration -> models.autoports.google_gemma_4_31b.tt.generator_vllm:Gemma4ForCausalLM (from EXTRA_MODELS_DIR/gemma4_31b_autoport)
+(EngineCore_DP0 pid=1595072) INFO 08-18 13:23:43 platform.py:327] Registered TT model TTGemma4ForConditionalGeneration -> models.autoports.google_gemma_4_31b.tt.generator_vllm:Gemma4ForCausalLM (from EXTRA_MODELS_DIR/gemma4_31b_autoport)
+(EngineCore_DP0 pid=1595072) INFO 08-18 13:38:51 kv_cache_utils.py:1308] GPU KV cache size: 103,872 tokens
+(EngineCore_DP0 pid=1595072) INFO 08-18 13:38:51 kv_cache_utils.py:1313] Maximum concurrency for 113,280 tokens per request: 1.00x
+(EngineCore_DP0 pid=1595072) INFO 08-18 13:38:58 platform.py:327] Registered TT model TTGemma4ForConditionalGeneration -> models.autoports.google_gemma_4_31b.tt.generator_vllm:Gemma4ForCausalLM (from EXTRA_MODELS_DIR/gemma4_31b_autoport)
+(APIServer pid=1594822) INFO 08-18 13:38:58 hf.py:318] Detected the chat template content format to be 'string'. You can set `--chat-template-content-format` to override this.
