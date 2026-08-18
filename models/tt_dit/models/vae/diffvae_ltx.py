@@ -264,7 +264,11 @@ class NeighborhoodAttention(Module):
         # chip's matmul only ever computes its own heads. The partition then has nothing to do --
         # the output is born 3*dim/tp wide -- and nlp_create_qkv_heads splits it locally.
         self.colpar_qkv = tp_axis is not None and os.environ.get("DIFFVAE_DET_COLPAR_QKV") == "1"
-        self.fused_qkv = self.colpar_qkv or (tp_axis is not None and os.environ.get("DIFFVAE_DET_FUSED_QKV") == "1")
+        # Deliberately not gated on tp_axis. A TP axis is what the head *partition* needs; what
+        # fused RoPE needs is the (B, NH, S, HD) TILE layout nlp_create_qkv_heads emits, which a
+        # replicated stage wants just as much. At tp=1 the partition is skipped and the layout
+        # benefit stands alone -- this is what lets stage 1 reach the RoPE and qkv fast paths.
+        self.fused_qkv = self.colpar_qkv or os.environ.get("DIFFVAE_DET_FUSED_QKV") == "1"
         # DIFFVAE_DET_FUSED_ROPE=1: rotate with one rotary_embedding_hf per lane instead of the
         # nine-op halves form. The weight fold already puts q/k in HF's rotate_half convention, so
         # this is the same arithmetic; what it needs is a full-width cos/sin rather than the half
@@ -276,7 +280,12 @@ class NeighborhoodAttention(Module):
         # take. The volume is an interface, not a computation: to_seq tears down what to_volume just
         # built, and the round trip copies q/k/v three times where the reorder needs one.
         # Needs the fused RoPE, which is the only form that leaves q/k in TILE (B, NH, S, HD).
-        self.flat_seq = self.fused_rope and os.environ.get("DIFFVAE_DET_FLAT_SEQ") == "1"
+        # Backend-gated because only the W-sharded attention implements the flat path; the gather
+        # backend takes the 6-D volume, and reaching it with flat_seq set would hand a replicated
+        # stage the sharded kernel.
+        self.flat_seq = (
+            self.fused_rope and self.na3d_backend == "op_sp_w_sharded" and os.environ.get("DIFFVAE_DET_FLAT_SEQ") == "1"
+        )
         self._fused_rope_cache: dict = {}
         self.tp = int(list(mesh_device.shape)[tp_axis]) if tp_axis is not None else 1
         if self.fused_qkv:
@@ -378,7 +387,7 @@ class NeighborhoodAttention(Module):
             flat = self.qkv(x)
             ttnn.deallocate(x)
             qkv = ttnn.reshape(flat, (1, 1, tokens, int(flat.shape[-1])))
-            if not self.colpar_qkv:
+            if not self.colpar_qkv and self.tp > 1:
                 # The head partition lands here rather than inside the attention, so the norms, the
                 # scale and both RoPEs below see heads/tp instead of computing every head and
                 # letting the attention discard all but this chip's. Under colpar_qkv the matmul

@@ -21,6 +21,7 @@ import pytest
 import torch
 
 import ttnn
+from models.tt_dit.layers.na3d import build_device_plan, plan_na3d
 from models.tt_dit.models.vae.diffvae_ltx import NABlock, default_rope_dim_split, rope_tables
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
@@ -192,3 +193,68 @@ def _seeded(name: str, shape: tuple[int, ...]) -> torch.Tensor:
         return (1.0 + 0.05 * torch.randn(*shape, generator=g)).to(torch.float32)
     scale = shape[-2] ** -0.5 if len(shape) > 1 else 0.02
     return (torch.randn(*shape, generator=g) * scale).to(torch.float32)
+
+
+#: Stage 1 of the same decode: (dim, kernel, dims, blocks). Its W=60 does not divide the size-8 axis
+#: so it runs replicated on the gather backend, which is why it needs its own case -- and why only
+#: the arms that do not depend on a TP axis or on the W-sharded attention can reach it.
+STAGE1 = (2048, (3, 7, 7), (6, 34, 60), 4)
+
+STAGE1_ARMS = {
+    "swiglu": ("DIFFVAE_DET_FUSED_SWIGLU",),
+    "qkv": ("DIFFVAE_DET_FUSED_QKV",),
+    "qkv_rope": ("DIFFVAE_DET_FUSED_QKV", "DIFFVAE_DET_FUSED_ROPE"),
+    "recommended": ("DIFFVAE_DET_FUSED_QKV", "DIFFVAE_DET_FUSED_ROPE", "DIFFVAE_DET_FUSED_SWIGLU"),
+}
+
+
+def _build_stage1(mesh, enabled: tuple[str, ...]):
+    """A replicated stage-1 block, asserting the flags took and that the unreachable ones did not."""
+    for flag in FLAGS:
+        os.environ[flag] = "1" if flag in enabled else "0"
+    dim, kernel, _, _ = STAGE1
+    block = NABlock(
+        dim,
+        kernel,
+        head_dim=HEAD_DIM,
+        mesh_device=mesh,
+        na3d_backend="gather",
+        ccl_manager=None,
+        sp_axis=None,
+        tp_axis=None,
+    )
+    assert block.attn.tp == 1
+    assert block.attn.fused_qkv is ("DIFFVAE_DET_FUSED_QKV" in enabled)
+    assert block.attn.fused_rope is ("DIFFVAE_DET_FUSED_ROPE" in enabled)
+    assert block.attn.colpar_qkv is False, "colpar needs a tp_axis to shard the weight over"
+    assert block.attn.flat_seq is False, "flat_seq exists only in the W-sharded attention"
+    assert block.mlp.fused is ("DIFFVAE_DET_FUSED_SWIGLU" in enabled)
+    return block
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True, ids=["1d"])
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("arm", list(STAGE1_ARMS), ids=list(STAGE1_ARMS))
+def test_det_stage1_arm_matches_baseline(*, mesh_device, device_params, arm):
+    """Every stage-1 fast path reproduces the unflagged replicated block on the same weights."""
+    dim, kernel, dims, _ = STAGE1
+    state = _state(dim, seed=11)
+    t, h, w = dims
+    tokens = t * h * w  # replicated: no W shard
+    cos, sin = rope_tables(dims, default_rope_dim_split(HEAD_DIM), mesh_device=mesh_device)
+    plan = build_device_plan(
+        plan_na3d(dims, kernel),
+        mesh_device=mesh_device,
+        ccl_manager=CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear),
+    )
+    x_t = torch.randn(tokens, dim, generator=torch.Generator().manual_seed(5))
+
+    def run(enabled):
+        block = _build_stage1(mesh_device, enabled)
+        block.load_torch_state_dict(dict(state))
+        x = ttnn.from_torch(x_t, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        out = block(x, dims=dims, cos=cos, sin=sin, device_plan=plan)
+        return ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
+
+    reference = run(())
+    assert_quality(reference, run(STAGE1_ARMS[arm]), pcc=0.999)
