@@ -144,6 +144,26 @@ inline void llk_unpack_tilizeA_B_init(
     llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(operandA_id);
     llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
 
+    // [#48552] Reprogram operandB (the reduce scaler / srcB) buffer descriptor. main DROPPED this block when
+    // this file was reverted; without it operandB keeps the stale/default full-tile dims from
+    // llk_unpack_hw_configure and its UNPACR reads resolve to a bad L1 address (maxpool/halo padding path ->
+    // MEM_READ_NO_RESPONSE / hang). Ported from bbradel-52085_resnet_qsr per LLK-team (Ana Mokan) guidance.
+    // Uses _configure_buf_desc_table_ (no validate) so it does not itself trip validate_buffer_desc. NOTE:
+    // llk_unpack_hw_configure still programs operandB with z_dim=4 / y_dim!=16 and trips the
+    // "y_dim must be 16 when z_dim is 4" assert (ckernel_trisc_common.h:146) BEFORE this overwrite, so that
+    // assert is disabled on the Quasar reduce path (see ckernel_trisc_common.h).
+    const ckernel::TensorShape tensor_shape_B = get_operand_tensor_shape(operandB_id);
+    buffer_descriptor_u bd_val_b = {0};
+    bd_val_b.f.l1_addr_16B = get_local_dfb_interface(operandB_id).tc_slots[0].base_addr;
+    bd_val_b.f.format = static_cast<std::uint8_t>(unpack_src_format[operandB_id]);
+    bd_val_b.f.x_dim = ckernel::trisc::FACE_C_DIM;
+    bd_val_b.f.y_dim = ckernel::trisc::FACE_R_DIM;
+    bd_val_b.f.z_dim =
+        (tensor_shape_B.num_faces_r_dim == tensor_shape_B.num_faces_c_dim)
+            ? tensor_shape_B.total_num_faces()
+            : ckernel::trisc::compute_square_of_min(tensor_shape_B.num_faces_r_dim, tensor_shape_B.num_faces_c_dim);
+    ckernel::trisc::_configure_buf_desc_table_(operandB_id, bd_val_b);
+
 #if defined(REDUCE_OP)
     _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(
         ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),

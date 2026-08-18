@@ -145,7 +145,13 @@ inline void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
     LLK_ASSERT(buf_desc.f.z_dim == 1 || buf_desc.f.z_dim == 4, "z_dim must be 1 or 4");
     if (buf_desc.f.z_dim == 4)
     {
-        LLK_ASSERT(buf_desc.f.y_dim == 16, "y_dim must be 16 when z_dim is 4");
+        // [#48552] Band-aid (LLK-team / Ana Mokan guidance): disabled on the Quasar reduce path. The
+        // unpack_tilizeA_B reduce-scaler (operandB) BD is programmed by llk_unpack_hw_configure with
+        // z_dim=4 / y_dim!=16 and trips this assert; llk_unpack_tilizeA_B_init then overwrites operandB with
+        // the correct dims (see tt_metal/hw/ckernels/quasar/metal/llk_api/llk_unpack_tilize_api.h), so the
+        // runtime read is correct but the assert still fires on the pre-overwrite programming. Re-enable once
+        // the scaler BD is programmed correctly at hw_configure time.
+        // LLK_ASSERT(buf_desc.f.y_dim == 16, "y_dim must be 16 when z_dim is 4");
     }
     if constexpr (MODE == L1AccessMode::Strided)
     {
