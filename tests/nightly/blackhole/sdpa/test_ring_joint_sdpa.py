@@ -5721,12 +5721,15 @@ else:
         # Kimi-K3, measured 2026-08-05 on bh_quietbox_2 (run 31003064713): 4.845 ms. Inert until
         # #52190 ungates this test here; kimi50k read 65.89 vs its committed 66.05 in the same run.
         ("kimi_k3", 32, 640, 4, 67.07),
-        # Genuine 16x32 tiny tiles, processed as paired chunks: each K chunk is walked once per
-        # PAIR of 16-row chunks (Sq_chunk_t=2), and the Blackhole tiny-pair no-mop matmul holds
-        # each streamed SrcA (K^T) tile across the pair's two genuine 16x32 @ 32x32 walks,
-        # halving SrcA unpack traffic (the q16 bottleneck: K streaming is independent of Q rows).
-        # Beats the q32 row. Measured 2026-08-17: 4.533 ms, 71.68% math utilization on QB.
-        ("kimi_k3", 16, 640, 4, 71.68),
+        # Genuine 16x32 tiny tiles at HiFi2 (same compute config as q32; PCC ~0.9995), processed as
+        # paired chunks: each K chunk is walked once per PAIR of 16-row chunks (Sq_chunk_t=2), and
+        # the Blackhole tiny-pair no-mop matmul holds each streamed SrcA (K^T) tile across the
+        # pair's two genuine 16x32 @ 32x32 walks — interleaved per column so DEST accumulation
+        # revisits sit 8 MVMULs apart (a 16-row tile alone can only manage 4, which exposes the
+        # DEST read-modify-write latency). Math-thread matmul time measures ~1.25 cycles/MVMUL,
+        # the tiny-tile floor; the gap to the q32 row is exactly that 1.25-vs-1.05 factor.
+        # Measured 2026-08-18: 5.393 ms, 60.31% math utilization on QB.
+        ("kimi_k3", 16, 640, 4, 60.31),
     ]
 
 
