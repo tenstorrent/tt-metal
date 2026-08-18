@@ -4,19 +4,27 @@ Goal: implement the DFlash drafter Muse-Glimmer-30B ships with, and win decode
 t/s/u at batch 1.  The model card advertises **3.1× on an RTX 5090** (74.9 →
 233.4 tok/s) from this feature, and no stage of the original bring-up ported it.
 
-Status: **7.3× faster than the first working run; ahead of non-speculative decode
-on the highest-acceptance prompt and behind it on the rest.**  26.2 t/s/u against a
-42.9 t/s/u baseline at ISL 67 / OSL 128, and 25.4–44.2 t/s/u across six prompts
-(mean 32.6, up from 22.0) where one prompt reaches **1.03×**.
+Status: **DFlash is now faster than not using it** (F25).  Against a 42.9 t/s/u
+non-speculative baseline:
 
-Two independent things cap it, both now measured rather than assumed:
+| workload | DFlash | vs baseline |
+|---|---|---|
+| ISL 89 / OSL 256, structured output | **51.82 t/s/u** | **1.211×** |
+| ISL 67 / OSL 128, free-form code | **42.71 t/s/u** | 0.995× |
 
-* **one target forward costs 55–67 ms whatever it computes** (F13), because the
-  prefill path is host-dispatch bound — so the verify cannot be made cheaper by
-  verifying fewer rows, and it alone exceeds the break-even budget;
-* **acceptance is capped by the target port, not the drafter** (F15) — the real HF
-  drafter scores no better against this target — so the CPU oracle's 4.41
-  accepted/forward is not reachable here.
+The margin grows with output length, because what was removed (trace capture) cost
+one capture per 32 generated tokens while the benefit is per token.
+
+Two things shaped the route here, and only one of them survived as a limit:
+
+* **one target forward costs 55–67 ms eagerly whatever it computes** (F13), because
+  the prefill path is host-dispatch bound.  Tracing removes that dispatch: the same
+  32-row verify replays in 24.7 ms, one decode step (F18, F23).
+* **acceptance is workload-bound before it is port-bound.**  F15 read it as a hard
+  cap from the target's fidelity, which F25 corrects: the same code measures 18 % on
+  free-form code, 26 % on structured output, and an external bring-up reports 83 % on
+  a repeating pattern.  The drafter is genuinely weaker than the CPU oracle suggested,
+  but "capped" overstated it — the *prompt* moves acceptance more than the port does.
 
 The *shipped* non-speculative path is unaffected: measured against the pristine
 pre-DFlash commit it is 42.92 vs 42.96 t/s/u, a -0.10 % difference inside the
