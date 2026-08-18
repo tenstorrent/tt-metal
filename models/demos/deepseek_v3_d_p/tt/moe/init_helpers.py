@@ -26,9 +26,26 @@ MAX_PAYLOAD_SIZE_BH = 14 * 1024  # Blackhole hardware max ~15232 B
 MAX_PAYLOAD_SIZE_WH = 7 * 1024  # Wormhole hardware max ~7616 B
 
 
-def get_max_payload_size() -> int:
-    """Return the arch-appropriate fabric payload size. Deferred to avoid probing hardware at import time."""
-    return MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH
+# Alignment a DRAM read requires of its L1 destination (NOC_DRAM_READ_ALIGNMENT_BYTES). An
+# unaligned destination corrupts silently rather than failing, so anything sizing a buffer that a
+# kernel will read out of DRAM has to agree with the device on this value.
+DRAM_ALIGNMENT_BH = 64
+DRAM_ALIGNMENT_WH = 32
+
+
+def get_dram_alignment() -> int:
+    """Return the arch-appropriate DRAM alignment. Deferred to avoid probing hardware at import time."""
+    return DRAM_ALIGNMENT_BH if is_blackhole() else DRAM_ALIGNMENT_WH
+
+
+def get_max_payload_size(tail_bytes: int = 0) -> int:
+    """Return the arch-appropriate fabric payload size.
+
+    `tail_bytes` widens the payload so a token plus its routing tail still fits in a single fabric
+    packet. Without it the tail chunks into a second packet, which costs an EDM slot and a full
+    fabric header per staged token. Deferred to avoid probing hardware at import time.
+    """
+    return (MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH) + tail_bytes
 
 
 @dataclass

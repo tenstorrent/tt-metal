@@ -10,6 +10,7 @@ PyTorch reference implementation when combining expert outputs back to token pos
 Uses torch-generated dispatch inputs to isolate the combine operation.
 """
 
+import sys
 from dataclasses import dataclass
 
 import pytest
@@ -40,7 +41,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import (
+    TtCombineModule,
+    combine_sf_levels,
+    make_combine_staging_buffer,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     assert_output_shape,
     log_combine_mismatch_details,
@@ -65,6 +70,7 @@ def run_combine(
     use_fp8_output,
     is_ci_env,
     is_ci_v2_env,
+    use_store_and_forward=False,
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
@@ -259,6 +265,19 @@ def run_combine(
         torch_output = torch_output.to(torch.float8_e4m3fn).to(torch.bfloat16)
 
     # Run ttnn combine
+    staging_buffer = (
+        make_combine_staging_buffer(
+            mesh_device,
+            emb_dim,
+            output_dtype=ttnn.fp8_e4m3 if use_fp8_output else ttnn.bfloat16,
+            num_links=num_links,
+            topology=topology,
+            cluster_axis=sp_axis,
+        )
+        if use_store_and_forward
+        else None
+    )
+
     tt_combine = TtCombineModule(
         mesh_device=mesh_device,
         dispatch_group_size=dispatch_group_size,
@@ -271,6 +290,8 @@ def run_combine(
         topology=topology,
         init_zeros=False,
         fp8_output=use_fp8_output,
+        use_store_and_forward=use_store_and_forward,
+        staging_buffer=staging_buffer,
     )
 
     tt_output = tt_combine(
@@ -544,3 +565,131 @@ def test_ttnn_combine(
         is_ci_env,
         is_ci_v2_env,
     )
+
+
+# Store-and-forward is a separate entrypoint rather than another axis on test_ttnn_combine so that
+# every existing test ID stays byte-identical -- an extra parametrize axis appends its id to all of
+# them and silently breaks the CI -k filters that select on those names. It also keeps the matrix
+# down to the axes that actually interact with the relay path: the two dispatched-buffer layouts
+# (the path is meant to be layout-agnostic) and link count (which sets the stream count).
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    _cross_product_conflated_cmb_test_dimensions(),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
+@pytest.mark.parametrize(
+    "dispatched_buffer_layout",
+    [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    ids=["tile", "row_major"],
+)
+def test_ttnn_combine_store_and_forward(
+    mesh_device,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    num_links,
+    topology,
+    run_pcc_check,
+    dispatched_buffer_layout,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    run_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        num_links,
+        topology,
+        True,  # predictable data: a routing bug reads as a specific wrong token, not noise
+        run_pcc_check,
+        dispatched_buffer_layout,
+        False,  # bf16 output
+        is_ci_env,
+        is_ci_v2_env,
+        use_store_and_forward=True,
+    )
+
+
+# A validator that never fires is worthless, so each store-and-forward rejection gets exercised.
+# One cheap mesh is enough: these are host-side shape and consistency checks, not data paths.
+@pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2")
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((4, 2), fabric_to_device_params(ttnn.FabricConfig.FABRIC_2D))],
+    indirect=True,
+)
+def test_ttnn_combine_store_and_forward_rejects(
+    mesh_device, device_params, monkeypatch, expect_error, is_ci_env, is_ci_v2_env
+):
+    assert combine_sf_levels(mesh_device, ttnn.Topology.Linear, 0) == 2, "4-device linear axis needs 2 relay levels"
+
+    # Captured before any patching: the module global is rebound below, so the bare name would
+    # otherwise resolve to whichever stub was installed last.
+    real_make_staging_buffer = make_combine_staging_buffer
+
+    def run():
+        run_combine(
+            mesh_device,
+            128,
+            7168,
+            8,
+            4,
+            4,
+            1,
+            ttnn.Topology.Linear,
+            True,
+            True,
+            ttnn.TILE_LAYOUT,
+            False,
+            is_ci_env,
+            is_ci_v2_env,
+            use_store_and_forward=True,
+        )
+
+    monkeypatch.setattr(sys.modules[__name__], "make_combine_staging_buffer", lambda *a, **k: None)
+    with expect_error(ValueError, "needs a staging_buffer"):
+        run()
+
+    def wrong_page_size(mesh, emb_dim, **kwargs):
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 64, 1024]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    monkeypatch.setattr(sys.modules[__name__], "make_combine_staging_buffer", wrong_page_size)
+    with expect_error(RuntimeError, "aligned page size"):
+        run()
+
+    def indivisible_page_count(mesh, emb_dim, **kwargs):
+        reference = real_make_staging_buffer(mesh, emb_dim, num_links=1, topology=ttnn.Topology.Linear, cluster_axis=0)
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 65, reference.shape[-1]]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    monkeypatch.setattr(sys.modules[__name__], "make_combine_staging_buffer", indivisible_page_count)
+    with expect_error(RuntimeError, "does not divide evenly"):
+        run()
+
+    # A buffer handed over with the flag clear would let the program-cache key and the workload's
+    # buffer list disagree about whether the path is live.
+    monkeypatch.setattr(sys.modules[__name__], "make_combine_staging_buffer", real_make_staging_buffer)
+    buffered_module = TtCombineModule
+
+    class FlagOffButBuffered(buffered_module):
+        def __init__(self, *args, **kwargs):
+            kwargs["use_store_and_forward"] = False
+            super().__init__(*args, **kwargs)
+            self.use_store_and_forward = False
+
+    monkeypatch.setattr(sys.modules[__name__], "TtCombineModule", FlagOffButBuffered)
+    with expect_error(RuntimeError, "must not be supplied"):
+        run()

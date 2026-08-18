@@ -34,6 +34,71 @@ TtDispatchModule produces the dispatched_buffer and metadata consumed here.
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_dram_alignment
+
+# Bytes of routing tail the store-and-forward path appends to a staged token. Must match
+# sf::tail_bytes() in combine/device/combine_sf.hpp.
+COMBINE_SF_TAIL_BYTES = 16
+
+
+def combine_sf_levels(mesh_device, topology, cluster_axis=0):
+    """Number of relay levels the store-and-forward path needs on this mesh.
+
+    Zero means no token is ever more than one hop from its destination, so the path is inert and
+    no staging buffer is required. Mirrors sf::num_levels() in combine_sf.hpp.
+    """
+    extent = mesh_device.shape[cluster_axis]
+    max_distance = extent // 2 if topology == ttnn.Topology.Ring else extent - 1
+    return max_distance - 1 if max_distance >= 2 else 0
+
+
+def combine_sf_page_bytes(emb_dim, output_dtype=ttnn.bfloat16):
+    """Stride of one staging page: a token payload plus its routing tail, DRAM-aligned.
+
+    Mirrors sf::page_bytes(). The op rejects a staging buffer whose page size disagrees, because a
+    relay reads a page straight into an L1 ring slot and an unaligned stride corrupts silently.
+    """
+    element_bytes = 1 if output_dtype == ttnn.fp8_e4m3 else 2
+    alignment = get_dram_alignment()
+
+    def align_up(value):
+        return ((value + alignment - 1) // alignment) * alignment
+
+    return align_up(align_up(emb_dim * element_bytes) + COMBINE_SF_TAIL_BYTES)
+
+
+def make_combine_staging_buffer(
+    mesh_device,
+    emb_dim,
+    output_dtype=ttnn.bfloat16,
+    num_links=1,
+    topology=ttnn.Topology.Linear,
+    cluster_axis=0,
+    slots_per_stream=16,
+):
+    """Allocate the DRAM scratch the store-and-forward combine path relays through.
+
+    Returns None when the mesh is too shallow for any relay to exist.
+
+    The buffer holds no state between invocations, so allocate it once for the whole model and hand
+    the same tensor to every layer -- allocating per layer would multiply it by the layer count for
+    no benefit. `slots_per_stream` sets the ring depth per (direction, level, sender core) and must
+    be a power of two of at least 2; it is sized from the credit round-trip, so ~16 already covers
+    a link's bandwidth-delay product several times over.
+    """
+    levels = combine_sf_levels(mesh_device, topology, cluster_axis)
+    if levels == 0:
+        return None
+
+    page_bytes = combine_sf_page_bytes(emb_dim, output_dtype)
+    num_pages = 2 * levels * min(num_links, 4) * slots_per_stream
+    return ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, num_pages, page_bytes // 4]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_device,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
 
 
 class TtCombineModule(LightweightModule):
@@ -60,6 +125,8 @@ class TtCombineModule(LightweightModule):
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         init_zeros: bool = True,
         fp8_output: bool = False,
+        use_store_and_forward: bool = False,
+        staging_buffer=None,
     ):
         """
         Initialize combine module with configuration parameters.
@@ -77,6 +144,13 @@ class TtCombineModule(LightweightModule):
             memory_config: Output memory configuration. Must be interleaved (L1 or DRAM).
             init_zeros: Whether to zero-initialize the output buffer before writing.
             fp8_output: Emit the combined output in fp8_e4m3. Requires Blackhole hardware.
+            use_store_and_forward: Relay a token more than one hop from its destination through the
+                first neighbour's staging_buffer instead of sending a multi-hop fabric unicast, so
+                every ethernet packet terminates at its receiver and no router eRISC re-injects
+                forwarded traffic.
+            staging_buffer: DRAM scratch for that path, from make_combine_staging_buffer(). Shared
+                across layers, so it is injected rather than allocated here. Required when
+                use_store_and_forward is set and combine_sf_levels() is non-zero.
         """
         if fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
             raise ValueError("fp8_output requires Blackhole hardware")
@@ -93,6 +167,13 @@ class TtCombineModule(LightweightModule):
         self.memory_config = memory_config
         self.init_zeros = init_zeros
         self.fp8_output = fp8_output
+        self.use_store_and_forward = use_store_and_forward
+        self.staging_buffer = staging_buffer
+        if use_store_and_forward and staging_buffer is None and combine_sf_levels(mesh_device, topology, cluster_axis):
+            raise ValueError(
+                "use_store_and_forward needs a staging_buffer on this mesh; build one with "
+                "make_combine_staging_buffer() and share it across layers"
+            )
 
     def forward(
         self,
@@ -155,6 +236,8 @@ class TtCombineModule(LightweightModule):
             memory_config=self.memory_config,
             init_zeros=self.init_zeros,
             use_fp8_combine=self.fp8_output,
+            staging_buffer=self.staging_buffer,
+            use_store_and_forward=self.use_store_and_forward,
         )
 
         return output

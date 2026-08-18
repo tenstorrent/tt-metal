@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "combine_device_operation.hpp"
+#include "combine_sf.hpp"
 #include <algorithm>
 #include <array>
 #include <bitset>
@@ -118,6 +119,85 @@ std::vector<uint32_t> compute_per_neighbor_forwarding_links(
     return per_conn_links;
 }
 
+// Resolved store-and-forward geometry for one mesh coordinate.  Everything the kernels need is
+// either here or derived from it by combine_sf.hpp, so host and device never compute the same
+// quantity two different ways.
+struct SfPlan {
+    bool enabled = false;
+    uint32_t extent = 0;  // devices on the combine axis
+    bool is_ring = false;
+    uint32_t levels = 0;      // relay levels; 0 means nothing is ever staged
+    uint32_t slots = 0;       // ring depth per (direction, level, sender core), power of two
+    uint32_t page_bytes = 0;  // staging page stride == L1 ring slot stride
+    // Indexed [direction][level - 1]; a chip near the end of a line cannot fill every level.
+    std::array<uint32_t, 2> out_live_mask{0, 0};
+    // Linearized index of the axis neighbour in each direction, or NO_NEIGHBOUR.
+    static constexpr uint32_t NO_NEIGHBOUR = 0xFFFFFFFFu;
+    std::array<uint32_t, 2> neighbour{NO_NEIGHBOUR, NO_NEIGHBOUR};
+};
+
+// Direction 0 is the positive traversal of the combine axis (increasing row for axis 0), direction
+// 1 the negative one.  The distinction only has to be self-consistent: it selects which of the two
+// neighbours a stream flows toward, and the same rule runs on every chip.
+SfPlan build_sf_plan(
+    const CombineParams& operation_attributes,
+    const CombineInputs& tensor_args,
+    const ttnn::Tensor& output_tensor,
+    const ttnn::MeshDeviceView& mesh_view,
+    uint32_t linearized_mesh_coord,
+    uint32_t num_cores) {
+    SfPlan plan;
+    if (!operation_attributes.use_store_and_forward) {
+        return plan;
+    }
+
+    const uint32_t axis = operation_attributes.axis.value_or(0);
+    plan.extent = axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
+    plan.is_ring = operation_attributes.topology == tt::tt_fabric::Topology::Ring;
+    plan.levels = sf::num_levels(plan.extent, plan.is_ring);
+    if (plan.levels == 0) {
+        return plan;  // inert on this mesh; caller keeps the legacy path
+    }
+    plan.enabled = true;
+
+    const auto dram_alignment = (uint32_t)tt::tt_metal::hal::get_dram_alignment();
+    plan.page_bytes = sf::page_bytes(detail::get_aligned_page_size(output_tensor), dram_alignment);
+
+    const auto& staging = tensor_args.staging_buffer.value();
+    const uint32_t staging_pages = (uint32_t)staging.buffer()->num_pages();
+    plan.slots = staging_pages / (2u * plan.levels * num_cores);
+    TT_FATAL(
+        (uint32_t)staging.buffer()->aligned_page_size() == plan.page_bytes,
+        "staging_buffer aligned page size is {} but the payload stride requires {} "
+        "(output page {} + {} tail bytes, rounded up to the {}-byte DRAM alignment)",
+        staging.buffer()->aligned_page_size(),
+        plan.page_bytes,
+        detail::get_aligned_page_size(output_tensor),
+        sf::tail_bytes(),
+        dram_alignment);
+
+    const uint32_t mesh_cols = mesh_view.num_cols();
+    // Position along the combine axis, and the fixed coordinate on the other axis.  Recomposing the
+    // neighbour from (position, fixed) rather than adding a signed delta keeps the ring wrap from
+    // underflowing when position 0 steps backwards to extent - 1.
+    const uint32_t pos = axis == 0 ? linearized_mesh_coord / mesh_cols : linearized_mesh_coord % mesh_cols;
+    const uint32_t fixed = axis == 0 ? linearized_mesh_coord % mesh_cols : linearized_mesh_coord / mesh_cols;
+    for (uint32_t dir = 0; dir < 2; dir++) {
+        const bool positive = dir == 0;
+        for (uint32_t level = 1; level <= plan.levels; level++) {
+            if (sf::out_live(pos, plan.extent, plan.is_ring, positive, level)) {
+                plan.out_live_mask[dir] |= 1u << (level - 1);
+            }
+        }
+        const bool has_neighbour = plan.is_ring || (positive ? pos + 1 < plan.extent : pos > 0);
+        if (has_neighbour) {
+            const uint32_t nbr_pos = positive ? (pos + 1) % plan.extent : (pos + plan.extent - 1) % plan.extent;
+            plan.neighbour[dir] = axis == 0 ? nbr_pos * mesh_cols + fixed : fixed * mesh_cols + nbr_pos;
+        }
+    }
+    return plan;
+}
+
 // Per-coord ProgramDescriptor builder.  The cross-device GlobalSemaphores are
 // allocated once at workload scope in create_workload_descriptor() and passed
 // down by const-reference so every per-coord program references the same
@@ -203,6 +283,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     uint32_t num_cores = effective_num_links;
     uint32_t experts_per_core_range = tt::div_up(operation_attributes.experts_per_chip, num_cores);
+
+    const SfPlan sf_plan =
+        build_sf_plan(operation_attributes, tensor_args, output_tensor, mesh_view, linearized_mesh_coord, num_cores);
 
     // Core layout depends on dispatched_buffer layout:
     //   TILE_LAYOUT: sender placed at the start of its untilizer group so every untilizer core sits to the
@@ -629,6 +712,19 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     }
     if (operation_attributes.axis.has_value()) {
         fabric_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
+    }
+
+    // Emitted only when the path is live, so a flag-off program hashes and compiles exactly as
+    // before.  The geometry travels as defines rather than compile-time args to avoid perturbing
+    // the reader's positional arg indices, which later args are computed relative to.
+    if (sf_plan.enabled) {
+        fabric_defines["USE_STORE_AND_FORWARD"] = "1";
+        fabric_defines["SF_LEVELS"] = std::to_string(sf_plan.levels);
+        fabric_defines["SF_SLOTS"] = std::to_string(sf_plan.slots);
+        fabric_defines["SF_PAGE_BYTES"] = std::to_string(sf_plan.page_bytes);
+        fabric_defines["SF_EXTENT"] = std::to_string(sf_plan.extent);
+        fabric_defines["SF_OUT_LIVE_MASK"] = ccl::common::stringify(sf_plan.out_live_mask);
+        fabric_defines["SF_NEIGHBOUR"] = ccl::common::stringify(sf_plan.neighbour);
     }
 
     std::map<std::string, std::string> reader_defines = fabric_defines;

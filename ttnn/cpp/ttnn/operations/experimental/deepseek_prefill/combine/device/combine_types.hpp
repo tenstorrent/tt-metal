@@ -25,6 +25,7 @@ struct CombineParams {
     bool init_zeros;
     bool use_l1_small_for_semaphores = false;
     bool use_fp8_combine = false;
+    bool use_store_and_forward = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
@@ -38,7 +39,8 @@ struct CombineParams {
         "worker_core_range_set",
         "init_zeros",
         "use_l1_small_for_semaphores",
-        "use_fp8_combine");
+        "use_fp8_combine",
+        "use_store_and_forward");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -53,7 +55,8 @@ struct CombineParams {
             worker_core_range_set,
             init_zeros,
             use_l1_small_for_semaphores,
-            use_fp8_combine);
+            use_fp8_combine,
+            use_store_and_forward);
     };
 };
 
@@ -62,6 +65,10 @@ struct CombineInputs {
     ttnn::Tensor dispatched_metadata;
     ttnn::Tensor expert_token_counts;
     ttnn::Tensor expert_region_offsets;
+    // Caller-owned DRAM scratch for the store-and-forward path.  Required exactly when
+    // use_store_and_forward is set and the mesh is deep enough for a relay to exist.  Never read
+    // across invocations, so one buffer is shared by every layer rather than allocated per layer.
+    std::optional<ttnn::Tensor> staging_buffer;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine
