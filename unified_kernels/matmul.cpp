@@ -25,7 +25,7 @@
 //   1        in1 base address
 //   2        out base address
 
-#include <tt/unified>
+#include <tt/unified/core>
 
 namespace u = tt::unified;
 

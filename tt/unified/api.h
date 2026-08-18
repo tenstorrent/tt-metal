@@ -15,7 +15,7 @@
 //         * <-     pop          pop -> *                         read
 //                                                                 pop
 //
-// Include <tt/unified>, not this header directly -- it selects an implementation
+// Include <tt/unified/core>, not this header directly -- it selects an implementation
 // and a backend binding, and documents the layering.
 
 #pragma once
@@ -24,7 +24,7 @@
 #include <type_traits>
 #include <utility>
 
-#include <tt/unified_math.hpp>
+#include <tt/unified/math.hpp>
 
 namespace tt {
 namespace unified {
@@ -152,7 +152,7 @@ struct Storage {
     Storage& operator=(const Storage&) = delete;
 
     // Evaluate a compute fusion into this buffer. The loop shape is chosen by the
-    // fusion's kind; see Strategy in tt/unified_math.hpp.
+    // fusion's kind; see Strategy in tt/unified/math.hpp.
     template <typename Node>
     Block store(const Node& node);
 
@@ -440,11 +440,11 @@ private:
 
 // ---------------------------------------------------------------------------
 // Adaptors letting a ComputeBlock stand in for an expression leaf. These are the
-// hooks tt/unified_math.hpp declares; they live here because this is the only
+// hooks tt/unified/math.hpp declares; they live here because this is the only
 // place the math layer needs to know about a core type.
 // ---------------------------------------------------------------------------
 
-// Without this the operator+ in tt/unified_math.hpp is SFINAE'd out and
+// Without this the operator+ in tt/unified/math.hpp is SFINAE'd out and
 // `lhs + rhs` does not resolve.
 template <>
 struct is_operand<ComputeBlock> : std::true_type {};
@@ -460,7 +460,7 @@ auto matmul(const ComputeBlock& a, const ComputeBlock& b);
 // Reduce `b`'s tile grid down one axis, within and across tiles. `Geometry` is
 // the INPUT grid, `Axis` says which dimension collapses, and the destination
 // Storage must hold Geometry::out_tiles(Axis) tiles -- see ReduceAxis in
-// tt/unified_math.hpp for the shapes.
+// tt/unified/math.hpp for the shapes.
 //
 //     u::Storage out(kCbOut, u::ReduceGeometry<4, 4>::out_tiles(u::ReduceAxis::Rows));
 //     out.store(u::reduce_sum<u::ReduceGeometry<4, 4>, u::ReduceAxis::Rows>(block, scaler));
@@ -627,7 +627,7 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uin
 //
 // `fn` is only CALLED on the owning data-movement thread, but its body is
 // COMPILED on all five projections, so the intrinsics it names have to resolve
-// everywhere; see tt/unified_adaptor_v1.hpp.
+// everywhere; see tt/unified/adaptor_v1.hpp.
 template <int thread, typename Fn>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, Fn fn);
 

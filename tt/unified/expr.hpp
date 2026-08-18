@@ -4,7 +4,7 @@
 //
 // Deliberately domain-free: it knows nothing about circular buffers, the NOC, or
 // Tensix. It provides the tree shapes, a compile-time register allocator, and the
-// emission walk; tt/unified_math.hpp supplies the policies.
+// emission walk; tt/unified/math.hpp supplies the policies.
 //
 // A compute expression is a tree encoded in its own type, e.g.
 //     x + y + z   ==>   Bin<AddOp, Bin<AddOp, Leaf, Leaf>, Leaf>

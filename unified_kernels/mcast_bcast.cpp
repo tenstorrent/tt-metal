@@ -35,7 +35,7 @@
 // be mirrored into descending order, which ascending virtual coords cannot
 // satisfy. NOC 0 has no such constraint. Set MC_DM_THREAD=1 on real hardware.
 
-#include <tt/unified>
+#include <tt/unified/core>
 
 namespace u = tt::unified;
 

@@ -1,9 +1,9 @@
 // Compile + trace harness for the unified programming model.
 //
-//   tt/unified_expr.hpp    -- domain-free expression tree + DST allocator
-//   tt/unified_math.hpp    -- leaves, ops, fusion kinds, driver strategies
-//   tt/unified_api.h       -- core API (Storage / Block / ComputeBlock / noc_*)
-//   tt/unified_impl_v1.hpp -- its definitions
+//   tt/unified/expr.hpp    -- domain-free expression tree + DST allocator
+//   tt/unified/math.hpp    -- leaves, ops, fusion kinds, driver strategies
+//   tt/unified/api.h       -- core API (Storage / Block / ComputeBlock / noc_*)
+//   tt/unified/impl_v1.hpp -- its definitions
 //
 // Those headers are a design sketch: the CB / NOC / Tensix intrinsics they call
 // come from the metal kernel headers in a real build. This file supplies traced
@@ -14,7 +14,7 @@
 //            "DM1 -DIS_DM_THREAD=1 -DTT_DM_THREAD_ID=1" \
 //            "COMPUTE -DIS_COMPUTE_THREAD=1"; do
 //     set -- $s; l=$1; shift
-//     clang++-20 -std=c++17 -Wall -Wextra "$@" -DTT_LABEL="\"$l\"" \
+//     clang++-20 -std=c++17 -Wall -Wextra -I. "$@" -DTT_LABEL="\"$l\"" \
 //       unified_selftest.cpp -o /tmp/u_$l && /tmp/u_$l
 //   done
 
@@ -51,6 +51,22 @@ inline void tile_regs_release() { T("  tile_regs_release"); }
 inline void copy_tile(uint32_t cb, uint32_t tile, uint32_t dst) {
     T("    copy_tile(cb" + n(cb) + ",tile=" + n(tile) + " -> dst" + n(dst) + ")");
 }
+
+enum class PoolType { SUM, AVG, MAX };
+enum class ReduceDim { REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR };
+
+inline void reconfig_data_format(uint32_t srca, uint32_t srcb) {
+    T("    reconfig_data_format(cb" + n(srca) + ",cb" + n(srcb) + ")");
+}
+template <PoolType pool, ReduceDim dim>
+inline void reduce_init(uint32_t icb, uint32_t iscaler, uint32_t ocb) {
+    T("  reduce_init(cb" + n(icb) + ",scaler=cb" + n(iscaler) + " -> cb" + n(ocb) + ")");
+}
+template <PoolType pool, ReduceDim dim>
+inline void reduce_tile(uint32_t icb, uint32_t iscaler, uint32_t itile, uint32_t, uint32_t idst) {
+    T("    reduce_tile(cb" + n(icb) + ",tile=" + n(itile) + ",scaler=cb" + n(iscaler) + " -> dst" + n(idst) + ")");
+}
+inline void reduce_uninit(uint32_t icb = 0) { T("  reduce_uninit(cb" + n(icb) + ")"); }
 inline void pack_tile(uint32_t dst, uint32_t cb) { T("  pack_tile(dst" + n(dst) + " -> cb" + n(cb) + ")"); }
 inline void add_binary_tile_init() {}
 inline void add_binary_tile(uint32_t a, uint32_t b, uint32_t o) {
@@ -76,6 +92,9 @@ inline void init_sfpu(uint32_t icb, uint32_t ocb) { T("  init_sfpu(cb" + n(icb) 
 inline uint32_t get_write_ptr(uint32_t) { return 0; }
 inline uint32_t get_read_ptr(uint32_t) { return 0; }
 inline uint32_t cb_page_bytes(uint32_t) { return 2048; }
+
+// An L1 pointer attribute on device (risc_attribs.h); nothing on the host.
+#define tt_l1_ptr
 
 // Stand-ins for TensorAccessorArgs / TensorAccessor, under metal's own names so
 // the harness presents the same surface the device binding does.
@@ -147,6 +166,10 @@ private:
 inline void noc_async_read_barrier() { T2("noc_async_read_barrier()"); }
 inline void noc_async_writes_flushed() { T2("noc_async_writes_flushed()"); }
 inline void noc_async_write_barrier() { T2("noc_async_write_barrier()"); }
+inline void noc_async_atomic_barrier() { T2("noc_async_atomic_barrier()"); }
+inline void noc_async_write_multicast_loopback_src(uint32_t l1, std::uint64_t, uint32_t bytes, uint32_t dests) {
+    T2("noc_async_write_multicast_loopback_src(l1=" + n(l1) + "," + n(bytes) + "B, dests=" + n(dests) + ")");
+}
 namespace ckernel {
 enum class SrcOrder { Regular, Reverse };
 template <SrcOrder order = SrcOrder::Regular>
@@ -185,7 +208,7 @@ inline void pack_block(uint32_t dst, uint32_t cb, uint32_t count) {
 #endif
 
 #define TT_UNIFIED_CUSTOM_BINDING 1
-#include <tt/unified>
+#include <tt/unified/core>
 
 namespace tt {
 namespace unified {
@@ -244,7 +267,8 @@ void example_peer_hop() {
 
     ComputeBlock x = noc_load<1>(in_storage, t0, 0).wait();
     Block staged = hop_storage.store(x.exp());
-    ComputeBlock y = noc_write<0>(out_storage, std::move(staged), peer, 0).wait();
+    ComputeBlock y =
+        noc_core_write<0>(out_storage, std::move(staged), peer, /*write_predicate=*/true).wait(/*num_writers=*/1);
     noc_store<0>(out_storage.store(y.exp()), t2, 0);
 }
 

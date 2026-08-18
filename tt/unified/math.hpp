@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Compute fusions: what a leaf is, what each op emits, and the per-kind driver
-// strategies. See <tt/unified> for the layering.
+// strategies. See <tt/unified/core> for the layering.
 //
 // This header deliberately does not depend on the core types. Leaves and nodes
-// carry raw circular-buffer ids, so the dependency runs one way: tt/unified_api.h
+// carry raw circular-buffer ids, so the dependency runs one way: tt/unified/api.h
 // includes this and supplies the thin ComputeBlock adaptors.
 //
 // A fusion KIND selects the driver strategy -- the shape of the enclosing loop,
@@ -35,12 +35,12 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <tt/unified_expr.hpp>
+#include <tt/unified/expr.hpp>
 
 // Every op body below is guarded on IS_COMPUTE_THREAD, which a binding defines.
 // Without one they would all silently compile to nothing, so refuse instead.
 #if !defined(IS_COMPUTE_THREAD) && !defined(IS_DM_THREAD)
-#error "include <tt/unified> (or a binding) before tt/unified_math.hpp"
+#error "include <tt/unified/core> (or a binding) before tt/unified/math.hpp"
 #endif
 
 namespace tt {
@@ -414,7 +414,7 @@ struct Strategy<SFPUFusion> {
 };
 
 // FPU: one k-block per call. The kernel owns the k-loop (see Accumulator in
-// tt/unified_api.h), because the operand CBs must be waited and popped per block
+// tt/unified/api.h), because the operand CBs must be waited and popped per block
 // so the reader can stream them.
 //
 // Mirrors bmm_large_block_zm_fused_bias_activation.cpp:
@@ -595,7 +595,11 @@ struct Strategy<ReduceFusion> {
         constexpr ckernel::ReduceDim kDim = metal_dim(kAxis);
 
         // The destination has to be exactly the shape the axis leaves behind.
+        // Guarded, as everywhere else: this layer is binding-agnostic, so it must
+        // not require a binding to supply ASSERT.
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
         ASSERT(num_tiles == kOut);
+#endif
 
         // The scaler is read by every reduce_tile and never popped, so waiting is
         // idempotent -- one page stays at the front for the kernel's lifetime.

@@ -38,7 +38,7 @@ DTYPE_TILE_BYTES = {ttnn.bfloat16: TILE_HW * 2, ttnn.float32: TILE_HW * 4}
 
 # Per data-movement thread: two for the multicast handshake, then one more for
 # the arrival flag a multicast noc_core_write raises on its receivers. Laid out as
-# [ready0, sent0, ready1, sent1, copy0, copy1] -- tt/unified_api.h derives every id
+# [ready0, sent0, ready1, sent1, copy0, copy1] -- tt/unified/api.h derives every id
 # from the base, so the two groups must stay in this order.
 MCAST_SEMAPHORES = 6
 
@@ -121,7 +121,7 @@ def unified_program(
     """
     # Reserve the multicast handshake semaphores: two per DM thread, placed ABOVE
     # any id the caller used so their choices stay unconstrained. Their base goes
-    # to the kernel as a define; tt/unified_api.h derives each thread's ids from
+    # to the kernel as a define; tt/unified/api.h derives each thread's ids from
     # it. Six slots out of NUM_SEMAPHORES = 16.
     user_semaphores = list(semaphores or [])
     mcast_sem_base = 1 + max((s.id for s in user_semaphores), default=-1)
