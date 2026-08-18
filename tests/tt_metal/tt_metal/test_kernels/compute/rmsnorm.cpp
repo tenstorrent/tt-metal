@@ -20,9 +20,9 @@ void kernel_main() {
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
 
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 #else
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 #endif
 
     constexpr uint32_t onetile = 1;
@@ -62,7 +62,7 @@ void kernel_main() {
  * X + Y
  */
 #ifdef FUSE_PRE_ADD
-        add_tiles_init(cb_in, cb_inb);
+        add_init(cb_in, cb_inb);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             tile_regs_acquire();
             // DPRINT_UNPACK("Waiting on cb_x\n");
@@ -90,7 +90,7 @@ void kernel_main() {
         /* (x)^2
          * compute temp = x^2
          */
-        mul_tiles_init(cb_x, cb_x);
+        mul_init(cb_x, cb_x);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             cb_reserve_back(cb_x2, blk);  // can probably use less space for this if we block
@@ -138,7 +138,7 @@ void kernel_main() {
          * add epsilon E[(x-E[x])^2]+eps
          */
         tile_regs_acquire();
-        add_tiles_init(cb_ex2, cb_eps);
+        add_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
         cb_reserve_back(cb_ex2pe, 1);  // 1
@@ -162,7 +162,7 @@ void kernel_main() {
             cb_reserve_back(cb_im_or_out, blk);
 
             tile_regs_acquire();
-            mul_bcast_cols_init_short(cb_x, cb_ex2pe);
+            mul_bcast_cols_init(cb_x, cb_ex2pe);
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
                 mul_tiles_bcast_cols(cb_x, cb_ex2pe, wt + wtr, 0, wtr);  // tile *= 1/(sum(exp(x)))
@@ -178,7 +178,7 @@ void kernel_main() {
             if (do_gamma) {
                 tile_regs_acquire();
                 uint32_t cb_outg = do_beta ? cb_fusion : tt::CBIndex::c_16;
-                mul_bcast_rows_init_short(cb_fusion, cb_gamma);
+                mul_bcast_rows_init(cb_fusion, cb_gamma);
                 cb_reserve_back(cb_outg, blk);
                 cb_wait_front(cb_gamma, wt + blk);  // we don't pop, TODO: only wait on first ht
                 cb_wait_front(cb_fusion, blk);
@@ -198,7 +198,7 @@ void kernel_main() {
             }
             if (do_beta) {
                 tile_regs_acquire();
-                add_bcast_rows_init_short(cb_fusion, cb_beta);
+                add_bcast_rows_init(cb_fusion, cb_beta);
                 cb_reserve_back(tt::CBIndex::c_16, blk);
                 cb_wait_front(cb_beta, wt + blk);  // TODO: optimization - only wait on first ht
                 cb_wait_front(cb_fusion, blk);

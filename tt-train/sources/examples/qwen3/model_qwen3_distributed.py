@@ -9,11 +9,14 @@ TP strategy (Megatron-LM / C++ DistributedLlama):
   - Attention O:         RowParallel    (shard input, all-reduce)
   - MLP gate, up:        ColumnParallel (shard intermediate)
   - MLP down:            RowParallel    (shard input, all-reduce)
-  - Embedding (untied):  Sharded along hidden dim, all-gather after lookup
-  - Embedding (tied):    VocabParallelEmbedding (Megatron-LM style) — each
-                          TP device looks up its local vocab shard, masks
-                          out-of-range tokens, all-reduces hidden vectors.
-                          No weight all-gather; only hidden-dim communication.
+  - Embedding (untied):  ttml.modules.FeatureParallelEmbedding — table sharded
+                          along the hidden dim, all-gather after lookup
+  - Embedding (tied):    ttml.modules.VocabParallelEmbedding (Megatron-LM
+                          style) — each TP device looks up its local vocab
+                          shard, masks out-of-range tokens, all-reduces hidden
+                          vectors.  No weight all-gather; only hidden-dim
+                          communication.  Shares the ColumnParallel LM-head
+                          weight (see DistributedQwen3Model).
   - Norms (QK, layer, final): Replicated
   - LM head:             Always ColumnParallel with vocab-sharded output
                           (paired with vocab_parallel_cross_entropy_loss)
@@ -37,15 +40,17 @@ DP+TP support:
   to average gradients across DP groups.
 
 Usage (TP only):
-    ttml.core.distributed.enable_fabric(tp_size)
-    ctx.open_device([1, tp_size])
+    ttml.open_device_mesh(ttml.Mesh((1, tp_size), ("dp", "tp")))
     model = DistributedQwen3ForCausalLM(config, shard_dim=1)
 
 Usage (DP + TP):
-    ttml.core.distributed.enable_fabric(dp_size * tp_size)
-    ctx.open_device([dp_size, tp_size])
+    ttml.open_device_mesh(ttml.Mesh((dp_size, tp_size), ("dp", "tp")))
     model = DistributedQwen3ForCausalLM(config, shard_dim=1)
     # Data: shard batch along DP (mesh dim 0), replicate along TP (mesh dim 1)
+
+The mesh must be opened via ``ttml.open_device_mesh`` (``utils.device_setup``
+does this) so the ``"tp"`` axis is registered by name — the ``ttml.modules``
+parallel embeddings look their cluster axis up by name, not by index.
 """
 
 from typing import Optional
@@ -53,7 +58,13 @@ import torch
 from tqdm.auto import tqdm
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, ModuleList, Parameter
+from ttml.modules import (
+    AbstractModuleBase,
+    FeatureParallelEmbedding,
+    ModuleList,
+    Parameter,
+    VocabParallelEmbedding,
+)
 
 from ttml.models.qwen3 import (
     Qwen3Config,
@@ -75,10 +86,25 @@ from utils.tensor_utils import (
     make_sharded_weight,
     make_sharded_zeros,
     make_replicated_zeros,
+    sharded_weight_init,
 )
-from utils.distributed_ops import (
-    _vocab_parallel_embedding,
-)
+
+
+def tp_padded_vocab_size(vocab_size):
+    """Pad the vocab so each TP shard is whole *and* tile-aligned.
+
+    ColumnParallelLinear and VocabParallelEmbedding both shard dim 2 across the
+    TP axis, so the padded size has to be divisible by ``tp_size`` *and* every
+    resulting shard has to be a multiple of 32 for the tile layout — that is,
+    the padded size must be a multiple of ``32 * tp_size``.
+
+    The trailing padded rows stay on device and are absorbed by
+    ``vocab_parallel_cross_entropy_loss``, so ``config.vocab_size`` itself is
+    free to be arbitrary.
+    """
+    align = 32 * ttml.mesh().axis_size("tp")
+    return ((vocab_size + align - 1) // align) * align
+
 
 # ---------------------------------------------------------------------------
 # ColumnParallelLinear
@@ -342,26 +368,40 @@ class DistributedQwen3Model(AbstractModuleBase):
         self.shard_dim = shard_dim
         self.use_checkpoint = use_checkpoint
         self.track_memory = track_memory
-        self.tied_embed_weight = tied_embed_weight
-        vocab_tiled = ((config.vocab_size + 31) // 32) * 32
-        if tied_embed_weight is None:
-            self.embed_tokens = Parameter(make_sharded_weight((1, 1, vocab_tiled, config.hidden_size), 3, shard_dim))
+        # Deliberately not stored on self: AbstractModuleBase.__setattr__ would
+        # register the tied tensor under a third name (``model/tied_embed_weight``)
+        # on top of ``lm_head/weight`` and ``model/embed_tokens/weight``.
+        vocab_tiled = tp_padded_vocab_size(config.vocab_size)
+        if tied_embed_weight is not None:
+            # Megatron-LM VocabParallelEmbedding sharing the ColumnParallel LM-head
+            # weight. ``weight_init`` hands back the LM head's existing tensor so the
+            # constructor never allocates a throwaway [1, 1, V, H] table, and the
+            # assignment right after makes ``embed_tokens.weight`` and
+            # ``lm_head.weight`` the same Parameter object (the tying pattern used by
+            # ttml.models.llama). ModuleBase::parameters() dedupes by tensor address,
+            # so the shared weight is still reported — and optimized — exactly once,
+            # under the ``lm_head/weight`` name that param_utils maps to.
+            self.embed_tokens = VocabParallelEmbedding(
+                vocab_tiled,
+                config.hidden_size,
+                weight_init=lambda shape, mapper=None: tied_embed_weight.tensor,
+                axis_name="tp",
+            )
+            self.embed_tokens.weight = tied_embed_weight
+        else:
+            self.embed_tokens = FeatureParallelEmbedding(
+                vocab_tiled,
+                config.hidden_size,
+                weight_init=sharded_weight_init(3),
+                axis_name="tp",
+            )
         self.layers = ModuleList(
             [DistributedQwen3DecoderLayer(config, i, shard_dim) for i in range(config.num_hidden_layers)]
         )
         self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(self, input_ids, attention_mask=None, past_key_values=None, input_ids_np=None):
-        if self.tied_embed_weight is not None:
-            h = _vocab_parallel_embedding(
-                input_ids_np,
-                self.tied_embed_weight,
-                self.config.vocab_size,
-                self.shard_dim,
-            )
-        else:
-            h = ttml.ops.embedding.embedding(input_ids, self.embed_tokens.tensor)
-            h = ttml.ops.distributed.all_gather(h, 3, self.shard_dim, ttml.ops.distributed.GradOutputType.REPLICATED)
+    def forward(self, input_ids, attention_mask=None, past_key_values=None):
+        h = self.embed_tokens(input_ids)
         if self.track_memory:
             h = memory_snapshot(h, "AFTER_EMBEDDING_FWD", "AFTER_EMBEDDING_BWD")
         position_offset = 0
@@ -392,10 +432,9 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
     along dim 3 themselves.
 
     When ``tie_word_embeddings`` is True the same vocab-sharded weight is
-    reused for input embedding (Megatron-LM VocabParallelEmbedding: local
-    lookup → mask → all-reduce) and output projection; callers must pass
-    ``input_ids_np`` (numpy uint32 token IDs) to :meth:`forward` for the
-    vocab-parallel embedding preprocessing.
+    reused for input embedding (``ttml.modules.VocabParallelEmbedding``: local
+    lookup → mask → all-reduce) and output projection. The offset/mask math
+    runs on device, so :meth:`forward` needs only the on-device ``input_ids``.
     """
 
     def __init__(
@@ -413,7 +452,7 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
         self.shard_dim = shard_dim
         self.track_memory = track_memory
 
-        vocab_tiled = ((config.vocab_size + 31) // 32) * 32
+        vocab_tiled = tp_padded_vocab_size(config.vocab_size)
         lm_vocab = vocab_tiled if tie_word_embeddings else config.vocab_size
         self.lm_head = ColumnParallelLinear(
             config.hidden_size,
@@ -427,11 +466,11 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
             shard_dim,
             use_checkpoint=use_checkpoint,
             track_memory=track_memory,
-            tied_embed_weight=(self.lm_head.weight.tensor if tie_word_embeddings else None),
+            tied_embed_weight=(self.lm_head.weight if tie_word_embeddings else None),
         )
 
-    def forward(self, input_ids, attention_mask=None, past_key_values=None, input_ids_np=None):
-        h = self.model(input_ids, attention_mask, past_key_values, input_ids_np=input_ids_np)
+    def forward(self, input_ids, attention_mask=None, past_key_values=None):
+        h = self.model(input_ids, attention_mask, past_key_values)
         if self.track_memory:
             h = memory_snapshot(h, "AFTER_NORM_FWD", "AFTER_NORM_BWD")
         out = self.lm_head(h)

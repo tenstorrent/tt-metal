@@ -32,6 +32,7 @@ from ...layers.audio_resample import Activation1d
 from ...layers.module import Module, ModuleList
 from ...parallel.config import ParallelFactor
 from ...parallel.manager import CCLManager
+from ...utils.tensor import local_device_to_torch
 from ...utils.tracing import traced_function
 
 
@@ -51,6 +52,8 @@ class DilatedConv1d(_AlignedOutConv1d):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        split_mode: str = "off",
+        tap_matmul: bool = False,
     ) -> None:
         super().__init__(
             in_channels=in_channels,
@@ -64,6 +67,8 @@ class DilatedConv1d(_AlignedOutConv1d):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            split_mode=split_mode,
+            tap_matmul=tap_matmul,
         )
 
 
@@ -81,6 +86,9 @@ class AMPBlock1(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        prefer_mac: bool = False,
+        split_mode: str = "off",
+        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         self.channels = channels
@@ -102,6 +110,8 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
+                    split_mode=split_mode,
+                    tap_matmul=tap_matmul,
                 )
                 for i in range(self.num_branches)
             ]
@@ -118,6 +128,8 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
+                    split_mode=split_mode,
+                    tap_matmul=tap_matmul,
                 )
                 for i in range(self.num_branches)
             ]
@@ -138,6 +150,7 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
+                    prefer_mac=prefer_mac,
                 )
                 for _ in range(self.num_branches)
             ]
@@ -157,6 +170,7 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
+                    prefer_mac=prefer_mac,
                 )
                 for _ in range(self.num_branches)
             ]
@@ -221,6 +235,9 @@ class Vocoder(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        prefer_mac: bool = False,
+        split_mode: str = "off",
+        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
 
@@ -266,6 +283,8 @@ class Vocoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            split_mode=split_mode,
+            tap_matmul=tap_matmul,
         )
 
         self.ups = ModuleList(
@@ -280,6 +299,8 @@ class Vocoder(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
+                    split_mode=split_mode,
+                    tap_matmul=tap_matmul,
                 )
                 for i in range(self.num_upsamples)
             ]
@@ -300,6 +321,9 @@ class Vocoder(Module):
                         dtype=dtype,
                         parallel_config=parallel_config,
                         ccl_manager=ccl_manager,
+                        prefer_mac=prefer_mac,
+                        split_mode=split_mode,
+                        tap_matmul=tap_matmul,
                     )
                 )
 
@@ -318,6 +342,7 @@ class Vocoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            prefer_mac=prefer_mac,
         )
 
         self.conv_post = _AlignedOutConv1d(
@@ -333,6 +358,8 @@ class Vocoder(Module):
             ccl_manager=ccl_manager,
             # out_channels=2 is too small to channel-shard; keep output full (no trailing gather).
             channel_shard_output=False,
+            split_mode=split_mode,
+            tap_matmul=tap_matmul,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -344,6 +371,25 @@ class Vocoder(Module):
         """
         x_dev = self._host_to_device(mel_spec)
         y_dev = self._forward_device(x_dev)
+        return self._device_to_host(y_dev)
+
+    def forward_BCT(self, x_BCT: torch.Tensor) -> torch.Tensor:
+        """``(B, C, T)`` in, ``(B, out_channels, T * prod(rates))`` out.
+
+        The same device graph as :meth:`forward`, minus the mel-specific input reshape.
+        Used by MiniMax-H3's audio decoder, whose input is already channels-over-time.
+        """
+        return self._device_to_host(self._forward_device(self._upload_BCT(x_BCT)))
+
+    def forward_BCT_traced(self, x_BCT: torch.Tensor) -> torch.Tensor:
+        """:meth:`forward_BCT` with the device graph captured and replayed.
+
+        The channels-over-time counterpart of :meth:`forward_traced`, for MiniMax-H3's audio
+        decoder. Same argument for it: this vocoder is ~70 % host-bound, so removing per-op
+        dispatch is the dominant lever, and ``_forward_device`` is already a fixed-shape
+        device-in/device-out region for exactly this reason.
+        """
+        y_dev = self._forward_device(self._upload_BCT(x_BCT), traced=True, tracer_trace_key=tuple(x_BCT.shape))
         return self._device_to_host(y_dev)
 
     def forward_traced(self, mel_spec: torch.Tensor) -> torch.Tensor:
@@ -370,10 +416,20 @@ class Vocoder(Module):
             assert x_t.shape[1] == 2, f"stereo input must have 2 channels, got {x_t.shape[1]}"
             B, S, F, T = x_t.shape
             x_t = x_t.reshape(B, S * F, T)
-        B, C, T = x_t.shape
+        return self._upload_BCT(x_t)
+
+    def _upload_BCT(self, x_BCT: torch.Tensor) -> ttnn.Tensor:
+        """Upload a plain ``(B, C, T)`` tensor, T-padded for tile-aligned per-chip shards.
+
+        Split out of ``_host_to_device`` so a caller whose input is already ``(B, C, T)`` --
+        MiniMax-H3's audio decoder, whose ``dec_in_proj`` emits ``(B, 2048, T)`` rather than
+        a mel spectrogram -- can reuse the padding and upload without going through the
+        mel-specific reshape above. Sets ``self._t_pad``.
+        """
+        B, C, T = x_BCT.shape
         assert C == self.in_channels, f"expected {self.in_channels} input channels, got {C}"
 
-        x_BTC_torch = x_t.transpose(1, 2).float().contiguous()
+        x_BTC_torch = x_BCT.transpose(1, 2).float().contiguous()
 
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
         # Pad T to a multiple of (TILE_HEIGHT * factor) for tile-aligned per-chip shards;
@@ -470,7 +526,7 @@ class Vocoder(Module):
     def _device_to_host(self, x_dev: ttnn.Tensor) -> torch.Tensor:
         """Readback + host crop. Trims padded out-channels and the upsampled image of the
         input T-padding (``self._t_pad``), then returns ``(B, out_channels, T_out)``."""
-        x_host = ttnn.to_torch(ttnn.get_device_tensors(x_dev)[0])
+        x_host = local_device_to_torch(x_dev)
         x_host = x_host[..., : self.out_channels]  # trim any padded out channels
         # Crop the upsampled image of the input T-padding.
         if self._t_pad > 0:

@@ -17,59 +17,51 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);     // Source address in dram
-    const uint32_t NCHt = get_arg_val<uint32_t>(1);         // Number of NCH tiles
-    const uint32_t Wt = get_arg_val<uint32_t>(2);           // Width in tiles
-    const uint32_t tile_offset = get_arg_val<uint32_t>(3);  // Tile offset for this core
-    const bool is_merge_core = get_arg_val<uint32_t>(4);
-    const uint32_t reduce_core_noc_x = get_arg_val<uint32_t>(5);
-    const uint32_t reduce_core_noc_y = get_arg_val<uint32_t>(6);
-    const uint32_t y = get_arg_val<uint32_t>(7);
+    const auto NCHt = get_arg(args::NCHt);                // Number of NCH tiles
+    const auto Wt = get_arg(args::Wt);                    // Width in tiles
+    const auto tile_offset = get_arg(args::tile_offset);  // Tile offset for this core
+    const bool is_merge_core = get_arg(args::is_merge_core);
+    const auto reduce_core_noc_x = get_arg(args::reduce_core_noc_x);
+    const auto reduce_core_noc_y = get_arg(args::reduce_core_noc_y);
+    const auto y = get_arg(args::y);
 
-    constexpr uint32_t dfb_inp = tt::CBIndex::c_0;
-    constexpr uint32_t dfb_reduce = tt::CBIndex::c_1;
-    constexpr uint32_t dfb_out = tt::CBIndex::c_16;
-    constexpr uint32_t dfb_x2_merge = tt::CBIndex::c_15;
-    constexpr uint32_t dfb_zero = tt::CBIndex::c_13;
-
-    // ublocks size defined in tiles
-    const uint32_t src0_tile_bytes = get_tile_size(dfb_inp);
-    const uint32_t TILE_SIZE = 32 * 32;
-    const uint32_t BF16_TILE_BYTES = 2 * TILE_SIZE;
     const uint32_t onetile = 1;
 
-    constexpr uint32_t blk = get_compile_time_arg_val(0);
-    constexpr uint32_t reducer_semaphore_id = get_compile_time_arg_val(1);
-    constexpr uint32_t num_cores_to_wait = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    constexpr auto blk = get_arg(args::blk);
+    constexpr auto num_cores_to_wait = get_arg(args::num_cores_to_wait);
 
-    const auto src_a = TensorAccessor(src_args, src_addr);
+    const auto src_a = TensorAccessor(tensor::src);
 
     Noc noc;
-    DataflowBuffer dfb_inp_buf(dfb_inp);
-    DataflowBuffer dfb_out_buf(dfb_out);
-    DataflowBuffer dfb_x2_merge_buf(dfb_x2_merge);
-    Semaphore<> reducer_sem(reducer_semaphore_id);
+    // Input tiles, consumed downstream by the compute kernel.
+    DataflowBuffer dfb_inp_buf(dfb::inp);
+    // This core's partial statistic: produced by compute, then shipped over the NoC to the merge core.
+    DataflowBuffer dfb_out_buf(dfb::out);
+    // Gather buffer on the merge core: every core in the column lands its partial here.
+    DataflowBuffer dfb_x2_merge_buf(dfb::x2_merge);
+    Semaphore<> reducer_sem(sem::reducer);
 
-#if FUSE_PRE_ADD
-    const uint32_t res_addr = get_arg_val<uint32_t>(8);  // Residual source address in dram
-    constexpr uint32_t dfb_res = tt::CBIndex::c_5;
-    const uint32_t src1_tile_bytes = get_tile_size(dfb_res);
-    constexpr auto res_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
-    const auto src_b = TensorAccessor(res_args, res_addr);
-    DataflowBuffer dfb_res_buf(dfb_res);
+    // ublocks size defined in tiles
+    const uint32_t src0_tile_bytes = dfb_inp_buf.get_tile_size();
+
+#ifdef FUSE_PRE_ADD
+    // Residual tiles, added to the input by the compute kernel before the statistics pass.
+    DataflowBuffer dfb_res_buf(dfb::res);
+    const uint32_t src1_tile_bytes = dfb_res_buf.get_tile_size();
+    const auto src_b = TensorAccessor(tensor::res_src);
 #endif
 
     // Generate constant tiles for reduce scalar
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        dfb_reduce,
+        dfb::reduce,
         ckernel::PoolType::SUM,
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     if (is_merge_core) {
-        dataflow_kernel_lib::prepare_zero_tile<dfb_zero>();
+        dataflow_kernel_lib::prepare_zero_tile<dfb::zero>();
     }
 
     uint32_t inp_tile_idx = tile_offset;
@@ -78,7 +70,7 @@ void kernel_main() {
         // read input tiles
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_inp_buf.reserve_back(blk);
-#if FUSE_PRE_ADD
+#ifdef FUSE_PRE_ADD
             dfb_res_buf.reserve_back(blk);
 #endif
 
@@ -89,7 +81,7 @@ void kernel_main() {
                     src0_tile_bytes,
                     {.page_id = inp_tile_idx},
                     {.offset_bytes = r * src0_tile_bytes});
-#if FUSE_PRE_ADD
+#ifdef FUSE_PRE_ADD
                 noc.async_read(
                     src_b,
                     dfb_res_buf,
@@ -102,7 +94,7 @@ void kernel_main() {
             noc.async_read_barrier();
 
             dfb_inp_buf.push_back(blk);
-#if FUSE_PRE_ADD
+#ifdef FUSE_PRE_ADD
             dfb_res_buf.push_back(blk);
 #endif
 
@@ -110,10 +102,11 @@ void kernel_main() {
 
     }  // ncht loop
 
-    // wait on cb_out and then write to merge core over noc
+    // wait on the partial output and then write it to the merge core over the NoC
     dfb_out_buf.wait_front(onetile);
 
-    uint32_t o_write_size = BF16_TILE_BYTES;
+    // Partial statistics use the intermediate format, which is Float32 with fp32_dest_acc_en.
+    uint32_t o_write_size = dfb_out_buf.get_tile_size();
     uint32_t worker_offset = o_write_size * y;
 
     UnicastEndpoint reduce_ep;
@@ -124,6 +117,9 @@ void kernel_main() {
         {.offset_bytes = 0},
         {.noc_x = reduce_core_noc_x,
          .noc_y = reduce_core_noc_y,
+         // The gather buffer is laid out identically on every core in the column, so this core's own
+         // write pointer gives the same base address the merge core's instance has. The write itself
+         // lands on the remote core, not here.
          .addr = dfb_x2_merge_buf.get_write_ptr() + worker_offset});
     noc.async_write_barrier();
     dfb_out_buf.pop_front(onetile);

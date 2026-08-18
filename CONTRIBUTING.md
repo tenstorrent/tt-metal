@@ -5,10 +5,19 @@ Table of Contents
 
 - [Table of Contents](#table-of-contents)
   - [Contributing to tt-metal](#contributing-to-tt-metal)
-  - [Machine setup](#machine-setup)
-  - [Developing tt-metal](#developing-tt-metal)
-    - [Setting logger level](#setting-logger-level)
-    - [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
+  - [Contribution standards](#contribution-standards)
+    - [Pre-commit Hook Integration for Formatting and Linting](#pre-commit-hook-integration-for-formatting-and-linting)
+      - [What is Pre-commit?](#what-is-pre-commit)
+      - [How to Set Up Pre-commit Locally](#how-to-set-up-pre-commit-locally)
+    - [File structure and formats](#file-structure-and-formats)
+    - [Using CI/CD for development](#using-cicd-for-development)
+    - [Documentation](#documentation)
+    - [PR categories](#pr-categories)
+    - [Code reviews](#code-reviews)
+    - [New feature and design specifications](#new-feature-and-design-specifications)
+    - [Release flows](#release-flows)
+    - [Logging, assertions, and exceptions](#logging-assertions-and-exceptions)
+    - [Further reading](#further-reading)
   - [Tests in tt-metal](#tests-in-tt-metal)
     - [Running post-commit regressions](#running-post-commit-regressions)
     - [Adding post-commit tests](#adding-post-commit-tests)
@@ -22,26 +31,13 @@ Table of Contents
     - [Debugging device hangs](#debugging-device-hangs)
       - [Using watcher](#using-watcher)
       - [Using watcher hang dump tool](#using-watcher-hang-dump-tool)
-  - [Contribution standards](#contribution-standards)
-    - [File structure and formats](#file-structure-and-formats)
-    - [CI/CD Principles](#cicd-principles)
-    - [Using CI/CD for development](#using-cicd-for-development)
-    - [Skipping CI/CD for documentation updates](#skipping-cicd-for-documentation-updates)
-    - [Documentation](#documentation)
-    - [Git rules and guidelines](#git-rules-and-guidelines)
-      - [Creating a branch](#creating-a-branch)
-      - [Saving your changes](#saving-your-changes)
-      - [Saving the commit to origin and create a pull request](#saving-the-commit-to-origin-and-create-a-pull-request)
-      - [Rebasing your branch](#rebasing-your-branch)
-      - [Merging to main](#merging-to-main)
-    - [PR categories](#pr-categories)
-    - [Code reviews](#code-reviews)
-    - [New feature and design specifications](#new-feature-and-design-specifications)
-    - [Release flows](#release-flows)
-    - [Logging, assertions, and exceptions](#logging-assertions-and-exceptions)
-    - [Further reading](#further-reading)
+  - [Development tips](#development-tips)
+    - [Setting logger level](#setting-logger-level)
+    - [Adding new TTNN examples](#adding-new-ttnn-examples)
+    - [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
   - [Hardware troubleshooting](#hardware-troubleshooting)
     - [Resetting an accelerator board](#resetting-an-accelerator-board)
+  - [Bug Bounty Program - AI Tool Restrictions](#bug-bounty-program---ai-tool-restrictions)
 
 <!-- Created by https://luciopaiva.com/markdown-toc/ -->
 
@@ -54,9 +50,8 @@ Thank you for your interest in this project.
 If you are interested in making a contribution, then please familiarize
 yourself with our technical contribution standards as set forth in this guide.
 
-Next, please request appropriate write permissions by [opening an
-issue](https://github.com/tenstorrent/tt-metal/issues/new/choose) for
-GitHub permissions.
+[Fork the repo](https://github.com/tenstorrent/tt-metal/fork) and submit your
+pull request from your personal fork.
 
 All contributions require:
 - an issue
@@ -69,113 +64,146 @@ All contributions require:
 Furthermore, all PRs must follow the [contribution
 standards](#contribution-standards).
 
-## Developing tt-metal
+## Contribution standards
+This project has adopted C++ formatting and style as defined in `.clang-format`.
+There are additional requirements such as license headers.
 
-Currently, the most convenient way to develop is to do so on our cloud
-machines. They have prerequisite dependencies, model files, and other settings
-set up for users.
+### Pre-commit Hook Integration for Formatting and Linting
 
-Please refer to the [README](README.md) for source installation and environment
-setup instructions, then please read the [Getting Started
-page](docs/source/tt-metalium/get_started/get_started.rst).
+As part of maintaining consistent code formatting across the project, we have integrated the [pre-commit](https://pre-commit.com/) framework into our workflow. The pre-commit hooks will help automatically check and format code before commits are made, ensuring that we adhere to the project's coding standards.
 
-### Setting logger level
+#### What is Pre-commit?
 
-In order to get debug level log messages, set the environment variable
-`TT_LOGGER_LEVEL=Debug`.
+Pre-commit is a framework for managing and maintaining multi-language pre-commit hooks. It helps catch common issues early by running a set of hooks before code is committed, automating tasks like:
 
-For example,
+- Formatting code (e.g., fixing trailing whitespace, enforcing end-of-file newlines)
+- Running linters (e.g., `clang-format`, `black`, `flake8`)
+- Checking for merge conflicts or other common issues.
 
-```
-TT_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
-```
+For more details on pre-commit, you can visit the [official documentation](https://pre-commit.com/).
 
-### Adding new TTNN examples
+#### How to Set Up Pre-commit Locally
 
-TTNN tutorials in this documentation are written as Jupyter notebooks (`.ipynb`) and located in the `ttnn/tutorials` directory. For each notebook, a corresponding Python script is automatically generated and maintained in the `ttnn/tutorials/basic_python` directory. To ensure consistency between notebooks and their exported Python versions, a Git pre-commit hook is provided.
+To set up pre-commit on your local machine, follow these steps:
 
-This hook performs the following actions:
+1. **Install Pre-commit**:
+   Ensure you have Python installed, then run:
+   ```bash
+   pip install pre-commit
+   ```
+   *Note:* pre-commit is already installed if you are using the python virtual environment.
+2. **Install the Git Hook Scripts**:
+   In your local repository, run the following command to install the pre-commit hooks:
+   ```bash
+   pre-commit install
+   ```
+   This command will configure your local Git to run the defined hooks automatically before each commit.
+3. **Run Pre-commit Hooks Manually**:
+   You can also run the hooks manually against all files at any time with:
+   ```bash
+   pre-commit run --all-files
+   ```
 
-- Detects all staged Jupyter notebook files under the notebooks/ directory.
-- Converts each notebook to a Python script using jupyter nbconvert with a custom template.
-- Writes the output to the python/ directory only if there are changes.
-- Automatically stages new or updated Python scripts for commit.
-- Exits with a non-zero status code if any files were modified, alerting Git to re-check the commit.
+### File structure and formats
 
-This process ensures that all TTNN examples remain synchronized and up-to-date in both formats. **Important:** Always make changes directly to the `.ipynb` notebook files—not the generated Python scripts. Any manual changes made to the Python files will be overwritten the next time the notebook is updated. Python files are considered read-only exports for users or CI pipelines that prefer `.py` formats.
+- Every source file must have the appropriate SPDX header at the top following
+  the [Linux conventions](https://elixir.bootlin.com/linux/v6.5.1/source/Documentation/process/license-rules.rst#L71)
+  for C++ source files, RST files, ASM files, and
+  scripts. For Python files, we are to use this convention:
 
-Both the Jupyter notebooks and the exported Python files are tested as part of the CI workflows to ensure correctness and stability.
+  ```
+  # SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
-### Building and viewing the documentation locally
+  # SPDX-License-Identifier: Apache-2.0
+  ```
 
-1. First, ensure that you have [built the project and activated the Python
-environment](docs/source/tt-metalium/get_started/get_started.rst), along with any required
-`PYTHONPATH` variables.
+  For C++ header files, we will treat them as C++ source files and use this
+  convention:
 
-2. Build the HTML documentation.
+  ```
+  // SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+  //
+  // SPDX-License-Identifier: Apache-2.0
+  ```
 
-```
-cd docs
-make clean
-make html
-```
+### Using CI/CD for development
 
-You can optionally build and view the ttnn sweeps results with:
+- There are some automated checks upon opening a PR. These checks are part, but
+  not all, of the post-commit test suite. They must pass, but are not enough to
+  ensure your PR will not be reverted.
+- We currently do not run all required workflows automatically upon opening a
+  PR, due to limited machine resources. If your PR needs additional CI
+  pipelines run beyond what triggers automatically, ask a maintaining team
+  member or codeowner to run them for you — triggering workflows manually on
+  GitHub Actions requires repository access that third-party contributors
+  don't have.
 
-```
-make ttnn_sweeps/check_directory
-make ttnn_sweeps
-```
+### Documentation
 
-then turn on the server to view.
+- Any API changes must be accompanied with appropriate documentation changes.
 
-```
-make server
-```
+### PR categories
 
-You can customize the port by using the `PORT=<port>` environment variable. If
-you're using a customer-facing cloud machine, please disregard this point.
+All PRs must be bucketed into exactly one of the following categories. Include
+the category name in your PR title (e.g. `[Feature] Add new op`). Reviewers
+should reject PRs that span multiple categories — use `git rebase -i` to split
+them first.
 
-3. Navigate to the docs page.
+| Category | When to use |
+|---|---|
+| **Feature** | Implements new functionality. Tests encouraged. |
+| **Performance** | No new functionality, no bug fixes — only performance improves. Tests encouraged. |
+| **Bug fix** | Fixes an issue with existing functionality. New regression tests strongly encouraged. |
+| **Cleanup** | Refactor, rename, restructure, or cosmetic change. No functional change. Tests OK to add. |
+| **Test Only** | Adds or modifies tests with no production code change. |
 
-Navigate your web browser to `http://<ip address>:<port>`, where `<ip address>`
-is the IP address of the machine on which you launched the web server. For
-example: `http://10.250.37.37:4242`, for port ``4242``.
+Exceptions are rare and must be justified. When in doubt, split the PR.
 
-If you forwarded your port, navigate to `http://localhost:8888`.
+### Code reviews
 
-`http://<ip address>:<port>` will redirect you to the tt-metalium docs at `http://<ip address>:<port>/tt-metalium/`.
+- A PR must be opened for any code change with the following criteria:
+  - Be approved, by a maintaining team member and any codeowners whose modules
+    are relevant for the PR.
+  - Pass any required post-commit pipelines, updated to the latest main. These
+    pipelines will generally, but not always, be defined in
+    `.github/workflows/sanity-tests.yaml`.
+  - Pass any acceptance criteria mandated in the original issue.
+  - Pass any testing criteria mandated by codeowners whose modules are relevant
+    for the PR.
+- Avoid opening/re-opening/push new commits to PRs before you're ready for
+  review and start running pipelines. This is because we don't want to clog
+  our pipelines with unnecessary runs that developers may know will fail
+  anyways.
 
-To view the ttnn docs, navigate to `http://<ip address>:<port>/ttnn`.
+### New feature and design specifications
 
-4. If you make changes, you may need to check spelling errors.
+- New or changing features require the following accompanying documentation:
+  - An architectural change plan approved by maintaining team members.
+  - A design plan with associated GitHub project/large containing issue.
+    with sub-issues for proper documentation of project slices.
+  - An appropriate test plan with issues.
 
-We use the spell-checker, Aspell, to ensure we don't sneak in some typos in
-our documentation. This is enforced by static-checks on github workflows as
-well.
+### Release flows
 
-To check if your updated docs pass this check you can run,
+- Any release must be externally-available artifacts generated by a workflow
+  on a protected branch.
+- Demo models and tags conform to the rules set forth in the models [README](./models/README.md).
 
-```bash
-$ cd ${TT_METAL_HOME} && ./docs/spellcheck.sh
-```
+### Logging, assertions, and exceptions
 
-If there are errors in this check you will see an exit code non-zero.
+- Use Loguru for Python logging.
+- Use Tenstorrent logger for C++ logging.
 
-To update the documentation for spelling errors or any out-of-dictionary words
-you can run,
+### Further reading
 
-```bash
-$ cd ${TT_METAL_HOME} && ./docs/spellcheck.sh update
-```
-
-Commit your changes and the personal dictionary, at docs/aspell-dictionary.pws,
-that is changed.
+- [General best practices](contributing/BestPractices.md)
+- [Error message best practices](contributing/ErrorMessageBestPractices.md)
+- [Working with Clang Tidy](contributing/ClangTidy.md)
 
 ## Tests in tt-metal
 
 Ensure you're in a developer Python environment with necessary environment variables
-set as documented in the [developing section](#developing-tt-metal).
+set as documented in the [development tips section](#development-tips).
 
 This includes the environment variables, Python dev environment etc.
 
@@ -432,430 +460,104 @@ cat generated/watcher/watcher.log  # See k_ids field for each core in the last d
 ```
   - In the future, this tool will be expanded to show more debug information available from the host side.
 
-## Contribution standards
-This project has adopted C++ formatting and style as defined in `.clang-format`.
-There are additional requirements such as license headers.
+## Development tips
 
-## Pre-commit Hook Integration for Formatting and Linting
+Please refer to the [README](README.md) for source installation and environment
+setup instructions, then please read the [Getting Started
+page](docs/source/tt-metalium/get_started/get_started.rst).
 
-As part of maintaining consistent code formatting across the project, we have integrated the [pre-commit](https://pre-commit.com/) framework into our workflow. The pre-commit hooks will help automatically check and format code before commits are made, ensuring that we adhere to the project's coding standards.
+### Setting logger level
 
-### What is Pre-commit?
+In order to get debug level log messages, set the environment variable
+`TT_LOGGER_LEVEL=Debug`.
 
-Pre-commit is a framework for managing and maintaining multi-language pre-commit hooks. It helps catch common issues early by running a set of hooks before code is committed, automating tasks like:
-
-- Formatting code (e.g., fixing trailing whitespace, enforcing end-of-file newlines)
-- Running linters (e.g., `clang-format`, `black`, `flake8`)
-- Checking for merge conflicts or other common issues.
-
-For more details on pre-commit, you can visit the [official documentation](https://pre-commit.com/).
-
-### How to Set Up Pre-commit Locally
-
-To set up pre-commit on your local machine, follow these steps:
-
-1. **Install Pre-commit**:
-   Ensure you have Python installed, then run:
-   ```bash
-   pip install pre-commit
-   ```
-   *Note:* pre-commit is already installed if you are using the python virtual environment.
-2. **Install the Git Hook Scripts**:
-   In your local repository, run the following command to install the pre-commit hooks:
-   ```bash
-   pre-commit install
-   ```
-   This command will configure your local Git to run the defined hooks automatically before each commit.
-3. **Run Pre-commit Hooks Manually**:
-   You can also run the hooks manually against all files at any time with:
-   ```bash
-   pre-commit run --all-files
-   ```
-
-### File structure and formats
-
-- Every source file must have the appropriate SPDX header at the top following
-  the [Linux conventions](https://elixir.bootlin.com/linux/v6.5.1/source/Documentation/process/license-rules.rst#L71)
-  for C++ source files, RST files, ASM files, and
-  scripts. For Python files, we are to use this convention:
-
-  ```
-  # SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
-
-  # SPDX-License-Identifier: Apache-2.0
-  ```
-
-  For C++ header files, we will treat them as C++ source files and use this
-  convention:
-
-  ```
-  // SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
-  //
-  // SPDX-License-Identifier: Apache-2.0
-  ```
-
-### CI/CD Principles
-
-- Revert commits on main which fail post-commit tests immediately.
-  - The names listed in the commit, and technical leads if their names are
-    convenient and clear to find, will be pinged in #tt-metal-pipelines.
-  - We will usually give a grace period during working hours depending on the
-    load of the teams to see if the author(s) can merge a fix quickly.
-    Otherwise, the revert will be immediate to prevent the issue from spreading
-    to other peoples' pipelines.
-- There shall be a periodic discussion among the technical leads of this
-  project concerning:
-  - Certain codeowners and project-specific members review current tests in
-    post-commit.
-  - Certain codeowners and project-specific members decide whether to
-    remove/add any current tests in post-commit as project priorities change on
-    an ongoing basis.
-  - Certain codeowners and project-specific members decide if we need to change
-    owners or add more as project priorities change on an ongoing basis.
-  - Communication channels for these decisions and meetings shall be kept
-    internal to Tenstorrent with the intent of having such discussions in the
-    open later.
-- Non-post-commit pipelines will not necessarily mean we have to revert the
-  breaking commit, however any broken pipelines will be considered a priority
-  bug fix.
-- The responsibility of identifying, announcing status-tracking, and escalating
-  broken non-post-commit pipelines will be the responsibility of codeowners
-  whose tests are in the said non-post-commit pipeline.
-  - In the case of the model performance test pipeline, there are codeowners
-    for such tests. However, it is the collective responsibility of all
-    developers to ensure that we do not regress this pipeline.
-
-### Using CI/CD for development
-
-- There are some automated checks upon opening a PR. These checks are part, but
-  not all, of the post-commit test suite. They must pass, but are not enough to
-  ensure your PR will not be reverted.
-- To run any CI pipeline on GitHub Actions, please navigate to the [actions
-  page](https://github.com/tenstorrent/tt-metal/actions).
-
-  Next, you can navigate to any pipeline on the left side of the view. For
-  example, you can run the entire post-commit CI suite by clicking on
-  the link to [sanity tests](https://github.com/tenstorrent/tt-metal/actions/workflows/sanity-tests.yaml), clicking "Run workflow",
-  selecting your branch, then selecting `build-type` as "Release" and pressing "Run workflow".
-
-  ![Dropdown menu of sanity tests and Run Workflow button](docs/source/common/_static/all-post-commit-workflows-button.png)
-
-  You can see the status of your CI run by clicking on the specific run you
-  dispatched.
-
-  We have a sizeable number of workflows, so don't forget to press "Show more
-  workflows...".
-- Unfortunately, we currently do not do automatic checks of all required
-  workflows upon opening a PR. There are various reasons for this, such as
-  limited machine resources. This means that developer and reviewer discretion
-  is still the most important factor in ensuring PRs are merged successfully
-  and without CI failure.
-
-### Skipping CI/CD for documentation updates
-- CI/CD can be skipped for *documentation only* updates that incur no functional change. However, note that modifying `.rst` files in `docs/` is *not a documentation only* update, as the CI step for building documentation needs to run.
-- Upon submitting a PR and getting the necessary approvals:
-  - Click Squash and Merge
-  - Before confirming, edit the top level commit message by prepending the token `[skip ci]`
-    - Example: `[skip ci] #9999: Update CONTRIBUTING.md`
-
-### Documentation
-
-- Any API changes must be accompanied with appropriate documentation changes.
-
-### Git rules and guidelines
-
-- Filing an issue is encouraged for any item that needs alignment or long term tracking.
-
-- Link your issue under the `Ticket` headline in your PR description.
-
-- Use descriptive commit messages
-
-- Merge commits are not allowed in our main branch. We enforce a linear
-  history.
-
-- You can use either of the following methods to merge your branch on the
-  GitHub UI:
-  - Squash and merge
-  - Rebase and merge
-
-#### Creating a branch
-
-Include the user, the issue number, and optionally a description of the change.
-/ and - are used as separators between user and issue number. And - and _
-between issue number and description. E.g.
+For example,
 
 ```
-git checkout -b user-123
-git checkout -b user/123
-git checkout -b user-123_rename_method_x
-git checkout -b user/123-add-x-unit-test
+TT_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
 ```
 
-#### Saving your changes
+### Adding new TTNN examples
 
-Edit the files that you want, making sure relevant unit tests pass. Then add
-them in. E.g.
+TTNN tutorials in this documentation are written as Jupyter notebooks (`.ipynb`) and located in the `ttnn/tutorials` directory. For each notebook, a corresponding Python script is automatically generated and maintained in the `ttnn/tutorials/basic_python` directory. To ensure consistency between notebooks and their exported Python versions, a Git pre-commit hook is provided.
 
-```
-git add abc.py
-git add "*.py"
-```
+This hook performs the following actions:
 
-Please avoid using `git add -A`, which is fairly error prone.
+- Detects all staged Jupyter notebook files under the notebooks/ directory.
+- Converts each notebook to a Python script using jupyter nbconvert with a custom template.
+- Writes the output to the python/ directory only if there are changes.
+- Automatically stages new or updated Python scripts for commit.
+- Exits with a non-zero status code if any files were modified, alerting Git to re-check the commit.
 
-You can restore files if you need to get the original. E.g.
+This process ensures that all TTNN examples remain synchronized and up-to-date in both formats. **Important:** Always make changes directly to the `.ipynb` notebook files—not the generated Python scripts. Any manual changes made to the Python files will be overwritten the next time the notebook is updated. Python files are considered read-only exports for users or CI pipelines that prefer `.py` formats.
 
-```
-git restore abc.py
-git restore '*'
-git restore --staged abc.py # if the file was already added
-```
+Both the Jupyter notebooks and the exported Python files are tested as part of the CI workflows to ensure correctness and stability.
 
-```
-git commit -m "Rename method x"
-```
+### Building and viewing the documentation locally
 
-Note: each commit on the main branch and any feature branch where multiple
-engineers collaborate should work. That is, everything compiles properly on the
-architecture used by your machine, you can run relevant code on the card, and
-relevant unit tests pass. Furthermore, for the main branch, you should run
-CI pipelines and make sure that the commit doesn't break anything important.
+1. First, ensure that you have [built the project and activated the Python
+environment](docs/source/tt-metalium/get_started/get_started.rst), along with any required
+`PYTHONPATH` variables.
 
-You can use git log to see the sequence of commits in the branch. That allows
-you to see where your branch is relative to main, and can help you figure out
-how the commits are structured, before and after commits and rebases.
-
-#### Saving the commit to origin and create a pull request
-
-You will need to push the change to origin. The command will provide a url that
-you should use to create pull request. This should be done the first time you
-push a change. After that you may need to set upstream to be able to push
-changes in the future. E.g.
+2. Build the HTML documentation.
 
 ```
-git push origin user-123:user-123
-git branch --set-upstream-to=origin/user-123 user-123
+cd docs
+make clean
+make html
 ```
 
-or
+You can optionally build and view the ttnn sweeps results with:
 
 ```
-git push -u branch_name
+make ttnn_sweeps/check_directory
+make ttnn_sweeps
 ```
 
-Note: you may be able to push and set the upstream at the same time, but that
-assumes that you haven't rebased, which is probably not the case. The command
-would be something like
+then turn on the server to view.
 
 ```
-git push origin --set-upstream origin user-123
+make server
 ```
 
-If that doesn't work, you should use `branch --set-upstream-to`.
+You can customize the port by using the `PORT=<port>` environment variable. If
+you're using a customer-facing cloud machine, please disregard this point.
 
-Once you have a pull request, in the UI you can run actions against the branch.
-Go to Actions (https://github.com/tenstorrent/tt-metal/actions) and run the
-workflows that you want against your branch. At the very least, you should run
-Sanity tests.
+3. Navigate to the docs page.
 
-You can make more changes, commit them, and then if everything is set up and you
-don't need to rebase, then you can just do
+Navigate your web browser to `http://<ip address>:<port>`, where `<ip address>`
+is the IP address of the machine on which you launched the web server. For
+example: `http://10.250.37.37:4242`, for port ``4242``.
 
-```
-git push
-```
+If you forwarded your port, navigate to `http://localhost:8888`.
 
-Occasionally, and for the final set of tests before the final commit, you should
-rebase your branch.
+`http://<ip address>:<port>` will redirect you to the tt-metalium docs at `http://<ip address>:<port>/tt-metalium/`.
 
-#### Rebasing your branch
+To view the ttnn docs, navigate to `http://<ip address>:<port>/ttnn`.
 
-Your branch needs to be kept up to date with main via rebase. You should rebase
-your local branch, and then once everything looks good, push the change. You
-should not rebase your origin branch. That way, if anything goes wrong, you can
-use origin to restore your branch to a good state.
+4. If you make changes, you may need to check spelling errors.
 
-Note: for very small changes where you don't expect to create a second commit
-it might be okay to use the UI to rebase origin. However, in general, it's
-better to avoid that.
+We use the spell-checker, Aspell, to ensure we don't sneak in some typos in
+our documentation. This is enforced by static-checks on github workflows as
+well.
 
-You should first make sure main is up to date:
+To check if your updated docs pass this check you can run,
 
-```
-git checkout main
-git fetch origin
-git submodule sync
-git pull --rebase --prune
-git submodule update --init --recursive
+```bash
+$ cd ${TT_METAL_HOME} && ./docs/spellcheck.sh
 ```
 
-Then you can
+If there are errors in this check you will see an exit code non-zero.
 
-```
-git checkout user-123
-git rebase main
-```
+To update the documentation for spelling errors or any out-of-dictionary words
+you can run,
 
-This will apply one commit at a time. Each commit is in order. If your branch
-has two commits, then the first one is applied, then the second one is applied.
-
-If there are no conflicts, everything will complete successfully. Then you can
-push the changes to origin. This is done through a forced push to save the
-rebase information:
-
-```
-git push -f
+```bash
+$ cd ${TT_METAL_HOME} && ./docs/spellcheck.sh update
 ```
 
-If there is any conflict with the commits being processed, you will need to
-edit the files to fix the problem. Information should be printed about what to
-do. It's probably a good idea not to skip commits.
-
-Don't be surprised if changes from a subsequent commit are not there in the
-first commit. For example, if you are editing the files to fix up the first of
-two commits, the files will not have the edits of the second commit. When
-editing files, only fix up the conflicts listed. Do not change anything else.
-
-If you do change anything else, then `git rebase --continue` will complain and
-you will probably have to restart.
-
-Look for HEAD. The conflict will look something like:
-
-```
-<<<< HEAD
-Some other edits
-====
-Your edits
->>>> Your branch
-```
-
-Update the file to have a single piece of working code and remove the commit
-info. Make sure everything compiles and all the tests pass. Then you can
-continue with the rebase.
-
-```
-git rebase --continue
-```
-
-If something is wrong enough that you want to abort the rebase and undo all the
-changes, then you can start over. Do
-
-```
-git rebase --abort # go to before the rebase
-```
-
-If your local is in a bad state, you may also want to start from scratch on your
-local by pulling from origin, reflogging, or checking out a specific commit via
-its hash:
-
-```
-git pull --rebase # will undo changes
-git reflog
-git checkout <hash>
-```
-
-If none of those work you can also try:
-
-```
-git reset --hard origin/<BRANCH>
-```
-
-Note: If you are getting errors you may need to update the origin info via
-`git branch --set-upstream-to`.
-
-If everything goes well with all the updates. Then you can update origin:
-
-```
-git push -f
-```
-
-Note: It's okay to have a few commits, as long as each one works on its own.
-If you do want to combine commits you would want to run something like:
-
-```
-git rebase -i HEAD~10 # the number indicates how many commits you want to look at - here 10 commits
-```
-
-The latest one is at the bottom. You can use fixup or squash. Usually you want
-to use fixup (indicated by f) since that discards the message. Then edit the
-messages appropriately.
-
-However, new squash and merge functionality in the UI is much easier than
-doing this process manually. Therefore you should use the UI whenever possible.
-
-#### Merging to main
-
-You will probably need to iterate several times in terms of pushing changes and
-rebasing your branch.
-
-Once you have all of your changes working locally, your pull request (PR)
-approved, and all the workflows that you want passing after a final rebase, It
-is time to merge in your branch into main. This should be done in the Github UI.
-
-Go to your PR and press the `Squash and merge` button. That will automatically
-squash all of your commits, which is very useful. The button has an alternate
-option to merge without squashing. You should use `Squash and merge` unless you
-have a good reason not to.
-
-After that, the UI will usually delete your branch.
-
-### PR categories
-
-All PRs must be bucketed into exactly one of the following categories. Include
-the category name in your PR title (e.g. `[Feature] Add new op`). Reviewers
-should reject PRs that span multiple categories — use `git rebase -i` to split
-them first.
-
-| Category | When to use |
-|---|---|
-| **Feature** | Implements new functionality. Tests encouraged. |
-| **Performance** | No new functionality, no bug fixes — only performance improves. Tests encouraged. |
-| **Bug fix** | Fixes an issue with existing functionality. New regression tests strongly encouraged. |
-| **Cleanup** | Refactor, rename, restructure, or cosmetic change. No functional change. Tests OK to add. |
-| **Test Only** | Adds or modifies tests with no production code change. |
-
-Exceptions are rare and must be justified. When in doubt, split the PR.
-
-### Code reviews
-
-- A PR must be opened for any code change with the following criteria:
-  - Be approved, by a maintaining team member and any codeowners whose modules
-    are relevant for the PR.
-  - Pass any required post-commit pipelines, updated to the latest main. These
-    pipelines will generally, but not always, be defined in
-    `.github/workflows/sanity-tests.yaml`.
-  - Pass any acceptance criteria mandated in the original issue.
-  - Pass any testing criteria mandated by codeowners whose modules are relevant
-    for the PR.
-- Avoid opening/re-opening/push new commits to PRs before you're ready for
-  review and start running pipelines. This is because we don't want to clog
-  our pipelines with unnecessary runs that developers may know will fail
-  anyways.
-
-### New feature and design specifications
-
-- New or changing features require the following accompanying documentation:
-  - An architectural change plan approved by maintaining team members.
-  - A design plan with associated GitHub project/large containing issue.
-    with sub-issues for proper documentation of project slices.
-  - An appropriate test plan with issues.
-
-### Release flows
-
-- Any release must be externally-available artifacts generated by a workflow
-  on a protected branch.
-- Demo models and tags conform to the rules set forth in the models [README](./models/README.md).
-
-### Logging, assertions, and exceptions
-
-- Use Loguru for Python logging.
-- Use Tenstorrent logger for C++ logging.
-
-### Further reading
-
-- [General best practices](contributing/BestPractices.md)
-- [Error message best practices](contributing/ErrorMessageBestPractices.md)
-- [Working with Clang Tidy](contributing/ClangTidy.md)
+Commit your changes and the personal dictionary, at docs/aspell-dictionary.pws,
+that is changed.
 
 ## Hardware troubleshooting
 

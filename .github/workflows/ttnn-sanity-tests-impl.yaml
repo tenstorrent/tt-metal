@@ -182,6 +182,7 @@ jobs:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         TT_LOGGER_LEVEL: warn
+        TTNN_CONFIG_OVERRIDES: '{"validate_program_args": true}'
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -241,7 +242,7 @@ jobs:
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
-          echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
+          echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false, \"validate_program_args\": true}" >> $GITHUB_ENV
 
       - name: Set up coverage profiling
         if: ${{ inputs.collect-coverage }}
@@ -316,6 +317,13 @@ jobs:
         if: ${{ !startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         env:
+          # Cap PyTorch/ATen host-side OpenMP threads and use passive waiting. A brief host
+          # reference-tensor op is enough to spin up the OpenMP/MKL thread pool; its worker
+          # threads then busy-wait for the rest of the job — including while the device is
+          # doing the actual (much longer) work — which is where most of the CPU burn comes from.
+          OMP_NUM_THREADS: 2
+          MKL_NUM_THREADS: 2
+          OMP_WAIT_POLICY: passive
           # Whether THIS matrix leg should be profiled: experiment on + this is the chosen HW group.
           # (Never true on sim legs — this step's `if` already excludes sim_* SKUs.)
           PERF_PROFILE_THIS: ${{ inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku) }}
@@ -369,6 +377,13 @@ jobs:
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         env:
           PYTEST_ADDOPTS: "-p no:timeout -n 4 ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+          # Cap PyTorch/ATen host-side OpenMP threads and use passive waiting. A brief host
+          # reference-tensor op is enough to spin up the OpenMP/MKL thread pool; its worker
+          # threads then busy-wait for the rest of the job, which is where most of the CPU
+          # burn comes from — not the (much shorter) reference-tensor computation itself.
+          OMP_NUM_THREADS: 2
+          MKL_NUM_THREADS: 2
+          OMP_WAIT_POLICY: passive
         run: |
           # Strip the per-test `pytest --timeout N` from the cmd: the simulator is ~10-50x slower than
           # HW, so that per-op limit kills slow-but-correct ops (the job timeout-minutes is the backstop;

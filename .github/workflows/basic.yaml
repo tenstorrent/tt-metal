@@ -118,7 +118,12 @@ jobs:
         timeout-minutes: 10
         run: |
           # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
-          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-validation_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
+          # tt-metalium-jit is optional: TT_USE_SYSTEM_SFPI builds don't produce it, since the
+          # dev/ci-test containers this workflow runs in already have /opt/tenstorrent/sfpi for
+          # the JIT-build runtime fallback (see tt_metal/jit_build/build.cpp).
+          shopt -s nullglob
+          pkgs=(./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-validation_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb)
+          apt install -y "${pkgs[@]}"
 
       - name: Set up env vars for watcher
         if: ${{ inputs.enable-watcher == true }}

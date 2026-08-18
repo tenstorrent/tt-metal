@@ -368,13 +368,14 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
                     worker_l1_size,
                     dispatch_core_config,
                     context_id),
-                mapped_devices.fabric_node_ids,
+                std::move(mapped_devices.fabric_node_ids),
                 mapped_devices.mesh_shape);
         }  // Initialize fabric node ids manually.
         // TODO: #22087 - Remove this code path.
         std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
         TT_FATAL(config.mesh_shape().has_value(), "Mesh shape must be provided when physical device ids are supplied");
         const auto& supplied_ids = config.physical_device_ids();
+        fabric_node_ids.reserve(supplied_ids.size());
         for (int supplied_id : supplied_ids) {
             auto fabric_node_id = ctx.get_control_plane().get_fabric_node_id_from_physical_chip_id(supplied_id);
             TT_FATAL(
@@ -399,7 +400,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
                 worker_l1_size,
                 dispatch_core_config,
                 context_id),
-            fabric_node_ids,
+            std::move(fabric_node_ids),
             config.mesh_shape().value());
     }();
 
@@ -650,6 +651,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     std::vector<MaybeRemote<IDevice*>> submesh_devices;
     std::vector<tt::tt_fabric::FabricNodeId> submesh_fabric_node_ids;
     const MeshCoordinateRange submesh_range(offset_coord, end_coordinate);
+    submesh_devices.reserve(submesh_range.shape().mesh_size());
+    submesh_fabric_node_ids.reserve(submesh_range.shape().mesh_size());
     for (const auto& coord : submesh_range) {
         if (view_->impl().is_local(coord)) {
             submesh_devices.push_back(MaybeRemote<IDevice*>::local(view_->impl().get_device(coord)));
@@ -718,6 +721,7 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_submeshes(
 
     // Stamp `submesh_shape` along each dimension, `steps` number of times.
     std::vector<std::shared_ptr<MeshDevice>> submeshes;
+    submeshes.reserve(MeshShape(steps).mesh_size());
     for (const auto& step_position : MeshCoordinateRange(MeshShape(steps))) {
         ttsl::SmallVector<uint32_t> offset_coords;
         for (size_t dim = 0; dim < submesh_shape.dims(); dim++) {
@@ -1670,10 +1674,17 @@ void MeshDeviceImpl::quiesce_internal() {
             submesh_ptr->quiesce_devices();
         }
     }
-    bool have_reset_launch_msg_state = false;
-    for (auto& command_queue : mesh_command_queues_) {
-        command_queue->wait_for_completion(!have_reset_launch_msg_state);
-        have_reset_launch_msg_state = true;
+    // The launch message ring buffer and the worker GO mailboxes are shared across hardware CQs, so exactly
+    // one CQ resets them. Pick the last CQ that has work outstanding: wait_for_completion finishes each CQ in
+    // turn, so by then no other CQ can still have workers in flight whose GO mailboxes would be reset.
+    size_t launch_msg_reset_cq = mesh_command_queues_.size();
+    for (size_t cq_id = 0; cq_id < mesh_command_queues_.size(); ++cq_id) {
+        if (mesh_command_queues_[cq_id]->in_use()) {
+            launch_msg_reset_cq = cq_id;
+        }
+    }
+    for (size_t cq_id = 0; cq_id < mesh_command_queues_.size(); ++cq_id) {
+        mesh_command_queues_[cq_id]->wait_for_completion(/*reset_launch_msg_state=*/cq_id == launch_msg_reset_cq);
     }
     for (auto& command_queue : mesh_command_queues_) {
         command_queue->finish_and_reset_in_use();
@@ -1834,6 +1845,22 @@ uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRan
     return pimpl_->get_noc_multicast_encoding(noc_index, cores);
 }
 SystemMemoryManager& MeshDevice::sysmem_manager() { return pimpl_->sysmem_manager(); }
+MeshTraceId MeshDevice::begin_mesh_trace(MeshCommandQueue& cq) {
+    TT_FATAL(cq.device() == this, "MeshCommandQueue belongs to a different MeshDevice");
+    return pimpl_->begin_mesh_trace(static_cast<uint8_t>(cq.id()));
+}
+void MeshDevice::begin_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id) {
+    TT_FATAL(cq.device() == this, "MeshCommandQueue belongs to a different MeshDevice");
+    pimpl_->begin_mesh_trace(static_cast<uint8_t>(cq.id()), trace_id);
+}
+void MeshDevice::end_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id) {
+    TT_FATAL(cq.device() == this, "MeshCommandQueue belongs to a different MeshDevice");
+    pimpl_->end_mesh_trace(static_cast<uint8_t>(cq.id()), trace_id);
+}
+void MeshDevice::replay_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id, bool blocking) {
+    TT_FATAL(cq.device() == this, "MeshCommandQueue belongs to a different MeshDevice");
+    pimpl_->replay_mesh_trace(static_cast<uint8_t>(cq.id()), trace_id, blocking);
+}
 MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id) { return pimpl_->begin_mesh_trace(cq_id); }
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     pimpl_->begin_mesh_trace(cq_id, trace_id);

@@ -109,6 +109,7 @@ void kernel_main() {
     BINARY_SFPU_INIT
 #endif
 
+    compute_kernel_hw_startup(dfb_bcast_id, dfb_llk_post_id);
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         // --- Broadcast pass: partial tile (from the reader) -> full tile in the intermediate llk_post. ---
         dfb_bcast.wait_front(num_tiles_per_cycle);
@@ -121,7 +122,8 @@ void kernel_main() {
         // below also re-inits the packer for llk_post, so this is belt-and-suspenders on the LHS side.)
         pack_init(dfb_llk_post_id);
 #endif
-        unary_bcast_init<BroadcastType::ROW>(dfb_bcast_id, dfb_llk_post_id);
+        reconfig_data_format(dfb_bcast_id, dfb_bcast_id);
+        unary_bcast_init<BroadcastType::ROW>(dfb_bcast_id);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_bcast_id, 0, 0);

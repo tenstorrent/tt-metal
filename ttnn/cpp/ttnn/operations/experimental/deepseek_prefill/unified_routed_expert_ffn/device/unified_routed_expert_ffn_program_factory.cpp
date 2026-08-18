@@ -301,6 +301,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // Candidate gate/up K-block widths: divisors of K_gate_tiles no wider
         // than the requested in0_block_w_gu, largest first.
         std::vector<uint32_t> w_gu_candidates;
+        w_gu_candidates.reserve(std::min<uint32_t>(in0_block_w_gu, K_gate_tiles));
         for (uint32_t w = std::min<uint32_t>(in0_block_w_gu, K_gate_tiles); w >= 1; --w) {
             if (K_gate_tiles % w == 0) {
                 w_gu_candidates.push_back(w);

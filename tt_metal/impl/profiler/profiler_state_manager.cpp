@@ -10,6 +10,7 @@
 #include <tt_stl/assert.hpp>
 #include "hostdevcommon/profiler_common.h"
 #include "context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "math.hpp"
 #include "tt_cluster.hpp"
 #include <tt-metalium/device.hpp>
@@ -83,7 +84,7 @@ uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rt
     return per_buffer_size;
 }
 
-ProfilerStateManager::ProfilerStateManager() : do_sync_on_close(true) {}
+ProfilerStateManager::ProfilerStateManager(MetalEnvImpl& env) : env_(env), do_sync_on_close(true) {}
 
 void ProfilerStateManager::cleanup_device_profilers() {
     // This thread only exists when debug dump is enabled
@@ -214,7 +215,7 @@ void ProfilerStateManager::start_debug_dump_thread(
                     auto profiler_it = this->device_profiler_map.find(device->id());
                     TT_ASSERT(profiler_it != this->device_profiler_map.end());
                     DeviceProfiler& profiler = profiler_it->second;
-                    if (MetalContext::instance().rtoptions().get_profiler_trace_only() || was_force_read) {
+                    if (this->env_.get_rtoptions().get_profiler_trace_only() || was_force_read) {
                         profiler.processResults(
                             device,
                             virtual_cores_map.at(device->id()),

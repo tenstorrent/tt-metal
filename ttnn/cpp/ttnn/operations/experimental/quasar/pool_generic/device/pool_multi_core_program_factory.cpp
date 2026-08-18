@@ -17,8 +17,8 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/hal.hpp>
 
@@ -69,6 +69,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
         "(ceil_pad_h > 0 || ceil_pad_w > 0) or count_include_pad == false and (pad_h > 0 || pad_w > 0)");
 
     std::vector<ScalarInfo> scalars;
+    scalars.reserve(config.max_out_nhw_per_core);
     bool first_scalar = true;
     uint32_t last_pool_area = 0;
 
@@ -151,6 +152,8 @@ Tensor create_scalar_config_tensor(
         default: break;
     }
 
+    scalars_per_core.reserve(num_iterations);
+
     {
         uint32_t nhw_linear = 0;
         uint32_t output_stick_n = 0;
@@ -228,6 +231,7 @@ std::vector<uint32_t> generate_core_starting_indices(
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: repeat_factor = num_cores_x; break;
         default: TT_FATAL(false, "Unsupported shard scheme");
     };
+    starting_indices.reserve(shard_boundaries.size() * repeat_factor);
     for (const auto& item : shard_boundaries) {
         const auto& [output_shard_start, _] = item.output_range;
         if (output_shard_start >= op_trace_metadata.size()) {
@@ -432,8 +436,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         const tt::tt_metal::ShardSpec ri_shard_spec(setup.parallel_config.grid, ri_shard_shape, ri_orient);
         return MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, ri_shard_spec};
     }();
-    MeshTensor reader_indices_owned = tt::tt_metal::enqueue_write_tensor(
-        cq, reader_indices_host.host_tensor(), *mesh_device, reader_indices_mem_config);
+    MeshTensor reader_indices_owned =
+        cq.enqueue_write_tensor(reader_indices_host.host_tensor(), reader_indices_mem_config);
     const tt::tt_metal::TensorSpec reader_indices_spec = reader_indices_owned.tensor_spec();
     const uint32_t reader_indices_page_size = reader_indices_owned.mesh_buffer().page_size();
 
@@ -493,8 +497,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                 input.shard_spec().value().grid, shard_shape, config_orient);
             return MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
         }();
-        config_tensor_owned =
-            tt::tt_metal::enqueue_write_tensor(cq, config_tensor.host_tensor(), *mesh_device, config_mem_config);
+        config_tensor_owned = cq.enqueue_write_tensor(config_tensor.host_tensor(), config_mem_config);
         config_tensor_spec = config_tensor_owned->tensor_spec();
         config_buffer_page_size = config_tensor_owned->mesh_buffer().page_size();
     }
@@ -728,6 +731,12 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // whenever pool2d uses a split reader. (mpwi has a single input/scalar stream — reader1 is
     // the writer face.)
     const bool has_second_input_cb = cb_sizes.has_split_reader && !return_indices;
+
+    // mandatory: in_scalar_0, clear_value, in_shard, reader_indices, in_0, out
+    constexpr uint32_t num_mandatory_dfbs = 6;
+    dfbs.reserve(
+        num_mandatory_dfbs + (has_second_input_cb ? 2 : 0) + (return_indices ? 9 : 0) +
+        (cb_sizes.has_pre_tilize ? 2 : 0) + (cb_sizes.has_out_idx ? 1 : 0) + (one_scalar_per_core ? 0 : 1));
 
     dfbs.push_back(local_dfb(
         DFB_IN_SCALAR_0, cb_sizes.scalar_cb_pagesize, cb_sizes.scalar_cb_npages, params.data_format, scalar_face));

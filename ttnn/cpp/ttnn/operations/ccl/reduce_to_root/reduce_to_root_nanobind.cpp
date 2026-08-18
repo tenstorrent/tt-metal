@@ -54,6 +54,8 @@ void bind_reduce_to_root(nb::module_& mod) {
 
                 reduce_to_root operates on a fixed 4-device line topology with the root at (1, 0). All three input tensors must be sharded; each output preserves the spec of its corresponding input.
 
+                Each shard core is moved in a single fabric packet holding its l shard plus one s and one m page, so ``l_shard_pages * page_size + 2 * page_size`` must not exceed the fabric maximum payload size (4352 B by default). Wider shards need ``max_packet_payload_size_bytes`` raised in the ``FabricRouterConfig``.
+
             Memory Support:
                 - Sharded: required (L1)
             )doc";

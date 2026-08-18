@@ -490,6 +490,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)false);  // compact_output
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
@@ -620,6 +621,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 {"cb_in0_sharded", tt::CBIndex::c_2},
                 {"cb_l1_array", tt::CBIndex::c_6},
                 {"cb_sparsity", tt::CBIndex::c_6},
+                // Indexed/gather mode is sparse-matmul-only; 0 disables it here. The reader reads this
+                // name unconditionally, so every factory building it must pass it. (This block also
+                // serves the block-sharded reader selected above, which simply ignores it.)
+                {"num_active", 0},
             }});
 
     tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = 0;
@@ -694,6 +699,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 {"cb_bias", tt::CBIndex::c_3},
                 {"cb_out", tt::CBIndex::c_4},
                 {"cb_sparsity", tt::CBIndex::c_7},
+                {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
             }});
 
     // Compute kernel compile time args
@@ -1483,6 +1489,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)false);  // compact_output
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
@@ -1615,6 +1622,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 {"cb_in0", tt::CBIndex::c_0},
                 {"cb_in0_sharded", tt::CBIndex::c_2},
                 {"cb_sparsity", tt::CBIndex::c_6},
+                {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
             }});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
@@ -1631,6 +1639,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 {"cb_bias", tt::CBIndex::c_3},
                 {"cb_out", tt::CBIndex::c_4},
                 {"cb_sparsity", tt::CBIndex::c_7},
+                {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
             }});
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
@@ -2118,6 +2127,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
     CoreRangeSet all_cores = non_idle_cores;
     std::vector<CoreRange> non_idle_cores_vec;
+    non_idle_cores_vec.reserve(non_idle_cores.ranges().size());
     auto subdevice_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
@@ -2316,8 +2326,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
     std::vector<tt::tt_metal::CBHandle> cb_outputs;
+    cb_outputs.reserve(out_buffers.size());
     std::vector<tt::tt_metal::CBHandle> output_cb_indices;
+    output_cb_indices.reserve(out_buffers.size());
     std::vector<tt::tt_metal::CBHandle> interm_cb_indices;
+    interm_cb_indices.reserve(out_buffers.size());
 
     if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
         // interm0
@@ -2637,6 +2650,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
             std::vector<std::pair<uint32_t, uint32_t>> first_col_anchors;   // (y, bank_id)
             std::vector<std::pair<uint32_t, uint32_t>> second_col_anchors;  // (y, bank_id)
+            first_col_anchors.reserve(banks_in_first_col);
+            second_col_anchors.reserve(num_banks - banks_in_first_col);
 
             for (uint32_t bank = 0; bank < num_banks; ++bank) {
                 const auto& core = optimal_dram_workers[bank];
@@ -2685,6 +2700,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
     uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
+    bank_ids.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         bool send_to_hop_core = i == 0 && use_hop_cores;
         const auto& core = worker_cores_vec[i];
@@ -2843,10 +2859,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
 
     return MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t{
         {mm_kernel_in1_sender_writer_id},
-        shared_cbs,
+        std::move(shared_cbs),
         false,
         CoreCoord{0, 0},
-        worker_cores_vec,
+        std::move(worker_cores_vec),
         0,
         ttnn::prim::Matmul1DType::GATHER_IN0};
 }
@@ -3477,6 +3493,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)false);  // compact_output
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
@@ -3594,12 +3611,16 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             {"cb_in0_sharded", tt::CBIndex::c_2},
             {"cb_l1_array", tt::CBIndex::c_6},
             {"cb_sparsity", tt::CBIndex::c_6},
+            // Indexed/gather mode: sparse_matmul only (0 = disabled). Passed on both branches so the
+            // arg does not depend on which reader was selected above; the block-sharded one ignores it.
+            {"num_active", 0},
         };
     } else {
         in0_sender_kernel_desc.named_compile_time_args = {
             {"cb_in0", tt::CBIndex::c_0},
             {"cb_in0_sharded", tt::CBIndex::c_2},
             {"cb_sparsity", tt::CBIndex::c_6},
+            {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
         };
     }
     in0_sender_kernel_desc.config =
@@ -3673,6 +3694,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         {"cb_bias", tt::CBIndex::c_3},
         {"cb_out", tt::CBIndex::c_4},
         {"cb_sparsity", tt::CBIndex::c_7},
+        {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
     };
     in1_sender_writer_kernel_desc.config =
         DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
@@ -4444,6 +4466,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)fuse_op);
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)false);  // compact_output
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
@@ -4571,6 +4594,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         {"cb_in0", tt::CBIndex::c_0},
         {"cb_in0_sharded", tt::CBIndex::c_2},
         {"cb_sparsity", tt::CBIndex::c_6},
+        {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
     };
     in0_sender_kernel_desc.config =
         DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
@@ -4586,6 +4610,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         {"cb_bias", tt::CBIndex::c_3},
         {"cb_out", tt::CBIndex::c_4},
         {"cb_sparsity", tt::CBIndex::c_7},
+        {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
     };
     in1_sender_writer_kernel_desc.config =
         DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
