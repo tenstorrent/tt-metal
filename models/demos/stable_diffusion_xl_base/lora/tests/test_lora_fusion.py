@@ -170,7 +170,8 @@ def test_lora_fusion_pcc(mesh_device, lora_path):
 def test_text_encoder_lora_fusion_pcc(mesh_device, te_lora_path):
     """Fuse a text-encoder-impacting LoRA and check the fused CLIP weights match a
     PEFT reference. The default adapter used by `test_lora_fusion_pcc` is UNet-only,
-    so this is the only coverage of the text-encoder fuse path (`_fuse_text_encoder_lora`).
+    so this is the only coverage of the text-encoder fuse path
+    (`TtTextEncoderLoRAWeightsManager.fuse`).
     """
     torch_pipeline_for_tt = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
@@ -187,7 +188,7 @@ def test_text_encoder_lora_fusion_pcc(mesh_device, te_lora_path):
     tt_pipeline = TtSDXLPipeline(mesh_device, torch_pipeline_for_tt, pipeline_config)
 
     tt_pipeline.load_lora_weights(te_lora_path)
-    components = tt_pipeline._lora_weights_manager.adapter_state()["text_encoder_components"]
+    components = tt_pipeline._te_lora_weights_manager.state()["components"]
     assert components, (
         "Chosen LoRA does not impact any text encoder; pick a LoRA that trains "
         "text_encoder / text_encoder_2 to exercise this path."
@@ -278,7 +279,7 @@ def test_text_encoder_lora_zero_clip_scale_skips_fusion(mesh_device, te_lora_pat
     tt_pipeline = TtSDXLPipeline(mesh_device, torch_pipeline_for_tt, pipeline_config)
 
     tt_pipeline.load_lora_weights(te_lora_path)
-    components = tt_pipeline._lora_weights_manager.adapter_state()["text_encoder_components"]
+    components = tt_pipeline._te_lora_weights_manager.state()["components"]
     assert components, (
         "Chosen LoRA does not impact any text encoder; pick a LoRA that trains "
         "text_encoder / text_encoder_2 to exercise this path."

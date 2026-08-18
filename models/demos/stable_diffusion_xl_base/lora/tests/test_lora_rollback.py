@@ -111,7 +111,7 @@ def test_lora_rollback(mesh_device, is_ci_env, lora_path, prompt, negative_promp
 def test_text_encoder_lora_rollback(mesh_device, is_ci_env, te_lora_path, prompt, negative_prompt, lora_prompt):
     """Rollback for a text-encoder-impacting LoRA: after unload, the base image must
     return bit-for-bit (pcc=1.0), which requires the CLIP encoders to be restored on
-    device (`_unload_text_encoder_lora`), not just the UNet. The default rollback test
+    device (`TtTextEncoderLoRAWeightsManager.unload`), not just the UNet. The default rollback test
     uses a UNet-only adapter and does not cover this.
     """
     prepare_device(mesh_device, use_cfg_parallel=False)
@@ -154,9 +154,7 @@ def test_text_encoder_lora_rollback(mesh_device, is_ci_env, te_lora_path, prompt
     img_base = _run_forward_pass(tt_sdxl, pipeline, prompt, negative_prompt, batch_size)
 
     tt_sdxl.load_lora_weights(te_lora_path)
-    assert tt_sdxl._lora_weights_manager.adapter_state()[
-        "text_encoder_components"
-    ], "chosen LoRA does not impact the text encoders"
+    assert tt_sdxl._te_lora_weights_manager.state()["components"], "chosen LoRA does not impact the text encoders"
     tt_sdxl.fuse_lora()
     assert tt_sdxl.get_lora_status()["text_encoder"] is True
     _run_forward_pass(tt_sdxl, pipeline, lora_prompt, negative_prompt, batch_size)
