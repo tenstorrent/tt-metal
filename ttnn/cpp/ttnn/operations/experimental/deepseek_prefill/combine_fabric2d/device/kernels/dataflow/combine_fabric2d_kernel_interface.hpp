@@ -12,6 +12,7 @@
 // Everything the host needs sits behind KERNEL_BUILD, so a kernel translation unit never sees it — neither
 // the code nor its includes.
 
+#include <cstddef>
 #include <cstdint>
 
 #ifndef KERNEL_BUILD
@@ -109,12 +110,26 @@ constexpr uint32_t SCHED_FWD = 0x80000000u;
 // directly.
 constexpr uint32_t FORWARDING_METADATA_SIZE = 64;
 
-// Forwarding-metadata words, as uint64_t indices from (slot_base + token_size_bytes). The reader fills them,
-// the sender consumes them. All uint64_t so the sender needs no sub-word loads.
-constexpr uint32_t FWD_META_FINAL_ADDR = 0;  // destination DRAM address on the FINAL destination chip
-constexpr uint32_t FWD_META_DST_CHIP = 1;    // final destination chip id; SENTINEL_DST_CHIP marks a sentinel
-constexpr uint32_t FWD_META_CMD = 2;
-constexpr uint32_t FWD_META_THIS_ADDR = 3;  // the address THIS hop writes to
+// The forwarding metadata a ring slot carries after its token, at (slot_base + token_size_bytes). The reader
+// fills it, the sender consumes it. All uint64_t so the sender needs no sub-word loads.
+struct FwdMetadata {
+    uint64_t final_addr;  // destination DRAM address on the FINAL destination chip
+    uint64_t dst_chip;    // final destination chip id; SENTINEL_DST_CHIP marks a sentinel
+    uint64_t cmd;
+    uint64_t this_addr;  // the address THIS hop writes to
+};
+
+// A forwarded packet is the token plus the first two words, sent as one contiguous run, so the layout below
+// is wire format between chips rather than a private convenience.
+constexpr uint32_t FWD_EXTRA_BYTES = 2 * sizeof(uint64_t);
+
+// Asserted so that whoever changes this layout has to acknowledge they need some other means of ensuring
+// every device runs kernels built from the same metadata format.
+static_assert(sizeof(FwdMetadata) <= FORWARDING_METADATA_SIZE);
+static_assert(offsetof(FwdMetadata, final_addr) == 0);
+static_assert(offsetof(FwdMetadata, dst_chip) == sizeof(uint64_t));
+static_assert(offsetof(FwdMetadata, cmd) == 2 * sizeof(uint64_t));
+static_assert(offsetof(FwdMetadata, this_addr) == 3 * sizeof(uint64_t));
 
 constexpr uint64_t CMD_END = 0;  // end of stream; the slot carries no token
 constexpr uint64_t CMD_FINAL_WRITE = 1;
