@@ -984,6 +984,12 @@ void kernel_main() {
                 // untilize/exit and works bare today (the single-K-block stem, nbw=1, passes) -- leave it
                 // untouched so this cannot regress the stem.
                 if (!last_inner_dim_block) {
+                    // [#48552 DS-DEBUG] intra-guard markers (unwrapped -> UNPACK prints). Decisive:
+                    //   no g-mm0copy      -> UNPACK wedged in the mm_in0 copy_tile itself (unpacker cannot
+                    //                        issue ANY UNPACR at the transition; NOT a pop trap)
+                    //   g-mm0copy, no g-mm0pop -> wedged in cb_mm_in0.pop_front (POP_TILES NOT drained by the
+                    //                        preceding copy_tile -> a real UNPACR does not cure this trap)
+                    //   g-mm0pop, no g-in1copy -> in1 copy_tile; etc.
                     // drain mm_in0, then pop it
                     reconfig_data_format_srca(in1_cb_id, mm_in0_cb_id);
                     copy_tile_to_dst_init_short(mm_in0_cb_id);
@@ -992,7 +998,13 @@ void kernel_main() {
                     tile_regs_commit();
                     tile_regs_wait();
                     tile_regs_release();
+                    if (in0_block_h_i == 0) {
+                        DPRINT("[DS] g-mm0copy kb{}\n", in0_block_w_i);
+                    }
                     cb_mm_in0.pop_front(in0_block_num_tiles);
+                    if (in0_block_h_i == 0) {
+                        DPRINT("[DS] g-mm0pop kb{}\n", in0_block_w_i);
+                    }
                     // drain in1, then pop it
                     reconfig_data_format_srca(mm_in0_cb_id, in1_cb_id);
                     copy_tile_to_dst_init_short(in1_cb_id);
@@ -1001,7 +1013,13 @@ void kernel_main() {
                     tile_regs_commit();
                     tile_regs_wait();
                     tile_regs_release();
+                    if (in0_block_h_i == 0) {
+                        DPRINT("[DS] g-in1copy kb{}\n", in0_block_w_i);
+                    }
                     cb_in1.pop_front(in1_block_num_tiles);
+                    if (in0_block_h_i == 0) {
+                        DPRINT("[DS] g-in1pop kb{}\n", in0_block_w_i);
+                    }
                     // restore matmul (srcA already on in1)
                     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 } else
