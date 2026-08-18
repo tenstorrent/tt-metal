@@ -129,6 +129,11 @@ def main() -> None:
             "without fatals but currently diverges from greedy past the first window."
         ),
     )
+    parser.add_argument(
+        "--offset-free-eager",
+        action="store_true",
+        help="diagnostic: run the offset-free graph with no trace, isolating graph from replay",
+    )
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
@@ -178,6 +183,7 @@ def main() -> None:
             verify_width=args.verify_width,
             verify_rows=args.verify_rows,
             offset_free_verify=args.offset_free_verify,
+            offset_free_eager=args.offset_free_eager,
         )
 
         per_prompt = []

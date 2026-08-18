@@ -917,11 +917,30 @@ Acceptance stays healthy (2.78/forward), which is exactly why acceptance must ne
 correctness signal — F16 recorded the same trap for the batched decode verify.
 
 So it ships **off**, behind ``offset_free_verify=False`` and ``--offset-free-verify``.
-The next step is narrow and does not need a redesign: replay the same window twice with
-the offset tensors rewritten in between and compare against the eager verify, which
-isolates whether the staleness is in ``rope_pos_ids``, ``chunk_page_table`` or
-``chunk_start_idx``.  All three are refreshed with ``copy_host_to_device_tensor`` before
-``execute_trace``, so the suspicion is ordering against the replay rather than the values.
+
+**The fault is in the graph, not in trace replay.**  ``offset_free_eager`` runs the same
+offset-free graph with no trace at all — ``trace_capture_seconds`` reads 0.000 and every
+forward is eager — and it reproduces the failure *exactly*: 96 mismatches, first at index
+32, acceptance 2.783.  Identical to the traced run in every respect except speed (26.82
+t/s/u, since eager verify costs 3.081 s against the traced 1.129 s).
+
+That retires the entire "stale tensors at replay" hypothesis, which was the obvious one
+and was wrong.  ``copy_host_to_device_tensor`` ordering, capture-time buffer binding and
+trace lifetime are all exonerated, because none of them are involved.  What is left is the
+three ways the offset-free graph genuinely differs from the shipped one:
+
+1. RoPE gathered with ``ttnn.embedding`` from the 2-D ``cos_cache`` rather than sliced
+   from the pre-tilized 4-D ``cos_cache_tile``;
+2. ``q_chunk_size``/``k_chunk_size`` pinned to ``TILE_SIZE`` instead of
+   ``chunked_sdpa_chunk_size(start_pos, ...)``;
+3. no ``start_pos == 0`` branch, so the chunked paged SDPA runs at every offset.
+
+(2) is worth ruling out first but is not obviously guilty: at the failing window the
+shipped path *also* selects 32, since ``96 % 64 != 0``.  The first window verifies
+correctly and the second does not, so whatever it is depends on the offset rather than on
+the shape — which points at (1) or (3) and makes a direct numerical comparison of the two
+RoPE table paths, at one offset, the cheapest decisive next test.  Both are single-op
+comparisons that need no generation loop.
 
 ## Artifacts
 

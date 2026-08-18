@@ -149,6 +149,7 @@ class DFlashRunner:
         verify_width: int = 256,
         verify_rows: int = 32,
         offset_free_verify: bool = False,
+        offset_free_eager: bool = False,
         max_verify_traces: int = 24,
     ) -> None:
         self.generator = generator
@@ -281,6 +282,12 @@ class DFlashRunner:
         #: computing.  Falls back to the per-window path automatically once the window
         #: would leave the sliding window, where the graph genuinely differs.
         self.offset_free_verify = bool(offset_free_verify)
+        #: Diagnostic: run the offset-free *graph* with no trace at all.  This splits the
+        #: two ways F24's divergence-at-window-advance can be caused -- a wrong graph
+        #: (chunked SDPA pinned to TILE_SIZE, no ``start_pos == 0`` branch) versus stale
+        #: offset tensors at replay.  Eager removes replay from the picture entirely, so
+        #: matching greedy here means the graph is right and the fault is in the refresh.
+        self.offset_free_eager = bool(offset_free_eager)
         #: How many 32-row windows may hold a trace at once.  Beyond this the verify falls
         #: back to the eager path rather than evicting: releasing a trace mid-generation
         #: while its addresses are still live is what wedged the board twice here.
@@ -756,6 +763,8 @@ class DFlashRunner:
         used = list(candidates[:n_cand])
 
         self._last_capture_seconds = 0.0
+        if self.offset_free_eager:
+            return self._verify_offset_free_eager(full_sequence, aligned_start, lead, used, n_cand, stats)
         entry = self._ensure_offset_trace(aligned_start)
         stats.trace_capture_seconds += self._last_capture_seconds
 
@@ -781,6 +790,46 @@ class DFlashRunner:
         target_argmax = self._argmax_range(entry["hidden"], lead, n_cand + 1)
         stats.verify_logits_seconds += time.perf_counter() - t_logits
         return target_argmax, entry["taps"], lead, used
+
+    def _verify_offset_free_eager(self, full_sequence, aligned_start, lead, used, n_cand, stats):
+        """The offset-free graph, run eagerly.  Diagnostic only; see ``offset_free_eager``."""
+        model = self.model
+        rows = self.verify_rows
+        self._stage_offset(aligned_start)
+        host_ids = torch.full((1, rows), model.embed_pad_id, dtype=torch.int32)
+        ids = list(full_sequence[aligned_start : aligned_start + lead]) + [full_sequence[aligned_start + lead]] + used
+        host_ids[0, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                host_ids,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
+            ),
+            self._verify_tokens,
+        )
+        t_forward = time.perf_counter()
+        model.arm_hidden_state_taps(self._tap_layers())
+        model.release_sliding_tails()
+        embedded = model.embed_prefill(self._verify_tokens)
+        hidden = model.prefill_forward(
+            embedded,
+            page_table=self._verify_page_table,
+            user_id=0,
+            start_pos=aligned_start,
+            runtime_offset=self._offset_inputs,
+        )
+        taps = model.take_hidden_state_taps()
+        ttnn.synchronize_device(model.mesh_device)
+        stats.verify_forward_seconds += time.perf_counter() - t_forward
+        stats.target_forwards += 1
+
+        t_logits = time.perf_counter()
+        target_argmax = self._argmax_range(hidden, lead, n_cand + 1)
+        stats.verify_logits_seconds += time.perf_counter() - t_logits
+        ttnn.deallocate(hidden)
+        self._eager_taps_owned = taps
+        return target_argmax, taps, lead, used
 
     def _release_offset_trace(self) -> None:
         """Release the offset-free trace, drained on both sides like every other."""
