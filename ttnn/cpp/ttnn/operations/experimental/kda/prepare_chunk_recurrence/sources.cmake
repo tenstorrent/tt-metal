@@ -6,8 +6,6 @@ set(TTNN_OP_EXPERIMENTAL_KDA_PREPARE_CHUNK_RECURRENCE_SRCS
     device/prepare_chunk_recurrence_program_factory.cpp
 )
 
-set(TTNN_OP_EXPERIMENTAL_KDA_SHARED_SRCS ../factory/kda_factory_utils.cpp)
-
 set(TTNN_OP_EXPERIMENTAL_KDA_PREPARE_CHUNK_RECURRENCE_NANOBIND_SRCS
     prepare_chunk_recurrence_nanobind.cpp
     ../kda_nanobind.cpp
