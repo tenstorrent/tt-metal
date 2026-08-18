@@ -4,6 +4,7 @@
 
 import ttnn
 import os
+from ttnn.operations import integer_golden
 
 
 def register_ttnn_cpp_unary_function(unary_function):
@@ -36,6 +37,30 @@ def register_ttnn_cpp_unary_function(unary_function):
 
             return final_result
 
+        def torch_logical_not(x):
+            if integer_golden.is_unsigned_dtype(x.dtype):
+                # PyTorch lacks unsigned logical-not; compare widened values with zero.
+                return integer_golden.logical_not(x)
+            return torch.logical_not(x)
+
+        def torch_compare_zero(x, torch_function):
+            if integer_golden.is_unsigned_dtype(x.dtype):
+                # PyTorch lacks unsigned relational kernels; compare widened values with zero.
+                return integer_golden.compare(x, 0, torch_function)
+            return torch_function(x, 0)
+
+        def torch_relu(x):
+            if integer_golden.is_unsigned_dtype(x.dtype):
+                # Unsigned values are non-negative, so ReLU is the identity.
+                return x
+            return torch.relu(x)
+
+        def torch_relu6(x):
+            if integer_golden.is_unsigned_dtype(x.dtype):
+                # Evaluate unsigned ReLU6 as a widened clamp and restore its dtype.
+                return integer_golden.clamp(x, 0, 6)
+            return torch.nn.functional.relu6(x)
+
         name_to_golden_function = {
             "abs": torch.abs,
             "atan": torch.atan,
@@ -47,8 +72,8 @@ def register_ttnn_cpp_unary_function(unary_function):
             "eqz": lambda x: torch.eq(x, 0),
             "floor": torch.floor,
             "ceil": torch.ceil,
-            "gez": lambda x: torch.ge(x, 0),
-            "gtz": lambda x: torch.gt(x, 0),
+            "gez": lambda x: torch_compare_zero(x, torch.ge),
+            "gtz": lambda x: torch_compare_zero(x, torch.gt),
             "i0": torch.i0,
             "identity": torch.clone,
             "isfinite": torch.isfinite,
@@ -56,17 +81,17 @@ def register_ttnn_cpp_unary_function(unary_function):
             "isnan": torch.isnan,
             "isneginf": torch.isneginf,
             "isposinf": torch.isposinf,
-            "lez": lambda x: torch.le(x, 0),
+            "lez": lambda x: torch_compare_zero(x, torch.le),
             "log": torch.log,
             "log10": torch.log10,
             "log2": torch.log2,
             "log_sigmoid": torch.nn.functional.logsigmoid,
-            "logical_not": torch.logical_not,
-            "ltz": lambda x: torch.lt(x, 0),
+            "logical_not": torch_logical_not,
+            "ltz": lambda x: torch_compare_zero(x, torch.lt),
             "neg": torch.neg,
             "nez": lambda x: torch.ne(x, 0),
-            "relu": torch.relu,
-            "relu6": torch.nn.functional.relu6,
+            "relu": torch_relu,
+            "relu6": torch_relu6,
             "sigmoid": torch.sigmoid,
             "sign": torch.sign,
             "signbit": torch.signbit,
@@ -196,15 +221,27 @@ for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
 def _golden_function_gelu(input_tensor, *args, variant=None, fast_and_approximate_mode=False, **kwargs):
     import torch
 
-    # Only variant=Tanh changes the *mathematical* function; the legacy
-    # fast_and_approximate_mode=True is the LUT approximation of exact GELU
-    # (~1% absolute error), which can't be modelled as a closed form — fall
-    # back to exact GELU as the reference for it too.
+    # Tanh changes the function; legacy fast mode has no closed-form reference.
     approximate = "tanh" if variant == ttnn.GeluVariant.Tanh else "none"
-    return torch.nn.functional.gelu(input_tensor, approximate=approximate)
+    input_dtype = input_tensor.dtype
+    if input_dtype == torch.bfloat16:
+        # Evaluate BF16 in float32 and round once to match the hardware accurate path.
+        input_tensor = input_tensor.to(torch.float32)
+    result = torch.nn.functional.gelu(input_tensor, approximate=approximate)
+    return result.to(input_dtype)
 
 
 ttnn.attach_golden_function(ttnn.gelu, golden_function=_golden_function_gelu)
+
+
+def _golden_function_softplus(input_tensor, *args, beta=1.0, threshold=20.0, **kwargs):
+    import torch
+
+    # The generic unary wrapper drops parameters, so forward both operation controls.
+    return torch.nn.functional.softplus(input_tensor, beta=beta, threshold=threshold)
+
+
+ttnn.attach_golden_function(ttnn.softplus, golden_function=_golden_function_softplus)
 
 
 def _golden_function_asin(input_tensor_a, *args, device, **kwargs):
@@ -275,6 +312,9 @@ ttnn.attach_golden_function(ttnn.reciprocal, golden_function=_golden_function_re
 def _golden_function_pow(input_tensor_a, exponent, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Evaluate unsupported unsigned power in int64 and restore TT wraparound.
+        return integer_golden.power(input_tensor_a, exponent)
     return torch.pow(input_tensor_a, exponent)
 
 
@@ -327,6 +367,9 @@ ttnn.attach_golden_function(ttnn.hardtanh, golden_function=_golden_function_hard
 def _golden_function_leaky_relu(input_tensor_a, *args, negative_slope=0.01, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Unsigned inputs are non-negative, so leaky ReLU is the identity.
+        return input_tensor_a
     return torch.nn.functional.leaky_relu(input_tensor_a, negative_slope=negative_slope)
 
 
@@ -381,6 +424,9 @@ ttnn.attach_golden_function(ttnn.polygamma, golden_function=_golden_function_pol
 def _golden_function_clamp(input_tensor_a, min=None, max=None, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # PyTorch lacks unsigned clamp kernels; clamp widened values and restore dtype.
+        return integer_golden.clamp(input_tensor_a, min, max)
     return torch.clamp(input_tensor_a, min, max)
 
 
@@ -390,6 +436,9 @@ ttnn.attach_golden_function(ttnn.clamp, golden_function=_golden_function_clamp)
 def _golden_function_clip(input_tensor_a, min=None, max=None, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # PyTorch lacks unsigned clamp kernels; clamp widened values and restore dtype.
+        return integer_golden.clamp(input_tensor_a, min, max)
     return torch.clip(input_tensor_a, min, max)
 
 
@@ -447,6 +496,9 @@ ttnn.attach_golden_function(ttnn.trunc, golden_function=_golden_function_trunc)
 def _golden_function_rsub(input_tensor_a, value, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Evaluate unsupported unsigned reverse subtraction with TT wraparound.
+        return integer_golden.binary(input_tensor_a, value, lambda a, b: b - a)
     return torch.sub(value, input_tensor_a)
 
 
@@ -465,6 +517,9 @@ ttnn.attach_golden_function(ttnn.rdiv, golden_function=_golden_function_rdiv)
 def _golden_function_bitwise_left_shift(input_tensor_a, shift_amt, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Evaluate shifts in int64, zero invalid counts, and mask to the dtype width.
+        return integer_golden.shift(input_tensor_a, shift_amt, torch.bitwise_left_shift)
     return torch.bitwise_left_shift(input_tensor_a, shift_amt)
 
 
@@ -476,6 +531,9 @@ ttnn.attach_golden_function(ttnn.logical_left_shift, golden_function=_golden_fun
 def _golden_function_bitwise_right_shift(input_tensor_a, shift_amt, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Widening preserves unsigned logical-right-shift behavior on the host.
+        return integer_golden.shift(input_tensor_a, shift_amt, torch.bitwise_right_shift)
     return torch.bitwise_right_shift(input_tensor_a, shift_amt)
 
 
@@ -541,9 +599,10 @@ def _golden_function_reglu(input_tensor_a, dim, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.reglu, golden_function=_golden_function_reglu)
 
 
-def _golden_function_geglu(input_tensor_a, dim, *args, **kwargs):
+def _golden_function_geglu(input_tensor_a, dim=-1, *args, **kwargs):
     import torch
 
+    # Match the C++ default when comparison mode receives no dim argument.
     assert isinstance(dim, int), "dim must be an integer"
     assert dim in [-1, 3], "dim must be -1 or 3"
     split_size = input_tensor_a.size(-1) // 2
@@ -572,6 +631,10 @@ ttnn.attach_golden_function(ttnn.swiglu, golden_function=_golden_function_swiglu
 def _golden_function_logical_not_(input_tensor_a, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Preserve in-place golden state while evaluating unsigned logical-not.
+        input_tensor_a.copy_(integer_golden.logical_not(input_tensor_a))
+        return input_tensor_a
     return input_tensor_a.logical_not_()
 
 
@@ -730,9 +793,10 @@ def _golden_function_reglu(input_tensor_a, dim, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.reglu, golden_function=_golden_function_reglu)
 
 
-def _golden_function_geglu(input_tensor_a, dim, *args, **kwargs):
+def _golden_function_geglu(input_tensor_a, dim=-1, *args, **kwargs):
     import torch
 
+    # Match the C++ default when comparison mode receives no dim argument.
     assert isinstance(dim, int), "dim must be an integer"
     assert dim in [-1, 3], "dim must be -1 or 3"
 
@@ -794,6 +858,9 @@ ttnn.attach_golden_function(ttnn.normalize_hw, golden_function=_golden_function_
 def _golden_function_rpow(input_tensor_a, dim, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Evaluate unsupported unsigned reverse power in int64 and restore its width.
+        return integer_golden.power(input_tensor_a, dim, reverse=True)
     return torch.pow(dim, input_tensor_a)
 
 

@@ -7,6 +7,7 @@ from typing import List, Union, Optional
 import sys
 
 import ttnn
+from ttnn.operations import integer_golden
 
 __all__ = []
 
@@ -35,7 +36,11 @@ def apply_activations(tensor, activations):
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
-    output_tensor = input_tensor_a + input_tensor_b
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # PyTorch lacks unsigned arithmetic kernels; widen and restore TT wraparound.
+        output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: a + b)
+    else:
+        output_tensor = input_tensor_a + input_tensor_b
     return apply_activations(output_tensor, activations)
 
 
@@ -44,7 +49,11 @@ ttnn.attach_golden_function(ttnn.add_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
-    output_tensor = input_tensor_a - input_tensor_b
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # PyTorch lacks unsigned arithmetic kernels; widen and restore TT wraparound.
+        output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: a - b)
+    else:
+        output_tensor = input_tensor_a - input_tensor_b
     return apply_activations(output_tensor, activations)
 
 
@@ -53,7 +62,11 @@ ttnn.attach_golden_function(ttnn.subtract_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
-    output_tensor = input_tensor_b - input_tensor_a
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # PyTorch lacks unsigned arithmetic kernels; widen and restore TT wraparound.
+        output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: b - a)
+    else:
+        output_tensor = input_tensor_b - input_tensor_a
     return apply_activations(output_tensor, activations)
 
 
@@ -62,7 +75,11 @@ ttnn.attach_golden_function(ttnn.rsub_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
-    output_tensor = input_tensor_a * input_tensor_b
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # PyTorch lacks unsigned arithmetic kernels; widen and restore TT wraparound.
+        output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: a * b)
+    else:
+        output_tensor = input_tensor_a * input_tensor_b
     return apply_activations(output_tensor, activations)
 
 
@@ -91,6 +108,9 @@ ttnn.attach_golden_function(ttnn.ne, golden_function=_golden_function)
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Compare widened unsigned values because PyTorch has no UInt16/UInt32 kernel.
+        return integer_golden.compare(input_tensor_a, input_tensor_b, torch.gt)
     return torch.gt(input_tensor_a, input_tensor_b)
 
 
@@ -100,6 +120,9 @@ ttnn.attach_golden_function(ttnn.gt, golden_function=_golden_function)
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Compare widened unsigned values because PyTorch has no UInt16/UInt32 kernel.
+        return integer_golden.compare(input_tensor_a, input_tensor_b, torch.ge)
     return torch.ge(input_tensor_a, input_tensor_b)
 
 
@@ -109,6 +132,9 @@ ttnn.attach_golden_function(ttnn.ge, golden_function=_golden_function)
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Compare widened unsigned values because PyTorch has no UInt16/UInt32 kernel.
+        return integer_golden.compare(input_tensor_a, input_tensor_b, torch.lt)
     return torch.lt(input_tensor_a, input_tensor_b)
 
 
@@ -118,6 +144,9 @@ ttnn.attach_golden_function(ttnn.lt, golden_function=_golden_function)
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Compare widened unsigned values because PyTorch has no UInt16/UInt32 kernel.
+        return integer_golden.compare(input_tensor_a, input_tensor_b, torch.le)
     return torch.le(input_tensor_a, input_tensor_b)
 
 
@@ -127,6 +156,10 @@ ttnn.attach_golden_function(ttnn.le, golden_function=_golden_function)
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Preserve in-place golden state while evaluating unsupported unsigned logic.
+        input_tensor_a.copy_(integer_golden.logical(input_tensor_a, input_tensor_b, torch.logical_and))
+        return input_tensor_a
     return input_tensor_a.logical_and_(input_tensor_b)
 
 
@@ -136,6 +169,10 @@ ttnn.attach_golden_function(ttnn.logical_and_, golden_function=_golden_function)
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Preserve in-place golden state while evaluating unsupported unsigned logic.
+        input_tensor_a.copy_(integer_golden.logical(input_tensor_a, input_tensor_b, torch.logical_or))
+        return input_tensor_a
     return input_tensor_a.logical_or_(input_tensor_b)
 
 
@@ -145,6 +182,10 @@ ttnn.attach_golden_function(ttnn.logical_or_, golden_function=_golden_function)
 def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Preserve in-place golden state while evaluating unsupported unsigned logic.
+        input_tensor_a.copy_(integer_golden.logical(input_tensor_a, input_tensor_b, torch.logical_xor))
+        return input_tensor_a
     return input_tensor_a.logical_xor_(input_tensor_b)
 
 
@@ -267,6 +308,9 @@ ttnn.attach_golden_function(ttnn.hypot, golden_function=_golden_function_hypot)
 def _golden_function_maximum(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Evaluate unsupported unsigned min/max in int64 and restore the input dtype.
+        return integer_golden.binary(input_tensor_a, input_tensor_b, torch.maximum)
     return torch.maximum(input_tensor_a, input_tensor_b)
 
 
@@ -276,6 +320,9 @@ ttnn.attach_golden_function(ttnn.maximum, golden_function=_golden_function_maxim
 def _golden_function_minimum(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Evaluate unsupported unsigned min/max in int64 and restore the input dtype.
+        return integer_golden.binary(input_tensor_a, input_tensor_b, torch.minimum)
     return torch.minimum(input_tensor_a, input_tensor_b)
 
 
@@ -285,6 +332,9 @@ ttnn.attach_golden_function(ttnn.minimum, golden_function=_golden_function_minim
 def _golden_function_logical_xor(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Convert unsigned operands to truth values before applying host logical kernels.
+        return integer_golden.logical(input_tensor_a, input_tensor_b, torch.logical_xor)
     return torch.logical_xor(input_tensor_a, input_tensor_b)
 
 
@@ -294,6 +344,9 @@ ttnn.attach_golden_function(ttnn.logical_xor, golden_function=_golden_function_l
 def _golden_function_logical_and(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Convert unsigned operands to truth values before applying host logical kernels.
+        return integer_golden.logical(input_tensor_a, input_tensor_b, torch.logical_and)
     return torch.logical_and(input_tensor_a, input_tensor_b)
 
 
@@ -303,6 +356,9 @@ ttnn.attach_golden_function(ttnn.logical_and, golden_function=_golden_function_l
 def _golden_function_logical_or(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Convert unsigned operands to truth values before applying host logical kernels.
+        return integer_golden.logical(input_tensor_a, input_tensor_b, torch.logical_or)
     return torch.logical_or(input_tensor_a, input_tensor_b)
 
 
@@ -339,6 +395,10 @@ ttnn.attach_golden_function(ttnn.isclose, golden_function=_golden_function_isclo
 def _golden_function_div(input_tensor_a, input_tensor_b, rounding_mode=None, *args, **kwargs):
     import torch
 
+    if input_tensor_a.dtype == torch.int32 and rounding_mode in ("trunc", "floor"):
+        # Widen integer division so the golden does not take the float32 quotient path.
+        wide_input_b = input_tensor_b.to(torch.int64) if torch.is_tensor(input_tensor_b) else input_tensor_b
+        return torch.div(input_tensor_a.to(torch.int64), wide_input_b, rounding_mode=rounding_mode).to(torch.int32)
     return torch.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode)
 
 
@@ -369,9 +429,10 @@ def _golden_function_floor_div(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.floor_div, golden_function=_golden_function_floor_div)
 
 
-def _golden_function_remainder(input_tensor_a, input_tensor_b, *args, device, **kwargs):
+def _golden_function_remainder(input_tensor_a, input_tensor_b, *args, device=None, **kwargs):
     import torch
 
+    # Comparison mode does not inject device, and this reference does not use it.
     input_dtype = input_tensor_a.dtype
     if not torch.is_tensor(input_tensor_b):
         if input_dtype == torch.bfloat16:
@@ -436,6 +497,10 @@ ttnn.attach_golden_function(ttnn.polyval, golden_function=_golden_function_polyv
 def _golden_function_gt_(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Preserve in-place golden state while comparing widened unsigned values.
+        input_tensor_a.copy_(integer_golden.compare(input_tensor_a, input_tensor_b, torch.gt))
+        return input_tensor_a
     return input_tensor_a.gt_(input_tensor_b)
 
 
@@ -445,6 +510,10 @@ ttnn.attach_golden_function(ttnn.gt_, golden_function=_golden_function_gt_)
 def _golden_function_le_(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Preserve in-place golden state while comparing widened unsigned values.
+        input_tensor_a.copy_(integer_golden.compare(input_tensor_a, input_tensor_b, torch.le))
+        return input_tensor_a
     return input_tensor_a.le_(input_tensor_b)
 
 
@@ -454,6 +523,10 @@ ttnn.attach_golden_function(ttnn.le_, golden_function=_golden_function_le_)
 def _golden_function_lt_(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Preserve in-place golden state while comparing widened unsigned values.
+        input_tensor_a.copy_(integer_golden.compare(input_tensor_a, input_tensor_b, torch.lt))
+        return input_tensor_a
     return input_tensor_a.lt_(input_tensor_b)
 
 
@@ -463,6 +536,10 @@ ttnn.attach_golden_function(ttnn.lt_, golden_function=_golden_function_lt_)
 def _golden_function_ge_(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Preserve in-place golden state while comparing widened unsigned values.
+        input_tensor_a.copy_(integer_golden.compare(input_tensor_a, input_tensor_b, torch.ge))
+        return input_tensor_a
     return input_tensor_a.ge_(input_tensor_b)
 
 
@@ -520,6 +597,9 @@ ttnn.attach_golden_function(ttnn.prelu, golden_function=_golden_function_prelu)
 def _golden_function_logical_right_shift(input_tensor_a, shift_amt, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Unsigned right shift uses widened non-negative values and dtype-width masking.
+        return integer_golden.shift(input_tensor_a, shift_amt, torch.bitwise_right_shift)
     t1_uint = input_tensor_a.to(torch.int64) & 0xFFFFFFFF
     result = (t1_uint >> shift_amt).to(torch.int32)
     return result

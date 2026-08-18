@@ -234,7 +234,7 @@ ttnn.attach_golden_function(ttnn.reshape, golden_function=_golden_function)
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
 
-def _golden_function(input_tensor, dtype=None, *, spec=None, **_):
+def _golden_function(input_tensor, dtype=None, *, spec=None, layout=None, **_):
     if input_tensor is None:
         return None
 
@@ -251,6 +251,12 @@ def _golden_function(input_tensor, dtype=None, *, spec=None, **_):
     if target_dtype == ttnn.fp8_e4m3:
         # Match FP8 storage quantization while keeping the golden exportable as torch.float32.
         return input_tensor.to(torch.float8_e4m3fn).to(torch.float32)
+
+    if target_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        # Round-trip block floats through host packing so the golden includes BFP quantization.
+        target_layout = spec.layout if spec is not None else layout
+        target_layout = target_layout or ttnn.TILE_LAYOUT
+        return ttnn.Tensor(tensor=input_tensor, data_type=target_dtype, layout=target_layout).to_torch()
 
     # Mirror explicit TT dtype conversion so the golden matches values stored by from_torch.
     return input_tensor.to(ttnn.ttnn_dtype_to_torch_dtype(target_dtype))

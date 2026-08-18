@@ -6,6 +6,7 @@ import sys
 from typing import Union
 
 import ttnn
+from ttnn.operations import integer_golden
 
 __all__ = []
 
@@ -19,6 +20,9 @@ def torch_mac(input, tensor1, tensor2):
 def _golden_function_addcmul(input_tensor_a, input_tensor_b, input_tensor_c, *args, value=1, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # PyTorch lacks UInt32 addcmul; widen and restore the hardware wraparound.
+        return integer_golden.addcmul(input_tensor_a, input_tensor_b, input_tensor_c, value)
     return torch.addcmul(input_tensor_a, input_tensor_b, input_tensor_c, value=value)
 
 

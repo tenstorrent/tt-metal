@@ -195,6 +195,13 @@ def get_all_tensors(object_value):
     return get_tensors(object_value, (ttnn.Tensor, torch.Tensor))
 
 
+def should_compare_tensor_outputs(golden_outputs, outputs):
+    # Scalar operations can retain their golden result without entering tensor-only comparison.
+    golden_has_tensors = bool(get_all_tensors(golden_outputs))
+    output_has_tensors = bool(get_all_tensors(outputs))
+    return golden_has_tensors or output_has_tensors
+
+
 def set_tensor_id(tensor, force=False):
     import torch
 
@@ -535,6 +542,7 @@ INPLACE_OUTPUT_KWARG_NAMES = (
     "optional_tensor",
     "optional_output_tensor",
     "out",
+    "output",
     "output_tensors",
     "optional_output_tensors",
 )
@@ -840,7 +848,9 @@ class Operation:
                             "Global comparison will be skipped"
                         )
 
-                if local_golden_function_output is not None:
+                if local_golden_function_output is not None and should_compare_tensor_outputs(
+                    local_golden_function_output, output
+                ):
                     try:
                         set_tensor_id(local_golden_function_output)
                         local_tensor_comparison_records = compare_tensors_using_pcc(
@@ -860,7 +870,9 @@ class Operation:
                             "Local comparison will be skipped"
                         )
 
-                if global_golden_function_output is not None:
+                if global_golden_function_output is not None and should_compare_tensor_outputs(
+                    global_golden_function_output, output
+                ):
                     try:
                         set_tensor_id(global_golden_function_output)
                         postprocess_global_golden_function_outputs(output, global_golden_function_output)
