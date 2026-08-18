@@ -76,9 +76,9 @@ def _to_torch_one_device(t):
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 2), id="p300_1x2")], indirect=True)
 def test_decode_gated_delta_rule_t1_vs_golden(mesh_device):
-    assert hasattr(ttnn.transformer, "decode_gated_delta_rule"), (
-        "ttnn.transformer.decode_gated_delta_rule is not bound in this tree"
-    )
+    assert hasattr(
+        ttnn.transformer, "decode_gated_delta_rule"
+    ), "ttnn.transformer.decode_gated_delta_rule is not bound in this tree"
 
     cases = ((1, 32, 32, 32, 0), (1, 24, 128, 128, 1))
     worst_o = worst_h = 1.0
@@ -92,9 +92,7 @@ def test_decode_gated_delta_rule_t1_vs_golden(mesh_device):
         g = -torch.rand(B, 1, H) * 0.5
         scale = K**-0.5
         h0 = torch.randn(B, H, K, V)
-        gold_o, gold_h = recurrent_gated_delta_rule_decode_golden(
-            q, k, v, beta, g, scale=scale, initial_state=h0
-        )
+        gold_o, gold_h = recurrent_gated_delta_rule_decode_golden(q, k, v, beta, g, scale=scale, initial_state=h0)
 
         kw = dict(
             dtype=ttnn.bfloat16,
