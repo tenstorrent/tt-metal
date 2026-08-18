@@ -53,6 +53,18 @@ void kernel_main() {
     // first sync tells sync core to start global sync, second sync is waiting for global sync done
     sync_config->local_sync(local_sync_iter++);
 
+    // [PURE-SYNC IDLE #45872] For the 0-packet pure-sync test: hold here so a link-down injected now
+    // retrains the link BEFORE global_sync(1) reopens the channel-0/stream-22 connection. This manufactures
+    // the retrain window that the payload phase normally provides. ~80e9 wall-clock ticks ~= 55-80s
+    // depending on AICLK, which spans the harness's +2s down + ~25s recovery. Set to 0 to disable.
+    constexpr uint64_t PURE_SYNC_IDLE_TICKS = 0ULL;  // disabled for standard payload run
+    if constexpr (PURE_SYNC_IDLE_TICKS > 0) {
+        const uint64_t _idle_t0 = get_timestamp();
+        while (get_timestamp() - _idle_t0 < PURE_SYNC_IDLE_TICKS) {
+            invalidate_l1_cache();
+        }
+    }
+
     // Perform global sync (master sync core) for end of sync
     sync_config->global_sync(global_sync_iter++);
 

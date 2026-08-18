@@ -5,7 +5,7 @@ allocation_policies:
 Tests:
   ### NEIGHBOR EXCHANGE BANDWIDTH TESTS ###
   - name: "NeighborExchangeUnicast"
-    benchmark_mode: true
+    benchmark_mode: false
     sync: true
     fabric_setup:
       topology: NeighborExchange
@@ -17,8 +17,8 @@ Tests:
 
     defaults:
       ftype: unicast
-      num_packets: 100000000
-      #### num_packets: 4294967295
+      num_packets: 10000000
+      #### num_packets: 4294967295  # [#45872] 10M packets, benchmark_mode off = correctness check
 
     patterns:
       - type: neighbor_exchange
