@@ -1,7 +1,7 @@
 name: "Build tt-metal artifacts"
 permissions:
   contents: read
-  packages: write
+  packages: read
 on:
   workflow_call:
     inputs:
@@ -360,6 +360,9 @@ jobs:
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
     if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
