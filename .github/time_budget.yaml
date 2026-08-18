@@ -185,14 +185,10 @@ shield:
   device_perf:
     wh_n150: 100
     bh_p150: 60
+  demo:
+    bh_sc4: 15
 
 scaleout:
-  demo:
-    # blaze_models_prefill_tests.yaml (sc4 job): Kimi-2.7 disaggregated prefill
-    # runner+producer KV-PCC leg (blaze verifies under workflow key "demo"). Distinct from
-    # scaleout.e2e.bh_sc4 below (a different workflow key). Needs scaleout-owner
-    # sign-off before merge. Matches the leg's 15-min timeout.
-    bh_sc4: 15
   merge_gate:
     cpu_medium: 10
     wh_n300_civ2: 10
@@ -302,8 +298,8 @@ models:
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
   frequent:
-    wh_n150: 348
-    wh_n300: 330
+    wh_n150: 318
+    wh_n300: 300
     wh_n150_civ2: 30
     wh_n300_civ2: 30
     bh_p150b_civ2: 120
@@ -326,7 +322,7 @@ models:
     bh_sc4: 120
   e2e_tier2:
     wh_llmbox_perf: 266
-    wh_n150: 41
+    wh_n150: 45
     wh_n300: 6
     bh_p150: 26
     bh_p300: 42
@@ -355,7 +351,7 @@ models:
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 172
-    wh_n150: 67
+    wh_n150: 82
     wh_n300: 30
     bh_p150: 20
     bh_quietbox_2: 50
