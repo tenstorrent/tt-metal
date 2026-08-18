@@ -103,7 +103,8 @@ class KimiK3Config:
     ATTN_RES_BLOCK_SIZE = 12
 
     LATENT_MOE_USE_NORM = True
-    # Torch reference only: no TT kernel implements SiTU yet (#51335), so the device path runs SiLU.
+    # Must match SituGluConfigKimi, which the fused routed-expert kernel bakes in (#51351).
+    # Outside that kernel (shared expert, dense FFN) the device path still runs SiLU.
     ACTIVATION_SITU_BETA = 4.0
     ACTIVATION_SITU_LINEAR_BETA = 25.0
 
@@ -190,8 +191,8 @@ def kimi_k3_hf_config(max_seq: int = 8192):
         # LatentMoE: the routed experts' reduced hidden dim, and the latent RMSNorm flag.
         routed_expert_hidden_size=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
         latent_moe_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
-        # The checkpoint says "situ", but no TT kernel implements it yet (#51335) and consumers of
-        # this field build the activation from it.
+        # The checkpoint says "situ", but consumers of this field index ACT2FN with it, which has
+        # no "situ" entry. The routed expert selects SiTU through RoutedExpertActivation instead.
         hidden_act="silu",
         activation_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
         activation_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
