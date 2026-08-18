@@ -529,8 +529,9 @@ Tensor fmod(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    // The unary SFPU fast path has no int32 kernel and would reinterpret the tile as float.
-    if (input.dtype() == DataType::INT32) {
+    // The unary SFPU fast path has no int32 kernel (it would reinterpret the tile as float)
+    // and cannot honor sub_device_id.
+    if (input.dtype() == DataType::INT32 || sub_device_id.has_value()) {
         return ttnn::detail::invoke_binary_ng(
             input,
             scalar,
@@ -546,7 +547,7 @@ Tensor fmod(
             sub_device_id);
     }
     float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
-    return ttnn::unary_fmod(input, scalar_f, output_mem_config);
+    return ttnn::unary_fmod(input, scalar_f, output_mem_config, std::nullopt, sub_core_grids);
 }
 
 Tensor floor_div(
