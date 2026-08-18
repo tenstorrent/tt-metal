@@ -387,8 +387,17 @@ bash ./build_metal.sh "$@"
 # a symlinked venv resolves to an interpreter that may not exist on other nodes and
 # dies with "python3: not found" once the tree is shared.
 # See https://github.com/tenstorrent/tt-blaze/issues/1516
-echo "==> Running create_venv.sh --bundle-python"
-bash ./create_venv.sh --bundle-python
+#
+# IMPORTANT: the ci-build image bakes ENV PYTHON_ENV_DIR=/opt/venv (pointing at
+# its own pre-built venv from a separate Dockerfile.python layer). create_venv.sh
+# defaults to that env var when --env-dir is not passed, so without this it tries
+# to rebuild/overwrite the image's venv at /opt/venv instead of inside our
+# checkout — and fails, since /opt/venv isn't writable for the mapped host UID.
+# Explicit --env-dir always overrides the env var (per create_venv.sh --help), so
+# pass it, and unset the leaking env vars so nothing else picks up /opt/venv either.
+unset PYTHON_ENV_DIR VIRTUAL_ENV
+echo "==> Running create_venv.sh --bundle-python --env-dir $(pwd)/python_env"
+bash ./create_venv.sh --bundle-python --env-dir "$(pwd)/python_env"
 
 echo "==> Build complete inside container"
 INNER_EOF
