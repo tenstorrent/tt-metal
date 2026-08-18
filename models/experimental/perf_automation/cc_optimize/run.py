@@ -1830,6 +1830,18 @@ def _publish_stage_roots(seq, model_root, node) -> dict:
     byte count.
     """
     try:
+        # NARROW THE ROUTER TO THIS MODEL'S STAGES. The lever catalogue tags each lever with the
+        # stage it applies to, and that axis was a fixed {prefill, decode, na}: a lever for an audio
+        # encoder could not be tagged at all, and a model with no decode was still routed by a
+        # vocabulary that only knows decode. Declared here because this is where the model's stages
+        # are already in hand, and it is called unconditionally and early.
+        try:
+            from agent.model_contract import declared_stage_names
+            from agent.router import declare_stages
+
+            declare_stages(declared_stage_names(model_root))
+        except Exception:  # noqa: BLE001 -- an undeclared axis stays open, which is the safe default
+            pass
         _roots = stage_roots(seq, model_root, _model_id_for_facts(model_root), node)
         if _roots:
             _merge_model_facts(model_root, {"stage_roots": _roots})

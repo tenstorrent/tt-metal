@@ -340,3 +340,75 @@ def test_the_decode_contract_still_answers_when_nothing_is_declared():
 
     assert headline_unit(["whatever"], _P()) == "token"
     assert headline_unit(["classify"], None) == "inference"
+
+
+# ------------------------------------------- the lever catalogue can name a stage the model has
+
+
+def test_a_lever_can_be_tagged_for_a_stage_the_model_actually_declares():
+    """The regime axis was frozenset({"prefill", "decode", "na"}), so a lever written for an audio
+    encoder could not be TAGGED -- `regime: encode` failed validation and the lever was flagged
+    out-of-vocabulary. A model with no decode at all was still routed by a vocabulary that knows
+    only decode."""
+    from agent import router
+
+    router._DECLARED_STAGES.clear()
+    router.declare_stages(["encode", "prefill", "decode"])
+    for st in ("encode", "prefill", "decode", "na"):
+        router._validate_query({"regime": st})  # must not raise
+    try:
+        router._validate_query({"regime": "vocode"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an undeclared stage was accepted as a regime")
+    router._DECLARED_STAGES.clear()
+
+
+def test_a_model_with_no_decode_does_not_have_decode_in_its_vocabulary():
+    """The point: the axis follows the model. Asking for `decode` on a classifier is now a rejected
+    query rather than a silently valid one."""
+    from agent import router
+
+    router._DECLARED_STAGES.clear()
+    router.declare_stages(["classify"])
+    router._validate_query({"regime": "classify"})
+    try:
+        router._validate_query({"regime": "decode"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("decode is still valid for a model that has no decode")
+    router._DECLARED_STAGES.clear()
+
+
+def test_an_undeclared_axis_stays_open_but_still_refuses_junk():
+    """Before any model has spoken -- indexing the catalogue, a unit test -- any identifier is
+    accepted, because not knowing the stages is not grounds to reject them."""
+    from agent import router
+
+    router._DECLARED_STAGES.clear()
+    router._validate_query({"regime": "anything_at_all"})
+    try:
+        router._validate_query({"regime": "NOT AN IDENT!"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("junk was accepted on the open axis")
+
+
+def test_the_stage_list_has_one_reader():
+    """Three places walked the AST for PIPELINE_STAGES independently; anything else that wanted the
+    answer either copied the walk or guessed."""
+    from agent.model_contract import declared_stage_names
+
+    assert declared_stage_names("/nonexistent") == []
+
+
+def test_the_trace_knob_is_derived_per_stage():
+    """One TT_PERF_PREFILL_TRACE was set for every model, so a pipeline whose stages are
+    encode/vocode had no way to be told to trace them -- the flag names the stage."""
+    src = (_PA / "cc_optimize" / "perf_mcp.py").read_text()
+    code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
+    assert 'env["TT_PERF_%s_TRACE" % str(_st).upper()] = "1"' in code
+    assert 'env["TT_PERF_PREFILL_TRACE"] = "1"' in code, "an older generated test lost its trace"

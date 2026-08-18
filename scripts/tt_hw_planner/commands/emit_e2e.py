@@ -587,26 +587,40 @@ def _enumerate_task_heads(model_id: str) -> list:
     return unique
 
 
+# HOST-FALLBACK DETECTION, BY DEFAULT RATHER THAN BY LIST.
+#
+# This was six submodule names -- text_decoder, t2u_model, vocoder, speech_encoder, text_encoder,
+# lm_head -- which are SeamlessM4T's. Voxtral's are audio_tower and language_model, Gemma's are
+# vision_tower and language_model, and neither appears here, so for those models the check has never
+# fired at all: a pipeline calling `hf_model.audio_tower(...)` from its hot path -- the whole thing
+# this exists to catch, torch running on the host while the report calls it a device measurement --
+# passed silently. An allow-list of known-bad names can only produce false NEGATIVES, and every new
+# model is a new negative.
+#
+# Inverted: ANY attribute of hf_model reached from a hot function is a host fallback, because the hot
+# path is by definition what must be on device. The exemptions are the handful of accessors that
+# carry metadata rather than compute; a submodule nobody has heard of is caught by default.
+_HF_NON_COMPUTE_ATTRS = frozenset(
+    {"config", "generation_config", "device", "dtype", "name_or_path", "training", "base_model_prefix"}
+)
+_HF_ATTR = r"(?!(?:%s)\b)\w+" % "|".join(sorted(_HF_NON_COMPUTE_ATTRS))
 _G1B_HF_FALLBACK = (
-    r"(?<!\w)hf_model\.text_decoder\s*\(",
-    r"(?<!\w)hf_model\.t2u_model\s*\(",
-    r"(?<!\w)hf_model\.vocoder\s*\(",
-    r"(?<!\w)hf_model\.speech_encoder\s*\(",
-    r"(?<!\w)hf_model\.text_encoder\s*\(",
-    r"(?<!\w)hf_model\.lm_head\s*\(",
-    r"(?<!\w)self\.hf_model\.text_decoder\s*\(",
-    r"(?<!\w)self\.hf_model\.t2u_model\s*\(",
-    r"(?<!\w)self\.hf_model\.vocoder\s*\(",
-    r"(?<!\w)self\.hf_model\.speech_encoder\s*\(",
-    r"(?<!\w)self\.hf_model\.text_encoder\s*\(",
-    r"(?<!\w)self\.hf_model\.lm_head\s*\(",
-    r"(?<!\w)hf_model\.(text_decoder|t2u_model|vocoder|speech_encoder|text_encoder|lm_head)\.\w+\s*\(",
-    r"(?<!\w)self\.hf_model\.(text_decoder|t2u_model|vocoder|speech_encoder|text_encoder|lm_head)\.\w+\s*\(",
-    r"(?<!\w)hf_model\.(text_decoder|t2u_model|vocoder|speech_encoder|text_encoder)\.[\w.\[\]0-9]+\s*\(",
-    r"(?<!\w)self\.hf_model\.(text_decoder|t2u_model|vocoder|speech_encoder|text_encoder)\.[\w.\[\]0-9]+\s*\(",
+    r"(?<!\w)hf_model\.%s\s*\(" % _HF_ATTR,
+    r"(?<!\w)self\.hf_model\.%s\s*\(" % _HF_ATTR,
+    r"(?<!\w)hf_model\.%s\.[\w.\[\]0-9]+\s*\(" % _HF_ATTR,
+    r"(?<!\w)self\.hf_model\.%s\.[\w.\[\]0-9]+\s*\(" % _HF_ATTR,
 )
 
-_HF_ALIAS_ROOTS = ("text_decoder", "t2u_model", "vocoder", "speech_encoder", "text_encoder", "lm_head")
+
+def _is_hf_compute_attr(top: str) -> bool:
+    """Whether `hf_model.<top>` reached from a hot function means torch ran on the host.
+
+    Everything is, except the metadata accessors: the point of the check is that a hot path touching
+    the reference model at all is the fallback, whatever that submodule happens to be called.
+    """
+    t = str(top or "").strip()
+    return bool(t) and not t.startswith("_") and t not in _HF_NON_COMPUTE_ATTRS
+
 
 _TORCH_COMPUTE_BLOCKLIST = {
     "matmul",
@@ -756,7 +770,11 @@ def _check_hf_fallback(src: str) -> list:
         for sub in ast.walk(node):
             if isinstance(sub, ast.Assign):
                 root = _attr_root(sub.value)
-                if root and any(s in root for s in _HF_ALIAS_ROOTS):
+                if (
+                    root
+                    and "hf_model." in root
+                    and _is_hf_compute_attr(root.split("hf_model.", 1)[-1].split(".", 1)[0])
+                ):
                     for tgt in sub.targets:
                         if isinstance(tgt, ast.Name):
                             aliases[tgt.id] = root
@@ -783,7 +801,7 @@ def _check_hf_fallback(src: str) -> list:
                 if root:
                     tail = root.split("hf_model.", 1)[-1] if "hf_model." in root else ""
                     top = tail.split(".", 1)[0]
-                    if top in _HF_ALIAS_ROOTS:
+                    if _is_hf_compute_attr(top):
                         hits.append(f"{node.name}(): {_dotted_call(sub)}{via_suffix}")
                         continue
             walker = f

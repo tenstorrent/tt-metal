@@ -369,6 +369,28 @@ def _c_selftests(src: Source) -> list:
     return out
 
 
+def declared_stage_names(model_root) -> list:
+    """The stages this model says it has, from its own PIPELINE_STAGES. [] when it declares none.
+
+    THE ONE READER. Three places walked the AST for this assignment independently, and anything that
+    wanted the answer either copied the walk or made do with a guess. A stage list is the model's own
+    statement about itself and is what every stage-keyed thing in the tool should be checked against
+    -- which stages exist, which regime tags are legal, which depth knobs get set.
+    """
+    import ast as _ast
+
+    try:
+        src = Source.load(model_root)
+    except Exception:  # noqa: BLE001 -- an unreadable source declares nothing, and says so as []
+        return []
+    for _p, node in src.assigns("PIPELINE_STAGES"):
+        if isinstance(node.value, (_ast.List, _ast.Tuple)):
+            got = [e.value for e in node.value.elts if isinstance(e, _ast.Constant) and isinstance(e.value, str)]
+            if got:
+                return [str(x) for x in got]
+    return []
+
+
 def _c_decode_contract(src: Source) -> list:
     """An autoregressive stage keeps the decode contract, or its per-token step cannot be measured.
 

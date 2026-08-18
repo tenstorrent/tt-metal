@@ -729,7 +729,12 @@ def invented_workload_vars(src: str, stages=()) -> list:
     fixing is that nothing ever surfaced these, so a 2-clip measurement sat beside an 8-clip ceiling
     for a week. Naming them where the run can see them is the fix.
     """
-    allowed = set(_KNOWN_WORKLOAD_VARS) | {"TT_PERF_%s_LAYERS" % str(st).upper() for st in (stages or ())}
+    allowed = (
+        set(_KNOWN_WORKLOAD_VARS)
+        | {"TT_PERF_%s_LAYERS" % str(st).upper() for st in (stages or ())}
+        # The per-stage trace knob, derived from the same declaration as the depth knob beside it.
+        | {"TT_PERF_%s_TRACE" % str(st).upper() for st in (stages or ())}
+    )
     out = []
     for var, default in _ENV_INT_DEFAULT_RE.findall(src or ""):
         if var in allowed:

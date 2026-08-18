@@ -60,8 +60,45 @@ VOCABULARY: dict[str, frozenset[str]] = {
     "grid": frozenset({"full", "partial", "tiny"}),
     "dispatch": frozenset({"ok", "gappy", "unknown"}),
     "memory": frozenset({"dram_interleaved", "l1_interleaved", "sharded", "unknown"}),
-    "regime": frozenset({"prefill", "decode", "na"}),
+    # OPEN, AND NARROWED BY THE MODEL. This was frozenset({"prefill", "decode", "na"}) -- the two
+    # stages an LLM has -- so a lever written for an audio encoder could not be TAGGED: `regime:
+    # encode` failed validation and the lever was flagged out-of-vocabulary. Worse in the other
+    # direction, a model with no decode at all was still being routed with a vocabulary that only
+    # knows decode.
+    #
+    # A stage is whatever the model declares, so this axis cannot have a fixed membership. It is
+    # validated against the stages the RUN declared (declare_stages, called once the pipeline's
+    # PIPELINE_STAGES are known), plus "na" for a lever that belongs to no stage. Before anything is
+    # declared -- indexing the catalogue on its own, a unit test, a tool with no model in hand -- any
+    # identifier is accepted, because "I do not know this model's stages" is not grounds to reject
+    # its tags. The empty frozenset marks the axis dynamic; _vocab_for() is the reader.
+    "regime": frozenset(),
 }
+
+# Stages the current run's model declares. Empty until declare_stages() is called, which means
+# "unknown", not "none".
+_DECLARED_STAGES: set[str] = set()
+_STAGE_TOKEN = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def declare_stages(names) -> None:
+    """Tell the router which stages this model has, so `regime` can be checked against them.
+
+    Called with the model's own PIPELINE_STAGES. Idempotent and additive: a run that measures more
+    stages than it declared does not invalidate the ones it already stated.
+    """
+    for n in names or ():
+        t = str(n or "").strip().lower()
+        if _STAGE_TOKEN.match(t):
+            _DECLARED_STAGES.add(t)
+
+
+def _vocab_for(dim: str):
+    """The accepted values for a dimension, or None when the dimension accepts any identifier."""
+    if dim == "regime":
+        return ({"na"} | set(_DECLARED_STAGES)) if _DECLARED_STAGES else None
+    return VOCABULARY.get(dim) or None
+
 
 _ROOT = Path(__file__).resolve().parent.parent
 GUIDELINES_DIR = _ROOT / "GUIDELINES"
@@ -143,7 +180,7 @@ def build_index(playbook_dir: str | os.PathLike[str] = GUIDELINES_DIR) -> list[d
                 ]
             _bad = []
             for dim in DIMENSIONS:
-                _vocab = VOCABULARY.get(dim)
+                _vocab = _vocab_for(dim)
                 if not _vocab:
                     continue
                 for v in entry[dim]:
@@ -188,10 +225,16 @@ def _validate_query(query: dict[str, Any]) -> None:
             raise ValueError(f"unknown routing dimension {key!r}; valid dimensions: " f"{sorted(VOCABULARY)}")
         if value is None or value == WILDCARD:
             continue
-        if value not in VOCABULARY[key]:
-            raise ValueError(
-                f"invalid value {value!r} for dimension {key!r}; valid values: " f"{sorted(VOCABULARY[key])}"
-            )
+        _vocab = _vocab_for(key)
+        if _vocab is None:
+            # A DYNAMIC AXIS WITH NOTHING DECLARED accepts any identifier: rejecting a stage name
+            # because this process has not been told the model's stages would refuse the query the
+            # caller is entitled to make. Junk is still refused.
+            if not _STAGE_TOKEN.match(str(value)):
+                raise ValueError(f"invalid value {value!r} for dimension {key!r}")
+            continue
+        if value not in _vocab:
+            raise ValueError(f"invalid value {value!r} for dimension {key!r}; valid values: " f"{sorted(_vocab)}")
 
 
 def route(index: list[dict[str, Any]], query: dict[str, Any]) -> list[dict[str, Any]]:

@@ -2598,7 +2598,17 @@ def _run_full_pipeline_ms():
         "TT_PERF_OSL_TOKENS", "128"
     )
     env.setdefault("TT_PERF_TRACE", "1")
+    # TRACE EVERY STAGE THE MODEL DECLARES, not the one an LLM happens to have. This set a single
+    # TT_PERF_PREFILL_TRACE for every model measured, so a pipeline whose stages are encode/vocode
+    # had no way to be told to trace them -- the flag names the stage, and only one stage had a name
+    # the tool knew. The per-stage depth knobs (TT_PERF_<STAGE>_LAYERS) have been derived from
+    # PIPELINE_STAGES for a while; this is the same derivation, applied to the same question.
+    #
+    # TT_PERF_PREFILL_TRACE is still set, because it is what a generated test written before this
+    # would read, and an old test meeting a new harness must not lose its trace.
     env["TT_PERF_PREFILL_TRACE"] = "1"
+    for _st in _declared_stages_for_env():
+        env["TT_PERF_%s_TRACE" % str(_st).upper()] = "1"
     # Start the trace region at the DRAM-derived size, not the perf test's hardcoded default. This gate
     # runs the whole pipeline at FULL depth (a much bigger capture than the coverage-depth default the
     # builder baked in), so starting big avoids the overflow entirely; the grow below is the fallback.
@@ -5119,6 +5129,20 @@ def _reliable_forward_ms(dev: float) -> float | None:
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+def _declared_stages_for_env() -> list:
+    """This model's declared stages, for building the per-stage env knobs. [] when it declares none.
+
+    Read from the model's own PIPELINE_STAGES via the contract's single reader, so the names the
+    harness sets match the names the generated test binds and the report keys on.
+    """
+    try:
+        from agent.model_contract import declared_stage_names
+
+        return [str(x) for x in (declared_stage_names(_MODEL_ROOT) or []) if str(x).strip()]
+    except Exception:  # noqa: BLE001 -- no declaration is no extra knobs, never a failed run
+        return []
 
 
 def _reliable_forward_unit() -> str:
