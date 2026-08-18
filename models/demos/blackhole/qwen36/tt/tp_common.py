@@ -109,6 +109,38 @@ def sdpa_bf8_enabled(args):
     return not is_blackhole() and getattr(args, "device_name", None) == "N300"
 
 
+def wh_9b_n300(args):
+    """True only for Qwen3.5-9B on a Wormhole N300 -- the exact configuration the DECODE
+    optimizations below were measured and PCC-validated on.
+
+    Single source of truth for the scope of four decode changes that were all measured on this one
+    config and are unvalidated anywhere else:
+      * ``TPAttention._make_heads_decode``'s ``skip_v_reshard`` (v goes straight from the head split
+        into the paged-cache write)
+      * ``model_config.kv_cache_write_{k,v}_shard_cfg`` + ``kv_cache_write_fused_enabled``
+        (paged_fused_update_cache on disjoint K/V grids)
+      * the fused sigmoid-multiply attention gate in ``TPAttention.forward_decode``
+      * ``mlp_w1/w3_decode_1d_progcfg``'s num_cores=56 + fp32_dest_acc_en=False, paired with
+        ``Qwen36MLP.compute_kernel_config_gateup_decode``
+
+    Three conditions, each load-bearing:
+      * ``not is_blackhole()`` -- Blackhole has 1.84x the L1 and a taller grid, takes a different
+        pad-first KV path (_WH_KV_PAD_NOTE) and a fused AGMM prefill path; every core count and
+        blocking here was tuned against WH's 8x8 grid.
+      * ``dim <= 4096`` -- the 9B. The 27B (dim 5120) has different per-device widths (its
+        hidden_dim/tp is 2176, not 6144), so the swept core counts do not transfer, and it runs at
+        TP=8 on T3K where the CCL/grid arithmetic differs. Gate on dim rather than model_name because
+        HF_MODEL is often a hashed snapshot directory -- same reason ``_decode_tile_opt`` and
+        ``_ab_gap_scoped`` do it this way.
+      * ``device_name == "N300"`` -- 2-device Wormhole. The KV-write grid split needs 2*B/cols rows of
+        worker grid, and the batch-derived shard grids were only checked against this mesh; N150
+        (TP=1) never reaches the TP path at all and T3K (TP=8) re-shapes every one of these grids.
+
+    Outside this scope every one of the four falls back to the previously shipped behavior.
+    """
+    return not is_blackhole() and getattr(args, "dim", 0) <= 4096 and getattr(args, "device_name", None) == "N300"
+
+
 # Grid helpers
 def prefill_grid_default():
     """BH P150: (8,10); WH: (8,8). y capped at 10 on BH (grid_x=10 breaks matmul)."""

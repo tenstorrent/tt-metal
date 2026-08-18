@@ -262,20 +262,44 @@ class Qwen36ModelArgs(ModelArgs):
         self.decode_grid_w = mesh_device.compute_with_storage_grid_size().x
         self.mlp_1d_decode = True
         # gate/up: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, 42.8us vs
-        # 43.9us for the old 8x4=forced1d_32c). On WH (decode_grid_w=8) this falls back to 8x6, which
-        # -- like gdn_qkvz and attn_wo below -- was never independently tuned there. MEASURED (WH,
-        # M=32 K=4096 N~5504, representative intermediate/tp shape): full 8x8=64-core grid beats 44
-        # by -3.5% (w1/gate) and -3.2% (w3/up), same PCC.
+        # 43.9us for the old 8x4=forced1d_32c). On WH (decode_grid_w=8), re-swept at the EXACT
+        # production shape (M=32 K=4096 N=6144, test_mlp_decode_matmul_sweep.py, 3 independent runs
+        # each): num_cores=56 (not 64 -- the prior "N~5504 representative shape" note predates this
+        # exact width) paired with fp32_dest_acc_en=False beats today's cores=64/fp32_acc=True by
+        # ~3-4% on BOTH gate and up, reproducibly. fp32_acc=False is passed here too so this
+        # progcfg's own subblock choice is consistent with the runtime compute config that's paired
+        # with it (mlp.py's compute_kernel_config_gateup_decode) -- at this N/core count it doesn't
+        # change the chosen blocking (per_core_N=4 has no divisor between 4 and 8), but keeping the
+        # two in sync avoids a silent mismatch if either changes later. PCC cost is small and
+        # consistent with LoFi+bfp4 already dominating this matmul's error budget (gate 0.99032 ->
+        # 0.98959, up 0.99320 -> 0.99268 -- 4th-decimal, same class as other accepted trades here).
+        #
+        # SCOPED TO WORMHOLE 9B ON N300 (tpc.wh_9b_n300 -- see that helper for why each of the three
+        # conditions is load-bearing). The 56/fp32F pair was swept at the 9B's hidden_dim/tp = 6144;
+        # the 27B's is 2176, so neither the core count nor the subblock choice transfers. Outside the
+        # scope this restores the previously shipped values exactly: 44 cores on Blackhole, 64 on
+        # other Wormhole meshes, fp32_dest_acc_en left on.
+        # NOTE: fp32_acc here MUST stay in lockstep with mlp.py's compute_kernel_config_gateup_decode,
+        # which is gated on the same helper -- a mismatch silently pairs a subblock cap of 8 with an
+        # fp32-acc kernel (or vice versa).
+        _gateup_9b = tpc.wh_9b_n300(self)
+        _gateup_cores = 56 if _gateup_9b else (44 if tpc.is_blackhole() else 64)
         self.mlp_w1_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M,
             self.dim,
             self.hidden_dim // tp,
-            num_cores=44 if tpc.is_blackhole() else 64,
+            num_cores=_gateup_cores,
             fused_activation=ttnn.UnaryOpType.SILU,
             grid_w=self.decode_grid_w,
+            fp32_acc=not _gateup_9b,
         )
         self.mlp_w3_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.hidden_dim // tp, num_cores=44 if tpc.is_blackhole() else 64, grid_w=self.decode_grid_w
+            M,
+            self.dim,
+            self.hidden_dim // tp,
+            num_cores=_gateup_cores,
+            grid_w=self.decode_grid_w,
+            fp32_acc=not _gateup_9b,
         )
         # down: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~63us, +28% vs
         # the old 8x2). On WH (decode_grid_w=8) this falls back to 8x5; MEASURED full 8x8 grid is
@@ -415,6 +439,63 @@ class Qwen36ModelArgs(ModelArgs):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+        # Disjoint K/V grids for the fused paged-cache write (ttnn.experimental.
+        # paged_fused_update_cache requires its two inputs' shard grids to be non-overlapping). Two
+        # halves of the device grid: the NATURAL half (rows 0.._rows-1, which is exactly
+        # kv_update_shard_cfg's grid and exactly what nlp_create_qkv_heads_decode emits) and the
+        # SHIFTED half (the next _rows rows). Using both doubles the cores for this one op (together =
+        # the full device grid at B=32) to collapse 2 device programs into 1.
+        #
+        # WHICH TENSOR GETS WHICH HALF IS NOT ARBITRARY -- V TAKES THE NATURAL ONE:
+        #   * K arrives INTERLEAVED at the write (it went through q/k-norm + RoPE), so it owes an
+        #     InterleavedToSharded no matter which half it targets -- the grid origin is FREE for K.
+        #   * V arrives ALREADY SHARDED on the natural half straight from the head split, so pointing
+        #     V at the natural half means it needs NO reshard at all (forward_decode's equality guard
+        #     then short-circuits), while pointing it at the shifted half forces a Reshard op.
+        # This was originally assigned the other way round, which cost one extra device op per layer.
+        # MEASURED (test_attn_head_split_v_reshard_sweep.py::test_kv_write_grid_swap_removes_v_reshard,
+        # N300, B=32): 26.7us/4 programs -> 26.0us/3 programs (-3.0%), K and V cache contents
+        # bit-identical either way and no NaN.
+        #
+        # DO NOT instead try to make nlp_create_qkv_heads_decode emit onto the shifted half by passing
+        # that grid as its memory_config: it SILENTLY RETURNS NaN. The tensor comes back with the
+        # right shape and the right shard_spec (so a structural check passes) but that kernel writes
+        # its shards from absolute core (0,0) outward, leaving a non-(0,0)-origin grid unwritten.
+        # MEASURED: natural grid -> max|diff vs torch| 0.000000; grid at origin (0,1) -> NaN.
+        #
+        # WH-only (gated with is_blackhole below): unverified there from this host, and Blackhole's
+        # paged decode takes a different pad-first branch anyway (_WH_KV_PAD_NOTE in attention/tp.py).
+        # VERIFIED (test_kv_cache_sdpa_decode_sweep.py, N300, B=32): bit-identical cache contents vs
+        # the two separate paged_update_cache calls (checked against a per-user-distinct page table,
+        # not a degenerate shared one), device kernel duration 22.4us -> 18.1us (-19.1%).
+        # SCOPED TO WORMHOLE 9B ON N300 (tpc.wh_9b_n300), plus the geometric precondition that the
+        # worker grid actually has room for both disjoint halves. Outside the scope, forward_decode
+        # falls back to the two separate paged_update_cache calls exactly as before.
+        self.kv_cache_write_fused_enabled = (
+            tpc.wh_9b_n300(self) and 2 * _rows <= mesh_device.compute_with_storage_grid_size().y
+        )
+        if self.kv_cache_write_fused_enabled:
+            # K -> SHIFTED half (it reshards from interleaved regardless, so the origin costs nothing)
+            self.kv_cache_write_k_shard_cfg = ttnn.create_sharded_memory_config(
+                shape=(tpc.TILE_SIZE, self.head_dim),
+                core_grid=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, _rows), ttnn.CoreCoord(_cols - 1, 2 * _rows - 1))}
+                ),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            # V -> NATURAL half == kv_update_shard_cfg's grid == what the head split already emits,
+            # so forward_decode's equality guard skips V's reshard entirely.
+            self.kv_cache_write_v_shard_cfg = ttnn.create_sharded_memory_config(
+                shape=(tpc.TILE_SIZE, self.head_dim),
+                core_grid=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_cols - 1, _rows - 1))}
+                ),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
 
     def _set_hf_params(self, checkpoint_dir):
         # trust_remote_code before base AutoConfig load.
