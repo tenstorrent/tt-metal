@@ -1031,7 +1031,15 @@ Result conv2d_DRAM(
 
     // The channel-chunked path stitches chunk outputs into a ROW_MAJOR DRAM tensor:
     // slice_write's RM interleaved program factory is the only one that supports a
-    // non-zero start offset on the last (channel) dimension.
+    // non-zero start offset on the last (channel) dimension. Compressed dtypes that
+    // cannot be stored ROW_MAJOR (BFloat8_B / BFloat4_B) therefore cannot be chunked;
+    // fail fast instead of constructing an invalid ROW_MAJOR allocation below.
+    TT_FATAL(
+        !(num_channel_chunks > 1 &&
+          (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B)),
+        "Channel-chunked conv stitches its output through a ROW_MAJOR tensor; BFloat8_B / BFloat4_B output "
+        "dtype is not supported on this path.");
+
     ttnn::Tensor dram_output_tensor = ttnn::create_device_tensor(
         tt::tt_metal::TensorSpec(
             ttnn::Shape({batch_size, output_height, output_width, out_channels}),
@@ -1185,10 +1193,22 @@ Result conv2d_DRAM(
         if (should_deallocate_act) {
             input_tensor_on_device.deallocate(true);
         }
+        // Stitching happened through a ROW_MAJOR intermediate because slice_write needs
+        // it; convert back to the caller-requested layout so chunked calls honor
+        // conv_config.output_layout exactly like the stock DRAM path. Values are
+        // unchanged - this is a layout hop only.
+        if (conv_config.output_layout != tt::tt_metal::Layout::ROW_MAJOR) {
+            dram_output_tensor = ttnn::to_layout(dram_output_tensor, conv_config.output_layout);
+        }
         const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
         const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
         dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
 
+        // return_weights_and_bias contract on the chunked path: with host weights, every
+        // chunk prepares (and discards) its own channel-sliced device weights, so there is
+        // no single prepared device tensor to hand back; the caller's original host
+        // weight/bias are returned so a repeated call re-runs preparation identically.
+        // Prepared device weights are returned unchanged and stay reusable.
         return {dram_output_tensor, output_height, output_width, weight_tensor, bias_tensor};
     }
 
