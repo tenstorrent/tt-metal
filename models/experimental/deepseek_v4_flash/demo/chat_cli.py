@@ -67,6 +67,7 @@ from models.experimental.deepseek_v4_flash.tt.common import _region
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
 from models.experimental.deepseek_v4_flash.tt.paged_cache import PagedCacheFull, round_context
+from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
@@ -87,13 +88,20 @@ class ContextFull(RuntimeError):
 
 
 @contextlib.contextmanager
-def open_mesh_device(trace_region_size: int | None):
+def open_mesh_device(trace_region_size: int | None, system_config=None):
     """Open the full system mesh the way the ``mesh_device`` pytest fixture does for
     the decode demo: 2D fabric (the submesh pipeline sockets need it) and two
-    command queues."""
+    command queues.
+
+    The fabric mode, queue count and trace region come from the system profile's
+    ``device`` section. The profile cannot be chosen by device count here -- the device
+    does not exist yet -- so this uses the default (or ``$DEEPSEEK_V4_SYSTEM_PROFILE``);
+    the model then re-resolves it against the mesh it is actually handed.
+    """
     from tests.scripts.common import get_updated_device_params
 
-    device_params = {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2}
+    sys_cfg = system_config or load_system_config()
+    device_params = sys_cfg.device.device_params()
     if trace_region_size:
         device_params["trace_region_size"] = trace_region_size
     params = get_updated_device_params(device_params)
@@ -106,9 +114,12 @@ def open_mesh_device(trace_region_size: int | None):
         ttnn.FabricUDMMode.DISABLED,
         ttnn.FabricManagerMode.DEFAULT,
     )
-    # The fixture defaults to the whole system flattened to a line, which is the
-    # shape the model's submesh pipeline is built against.
-    mesh_shape = ttnn.MeshShape(1, ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size())
+    # Default to the whole system flattened to a line, which is the shape the model's
+    # submesh pipeline is built against; a profile may pin an explicit shape instead.
+    if sys_cfg.device.mesh_shape:
+        mesh_shape = ttnn.MeshShape(*sys_cfg.device.mesh_shape)
+    else:
+        mesh_shape = ttnn.MeshShape(1, ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size())
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **params)
     logger.info(f"opened mesh device with {mesh_device.get_num_devices()} devices")
     try:
@@ -306,6 +317,16 @@ class ChatEngine:
             max_layers=max_layers,
             use_submeshes=True,
             use_prefetcher=args.prefetcher,
+            # Re-resolved against the open mesh, so an 8-chip host and a 32-chip one
+            # pick up their own profile from the same command line. ``system_variant``
+            # carries the workload flavour the entry point asked for (the server sets
+            # "server"), so the machine match does not drop it.
+            system_config=load_system_config(
+                profile=args.system_profile,
+                path=args.system_config_file,
+                variant=getattr(args, "system_variant", None),
+                mesh_device=mesh_device,
+            ).log(),
         )
         self.lm_head = Linear(
             _w(loader, "lm_head.weight"),
@@ -661,7 +682,28 @@ def repl(engine: ChatEngine) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    # The sizing defaults come from the system profile, so the profile has to be known
+    # before the main parser is built: resolve it from a throwaway pre-parse (and
+    # $DEEPSEEK_V4_SYSTEM_PROFILE) first. A flag still overrides whatever it says.
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--system-profile", default=None)
+    pre.add_argument("--system-config-file", default=None)
+    pre_args, _ = pre.parse_known_args(argv)
+    sys_cfg = load_system_config(profile=pre_args.system_profile, path=pre_args.system_config_file)
+    decode = sys_cfg.decode
+
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument(
+        "--system-profile",
+        default=pre_args.system_profile,
+        help=f"machine tuning profile to load (default: {sys_cfg.name}); "
+        f"see configs/system_configs.yaml, or $DEEPSEEK_V4_SYSTEM_PROFILE",
+    )
+    p.add_argument(
+        "--system-config-file",
+        default=pre_args.system_config_file,
+        help="alternate profile file (default: configs/system_configs.yaml)",
+    )
     p.add_argument("--model-dir", default=_DEFAULT_MODEL_DIR, help="HF snapshot (or hub cache) of the checkpoint")
     p.add_argument(
         "--cache-dir",
@@ -671,33 +713,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--num-layers",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_DECODE_LAYERS", "0")) or None,
+        default=decode.num_layers or None,
         help="cap the decoder stack (the full 43 layers do not fit one Blackhole)",
     )
     p.add_argument(
         "--num-users",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_NUM_USERS", "2")),
+        default=decode.num_users,
         help="independent conversations to allocate, switched with /user N (fixed at "
         "startup: their cache blocks cannot be allocated once the traces exist)",
     )
     p.add_argument(
         "--max-context",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_MAX_CONTEXT", "131072")),
+        default=decode.max_context,
         help="tokens (all turns) one user's caches are addressed for; rounded up",
     )
     p.add_argument(
         "--total-context",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_TOTAL_CONTEXT", "0")) or None,
+        default=decode.total_context or None,
         help="total tokens the shared block pool holds across all users "
         "(default: one --max-context, i.e. the users share a single context's worth)",
     )
     p.add_argument(
         "--max-new-tokens",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "2048")),
+        default=decode.max_new_tokens,
         help="cap on the tokens generated per reply",
     )
     p.add_argument(
@@ -720,19 +762,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="reasoning-effort hint, only meaningful with --think",
     )
-    p.add_argument("--trace-region-size", type=int, default=int(os.environ.get("DEEPSEEK_V4_TRACE_REGION_SIZE", "0")))
-    p.add_argument("--no-trace", dest="traced", action="store_false", help="eager decode instead of traced decode")
+    p.add_argument("--trace-region-size", type=int, default=sys_cfg.device.trace_region_size)
+    p.add_argument(
+        "--no-trace",
+        dest="traced",
+        action="store_false",
+        default=decode.traced,
+        help="eager decode instead of traced decode",
+    )
     p.add_argument(
         "--no-prefetcher",
         dest="prefetcher",
         action="store_const",
         const=False,
-        default=None,
+        default=sys_cfg.prefetcher.enabled,
         help="feed the attention projections with a DRAM->L1 copy per call instead of the "
         "DRISC tensor prefetcher (default: use it wherever the device supports it)",
     )
     p.add_argument("--quiet", action="store_true", help="only warnings and above from the model logs")
     args = p.parse_args(argv)
+    # The engine builds the model against this, so a --system-profile given after the
+    # pre-parse (or a stale one) cannot disagree with the defaults above.
+    args.system_config = sys_cfg
+    args.system_variant = None
     if args.system_prompt_file:
         args.system_prompt = Path(args.system_prompt_file).expanduser().read_text().strip()
     if args.reasoning_effort and not args.think:
@@ -763,7 +815,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"checkpoint not found: {args.model_dir}", file=sys.stderr)
         return 1
     torch.manual_seed(0)
-    with open_mesh_device(args.trace_region_size) as mesh_device:
+    with open_mesh_device(args.trace_region_size, system_config=args.system_config) as mesh_device:
         # The prefetcher session spans the trace capture, the warmup and the REPL both, so it
         # is opened inside ``ChatEngine`` (once the model exists) against this stack, and the
         # senders are stopped before the mesh device is closed.

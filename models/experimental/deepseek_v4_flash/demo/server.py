@@ -136,6 +136,7 @@ from models.experimental.deepseek_v4_flash.encoding_dsv4 import (
 )
 from models.experimental.deepseek_v4_flash.tt.common import _region
 from models.experimental.deepseek_v4_flash.tt.paged_cache import PagedCacheFull
+from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
 
 _VENDOR = "tenstorrent"
 _THINK_OPEN = "<think>"
@@ -1647,10 +1648,16 @@ class _ModelHTTPServer(ThreadingHTTPServer):
         self.api = api
 
 
-def _add_model_args(p: argparse.ArgumentParser) -> None:
-    """The model/engine flags, identical to ``chat_cli.parse_args``."""
+def _add_model_args(p: argparse.ArgumentParser, sys_cfg) -> None:
+    """The model/engine flags, identical to ``chat_cli.parse_args``.
+
+    The sizing defaults come from ``sys_cfg``, the machine's system profile (its
+    ``server`` variant -- see :mod:`...tt.system_config`), so they follow the hardware
+    instead of being restated here.
+    """
     from models.experimental.deepseek_v4_flash.tests.test_full_model_decode_demo import _DEFAULT_MODEL_DIR
 
+    decode = sys_cfg.decode
     p.add_argument("--model-dir", default=_DEFAULT_MODEL_DIR, help="HF snapshot (or hub cache) of the checkpoint")
     p.add_argument(
         "--cache-dir",
@@ -1660,13 +1667,13 @@ def _add_model_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--num-layers",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_DECODE_LAYERS", "0")) or None,
+        default=decode.num_layers or None,
         help="cap the decoder stack (the full 43 layers do not fit one Blackhole)",
     )
     p.add_argument(
         "--num-users",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_NUM_USERS", "8")),
+        default=decode.num_users,
         help="turns that can generate at once, each with its own KV session (fixed at "
         "startup: their cache blocks cannot be allocated once the traces exist). Note "
         "the rounds interleave rather than batch, so the device's token rate is shared: "
@@ -1675,22 +1682,22 @@ def _add_model_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--max-context",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_MAX_CONTEXT", "524288")),
+        default=decode.max_context,
         help="tokens (all turns) one user's caches are addressed for; rounded up. The "
         "model handles 524288, but that much per user costs page-table width and pool "
-        "blocks for every session, so the default is sized for a busy server",
+        "blocks for every session, so the profile default is sized for a busy server",
     )
     p.add_argument(
         "--total-context",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_TOTAL_CONTEXT", "2097152")) or None,
+        default=decode.total_context or None,
         help="total tokens the shared block pool holds across all users "
         "(default: --num-users x --max-context, i.e. every user can fill its context)",
     )
     p.add_argument(
         "--max-new-tokens",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "2048")),
+        default=decode.max_new_tokens,
         help="cap on the tokens generated per reply",
     )
     p.add_argument(
@@ -1713,14 +1720,20 @@ def _add_model_args(p: argparse.ArgumentParser) -> None:
         default=None,
         help="reasoning-effort hint, only meaningful with --think",
     )
-    p.add_argument("--trace-region-size", type=int, default=int(os.environ.get("DEEPSEEK_V4_TRACE_REGION_SIZE", "0")))
-    p.add_argument("--no-trace", dest="traced", action="store_false", help="eager decode instead of traced decode")
+    p.add_argument("--trace-region-size", type=int, default=sys_cfg.device.trace_region_size)
+    p.add_argument(
+        "--no-trace",
+        dest="traced",
+        action="store_false",
+        default=decode.traced,
+        help="eager decode instead of traced decode",
+    )
     p.add_argument(
         "--no-prefetcher",
         dest="prefetcher",
         action="store_const",
         const=False,
-        default=None,
+        default=sys_cfg.prefetcher.enabled,
         help="feed the attention projections with a DRAM->L1 copy per call instead of the "
         "DRISC tensor prefetcher (default: use it wherever the device supports it)",
     )
@@ -1728,8 +1741,28 @@ def _add_model_args(p: argparse.ArgumentParser) -> None:
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    # See ``chat_cli.parse_args``: the profile has to be resolved before the parser is
+    # built, since it supplies the sizing defaults. ``variant="server"`` picks the
+    # server flavour of whichever machine profile applies.
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--system-profile", default=None)
+    pre.add_argument("--system-config-file", default=None)
+    pre_args, _ = pre.parse_known_args(argv)
+    sys_cfg = load_system_config(profile=pre_args.system_profile, path=pre_args.system_config_file, variant="server")
+
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    _add_model_args(p)
+    p.add_argument(
+        "--system-profile",
+        default=pre_args.system_profile,
+        help=f"machine tuning profile to load (default: {sys_cfg.name}); "
+        f"see configs/system_configs.yaml, or $DEEPSEEK_V4_SYSTEM_PROFILE",
+    )
+    p.add_argument(
+        "--system-config-file",
+        default=pre_args.system_config_file,
+        help="alternate profile file (default: configs/system_configs.yaml)",
+    )
+    _add_model_args(p, sys_cfg)
     p.add_argument(
         "--host", default=os.environ.get("DEEPSEEK_V4_HOST", "0.0.0.0"), help="interface to bind (default: all)"
     )
@@ -1769,6 +1802,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "stdout is not a terminal, e.g. under nohup or in CI)",
     )
     args = p.parse_args(argv)
+    args.system_config = sys_cfg
+    # ``ChatEngine`` re-resolves the profile once the mesh is open; keep it on the
+    # server flavour when it does.
+    args.system_variant = "server"
     if args.system_prompt_file:
         args.system_prompt = Path(args.system_prompt_file).expanduser().read_text().strip()
     if args.reasoning_effort and not args.think:
@@ -1818,7 +1855,7 @@ def main(argv: list[str] | None = None) -> int:
         f"shared pool {args.total_context} tokens. The rounds interleave rather than batch, so "
         f"expect the device's token rate to be split across the users that are decoding."
     )
-    with open_mesh_device(args.trace_region_size) as mesh_device:
+    with open_mesh_device(args.trace_region_size, system_config=args.system_config) as mesh_device:
         # The prefetcher session spans the trace capture, the warmup and every served
         # turn, so it is opened inside ``ChatEngine`` (once the model exists) against
         # this stack, and the senders are stopped before the mesh device is closed.
