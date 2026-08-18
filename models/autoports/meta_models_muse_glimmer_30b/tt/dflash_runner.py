@@ -140,7 +140,7 @@ class DFlashRunner:
         aligned_verify: bool = True,
         uncapped_argmax: bool = True,
         verify_mode: str = "prefill",
-        trace_verify: bool = False,
+        trace_verify: bool = True,
         verify_width: int = 256,
         verify_rows: int = 32,
         max_verify_traces: int = 24,
@@ -604,6 +604,21 @@ class DFlashRunner:
         # ~66 ms per 32-token window, and it is exactly what a runtime-offset design
         # (chunk_start_idx_tensor plus on-device prefill RoPE) would remove, along with
         # the capture itself.
+        #
+        # Deleting the *body* of this and keeping the comment is not a hypothetical: it is
+        # what produced the ``Cannot load new binaries during trace capture`` that stalled
+        # this path for a day.  The warm pass has to run, not merely be described.
+        self.generator._release_decode_trace()
+        self.generator._release_prefill_traces()
+        model.arm_hidden_state_taps(tap_layers)
+        model.release_sliding_tails()
+        warm_embedded = model.embed_prefill(self._verify_tokens)
+        ttnn.deallocate(
+            model.prefill_forward(warm_embedded, page_table=self._verify_page_table, user_id=0, start_pos=aligned_start)
+        )
+        for tensor in model.take_hidden_state_taps().values():
+            ttnn.deallocate(tensor)
+        ttnn.synchronize_device(model.mesh_device)
 
         model.release_sliding_tails()
         trace_id = ttnn.begin_trace_capture(model.mesh_device, cq_id=0)
@@ -619,7 +634,18 @@ class DFlashRunner:
         return entry
 
     def _release_all_verify_traces(self) -> None:
-        """Release the live verify traces, keeping the shared input buffers alive."""
+        """Release the live verify traces, keeping the shared input buffers alive.
+
+        Drained on both sides, which is not optional and is not decoration: the mesh only
+        marks allocations safe again once the *last* trace is gone, and a release that has
+        not drained leaves the region still claimed.  The next thing this path does is
+        warm-compile the following window, and loading binaries while any trace is live
+        fails outright with ``TT_FATAL: Cannot load new binaries during trace``.  The
+        generator's own trace releases drain the same way for the same reason.
+        """
+        if not self._verify_traces:
+            return
+        ttnn.synchronize_device(self.model.mesh_device)
         for entry in self._verify_traces.values():
             try:
                 ttnn.release_trace(self.model.mesh_device, entry["id"])
@@ -627,6 +653,7 @@ class DFlashRunner:
             except Exception:  # noqa: BLE001 - a failed release must not mask the caller
                 pass
         self._verify_traces = {}
+        ttnn.synchronize_device(self.model.mesh_device)
 
     def release_verify_traces(self) -> None:
         """Release every 32-row verify trace, then the buffers they baked in."""

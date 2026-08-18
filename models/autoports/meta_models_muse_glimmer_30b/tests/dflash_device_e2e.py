@@ -100,12 +100,13 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--trace-verify",
-        action="store_true",
+        "--no-trace-verify",
+        dest="trace_verify",
+        action="store_false",
         help=(
-            "verify via a 32-row traced window: 25.2 vs 64.2 ms per verify forward, and "
-            "29.9 vs 26.6 t/s/u measured at OSL 128. Off by default -- capturing a window "
-            "past the first can still hit 'Cannot load new binaries during trace'."
+            "fall back to the eager verify forward. The traced 32-row window is the "
+            "default: 25.2 vs 64.2 ms per verify forward. Kept as an escape hatch because "
+            "it is the one path that captures traces mid-generation."
         ),
     )
     parser.add_argument("--verify-width", type=int, default=256, help="padded row count of the from-zero traced verify")
