@@ -67,8 +67,6 @@ def test_tiled_concat(device, concat_spec, dtype):
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_tiled_concat_unaligned_width(device, shapes, dtype):
-    # L1 memory config only: the native path is buffer-location agnostic, and the DRAM
-    # variant is covered by the issue-21358 regression test.
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     torch_input_tensors = [torch.rand(shape, dtype=torch_dtype) for shape in shapes]
     torch_output_tensor = torch.concat(torch_input_tensors, dim=-1)
@@ -82,6 +80,29 @@ def test_tiled_concat_unaligned_width(device, shapes, dtype):
     output = ttnn.to_torch(output)
 
     assert_equal(torch_output_tensor, output)
+
+
+def test_tiled_concat_unaligned_width_program_cache(device):
+    shapes = [[64, 100], [64, 60]]
+    entries_after_first = None
+    live_tensors = []
+    for iteration in range(2):
+        torch_inputs = [torch.rand(shape, dtype=torch.bfloat16) for shape in shapes]
+        inputs = [
+            ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+            for x in torch_inputs
+        ]
+        live_tensors.extend(inputs)
+
+        output = ttnn.concat(inputs, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        assert_equal(torch.concat(torch_inputs, dim=-1), ttnn.to_torch(output))
+
+        if iteration == 0:
+            entries_after_first = device.num_program_cache_entries()
+        else:
+            assert (
+                device.num_program_cache_entries() == entries_after_first
+            ), "second invocation must reuse the cached program"
 
 
 @pytest.mark.parametrize(

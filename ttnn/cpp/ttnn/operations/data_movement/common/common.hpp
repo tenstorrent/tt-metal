@@ -68,12 +68,20 @@ bool is_enough_space(
 
 // Per-core L1 footprint that `output_memory_config` will require for a tensor of
 // `output_padded_shape`/`output_dtype`, or 0 if it will not live in L1.
+//
+// If the TensorSpec cannot be constructed (unsupported dtype/layout combination) and
+// `require_constructible` is false, this falls back to reserving nothing -- the pre-existing
+// behavior for callers that treat a failed reservation as advisory. Callers that use the return
+// value to decide eligibility for a path with no other correctness backstop (e.g. concat's
+// unaligned-width routing) should pass `require_constructible = true` so an unconstructible spec
+// throws instead of silently making the eligibility check more permissive than it should be.
 uint32_t get_pending_l1_output_reservation(
     const Tensor& input_tensor_a,
     const ttnn::Shape& output_padded_shape,
     const MemoryConfig& output_memory_config,
     DataType output_dtype,
-    Layout output_layout);
+    Layout output_layout,
+    bool require_constructible = false);
 
 ttnn::Tensor pad_to_tile_vol(
     const ttnn::Tensor& tensor, float value, bool use_multicore, const std::optional<MemoryConfig>& memory_config);
