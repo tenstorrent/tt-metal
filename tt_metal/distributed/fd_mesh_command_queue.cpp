@@ -108,6 +108,12 @@ void record_program_sub_device_for_range(
 // per workload: the first task to reach the program takes ownership through `prepared` and the rest
 // block there until the update lands. If the owner throws, the flag stays clear and the next waiter
 // retries, so a waiter can never block forever.
+// Ceiling on how many workers a single MeshWorkload dispatch may fan out across, including the calling
+// thread. Bounded because the calling thread pays for every worker it wakes, serially: measured on a
+// 32-device mesh, a large workload is fastest at 8 and gets worse from there, as the wake-ups start to
+// cost more than the copying they overlap.
+constexpr size_t k_max_dispatch_fanout = 8;
+
 struct ProgramDispatchEntry {
     Program* program = nullptr;
     ProgramCommandSequence* cmd_seq = nullptr;
@@ -569,6 +575,9 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     std::vector<DeviceDispatchTask> program_tasks;
     program_tasks.reserve(mesh_device_->shape().mesh_size());
     std::unordered_set<uint32_t> chip_ids_in_workload = {};
+    // Command-stream bytes this workload will copy across all local devices, used below to size the
+    // fan-out.
+    size_t total_command_bytes = 0;
 
     uint32_t program_idx = 0;
     for (auto& [device_range, program] : programs) {
@@ -587,6 +596,9 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             program_tasks.push_back(DeviceDispatchTask{device, &entry});
             chip_ids_in_workload.insert(device->id());
         });
+        total_command_bytes += static_cast<size_t>(entry.cmd_seq->get_one_shot_fetch_size(
+                                   dispatch_metadata.stall_first, dispatch_metadata.stall_before_program, true)) *
+                               (program_tasks.size() - tasks_before_program);
         if (program_tasks.size() == tasks_before_program) {
             // The program runs entirely on devices owned by another host, so no task will claim it.
             // Still update its dispatch commands here, to match what a single-host mesh would do.
@@ -631,17 +643,44 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             dispatch_metadata.stall_before_program);
     };
 
-    // Each device has its own sysmem manager, so the program writes are independent and go out in
+    // Each device has its own sysmem manager, so the program writes are independent and can go out in
     // parallel on the pool, which has a thread pinned near each device. The pool is quiescent here:
     // every other user of it joins before releasing the MeshDevice API lock this function holds.
     //
-    // The calling thread keeps one write for itself rather than handing out all of them. Waking a
-    // worker costs tens of microseconds, so a workload covering a single device would otherwise pay
-    // for the pool without getting any overlap in return.
-    for (size_t i = 1; i < program_tasks.size(); i++) {
-        const auto& task = program_tasks[i];
+    // Hand out a bounded number of chunks rather than one task per device. Handing a device's write to
+    // a worker costs this thread a queue push and a futex wake, about 1.4 us and all of it serial,
+    // while performing the write inline costs about 0.66 us for a model-sized program. One task per
+    // device therefore makes a wide mesh pay more in wake-ups than it recovers in overlap: measured on
+    // a 4x8 mesh, a one-shot program cost 29 us of host time written serially and 67 us fanned out
+    // across all 32. With K chunks the wake cost is K rather than the device count, and each worker
+    // walks its devices back to back. The calling thread takes the first chunk, so a single-device
+    // workload never touches the pool at all.
+    auto write_chunk = [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; i++) {
+            write_program_for_device(program_tasks[i]);
+        }
+    };
+    const size_t num_tasks = program_tasks.size();
+    // A chunk has to carry enough copying to pay for the wake that hands it over. At roughly 25 GB/s
+    // of hugepage write bandwidth the wake is worth about 32 KB of command stream, so scale the
+    // fan-out with the bytes on hand: a model-sized program stays serial on any mesh width, while a
+    // large one spreads out. Sizing by device count instead gets both ends wrong, fanning a cheap
+    // workload across a wide mesh out for nothing and confining an expensive one on a narrow mesh to
+    // a single thread.
+    constexpr size_t k_bytes_worth_a_wake = 32 * 1024;
+    size_t num_chunks = 0;
+    if (num_tasks) {
+        const size_t upper_bound = std::min(num_tasks, k_max_dispatch_fanout);
+        num_chunks = std::clamp(total_command_bytes / k_bytes_worth_a_wake, size_t{1}, upper_bound);
+    }
+    // Chunk c covers [num_tasks * c / num_chunks, num_tasks * (c + 1) / num_chunks), splitting the
+    // devices as evenly as an uneven division allows.
+    const auto chunk_start = [&](size_t chunk) { return num_chunks ? (num_tasks * chunk) / num_chunks : 0; };
+    for (size_t c = 1; c < num_chunks; c++) {
+        const size_t begin = chunk_start(c);
+        const size_t end = chunk_start(c + 1);
         dispatch_thread_pool_->enqueue(
-            [&write_program_for_device, &task]() { write_program_for_device(task); }, task.device->id());
+            [&write_chunk, begin, end]() { write_chunk(begin, end); }, program_tasks[begin].device->id());
     }
     // The work below can throw - a device timeout surfaces as an exception out of the fetch queue -
     // and the tasks enqueued above hold references into this frame. Join the pool on every path out
@@ -658,13 +697,13 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             mcast_go_signals,
             unicast_go_signals,
             dispatch_metadata);
-        if (!program_tasks.empty()) {
-            write_program_for_device(program_tasks.front());
+        if (num_chunks) {
+            write_chunk(chunk_start(0), chunk_start(1));
         }
     } catch (...) {
         dispatch_exception = std::current_exception();
     }
-    if (program_tasks.size() > 1) {
+    if (num_chunks > 1) {
         try {
             dispatch_thread_pool_->wait();
         } catch (...) {
