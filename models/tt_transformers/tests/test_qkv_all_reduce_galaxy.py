@@ -22,6 +22,11 @@ GLOBAL_SHAPE = (1, 1, 32, 3072)
 def test_llama32_1b_decode_qkv_all_reduce_bh_galaxy(mesh_device):
     torch.manual_seed(0)
     host_input = torch.randn(*GLOBAL_SHAPE, dtype=torch.bfloat16)
+    tt_ccl = TT_CCL(mesh_device)
+    assert tt_ccl.get_num_links(cluster_axis=1) == 2
+    tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1)
+    tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1)
+
     device_input = ttnn.from_torch(
         host_input,
         device=mesh_device,
@@ -31,10 +36,6 @@ def test_llama32_1b_decode_qkv_all_reduce_bh_galaxy(mesh_device):
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, None), mesh_shape=MESH_SHAPE),
     )
 
-    tt_ccl = TT_CCL(mesh_device)
-    assert tt_ccl.get_num_links(cluster_axis=1) == 2
-    tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1)
-    tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1)
     output_memory_config = ttnn.create_sharded_memory_config(
         shape=(128, 32),
         core_grid=ttnn.CoreGrid(x=6, y=2),
