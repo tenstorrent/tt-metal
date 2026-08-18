@@ -842,7 +842,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
-    const std::optional<std::vector<PinningConstraint>>& pinnings) {
+    const std::optional<PinningsByMesh>& pinnings) {
     using namespace ::tt::tt_fabric;
 
     // -------------------------------------------------------------------------
@@ -1544,7 +1544,7 @@ void assign_pgd_pinnings_to_rank_bound_physical_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
-    const std::optional<std::vector<PinningConstraint>>& pinnings) {
+    const std::optional<PinningsByMesh>& pinnings) {
     using namespace ::tt::tt_fabric;
 
     if (physical_multi_mesh_graph.mesh_adjacency_graphs_.empty()) {
@@ -1631,7 +1631,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const std::vector<tt::tt_fabric::MeshGraphDescriptor>& mesh_graph_descriptors,
-    const std::vector<std::optional<std::vector<PinningConstraint>>>& per_mgd_pinnings) {
+    const std::vector<std::optional<PinningsByMesh>>& per_mgd_pinnings) {
     using namespace ::tt::tt_fabric;
 
     // -------------------------------------------------------------------------
@@ -2363,7 +2363,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor,
-    const std::optional<std::vector<PinningConstraint>>& pinnings) {
+    const std::optional<PinningsByMesh>& pinnings) {
     auto physical_multi_mesh_graph =
         build_physical_multi_mesh_adjacency_graph(physical_system_descriptor, asic_id_to_mesh_rank);
     assign_pgd_pinnings_to_rank_bound_physical_graph(

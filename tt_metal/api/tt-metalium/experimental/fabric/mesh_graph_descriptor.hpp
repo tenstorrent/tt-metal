@@ -8,6 +8,7 @@
 #include <string_view>
 #include <filesystem>
 #include <memory>
+#include <map>
 #include <vector>
 #include <unordered_set>
 #include <unordered_map>
@@ -227,8 +228,17 @@ public:
     static FabricType infer_fabric_type_from_dim_types(const proto::SwitchDescriptor* switch_desc);
 
     // Many-to-many pinning groups parsed from the MGD's top-level `pinnings` section. Each entry may
-    // bind multiple logical fabric nodes to multiple physical ASIC positions (all-to-all).
+    // bind multiple logical fabric nodes to multiple physical ASIC positions (all-to-all). Groups are
+    // already split by mesh at construction (regex and literal entries), so every group names one mesh.
     const std::vector<AsicPinningGroup>& get_pinnings() const { return pinnings_; }
+
+    // Same groups as get_pinnings(), keyed by local mesh id. Empty if that mesh has no pins.
+    const std::vector<AsicPinningGroup>& get_pinnings_for_mesh(uint32_t mesh_id) const {
+        static const std::vector<AsicPinningGroup> kEmpty;
+        const auto it = pinnings_by_mesh_.find(mesh_id);
+        return it == pinnings_by_mesh_.end() ? kEmpty : it->second;
+    }
+    const std::map<uint32_t, std::vector<AsicPinningGroup>>& get_pinnings_by_mesh() const { return pinnings_by_mesh_; }
 
 private:
     // Descriptor fast lookup
@@ -258,6 +268,7 @@ private:
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
     std::vector<AsicPinningGroup> pinnings_;
+    std::map<uint32_t, std::vector<AsicPinningGroup>> pinnings_by_mesh_;
 
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(

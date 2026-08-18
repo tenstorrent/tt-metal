@@ -837,20 +837,6 @@ std::set<uint32_t> get_mesh_ids_for_mgd_instance_name(
     return mesh_ids;
 }
 
-// Keep only the pinning groups that belong to this MGD mesh instance. After per-mesh expansion each group
-// names a single mesh, so a group belongs here iff its first fabric node's mesh is in applicable_mesh_ids.
-std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> filter_pinnings_for_mesh_ids(
-    const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pinnings,
-    const std::set<uint32_t>& applicable_mesh_ids) {
-    std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> filtered;
-    for (const auto& group : pinnings) {
-        if (!group.fabric_nodes.empty() && applicable_mesh_ids.contains(group.fabric_nodes.front().mesh_id.get())) {
-            filtered.push_back(group);
-        }
-    }
-    return filtered;
-}
-
 // Returns the number of required constraints added (one per many-to-many pinning group that resolved to >=1 PGD
 // node per side). Can be fewer than `pinnings.size()` when a group's pinned ASIC positions map to no PGD node in
 // this grouping, or when a group is unsatisfiable here; the caller requires every group to land and skips the PGD
@@ -887,20 +873,24 @@ namespace tt::tt_fabric {
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>>& pinnings) const {
+    const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings) const {
     return get_valid_groupings_for_mgd(mesh_graph_descriptor, &physical_system_descriptor, pinnings);
 }
 
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor,
-    const std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>>& pinnings) const {
+    const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings) const {
     ValidGroupingsMap result;
 
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====
     // This step calculates required ASIC counts bottom-up and builds adjacency graphs
     std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> mgd_grouping_infos =
         PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(mesh_graph_descriptor);
+
+    // Incoming pins are already keyed by local mesh id (MGD get_pinnings_by_mesh + caller-merged galaxy pins).
+    const tt::tt_metal::experimental::tt_fabric::PinningsByMesh all_pinnings_by_mesh =
+        pinnings.value_or(tt::tt_metal::experimental::tt_fabric::PinningsByMesh{});
 
     // ===== PHASE 1: Build flattened adjacency graphs for all mesh group infos =====
     // Map from grouping name to vector of flattened GroupingInfo (supports multiple definitions with same name)
@@ -940,24 +930,14 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         const GroupingInfo& mgd_grouping_info = mgd_mesh_grouping;
         const std::string& instance_type = mgd_grouping_info.type;  // Should be "MESH"
 
-        // Only pinnings related to THIS mesh instance must land on a candidate grouping. Pinnings for other
-        // meshes (e.g. an odd mesh's asic-2 corner pin while matching an even/Middle mesh) are irrelevant here
-        // and must not force the grouping to be rejected.
-        const std::set<uint32_t> applicable_mesh_ids =
-            get_mesh_ids_for_mgd_instance_name(mesh_graph_descriptor, instance_name);
-        const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> mesh_pinnings =
-            pinnings.has_value() ? filter_pinnings_for_mesh_ids(*pinnings, applicable_mesh_ids)
-                                 : std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>{};
-
         // A single MGD descriptor may be instantiated as several meshes (e.g. gemma's M_4x4_h14 for meshes
         // 1..7), and different instances can be pinned to different physical columns (even -> Middle asic 3,
-        // odd -> Edge asic 2). Applying all their pins to one candidate grouping can never succeed, so we
-        // partition this descriptor's mesh ids by pin-set and run the match/commit once PER distinct pin-set,
-        // committing every group's result together. First bucket the pins by the instance mesh they target.
+        // odd -> Edge asic 2). Incoming pins are already keyed by mesh; look up only this descriptor's
+        // mesh ids so we run match/commit once per distinct pin-set.
         std::map<uint32_t, std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> pinnings_by_mesh;
-        for (const auto& group : mesh_pinnings) {
-            if (!group.fabric_nodes.empty()) {
-                pinnings_by_mesh[group.fabric_nodes.front().mesh_id.get()].push_back(group);
+        for (uint32_t mesh_id : get_mesh_ids_for_mgd_instance_name(mesh_graph_descriptor, instance_name)) {
+            if (auto it = all_pinnings_by_mesh.find(mesh_id); it != all_pinnings_by_mesh.end()) {
+                pinnings_by_mesh.emplace(mesh_id, it->second);
             }
         }
 
@@ -1396,8 +1376,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_mgd_mesh_groupings_for
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgds(
     const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const std::vector<std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>>>&
-        per_mgd_pinnings) const {
+    const std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>>& per_mgd_pinnings) const {
     ValidGroupingsMap out;
     // With multiple MGDs (split sub-contexts), different descriptors can reuse the same instance name (e.g. "M0").
     // Prefix each MGD's instance names with "mgd{i}_" so they stay distinct in the merged map; otherwise their
@@ -1408,7 +1387,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgds(
     for (size_t i = 0; i < mesh_graph_descriptors.size(); ++i) {
         // Pins for MGD i are in this descriptor's own local mesh-id space; forward them so the PGD<->MGD match
         // honours the pinned ASIC positions (same as the single-MGD get_valid_groupings_for_mgd(mgd, psd, pins)).
-        std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> pins;
+        std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh> pins;
         if (i < per_mgd_pinnings.size()) {
             pins = per_mgd_pinnings[i];
         }

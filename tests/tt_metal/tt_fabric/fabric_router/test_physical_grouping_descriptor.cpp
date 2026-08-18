@@ -2689,7 +2689,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_WithManyToManyPinn
     ASSERT_GE(pinning_groups[0].asic_positions.size(), 4u);
 
     auto without_pinnings = pgd.get_valid_groupings_for_mgd(mgd, psd);
-    auto with_pinnings = pgd.get_valid_groupings_for_mgd(mgd, psd, pinning_groups);
+    auto with_pinnings = pgd.get_valid_groupings_for_mgd(mgd, psd, mgd.get_pinnings_by_mesh());
 
     ASSERT_TRUE(without_pinnings.contains("MESH"));
     ASSERT_TRUE(with_pinnings.contains("MESH"));

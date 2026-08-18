@@ -2462,6 +2462,54 @@ TEST(MeshGraphDescriptorTests, PinningsRegexOverlappingMeshIdsExpandPerMesh) {
     EXPECT_EQ(groups_per_mesh[3], 1u);
 }
 
+TEST(MeshGraphDescriptorTests, PinningsLiteralMultiMeshSplitsByMesh) {
+    // A non-regex entry that lists nodes from two meshes must emit one group per mesh, matching the
+    // regex path, so get_pinnings_for_mesh can look up without filtering mixed-mesh groups.
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+        }
+        pinnings: {
+          logical_fabric_node_id: { mesh_id: 0 chip_id: 0 }
+          logical_fabric_node_id: { mesh_id: 0 chip_id: 3 }
+          logical_fabric_node_id: { mesh_id: 1 chip_id: 0 }
+          physical_asic_position: { tray_id: 1 asic_location: 3 }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+    const auto& pinnings = desc.get_pinnings();
+    ASSERT_EQ(pinnings.size(), 2u);
+
+    const auto& mesh0 = desc.get_pinnings_for_mesh(0);
+    ASSERT_EQ(mesh0.size(), 1u);
+    ASSERT_EQ(mesh0[0].fabric_nodes.size(), 2u);
+    EXPECT_EQ(*mesh0[0].fabric_nodes[0].mesh_id, 0u);
+    EXPECT_EQ(mesh0[0].fabric_nodes[0].chip_id, 0u);
+    EXPECT_EQ(*mesh0[0].fabric_nodes[1].mesh_id, 0u);
+    EXPECT_EQ(mesh0[0].fabric_nodes[1].chip_id, 3u);
+
+    const auto& mesh1 = desc.get_pinnings_for_mesh(1);
+    ASSERT_EQ(mesh1.size(), 1u);
+    ASSERT_EQ(mesh1[0].fabric_nodes.size(), 1u);
+    EXPECT_EQ(*mesh1[0].fabric_nodes[0].mesh_id, 1u);
+    EXPECT_EQ(mesh1[0].fabric_nodes[0].chip_id, 0u);
+
+    EXPECT_TRUE(desc.get_pinnings_for_mesh(2).empty());
+    ASSERT_EQ(desc.get_pinnings_by_mesh().size(), 2u);
+}
+
 TEST(MeshGraphDescriptorTests, VectorReallocPreservesConnectionsByTypeLookup) {
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
     ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
