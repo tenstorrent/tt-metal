@@ -216,6 +216,10 @@ def kv_cache_pcc_check(
     def _to_host(tensor):
         return ttnn.to_torch(tensor, mesh_composer=composer)[:, :1]
 
+    logger.info(
+        f"[kv-pcc] gathering and unpacking device KV cache "
+        f"(slot={slot_id}, layers={num_layers}, positions={seq_len_cache}, width={kvpe_dim})"
+    )
     cache_full = kvpe_cache.unpack_host(_to_host(kvpe_cache.storage)).to(torch.float32)
 
     p = blockcyclic_positions(sp, chunk_size, seq_len_cache)
