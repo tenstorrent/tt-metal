@@ -1097,7 +1097,7 @@
     wh_n150:
       timeout: 4
       tier: 3
-  owner_id: U06Q7ESTFEV # Borys Bradel
+  owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
 
 - name: BERT-Tiny e2e tests
