@@ -762,6 +762,205 @@ AUDITED_SEEDS = {
         semantic_cpp_class="ready",
         semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
     ),
+    # ---- Lane BK 2026-08-18: unmapped-row citations (class + exact evidence),
+    # per-row re-verified at bb52e0fc33; three classes corrected (legacy sigmoid/
+    # tanh -> D-ABSENT-on-BH, metal relu -> D-SHADOWED). rsqrt_compat, metal abs
+    # and bitwise_not were rescued to mapped rows instead. ----
+    "legacy__ckernel_sfpu_cdf": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — included by metal ckernel_sfpu_gelu.h:16 -> sfpu_operations.h:169 -> mapped Gelu nodes; NOTE _calculate_cdf_appx_/_calculate_pos_cdf_appx_ have zero callers repo-wide, so the body is compiled dead code through gelu. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — included by metal ckernel_sfpu_gelu.h:16 -> sfpu_operations.h:169 -> mapped Gelu nodes; NOTE _calculate_cdf_appx_/_calculate_pos_cdf_appx_ have zero callers repo-wide, so the body is compiled dead code through gelu. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "legacy__ckernel_sfpu_converter": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — STRONGER than include-only: directly included by tests/sources/deepseek_moe_gate_test.cpp:132 AND directly used by the test harness (helpers/include/fresh_cpp_operations.h:181,395 Converter::as_float inside measured fresh_cpp bodies), plus legacy relu/fill/threshold and ~30 metal consumers. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — STRONGER than include-only: directly included by tests/sources/deepseek_moe_gate_test.cpp:132 AND directly used by the test harness (helpers/include/fresh_cpp_operations.h:181,395 Converter::as_float inside measured fresh_cpp bodies), plus legacy relu/fill/threshold and ~30 metal consumers. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "legacy__ckernel_sfpu_generic_moe_gate_topk_top16": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — body EXECUTED, not merely compiled: consumer legacy experimental/ckernel_sfpu_generic_moe_gate_topk.h:294 calls _generic_moe_gate_top16_, and that consumer row is mapped AND wired (moegatetopk sweep row, corr + MOE_GATE_TOPK_BODY perf fixture). Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — body EXECUTED, not merely compiled: consumer legacy experimental/ckernel_sfpu_generic_moe_gate_topk.h:294 calls _generic_moe_gate_top16_, and that consumer row is mapped AND wired (moegatetopk sweep row, corr + MOE_GATE_TOPK_BODY perf fixture). Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "legacy__ckernel_sfpu_generic_moe_gate_topk_top8": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — body EXECUTED, not merely compiled: consumer legacy experimental/ckernel_sfpu_generic_moe_gate_topk.h:298 calls _generic_moe_gate_top8_ (the wired moegatetopk row's top-8 point exercises exactly this half). Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — body EXECUTED, not merely compiled: consumer legacy experimental/ckernel_sfpu_generic_moe_gate_topk.h:298 calls _generic_moe_gate_top8_ (the wired moegatetopk row's top-8 point exercises exactly this half). Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "legacy__ckernel_sfpu_is_fp16_zero": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — called by metal ckernel_sfpu_sign.h:30 (_sfpu_is_fp16_zero_) -> sfpu_operations.h:149 -> mapped Sign nodes; also included by metal mask/comp headers. Helper predicate, no kernel entry of its own. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — called by metal ckernel_sfpu_sign.h:30 (_sfpu_is_fp16_zero_) -> sfpu_operations.h:149 -> mapped Sign nodes; also included by metal mask/comp headers. Helper predicate, no kernel entry of its own. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "legacy__ckernel_sfpu_load_config": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — STRONGER than include-only: ckernel::sfpu::_init_sfpu_config_reg() is called directly by tests/sources/sfpu_reduce_sdpa_test.cpp:202 (the MEASURED reduce-sdpa row) and _sfpu_load_config32_ is referenced by test_topk_xl.py:505; also included via tt_llk ckernel_sfpu.h -> sfpu_operations.h:9. Helper header, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — STRONGER than include-only: ckernel::sfpu::_init_sfpu_config_reg() is called directly by tests/sources/sfpu_reduce_sdpa_test.cpp:202 (the MEASURED reduce-sdpa row) and _sfpu_load_config32_ is referenced by test_topk_xl.py:505; also included via tt_llk ckernel_sfpu.h -> sfpu_operations.h:9. Helper header, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "legacy__ckernel_sfpu_polyval": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — legacy ckernel_sfpu_silu.h:7 includes it and calls POLYVAL5 at :22 (mapped Silu nodes, sfpu_operations.h:1059); ~14 metal consumers (exp, gelu, tanh, log, trigonometry, unary_power ...). Helper evaluator, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — legacy ckernel_sfpu_silu.h:7 includes it and calls POLYVAL5 at :22 (mapped Silu nodes, sfpu_operations.h:1059); ~14 metal consumers (exp, gelu, tanh, log, trigonometry, unary_power ...). Helper evaluator, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "metal__ckernel_sfpu_binary_pow": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — sfpu_binary_pow_init is dispatched DIRECTLY at sfpu_operations.h:599 (SfpuType::rpow init) and _sfpu_binary_power_ is called by metal ckernel_sfpu_rpow.h:18 -> mapped Rpow nodes; calculate_sfpu_binary_pow itself has zero standalone hits. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — sfpu_binary_pow_init is dispatched DIRECTLY at sfpu_operations.h:599 (SfpuType::rpow init) and _sfpu_binary_power_ is called by metal ckernel_sfpu_rpow.h:18 -> mapped Rpow nodes; calculate_sfpu_binary_pow itself has zero standalone hits. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "metal__ckernel_sfpu_conversions": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — float32_to_bf16_rne called by metal binary.h:126,146,193 and binop_with_unary.h:51; _float_to_int32_positive_ called by unary_power.h:96,108 and binary_pow.h:96,109 — all mapped families. Helper conversions, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — float32_to_bf16_rne called by metal binary.h:126,146,193 and binop_with_unary.h:51; _float_to_int32_positive_ called by unary_power.h:96,108 and binary_pow.h:96,109 — all mapped families. Helper conversions, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "metal__ckernel_sfpu_log": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — metal ckernel_sfpu_erfinv.h:10 includes it and calls calculate_log_body<false,false,false> at :27 -> mapped Erfinv nodes. NOTE the tested Log mathop dispatches the LEGACY log header (_calculate_log_, sfpu_operations.h:1009); lgamma/digamma use the legacy _calculate_log_body_no_init_, not this file. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — metal ckernel_sfpu_erfinv.h:10 includes it and calls calculate_log_body<false,false,false> at :27 -> mapped Erfinv nodes. NOTE the tested Log mathop dispatches the LEGACY log header (_calculate_log_, sfpu_operations.h:1009); lgamma/digamma use the legacy _calculate_log_body_no_init_, not this file. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "metal__ckernel_sfpu_piecewise_rational": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — piecewise_rational_eval called by metal erf.h:61, erfc.h:70, digamma.h:73; piecewise_rational_eval_parity_numer_denom by gelu.h:323 — all mapped families (sfpu_operations.h:126,127,123,169). Helper evaluator, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+        notes="Unmapped-cited, class B-TRANSITIVE (Lane BK re-verification 2026-08-18 at bb52e0fc33): no standalone BH test node exists; the header is compiled through mapped consumers — piecewise_rational_eval called by metal erf.h:61, erfc.h:70, digamma.h:73; piecewise_rational_eval_parity_numer_denom by gelu.h:323 — all mapped families (sfpu_operations.h:126,127,123,169). Helper evaluator, no kernel entry. Hand path equally uncovered as a standalone surface; optional upstream standalone test.",
+    ),
+    "legacy__ckernel_sfpu_rope": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns sfpu_rope_all_rows/sfpu_rope_face/sfpu_rope_load_cos_sin/sfpu_rope_dest_setup/sfpu_rope_configure_addrmod: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns sfpu_rope_all_rows/sfpu_rope_face/sfpu_rope_load_cos_sin/sfpu_rope_dest_setup/sfpu_rope_configure_addrmod: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "legacy__ckernel_sfpu_sparse_k_filter": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn _sparse_k_filter_tile_: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn _sparse_k_filter_tile_: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "legacy__ckernel_sfpu_zero_pad": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn _zero_pad_tile_: zero hits (the only tree-wide mention is the corpus self-test asserting it is unmapped). Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn _zero_pad_tile_: zero hits (the only tree-wide mention is the corpus self-test asserting it is unmapped). Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_add_rsqrt": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_add_rsqrt/init_add_rsqrt: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_add_rsqrt/init_add_rsqrt: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_alt_complex_rotate90": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_alt_complex_rotate90/alt_complex_rotate90_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_alt_complex_rotate90/alt_complex_rotate90_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_bitwise": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_sfpu_unary_bitwise/bitwise_{and,or,xor}_init: zero hits. NOTE the tested bitwise surface is the BINARY header ckernel_sfpu_binary_bitwise.h (mapped + wired) — a different file; this unary-bitwise header is absent-with-a-shadow. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_sfpu_unary_bitwise/bitwise_{and,or,xor}_init: zero hits. NOTE the tested bitwise surface is the BINARY header ckernel_sfpu_binary_bitwise.h (mapped + wired) — a different file; this unary-bitwise header is absent-with-a-shadow. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_clamped_silu": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_clamped_silu_gate/calculate_clamped_up/calculate_clamped/calculate_situ_gate/calculate_scaled_tanh: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_clamped_silu_gate/calculate_clamped_up/calculate_clamped/calculate_situ_gate/calculate_scaled_tanh: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_copy_dest_values": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns copy_dest_value/copy_dest_value_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns copy_dest_value/copy_dest_value_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_cumsum": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_cumsum/cumsum_init: zero hits; no cumsum token in sfpu_operations.h or llk_params.py. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_cumsum/cumsum_init: zero hits; no cumsum token in sfpu_operations.h or llk_params.py. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_custom_add": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn my_add_tile_face: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn my_add_tile_face: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_dropout": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_dropout/dropout_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_dropout/dropout_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_int_sum": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_sum_int_col/calculate_sum_int_row/sum_int_init/add_int: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_sum_int_col/calculate_sum_int_row/sum_int_init/add_int: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_logit_softcap": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn calculate_logit_softcap: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn calculate_logit_softcap: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_max_pool_indices": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_max_pool_with_indices/_calculate_max_pool_with_indices_(generic_)/init_max_pool_with_indices: zero hits; carries the TopK value/index-pairing hazard — audit against TOPK_TYPED_CONVERSION_BLOCKER.md before any selector promise. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_max_pool_with_indices/_calculate_max_pool_with_indices_(generic_)/init_max_pool_with_indices: zero hits; carries the TopK value/index-pairing hazard — audit against TOPK_TYPED_CONVERSION_BLOCKER.md before any selector promise. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_quant": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_{quant,requant,dequant}_int32/{quant,requant,dequant}_init: zero BH hits. Do NOT conflate with the Quasar namesake: sfpu_operations_quasar.h:47 includes the QUASAR metal quant header (quant_family), a different file on a different arch. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_{quant,requant,dequant}_int32/{quant,requant,dequant}_init: zero BH hits. Do NOT conflate with the Quasar namesake: sfpu_operations_quasar.h:47 includes the QUASAR metal quant header (quant_family), a different file on a different arch. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_rand": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns rand/rand_init/rand_rows/rand_row/rand_prng/make_lane_salt: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns rand/rand_init/rand_rows/rand_row/rand_prng/make_lane_salt: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_reshuffle_rows": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_reshuffle_rows/reshuffle_rows_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_reshuffle_rows/reshuffle_rows_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_smoothstep": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn smoothstep_tile_face: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fn smoothstep_tile_face: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "metal__ckernel_sfpu_tiled_prod": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_tiled_prod/tiled_prod_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — entry fns calculate_tiled_prod/tiled_prod_init: zero hits. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "legacy__ckernel_sfpu_sigmoid": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — CLASS CORRECTED from B-TRANSITIVE (the old 'metal tanh includes it' chain conflated include paths): sfpu/ckernel_sfpu_sigmoid.h has ZERO BH consumers — repo-wide it is included only by the Quasar trees; BH metal silu.h:8/tanh.h:14/clamped_silu.h:23 use the unprefixed include = the METAL sigmoid sibling (self-contained body). _calculate_sigmoid_/_init_sigmoid_ have zero BH callers. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — CLASS CORRECTED from B-TRANSITIVE (the old 'metal tanh includes it' chain conflated include paths): sfpu/ckernel_sfpu_sigmoid.h has ZERO BH consumers — repo-wide it is included only by the Quasar trees; BH metal silu.h:8/tanh.h:14/clamped_silu.h:23 use the unprefixed include = the METAL sigmoid sibling (self-contained body). _calculate_sigmoid_/_init_sigmoid_ have zero BH callers. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "legacy__ckernel_sfpu_tanh": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — CLASS CORRECTED from B-TRANSITIVE (same include-path conflation): sfpu/ckernel_sfpu_tanh.h is included by NOTHING repo-wide; metal gelu.h:20/tanhshrink.h:10/logit_softcap.h:13 use the unprefixed include = the METAL tanh; the tested Tanh mathop routes to metal calculate_tanh. _calculate_tanh_/_init_tanh_ have zero callers. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+        notes="Unmapped-cited, class D-ABSENT (Lane BK re-verification 2026-08-18 at bb52e0fc33): zero test-source inclusion and zero dispatch anywhere under tests/ — CLASS CORRECTED from B-TRANSITIVE (same include-path conflation): sfpu/ckernel_sfpu_tanh.h is included by NOTHING repo-wide; metal gelu.h:20/tanhshrink.h:10/logit_softcap.h:13 use the unprefixed include = the METAL tanh; the tested Tanh mathop routes to metal calculate_tanh. _calculate_tanh_/_init_tanh_ have zero callers. Hand path equally untested by the BH suite; needs new upstream nodes before any mapping.",
+    ),
+    "legacy__ckernel_sfpu_cast_fp32_to_fp16a": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped metal cast_fp32_to_fp16a header (sfpu_operations.h:115 include, :827 dispatch); legacy _cast_fp32_to_fp16a_: zero hits.",
+        notes="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped metal cast_fp32_to_fp16a header (sfpu_operations.h:115 include, :827 dispatch); legacy _cast_fp32_to_fp16a_: zero hits.",
+    ),
+    "legacy__ckernel_sfpu_comp": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — zero/unary comp ops tested via the mapped metal comp headers (calculate_comp/_int/_uint16/eqz/nez, sfpu_operations.h:1297-1333); CAVEAT this legacy header IS compiled (direct include at sfpu_operations.h:193 with an explicit not-used comment) but _calculate_comp_/_calculate_zero_comp_* have zero dispatch.",
+        notes="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — zero/unary comp ops tested via the mapped metal comp headers (calculate_comp/_int/_uint16/eqz/nez, sfpu_operations.h:1297-1333); CAVEAT this legacy header IS compiled (direct include at sfpu_operations.h:193 with an explicit not-used comment) but _calculate_comp_/_calculate_zero_comp_* have zero dispatch.",
+    ),
+    "metal__ckernel_sfpu_clamp": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped legacy sfpu/ckernel_sfpu_clamp.h (_calculate_clamp_, sfpu_operations.h:1273); metal calculate_clamp appears only in the Quasar harness (sfpu_operations_quasar.h:296) and calculate_clamp_int32 has zero hits anywhere.",
+        notes="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped legacy sfpu/ckernel_sfpu_clamp.h (_calculate_clamp_, sfpu_operations.h:1273); metal calculate_clamp appears only in the Quasar harness (sfpu_operations_quasar.h:296) and calculate_clamp_int32 has zero hits anywhere.",
+    ),
+    "metal__ckernel_sfpu_div_int32": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — trunc/floor int32 division tested via the mapped metal div_int32_floor.h — BinaryOp::DIV_INT32 was re-pointed at calculate_div_int32_trunc (sfpu_operations.h:2049-2055, comment names the legacy fp32-result bug); CAVEAT this header IS compiled (include at sfpu_operations.h:124) but calculate_div_int32/div_init are dispatched by nothing (both appear only in comments).",
+        notes="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — trunc/floor int32 division tested via the mapped metal div_int32_floor.h — BinaryOp::DIV_INT32 was re-pointed at calculate_div_int32_trunc (sfpu_operations.h:2049-2055, comment names the legacy fp32-result bug); CAVEAT this header IS compiled (include at sfpu_operations.h:124) but calculate_div_int32/div_init are dispatched by nothing (both appear only in comments).",
+    ),
+    "metal__ckernel_sfpu_hardtanh": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped legacy sfpu/ckernel_sfpu_hardtanh.h (_calculate_hardtanh_, sfpu_operations.h:1287); metal calculate_hardtanh/hardtanh_init: zero hits.",
+        notes="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped legacy sfpu/ckernel_sfpu_hardtanh.h (_calculate_hardtanh_, sfpu_operations.h:1287); metal calculate_hardtanh/hardtanh_init: zero hits.",
+    ),
+    "metal__ckernel_sfpu_silu": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped legacy sfpu/ckernel_sfpu_silu.h (_calculate_silu_, sfpu_operations.h:1059; harness comment at :744 records the deliberate choice); metal calculate_silu: zero hits.",
+        notes="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — op tested via the mapped legacy sfpu/ckernel_sfpu_silu.h (_calculate_silu_, sfpu_operations.h:1059; harness comment at :744 records the deliberate choice); metal calculate_silu: zero hits.",
+    ),
+    "metal__ckernel_sfpu_relu": dict(
+        semantic_cpp_class="unmapped",
+        semantic_cpp_blocker="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — CLASS CORRECTED from B-TRANSITIVE (the old 'metal activations includes it' claim is false): NOTHING includes metal llk_sfpu/ckernel_sfpu_relu.h (its own line 11 includes the legacy relu); the relu family is tested through the LEGACY header (_relu_max_ :1168, _relu_min_ :1177/1181, _calculate_lrelu_ :1186 in sfpu_operations.h); relu_clamp_uint/relu_clamp_int/relu_min/relu_max/calculate_lrelu/lrelu_init of THIS file have zero dispatch.",
+        notes="Unmapped-cited, class D-SHADOWED (Lane BK re-verification 2026-08-18 at bb52e0fc33): the OP is covered by a mapped other-surface header; THIS header is dispatched by nothing — CLASS CORRECTED from B-TRANSITIVE (the old 'metal activations includes it' claim is false): NOTHING includes metal llk_sfpu/ckernel_sfpu_relu.h (its own line 11 includes the legacy relu); the relu family is tested through the LEGACY header (_relu_max_ :1168, _relu_min_ :1177/1181, _calculate_lrelu_ :1186 in sfpu_operations.h); relu_clamp_uint/relu_clamp_int/relu_min/relu_max/calculate_lrelu/lrelu_init of THIS file have zero dispatch.",
+    ),
     # ---- end coverage-parity audit seeds ----
 }
 
