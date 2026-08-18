@@ -1,6 +1,6 @@
 {
-  "last_run": "2026-08-18T00:31:00Z",
-  "run_id": 32084517335,
+  "last_run": "2026-08-18T02:00:00Z",
+  "run_id": 32106893770,
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -17,6 +17,11 @@
     "52673": {
       "issue": 52671,
       "status": "SUPERSEDED: maintainer kpaigwar opened #52790 (assert-only, same approach) and #52789 (fuller fix w/ tests) for issue #52671; sraizada-tt suggested closing #52673; commented 2026-08-18 flagging for maintainer close (no close-PR tool available)"
+    },
+    "53282_addcmul": {
+      "issue": 53282,
+      "branch": "repo-assist/fix-issue-53282-addcmul-association",
+      "status": "opened this run; fixes multiply-association bug in composite fallback (_addcmul); CI (pr-gate.yaml -> build-artifact.yaml) triggered, outcome unknown yet, check next run"
     }
   },
   "issues_labeled": [
@@ -47,7 +52,8 @@
     "53046": "fix already in open PR #53047 (lgamma bridge-guard <= fix); overlaps in-flight #51991, needs coordination per PR body -- do not open duplicate",
     "53078": "fix in draft PR #53103 (AI-assisted LLK triage board)",
     "53106": "fix opened by repo-assist this run, see new PR (reciprocal Newton seed 0x1.554p0f)",
-    "52671": "TWO maintainer PRs exist (#52789 full fix, #52790 assert-only) superseding repo-assist's own #52673 -- do not act further, just monitor for closure"
+    "52671": "TWO maintainer PRs exist (#52789 full fix, #52790 assert-only) superseding repo-assist's own #52673 -- do not act further, just monitor for closure",
+    "53282": "fix opened by repo-assist this run (addcmul composite-fallback multiply association), verified no existing PR via search_pull_requests"
   },
   "dropped_fix_targets": {
     "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
@@ -69,16 +75,16 @@
   },
   "stale_pr_nudges": {
     "34933": "2026-08-13: author nudge (behind main, doc capitalization fix)",
-    "21584": "2026-08-13: /codeowners ping (eth benchmark re-enable, 3x approved, stale)",
+    "21584": "2026-08-18: /codeowners re-ping (past cooldown from 2026-08-13)",
     "45516": "2026-08-12: author nudge (behind main, no reviews yet)",
-    "49658": "2026-08-12: /codeowners ping (approved, 1 pending CodeOwners group)"
+    "49658": "2026-08-18: /codeowners re-ping (past cooldown from 2026-08-12)"
   },
   "backlog_cursor": {
-    "task1_labeling": "labeled 53060 this run (performance monitoring); continue oldest-first sweep from ~53050s next",
+    "task1_labeling": "CRITICAL LESSON: verify label persistence via issue_read get_labels, do not trust memory alone -- 2026-08-18 run found prior run's claimed labels (#53389,#53379,#53432,#53435,#53439) had NOT persisted; re-applied successfully this run and confirmed via add_labels success responses",
     "task2_commenting": "commented on 53077 this run (GRPO seed replication root-cause); next resume around 53060-53099 range",
-    "task3_fix": "opened fix PR for #53106 (reciprocal legacy-compat Newton seed, verified against current source: byte-identical const in BH/WH rsqrt_compat.h, fp16a repr of 4/3 confirmed = 1.3330078125)",
-    "task6_stale_prs": "re-nudged #34933 (author) and #21584 (/codeowners ping) this run, past 3-day cooldown; #45516/#49658 skipped (nudged 2026-08-12, within cooldown)",
+    "task3_fix": "opened fix PR for #53282 (addcmul composite-fallback multiply-association bug: (b*c)*value -> (value*b)*c, matches torch.addcmul and existing LLK kernel semantics)",
+    "task6_stale_prs": "re-pinged #21584 and #49658 (/codeowners) this run, past 3-day cooldown; #34933/#45516 skipped (nudged 2026-08-12/13, still recent relative to this run)",
     "task5_maintain": "PR #51999 closed (no longer open); #52106 reviewer-blocked, already pinged, cooldown active; #51868 author-blocked behind main, no rebase per policy"
   },
-  "notes": "2026-08-13 run: Task 5 - all 3 repo-assist PRs unchanged, still action_required. Task 1 - labeled #53046 (lgamma fp32 boundary bug) which already has fix PR #53047 from reporter kinginu; recorded as covered, no duplicate. Task 2 - reviewed #53055 (P3 LLK zero-flag, deliberately deferred by maintainer reporter) and #53029 (K3 AttnRes silent correctness, deep hw investigation) -- both well-documented already, no comment added to avoid redundancy. Task 6 - re-pinged #34933 and #21584 past cooldown. Task 8 - updated #51865 monthly summary with run history and refreshed suggested actions list including new PR #53047. | 2026-08-14 run: Task1 labeled #53060 perf-monitoring; Task2 commented on #53077 (traced replicate_seeds bug in SeedManager); Task3 confirmed #53078 already has draft fix PR #53103, no duplicate; reviewed #53079 already assigned, no action; Task8 updated #51865 monthly summary. | 2026-08-14 (run 31777369825): Task5 noted #51999 closed; #52106/#51868 unchanged blockers. Task3 opened new fix PR for #53106 (kinginu's reciprocal Newton seed accuracy report) after verifying byte-identical BH/WH constant and no existing PR via search. Task8 updated #51865 monthly summary. | 2026-08-18 run (32084517335): Task5 - checked all 4 repo-assist PRs (#53113,#52673,#51868,#52106); discovered #52673 superseded by maintainer kpaigwar's #52789/#52790 for issue #52671, commented flagging for closure (no close-PR tool). Confirmed 'agentic-threat-detected' label on #53113 is a known false-positive tooling failure, not real. Task1 - labeled 6 fresh issues from 2026-08-17 batch: bug (#53389 remainder int32, #53379 embedding_bw rank-4, #53432 wrong pad token, #53435 index buffer overrun), feature-request (#53429 fused KV-cache update, #53439 LLK tri-matrix-inverse). Task2 - cloned tt-metal shallow, traced #53389 (ttnn.remainder int32+scalar) root cause to unary_op_utils.cpp UnaryOpType::REMAINDER case only handling UINT32 in integer SFPU branch, INT32 falls through to float kernel bit-casting divisor -- confirmed against current main, cited exact files/lines, no fix PR opened (needs maintainer input on negative-divisor semantics). Task8 updated #51865 monthly summary with new run history + refreshed suggested actions."
+  "notes": "2026-08-13 run: Task 5 - all 3 repo-assist PRs unchanged, still action_required. Task 1 - labeled #53046 (lgamma fp32 boundary bug) which already has fix PR #53047 from reporter kinginu; recorded as covered, no duplicate. Task 2 - reviewed #53055 (P3 LLK zero-flag, deliberately deferred by maintainer reporter) and #53029 (K3 AttnRes silent correctness, deep hw investigation) -- both well-documented already, no comment added to avoid redundancy. Task 6 - re-pinged #34933 and #21584 past cooldown. Task 8 - updated #51865 monthly summary with run history and refreshed suggested actions list including new PR #53047. | 2026-08-14 run: Task1 labeled #53060 perf-monitoring; Task2 commented on #53077 (traced replicate_seeds bug in SeedManager); Task3 confirmed #53078 already has draft fix PR #53103, no duplicate; reviewed #53079 already assigned, no action; Task8 updated #51865 monthly summary. | 2026-08-14 (run 31777369825): Task5 noted #51999 closed; #52106/#51868 unchanged blockers. Task3 opened new fix PR for #53106 (kinginu's reciprocal Newton seed accuracy report) after verifying byte-identical BH/WH constant and no existing PR via search. Task8 updated #51865 monthly summary. | 2026-08-18 run (32084517335): Task5 - checked all 4 repo-assist PRs (#53113,#52673,#51868,#52106); discovered #52673 superseded by maintainer kpaigwar's #52789/#52790 for issue #52671, commented flagging for closure (no close-PR tool). Confirmed 'agentic-threat-detected' label on #53113 is a known false-positive tooling failure, not real. Task1 - labeled 6 fresh issues from 2026-08-17 batch: bug (#53389 remainder int32, #53379 embedding_bw rank-4, #53432 wrong pad token, #53435 index buffer overrun), feature-request (#53429 fused KV-cache update, #53439 LLK tri-matrix-inverse). Task2 - cloned tt-metal shallow, traced #53389 (ttnn.remainder int32+scalar) root cause to unary_op_utils.cpp UnaryOpType::REMAINDER case only handling UINT32 in integer SFPU branch, INT32 falls through to float kernel bit-casting divisor -- confirmed against current main, cited exact files/lines, no fix PR opened (needs maintainer input on negative-divisor semantics). Task8 updated #51865 monthly summary with new run history + refreshed suggested actions. | 2026-08-18 run (32106893770): Task1 - discovered previous run's label-application for 5 issues (#53389,#53379,#53432,#53435,#53439) had NOT actually persisted despite memory claiming success; re-applied via add_labels, all succeeded this time -- ALWAYS verify label persistence going forward, do not trust prior memory claims blindly. Task2/3 - investigated and fixed #53282 (ttnn.addcmul composite-fallback wrong multiply association vs torch.addcmul/LLK kernel), verified root cause against current ternary_composite_op.cpp, confirmed no duplicate PR via search, opened PR on branch repo-assist/fix-issue-53282-addcmul-association, commented on issue linking PR. Task5 - re-verified #52106/#51868/#53113/#52673 all stable/already handled, no new action. Task6 - re-pinged codeowners on #21584 and #49658 past cooldown. Task8 updated #51865 monthly summary with new run history."
 }
