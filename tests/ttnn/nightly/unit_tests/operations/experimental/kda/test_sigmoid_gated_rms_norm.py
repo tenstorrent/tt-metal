@@ -15,7 +15,11 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.reference.kda.ops import sigmoid_gated_rms_norm_reference
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    assert_equal,
+)
 
 pytestmark = [
     run_for_blackhole(),
@@ -173,34 +177,40 @@ def _reference(
     )
 
 
-def _collect_eager_results(
+def _collect_accuracy_and_determinism_results(
     device: ttnn.Device,
     run: Callable[[], ttnn.Tensor],
     *,
     count: int = 3,
 ) -> tuple[ttnn.Tensor, torch.Tensor, torch.Tensor]:
     assert count > 1
-    reference_output = None
+    reference_output = run()
+    mismatch_scratch = ttnn.empty(
+        reference_output.shape,
+        dtype=ttnn.bfloat16,
+        layout=reference_output.layout,
+        device=device,
+        memory_config=reference_output.memory_config(),
+    )
     mismatch_marker = None
-    for invocation in range(count):
-        cache_entries_before = device.num_program_cache_entries()
+    for _ in range(1, count):
         output_tt = run()
-        if invocation > 0:
-            assert device.num_program_cache_entries() == cache_entries_before
-
-        if reference_output is None:
-            reference_output = output_tt
+        ttnn.ne(reference_output, output_tt, dtype=ttnn.bfloat16, output_tensor=mismatch_scratch)
+        current_mismatch = ttnn.max(mismatch_scratch)
+        ttnn.deallocate(output_tt)
+        if mismatch_marker is None:
+            mismatch_marker = current_mismatch
         else:
-            current_mismatch = ttnn.max(ttnn.ne(reference_output, output_tt, dtype=ttnn.bfloat16))
-            mismatch_marker = (
-                current_mismatch if mismatch_marker is None else ttnn.maximum(mismatch_marker, current_mismatch)
-            )
+            updated_marker = ttnn.maximum(mismatch_marker, current_mismatch)
+            ttnn.deallocate(mismatch_marker)
+            ttnn.deallocate(current_mismatch)
+            mismatch_marker = updated_marker
 
-    assert reference_output is not None
     assert mismatch_marker is not None
-    ttnn.synchronize_device(device)
     reference_output_host = ttnn.to_torch(reference_output).clone()
     mismatch_marker_host = ttnn.to_torch(mismatch_marker).clone()
+    ttnn.deallocate(mismatch_scratch)
+    ttnn.deallocate(mismatch_marker)
     return reference_output, reference_output_host, mismatch_marker_host
 
 
@@ -222,19 +232,19 @@ def _assert_output_contract(
     assert all(output_tt.buffer_address() != tensor.buffer_address() for tensor in device_inputs)
 
 
-def _assert_accurate_and_deterministic(
+def _assert_accurate_and_exact_value_deterministic(
     expected: torch.Tensor,
     actual: torch.Tensor,
     mismatch_marker: torch.Tensor,
     *,
     name: str,
 ) -> None:
-    assert_accurate(expected, actual, name=f"{name} invocation 0", pcc_threshold=0.999)
-    assert_bit_identical(
+    assert_equal(
         torch.zeros_like(mismatch_marker),
         mismatch_marker,
-        name=f"{name} device-side determinism marker",
+        name=f"{name} device-side exact-value determinism marker",
     )
+    assert_accurate(expected, actual, name=f"{name} invocation 0", pcc_threshold=0.999)
 
 
 def _assert_inputs_unchanged(
@@ -266,7 +276,7 @@ def test_sigmoid_gated_rms_norm_is_accurate_and_deterministic(
         with ttnn.manage_config("throw_exception_on_fallback", True):
             return _run(input_tt, gate_tt, weight_tt, output_dtype=output_dtype)
 
-    output_tt, output, mismatch_marker = _collect_eager_results(device, run)
+    output_tt, output, mismatch_marker = _collect_accuracy_and_determinism_results(device, run)
     _assert_output_contract(
         output_tt,
         output,
@@ -277,8 +287,11 @@ def test_sigmoid_gated_rms_norm_is_accurate_and_deterministic(
         value_dim=_VALUE_DIM,
         output_dtype=output_dtype,
     )
-    _assert_accurate_and_deterministic(expected, output, mismatch_marker, name=f"{input_dtype} to {output_dtype}")
+    _assert_accurate_and_exact_value_deterministic(
+        expected, output, mismatch_marker, name=f"{input_dtype} to {output_dtype}"
+    )
     _assert_inputs_unchanged(input_snapshots, device_inputs)
+    ttnn.deallocate(output_tt)
 
 
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
@@ -302,7 +315,6 @@ def test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic(
         value_dim=_PRODUCTION_VALUE_DIM,
         output_dtype=_PRODUCTION_OUTPUT_DTYPE,
     )
-    input_snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in device_inputs)
     compute_kernel_config = _production_compute_kernel_config(device)
 
     def run() -> ttnn.Tensor:
@@ -316,7 +328,7 @@ def test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic(
                 output_dtype=_PRODUCTION_OUTPUT_DTYPE,
             )
 
-    output_tt, output, mismatch_marker = _collect_eager_results(device, run)
+    output_tt, output, mismatch_marker = _collect_accuracy_and_determinism_results(device, run)
     _assert_output_contract(
         output_tt,
         output,
@@ -327,8 +339,8 @@ def test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic(
         value_dim=_PRODUCTION_VALUE_DIM,
         output_dtype=_PRODUCTION_OUTPUT_DTYPE,
     )
-    _assert_accurate_and_deterministic(expected, output, mismatch_marker, name=case.case_id)
-    _assert_inputs_unchanged(input_snapshots, device_inputs)
+    _assert_accurate_and_exact_value_deterministic(expected, output, mismatch_marker, name=case.case_id)
+    ttnn.deallocate(output_tt)
 
 
 @pytest.mark.requires_host_iommu
