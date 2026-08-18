@@ -227,6 +227,12 @@ def render_model_scenarios(rows):
                 )
         elif best_name == "routed":
             capture = "same API; drop indices_tensor/sub_core_grids/stable from the call"
+            landed_sha = ROUTED_FORM_LANDED.get(r["scenario"])
+            if landed_sha:
+                capture += (
+                    f" \u2014 LANDED on this branch ({landed_sha}): the call site now takes "
+                    f"this form (values bit-exact; index diffs all proven ties; greedy pick identical)"
+                )
         elif today_label == "ttnn.topk" and best_name == "direct":
             if int(r["k"]) < 16:
                 capture = "call ttnn.experimental.topk_large_indices yourself (k rounds up to 16, slice back); or extend the ttnn.topk route \u2014 A/B vs envelope pending"

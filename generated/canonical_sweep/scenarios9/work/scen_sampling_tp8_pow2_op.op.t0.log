@@ -1,0 +1,72 @@
+2026-08-17 12:25:55.615 | INFO     | __main__:main:412 - Using port 8086
+2026-08-17 12:25:55.616 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-17 12:25:55.619 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/nachiket/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/nachiket/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-17 12:25:55.630 | INFO     | __main__:main:430 - Test process started
+2026-08-17 12:25:56.680 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/nachiket/.cache/ttnn,model_cache_path=/home/nachiket/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-17 12:25:57.338 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-17 12:25:57.338 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-17 12:25:57.338 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-17 12:25:57.338 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-17 12:25:57.339 | warning  |             UMD | Setting power state failed on device 0: Invalid argument (pci_device.cpp:1090)
+2026-08-17 12:25:57.340 | info     |             UMD | Established firmware bundle version: 18.8.0 (topology_discovery.cpp:575)
+2026-08-17 12:25:57.340 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-17 12:25:57.376 | warning  |             UMD | Setting power state failed on device 0: Invalid argument (pci_device.cpp:1090)
+2026-08-17 12:25:57.376 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:173)
+2026-08-17 12:25:57.376 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-08-17 12:25:57.376 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:150)
+2026-08-17 12:25:57.376 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-17 12:25:57.376 | info     |             UMD | Starting devices in cluster (cluster.cpp:1188)
+2026-08-17 12:25:57.388 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1196)
+2026-08-17 12:25:57.531 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-17 12:25:57.531 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-17 12:25:57.531 | warning  |          Always | Unknown motherboard 'ROG STRIX X670E-E GAMING WIFI' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-17 12:25:57.531 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:3329)
+2026-08-17 12:25:57.531 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:3337)
+2026-08-17 12:25:57.563 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+SWEEP_OK   scen_sampling_tp8_pow2_op
+2026-08-17 12:25:57.941 | info     |           Metal | Device kernel duration perf summary (device=0): count=9, min=119801ns, avg=120463.3ns, max=120834ns (profiler_analysis.cpp:727)
+2026-08-17 12:25:57.941 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=200ns, range=[119800..121800), underflow(<119800ns)=0, overflow(>=121800ns)=0) (profiler_analysis.cpp:770)
+2026-08-17 12:25:57.941 | info     |           Metal |   [      119800 ..       120000) |##############################          |        3 (profiler_analysis.cpp:775)
+2026-08-17 12:25:57.941 | info     |           Metal |   [      120000 ..       120200) |                                        |        0 (profiler_analysis.cpp:775)
+2026-08-17 12:25:57.941 | info     |           Metal |   [      120200 ..       120400) |                                        |        0 (profiler_analysis.cpp:775)
+2026-08-17 12:25:57.941 | info     |           Metal |   [      120400 ..       120600) |                                        |        0 (profiler_analysis.cpp:775)
+2026-08-17 12:25:57.941 | info     |           Metal |   [      120600 ..       120800) |########################################|        4 (profiler_analysis.cpp:775)
+2026-08-17 12:25:57.941 | info     |           Metal |   [      120800 ..       121000) |####################                    |        2 (profiler_analysis.cpp:775)
+2026-08-17 12:25:57.941 | info     |           Metal |   [      121000 ..       121200) |                                        |        0 (profiler_analysis.cpp:775)
+2026-08-17 12:25:57.941 | info     |           Metal |   [      121200 ..       121400) |                                        |        0 (profiler_analysis.cpp:775)
+2026-08-17 12:25:57.941 | info     |           Metal |   [      121400 ..       121600) |                                        |        0 (profiler_analysis.cpp:775)
+2026-08-17 12:25:57.941 | info     |           Metal |   [      121600 ..       121800) |                                        |        0 (profiler_analysis.cpp:775)
+SWEEP: manifest -> generated/canonical_sweep/scenarios7/work/scen_sampling_tp8_pow2_op.op.t0.manifest.json
+2026-08-17 12:25:58.422 | info     |    BuildKernels | JIT cache stats: 21/21 hits (100.0%) [21 cached, 0 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-17 12:25:58.422 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-17 12:25:58.424 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-17 12:25:58.424 | info     |             UMD | Closing devices in cluster (cluster.cpp:1201)
+2026-08-17 12:25:58.782 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1210)
+2026-08-17 12:25:58.782 | info     |             UMD | Cluster destructor started. (cluster.cpp:916)
+2026-08-17 12:25:58.782 | info     |             UMD | Cluster destructor completed. (cluster.cpp:919)
+2026-08-17 12:25:58.782 | warning  |             UMD | Setting power state failed on device 0: Invalid argument (pci_device.cpp:1090)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 2.35 s
+Zones: 33,825
+Elapsed time: 2.2 s
+Saving trace... done!
+Trace size 257.06 KB (16.49% ratio)
+2026-08-17 12:25:58.930 | INFO     | __main__:main:469 - Copying /home/nachiket/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/nachiket/tt-metal/build/profiler/build_wasm/traces/_canonical_topk_sweep_2026_08_17_12_25_58.tracy
+2026-08-17 12:25:58.931 | INFO     | __main__:main:472 - Copied /home/nachiket/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/nachiket/tt-metal/build/profiler/build_wasm/traces/_canonical_topk_sweep_2026_08_17_12_25_58.tracy
+2026-08-17 12:25:58.931 | INFO     | __main__:main:481 - embed.tracy -> traces/_canonical_topk_sweep_2026_08_17_12_25_58.tracy
+2026-08-17 12:25:58.931 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-17 12:25:58.931 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-17 12:25:58.931 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-17 12:25:58.960 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/nachiket/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-17 12:25:58.963 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/nachiket/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-17 12:25:58.963 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+2026-08-17 12:25:58.989 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-17 12:25:58.989 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-17 12:25:59.026 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-17 12:25:59.026 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-17 12:25:59.031 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-17 12:25:59.034 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/nachiket/tt-metal/generated/profiler/reports/2026_08_17_12_25_59/ops_perf_results_2026_08_17_12_25_59.csv

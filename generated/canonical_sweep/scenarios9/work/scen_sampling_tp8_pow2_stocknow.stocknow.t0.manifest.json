@@ -1,0 +1,37 @@
+{
+ "arch": "blackhole",
+ "iters": 3,
+ "cells": [
+  {
+   "id": "scen_sampling_tp8_pow2_stocknow",
+   "scenario": "sampling_tp8_pow2",
+   "layer": "stocknow",
+   "op": "topk_stock",
+   "num_slices": null,
+   "batch": 32,
+   "n": 32768,
+   "k": 32,
+   "dtype": "bf16",
+   "dim": -1,
+   "anchor": "model_scenario",
+   "valid_length": null,
+   "return_values": false,
+   "apriori": "",
+   "expected_factory": "",
+   "composite": true,
+   "strict": true,
+   "seed": 35194430,
+   "iters": 3,
+   "warmup": 1,
+   "est_ms": null,
+   "arm": null,
+   "status": "RAN",
+   "error": "",
+   "phase": "measure",
+   "max_abs_err": 0.0,
+   "wrong": false,
+   "wrong_detail": ""
+  }
+ ],
+ "child_script_md5": "9bf423ae266272083e9e75fc72ec748a"
+}

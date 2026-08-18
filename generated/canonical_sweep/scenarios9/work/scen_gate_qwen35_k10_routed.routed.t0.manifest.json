@@ -1,0 +1,37 @@
+{
+ "arch": "blackhole",
+ "iters": 5,
+ "cells": [
+  {
+   "id": "scen_gate_qwen35_k10_routed",
+   "scenario": "gate_qwen35_k10",
+   "layer": "routed",
+   "op": "topk_routed",
+   "num_slices": null,
+   "batch": 32,
+   "n": 512,
+   "k": 10,
+   "dtype": "bf16",
+   "dim": -1,
+   "anchor": "model_scenario",
+   "valid_length": null,
+   "return_values": false,
+   "apriori": "",
+   "expected_factory": "",
+   "composite": true,
+   "strict": true,
+   "seed": 10057613,
+   "iters": 5,
+   "warmup": 3,
+   "est_ms": null,
+   "arm": null,
+   "status": "RAN",
+   "error": "",
+   "phase": "measure",
+   "max_abs_err": 0.0,
+   "wrong": false,
+   "wrong_detail": ""
+  }
+ ],
+ "child_script_md5": "9bf423ae266272083e9e75fc72ec748a"
+}

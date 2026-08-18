@@ -1,0 +1,37 @@
+{
+ "arch": "blackhole",
+ "iters": 5,
+ "cells": [
+  {
+   "id": "scen_msa_blocks_k16_routed",
+   "scenario": "msa_blocks_k16",
+   "layer": "routed",
+   "op": "topk_routed",
+   "num_slices": null,
+   "batch": 1,
+   "n": 8192,
+   "k": 16,
+   "dtype": "bf16",
+   "dim": -1,
+   "anchor": "model_scenario",
+   "valid_length": null,
+   "return_values": false,
+   "apriori": "",
+   "expected_factory": "",
+   "composite": true,
+   "strict": true,
+   "seed": 16802591,
+   "iters": 5,
+   "warmup": 3,
+   "est_ms": null,
+   "arm": null,
+   "status": "RAN",
+   "error": "",
+   "phase": "measure",
+   "max_abs_err": 0.0,
+   "wrong": false,
+   "wrong_detail": ""
+  }
+ ],
+ "child_script_md5": "9bf423ae266272083e9e75fc72ec748a"
+}

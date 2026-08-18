@@ -1,0 +1,214 @@
+2026-08-17 12:27:06.554 | INFO     | __main__:main:412 - Using port 8086
+2026-08-17 12:27:06.554 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-17 12:27:06.556 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/nachiket/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/nachiket/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-17 12:27:06.567 | INFO     | __main__:main:430 - Test process started
+2026-08-17 12:27:07.608 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/nachiket/.cache/ttnn,model_cache_path=/home/nachiket/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-17 12:27:08.254 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-17 12:27:08.254 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-17 12:27:08.255 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-17 12:27:08.255 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-17 12:27:08.255 | warning  |             UMD | Setting power state failed on device 0: Invalid argument (pci_device.cpp:1090)
+2026-08-17 12:27:08.256 | info     |             UMD | Established firmware bundle version: 18.8.0 (topology_discovery.cpp:575)
+2026-08-17 12:27:08.256 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-17 12:27:08.291 | warning  |             UMD | Setting power state failed on device 0: Invalid argument (pci_device.cpp:1090)
+2026-08-17 12:27:08.291 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:173)
+2026-08-17 12:27:08.291 | info     |             UMD | IOMMU: disabled (cluster.cpp:147)
+2026-08-17 12:27:08.291 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:150)
+2026-08-17 12:27:08.291 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-17 12:27:08.292 | info     |             UMD | Starting devices in cluster (cluster.cpp:1188)
+2026-08-17 12:27:08.393 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1196)
+2026-08-17 12:27:08.511 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-17 12:27:08.511 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-17 12:27:08.511 | warning  |          Always | Unknown motherboard 'ROG STRIX X670E-E GAMING WIFI' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-17 12:27:08.511 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:3329)
+2026-08-17 12:27:08.511 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:3337)
+2026-08-17 12:27:08.545 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+Building trisc0, compile step:
+/home/nachiket/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/nachiket/tt-metal/ -I/home/nachiket/tt-metal/ttnn -I/home/nachiket/tt-metal/ttnn/cpp -I/home/nachiket/tt-metal/tt_metal -I/home/nachiket/tt-metal/tt_metal/hw/inc -I/home/nachiket/tt-metal/tt_metal/tt-llk/common -I/home/nachiket/tt-metal/tt_metal/hostdevcommon/api -I/home/nachiket/tt-metal/tt_metal/api/ -I/home/nachiket/tt-metal/runtime/sfpi/include -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/nachiket/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/nachiket/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/nachiket/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=130 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="topk_final/18004149280168647247/" -DKERNEL_COMPILE_TIME_ARGS=4,5,6,7,8,9,1,64,32,1,5,6,0,1,0 -c -o /home/nachiket/.cache/tt-metal-cache/7512037380320502535/kernels/topk_final/18004149280168647247/trisc0/trisck.5174764465516314883_224310.o /home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/nachiket/.cache/tt-metal-cache/7512037380320502535/kernels/topk_final/18004149280168647247/trisc0/trisck.5174764465516314883_224310.d
+In file included from /home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /home/nachiket/tt-metal/tt_metal/hw/inc/api/compute/cb_api.h:15,
+                 from /home/nachiket/tt-metal/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /home/nachiket/tt-metal/tt_metal/hw/inc/api/compute/eltwise_unary/eltwise_unary.h:7,
+                 from /home/nachiket/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_final.cpp:5,
+                 from ../chlkc_unpack.cpp:3,
+                 from /home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1050:5: note: in expansion of macro 'DO_PRAGMA'
+ 1050 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+/home/nachiket/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/nachiket/tt-metal/ -I/home/nachiket/tt-metal/ttnn -I/home/nachiket/tt-metal/ttnn/cpp -I/home/nachiket/tt-metal/tt_metal -I/home/nachiket/tt-metal/tt_metal/hw/inc -I/home/nachiket/tt-metal/tt_metal/tt-llk/common -I/home/nachiket/tt-metal/tt_metal/hostdevcommon/api -I/home/nachiket/tt-metal/tt_metal/api/ -I/home/nachiket/tt-metal/runtime/sfpi/include -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/nachiket/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/nachiket/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/nachiket/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=130 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="topk_local/10367917672751431340/" -DKERNEL_COMPILE_TIME_ARGS=0,1,2,3,8,9,1,16,32,1,5,4,0,1,0 -c -o /home/nachiket/.cache/tt-metal-cache/7512037380320502535/kernels/topk_local/10367917672751431340/trisc0/trisck.5174764465516314883_224310.o /home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/nachiket/.cache/tt-metal-cache/7512037380320502535/kernels/topk_local/10367917672751431340/trisc0/trisck.5174764465516314883_224310.d
+In file included from /home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /home/nachiket/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:97,
+                 from /home/nachiket/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp:5,
+                 from ../chlkc_unpack.cpp:3,
+                 from /home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1050:5: note: in expansion of macro 'DO_PRAGMA'
+ 1050 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/home/nachiket/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/nachiket/tt-metal/ -I/home/nachiket/tt-metal/ttnn -I/home/nachiket/tt-metal/ttnn/cpp -I/home/nachiket/tt-metal/tt_metal -I/home/nachiket/tt-metal/tt_metal/hw/inc -I/home/nachiket/tt-metal/tt_metal/tt-llk/common -I/home/nachiket/tt-metal/tt_metal/hostdevcommon/api -I/home/nachiket/tt-metal/tt_metal/api/ -I/home/nachiket/tt-metal/runtime/sfpi/include -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/nachiket/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/nachiket/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/nachiket/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=130 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="topk_final/18004149280168647247/" -DKERNEL_COMPILE_TIME_ARGS=4,5,6,7,8,9,1,64,32,1,5,6,0,1,0 -c -o /home/nachiket/.cache/tt-metal-cache/7512037380320502535/kernels/topk_final/18004149280168647247/trisc2/trisck.5174764465516314883_224310.o /home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/nachiket/.cache/tt-metal-cache/7512037380320502535/kernels/topk_final/18004149280168647247/trisc2/trisck.5174764465516314883_224310.d
+In file included from /home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /home/nachiket/tt-metal/tt_metal/hw/inc/api/compute/cb_api.h:12,
+                 from /home/nachiket/tt-metal/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /home/nachiket/tt-metal/tt_metal/hw/inc/api/compute/eltwise_unary/eltwise_unary.h:7,
+                 from /home/nachiket/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_final.cpp:5,
+                 from ../chlkc_pack.cpp:3,
+                 from /home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1055:5: note: in expansion of macro 'DO_PRAGMA'
+ 1055 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/home/nachiket/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/nachiket/tt-metal/ -I/home/nachiket/tt-metal/ttnn -I/home/nachiket/tt-metal/ttnn/cpp -I/home/nachiket/tt-metal/tt_metal -I/home/nachiket/tt-metal/tt_metal/hw/inc -I/home/nachiket/tt-metal/tt_metal/tt-llk/common -I/home/nachiket/tt-metal/tt_metal/hostdevcommon/api -I/home/nachiket/tt-metal/tt_metal/api/ -I/home/nachiket/tt-metal/runtime/sfpi/include -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/nachiket/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/nachiket/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/nachiket/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=130 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="topk_local/10367917672751431340/" -DKERNEL_COMPILE_TIME_ARGS=0,1,2,3,8,9,1,16,32,1,5,4,0,1,0 -c -o /home/nachiket/.cache/tt-metal-cache/7512037380320502535/kernels/topk_local/10367917672751431340/trisc2/trisck.5174764465516314883_224310.o /home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/nachiket/.cache/tt-metal-cache/7512037380320502535/kernels/topk_local/10367917672751431340/trisc2/trisck.5174764465516314883_224310.d
+In file included from /home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /home/nachiket/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:72,
+                 from /home/nachiket/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp:5,
+                 from ../chlkc_pack.cpp:3,
+                 from /home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1055:5: note: in expansion of macro 'DO_PRAGMA'
+ 1055 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/home/nachiket/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/nachiket/tt-metal/ -I/home/nachiket/tt-metal/ttnn -I/home/nachiket/tt-metal/ttnn/cpp -I/home/nachiket/tt-metal/tt_metal -I/home/nachiket/tt-metal/tt_metal/hw/inc -I/home/nachiket/tt-metal/tt_metal/tt-llk/common -I/home/nachiket/tt-metal/tt_metal/hostdevcommon/api -I/home/nachiket/tt-metal/tt_metal/api/ -I/home/nachiket/tt-metal/runtime/sfpi/include -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/nachiket/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/nachiket/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/nachiket/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=130 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="topk_final/18004149280168647247/" -DKERNEL_COMPILE_TIME_ARGS=4,5,6,7,8,9,1,64,32,1,5,6,0,1,0 -c -o /home/nachiket/.cache/tt-metal-cache/7512037380320502535/kernels/topk_final/18004149280168647247/trisc1/trisck.5174764465516314883_224310.o /home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/nachiket/.cache/tt-metal-cache/7512037380320502535/kernels/topk_final/18004149280168647247/trisc1/trisck.5174764465516314883_224310.d
+In file included from /home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:15:
+/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/home/nachiket/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/home/nachiket/tt-metal/ -I/home/nachiket/tt-metal/ttnn -I/home/nachiket/tt-metal/ttnn/cpp -I/home/nachiket/tt-metal/tt_metal -I/home/nachiket/tt-metal/tt_metal/hw/inc -I/home/nachiket/tt-metal/tt_metal/tt-llk/common -I/home/nachiket/tt-metal/tt_metal/hostdevcommon/api -I/home/nachiket/tt-metal/tt_metal/api/ -I/home/nachiket/tt-metal/runtime/sfpi/include -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/nachiket/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/nachiket/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/nachiket/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/nachiket/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/nachiket/tt-metal/ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=130 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="topk_local/10367917672751431340/" -DKERNEL_COMPILE_TIME_ARGS=0,1,2,3,8,9,1,16,32,1,5,4,0,1,0 -c -o /home/nachiket/.cache/tt-metal-cache/7512037380320502535/kernels/topk_local/10367917672751431340/trisc1/trisck.5174764465516314883_224310.o /home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/nachiket/.cache/tt-metal-cache/7512037380320502535/kernels/topk_local/10367917672751431340/trisc1/trisck.5174764465516314883_224310.d
+In file included from /home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:15:
+/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/nachiket/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/nachiket/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+SWEEP_OK   scen_sampling_tp8_pow2_stocknow
+2026-08-17 12:27:09.390 | info     |           Metal | Device kernel duration perf summary (device=0): count=5, min=171070ns, avg=171310.8ns, max=171513ns (profiler_analysis.cpp:727)
+2026-08-17 12:27:09.390 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=100ns, range=[171000..172000), underflow(<171000ns)=0, overflow(>=172000ns)=0) (profiler_analysis.cpp:770)
+2026-08-17 12:27:09.390 | info     |           Metal |   [      171000 ..       171100) |####################                    |        1 (profiler_analysis.cpp:775)
+2026-08-17 12:27:09.390 | info     |           Metal |   [      171100 ..       171200) |####################                    |        1 (profiler_analysis.cpp:775)
+2026-08-17 12:27:09.390 | info     |           Metal |   [      171200 ..       171300) |                                        |        0 (profiler_analysis.cpp:775)
+2026-08-17 12:27:09.390 | info     |           Metal |   [      171300 ..       171400) |                                        |        0 (profiler_analysis.cpp:775)
+2026-08-17 12:27:09.390 | info     |           Metal |   [      171400 ..       171500) |########################################|        2 (profiler_analysis.cpp:775)
+2026-08-17 12:27:09.390 | info     |           Metal |   [      171500 ..       171600) |####################                    |        1 (profiler_analysis.cpp:775)
+2026-08-17 12:27:09.390 | info     |           Metal |   [      171600 ..       171700) |                                        |        0 (profiler_analysis.cpp:775)
+2026-08-17 12:27:09.390 | info     |           Metal |   [      171700 ..       171800) |                                        |        0 (profiler_analysis.cpp:775)
+2026-08-17 12:27:09.390 | info     |           Metal |   [      171800 ..       171900) |                                        |        0 (profiler_analysis.cpp:775)
+2026-08-17 12:27:09.390 | info     |           Metal |   [      171900 ..       172000) |                                        |        0 (profiler_analysis.cpp:775)
+SWEEP: manifest -> generated/canonical_sweep/scenarios7/work/scen_sampling_tp8_pow2_stocknow.stocknow.t0.manifest.json
+2026-08-17 12:27:09.769 | info     |    BuildKernels | JIT cache stats: 20/26 hits (76.9%) [20 cached, 0 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-17 12:27:09.769 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-17 12:27:09.770 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-17 12:27:09.770 | info     |             UMD | Closing devices in cluster (cluster.cpp:1201)
+2026-08-17 12:27:10.087 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1210)
+2026-08-17 12:27:10.088 | info     |             UMD | Cluster destructor started. (cluster.cpp:916)
+2026-08-17 12:27:10.088 | info     |             UMD | Cluster destructor completed. (cluster.cpp:919)
+2026-08-17 12:27:10.088 | warning  |             UMD | Setting power state failed on device 0: Invalid argument (pci_device.cpp:1090)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 2.65 s
+Zones: 13,408
+Elapsed time: 2.5 s
+Saving trace... done!
+Trace size 109.38 KB (17.61% ratio)
+2026-08-17 12:27:10.220 | INFO     | __main__:main:469 - Copying /home/nachiket/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/nachiket/tt-metal/build/profiler/build_wasm/traces/_canonical_topk_sweep_2026_08_17_12_27_10.tracy
+2026-08-17 12:27:10.220 | INFO     | __main__:main:472 - Copied /home/nachiket/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/nachiket/tt-metal/build/profiler/build_wasm/traces/_canonical_topk_sweep_2026_08_17_12_27_10.tracy
+2026-08-17 12:27:10.220 | INFO     | __main__:main:481 - embed.tracy -> traces/_canonical_topk_sweep_2026_08_17_12_27_10.tracy
+2026-08-17 12:27:10.220 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-17 12:27:10.220 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-17 12:27:10.220 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-17 12:27:10.239 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/nachiket/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-17 12:27:10.242 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/nachiket/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-17 12:27:10.242 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+2026-08-17 12:27:10.257 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-17 12:27:10.257 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-17 12:27:10.269 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-17 12:27:10.269 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-17 12:27:10.273 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-17 12:27:10.275 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/nachiket/tt-metal/generated/profiler/reports/2026_08_17_12_27_10/ops_perf_results_2026_08_17_12_27_10.csv

@@ -1,0 +1,3 @@
+CELL 32 128 4 routed : per_iter=8.3us [SliceDeviceOperation:n=66,avg=0.82us, TopkLargeIndicesDeviceOperation:n=33,avg=4.10us, UntilizeCodegenDeviceOperation:n=33,avg=2.52us]
+CELL 32 128 4 stock : per_iter=24.1us [SliceDeviceOperation:n=66,avg=0.81us, TopKDeviceOperation:n=33,avg=22.45us]
+DONE

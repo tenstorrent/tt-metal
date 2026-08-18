@@ -1,0 +1,9 @@
+CELL rows=160 W=102400 k=2048 seg : per_iter=598.7us [ConcatDeviceOperation:n=23,avg=8.8us, TopkLargeIndicesDeviceOperation:n=46,avg=295.0us]
+CELL rows=160 W=131072 k=2048 seg : per_iter=752.1us [ConcatDeviceOperation:n=23,avg=8.7us, TopkLargeIndicesDeviceOperation:n=46,avg=371.7us]
+CELL rows=160 W=262144 k=2048 seg : per_iter=1480.1us [ConcatDeviceOperation:n=23,avg=8.7us, TopkLargeIndicesDeviceOperation:n=46,avg=735.7us]
+CELL rows=160 W=524288 k=2048 seg : per_iter=2932.1us [ConcatDeviceOperation:n=13,avg=8.6us, TopkLargeIndicesDeviceOperation:n=26,avg=1461.7us]
+CELL rows=160 W=1048576 k=2048 seg : per_iter=5836.6us [ConcatDeviceOperation:n=13,avg=8.6us, TopkLargeIndicesDeviceOperation:n=26,avg=2914.0us]
+CELL rows=160 W=524288 k=1536 seg : per_iter=2928.7us [ConcatDeviceOperation:n=13,avg=6.2us, TopkLargeIndicesDeviceOperation:n=26,avg=1461.2us]
+CELL rows=640 W=524288 k=1536 seg : per_iter=10987.3us [TopkLargeIndicesDeviceOperation:n=13,avg=10987.3us]
+CELL rows=640 W=51200 k=1536 seg : per_iter=1072.2us [TopkLargeIndicesDeviceOperation:n=23,avg=1072.2us]
+SWEEP_DONE seg

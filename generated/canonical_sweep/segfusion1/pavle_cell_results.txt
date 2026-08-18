@@ -1,0 +1,2 @@
+PAVLE_CELL rows=160 buf=1M valid=512k k=2048 ours: per_iter=2932.2us [ConcatDeviceOperation:n=13,avg=8.6us, TopkLargeIndicesDeviceOperation:n=26,avg=1461.8us]
+DONE

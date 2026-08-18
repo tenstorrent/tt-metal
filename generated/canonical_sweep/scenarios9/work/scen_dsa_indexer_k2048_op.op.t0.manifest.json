@@ -1,0 +1,37 @@
+{
+ "arch": "blackhole",
+ "iters": 5,
+ "cells": [
+  {
+   "id": "scen_dsa_indexer_k2048_op",
+   "scenario": "dsa_indexer_k2048",
+   "layer": "op",
+   "op": "topk_large_indices",
+   "num_slices": null,
+   "batch": 160,
+   "n": 65536,
+   "k": 2048,
+   "dtype": "bf16",
+   "dim": -1,
+   "anchor": "model_scenario",
+   "valid_length": null,
+   "return_values": false,
+   "apriori": "",
+   "expected_factory": "",
+   "composite": false,
+   "strict": true,
+   "seed": 2054363136,
+   "iters": 5,
+   "warmup": 3,
+   "est_ms": null,
+   "arm": null,
+   "status": "RAN",
+   "error": "",
+   "phase": "measure",
+   "max_abs_err": 0.0,
+   "wrong": false,
+   "wrong_detail": ""
+  }
+ ],
+ "child_script_md5": "22fdeab146b84f01a54b1d1f52d84d3d"
+}

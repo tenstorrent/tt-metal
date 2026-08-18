@@ -1,0 +1,9 @@
+CELL 32 4096 32 routed : per_iter=17.4us [TilizeDeviceOperation:n=66,avg=1.65us, TopkLargeIndicesDeviceOperation:n=33,avg=10.07us, TypecastDeviceOperation:n=33,avg=1.21us, UntilizeCodegenDeviceOperation:n=33,avg=2.81us]
+CELL 32 4096 32 stock : per_iter=661.5us [TopKDeviceOperation:n=33,avg=661.53us]
+CELL 32 4096 64 routed : per_iter=18.4us [TilizeDeviceOperation:n=66,avg=1.90us, TopkLargeIndicesDeviceOperation:n=33,avg=10.11us, TypecastDeviceOperation:n=33,avg=1.68us, UntilizeCodegenDeviceOperation:n=33,avg=2.82us]
+CELL 32 4096 64 stock : per_iter=1288.3us [TopKDeviceOperation:n=33,avg=1288.27us]
+CELL 32 128 96 routed : per_iter=6.9us [TopkLargeIndicesDeviceOperation:n=33,avg=4.66us, UntilizeCodegenDeviceOperation:n=33,avg=2.20us]
+CELL 32 128 96 stock : per_iter=40.7us [TopKDeviceOperation:n=33,avg=40.68us]
+CELL 32 512 10 routed : per_iter=8.0us [SliceDeviceOperation:n=66,avg=0.82us, TopkLargeIndicesDeviceOperation:n=33,avg=4.10us, UntilizeCodegenDeviceOperation:n=33,avg=2.29us]
+CELL 32 512 10 stock : per_iter=87.9us [SliceDeviceOperation:n=66,avg=0.81us, TopKDeviceOperation:n=33,avg=86.25us]
+DONE
