@@ -200,6 +200,50 @@ Also note the release workflow runs the **full 198-document** GPQA Diamond set, 
 10-document CI subset, so a release eval on this hardware is roughly a 15-hour job at the
 measured ~4.7 min/document.
 
+## CI coverage for this model: what has run, what has not
+
+Checked against agentic-research `bh-model-status:reports/bh-model-evals.md` (generated, so treated
+as a checklist rather than ground truth). That report already consumes this directory, and its
+Qwen3.8-27B row is stale in one respect: it says "no serving run with 3.8 weights yet", which is no
+longer true.
+
+| CI check | status here |
+|---|---|
+| Layer PCC + AIME24 on the target weights | **done** — 0.999868 / 0.997952, top-1 95/100, top-5 100/100 |
+| Eval — GPQA, 10-doc subset | **done** — 0.70, but inflated; see the text-quality section |
+| Eval — GPQA, full 198 docs at concurrency 32 | **run, invalid** — 0.0253, because 193/198 responses came back empty |
+| Eval — GPQA, full 198 docs at concurrency 1 | in progress (~7.3 min/doc measured, so ~24 h) |
+| Graded benchmark point (isl 128 / osl 128 / c1, 8 prompts) | in progress |
+| Benchmark sweep, long isl → 65,535 | in progress (same run) |
+| Benchmark at concurrency 32 | to do — expected to fail, see below |
+| Spec tests / API conformance | to do |
+| Full release workflow end to end | not yet green; five branch blockers above |
+| Eval — IFEval | n/a — this model's config has one task |
+
+**Ordering matters and cost the first attempt a day.** The release workflow runs evals *before*
+benchmarks, so a full-set eval at concurrency 1 delays every benchmark by ~24 h. Running
+`--workflow benchmarks` and `--workflow spec_tests` separately first covers five checks in ~2 h.
+
+## ★ The concurrency-32 serving path is unusable on this implementation
+
+Measured, both from the same release workflow:
+
+| | concurrency 32 (spec value) | concurrency 1 (port's validated value) |
+|---|---|---|
+| decode | ~120 tok/s aggregate in bursts, then **0.0 tok/s with 31 reqs running** | **17.9 tok/s steady**, no stalls |
+| outcome | `Out of Memory: 402653184 B`, engine core dead | clean |
+| eval effect | **193/198 responses empty** → `exact_match` 0.0253 | pending |
+
+17.9 tok/s matches the 3.6 port's own recorded `vllm_benchmark.json` (itl p50 17.908), so 3.8 tracks
+3.6 exactly on serving decode. Against the benchmark target `tput_user 41` that is 2.3x short — but
+that target is self-flagged ASSUMED and extrapolated from Qwen3-32B on an 8-device t3k.
+
+**The dangerous part is how the failure presents.** Because unclosed `</think>` output lands in
+`message.reasoning` while lm-eval reads `message.content`, a serving collapse does not surface as an
+error — it surfaces as a plausible low score. A CI run of this configuration would have reported
+"Qwen3.8-27B scores 2.5% on GPQA" instead of "serving failed at concurrency 32". Any release gate on
+this model should assert non-empty response rate before trusting an accuracy number.
+
 ## Open decisions (not measurements)
 
 - Should the vLLM registration change be upstreamed? It decides which implementation owns
