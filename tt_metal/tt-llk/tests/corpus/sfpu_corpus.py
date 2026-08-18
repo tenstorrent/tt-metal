@@ -436,6 +436,10 @@ AUDITED_SEEDS = {
         semantic_cpp_class="typed_wrapper_needed",
         semantic_cpp_blocker="Coverage-parity mapping only: the production header carries explicit architectural markers (raw_tti=1, replay=0, mop=0), so a fresh semantic-C++ conversion still needs typed boundary work; the recorded node(s) exercise the production header under the compiler path either way.",
     ),
+    "legacy__ckernel_sfpu_rsqrt_compat": dict(
+        semantic_cpp_class="ready",
+        semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
+    ),
     "legacy__ckernel_sfpu_silu": dict(
         semantic_cpp_class="ready",
         semantic_cpp_blocker="Production body is pure typed SFPI (raw_tti=0, replay=0, mop=0): the compiler path compiles the production header itself, so the hand-vs-generated 2x2 collapses to the OFF/ON flag axis; mapped for coverage parity through the recorded exact node(s). No fresh selector exists yet and no boundary audit beyond the mapping chain has been performed.",
@@ -869,6 +873,11 @@ AUDITED_MAPPINGS = {
     "legacy__ckernel_sfpu_rounding_ops": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Ceil-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Floor-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Frac-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Trunc-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Round-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
         notes="Audited production-header mapping (coverage parity lane): _calculate_ceil_ (SfpuType::ceil); _calculate_floor_ (SfpuType::floor); _calculate_frac_ (SfpuType::frac); _calculate_round_ (SfpuType::round); _calculate_trunc_ (SfpuType::trunc) — dispatched by tests/helpers/include/sfpu_operations.h; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+    ),
+    "legacy__ckernel_sfpu_rsqrt_compat": dict(
+        functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:RsqrtCompat-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]],test_sfpu_unary.py::test_eltwise_unary_sfpu_edges[formats:Float16_b->Float16_b-mathop:RsqrtCompat-dest_acc:No-input_dimensions:[64, 64]]",
+        perf_modules="perf_eltwise_unary_sfpu.py::test_perf_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:RsqrtCompat-dest_acc:No-loop_factor:16-iterations:32-fast_mode:No-stable_sort:No-input_dimensions:[128, 64]]",
+        notes="Audited production-header mapping (Lane BK 2026-08-18 unmapped-rescue, the binop_with_unary incident class — the coverage-parity B-TRANSITIVE label was stale): a DEDICATED functional surface exists — MathOperation.RsqrtCompat (SfpuType::rsqrt_compat, sfpu_operations.h:1615) routes calculate_rsqrt<..., true /* legacy_compat */> into this header's _calculate_rsqrt_compat_ body, with registered domain + edge specs and golden; the RsqrtCompat perf node exists in the standard unary perf sweep. Exact BH-collected nodes recorded; no fresh selector, the production typed body is the compiler-path body.",
     ),
     "legacy__ckernel_sfpu_silu": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float16_b->Float16_b-approx_mode:No-mathop:Silu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
