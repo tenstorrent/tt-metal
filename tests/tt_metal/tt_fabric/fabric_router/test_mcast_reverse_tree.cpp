@@ -2,13 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The §5.7.1 arborescence gate over every express fixture, for every root on both axes.
+// Reverse-tree multicast: tree construction, the arborescence gate over every root on both axes,
+// packing, the encode pass, and the per-chip L1 embed.
 //
-// This is the precondition the whole indexed-multicast representation rests on, and it is
-// all-or-nothing by design: V1 runs one encoder, so a single failing root rejects the mesh with no
-// fallback. Checking it is cheap and machine-free -- MeshGraph(ClusterType, path) and
-// ExpressRingTopology::next_row need no cluster, no discovery, and no matching host world -- so the
-// multi-host shapes are covered here on one machine rather than only on a four-host run.
+// Machine-free: MeshGraph and ExpressRingTopology need no cluster, so multi-host mesh shapes are
+// covered here on a single machine.
 //
 // Rows are axis coordinates, not chip ids: chip = row * 4 + col.
 
@@ -40,16 +38,14 @@ namespace {
 
 MeshGraph load(const std::string& fixture) {
     // A local RunTimeOptions rather than MetalContext::instance(): the context eagerly builds a
-    // Cluster, which throws when no chips are present and would make these checks require a machine
-    // for nothing but a path lookup.
+    // Cluster, which throws when no chips are present.
     const tt::llrt::RunTimeOptions rtoptions;
     const auto path =
         std::filesystem::path(rtoptions.get_root_dir()) / "tests/tt_metal/tt_fabric/custom_mesh_descriptors" / fixture;
     return MeshGraph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path.string());
 }
 
-// Recompute union(R(root, dst)) straight from next_row, independently of the generator, so the tree
-// is checked against the routes it claims to represent rather than against its own bookkeeping.
+// union(R(root, dst)) recomputed from next_row, independently of the generator.
 std::map<int, std::pair<int, RoutingDirection>> canonical_edges(
     const MeshGraph& mesh_graph, MeshId mesh_id, const ExpressRingTopology& topo, int root) {
     std::map<int, std::pair<int, RoutingDirection>> by_child;
@@ -69,8 +65,8 @@ std::map<int, std::pair<int, RoutingDirection>> canonical_edges(
     return by_child;
 }
 
-// union over the requested targets of the actions each row drives on the canonical route to them,
-// walked straight from next_row. This is the definition the prune has to reproduce.
+// The actions each row drives on the canonical routes to the requested targets, walked from
+// next_row. This is the definition the prune has to reproduce.
 std::vector<std::uint8_t> expected_actions(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
@@ -93,8 +89,7 @@ std::vector<std::uint8_t> expected_actions(
     return want;
 }
 
-// The action bit a packed 2-bit output code stands for, resolved independently of the packer so the
-// round trip checks the encoding rather than restating it.
+// The action bit a packed 2-bit output code stands for, resolved independently of the packer.
 std::uint8_t expected_action_for_code(int axis_dim, std::uint8_t code) {
     if (axis_dim == 0) {
         switch (code) {
@@ -138,9 +133,8 @@ void check_prune(
     }
 }
 
-// Every singleton, every pair, the full set, and deterministic pseudo-random subsets. Singletons pin
-// each individual route, pairs are where a wrong `needed` propagation first shows up as a branch that
-// is taken for one target and lost for the other, and the full set exercises maximum fan-out.
+// Every singleton, every pair, the full set, and deterministic pseudo-random subsets. Pairs are
+// where a wrong `needed` propagation shows up: a branch taken for one target and lost for the other.
 void check_prune_over_target_sets(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
@@ -201,16 +195,14 @@ void check_axis(const MeshGraph& mesh_graph, const ExpressRingTopology& topo, co
             EXPECT_EQ(edge.parent_output, it->second.second) << where << ": command into row " << edge.child;
         }
 
-        // Every row present once as a child, and never the root: indegree 1 everywhere but the root.
+        // Indegree 1 everywhere but the root.
         std::set<int> children;
         for (const auto& edge : tree.edges) {
             EXPECT_TRUE(children.insert(edge.child).second) << where << ": row " << edge.child << " has two parents";
             EXPECT_NE(edge.child, tree.root) << where << ": the root has a parent";
         }
 
-        // Descendants before ancestors -- the ordering the worker's single reverse pass depends on. An
-        // edge hanging off row r must be visited before the edge that enters r, or the propagation
-        // that marks r needed would run after r's own edge had already been read.
+        // Descendants before ancestors: the ordering the worker's single reverse pass depends on.
         std::map<int, std::size_t> edge_index_by_child;
         for (std::size_t i = 0; i < tree.edges.size(); i++) {
             edge_index_by_child[tree.edges[i].child] = i;
@@ -253,21 +245,21 @@ void check_fixture(const std::string& fixture) {
     ASSERT_TRUE(express.has_value()) << fixture << ": derived no express rings";
     check_axis(mesh_graph, *express, fixture + " Y");
 
-    // X is the ordinary four-column ring: E/W only, no chords. Cheap, and it is part of the same
-    // mesh-wide gate, since a multicast encodes both axes.
+    // X is the ordinary four-column ring: E/W only, no chords. A multicast encodes both axes, so
+    // both are gated.
     const auto ordinary_x = derive_ordinary_ring_topology(mesh_graph, MeshId{0}, 1);
     ASSERT_TRUE(ordinary_x.has_value()) << fixture << ": X dimension does not close into a ring";
     check_axis(mesh_graph, *ordinary_x, fixture + " X");
 }
 
-// The packing order obligation is worth a negative test: it is the one §5.7.1 requirement whose
-// violation is silent on device, dropping branches from the encoded map rather than faulting.
+// Packing an ancestor before its descendant is silent on device, dropping branches from the encoded
+// map rather than faulting, so the packer must reject it.
 TEST(McastReverseTreeTest, PackingRejectsAncestorBeforeDescendant) {
     McastReverseTree tree;
     tree.root = 0;
     tree.axis_dim = 0;
     tree.axis_len = 3;
-    // 0 -> 1 -> 2, serialized root-first, which is exactly backwards.
+    // 0 -> 1 -> 2, serialized root-first, which is backwards.
     tree.edges = {
         McastTreeEdge{1, 0, RoutingDirection::S},
         McastTreeEdge{2, 1, RoutingDirection::S},
@@ -281,9 +273,8 @@ TEST(McastReverseTreeTest, PackingRejectsAncestorBeforeDescendant) {
     EXPECT_TRUE(pack_mcast_reverse_tree(tree, &failure).has_value()) << failure;
 }
 
-// The embed is a host<->device layout contract, so what matters is not only that the right tree lands
-// but that it lands where the loader will look and nowhere else. A sentinel-filled table makes both
-// halves of that checkable: the written span and, just as importantly, the untouched one.
+// The host/device layout contract: the trees land at the offsets the loader reads, and nothing
+// outside that span is touched. The sentinel fill is what makes the untouched region checkable.
 void check_embed(const std::string& fixture) {
     const auto mesh_graph = load(fixture);
     const auto y_topo = derive_express_ring_topology(mesh_graph, MeshId{0});
@@ -323,8 +314,8 @@ void check_embed(const std::string& fixture) {
                 ASSERT_EQ(table[i], kSentinel) << where << ": wrote outside the tree region at byte " << i;
             }
 
-            // The embedded words must be the same artifact the generator and packer produce standalone,
-            // for this chip's own row and column and no other.
+            // The embedded words must match what the generator and packer produce standalone, for
+            // this chip's own row and column and no other.
             const auto y_packed = pack_mcast_reverse_tree(
                 *build_mcast_reverse_tree(mesh_graph, MeshId{0}, *y_topo, static_cast<int>(my_y)));
             const auto x_packed = pack_mcast_reverse_tree(
@@ -345,9 +336,7 @@ void check_embed(const std::string& fixture) {
     }
 }
 
-// The rectangle the client asked for, as row/column target sets. Shared with the encoder by
-// definition rather than by implementation: what the golden below checks independently is the
-// routing, which is the part a tree can get wrong.
+// The rectangle the client asked for, as row/column target sets.
 std::vector<bool> target_rows(int axis_len, int root, int before_hops, int after_hops) {
     std::vector<bool> targets(axis_len, false);
     if (before_hops == 0 && after_hops == 0) {
@@ -363,12 +352,9 @@ std::vector<bool> target_rows(int axis_len, int root, int before_hops, int after
     return targets;
 }
 
-// Golden §5.6 map: trace the canonical route to every target and OR the actions, then apply the §5.5
-// teeth and delivery rules. This walks routes forward and never touches a reverse tree, so agreeing
-// with the device encoder means the tree really does stand for the routes.
-//
-// Multicast is where a wrong map is most expensive -- it does not fail, it delivers to the wrong set
-// of chips -- so this checks the encoder the device actually runs, not a host restatement of it.
+// Golden map: trace the canonical route to every target and OR the actions, then copy the X-root
+// teeth and local delivery onto the target rows. The golden walks routes forward and never touches a
+// reverse tree, so agreeing with the encoder means the tree does stand for the routes.
 void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
     const auto mesh_graph = load(fixture);
     const auto y_topo = derive_express_ring_topology(mesh_graph, MeshId{0});
@@ -381,8 +367,8 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
     const auto y_size = static_cast<std::uint32_t>(y_len);
     const auto x_size = static_cast<std::uint32_t>(x_len);
 
-    // Extents worth covering: none, one row either way, a two-sided range, a one-sided reach far
-    // enough to cross a ring boundary, and a range spanning most of the axis.
+    // None, one row either way, a two-sided range, a one-sided reach far enough to cross a ring
+    // boundary, and a range spanning most of the axis.
     const std::vector<std::pair<int, int>> y_extents = {{0, 0}, {1, 0}, {0, 1}, {2, 2}, {y_len / 2, 0}, {0, y_len / 2}};
     const std::vector<std::pair<int, int>> x_extents = {{0, 0}, {1, 0}, {0, 1}, {1, x_len - 2}};
 
@@ -446,14 +432,10 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
                     if (root_outputs != 0 && (root_outputs & (root_outputs - 1)) != 0) {
                         multi_output_roots++;
                     }
-                    // §7.3.1 states N/S/Z source fanout fits the existing four-slot connection
-                    // manager, which is why multi-inject needs no transport capacity work. If a root
-                    // ever wanted more outputs than there are slots, that conclusion would be wrong.
+                    // Source fanout must fit the four-slot connection manager.
                     EXPECT_LE(std::popcount(static_cast<unsigned>(root_outputs)), 4)
                         << where << ": root wants more outputs than a connection manager holds";
-                    // §7.3.1: a root with no eth outputs is legal and means deliver locally only.
-                    // A rectangle of nothing but the anchor is exactly that case, and the producer
-                    // must not treat it as an error.
+                    // A root with no eth outputs is legal and means deliver locally only.
                     if (n_hops == 0 && s_hops == 0 && e_hops == 0 && w_hops == 0) {
                         EXPECT_EQ(root_outputs, 0) << where << ": local-only mcast must leave no eth output";
                         EXPECT_NE(got[root_y] & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER, 0)
@@ -464,10 +446,9 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
         }
     }
 
-    // A one-hop range reaches an adjacent row or column, which no canonical route should need a chord
-    // to do, so its root should leave on exactly one edge from every source. The express multicast
-    // YAML relies on that: those are the ranges the test infra can drive before source multi-inject
-    // exists, and a failure here is how we find out on the host instead of on the cluster.
+    // A one-hop range reaches an adjacent row or column, which no canonical route needs a chord for,
+    // so its root leaves on exactly one edge. These are the ranges the express multicast YAML can
+    // drive before source multi-inject exists.
     for (int root_y = 0; root_y < y_len; root_y++) {
         for (int root_x = 0; root_x < x_len; root_x++) {
             std::vector<std::uint8_t> table(IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES, 0);
@@ -495,39 +476,20 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
         }
     }
 
-    // §7.3.1 claims multi-output roots are ordinary on an express axis rather than a corner case, and
-    // that claim is the whole reason express multicast still needs source multi-inject. If it were
-    // false here, the blocker would not be real and the plan would be wrong.
+    // Multi-output roots are ordinary on an express axis, which is why express multicast needs
+    // source multi-inject.
     if (expect_multi_output_roots) {
         EXPECT_GT(multi_output_roots, 0) << fixture << ": expected express routing to produce multi-output roots";
     }
 }
 
-struct ChordRange {
-    int n_hops = 0;
-    int s_hops = 0;
-    std::vector<int> roots;  // single-output roots whose map drives a chord
-    int multi_output_roots = 0;
-};
-
-// Which ranges exercise a chord on hardware today, before source multi-inject exists.
-//
-// A one-hop range never routes over a chord -- reaching an adjacent row needs no shortcut -- so the
-// ranges the express multicast YAML can currently drive prove the codec end to end without ever
-// crossing an express edge. That gap is narrower than it looks. A multi-output root is forced only
-// when the root is itself a chord tail whose range reaches that chord's head; a root that is not a
-// tail can leave on a single edge and have a router further along take the chord, because transit
-// routers clone through the source RX and need no multi-inject at all.
-//
-// So the useful question is not "which extents are single-output everywhere" -- for any extent wide
-// enough to reach a chord head the tail roots are multi-output, so the answer there is none -- but
-// "for a given extent, which roots are single-output and still drive a chord". Those roots are
-// exactly the senders the YAML can list, one entry per device, and they are what turns the express
-// multicast test from a codec smoke test into express coverage.
+// Ranges that route over a chord from a single-output root: the ranges the express multicast YAML
+// can drive before source multi-inject exists. A root only needs multi-inject when it is itself a
+// chord tail whose range reaches that chord's head; a root further from the chord leaves on a
+// single edge and lets a transit router take it.
 //
 // The column is not swept: with no E/W extent the X map is local delivery only and contributes no
-// teeth, so the Y map depends on the root row alone and every column of a reported row behaves the
-// same.
+// teeth, so the Y map depends on the root row alone.
 void check_chord_ranges(const std::string& fixture, bool expect_candidates) {
     const auto mesh_graph = load(fixture);
     const auto y_topo = derive_express_ring_topology(mesh_graph, MeshId{0});
@@ -548,10 +510,9 @@ void check_chord_ranges(const std::string& fixture, bool expect_candidates) {
             << failure;
     }
 
-    std::vector<ChordRange> found;
+    int candidates = 0;
     for (int n_hops = 0; n_hops < y_len; n_hops++) {
         for (int s_hops = 0; n_hops + s_hops < y_len; s_hops++) {
-            ChordRange range{n_hops, s_hops, {}, 0};
             for (int root_y = 0; root_y < y_len; root_y++) {
                 std::vector<std::uint8_t> got(y_size + x_size, 0);
                 encode_indexed_mcast_maps(
@@ -567,35 +528,26 @@ void check_chord_ranges(const std::string& fixture, bool expect_candidates) {
                     0);
 
                 const std::uint8_t outputs = got[root_y] & IndexedMeshRoutingFields::ACTION_ETH_MASK;
-                if (std::popcount(static_cast<unsigned>(outputs)) > 1) {
-                    range.multi_output_roots++;
-                    continue;
-                }
                 if (std::popcount(static_cast<unsigned>(outputs)) != 1) {
                     continue;
                 }
                 for (int y = 0; y < y_len; y++) {
                     if ((got[y] & IndexedMeshRoutingFields::ACTION_Z) != 0) {
-                        range.roots.push_back(root_y);
+                        candidates++;
                         break;
                     }
                 }
-            }
-            if (!range.roots.empty()) {
-                found.push_back(std::move(range));
             }
         }
     }
 
     if (expect_candidates) {
-        EXPECT_FALSE(found.empty()) << fixture << ": no range routes over a chord from a single-output root, so"
-                                    << " express multicast coverage really does have to wait for multi-inject";
+        EXPECT_GT(candidates, 0) << fixture << ": no range routes over a chord from a single-output root, so express"
+                                 << " multicast coverage has to wait for source multi-inject";
     }
 }
 
-// 32x4 has multi-output roots, so it certainly has chords to reach; whether any of them sit
-// downstream of a single-output root is the question, and an empty result would be a real finding.
-// 8x4 is reported without an expectation because its express pattern is coarser and may admit none.
+// 8x4 carries no expectation: its express pattern is coarser and may admit no such range.
 TEST(McastReverseTreeTest, ChordRanges8x4) {
     check_chord_ranges("express_links_8x4_mesh_graph_descriptor.textproto", /*expect_candidates=*/false);
 }
@@ -603,19 +555,13 @@ TEST(McastReverseTreeTest, ChordRanges32x4) {
     check_chord_ranges("express_links_32x4_mesh_graph_descriptor.textproto", /*expect_candidates=*/true);
 }
 
-// Whether an all-to-all is reachable, asked without hardware: every chip roots a range covering the
-// whole mesh, so the question is how many outputs a full-extent root has and therefore how many
-// copies the sender must inject (§7.3.1).
+// Every chip roots a range covering the whole mesh, bounding how many copies a sender must inject
+// for an all-to-all.
 //
-// The root action is route_buffer_y[root_y] alone. It is NOT that OR'd with route_buffer_x[root_x],
-// which is the mistake this test was first written with. §5.5 copies the X-root E/W teeth onto the
-// target rows, and §7.3.1 records that a range with a Y extent has target rows excluding the source
-// row -- so the source never picks up the teeth, and its outputs are a subset of N/S/Z. Reading the X
-// map here invents outputs the source does not have and reports five where the contract allows three.
-//
-// An X-only range is the other case: with no Y extent the source row is itself a target, so the teeth
-// do land on it and the action is a subset of E/W. Either way route_buffer_y[root_y] is the whole
-// answer, which is why mcast_root_output_directions reads only that byte.
+// The root action is route_buffer_y[root_y] alone, not that OR'd with route_buffer_x[root_x]. The
+// X-root E/W teeth are copied onto the target rows, and a range with a Y extent excludes the source
+// row, so the source never picks up the teeth and its outputs are a subset of N/S/Z. (An X-only
+// range is the other case: the source row is itself a target, so the action is a subset of E/W.)
 void check_full_extent_roots(const std::string& fixture) {
     const auto mesh_graph = load(fixture);
     const auto y_topo = derive_express_ring_topology(mesh_graph, MeshId{0});
@@ -628,8 +574,7 @@ void check_full_extent_roots(const std::string& fixture) {
     const auto y_size = static_cast<std::uint32_t>(y_len);
     const auto x_size = static_cast<std::uint32_t>(x_len);
 
-    // The whole mesh minus the source: split the axis so N and S together cover every other row, and
-    // likewise E and W. This is the widest range a client can ask for.
+    // The whole mesh minus the source: N and S together cover every other row, likewise E and W.
     const int n_hops = y_len / 2;
     const int s_hops = y_len - 1 - n_hops;
     const int e_hops = x_len / 2;
@@ -659,15 +604,14 @@ void check_full_extent_roots(const std::string& fixture) {
             const std::uint8_t outputs = got[root_y] & IndexedMeshRoutingFields::ACTION_ETH_MASK;
             const int count = std::popcount(static_cast<unsigned>(outputs));
 
-            // §7.3.1: with a Y extent the source row is not a target row, so no teeth reach it. A
-            // root that sets E or W here means §5.5's copy landed on the source row after all, and
-            // the sender would need a connection the contract says it never needs.
+            // With a Y extent the source row is not a target row, so no teeth reach it.
             const std::uint8_t teeth =
                 outputs & (IndexedMeshRoutingFields::ACTION_EAST | IndexedMeshRoutingFields::ACTION_WEST);
             EXPECT_EQ(teeth, 0) << fixture << ": root (" << root_y << "," << root_x
-                                << ") has an E/W output on a range with a Y extent, which §7.3.1 excludes";
+                                << ") has an E/W output on a range with a Y extent, where the source row is not a"
+                                << " target";
             ASSERT_LE(count, 3) << fixture << ": root (" << root_y << "," << root_x << ") has " << count
-                                << " outputs; §7.3.1 bounds a Y-extent root to the subset N/S/Z";
+                                << " outputs; a root on a range with a Y extent is bounded to the subset N/S/Z";
         }
     }
 }
@@ -689,8 +633,8 @@ TEST(McastReverseTreeTest, Encode32x4) {
 TEST(McastReverseTreeTest, Embed8x4) { check_embed("express_links_8x4_mesh_graph_descriptor.textproto"); }
 TEST(McastReverseTreeTest, Embed32x4) { check_embed("express_links_32x4_mesh_graph_descriptor.textproto"); }
 
-// [64,4] is the documented growth boundary, and the embed must say so rather than run off the slot.
-// The fit check reads only the axis lengths, so a bare topology is enough to reach it.
+// [64,4] is the documented growth boundary; the embed must reject it rather than run off the union
+// slot. The fit check reads only the axis lengths, so a bare topology is enough to reach it.
 TEST(McastReverseTreeTest, EmbedRejectsShapeThatDoesNotFit) {
     const auto mesh_graph = load("express_links_32x4_mesh_graph_descriptor.textproto");
     ExpressRingTopology y_topo;
