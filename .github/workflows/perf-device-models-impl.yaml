@@ -16,6 +16,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      # No longer consumed by any matrix entry — the only runner label built from it
+      # belonged to the "N300 WH B0 not yet ported" bare-metal group, removed when the
+      # tier-3 models migrated to the Models CI. Kept declared because pipeline-select
+      # still passes it.
       extra-tag:
         required: false
         type: string
@@ -45,15 +49,8 @@ jobs:
 
           # Initialize models JSON with all false
           models_json='{
-            "distilbert": false,
-            "vgg": false,
-            "bert-tiny": false,
-            "squeezebert": false,
-            "resnet50": false,
-            "metal-bert-large-11": false,
             "vit": false,
             "panoptic-deeplab": false,
-            "non-civ2": false,
             "ops-perf-tests": false
           }'
 
@@ -121,15 +118,13 @@ jobs:
 
           # Define which models belong to each matrix group
           group_models='{
-            "N300 WH B0 not yet ported": ["non-civ2"],
-            "N300 WH B0 Set 1": ["distilbert", "vgg", "bert-tiny", "squeezebert", "resnet50", "vit"],
-            "N300 WH B0 Set 2": ["metal-bert-large-11", "ops-perf-tests"],
-            "P150 BH": ["resnet50", "vit", "panoptic-deeplab", "ops-perf-tests"]
+            "N300 WH B0 Set 1": ["vit"],
+            "N300 WH B0 Set 2": ["ops-perf-tests"],
+            "P150 BH": ["vit", "panoptic-deeplab", "ops-perf-tests"]
           }'
 
           # Original matrix definition
           original_matrix='[
-            {"name": "N300 WH B0 not yet ported", "arch": "wormhole_b0", "runs-on": ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], "machine-type": "bare_metal", "civ2-compatible": false, "timeout": 30, "job-set1": false},
             {"name": "N300 WH B0 Set 1", "arch": "wormhole_b0", "runs-on": ["tt-ubuntu-2204-n300-stable"], "machine-type": "CIv2", "civ2-compatible": true, "timeout": 120, "job-set1": true},
             {"name": "N300 WH B0 Set 2", "arch": "wormhole_b0", "runs-on": ["tt-ubuntu-2204-n300-stable"], "machine-type": "CIv2", "civ2-compatible": true, "timeout": 120, "job-set1": false},
             {"name": "P150 BH", "arch": "blackhole", "runs-on": ["tt-ubuntu-2204-p150b-stable"], "machine-type": "CIv2", "civ2-compatible": true, "timeout": 120, "job-blackhole-set1": true}
@@ -206,71 +201,6 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: non-civ2 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        env:
-          HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
-        with:
-          device_perf_model_name: "non-civ2_tests"
-          commands: |
-            pytest models/demos/vision/classification/mnist/tests -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && !matrix.test-info.civ2-compatible && fromJSON(needs.define-models.outputs.models-to-run)['non-civ2'] }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
-      - name: distilbert tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "distilbert"
-          commands: |
-            pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 && fromJSON(needs.define-models.outputs.models-to-run)['distilbert'] }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
-      - name: vgg tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "vgg"
-          commands: |
-            pytest models/demos/vision/classification/vgg/tests/ -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 && fromJSON(needs.define-models.outputs.models-to-run)['vgg'] }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
-      - name: bert_tiny tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "bert_tiny"
-          commands: |
-            pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 && fromJSON(needs.define-models.outputs.models-to-run)['bert-tiny'] }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
-      - name: squeezebert tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "squeezebert"
-          commands: |
-            pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 && fromJSON(needs.define-models.outputs.models-to-run)['squeezebert'] }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
-      - name: resnet50 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "resnet50"
-          commands: |
-            pytest models/demos/vision/classification/resnet50/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) && fromJSON(needs.define-models.outputs.models-to-run)['resnet50'] }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
-      - name: metal_BERT_large_11 tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
-        with:
-          device_perf_model_name: "metal_BERT_large_11"
-          commands: |
-            # pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 && !matrix.test-info.job-blackhole-set1 && fromJSON(needs.define-models.outputs.models-to-run)['metal-bert-large-11'] }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
       - name: vit tests
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:

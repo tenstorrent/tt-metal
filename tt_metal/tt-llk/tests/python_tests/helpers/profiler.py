@@ -11,7 +11,7 @@ import pandas as pd
 
 from .device_io import read_words_from_device
 from .llk_params import PerfRunType
-from .perf_schema import MARKER, MEAN, STD, stat_column, stat_prefix
+from .perf.schema import MARKER, MEAN, STD, stat_column, stat_prefix
 from .test_config import TestConfig
 
 

@@ -204,10 +204,10 @@ Same roles as the DSV3 names above:
 
 A large `PREFILL_*` family exists in this module
 (`PREFILL_HF_MODEL`, `PREFILL_TTNN_CACHE`, `PREFILL_NUM_LAYERS`, `PREFILL_SP`/`PREFILL_TP`,
-`PREFILL_STANDALONE*`, `PREFILL_CHUNK_SIZE`, `PREFILL_MIGRATE_*`, `PREFILL_STRESS_*`,
+`PREFILL_STANDALONE_CHUNKED_*`, `PREFILL_CHUNK_SIZE`, `PREFILL_MIGRATE_*`, `PREFILL_STRESS_*`,
 `PREFILL_H2D_*`, `MIGRATION_DONE_FILE`, `DEEPSEEK_PREFILL_TRACE_DIR/PT`, etc.).
 
-These belong to the standalone multi-process prefill runner (`tt/runners/*`) and the
+These belong to the multi-process prefill runner (`tt/runners/*`) and the
 chunked/migration/stress tests — they are **not** read by `test_prefill_transformer.py`,
 so setting them here has no effect. Note the runner uses `PREFILL_TTNN_CACHE` /
 `PREFILL_HF_MODEL` while this test uses the `TT_DS_PREFILL_*` / `DEEPSEEK_V3_HF_MODEL`

@@ -40,6 +40,7 @@ from ...utils.fuse_loras import LoraSpec
 from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
+from ...utils.progress import Watchdog
 from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor
 from ...utils.video import Audio
@@ -203,6 +204,10 @@ class LTXPipeline:
     """
 
     HAS_UPSAMPLER: bool = False
+    # Set by subclasses that capture traces of their own after construction: the encode trace has to
+    # be the last one taken, or a later capture reclaims its activation region. See
+    # ``GemmaTokenizerEncoderPair.defer_trace_capture``.
+    DEFERS_ENCODE_TRACE: bool = False
 
     def __init__(
         self,
@@ -297,6 +302,8 @@ class LTXPipeline:
             mode=self.mode,
             dynamic_load=self.dynamic_load,
         )
+        if self._traced and not self.dynamic_load and self.DEFERS_ENCODE_TRACE:
+            self.gemma_encoder_pair.defer_trace_capture()
         self.gemma_path: str | None = self.gemma_encoder_pair.gemma_path
 
         self.transformer: LTXTransformerModel | None = None
@@ -341,6 +348,8 @@ class LTXPipeline:
             self.tt_vocoder_with_bwe.release_trace()
         if self.tt_mel_decoder is not None:
             self.tt_mel_decoder.release_trace()
+        if self.vae_decoder is not None:
+            self.vae_decoder.release_trace()
         self._trace_state.clear()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
@@ -759,7 +768,8 @@ class LTXPipeline:
             logger.info(f"Loading cached device embeddings from {cache_path}")
             return torch.load(cache_path, weights_only=False)
 
-        results = self.gemma_encoder_pair.encode(prompts)
+        with Watchdog("gemma text-encode"):
+            results = self.gemma_encoder_pair.encode(prompts)
 
         if use_cache:
             torch.save(results, cache_path)
@@ -810,7 +820,10 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
-        video = self.vae_decoder(latent_spatial, output_type=output_type)
+        with Watchdog("vae decode"):
+            video = self.vae_decoder(latent_spatial, output_type=output_type)
+        if output_type == "yuv":
+            return video  # already a numpy (T, H*3//2, W) uint8 yuv420p planar array
         if output_type != "float":
             return video.numpy()
         return video
@@ -1317,23 +1330,27 @@ class LTXPipeline:
         audio_spatial = audio_latent.reshape(1, audio_N, z, audio_latent.shape[2] // z).permute(0, 2, 1, 3).float()
 
         _time_stages = os.environ.get("LTX_TIME_STAGES") in ("1", "true", "True")
-        if _time_stages:
-            import time as _t
+        # Watchdog wraps both branches so the stall heartbeat fires during mel-VAE/vocoder regardless of
+        # the stage-timing toggle — LTX_TIME_STAGES=1 must not reintroduce the silent gap.
+        with Watchdog("audio decode (mel-VAE + vocoder)"):
+            if _time_stages:
+                import time as _t
 
-            ttnn.synchronize_device(self.mesh_device)
-            _t0 = _t.perf_counter()
-            mel = self._decode_mel(audio_spatial)
-            ttnn.synchronize_device(self.mesh_device)
-            _t_vae = _t.perf_counter()
-            waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
-            ttnn.synchronize_device(self.mesh_device)
-            _t_voc = _t.perf_counter()
-            logger.info(
-                f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms " f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"
-            )
-        else:
-            mel = self._decode_mel(audio_spatial)
-            waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
+                ttnn.synchronize_device(self.mesh_device)
+                _t0 = _t.perf_counter()
+                mel = self._decode_mel(audio_spatial)
+                ttnn.synchronize_device(self.mesh_device)
+                _t_vae = _t.perf_counter()
+                waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
+                ttnn.synchronize_device(self.mesh_device)
+                _t_voc = _t.perf_counter()
+                logger.info(
+                    f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms "
+                    f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"
+                )
+            else:
+                mel = self._decode_mel(audio_spatial)
+                waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
         sampling_rate = self.tt_vocoder_with_bwe.output_sampling_rate
 
         # Trim to video duration.

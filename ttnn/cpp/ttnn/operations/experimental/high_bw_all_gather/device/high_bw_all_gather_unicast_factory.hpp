@@ -19,6 +19,14 @@ struct HighBwAllGatherUnicastFactory {
         tt::tt_metal::KernelHandle writer_kernel_id{};
         tt::tt_metal::GlobalSemaphore ready_sem;
         tt::tt_metal::GlobalSemaphore data_valid_sem;
+        uint32_t num_links{};
+        uint32_t workers_per_direction{};
+        uint32_t num_devices{};
+        uint32_t device_idx{};
+        uint32_t forward_iterations{};
+        uint32_t backward_iterations{};
+        bool is_ring{};
+        bool ring_even_split{};
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
