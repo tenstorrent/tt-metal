@@ -139,7 +139,7 @@ void kernel_main() {
     constexpr uint32_t B_SENDS = get_compile_time_arg_val(1);  // this core injects B down its COLUMN
 
     // Two independent mcast families on one grid: the PerRow family (A) then the PerColumn family
-    // (B). Each self-parses a fixed 5-word CT block and a 4-word RT block, laid out back to back.
+    // (B). Each self-parses a fixed 6-word CT block and a 4-word RT block, laid out back to back.
     constexpr auto mc_a = McastArgs</*CT=*/2, /*RT=*/2>();  // RT 0,1 = a_addr,b_addr
     constexpr auto mc_b = McastArgs<mc_a.next_compile_time_args_offset(), mc_a.next_runtime_args_offset()>();
     constexpr uint32_t S = mc_b.next_compile_time_args_offset();
