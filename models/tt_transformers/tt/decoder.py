@@ -266,6 +266,7 @@ class TransformerBlock(LightweightModule):
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+        self._galaxy_stage_sync_diag("decoder_input")
 
         # Choose the correct rotation matrices based on the mode
         rot_mats = (
