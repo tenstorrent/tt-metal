@@ -96,6 +96,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 constexpr bool is_add = SFPU_BINARY_OPERATION == ckernel::BinaryOp::ADD;
                 call_add_sub_int_fresh_cpp<DstSync::SyncHalf, is_fp32_dest_acc_en, is_add, 8>(tile, tile + 1, tile, VectorMode::RC);
             }
+            else if constexpr (
+                FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::MUL_INT32 &&
+                static_cast<std::uint32_t>(formats.math) == static_cast<std::uint32_t>(DataFormat::Int32))
+            {
+                // Test-only fresh typed-C++ leg for the Int32 multiply production
+                // path (metal mul_int32 SFPLOADMACRO kernel).
+                call_mul_int_fresh_cpp<DstSync::SyncHalf, is_fp32_dest_acc_en, 8>(tile, tile + 1, tile, VectorMode::RC);
+            }
             else
             {
                 test_utils::call_binary_sfpu_operation<
