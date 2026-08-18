@@ -161,7 +161,11 @@ def test_matmul_noc_isolation(mesh_device):
         return {(ox + int(t[0]) % gx, oy + int(t[0]) // gx) for t in (a != b).nonzero()}
 
     def probe(build, blame, ox, oy, gx, gy):
-        """Run `iters` matmuls; return run-to-run drift {shard: {core: ndiff}} and vs-shard0 offsets."""
+        """Run `iters` matmuls; return run-to-run drift {shard: {core: [per-iter ndiff]}} and vs-shard0 offsets.
+
+        Per-iteration counts, not a sum: each entry is one iteration's diff against the iter-0 baseline, so a
+        drift of a few low-mantissa elements per run does not accumulate into a misleadingly large headline.
+        """
         x, w, pc, out_mc = build()
         r2r, vs0, baseline = {}, {}, None
         for i in range(iters):
@@ -183,7 +187,7 @@ def test_matmul_noc_isolation(mesh_device):
                         n = int((baseline[c] != cur[c]).sum())
                         per = r2r.setdefault(c, {})
                         for core in blame(ox, oy, gx, baseline[c], cur[c]):
-                            per[core] = per.get(core, 0) + n
+                            per.setdefault(core, []).append(n)
         ttnn.deallocate(x)
         ttnn.deallocate(w)
         return r2r, vs0
@@ -220,12 +224,13 @@ def test_matmul_noc_isolation(mesh_device):
             if not r2r:
                 logger.success(f"  [{name}] all 32 shards bit-exact run-to-run")
             for c, per_core in sorted(r2r.items()):
-                for core, ndiff in sorted(per_core.items()):
+                for core, counts in sorted(per_core.items()):
                     phys = mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(*core))
                     suspect = " <-- SUSPECT" if core == SUSPECT_CORE else ""
                     logger.warning(
                         f"  [{name}] DRIFT shard {c} (device id {ids[c]}), logical {core} -> "
-                        f"physical ({phys.x},{phys.y}): {ndiff} elements{suspect}"
+                        f"physical ({phys.x},{phys.y}): drifted {len(counts)}/{iters - 1} iters vs baseline, "
+                        f"per-iter diffs {counts} of 1024 (max {max(counts)}){suspect}"
                     )
             if vs0:
                 logger.info(f"  [{name}] stable vs-shard0 offsets on shards {sorted(vs0)} (fixed inter-chip, not ND)")
