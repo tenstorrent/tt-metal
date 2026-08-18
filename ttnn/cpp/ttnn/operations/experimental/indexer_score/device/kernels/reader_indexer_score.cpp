@@ -514,12 +514,21 @@ void kernel_main() {
                 if constexpr (fused_ring_enabled) {
                     const uint32_t band = gate->band(band_i);
                     span.set(group, band0 + band);
+                    // The program is compiled for the persistent K capacity, but kv_len is the
+                    // dispatch-time populated prefix. Do not push a stale full-K CB block for a
+                    // band entirely beyond that prefix: compute/writer take the same branch.
+                    if (span.k_tiles() == 0) {
+                        continue;
+                    }
                     gate->read_k(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
                 } else {
                     const uint32_t band = band_i;
                     const bool real_band = band < num_bands;
                     if (real_band) {
                         span.set(group, band0 + band);
+                        if (span.k_tiles() == 0) {
+                            continue;
+                        }
                         if constexpr (fuse_single && fused_stream_k) {
                             read_k_chunk_streaming(
                                 noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);

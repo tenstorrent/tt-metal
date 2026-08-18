@@ -480,6 +480,12 @@ void kernel_main() {
                 }
             }
             span.set(group, band0 + band);
+            // kv_len is runtime-variable while the work split is compiled for K capacity. Cells
+            // entirely past kv_len have no useful output and must not consume stale K tiles.
+            // Reader and writer make the identical skip, preserving the CB protocol.
+            if (span.k_tiles() == 0) {
+                continue;
+            }
             // Fused + streamed k waits incrementally inside the matmul (overlap the DRAM read); all other
             // paths wait the whole chunk here.
             if constexpr (!fuse_single || !fused_stream_k) {

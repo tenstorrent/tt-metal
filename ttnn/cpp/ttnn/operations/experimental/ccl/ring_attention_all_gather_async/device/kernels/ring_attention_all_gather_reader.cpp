@@ -35,6 +35,7 @@ constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is b
 constexpr bool fuse_op = get_compile_time_arg_val(10);
 constexpr bool has_metadata = get_compile_time_arg_val(11);
 constexpr uint32_t cb_meta_id = get_compile_time_arg_val(12);
+constexpr uint32_t num_links = get_compile_time_arg_val(13);
 
 // Prefetch: batch multiple packets of DRAM reads before a single barrier.
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
@@ -42,7 +43,7 @@ constexpr uint32_t cb_meta_id = get_compile_time_arg_val(12);
 constexpr uint32_t PREFETCH_PACKETS = 4;
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 13;
+    constexpr uint32_t page_size_base_idx = 14;
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<
         num_inputs,
@@ -70,6 +71,8 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_batch_head_count;
     std::array<uint32_t, num_inputs> input_tile_id_start;
     std::array<uint32_t, num_inputs> input_tile_id_end;
+    std::array<uint32_t, num_inputs> input_valid_pages;
+    std::array<uint32_t, num_inputs> worker_link;
     // Phase-1 input page base: nonzero only for single-slot gather (skip to the sliced input slot).
     // The slice is always emitted into output slot 0, whatever the output batch size.
     std::array<uint32_t, num_inputs> input_batch_base;
@@ -80,16 +83,22 @@ void kernel_main() {
         output_tensor_Wt[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         output_tensor_Ht[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_batch_head_count[input_idx] = get_arg_val<uint32_t>(arg_idx++);
-        input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
-        input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        (void)get_arg_val<uint32_t>(arg_idx++);  // structural tile_id_start placeholder
+        (void)get_arg_val<uint32_t>(arg_idx++);  // structural tile_id_end placeholder
         input_batch_base[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         // valid_pages_per_batch_head (slot 8): clamp the gather to the logical_n-valid slab prefix so
         // only kv_actual-sized data moves. Uniform across cores/devices, so producer/consumer page
         // counts and the ring slice protocol stay matched. Default (full input) leaves it unchanged.
         const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
-        if (valid_pages < input_tile_id_end[input_idx]) {
-            input_tile_id_end[input_idx] = valid_pages;
-        }
+        worker_link[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_valid_pages[input_idx] = valid_pages;
+        const uint32_t pages_per_link = valid_pages / num_links;
+        const uint32_t remainder = valid_pages % num_links;
+        input_tile_id_start[input_idx] = worker_link[input_idx] * pages_per_link +
+                                         (worker_link[input_idx] < remainder ? worker_link[input_idx] : remainder);
+        input_tile_id_end[input_idx] =
+            (worker_link[input_idx] + 1) * pages_per_link +
+            (worker_link[input_idx] + 1 < remainder ? worker_link[input_idx] + 1 : remainder);
     }
 
     auto inputs_tuple = make_tensor_accessor_tuple(inputs_args, arg_idx);
@@ -120,8 +129,17 @@ void kernel_main() {
             meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
         const uint32_t gather_valid_Ht =
             ring_attention_all_gather::compute_gather_valid_Ht(kv_actual, chunk_local_tiles, ring_size);
-        ring_attention_all_gather::clamp_input_ranges_to_gather_extent(
-            gather_valid_Ht, input_tensor_Ht, input_tensor_Wt, input_tile_id_end);
+        for (uint32_t input_idx = 0; input_idx < num_inputs; ++input_idx) {
+            const uint32_t valid_pages =
+                std::min(input_valid_pages[input_idx], gather_valid_Ht * input_tensor_Wt[input_idx]);
+            const uint32_t pages_per_link = valid_pages / num_links;
+            const uint32_t remainder = valid_pages % num_links;
+            input_tile_id_start[input_idx] = worker_link[input_idx] * pages_per_link +
+                                             (worker_link[input_idx] < remainder ? worker_link[input_idx] : remainder);
+            input_tile_id_end[input_idx] =
+                (worker_link[input_idx] + 1) * pages_per_link +
+                (worker_link[input_idx] + 1 < remainder ? worker_link[input_idx] + 1 : remainder);
+        }
     }
 
     OpSignaler op_signaler;
