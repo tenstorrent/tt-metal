@@ -567,6 +567,9 @@ class TOPK(TemplateParameter):
     topk_matrix_width: int = 0
     topk_sort_direction: TopKSortDirection = TopKSortDirection.Descending
     topk_stable_sort: bool = False
+    # Fused-key stable mode: [bf16 value | u16 index] packed 32-bit keys sorted by the unstable
+    # network (requires dest_acc=Yes; mutually exclusive with topk_stable_sort).
+    topk_fused_stable: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -575,7 +578,13 @@ class TOPK(TemplateParameter):
             f"constexpr std::uint32_t TOPK_NUM_ITERATIONS = {int(math.log2(self.topk_matrix_width // TILE_DIMENSIONS[1] // 2))};",
             f"constexpr std::uint32_t TOPK_SORT_DIRECTION = {self.topk_sort_direction.value};",
             f"constexpr bool TOPK_STABLE_SORT = {str(self.topk_stable_sort).lower()};",
+            f"constexpr bool TOPK_FUSED_STABLE = {str(self.topk_fused_stable).lower()};",
         ]
+        if self.topk_fused_stable:
+            # Switches the LLK topk value load/stores to raw INT32 so packed [bf16|u16] keys never
+            # go through a float-mode store (denormal flush would erase the index bits). Must be a
+            # preprocessor define: ckernel_sfpu_topk.h gates on it, and build.h is included first.
+            lines.append("#define TOPK_FUSED_KEYS 1")
         return "\n".join(lines)
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
@@ -585,8 +594,9 @@ class TOPK(TemplateParameter):
             "std::uint32_t TOPK_NUM_ITERATIONS;",
             "std::uint32_t TOPK_SORT_DIRECTION;",
             "bool TOPK_STABLE_SORT;",
+            "bool TOPK_FUSED_STABLE;",
         ]
-        return "\n".join(lines), "IIII?"
+        return "\n".join(lines), "IIII??"
 
 
 @dataclass

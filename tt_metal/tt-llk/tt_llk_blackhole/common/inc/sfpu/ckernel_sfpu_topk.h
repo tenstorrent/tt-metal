@@ -56,6 +56,15 @@ constexpr bool TOPK_UINT16_IN_FP32_DEST = false;
 // SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16): low→high 16-bit so packer sees UInt16 in 32-bit DEST.
 constexpr std::uint32_t TOPK_SFPSTORE_MODE_PACK_UINT16 = 9;
 
+// Fused-key stable topk (TOPK_FUSED_KEYS injected by the kernel build): the network sorts opaque
+// [bf16|u16] packed words, so every value load/store must be raw INT32 — a float-mode store
+// denormal-flushes 0x0000xxxx keys (value +0.0 / bf16 denormals), silently erasing the index bits.
+#if defined(TOPK_FUSED_KEYS) && TOPK_FUSED_KEYS
+constexpr bool TOPK_FUSED_KEYS_MODE = true;
+#else
+constexpr bool TOPK_FUSED_KEYS_MODE = false;
+#endif
+
 // 32 SFPU vectors cover one 32-bit DEST tile at addresses 0,2,...,62. Explicit offsets on
 // ADDR_MOD_7 (topk's incr=0 bank) avoid mutating ADDR_MOD_6 used for alt-stores.
 // tile_index / store_mode are template parameters so the leaf uses TTI_SFPLOAD/TTI_SFPSTORE
@@ -144,12 +153,109 @@ inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t dst_tile_index
     }
 }
 
+// Fused-key stable topk: pack each datum into one 32-bit word [bf16 value | u16 index'] where
+// index' = index XOR (0xFFFF iff (value_sign == 0) XNOR largest). Sign-magnitude SFPSWAP order on
+// the packed word is then a strict total order whose value-tie order is the requested torch-stable
+// order in BOTH global directions, and stays correct under the network's internal direction
+// alternation (mirror runs) — so the plain UNSTABLE swap network sorts it. Requires 32-bit DEST
+// (values exact-widened to [bf16|0x0000] by the fp32-dest datacopy) and raw INT32 load/store for
+// every touch of a packed word (a float-mode store would denormal-flush 0x0000xxxx keys).
+//
+// _topk_fuse_tile_ consumes the u16 index tiles at DEST offset 128 (garbage high bits per #50215,
+// masked here) and packs into the value tiles at offset 0; the index region is dead afterwards.
+// _topk_defuse_tile_ restores the pre-fuse layout: [bf16|0x0000] value words in place, u16 indices
+// back at offset 128 (index_store_mode selects raw INT32 or the mode-9 low->high store the packer
+// needs to read u16 from 32-bit DEST). Both are one-shot O(tile) sweeps called explicitly by the
+// kernel (fuse once per fresh slab with the GLOBAL direction — never per network call; defuse once
+// on the final output), and both record over replay slots 0..9, so the fuse poisons
+// topk_replay_init to force the network to re-record its load/store/phase windows.
+template <bool largest>
+inline void _topk_fuse_tile_()
+{
+    // Mask/complement constant (also the #50215 garbage-high mask). Programming goes through the
+    // SFPCONFIG path (clobbers LREG0 transiently, lane-predicated) so it precedes the SETCC arm
+    // and any live data.
+    sfpi::vConstIntPrgm0 = 0x0000FFFF;
+    TTI_SFPENCC(3, 0, 0, 10);
+
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    // 9-slot body: one 32-lane vector per replay. The XOR complement runs only in lanes selected
+    // by the value-sign test; the AND mask and the OR must be unconditional, hence the bracketing.
+    load_replay_buf<Exec>(
+        0,
+        9,
+        []
+        {
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);   // value [bf16|0x0000]
+            TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 128); // index [garbage|u16]
+            TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);                       // L1 &= 0x0000FFFF (#50215)
+            TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+            TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0); // complement enabled lanes
+            TTI_SFPENCC(3, 0, 0, 10);                        // all lanes back on
+            TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);   // L0 |= L1 -> packed key
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_INCRWC(0, 2, 0, 0); // next 32-lane vector (Matrix-unit issue, free vs the SFPU port)
+        });
+    for (int i = 1; i < 64; i++)
+    {
+        lltt::replay(0, 9);
+    }
+
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    // Slots 0..8 now hold the fuse body; make the network re-record its cached windows.
+    topk_replay_init = 0;
+}
+
+template <bool largest, std::uint32_t index_store_mode = static_cast<std::uint32_t>(InstrModLoadStore::INT32)>
+inline void _topk_defuse_tile_(const int num_tiles)
+{
+    sfpi::vConstIntPrgm0 = 0x0000FFFF;
+    TTI_SFPENCC(3, 0, 0, 10);
+
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    // 10-slot body. The sign test runs on the packed word BEFORE its halves are cleared: bit 31
+    // is the fused value's sign (the network moves whole words raw), so the same predicate as the
+    // fuse selects the same lanes — the complement is self-inverse.
+    load_replay_buf<Exec>(
+        0,
+        10,
+        []
+        {
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0); // packed [bf16|idx']
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+            TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+            TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0); // un-complement lo16
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, 0); // L1 = [0x0000|u16 idx]
+            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0); // L0 = [bf16|0x0000] (exact bf16 pack)
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_SFPSTORE(p_sfpu::LREG1, index_store_mode, ADDR_MOD_7, 128); // index region restored
+            TTI_INCRWC(0, 2, 0, 0);
+        });
+    const int n = 32 * num_tiles;
+    for (int i = 1; i < n; i++)
+    {
+        lltt::replay(0, 10);
+    }
+
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    topk_replay_init = 0;
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_load8(std::uint32_t offset, std::uint32_t dist)
 {
-    constexpr std::uint32_t dst_indices_offset = 128; // 2 tile x 64 rows per tile
+    constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
     constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
-    constexpr InstrModLoadStore instr_mod_value = TOPK_UINT16_IN_FP32_DEST ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
+    constexpr InstrModLoadStore instr_mod_value = (TOPK_UINT16_IN_FP32_DEST || TOPK_FUSED_KEYS_MODE) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
 
     std::uint32_t face_offset = offset >> 4;
     std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
@@ -166,9 +272,9 @@ inline void bitonic_topk_load8(std::uint32_t offset, std::uint32_t dist)
 template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_store8(std::uint32_t offset, std::uint32_t dist)
 {
-    constexpr std::uint32_t dst_indices_offset = 128; // 2 tile x 64 rows per tile
+    constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
     constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
-    constexpr InstrModLoadStore instr_mod_value = TOPK_UINT16_IN_FP32_DEST ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
+    constexpr InstrModLoadStore instr_mod_value = (TOPK_UINT16_IN_FP32_DEST || TOPK_FUSED_KEYS_MODE) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
 
     std::uint32_t face_offset = offset >> 4;
     std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
@@ -185,9 +291,9 @@ inline void bitonic_topk_store8(std::uint32_t offset, std::uint32_t dist)
 template <bool is_fp32_dest_acc_en>
 inline void bitonic_topk_load16(std::uint32_t dist0, std::uint32_t dist1)
 {
-    constexpr std::uint32_t dst_indices_offset = 128; // 2 tile x 64 rows per tile
+    constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
     constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
-    constexpr InstrModLoadStore instr_mod_value = TOPK_UINT16_IN_FP32_DEST ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
+    constexpr InstrModLoadStore instr_mod_value = (TOPK_UINT16_IN_FP32_DEST || TOPK_FUSED_KEYS_MODE) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
 
     // Load 16 consecutive numbers
     TTI_SFPLOAD(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, 0);
@@ -223,9 +329,9 @@ inline void bitonic_topk_load16(std::uint32_t dist0, std::uint32_t dist1)
 template <bool is_fp32_dest_acc_en, bool alt_addr_mod = false>
 inline void bitonic_topk_store16(std::uint32_t dist0, std::uint32_t dist1)
 {
-    constexpr std::uint32_t dst_indices_offset = 128; // 2 tile x 64 rows per tile
+    constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
     constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
-    constexpr InstrModLoadStore instr_mod_value = TOPK_UINT16_IN_FP32_DEST ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
+    constexpr InstrModLoadStore instr_mod_value = (TOPK_UINT16_IN_FP32_DEST || TOPK_FUSED_KEYS_MODE) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
 
     // Load 16 consecutive numbers
     TTI_SFPSTORE(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, 0);
