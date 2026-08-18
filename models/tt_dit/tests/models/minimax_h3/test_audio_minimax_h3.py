@@ -461,17 +461,6 @@ def test_audio_decode_traced(mesh_device):
     assert psnr_db > 60.0, f"traced output diverges from untraced: PSNR {psnr_db:.2f} dB"
 
 
-# -------------------------------------------------------------------- T-parallel audio decode
-#
-# Resurrected per this file's own instruction: the module docstring said to bring this back "if it
-# ships", and the 8-way shard layout it called known-broken is fixed in this branch (`Vocoder.conv_pre`
-# and `_forward_tap_matmul`). It is the only test that proves those two fixes.
-# ``None``.
-#
-# Sharded output is gated against the unsharded output of the same weights, so a speedup that
-# comes from dropping work fails rather than reports.
-
-
 MESH = [
     pytest.param(
         (4, 8),

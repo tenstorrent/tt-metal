@@ -950,10 +950,7 @@ class Conv1dViaConv3d(Module):
 
         self.same_pad = same_pad
         self.eff_k = eff_k
-        # Needs stride 1 to index taps directly and fp32 to be worth doing. T-sharding is supported --
-        # the tap path takes its own halo -- but channel-TP is not, since the conv3d route owns the C_in
-        # gather. Dropping the old `not sharded` term is what keeps sharded output equal to unsharded at
-        # the same levers (83.4 dB, against 57.4 dB when the two paths ran different math).
+        # Needs stride 1 to index taps directly and fp32 to be worth doing.
         self.tap_matmul = tap_matmul and dtype == ttnn.float32 and stride == 1 and channel_axis(parallel_config) is None
 
         self._alloc_weight_bias()
