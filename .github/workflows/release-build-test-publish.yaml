@@ -67,6 +67,7 @@ jobs:
   # A real release tags that SHA first; the wheel is then built from the tag.
   build-artifact:
     needs: [check-harbor, parse-platform]
+    if: ${{ !cancelled() && needs.parse-platform.result == 'success' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read

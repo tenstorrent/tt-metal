@@ -136,22 +136,54 @@ LAYER_PCC_THRESHOLD = 0.88
 KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
 
-# Per-chunk baseline medians (seconds) for the no-PCC perf gate, pulled from a known-good CI run. Keyed
-# by (num_layers, n_chunks, num_iters) so only the exact config we have a CI number for is gated; every
-# other combo in the no-PCC sweep stays record-only. Each list has one entry per chunk (index c ==
-# chunk c). A single margin (the perf_margin pytest arg) is applied to every chunk. Recalibrate by
-# re-reading the "chunk timing stats" table from a fresh green CI run.
-KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S = {
-    # test_kimi_prefill_transformer_chunked_no_pcc[...-L61-chunks_eleven-ten_iters] (55k / code_debug).
-    # TODO: populate the 11 per-chunk medians from the first green code_debug 55k CI run's
-    # "chunk timing stats" table; until then this config runs record-only (no perf gate). The old 5-chunk
-    # longbook baseline was [1.330, 1.326, 1.326, 1.340, 1.369] (run 28753487696) -- chunks 0-4 should be
-    # ~unchanged (chunk c attends to KV[0:c*CHUNK] regardless of n_chunks); chunks 5-10 are new.
-    # (61, 11, 10): [...],
+# Per-chunk baseline medians (seconds) for the perf gate, pulled from known-good CI runs. Keyed by
+# (num_layers, n_chunks, num_iters) so only the exact config we have CI numbers for is gated; every
+# other combo in the sweep stays record-only. Each list has one entry per chunk (index c == chunk c). A
+# single margin is applied to every chunk. Recalibrate by re-reading the "chunk timing stats" table
+# from fresh green CI runs.
+#
+# Traced and untraced get SEPARATE tables and SEPARATE margins, selected by mode in
+# `kimi_chunked_perf_gate` -- a traced baseline can never gate an untraced run or vice versa. The two
+# are different regimes, not a small delta: traced measures 0.6-0.95 s/chunk (a ramp, since chunk c
+# attends to KV[0:c*CHUNK]) while untraced is a flat ~1.09 s/chunk, host-dispatch bound so the op2op
+# gap swamps the depth ramp entirely.
+KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
+    # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
+    # (55k / code_debug), from run 31675454129 job 94407856609 -- green, and stable within the run
+    # (per-chunk stddev <= 0.002 s over the 9 post-warmup iterations).
+    (61, 11, 10): [0.605, 0.606, 0.653, 0.681, 0.711, 0.743, 0.760, 0.793, 0.842, 0.869, 0.905],
 }
-# Default +/- tolerance band around each baseline chunk median (fraction). Overridable per test via the
-# perf_margin pytest argument (see test_prefill_block_perf.py's `margin` column for the design).
-DEFAULT_PERF_MARGIN = 0.05
+KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
+    # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
+    # (55k / code_debug). Per chunk, the MEDIAN OVER 10 CI RUNS of that run's own per-chunk median --
+    # a single run is not a usable baseline here the way it is for the traced twin. The 10 (all green,
+    # 2026-08-15, `main`, bh_sc1_high_power): 31868565025 31868547288 31868532277 31868515545
+    # 31868482938 31868467067 31868452031 31868433473 31867986909 31866023124.
+    #
+    # WITHIN a run the untraced spread is huge -- per-chunk stddev reaches 0.33 s (~30%), because every
+    # iteration re-dispatches every op from host and pays a fresh, variable op2op gap. The MEDIAN of the
+    # 9 post-warmup iterations is not: across those 10 runs no chunk median lands further than 2.9% from
+    # the values below, and widening the sample to all 32 runs with a table from 2026-08-11 to 08-15
+    # (many branches) only reaches 3.2%. So the gate is on the median, with UNTRACED_PERF_MARGIN rather
+    # than the traced 3%.
+    #
+    # If this does go flaky, re-center before widening: these are the median over the 10 runs, and
+    # centering each chunk on the midrange of all 32 instead pulls the worst deviation to 2.7% (the
+    # 3.2% is one-sided). Widening to 10% is the fallback after that -- every observed run fits inside
+    # a 6.2% total spread, so a band that needs more than 10% is a regression, not noise.
+    (61, 11, 10): [1.095, 1.094, 1.091, 1.098, 1.093, 1.089, 1.092, 1.089, 1.094, 1.089, 1.090],
+}
+# Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
+# program, so the device is its only noise source; untraced re-dispatches from host every iteration and
+# carries the op2op gap, so it needs the wider band. Overridable per test via the perf_margin pytest
+# argument (None = use the mode default; see test_prefill_block_perf.py's `margin` column).
+#
+# 5% untraced is deliberately tight: the worst per-chunk deviation over all 32 recorded runs is 3.2%,
+# so CI noise already spends ~2/3 of the band. That is the intended bar -- catch a >5% eager-dispatch
+# regression -- but it leaves little slack, so triage a failure as noise-vs-regression (compare the
+# other chunks and the traced twin from the same run) before touching the number.
+TRACED_PERF_MARGIN = 0.03
+UNTRACED_PERF_MARGIN = 0.05
 
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
 # accumulation headroom is pinned.
@@ -1167,6 +1199,11 @@ def run_chunked_transformer_updated(
             raise ValueError(
                 f"baseline_chunk_times_s has {len(baseline_chunk_times_s)} entries but n_chunks={n_chunks}"
             )
+        if gated and perf_margin is None:
+            # perf_margin defaults to None ("use the mode default", resolved by kimi_chunked_perf_gate).
+            # Reaching the gate with it still None means a caller wired up a baseline without a band;
+            # falling through to 0.0 would collapse the band to zero width and fail every chunk.
+            raise ValueError("baseline_chunk_times_s was given without a perf_margin")
         margin = perf_margin if perf_margin is not None else 0.0
 
         headers = ["chunk", "median_time", "stddev"]
@@ -1669,6 +1706,31 @@ def run_chunked_transformer_updated(
     assert not perf_failures, "chunk timing out of baseline tolerance:\n  " + "\n  ".join(perf_failures)
 
 
+def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin=None):
+    """Resolve the chunked-Kimi perf gate for one parametrization: returns
+    ``(baseline_chunk_times_s, margin)`` for run_chunked_transformer_updated.
+
+    A baseline of None leaves the run record-only (print_duration_table prints the table and does not
+    assert), which is what every combo outside the two calibrated CI configs gets. Two conditions on
+    top of the table lookup:
+
+      use_trace   -- picks WHICH table and WHICH default margin. The two modes are separate regimes
+                     (see the tables), so this is a hard fork, not a shared table with a mode column:
+                     a traced baseline can never arm an untraced run, or the reverse.
+      preload_isl -- the baselines only mean anything at 0 (the recorded runs started from an empty
+                     cache); any preload depth stays record-only.
+
+    `perf_margin` overrides the mode default when not None, so a caller can still pin a band explicitly.
+    """
+    table, default_margin = (
+        (KIMI_TRACED_BASELINE_CHUNK_TIMES_S, TRACED_PERF_MARGIN)
+        if use_trace
+        else (KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S, UNTRACED_PERF_MARGIN)
+    )
+    baseline = table.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
+    return baseline, (default_margin if perf_margin is None else perf_margin)
+
+
 # No-PCC perf/smoke variant: runs the full n_chunks-chunk prefill `num_iters` times with no golden
 # trace dependency, no intermediate readback, and no PCC. Requires only the Kimi TTNN weight cache (set
 # TT_KIMI_PREFILL_TTNN_CACHE + KIMI_K2_6_HF_MODEL); the golden trace is optional.
@@ -1681,7 +1743,9 @@ def run_chunked_transformer_updated(
 # ids: "traced" not "trace" — "notrace" CONTAINS "trace", so a -k "trace" term would match BOTH
 # modes and silently double a CI job. Matches the padded test's convention.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
-@pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin5pct"])
+# None = take the band from the mode (TRACED_PERF_MARGIN / UNTRACED_PERF_MARGIN, resolved by
+# kimi_chunked_perf_gate). The two bands differ by more than 3x, so no single literal serves both.
+@pytest.mark.parametrize("perf_margin", [None], ids=["margin_auto"])
 @pytest.mark.parametrize(
     "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
 )
@@ -1748,11 +1812,11 @@ def test_kimi_prefill_transformer_chunked_perf(
 ):
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
-    # Gate against the CI baseline only for the exact config we have a recorded number for; every other
-    # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). The
-    # baseline is only meaningful at preload_isl=0 (the recorded runs started from an empty cache).
-    baseline_chunk_times_s = (
-        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
+    # Gate against the CI baseline only for the exact configs we have recorded numbers for; every other
+    # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). Both
+    # modes are gated, each against its own table and its own band -- see kimi_chunked_perf_gate.
+    baseline_chunk_times_s, perf_margin = kimi_chunked_perf_gate(
+        use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin
     )
     run_chunked_transformer_updated(
         variant,
@@ -1777,7 +1841,9 @@ def test_kimi_prefill_transformer_chunked_perf(
 # ids: "traced" not "trace" — "notrace" CONTAINS "trace", so a -k "trace" term would match BOTH
 # modes and silently double a CI job. Matches the padded test's convention.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
-@pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin5pct"])
+# None = take the band from the mode (TRACED_PERF_MARGIN / UNTRACED_PERF_MARGIN, resolved by
+# kimi_chunked_perf_gate). The two bands differ by more than 3x, so no single literal serves both.
+@pytest.mark.parametrize("perf_margin", [None], ids=["margin_auto"])
 @pytest.mark.parametrize(
     "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
 )
@@ -1840,12 +1906,13 @@ def test_kimi_prefill_transformer_chunked(
 ):
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
-    # Gate against the CI baseline only for the exact config we have a recorded number for; every other
-    # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). The
-    # baseline is only meaningful at preload_isl=0 (the recorded runs started from an empty cache).
-    baseline_chunk_times_s = (
-        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
-    )
+    # ALWAYS record-only -- this accuracy test is never perf-gated. It shares the perf test's
+    # parametrization but NOT its is_high_power() skipif, so it can run on a standard-power Blackhole,
+    # where the baseline tables -- measured on a >=130W galaxy -- describe nothing. Gating here would fail
+    # an accuracy run for a timing reason, on hardware the baseline never covered, and the timing table is
+    # incidental to this test anyway (see check_pcc below). The perf gate belongs to, and stays in,
+    # test_kimi_prefill_transformer_chunked_perf.
+    baseline_chunk_times_s = None
     run_chunked_transformer_updated(
         variant,
         config_only,
@@ -1859,6 +1926,8 @@ def test_kimi_prefill_transformer_chunked(
         num_iters,
         routing_use_l1_small_for_semaphores=True,
         baseline_chunk_times_s=baseline_chunk_times_s,
+        # Inert while baseline_chunk_times_s is None (print_duration_table only uses the margin when it
+        # has a baseline); kept for id/signature symmetry with the perf test.
         perf_margin=perf_margin,
         preload_isl=preload_isl,
         check_pcc=True,  # this test exists for the KV PCC; the timing table is incidental

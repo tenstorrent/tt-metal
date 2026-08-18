@@ -167,6 +167,10 @@ class TtPrefillRuntime:
                 is_first_rank=self.config.is_first_rank,
                 is_last_rank=self.config.is_last_rank,
                 kv_only_last_layer=self.config.kv_only_last_layer,
+                # Required for a LatentMoE model (Kimi-K3): without it the per-block check cannot know
+                # to look for the latent-projection cache files and would call an incomplete cache
+                # complete. model_cfg is already in hand two lines up.
+                model_cfg=model_cfg,
             ):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
             else:
@@ -707,7 +711,7 @@ class TtPrefillRuntime:
         PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1). Thin forwarder into the model's validation module.
         `real_len` caps the compared extent to the real (non-pad) tokens — a partial last chunk makes
         n_chunks * chunk_size overshoot the prompt; `pt_path_override` selects a per-slot .pt golden
-        (both are used by the migration validators in prefill/runners/validation.py)."""
+        (both are for out-of-tree callers; nothing in-tree passes either)."""
         from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import kv_cache_pcc_check
 
         return kv_cache_pcc_check(

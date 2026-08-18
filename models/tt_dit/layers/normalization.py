@@ -479,11 +479,6 @@ class GroupNorm(Module):
             math.ceil(self.num_channels // self.num_virtual_cols / 32) * self.num_virtual_cols,
             32,
         ]
-        block_wt = ttnn.operations.normalization.find_max_tile_span(
-            self.num_channels, self.num_channels // self.num_groups, 32
-        )
-        mask_shape = [1, self.num_groups, 32, 32 * block_wt]
-
         self.weight = Parameter(
             total_shape=weight_shape,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -496,7 +491,6 @@ class GroupNorm(Module):
             mesh_axes=[mesh_axis, None, None, None],
             device=self.mesh_device,
         )
-        self.mask = Parameter(total_shape=mask_shape, device=self.mesh_device)
 
     @classmethod
     def from_torch(
@@ -525,9 +519,6 @@ class GroupNorm(Module):
         if "bias" in state:
             state["bias"] = self._prepare_param(state["bias"])
 
-        input_mask = ttnn.create_group_norm_input_mask(self.num_channels, self.num_groups, self.num_virtual_cols)
-        state["mask"] = ttnn.to_torch(input_mask)
-
     def _prepare_param(self, param: torch.Tensor) -> torch.Tensor:
         expected_shape = (self.num_channels * self.num_devices,)
         assert param.shape == expected_shape, f"expected shape {expected_shape}, got {param.shape}"
@@ -544,7 +535,6 @@ class GroupNorm(Module):
         kwargs = dict(
             weight=self.weight.data,
             bias=self.bias.data,
-            input_mask=self.mask.data,
             num_groups=self.num_groups,
             epsilon=self.eps,
             core_grid=self.core_grid,
@@ -567,7 +557,7 @@ class GroupNorm3D(Module):
     Routes through the DRAM-interleaved ``ttnn.group_norm``. The grid is pinned at
     construction from ``input_nhw``/``num_batches`` via
     ``determine_expected_group_norm_dram_grid_size`` (uniform multicast groups; avoids
-    the mcast deadlock at small spatial sizes), so gamma/beta/mask are static
+    the mcast deadlock at small spatial sizes), so gamma/beta are static
     ``Parameter``s and round-trip through ``Module.save``/``load``.
     """
 
@@ -609,12 +599,9 @@ class GroupNorm3D(Module):
         )
 
         weight_shape = [1, 1, math.ceil(num_channels // self.num_virtual_cols / 32) * self.num_virtual_cols, 32]
-        block_wt = ttnn.operations.normalization.find_max_tile_span(num_channels, num_channels // num_groups, 32)
-        mask_shape = [1, num_groups, 32, 32 * block_wt]
 
         self.weight = Parameter(total_shape=weight_shape, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=mesh_device)
         self.bias = Parameter(total_shape=weight_shape, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=mesh_device)
-        self.mask = Parameter(total_shape=mask_shape, dtype=dtype, device=mesh_device)
 
     @classmethod
     def from_torch(
@@ -647,8 +634,6 @@ class GroupNorm3D(Module):
             state["bias"] = ttnn.create_group_norm_weight_bias_rm(
                 state["bias"], self.num_channels, self.num_virtual_cols
             )
-        mask = ttnn.create_group_norm_input_mask(self.num_channels, self.num_groups, self.num_virtual_cols)
-        state["mask"] = ttnn.to_torch(mask)
 
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
         B, T, H, W, C = x_BTHWC.shape
@@ -669,7 +654,6 @@ class GroupNorm3D(Module):
             # -1 = built-in chunk heuristic. Default 1 (with pinned core_grid) overflows L1
             # at large gathered spatial.
             num_out_blocks=-1,
-            input_mask=self.mask.data,
             weight=self.weight.data,
             bias=self.bias.data,
             epsilon=self.eps,

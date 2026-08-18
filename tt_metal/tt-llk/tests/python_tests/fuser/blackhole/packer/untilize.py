@@ -20,6 +20,7 @@ class PackUntilize(Packer):
     loop: TileLoop = LoopBlockRow()
     per_block_init = True
     pack_mode = "PackMode::Untilize"
+    requires_dest_remap = True
 
     def get_headers(self) -> List[str]:
         return [
