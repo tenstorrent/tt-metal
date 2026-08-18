@@ -455,8 +455,8 @@ to see the names and paths to those kernels</p></li>
 When the watcher is enabled, tripping an assert will cause the program to exit, and report which
 assert was tripped. An example of an assert and the resulting message is shown below:</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"debug/assert.h"</span><span class="c1">  // Required in all kernels using watcher asserts</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">"debug/waypoint.h"</span><span class="c1">  // Pair the assert with a status to see which assert is tripped</span>
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"debug/assert.h"</span><span class="w">  </span><span class="c1">// Required in all kernels using watcher asserts</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"debug/waypoint.h"</span><span class="w">  </span><span class="c1">// Pair the assert with a status to see which assert is tripped</span>
 
 <span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
@@ -577,7 +577,7 @@ transactions on BRISC core at location 0,0:</p>
 </h2>
 <p>Before issuing an ethernet transaction, Watcher can check that the link is up.</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"debug/eth_link_status.h"</span><span class="c1">  // Required in all kernels checking eth link status</span>
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"debug/eth_link_status.h"</span><span class="w">  </span><span class="c1">// Required in all kernels checking eth link status</span>
 
 <span class="n">FORCE_INLINE</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">eth_send_packet</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">q_num</span><span class="p">,</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">src_word_addr</span><span class="p">,</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">dest_word_addr</span><span class="p">,</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_words</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">WATCHER_CHECK_ETH_LINK_STATUS</span><span class="p">();</span>

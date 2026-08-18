@@ -356,7 +356,7 @@ on device close). If your prints never appear, the most common cause is a missin
 2.    <code class="docutils literal notranslate"><span class="pre">DPRINT("hit</span> <span class="pre">checkpoint</span> <span class="pre">{}",</span> <span class="pre">id);</span></code>  // This may never be printed</p>
 </div>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint.h"</span><span class="c1">  // required in all kernels using DPRINT</span>
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint.h"</span><span class="w">  </span><span class="c1">// required in all kernels using DPRINT</span>
 
 <span class="k">enum</span><span class="w"> </span><span class="nc">TestEnum</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">VAL0</span><span class="p">,</span><span class="w"> </span><span class="n">VAL1</span><span class="p">,</span><span class="w"> </span><span class="n">VAL2</span><span class="w"> </span><span class="p">};</span>
 
@@ -481,7 +481,7 @@ back of the CB, the <code class="docutils literal notranslate"><span class="pre"
 formats for printing from CBs are <code class="docutils literal notranslate"><span class="pre">DataFormat::Float32</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Float16_b</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Bfp8_b</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Bfp4_b</span></code>,
 <code class="docutils literal notranslate"><span class="pre">DataFormat::Int8</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::UInt8</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::UInt16</span></code>, <code class="docutils literal notranslate"><span class="pre">DataFormat::Int32</span></code>, and <code class="docutils literal notranslate"><span class="pre">DataFormat::UInt32</span></code>.</p>
 <div class="highlight-c++ notranslate">
-<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint.h"</span><span class="c1">  // required in all kernels using DPRINT</span>
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/dprint.h"</span><span class="w">  </span><span class="c1">// required in all kernels using DPRINT</span>
 
 <span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// Assuming the tile we want to print from CBIndex::c_25 is from the front the CB, print must happen after</span>

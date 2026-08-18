@@ -277,7 +277,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Resources</span></p>
@@ -393,6 +392,7 @@
 </tbody>
 </table>
 <p>reduce_to_root operates on a fixed 4-device line topology with the root at (1, 0). All three input tensors must be sharded; each output preserves the spec of its corresponding input.</p>
+<p>Each shard core is moved in a single fabric packet holding its l shard plus one s and one m page, so <code class="docutils literal notranslate"><span class="pre">l_shard_pages</span> <span class="pre">*</span> <span class="pre">page_size</span> <span class="pre">+</span> <span class="pre">2</span> <span class="pre">*</span> <span class="pre">page_size</span></code> must not exceed the fabric maximum payload size (4352 B by default). Wider shards need <code class="docutils literal notranslate"><span class="pre">max_packet_payload_size_bytes</span></code> raised in the <code class="docutils literal notranslate"><span class="pre">FabricRouterConfig</span></code>.</p>
 </div>
 </blockquote>
 <dl class="simple">
