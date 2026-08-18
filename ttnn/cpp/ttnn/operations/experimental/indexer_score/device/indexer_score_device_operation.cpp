@@ -283,12 +283,14 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_has_sub_device,
         fused_sub_device,
         fused_semaphore_addresses,
+        program::uses_idle_core_multiworker_schedule(attrs, tensor_args),
         tensor_args);
 }
 
 void IndexerScoreDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // chunk_start, cache slot, kv_len are hash-excluded runtime values -> re-checked on hits.
+    // chunk_start, cache slot, and exact kv_len are runtime values -> re-checked on hits. The fused schedule class
+    // derived from kv_len is hashed above because it changes the worker topology.
     validate_runtime_values(attrs, tensor_args);
     validate_chunk_start(attrs, tensor_args);
     validate_fused_runtime_values(attrs, tensor_args);
@@ -564,7 +566,10 @@ IndexerScoreDeviceOperation::create_op_performance_model(
     const auto grid = q.device()->compute_with_storage_grid_size();
     uint32_t compute_grid_x = grid.x;
     if (attrs.has_fused_ring()) {
-        const uint32_t ag_worker_cores = attrs.fused_ring->num_links * 2u;  // forward + backward per link
+        const uint32_t ag_worker_cores =
+            program::uses_idle_core_multiworker_schedule(attrs, tensor_args)
+                ? 10u
+                : attrs.fused_ring->num_links * 2u;  // forward + backward per link on the direct schedule
         const uint32_t reserved_cols = (ag_worker_cores + grid.y - 1) / grid.y;
         TT_FATAL(
             compute_grid_x > reserved_cols,

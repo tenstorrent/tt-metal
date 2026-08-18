@@ -14,8 +14,6 @@
 
 #pragma once
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
 
 namespace ring_attention_all_gather {
@@ -30,22 +28,21 @@ inline uint32_t compute_gather_valid_Ht(uint32_t kv_actual_isl, uint32_t chunk_l
     return valid_slabs * chunk_local_tiles;
 }
 
-// Shrink each input's page range to the valid slab prefix. Never grows a range: a caller that already
-// has a tighter host-provided end keeps it.
-template <size_t NumInputs>
-inline void clamp_input_ranges_to_gather_extent(
-    uint32_t gather_valid_Ht,
-    const std::array<uint32_t, NumInputs>& input_tensor_Ht,
-    const std::array<uint32_t, NumInputs>& input_tensor_Wt,
-    std::array<uint32_t, NumInputs>& input_tile_id_end) {
-    for (uint32_t input_idx = 0; input_idx < NumInputs; input_idx++) {
-        const uint32_t valid_Ht =
-            gather_valid_Ht < input_tensor_Ht[input_idx] ? gather_valid_Ht : input_tensor_Ht[input_idx];
-        const uint32_t valid_pages = valid_Ht * input_tensor_Wt[input_idx];
-        if (valid_pages < input_tile_id_end[input_idx]) {
-            input_tile_id_end[input_idx] = valid_pages;
-        }
-    }
+// Store a bounded page count and derive this worker link's disjoint contiguous logical range. Reader and
+// writer share this helper so metadata replay cannot update their CB protocol differently.
+FORCE_INLINE void set_worker_page_range(
+    uint32_t valid_pages,
+    uint32_t num_links,
+    uint32_t worker_link,
+    uint32_t& stored_valid_pages,
+    uint32_t& tile_id_start,
+    uint32_t& tile_id_end) {
+    stored_valid_pages = valid_pages;
+    const uint32_t pages_per_link = valid_pages / num_links;
+    const uint32_t remainder = valid_pages % num_links;
+    tile_id_start = worker_link * pages_per_link + (worker_link < remainder ? worker_link : remainder);
+    const uint32_t next_link = worker_link + 1;
+    tile_id_end = next_link * pages_per_link + (next_link < remainder ? next_link : remainder);
 }
 
 }  // namespace ring_attention_all_gather

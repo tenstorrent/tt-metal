@@ -68,7 +68,7 @@ RING_INDEXER_EXPECTED_FPU_UTIL = {
     (4, GLM52_KV_55K): 32.56,
     (4, 512 * 1024): 39.02,
     (8, GLM52_KV_55K): 30.46,
-    (8, 512 * 1024): 44.72,
+    (8, 512 * 1024): 48.38,
 }
 
 _FABRIC_2D_TORUS_DEVICE_PARAMS = {
@@ -122,8 +122,9 @@ def _ring_indexer_ideal_compute_cycles(mesh_device, kv_len, chunk_start):
 
     This is intentionally test-local until op-performance-model fields are
     directly exposed to the realtime-profiler API. The calculation is
-    fusion-aware: two links reserve four all-gather worker cores, so score
-    math is credited only to the remaining compute rectangle.
+    fusion-aware: the all-gather reserves one grid column (four direct-path
+    workers, or ten long-prefix workers), so score math is credited only to
+    the remaining compute rectangle.
     """
     q_tiles = GLM52_Q_PER_CHIP // 32
     k_tiles = GLM52_K_CACHE_CAPACITY // 32
@@ -256,9 +257,16 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
         ttnn.synchronize_device(mesh_device, sub_device_ids=[subdevice_id])
         ttnn.deallocate(warmup)
 
-        out, programs = profile_realtime_program_merged(mesh_device, run_once, record_timeout_seconds=30.0)
-        ttnn.deallocate(out)
-        duration_ns = _ring_indexer_duration_ns(programs)
+        # Independent profiler windows on both prefixes can spread beyond the +/-2% gate (512K has
+        # exhibited 2.27--2.43 ms back-to-back). Use a median instead of letting one noisy window
+        # either fail or bless the performance change.
+        sample_count = 3
+        duration_samples_ns = []
+        for _ in range(sample_count):
+            out, programs = profile_realtime_program_merged(mesh_device, run_once, record_timeout_seconds=30.0)
+            ttnn.deallocate(out)
+            duration_samples_ns.append(_ring_indexer_duration_ns(programs))
+        duration_ns = sorted(duration_samples_ns)[sample_count // 2]
         ideal_compute_cycles = _ring_indexer_ideal_compute_cycles(mesh_device, kv_len, chunk_start)
         fpu_utilization = ideal_compute_cycles / (duration_ns * _BH_CLOCK_GHZ) * 100
         expected_fpu_utilization = RING_INDEXER_EXPECTED_FPU_UTIL[(sp, kv_len)]
@@ -266,7 +274,8 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
         upper = expected_fpu_utilization * (1 + RING_INDEXER_PERF_MARGIN)
         logger.info(
             "ring_indexer_score_dsa perf: mesh={} fabric={} topology=ring heads={} k_capacity={} kv_len={} "
-            "q_per_chip={} duration={:.3f} ms, fpu_util={:.2f}% (expected {:.2f}%, band [{:.2f}, {:.2f}])".format(
+            "q_per_chip={} duration={:.3f} ms (median of {}), fpu_util={:.2f}% "
+            "(expected {:.2f}%, band [{:.2f}, {:.2f}])".format(
                 tuple(mesh_device.shape),
                 ttnn.get_fabric_config(),
                 GLM52_INDEX_HEADS,
@@ -274,6 +283,7 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
                 kv_len,
                 GLM52_Q_PER_CHIP,
                 duration_ns / 1e6,
+                sample_count,
                 fpu_utilization,
                 expected_fpu_utilization,
                 lower,

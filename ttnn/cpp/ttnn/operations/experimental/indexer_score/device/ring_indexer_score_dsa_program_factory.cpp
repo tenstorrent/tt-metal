@@ -107,6 +107,32 @@ std::optional<uint32_t> gather_valid_height_tiles(const operation_attributes_t& 
     return std::min<uint32_t>(valid_local_rows, k_local.logical_shape()[2]) / tt::constants::TILE_HEIGHT;
 }
 
+bool uses_idle_core_multiworker_schedule_impl(const operation_attributes_t& args, const tensor_args_t& tensors) {
+    if (!args.fused_ring.has_value() || !tensors.k_local.has_value() || args.fused_ring->num_links != 2 ||
+        args.fused_ring->topology != ttnn::ccl::Topology::Ring) {
+        return false;
+    }
+    // The mux schedule is tuned and perf-gated for the production eight-rank SP ring. Keep smaller rings on
+    // the direct schedule until their independent full-box baselines have been measured.
+    if (ring_size_for(args, tensors.k) != 8) {
+        return false;
+    }
+    const auto valid_height_tiles = gather_valid_height_tiles(args, *tensors.k_local);
+    if (valid_height_tiles.value_or(0) < ttnn::ring_attention_all_gather_async_detail::kMinMuxGatherHeightTiles) {
+        return false;
+    }
+
+    const auto& gathered_k = tensors.k;
+    const auto* buffer = gathered_k.buffer();
+    if (!buffer->is_dram() || buffer->buffer_layout() != tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
+        return false;
+    }
+    const uint32_t page_size = buffer->page_size();
+    return gathered_k.device()->compute_with_storage_grid_size().y >= 10 &&
+           gathered_k.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM) >= 8 &&
+           tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / page_size >= 2;
+}
+
 // One device's fused program: indexer compute (banded schedule, DSA path) + co-scheduled ring_attention AG.
 ProgramDescriptor build_ring_program_descriptor(
     const operation_attributes_t& args,
@@ -202,8 +228,9 @@ ProgramDescriptor build_ring_program_descriptor(
     // of the group count <= grid_y, so shaving even one row can halve the schedule (10 groups: grid_y 10->9 drops
     // group_rows 10->5 -> 55 cores instead of 110). cols_for_bands() just distributes the bands over min(bands,
     // compute_cols_x) columns (uneven remainder handled by band_list), so a reserved column costs exactly one
-    // column of compute -- no divisor cliff. The AG needs only num_links*2 workers; one column (grid_y cores) is
-    // plenty and the compute keeps grid_y*compute_cols_x cores.
+    // column of compute -- no divisor cliff. The direct AG schedule uses num_links*2 workers. The long-prefix
+    // schedule expands that same reserved column to ten workers; its selection predicate requires grid_y >= 10.
+    // In both cases the compute keeps grid_y*compute_cols_x cores.
     const uint32_t grid_y = phys_grid.y;  // full compute-grid height (all rows kept for compute)
     TT_FATAL(fused.num_links >= 1, "indexer_score fused: num_links must be >= 1 (got {})", fused.num_links);
     const uint32_t ag_worker_cores = fused.num_links * 2u;                   // AG uses 2 workers (fwd/bwd) per link
@@ -625,6 +652,7 @@ ProgramDescriptor build_ring_program_descriptor(
             // COL_MAJOR so the reserved-column offset lays the workers DOWN the free column ((compute_cols_x,0),
             // (compute_cols_x,1), ...) instead of running off the right grid edge as row-major would.
             ttnn::ccl::CoreAllocationStrategy::COL_MAJOR,
+            /*enable_idle_core_multiworker=*/uses_idle_core_multiworker_schedule(args, tensors),
             args.cache_batch_idx,
             gather_valid_height_tiles(args, k_local));
     }
@@ -651,6 +679,10 @@ ProgramDescriptor build_ring_program_descriptor(
 }
 
 }  // namespace
+
+bool uses_idle_core_multiworker_schedule(const operation_attributes_t& args, const tensor_args_t& tensors) {
+    return uses_idle_core_multiworker_schedule_impl(args, tensors);
+}
 
 tt::tt_metal::WorkloadDescriptor RingIndexerScoreDsaProgramFactory::create_workload_descriptor(
     const operation_attributes_t& args,
@@ -728,7 +760,8 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             }
         };
 
-        // kernel_idx: reader=0, writer=1, compute=2; AG workers are 3..6.
+        // kernel_idx: reader=0, writer=1, compute=2; base AG workers are 3..6 and the long-prefix schedule adds
+        // workers 7..9.
         // The fused rt_arg namespace is file-local, but this .cpp participates in unity builds alongside
         // the classic factory's same-named namespace. Keep these literals synchronized with its static_assert.
         patch_field(0, 25u, k_batch_page_offset);
@@ -746,8 +779,8 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         patch_field(1, 10u, geom.straddle_jump_tiles);
 
         // The descriptor fast path patches buffer bindings but not scalar fields embedded in the fused AG
-        // workers. cache_batch_idx and kv_len are hash-excluded, so update the selected input slot and the
-        // slab-rounded gather extent on every cache hit (same protocol as ring_joint_sdpa).
+        // workers. cache_batch_idx and the exact kv_len are hash-excluded (only the structural schedule class is
+        // hashed), so update the selected input slot and slab-rounded gather extent on every cache hit.
         const auto& shape = k_local.padded_shape();
         const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
         const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
@@ -758,13 +791,24 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
 
         const auto patch_ag_field = [&](uint32_t kernel_idx, uint32_t slot, uint32_t value) {
             auto& grid_args = GetRuntimeArgs(program, kernel_idx);
+            bool patched_any_core = false;
             for (auto& col_args : grid_args) {
                 for (auto& core_args : col_args) {
-                    if (core_args.size() > slot) {
-                        core_args[slot] = value;
+                    if (core_args.size() == 0) {
+                        continue;
                     }
+                    TT_FATAL(
+                        core_args.size() > slot,
+                        "indexer_score fused override: AG scalar slot {} out of range (size {}) for kernel {}",
+                        slot,
+                        core_args.size(),
+                        kernel_idx);
+                    core_args[slot] = value;
+                    patched_any_core = true;
                 }
             }
+            TT_FATAL(
+                patched_any_core, "indexer_score fused override: AG kernel {} has no runtime arguments", kernel_idx);
         };
         constexpr uint32_t ag_reader_input_base =
             ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kInputBatchBaseFieldOffset;
@@ -776,6 +820,10 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         patch_ag_field(/*reader backward=*/5, ag_reader_valid_pages, valid_pages);
         patch_ag_field(/*writer forward=*/4, ag_writer_valid_pages, valid_pages);
         patch_ag_field(/*writer backward=*/6, ag_writer_valid_pages, valid_pages);
+        if (uses_idle_core_multiworker_schedule(args, tensors)) {
+            patch_ag_field(/*single-client writer forward=*/7, ag_writer_valid_pages, valid_pages);
+            patch_ag_field(/*single-client writer backward=*/8, ag_writer_valid_pages, valid_pages);
+        }
     }
 }
 

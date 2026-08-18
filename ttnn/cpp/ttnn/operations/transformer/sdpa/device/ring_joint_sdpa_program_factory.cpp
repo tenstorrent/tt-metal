@@ -2846,6 +2846,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             all_gather_fused_op_signaler,
             args.ccl_core_grid_offset,
             args.all_gather_operation_attributes.core_allocation_strategy,
+            /*enable_idle_core_multiworker=*/false,
             gather_slice_idx,
             // Bound the gather to the logical_n-valid prefix at create time so the first (cache-miss)
             // dispatch moves only kv_actual-sized data, not the whole oversized cache. Re-patched per

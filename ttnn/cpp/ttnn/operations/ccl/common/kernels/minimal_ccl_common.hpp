@@ -313,10 +313,11 @@ FORCE_INLINE void fused_write_atomic_and_advance_local_read_address_for_fabric_w
     l1_read_addr += payload_size_bytes;
 }
 
+template <typename FabricSender>
 FORCE_INLINE void fabric_write_unidir(
     uint64_t noc0_dest_noc_addr,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_direction_connection,
+    FabricSender& fabric_direction_connection,
     size_t l1_read_addr,
     uint32_t payload_size_bytes) {
     pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
@@ -324,12 +325,12 @@ FORCE_INLINE void fabric_write_unidir(
     noc_async_writes_flushed();
 }
 
-template <typename AddrGenType>
+template <typename AddrGenType, typename FabricSender>
 FORCE_INLINE void fabric_write_unidir(
     uint32_t dest_id,
     AddrGenType addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_direction_connection,
+    FabricSender& fabric_direction_connection,
     size_t l1_read_addr,
     uint32_t payload_size_bytes,
     uint32_t offset = 0) {
@@ -338,11 +339,12 @@ FORCE_INLINE void fabric_write_unidir(
     noc_async_writes_flushed();
 }
 
+template <typename FabricSender>
 FORCE_INLINE void scatter_fabric_write_unidir(
     uint64_t noc0_dest_noc_addr,
     uint64_t noc0_dest_noc_addr_next_core,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_direction_connection,
+    FabricSender& fabric_direction_connection,
     size_t l1_read_addr,
     uint16_t payload_size_bytes_first_core,
     uint32_t payload_size_bytes_second_core) {
@@ -357,13 +359,13 @@ FORCE_INLINE void scatter_fabric_write_unidir(
     noc_async_writes_flushed();
 }
 
-template <typename AddrGenType>
+template <typename AddrGenType, typename FabricSender>
 FORCE_INLINE void scatter_fabric_write_unidir(
     uint32_t first_id,
     uint32_t second_id,
     AddrGenType addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_direction_connection,
+    FabricSender& fabric_direction_connection,
     size_t l1_read_addr,
     uint16_t payload_size,
     uint32_t offset0 = 0,
