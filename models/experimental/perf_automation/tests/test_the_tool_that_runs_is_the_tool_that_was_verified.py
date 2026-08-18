@@ -287,3 +287,114 @@ def test_the_refusal_code_agrees_across_the_two_places_that_report_it():
     bl = (_PA / "agent" / "before_loop.py").read_text()
     i = bl.index("isinstance(exc, DiscoveryRejected)")
     assert "EXIT_REFUSED = %d" % m.EXIT_REFUSED in bl[i : i + 1500], "before_loop's fallback disagrees with run.py"
+
+
+# --------------------------------------------------------------------------- the review verdict
+
+
+def test_the_verdict_survives_a_newline_in_its_reasoning():
+    """RUN 9, 2026-08-17: "Invalid control character at: line 1 column 1029 (char 1028)".
+
+    The prompt asked for {"decision": ..., "reasoning": <2-3 sentences>} -- free prose inside a JSON
+    string, where a literal newline is illegal. The reviewer is a language model writing that prose,
+    so a long enough answer eventually wraps a line. The verdict was sound and was thrown away, the
+    run was refused for it, and the retry passed only because the next answer happened to fit on one
+    line. The prompt has asked for that shape since 2026-06-27; it needed a big discovery to break.
+    """
+    from agent.probes import parse_review_verdict
+
+    exact = '{"decision": "continue", "reasoning": "the gate covers prefill\nand decode"}'
+    assert parse_review_verdict(exact)[0] == "continue"
+
+
+def test_the_token_form_cannot_break_on_a_line_break():
+    """The fix is the FORMAT, not a more forgiving parser: with the decision on its own line the
+    reasoning is no longer inside a quoted string, so its shape cannot invalidate the answer."""
+    from agent.probes import parse_review_verdict
+
+    d, why = parse_review_verdict("DECISION: stop\nREASON: the gate covers only\nprefill, and decode\nis unmeasured")
+    assert d == "stop" and why.startswith("the gate covers only")
+
+
+def test_both_shapes_are_accepted():
+    """A format instruction is a request, not a guarantee -- and an older harness may face a newer
+    prompt, or the reverse. Neither shape is required; both are read."""
+    from agent.probes import parse_review_verdict
+
+    for text, want in (
+        ("DECISION: continue\nREASON: fine", "continue"),
+        ('{"decision": "stop", "reasoning": "no"}', "stop"),
+        ("Let me review.\n\nDECISION: continue\nREASON: fine", "continue"),
+        ("```\nDECISION: stop\nREASON: bad gate\n```", "stop"),
+        ("decision: continue\nreason: ok", "continue"),
+        ('Here is my verdict:\n{"decision": "stop", "reasoning": "no"}\nThanks!', "stop"),
+    ):
+        assert parse_review_verdict(text)[0] == want, text[:40]
+
+
+def test_a_fence_is_not_reasoning():
+    from agent.probes import parse_review_verdict
+
+    assert parse_review_verdict("```\nDECISION: stop\nREASON: bad gate\n```")[1] == "bad gate"
+
+
+def test_the_word_stop_in_prose_is_not_a_decision():
+    """Substring matching on free text would let the reasoning veto the decision."""
+    from agent.probes import parse_review_verdict
+
+    assert parse_review_verdict("DECISION: continue\nREASON: I nearly said stop, but no")[0] == "continue"
+
+
+def test_no_decision_at_all_is_none_and_the_gate_asks_again():
+    """The parser reports None; the GATE turns that into a refusal, which regenerates discovery and
+    asks again rather than proceeding.
+
+    Continuing would run a plan nobody approved -- the gate bypassable by any reply that failed to
+    state a decision. Refusing used to kill the run, which is what made proceeding look safer; a
+    refusal now costs one more attempt instead. A reviewer that is systematically unreadable
+    exhausts the retries and stops the run, which is correct: never getting a verdict is not
+    approval."""
+    from agent.probes import parse_review_verdict
+
+    assert parse_review_verdict("I could not evaluate this.")[0] is None
+    assert parse_review_verdict("")[0] is None
+
+    src = (_PA / "agent" / "probes.py").read_text()
+    i = src.index("decision, reasoning = parse_review_verdict(")
+    body = src[i : i + 1600]
+    assert "raise DiscoveryRejected" in body, "an unreadable verdict proceeds again"
+    assert '"decision": "continue"' not in body, "the gate still manufactures approval"
+
+
+def test_the_prompt_asks_for_the_shape_that_cannot_break():
+    from agent.probes import REVIEW_PROMPT
+
+    assert "DECISION:" in REVIEW_PROMPT and "REASON:" in REVIEW_PROMPT
+    assert "ONLY a JSON object" not in REVIEW_PROMPT, "the prompt asks for prose inside JSON again"
+
+
+def test_the_format_spec_quoted_back_is_not_a_verdict():
+    """`DECISION: continue|stop` is the INSTRUCTION, and a naive match reads its first alternative as
+    an answer -- handing an automatic continue to any model that restates the format before
+    answering. Found by adversarial testing, not by a run; it would have been a silent pass."""
+    from agent.probes import parse_review_verdict
+
+    assert parse_review_verdict("DECISION: continue|stop\nDECISION: stop\nREASON: bad gate")[0] == "stop"
+    assert parse_review_verdict("I should answer DECISION: continue|stop\n\nDECISION: stop\nREASON: x")[0] == "stop"
+
+
+def test_decoration_does_not_hide_a_decision():
+    """Models bold and bullet things. `**DECISION:** stop` returning nothing loses a real refusal."""
+    from agent.probes import parse_review_verdict
+
+    for text in ("**DECISION:** stop\nREASON: bad", "- **DECISION**: stop\n- REASON: bad", "DECISION stop\nREASON bad"):
+        assert parse_review_verdict(text)[0] == "stop", text
+
+
+def test_two_different_answers_are_no_answer():
+    """A reply that says continue and later stop has not decided. Picking the first -- or the last --
+    invents a verdict out of ordering, on the one question the gate exists to answer."""
+    from agent.probes import parse_review_verdict
+
+    assert parse_review_verdict("DECISION: continue\nREASON: ok\nActually\nDECISION: stop")[0] is None
+    assert parse_review_verdict("DECISION: stop\nREASON: bad\nDECISION: stop")[0] == "stop"

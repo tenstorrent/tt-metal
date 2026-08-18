@@ -1430,10 +1430,76 @@ REVIEW_PROMPT = (
     "this run), NOT yours. IGNORE any memory, notes, prior-run state, or git history about earlier "
     "optimization; a freshly-reset/clean-slate component MUST still be allowed to run. Your ONLY grounds to "
     "stop are a genuine perf-test / PCC-gate SOUNDNESS blocker.\n"
-    'Respond with ONLY a JSON object: {{"decision": "continue"|"stop", '
-    '"reasoning": <2-3 sentences>}}. Stop only for genuine soundness blockers — '
-    "warnings with a sensible fallback are acceptable."
+    # THE DECISION ON ITS OWN LINE, not prose inside a JSON string. Asking a model for
+    # {{"reasoning": <2-3 sentences>}} puts free text where a raw newline is illegal, and a long
+    # enough answer eventually wraps: run 9 lost a sound verdict to "Invalid control character at
+    # char 1028". A leading token cannot break that way, and the reasoning can then be any shape.
+    # JSON stays accepted by the parser, because a format instruction is a request, not a guarantee.
+    "Answer with the DECISION ON ITS OWN LINE, then the reasoning. Line breaks in the reasoning are "
+    "fine:\n"
+    "DECISION: continue|stop\n"
+    "REASON: <2-3 sentences>\n"
+    "Stop only for genuine soundness blockers — warnings with a sensible fallback are acceptable. "
+    "(A JSON object with the same two fields is also accepted.)"
 )
+
+
+def parse_review_verdict(text: str):
+    """(decision, reasoning) from a lead-review reply, or (None, raw) when it states neither.
+
+    THE FORMAT IS THE FIX. This asked for `{"decision": ..., "reasoning": <2-3 sentences>}` and then
+    parsed it strictly -- free prose inside a JSON string, scraped out of raw stdout. A model writing
+    a kilobyte of reasoning eventually presses enter mid-sentence, and a literal newline inside a
+    JSON string is invalid JSON. Run 9, 2026-08-17: "Invalid control character at char 1028", a
+    perfectly sound verdict discarded, and the run refused for it. The prompt has asked for that
+    shape since 2026-06-27; it only needed a long enough answer to break.
+
+    A leading token cannot break that way, because the prose is no longer inside a quoted string:
+
+        DECISION: continue
+        REASON: ...any length, any number of lines...
+
+    JSON IS STILL ACCEPTED, with strict=False, because the reviewer is a language model and a format
+    instruction is a request rather than a guarantee -- and because an older harness may be talking
+    to a newer prompt or the reverse. Both shapes are read; neither is required.
+    """
+    import re as _re
+
+    raw = (text or "").strip()
+    if not raw:
+        return None, ""
+    # A model asked for a bare format still fences it about half the time; the fence is not content.
+    raw = _re.sub(r"^```[a-zA-Z]*\s*|\s*```$", "", raw).strip()
+    # 1. THE TOKEN FORM, anywhere in the reply -- a model often greets before it answers, and often
+    # decorates: `**DECISION:** stop`, `- DECISION: stop`, `DECISION stop`. The separator and the
+    # emphasis are noise; the pair of words is the signal.
+    #
+    # THE SPEC IS NOT A VERDICT. `DECISION: continue|stop` is the instruction quoted back, and a
+    # naive match reads its first alternative as an answer -- handing an automatic "continue" to any
+    # model that restates the format before answering. It is excluded explicitly.
+    #
+    # TWO DIFFERENT ANSWERS ARE NO ANSWER. A reply that says continue and later stop has not decided;
+    # picking the first (or the last) invents a verdict from ordering. That is UNKNOWN, which the
+    # caller handles, rather than a coin toss on whether to stop the run.
+    _tok = _re.compile(r"^[\s>*_#-]*DECISION[\s*_]*[:=]?[\s*_]*(continue|stop)\b(?!\s*[|/])", _re.I | _re.M)
+    _hits = [(m, m.group(1).lower()) for m in _tok.finditer(raw)]
+    if _hits:
+        _vals = {v for _m, v in _hits}
+        if len(_vals) > 1:
+            return None, raw
+        m = _hits[0][0]
+        why = raw[m.end() :]
+        r = _re.search(r"^[\s>*_#-]*REASON(?:ING)?[\s*_]*[:=]?[\s*_]*", why, _re.I | _re.M)
+        return _hits[0][1], (why[r.end() :] if r else why).strip(" \n*_#>-")
+    # 2. the JSON form, tolerant of the raw newlines that broke it
+    try:
+        obj = json.loads(_extract_json_object(raw), strict=False)
+        d = str(obj.get("decision", "")).strip().lower()
+        if d in ("continue", "stop"):
+            return d, str(obj.get("reasoning", "")).strip()
+    except Exception:  # noqa: BLE001 -- neither shape; the caller decides what silence means
+        pass
+    return None, raw
 
 
 def cli_lead_review_gate(
@@ -1495,26 +1561,25 @@ def cli_lead_review_gate(
     # run. The rule the preflight already follows applies: something that could not RUN has not
     # decided anything, so it proceeds and SAYS SO rather than asserting a verdict it does not have.
     # A genuine `stop` still stops, and a non-zero exit above still refuses.
-    verdict = None
-    try:
-        verdict = json.loads(_extract_json_object(r.stdout or ""), strict=False)
-    except json.JSONDecodeError as exc:
-        print(
-            "  [probes] lead review verdict did not parse (%s) -- treating as UNKNOWN and continuing; "
-            "a formatting fault in the answer is not a decision about the plan" % exc,
-            file=sys.stderr,
-            flush=True,
+    decision, reasoning = parse_review_verdict(r.stdout or "")
+    if decision is None:
+        # NO VERDICT MEANS ASK AGAIN, NOT PROCEED.
+        #
+        # Continuing here would run a plan nobody approved, and silently -- the gate would be
+        # bypassable by any reply that failed to state a decision. Refusing used to mean killing the
+        # run, which is why proceeding looked like the lesser evil; it no longer does. A refusal now
+        # regenerates discovery and asks again (supervisor, bounded by the restart limit), so the
+        # cost of refusing an unreadable answer is one more attempt rather than the whole run.
+        #
+        # The parse itself is already generous -- both the token form and JSON, decorated or fenced,
+        # newlines and all -- so reaching here means the reply stated nothing usable, or stated two
+        # different things. Neither is approval.
+        #
+        # THE COST, STATED: a reviewer that is systematically unreadable will exhaust the retries and
+        # stop the run. That is the right outcome -- "I never got a verdict" is not "carry on".
+        raise DiscoveryRejected(
+            "lead review stated no decision (reply began: %s)" % (reasoning or "")[:200].replace("\n", " ")
         )
-        return {
-            "decision": "continue",
-            "reasoning": "verdict unparseable: %s" % exc,
-            "model": "claude-cli",
-            "usage": None,
-        }
-    decision = verdict.get("decision")
-    reasoning = str(verdict.get("reasoning", ""))
-    if decision not in ("continue", "stop"):
-        raise DiscoveryRejected(f"lead review returned invalid decision: {decision!r}")
     if decision == "stop":
         raise DiscoveryRejected(f"cc lead agent stopped the run: {reasoning}")
     return {"decision": decision, "reasoning": reasoning, "model": "claude-cli", "usage": None}
