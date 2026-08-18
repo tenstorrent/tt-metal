@@ -125,6 +125,10 @@ class TTNNHifiganGenerator:
         self.cc = _compute_config()
         self.dtype = dtype  # activation dtype
         self.weights_dtype = weights_dtype or dtype
+        # preprocess_* keeps conv weights on host, so ttnn re-prepares and re-uploads them on
+        # every call (78 convs per forward). Keep the device-prepared pair it hands back, keyed
+        # by (weight, input length) — the layout it prepares depends on the conv's geometry.
+        self._prepared = {}
 
     def _conv_config(self):
         # Fresh Conv2dConfig per call: ttnn conv ops may write auto-selected sharding back into
@@ -147,10 +151,12 @@ class TTNNHifiganGenerator:
     def _conv1d(self, x, w, b, in_ch, out_ch, L, k, pad, dil):
         """x: [1,1,L,in_ch] (any layout) -> [1,1,Lout,out_ch] TILE. Length-preserving 'same' pad."""
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        out, lo, _ = ttnn.conv1d(
+        key = (id(w), L)
+        wp, bp = self._prepared.get(key, (w, b))
+        out, lo, wb = ttnn.conv1d(
             input_tensor=x,
-            weight_tensor=w,
-            bias_tensor=b,
+            weight_tensor=wp,
+            bias_tensor=bp,
             device=self.device,
             in_channels=in_ch,
             out_channels=out_ch,
@@ -168,6 +174,7 @@ class TTNNHifiganGenerator:
             return_output_dim=True,
             return_weights_and_bias=True,
         )
+        self._prepared.setdefault(key, wb)
         return self._post(out, lo, out_ch), lo
 
     def _convT(self, x, w, b, in_ch, out_ch, L, k, s, pad):
@@ -177,10 +184,12 @@ class TTNNHifiganGenerator:
         kwargs = {}
         if slice_cfg is not None:
             kwargs["dram_slice_config"] = slice_cfg
-        out, [ho, wo] = ttnn.conv_transpose2d(
+        key = (id(w), L)
+        wp, bp = self._prepared.get(key, (w, b))
+        out, [ho, wo], wb = ttnn.conv_transpose2d(
             input_tensor=x,
-            weight_tensor=w,
-            bias_tensor=b,
+            weight_tensor=wp,
+            bias_tensor=bp,
             device=self.device,
             in_channels=in_ch,
             out_channels=out_ch,
@@ -196,9 +205,11 @@ class TTNNHifiganGenerator:
             compute_config=self.cc,
             groups=1,
             return_output_dim=True,
+            return_weights_and_bias=True,
             dtype=self.dtype,
             **kwargs,
         )
+        self._prepared.setdefault(key, wb)
         return self._post(out, ho * wo, out_ch), wo
 
     def _cond(self, g2d, lin_w, lin_b, out_ch):
