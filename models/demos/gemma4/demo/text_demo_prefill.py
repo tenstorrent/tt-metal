@@ -54,7 +54,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma4.config import MeshConfig, ModeConfig
+from models.demos.gemma4.config import MeshConfig, ModeConfig, _cp_disabled
 from models.demos.gemma4.tests.test_factory import (
     TestFactory,
     build_hf_prefill_mask,
@@ -91,9 +91,19 @@ except ModuleNotFoundError:
 # (see models/demos/gemma4/GALAXY_1x32_HANG.md). TP=8 gives 672 -> 1344 B = 21x64,
 # which stays on the native path.
 #
-# Note the tensor cache is tagged by TP (``_tp8_`` vs ``_tp32_``), so switching mesh
-# needs a matching cache; _require_cache reports it when missing.
-_MESH_SHAPES = {"4x8": (4, 8), "1x32": (1, 32), "1x8": (1, 8), "1x4": (1, 4)}
+# ``8x4`` is the transpose of the default: TP=4 x CP=8, trading tensor parallelism for
+# twice the context parallelism. Every dimension still divides — hidden 5376/4 = 1344
+# (a 2688 B row-major page, 42x64, so the embedding all-gather stays on the native path
+# that TP=32 falls off), q heads 32/4 = 8, KV heads 16/4 = 4, vocab 262144/4 = 65536 —
+# and CP=8 splits a 4096-token chunk into 512 tokens per rank. Note this box's physical
+# mesh is 8x4, so 8x4 is the untransposed orientation and 4x8 is the rotated one
+# (SystemMesh::get_mapped_devices rotates a requested shape to fit and maps logical
+# (i,j) -> system (j,i) silently).
+#
+# Note the tensor cache is tagged by TP (``_tp8_`` vs ``_tp4_`` vs ``_tp32_``), so
+# switching mesh needs a matching cache; _require_cache reports it when missing. Populate
+# a new TP's cache with GEMMA4_PREFILL_LOAD_FULL_WEIGHTS=1 on the first run.
+_MESH_SHAPES = {"4x8": (4, 8), "8x4": (8, 4), "1x32": (1, 32), "1x8": (1, 8), "1x4": (1, 4)}
 GALAXY_MESH = _MESH_SHAPES[os.environ.get("GEMMA4_PREFILL_MESH", "4x8")]
 
 # Prefill chunk sizes, chosen to bracket the 1024-token sliding window.
@@ -535,6 +545,15 @@ def test_prefill_layer(mesh_device, layer_type, chunk, traced, reset_seeds, requ
 
         sliding: 0.99940 (512), 0.99933 (1024), 0.99932 (2048), 0.99931 (4096)
         global:  0.99986 (512), 0.99986 (1024), 0.99986 (2048), 0.99985 (4096)
+
+    Halving TP costs nothing numerically. At ``8x4`` (TP=4 x CP=8), chunk 4096,
+    eager and traced again identical:
+
+        sliding: 0.99932    global: 0.99986
+
+    i.e. indistinguishable from TP=8, which is the expected result — TP splits the
+    head and hidden dims without changing the arithmetic, so only the all-reduce
+    order differs.
 
     Left at the 0.99 default deliberately — every case clears it by ~4e-3, and
     pinning thresholds to measured values invites flakiness on run-to-run drift.
@@ -1064,12 +1083,28 @@ def test_prefill_kv_cache_covers_sequence(mesh_device, reset_seeds, request):
 
 # ── Test 6: long-context prefill as a chunk sequence under CP ─────────────────
 
-# Context lengths to walk, each prefilled as context/4096 chunks of 4096. 4096 is
-# the chunk the CP ring path supports: the 1024-token sliding window rounds to a
-# 32-tile halo, which exactly fills the 1024-token per-rank slab at CP=4. Smaller
-# chunks would need a multi-hop halo, which the op rejects.
+# Context lengths to walk, each prefilled as context/LONG_CONTEXT_CHUNK chunks.
+#
+# The chunk size is set by the sliding-window halo, not by preference. ring_joint
+# requires ``halo_tokens <= N_local_q`` (ring_joint_sdpa_device_operation.cpp), and the
+# 1024-token window rounds up to a 32-tile = 1024-token halo, so the per-rank Q slab
+# ``chunk / cp`` has to be at least the window. Anything smaller needs a multi-hop halo,
+# which the op rejects outright rather than reading a truncated history:
+#
+#   CP=4 (4x8 mesh): chunk 4096 -> slab 1024, halo 1024. Exactly fits.
+#   CP=8 (8x4 mesh): chunk 4096 -> slab  512, halo 1024. TT_FATAL.
+#                    chunk 8192 -> slab 1024, halo 1024. Exactly fits.
+#
+# So the chunk scales with CP, which keeps the per-device slab at 1024 tokens on every
+# mesh — the same local activation footprint — and simply halves the chunk count at CP=8.
+# Every LONG_CONTEXT_LENGTHS entry stays divisible by both 4096 and 8192.
+_SLIDING_WINDOW_TOKENS = 1024
+_CHUNK_CP = 1 if _cp_disabled() else GALAXY_MESH[0]
 LONG_CONTEXT_LENGTHS = [32768, 65536, 131072, 262144]
-LONG_CONTEXT_CHUNK = 4096
+# GEMMA4_LONG_CONTEXT_CHUNK forces a chunk size, for measuring what the halo rule costs.
+# Setting it below window*cp is expected to fail in ring_joint rather than silently read a
+# truncated history, which is the point of trying it.
+LONG_CONTEXT_CHUNK = int(os.environ.get("GEMMA4_LONG_CONTEXT_CHUNK", max(4096, _SLIDING_WINDOW_TOKENS * _CHUNK_CP)))
 
 # Chunks that pay a one-time program compile rather than steady-state cost: chunk 0 is
 # the first run of the mask CP path, chunk 1 the first run of the ring path. Both are
@@ -1652,6 +1687,22 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
       eager  0.94585 0.98890 0.98901 0.99042 0.99024 0.98987 0.98965 0.98899
       traced 0.94585 0.98890 0.98901 0.99042 0.99024 0.98987 0.98965 0.98899
     The perf half stands regardless: ~206 ms per replayed ring chunk vs ~1016 ms eager.
+
+    Mesh shape is worth sweeping here, because the chunk size is tied to it (see
+    LONG_CONTEXT_CHUNK). A 256k prefill, device time only, measured back to back:
+
+        4x8  TP=8 CP=4  chunk 4096  slab 1024  64 chunks  22.4 s  11.7k tok/s  200 -> 488 ms
+        8x4  TP=4 CP=8  chunk 8192  slab 1024  32 chunks  18.7 s  14.0k tok/s  304 -> 885 ms
+        8x4  TP=4 CP=8  chunk 4096  slab  512  -- TT_FATAL, halo 1024 > slab 512
+
+    8x4 is ~17% faster end to end despite each chunk costing more, because it runs half
+    as many of them and the per-device Q slab is the same 1024 tokens either way. Trading
+    tensor parallelism for context parallelism is the win at long context.
+
+    The third row is why LONG_CONTEXT_CHUNK scales with CP rather than staying at 4096:
+    keeping the chunk while doubling CP halves the Q slab below the sliding window, and
+    ring_joint refuses it instead of attending over a truncated history. Reproduce with
+    GEMMA4_LONG_CONTEXT_CHUNK=4096 on an 8x4 mesh.
     """
     from models.demos.gemma4.tests import cpu_prefill_reference as cpu_ref
     from models.demos.gemma4.tt.attention import ring_prefill
