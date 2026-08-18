@@ -361,10 +361,13 @@ auto matmul(const ComputeBlock& a, const ComputeBlock& b);
 //     u::Storage out(kCbOut, u::ReduceGeometry<4, 4>::out_tiles(u::ReduceAxis::Rows));
 //     out.store(u::reduce_sum<u::ReduceGeometry<4, 4>, u::ReduceAxis::Rows>(block, scaler));
 //
-// `scaler` must have been filled by fill_reduce_scaler and is never consumed.
+// `scaler` comes from fill_reduce_scaler and must be held at KERNEL scope: every
+// reduce_tile re-reads it, so it must not be popped until the kernel ends. Taking
+// a ComputeBlock rather than a Storage is what says so -- and proves the buffer
+// was actually filled and waited on.
 template <typename Geometry, ReduceAxis Axis>
 ReduceNode<Geometry, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
-    const ComputeBlock& b, const Storage& scaler);
+    const ComputeBlock& b, const ComputeBlock& scaler);
 
 // ---------------------------------------------------------------------------
 // Reserved multicast semaphores
@@ -717,8 +720,12 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, LogicalMcast mcast, cons
 // `value_bits` is written as raw 32-bit words, so its packing follows the CB's
 // format: for bfloat16 one word is TWO values, which is what kReduceScalerOne is.
 // Sum wants 1.0; an average wants 1/N (1/sqrt(N) reducing both axes).
+// Returns the page as a Block, so a scaler is held the same way a fused bias is:
+// as a ComputeBlock at KERNEL scope. That is what makes the wait happen once, in
+// its constructor, and the pop happen at the end of the kernel rather than after
+// the first reduction.
 template <int thread>
-void fill_reduce_scaler(const Storage& scaler, uint32_t value_bits = kReduceScalerOne);
+Block fill_reduce_scaler(const Storage& scaler, uint32_t value_bits = kReduceScalerOne);
 
 // Drains a Block to a tensor. Takes the Block by value: this call consumes it.
 template <int thread, typename Accessor>
