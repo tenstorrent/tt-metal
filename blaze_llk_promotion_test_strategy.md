@@ -1,8 +1,12 @@
 # tt-llk blaze promotions — OPEN work
 
 > **What this is.** The remaining tt-llk test work for the blaze->tt-metal `experimental/`
-> promotions (#52709, #52713, #52727). **4 items remain: 2 not started, 2 attempted and
-> reverted.** Completed work has been moved out to
+> promotions (#52709, #52713, #52727). **Updated 2026-08-18: 3 items remain — 2 not started,
+> 1 attempted and reverted.** Item 1 (`mul_reduce_scalar_chunked_tile`) is **resolved as a
+> product defect**, not an open test task; §3 is kept for its two dead ends, and the answer
+> is Finding 9 in the DONE document. `REMAINING_WORK.md` is the current actionable index —
+> read that first; this document is the long-form background it points into.
+> Completed work has been moved out to
 > **`BLAZE_PROMOTION_TESTS_DONE.md`** — check there before starting anything, since three
 > of the plans below were already corrected by what those tests measured on silicon.
 >
@@ -27,7 +31,7 @@
 
 | # | Item | PR | Est. | Notes |
 |---|------|----|------|-------|
-| 1 | `mul_reduce_scalar_chunked_tile` — new driver, not an extension | #52709 | ~1 d spent, not done | **§3. Attempted and reverted — read §3 before retrying.** Driver written and compiling; result is ~5-30x high and unexplained |
+| ~~1~~ | ~~`mul_reduce_scalar_chunked_tile`~~ — **RESOLVED 2026-08-18 as a defect, not a test gap** | #52709 | — | The op is broken as written: re-entering the reduce inside one DEST section does not restore state, and that is exactly how the chunked loop is built. Minimal reproducer landed (`test_mul_reduce_scalar_reenter.py`, 36 passed / 12 xfailed). **Read Finding 9 in the DONE document, not §3's plan.** Needs an owner (tracked as C4); a full chunked driver is pointless until the LLK or the compute API is fixed |
 | 3 | plain `custom_mm` matmul — new file | #52727 | ~2 d | **§8.** Also settles the `ct ∈ {7,9,11}` doc question |
 | 4 | `top32_rm` — new file, two modes | #52713 | ~3-4 d | **§6.** Largest single effort. **Now also gates a removal:** the 7 `llk_math_deepseek_top32_rm` wrappers were dropped from the promotion on review (no caller, no test), so this item is what earns them back |
 | 5 | `eltwise_mul_scalar` HiFi init fix | #52709 | ? | **§9. Attempted and reverted — read §9 before retrying.** Hangs the device as first written. **See also the review finding in the DONE document (Finding 7): the workaround's stated mechanism does not survive reading the code it calls** |
@@ -89,12 +93,24 @@ nothing for all four.
 
 ---
 
-## 3. OPEN #1 — `mul_reduce_scalar_chunked_tile` (ATTEMPTED AND REVERTED)
+## 3. RESOLVED (was OPEN #1) — `mul_reduce_scalar_chunked_tile`
 
-> **Status: attempted twice, both reverted. The driver code is NOT in git history** — it was
-> deleted before committing, so it must be rewritten. Everything learned is below, and the
-> bug is now localised: it is inside a **single batch's reduce**, not in the cross-batch
-> accumulation.
+> **Status as of 2026-08-18: the cause is found, and it is a product defect.** Re-entering the
+> reduce sequence works fine across a DEST-section boundary and is **bit-identical**; it is
+> broken only when there is no boundary in between — which is precisely how
+> `mul_reduce_scalar_chunked_tile` re-enters per batch. Measured 9.27x-9.93x golden, matching
+> the 5-30x non-integer signature recorded below.
+>
+> **Read Finding 9 in `BLAZE_PROMOTION_TESTS_DONE.md` for the result**, and
+> `tests/python_tests/test_mul_reduce_scalar_reenter.py` for the ~40-line reproducer. Tracked
+> for an owner decision as C4 in `REMAINING_WORK.md`.
+>
+> **What is still useful below:** the two dead ends (the accumulator fill, and the missing
+> UNPACK/MATH barrier) — both tried on silicon, both left the output byte-identical, and
+> Finding 9 explains why neither moved the number: neither touched the DEST-section boundary.
+> **Do not re-investigate either, and do not rebuild the full chunked driver** until the op
+> is fixed. The scaffolding notes are kept for whoever eventually writes the real chunked
+> test *after* the fix lands.
 
 ### What was built
 
@@ -174,6 +190,13 @@ reduce is already wrong before any cross-batch accumulation happens. The chunkin
 arithmetic, the accumulator and the barrier are all downstream of a broken single-batch
 reduce.
 
+**Reconciled 2026-08-18.** The measurement above is consistent with Finding 9, and in
+hindsight points straight at it. `DEST[0]` was packed *after the batch loop*, so the number
+read was the **last** batch's reduce, not the first — and Finding 9 says batch 0 is correct
+while every re-entry after it is wrong. The reading "the per-batch reduce is already wrong
+before any cross-batch accumulation" was right about *which* reduce was broken but wrong to
+infer that a single isolated reduce would fail; one does not.
+
 **The one structural difference from the working non-chunked driver** is that
 `_llk_math_mul_reduce_scalar_init_` (and the unpack-side `_llk_unpack_AB_init_` +
 `switch_to_reduce`) are invoked **once per batch** rather than once per kernel. The prime
@@ -182,19 +205,17 @@ suspect is therefore that this reduce family is not re-enterable — that a seco
 re-establishing it. That would be a real finding about the promoted LLKs if confirmed, and
 is exactly the kind of thing the compute API's chunked loop depends on working.
 
-**Next experiments, cheapest first:**
+**Next experiments — SUPERSEDED 2026-08-18, kept for the record.**
 
-1. Pack every batch's `DEST[0]` to its own result tile instead of one final scalar. That
-   shows whether batch 0 is already wrong (reduce family not re-enterable at all, or the
-   driver's single-batch sequence is simply wrong) or only batches >= 1 are (state not
-   restored between reduces). This single measurement splits the remaining space in half.
-2. If batch 0 alone is correct, bisect what `_llk_math_mul_reduce_scalar_init_` leaves
-   behind: try a full `_llk_math_hw_configure_` + `_llk_math_pack_sync_init_` before each
-   batch, and narrow from there.
-3. If batch 0 is already wrong, drop the chunking entirely and reproduce the non-chunked
-   driver's exact sequence for one batch of `batch_size` tiles — that must match
-   `test_mul_reduce_scalar.py`, and any divergence is a driver bug to fix before
-   re-adding batches.
+The three experiments listed here were the right shape but all presupposed rebuilding the
+chunked driver. What actually settled it was cheaper: keep the *known-good non-chunked*
+sequence and just run it twice, with the DEST-section boundary as an explicit axis. That
+isolates the one structural difference without reintroducing the chunking arithmetic, the
+accumulator, or the batch decomposition — none of which turned out to be involved.
+
+The prime suspect named below ("this reduce family is not re-enterable") was close but too
+coarse: the family *is* re-enterable, across a section boundary, bit-identically. See
+Finding 9.
 
 ### Original plan
 

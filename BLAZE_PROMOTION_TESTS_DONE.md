@@ -5,19 +5,26 @@
 > `BLAZE_PROMOTION_TEST_STRATEGY.md` on 2026-08-14 so that document only tracks
 > outstanding work.
 >
-> Most of this needs no action. **Three items do**, and are cross-referenced from the
+> Most of this needs no action. **Four items do**, and are cross-referenced from the
 > open-work document:
 >
 > - **Finding 2** — the `dense_packing` W-stride defect, recorded as an `xfail` in a landed
->   test. Needs an owner decision.
+>   test. Needs an owner decision. (Its `xfail` only became a working detector on
+>   2026-08-18 — see Finding 10.)
 > - **Finding 7** — the `eltwise_mul_scalar` HiFi workaround's stated mechanism does not
 >   survive reading the code it calls. Needs the #52709 author.
 > - **Finding 8** — a pre-existing `topk_xl` -> `eltwise_binary` reconfig escape. Unrelated
 >   to the promotions, but it needs an owner and it will confuse OPEN #4.
+> - **Finding 9 (NEW, 2026-08-18)** — `mul_reduce_scalar` re-entry needs a DEST-section
+>   boundary. This is the located cause of the reverted `mul_reduce_scalar_chunked_tile`
+>   driver, i.e. a defect in a shipping op. Needs an owner. Tracked as C4.
+>
+> **Updated 2026-08-18:** a second session added the A3 and A6 items below, closed the #53130
+> review comments, and turned the old open A4 investigation into Finding 9.
 >
 > Branch: `ldjurovic/llk-tests-blaze-promotions` (tt-metal). #52709 merged 2026-08-14 and the
-> branch was rebased onto main; #52713 and #52727 are still open, so it still carries their
-> promotion payload.
+> branch was rebased onto main; #52713 and #52727 are **still open** as of 2026-08-18, so it
+> still carries their promotion payload.
 
 **PRs covered:** tt-metal #52747, #52745, #52713, #52727, #52709
 
@@ -28,10 +35,10 @@
 | | |
 |---|---|
 | Verification tier (V1-V4) | 4 of 4, all green |
-| New test items landed | 5 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard, rmsnorm bcast-scalar dest-reuse) |
-| Test results | **137 new variants passing / 1 xfailed** (42 + 15 + 2 + 12 + 66) |
-| Files | 8 added (4 `tests/sources/*.cpp`, 4 `tests/python_tests/test_*.py`) + 2 extended (`sfpu_sampling_test.cpp`, `test_sfpu_sampling.py`) + 2 LLK headers fixed to compile |
-| Product findings | 1 defect (needs a decision) + 1 pre-existing reconfig escape (needs an owner) + 6 behavioural constraints |
+| New test items landed | **8** — the original 5 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard, rmsnorm bcast-scalar dest-reuse) plus 3 from 2026-08-18 (`set_dst_write_addr_offset` behaviour, compressed metadata-word boundary, `mul_reduce_scalar` re-entry) |
+| Test results | **235 new variants passing / 13 xfailed** (42 + 15 + 2 + 12 + 114 + 14 + 6 + 36; xfails are 1 W-stride + 12 re-entry) |
+| Files | 12 added (6 `tests/sources/*.cpp`, 6 `tests/python_tests/test_*.py`) + 3 extended (`sfpu_sampling_test.cpp`, `test_sfpu_sampling.py`, `test_matmul_custom_compressed.py`) + 2 LLK headers fixed to compile + 3 template params added |
+| Product findings | **2 defects** (both need a decision) + 1 pre-existing reconfig escape + 1 unresolved intermittent + 8 behavioural constraints |
 
 ### Landed tests
 
@@ -40,14 +47,17 @@
 | `add_rsqrt` SFPU functor (#52709) | `tests/sources/sfpu_add_rsqrt_test.cpp`, `tests/python_tests/test_sfpu_add_rsqrt.py` | 42 passed, 14 skipped |
 | `custom_mm`/`compressed_custom_mm` `block_uninit` (#52727) | `tests/sources/custom_mm_uninit_restore_test.cpp`, `tests/python_tests/test_custom_mm_uninit_restore.py` | 15 passed, 1 xfailed, 16 skipped |
 | Sort-header coexistence (#52713) | `tests/sources/sort_headers_coexist_test.cpp`, `tests/python_tests/test_sort_headers_coexist.py` | 2 passed |
-| **rmsnorm bcast-scalar dest-reuse (#52709)** | `tests/sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp`, `tests/python_tests/test_rmsnorm_bcast_scalar_dest_reuse.py` | **66 passed, 66 skipped** |
+| **rmsnorm bcast-scalar dest-reuse (#52709)** | `tests/sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp`, `tests/python_tests/test_rmsnorm_bcast_scalar_dest_reuse.py` | **114 passed, 114 skipped** (was 66; widened 2026-08-18, Finding 11) |
 | Sampling `vConstFloatPrgm0` hazard (#52745) | `tests/sources/sfpu_sampling_test.cpp`, `tests/python_tests/test_sfpu_sampling.py` (extended) | 63 passed, 97 skipped (was 51 passed) |
+| **`set_dst_write_addr_offset` behaviour (#52713)** — 2026-08-18 | `tests/sources/set_dst_write_addr_offset_test.cpp`, `tests/python_tests/test_set_dst_write_addr_offset.py` | **14 passed, 14 skipped** |
+| **Compressed metadata-word boundary (#52727)** — 2026-08-18 | `tests/python_tests/test_matmul_custom_compressed.py` (extended) | **6 passed** (suite 582 -> 588) |
+| **`mul_reduce_scalar` re-entry (#52709)** — 2026-08-18 | `tests/sources/mul_reduce_scalar_reenter_test.cpp`, `tests/python_tests/test_mul_reduce_scalar_reenter.py` | **36 passed, 12 xfailed** (Finding 9) |
 
 ### Verification tier — all green on the merged branch
 
 | Suite | For | Result |
 |---|---|---|
-| `test_matmul_custom_compressed.py` | V1 / #52727 | 583 passed |
+| `test_matmul_custom_compressed.py` | V1 / #52727 | 583 passed; **588 after the 2026-08-18 boundary test**, but see Finding 12 — one unreproduced failure in three runs |
 | `test_topk_xl.py` | V2 / #52713 | 71 passed |
 | `test_sfpu_sampling.py` | V3 / #52745 | 51 passed, 93 skipped as the baseline; **63 passed, 97 skipped** after the hazard test below was added |
 | `test_generalized_moe_gate.py` | V4 / #52747 | 89 passed |
@@ -530,6 +540,120 @@ where `<target>` is
 
 Per the tt-llk notes a reconfig escape is a real bug rather than a test-ordering nuisance,
 and `tt-smi -r` must not be used to paper over it. **Needs an owner.**
+
+### Finding 9 — DEFECT (needs an owner): `mul_reduce_scalar` re-entry needs a DEST-section boundary
+
+Added 2026-08-18. This is the located cause of the reverted `mul_reduce_scalar_chunked_tile`
+driver, and it closes what the open-work document tracked as A4. Tracked for decision as C4.
+
+A ~40-line driver that runs the known-good non-chunked sequence twice over the same input,
+re-issuing exactly what the chunked loop re-issues per batch, splits the behaviour cleanly:
+
+| Configuration | Result on BH p100a |
+|---|---|
+| `passes=1`, either mode (the control) | correct |
+| `passes=2`, DEST-section boundary between passes | correct, and **bit-identical** across passes |
+| `passes=2`, one shared DEST section | **wrong — all 12 variants, 9.27x to 9.93x golden** |
+
+So the family **is** re-enterable, which the old one-line hypothesis ("not re-enterable") got
+wrong. What breaks is re-entry with no `dest_section_done` / `wait_for_dest_available` pair in
+between — that handshake restores whatever the second `_llk_math_mul_reduce_scalar_init_` does
+not.
+
+And that is exactly the chunked op's structure. `mul_reduce_scalar_chunked_tile`
+(`rmsnorm.h:105`) documents that the caller "must ... acquire DST before calling", then
+re-enters every batch inside that single section, with `if (batch > 0)
+mul_reduce_scalar_init(...)` as its only restoration attempt.
+
+Same signature as the reverted driver — it reported 5-30x golden and "not a clean multiple of
+anything"; this reproduces 9.3-9.9x, also non-integer — so very likely the same defect, now
+with a minimal reproducer instead of a full chunked implementation.
+
+This also explains why the two earlier fix attempts (the accumulator fill, and a missing
+UNPACK/MATH barrier) both left the output **byte-identical**: neither touched the DEST-section
+boundary, which is the variable that actually matters. Do not re-investigate either.
+
+The 12 failing variants are `xfail` (marker form, so the body runs) and flip to XPASS the
+moment re-entry inside one section restores state. The fix belongs in the LLK, or in the
+compute API if the answer is that the chunked op must close its section per batch.
+
+### Finding 10 — an `xfail` that could never have reported XPASS
+
+`test_custom_mm_uninit_restore.py` recorded the Finding 2 W-stride defect with imperative
+`pytest.xfail()`, which raises immediately and aborts the test body. So the `dense_packing`
+fp32 variant never built, never ran, and **could never report XPASS** — functionally a `skip`
+with a different label, while the surrounding comment promised it would "flip to XPASS the
+moment the constants become format-aware". Finding 2's owner decision was resting on a detector
+that was not armed.
+
+Fixed 2026-08-18 by attaching the marker instead
+(`request.node.add_marker(pytest.mark.xfail(reason=..., strict=False))`), which is what the rest
+of the suite already did — `test_sfpu_unary.py`, `test_sfpu_binary.py` and
+`test_sfpu_reduce.py` all use the marker form; this file was the only outlier. The run now
+prints a real golden-vs-device comparison under XFAIL rather than a bare skip, which is how you
+can tell the difference at a glance.
+
+Note `pytest.param(..., marks=...)` is **not** available as an alternative here: the local
+`parametrize()` helper builds raw tuples and calls `.name`/`str()` on each value, so it does not
+unwrap a `ParameterSet`.
+
+### Finding 11 — the rmsnorm partial-faces addr_mod skips to the next tile base
+
+Established while widening the partial-faces test on 2026-08-18 (66 -> 114 variants). The
+addr_mod that `_llk_math_rmsnorm_bcast_scalar_dest_reuse_init_` programs increments DEST by
+`8 + (4 - num_faces) * 16`: after a tile's covered faces it **skips the uncovered ones and
+lands on the next tile's base**. The unpack side, by contrast, reads `num_tiles * num_faces`
+faces **contiguously** out of L1.
+
+So for `num_faces < 4` the k-th face of the input goes to tile k's leading face-slot, and the
+golden must slice the input contiguously while indexing the device output per tile. Assuming one
+contiguous output run — the obvious reading — produces a wrong golden.
+
+`num_tiles` is what pins the skip term: at `num_tiles=1` it is unobservable, since there is no
+second tile for a wrong stride to land in. Halving it to `8 + (4 - num_faces) * 8` fails every
+`num_tiles=2` variant and **no** `num_tiles=1` variant.
+
+Two smaller facts from the same pass, both previously unswept anywhere in the suite:
+
+- **HiFi3 was never exercised**, though `_FIDELITY_PHASES` defined it. It is the only fidelity
+  whose phase count is not a power of two (3), so an implementation deriving the loop bound by
+  shifting rather than from the table would pass LoFi/HiFi2/HiFi4 and fail only there.
+- **The transpose-fold path ran at LoFi only.** For ELWMUL the replay buffer decides which face
+  lands in which SrcA bank while each fidelity phase masks a different mantissa slice, and
+  nothing ran the two together.
+
+### Finding 12 — `test_matmul_custom_compressed.py` is not deterministic (unresolved)
+
+On 2026-08-18, three runs of the same suite on the same commit gave 588 passed, then **587
+passed / 1 failed**, then 588 passed. The failing variant was **not identified** — the run was
+backgrounded through a `grep` that discarded the detail, and it has not recurred.
+
+Not caused by the 2026-08-18 changes: the 6 new metadata-boundary variants passed in all three
+runs, and nothing else in that suite's compile path was touched. Finding 8 already records a
+pre-existing order-dependent reconfig escape in a neighbouring area, which is the obvious
+suspect but is unconfirmed.
+
+Recorded so a single green run of this suite is not read as proof. If it fires again, capture
+the full log; the `perturb` skill exists for this shape of problem.
+
+### Finding 13 — a test that passes first try has not been shown to test anything
+
+Method note rather than a product finding, but it changed two conclusions on 2026-08-18, so it
+is worth stating. Every test added that day passed on its first hardware run, and in every case
+a deliberate mutation was what established it was not vacuous:
+
+| Test | Mutation | Result |
+|---|---|---|
+| `set_dst_write_addr_offset` | helper discards its argument | 10 of 14 fail |
+| `set_dst_write_addr_offset` | rows read as datums (`addr * 32`) | sub-tile spill check fires |
+| rmsnorm partial faces | addr_mod skip term halved | every `num_tiles=2` variant fails |
+| compressed metadata boundary | the OOB guard removed | **still passes** |
+
+Two of those changed what the test could claim. The last one showed the boundary test cannot
+detect the out-of-bounds read at all — at `rem_iters == 0` the word read past the buffer is
+never used, so no golden comparison can see it — and the `set_dst_write_addr_offset` mutation
+showed its `tile=0` variants prove nothing about the helper, since offset 0 is a no-op even when
+broken. Both limitations are now written into the tests rather than left implied.
 
 ---
 
