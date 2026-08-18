@@ -2,9 +2,9 @@
 //
 // Metal (v1) binding for the unified programming model.
 //
-// <tt/unified> includes this automatically. To bind the model to something else
+// <tt/unified/core> includes this automatically. To bind the model to something else
 // -- the host trace harness, say -- define TT_UNIFIED_CUSTOM_BINDING before
-// including <tt/unified> and provide the same names yourself.
+// including <tt/unified/core> and provide the same names yourself.
 //
 // Two jobs:
 //
