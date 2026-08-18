@@ -261,7 +261,7 @@ class Qwen36DecoderLayer:
 
         ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
-        ff_output = self.feed_forward.forward(ff_input)
+        ff_output = self.feed_forward.forward(ff_input, mode=mode)
         ttnn.deallocate(ff_input)
 
         output = ttnn.add(h, ff_output)

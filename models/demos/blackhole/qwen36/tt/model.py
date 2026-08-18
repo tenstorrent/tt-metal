@@ -3017,7 +3017,7 @@ class Qwen36Model:
                     ttnn.deallocate(x)
                     ttnn.deallocate(attn_out)
                     ff_in = layer.ffn_norm(h, mode=Mode.PREFILL)
-                    ff_out = layer.feed_forward.forward(ff_in)
+                    ff_out = layer.feed_forward.forward(ff_in, mode="prefill")
                     ttnn.deallocate(ff_in)
                     x = ttnn.add(h, ff_out)
                     ttnn.deallocate(h)

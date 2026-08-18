@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""On-device expert decode forward using sparse_matmul (seq_len=1).
+"""On-device expert decode forward using sparse_matmul (the B decode users sit on dim-2).
 
 Mirrors the gemma4 experts decode path with two Qwen changes: SwiGLU (not GeGLU),
 and the row-parallel down_proj is combined with the qwen tt_all_reduce, which on the
@@ -62,7 +62,7 @@ def decode_forward(
     num_devices=1,
     topology=None,
 ):
-    """hidden_states [1,1,S,H] (S=1 decode), routing_weights [1,1,S,E]. Returns [1,1,S,H/tp]."""
+    """hidden_states [1,1,S,H] (S = decode batch), routing_weights [1,1,S,E]. Returns [1,1,S,H/tp]."""
     batch_size = hidden_states.shape[2]
     top_k = config.top_k
     intermediate_size = weights.intermediate_size_per_device
@@ -76,9 +76,19 @@ def decode_forward(
     # receivers (see gpt_oss #45943/#45052).
     if num_devices > 1:
         routing_weights = ttnn.mesh_partition(routing_weights, dim=3, cluster_axis=1)
-    nnz = None if num_devices > 1 else top_k
 
-    sparsity = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT)
+    # sparse_matmul requires sparsity.logical_volume() == num_experts (one gate per expert, the
+    # sparse batch dim). Multi-user decode has routing [1,1,B,E] (B users on dim-2), so collapse
+    # the user dim to a per-expert union mask [1,1,1,E]: an expert is computed if ANY user routed
+    # to it, and each user's per-expert weight is applied later by the routing_3d multiply — so
+    # every user still sees only its own top-k contribution. B==1 max is a no-op (bit-identical).
+    if batch_size > 1:
+        sparsity_src = ttnn.max(routing_weights, dim=2, keepdim=True)  # [1,1,1,E]
+        nnz = None
+    else:
+        sparsity_src = routing_weights
+        nnz = None if num_devices > 1 else top_k
+    sparsity = ttnn.to_layout(sparsity_src, ttnn.ROW_MAJOR_LAYOUT)
     output_tile = ttnn.Tile([32, 32])
 
     # up/gate fused into ONE sparse_matmul over concatenated weights (N = 2*full_intermediate),

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Qwen3.5-MoE sparse MLP block. Drop-in replacement for Qwen36MLP on MoE layers:
+"""Sparse MoE MLP block. Drop-in replacement for Qwen36MLP on MoE layers:
 forward(x) takes a single (ffn-normed, full-hidden) tensor and returns the same
 fractured-hidden layout the dense MLP produces.
 """
@@ -31,9 +31,9 @@ class Qwen36MoE:
         if config.shared_intermediate_size:
             self.shared = Qwen36SharedExpert(mesh_device, state_dict, tensor_cache_path, args=args, tt_ccl=tt_ccl)
 
-    def forward(self, x):
+    def forward(self, x, mode="decode"):
         dense_routing = self.router(x)
-        out = self.experts(x, dense_routing)
+        out = self.experts(x, dense_routing, mode=mode)
         if self.shared is not None:
             shared_out = self.shared.forward(x)
             out = ttnn.add(out, shared_out)

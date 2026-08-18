@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Qwen3.5-MoE routed experts. Dispatches decode (seq_len=1) vs prefill (seq_len>1)
-from the input's dim-2, mirroring gemma4's Gemma4Experts.__call__."""
+"""Routed experts. Dispatches decode vs prefill on the caller's explicit
+mode, not the input shape: multi-user decode puts the B users on dim-2, so a shape test
+would misroute B>1 decode into the prefill branch (decode_forward handles any batch)."""
 
 from .decode import decode_forward
 from .prefill import create_prefill_sparsity, prefill_forward
@@ -21,10 +22,10 @@ class Qwen36Experts:
         experts_per_device = config.num_experts // self.num_devices if self.num_devices > 1 else config.num_experts
         self.prefill_sparsity = create_prefill_sparsity(mesh_device, experts_per_device)
 
-    def __call__(self, hidden_states, dense_routing):
-        """hidden_states [1,1,S,H], dense_routing [1,1,S,E] -> [1,1,S,H/tp]."""
-        seq_len = hidden_states.shape[2]
-        if seq_len == 1:
+    def __call__(self, hidden_states, dense_routing, mode="decode"):
+        """hidden_states [1,1,S,H] (S=batch in decode, seq in prefill), dense_routing
+        [1,1,S,E] -> [1,1,S,H/tp]. mode ('decode'|'prefill') selects the path."""
+        if mode == "decode":
             return decode_forward(
                 hidden_states,
                 dense_routing,
@@ -35,6 +36,7 @@ class Qwen36Experts:
                 num_devices=self.num_devices,
                 topology=self.topology,
             )
+        seq_len = hidden_states.shape[2]
         assert seq_len % 32 == 0, f"Prefill seq_len must be a multiple of 32, got {seq_len}"
         return prefill_forward(
             hidden_states,
