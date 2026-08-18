@@ -9,6 +9,7 @@
 #include "ckernel_trisc_common.h"
 #include "cpack_common.h"
 #include "llk_pack_common.h"
+#include "llk_sync.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -25,6 +26,8 @@ using namespace ckernel;
 template <std::uint32_t BLOCK_CT_DIM>
 inline void _llk_pack_untilize_mop_config_(const std::uint8_t buf_desc_id)
 {
+    _llk_mop_bank_acquire_<p_stall::PACK0>();
+
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
     constexpr std::uint32_t MOP_INNER_LOOP = BLOCK_CT_DIM;
 
@@ -36,7 +39,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint8_t buf_desc_id)
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pack_instrn);
     temp.set_last_outer_loop_instr(reset_src_and_dst_reg_instrn);
 
-    temp.program_bank0_sw_cntl(instrn_buffer);
+    _mop_bank_program_(temp, instrn_buffer);
 }
 
 /**
@@ -88,7 +91,7 @@ inline void _llk_pack_untilize_(const std::uint32_t dest_idx, const std::uint32_
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, dest_reg_offset_idx + dest_idx);
     TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_pacr::PACK0, l1_tile_idx);
     // Runs MOP
-    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+    _mop_bank_run_(instrn_buffer);
 }
 
 /**
