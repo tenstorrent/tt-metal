@@ -1015,8 +1015,8 @@ def test_mla_chunked_prefill(
     reference), so this works for both variants. It complements the deepseek GPU-trace path, which only
     replays full-chunk iters and so never exercises real weights across the rotation/partial-chunk edge
     scenarios that the cpu path covers. Without the env var, fall back to random (mirroring
-    test_kimi_mla). kimi_k2_6 also runs the trace path (loader + k_pe re-interleave are arch-agnostic; needs kimi
-    its own registered traces). It otherwise runs the same config-driven driver on any arch/mesh.
+    test_kimi_mla). kimi_k2_6 also runs the trace path (loader + k_pe re-interleave are arch-agnostic),
+    against its own registered traces. It otherwise runs the same config-driven driver on any arch/mesh.
 
     kimi_k3 (NoPE + output gate, 96 heads) runs 'scalar' only -- 'metadata' is skipped explicitly
     below. It runs 'trace' like kimi_k2_6, taking real weights from layer 3 via

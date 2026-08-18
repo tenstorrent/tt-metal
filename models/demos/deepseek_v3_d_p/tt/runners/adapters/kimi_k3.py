@@ -58,7 +58,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
     mla_ref_cache_env = "KIMI_K3_MLA_REF_CACHE"
     ttnn_cache_env = "TT_KIMI_K3_PREFILL_TTNN_CACHE"
     # Loading the staged checkpoint wholesale needs an MXFP4 -> bf16 dequantizer that does not exist
-    # yet, so the pretrained fixtures stay skipped. The MoE gate is exempt: it is unquantized and read
+    # yet, so the full-transformer fixtures stay skipped. The MoE gate is exempt: it is unquantized and read
     # through a prefix-filtered safe_open.
     supports_pretrained = False
     # MLA alone is loadable: quantization_config.ignore covers self_attn, so those weights are bf16.
