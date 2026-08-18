@@ -2783,7 +2783,11 @@ inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
     TTI_SFPSHFT(6, 0, p_sfpu::LREG0, 1);
 
     // Load chunk_id (runtime) and place it in bits [15:11] of every lane.
-    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, chunk_id);
+    // Masked to the 5-bit field at composition: an out-of-contract id can
+    // only wrap within the index field, never spill into the BF16 value
+    // half (the mask is RISC-side arithmetic on the composed immediate —
+    // zero SFPU cost).
+    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, chunk_id & 0x1Fu);
     TTI_SFPSHFT(11, 0, p_sfpu::LREG1, 1);
 
     TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);

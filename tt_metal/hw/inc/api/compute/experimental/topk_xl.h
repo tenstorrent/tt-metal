@@ -119,8 +119,9 @@ ALWI void topk_xl_rebuild(uint32_t idst, bool ascending) {
  * Programs all of:
  *   * ADDR_MOD_1..7 for the bitonic load/store strides (incl. the +24 / +40 /
  *     +48 stride-folding slots that the inner loops depend on),
- *   * the math-thread MOP Expander with the merge body template (`fused`
- *     selects the body length: 16 for fused, 18 for unfused),
+ *   * the math-thread MOP Expander with the merge body template (16-issue
+ *     body for fused AND for the default macro-scheduled unfused path;
+ *     18 for unfused only when built with -DDISABLE_TOPK_XL_SFPLOADMACRO),
  *   * the SFPU index-tracking config in unfused mode.
  *
  * Because every merge/rebuild/local_sort relies on the ADDR_MOD programming
