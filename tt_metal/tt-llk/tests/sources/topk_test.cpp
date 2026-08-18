@@ -267,7 +267,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // After Datacopy, we do topk SFPU.
     // These two calls are essentially the same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_init<APPROX>(); from metal.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::topk_local_sort>();
-    ckernel::sfpu::_init_topk();
+    if constexpr (TOPK_FUSED_STABLE)
+    {
+        // Fused keys carry the index inside the packed word: index tracking stays OFF.
+        ckernel::sfpu::_init_topk_fused_();
+    }
+    else
+    {
+        ckernel::sfpu::_init_topk();
+    }
 
     if constexpr (TOPK_STABLE_SORT)
     {
@@ -350,7 +358,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_phases_steps,
-                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT),
+                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,
@@ -366,7 +374,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_rebuild,
-                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT),
+                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,
@@ -381,7 +389,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     dest_sync,
                     is_fp32_dest_acc_en,
                     calculate_bitonic_topk_merge,
-                    (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, NETWORK_STABLE_SORT),
+                    (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE),
                     dst_index,
                     vector_mode,
                     current_iteration,
@@ -395,7 +403,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_rebuild,
-                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT),
+                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,

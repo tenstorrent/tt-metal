@@ -22,6 +22,7 @@ from .llk_params import (
     DstRoundingMode,
     EltwiseBinaryReuseDestType,
     FastMode,
+    FusedSort,
     ImpliedMathFormat,
     L1Accumulation,
     MathFidelity,
@@ -445,6 +446,14 @@ class STABLE_SORT(TemplateParameter):
 
 
 @dataclass
+class FUSED_SORT(TemplateParameter):
+    fused_sort: FusedSort = FusedSort.No
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool FUSED_SORT = {str(self.fused_sort.value).lower()};"
+
+
+@dataclass
 class DEST_SYNC(TemplateParameter):
     dest_sync: DestSync = DestSync.Half
 
@@ -580,11 +589,6 @@ class TOPK(TemplateParameter):
             f"constexpr bool TOPK_STABLE_SORT = {str(self.topk_stable_sort).lower()};",
             f"constexpr bool TOPK_FUSED_STABLE = {str(self.topk_fused_stable).lower()};",
         ]
-        if self.topk_fused_stable:
-            # Switches the LLK topk value load/stores to raw INT32 so packed [bf16|u16] keys never
-            # go through a float-mode store (denormal flush would erase the index bits). Must be a
-            # preprocessor define: ckernel_sfpu_topk.h gates on it, and build.h is included first.
-            lines.append("#define TOPK_FUSED_KEYS 1")
         return "\n".join(lines)
 
     def convert_to_struct_fields(self) -> tuple[str, str]:

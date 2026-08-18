@@ -52,14 +52,10 @@ constexpr bool TOPK_UINT16_IN_FP32_DEST = false;
 // SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16): low→high 16-bit so packer sees UInt16 in 32-bit DEST.
 constexpr std::uint32_t TOPK_SFPSTORE_MODE_PACK_UINT16 = 9;
 
-// Fused-key stable topk (TOPK_FUSED_KEYS injected by the kernel build): the network sorts opaque
-// [bf16|u16] packed words, so every value load/store must be raw INT32 — a float-mode store
-// denormal-flushes 0x0000xxxx keys (value +0.0 / bf16 denormals), silently erasing the index bits.
-#if defined(TOPK_FUSED_KEYS) && TOPK_FUSED_KEYS
-constexpr bool TOPK_FUSED_KEYS_MODE = true;
-#else
-constexpr bool TOPK_FUSED_KEYS_MODE = false;
-#endif
+// Fused-key mode (FUSED template parameter on the drivers below): the network sorts opaque
+// [bf16|u16] packed words that live only in the value region — index loads/stores disappear
+// (half the DEST traffic) and every value access must be raw INT32, because a float-mode store
+// denormal-flushes 0x0000xxxx keys (value +0.0), silently erasing the index bits.
 
 // 32 SFPU vectors cover one 32-bit DEST tile at addresses 0,2,...,62 (same footprint as
 // typecast VectorMode::RC with ITERATIONS=8). Explicit offsets + ADDR_MOD_3 (incr=0) avoid
@@ -246,13 +242,13 @@ inline void _topk_defuse_tile_(const int num_tiles)
     topk_replay_init = 0;
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool FUSED = false>
 inline void bitonic_topk_load8(std::uint32_t offset, std::uint32_t dist)
 {
     constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
     constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
     // UInt16-in-32b-DEST: full-width INT32 value access (high bits pre-cleared). Else DEFAULT (0).
-    constexpr InstrModLoadStore instr_mod_value = (TOPK_UINT16_IN_FP32_DEST || TOPK_FUSED_KEYS_MODE) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
+    constexpr InstrModLoadStore instr_mod_value = (TOPK_UINT16_IN_FP32_DEST || FUSED) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
 
     std::uint32_t face_offset = offset >> 4;
     std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
@@ -261,17 +257,20 @@ inline void bitonic_topk_load8(std::uint32_t offset, std::uint32_t dist)
     TT_SFPLOAD(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_3, ld_offset);
     TT_SFPLOAD(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_3, ld_offset + dist);
 
-    // Load 16 consecutive indices
-    TT_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, dst_indices_offset + ld_offset);
-    TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, dst_indices_offset + ld_offset + dist);
+    if constexpr (!FUSED)
+    {
+        // Load 16 consecutive indices
+        TT_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, dst_indices_offset + ld_offset);
+        TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, dst_indices_offset + ld_offset + dist);
+    }
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool FUSED = false>
 inline void bitonic_topk_store8(std::uint32_t offset, std::uint32_t dist)
 {
     constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
     constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
-    constexpr InstrModLoadStore instr_mod_value = (TOPK_UINT16_IN_FP32_DEST || TOPK_FUSED_KEYS_MODE) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
+    constexpr InstrModLoadStore instr_mod_value = (TOPK_UINT16_IN_FP32_DEST || FUSED) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
 
     std::uint32_t face_offset = offset >> 4;
     std::uint32_t ld_offset   = (offset & 0xF) + face_offset * 32;
@@ -280,17 +279,20 @@ inline void bitonic_topk_store8(std::uint32_t offset, std::uint32_t dist)
     TT_SFPSTORE(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_3, ld_offset);
     TT_SFPSTORE(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_3, ld_offset + dist);
 
-    // Load 16 consecutive indices
-    TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, dst_indices_offset + ld_offset + 0);
-    TT_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, dst_indices_offset + ld_offset + dist);
+    if constexpr (!FUSED)
+    {
+        // Load 16 consecutive indices
+        TT_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, dst_indices_offset + ld_offset + 0);
+        TT_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, dst_indices_offset + ld_offset + dist);
+    }
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool FUSED = false>
 inline void bitonic_topk_load16(std::uint32_t dist0, std::uint32_t dist1)
 {
     constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
     constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
-    constexpr InstrModLoadStore instr_mod_value = (TOPK_UINT16_IN_FP32_DEST || TOPK_FUSED_KEYS_MODE) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
+    constexpr InstrModLoadStore instr_mod_value = (TOPK_UINT16_IN_FP32_DEST || FUSED) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
 
     // Load 16 consecutive numbers
     TTI_SFPLOAD(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_3, 0);
@@ -307,28 +309,31 @@ inline void bitonic_topk_load16(std::uint32_t dist0, std::uint32_t dist1)
         TT_SFPLOAD(p_sfpu::LREG3, instr_mod_value, ADDR_MOD_3, dist1 + dist0);
     }
 
-    // Load 16 consecutive indices
-    TTI_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 0);
-    if ((dist0 == 4) && (dist1 == 8))
+    if constexpr (!FUSED)
     {
-        TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 4);
-        TTI_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 8);
-        TTI_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 12);
-    }
-    else
-    {
-        TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 0 + dist0);
-        TT_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, dst_indices_offset + dist1);
-        TT_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_3, dst_indices_offset + dist1 + dist0);
+        // Load 16 consecutive indices
+        TTI_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 0);
+        if ((dist0 == 4) && (dist1 == 8))
+        {
+            TTI_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 4);
+            TTI_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 8);
+            TTI_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 12);
+        }
+        else
+        {
+            TT_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 0 + dist0);
+            TT_SFPLOAD(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, dst_indices_offset + dist1);
+            TT_SFPLOAD(p_sfpu::LREG7, instr_mod_index, ADDR_MOD_3, dst_indices_offset + dist1 + dist0);
+        }
     }
 }
 
-template <bool is_fp32_dest_acc_en, bool alt_addr_mod = false>
+template <bool is_fp32_dest_acc_en, bool alt_addr_mod = false, bool FUSED = false>
 inline void bitonic_topk_store16(std::uint32_t dist0, std::uint32_t dist1)
 {
     constexpr std::uint32_t dst_indices_offset  = 128; // 2 tile x 64 rows per tile
     constexpr InstrModLoadStore instr_mod_index = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
-    constexpr InstrModLoadStore instr_mod_value = (TOPK_UINT16_IN_FP32_DEST || TOPK_FUSED_KEYS_MODE) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
+    constexpr InstrModLoadStore instr_mod_value = (TOPK_UINT16_IN_FP32_DEST || FUSED) ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
 
     // Load 16 consecutive numbers
     TTI_SFPSTORE(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_3, 0);
@@ -336,28 +341,31 @@ inline void bitonic_topk_store16(std::uint32_t dist0, std::uint32_t dist1)
     {
         TTI_SFPSTORE(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_3, 4);
         TTI_SFPSTORE(p_sfpu::LREG2, instr_mod_value, ADDR_MOD_3, 8);
-        TTI_SFPSTORE(p_sfpu::LREG3, instr_mod_value, ADDR_MOD_3, 12);
+        TTI_SFPSTORE(p_sfpu::LREG3, instr_mod_value, (FUSED && alt_addr_mod) ? ADDR_MOD_2 : ADDR_MOD_3, 12);
     }
     else
     {
         TT_SFPSTORE(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_3, 0 + dist0);
         TT_SFPSTORE(p_sfpu::LREG2, instr_mod_value, ADDR_MOD_3, dist1);
-        TT_SFPSTORE(p_sfpu::LREG3, instr_mod_value, ADDR_MOD_3, dist1 + dist0);
+        TT_SFPSTORE(p_sfpu::LREG3, instr_mod_value, (FUSED && alt_addr_mod) ? ADDR_MOD_2 : ADDR_MOD_3, dist1 + dist0);
     }
 
-    // Load 16 consecutive indices
-    TTI_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 0);
-    if ((dist0 == 4) && (dist1 == 8))
+    if constexpr (!FUSED)
     {
-        TTI_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 4);
-        TTI_SFPSTORE(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 8);
-        TTI_SFPSTORE(p_sfpu::LREG7, instr_mod_index, alt_addr_mod ? ADDR_MOD_2 : ADDR_MOD_3, dst_indices_offset + 12);
-    }
-    else
-    {
-        TT_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 0 + dist0);
-        TT_SFPSTORE(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, dst_indices_offset + dist1);
-        TT_SFPSTORE(p_sfpu::LREG7, instr_mod_index, alt_addr_mod ? ADDR_MOD_2 : ADDR_MOD_3, dst_indices_offset + dist1 + dist0);
+        // Load 16 consecutive indices
+        TTI_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 0);
+        if ((dist0 == 4) && (dist1 == 8))
+        {
+            TTI_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 4);
+            TTI_SFPSTORE(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 8);
+            TTI_SFPSTORE(p_sfpu::LREG7, instr_mod_index, alt_addr_mod ? ADDR_MOD_2 : ADDR_MOD_3, dst_indices_offset + 12);
+        }
+        else
+        {
+            TT_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_3, dst_indices_offset + 0 + dist0);
+            TT_SFPSTORE(p_sfpu::LREG6, instr_mod_index, ADDR_MOD_3, dst_indices_offset + dist1);
+            TT_SFPSTORE(p_sfpu::LREG7, instr_mod_index, alt_addr_mod ? ADDR_MOD_2 : ADDR_MOD_3, dst_indices_offset + dist1 + dist0);
+        }
     }
 }
 
@@ -410,12 +418,14 @@ TT_ALWAYS_INLINE void topk_cmp_swap_stable_min_to_vd()
     }
 }
 
-template <bool STABLE_SORT>
+template <bool STABLE_SORT, bool FUSED = false>
 inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_start)
 {
     if (dir == static_cast<bool>(SortDir::ArgMin))
     {
-        TTI_SFPCONFIG(0x104, 0xF, 1); // Reverse the max/min behaviour of SWAP
+        // Full-register immediate write: 0x104 = swap reversal (bit 8) + index tracking (bit 2).
+        // Fused mode has tracking OFF and must keep it off: write 0x100 / restore 0x000.
+        TTI_SFPCONFIG(FUSED ? 0x100 : 0x104, 0xF, 1); // Reverse the max/min behaviour of SWAP
         TTI_SFPNOP;
         TTI_SFPNOP;
     }
@@ -468,7 +478,7 @@ inline void bitonic_topk_ph3_st4_to_1(bool dir, bool &init_replay, int replay_st
 
     if (dir == static_cast<bool>(SortDir::ArgMin))
     {
-        TTI_SFPCONFIG(0x004, 0xF, 1); // Restore the max/min behaviour of SWAP
+        TTI_SFPCONFIG(FUSED ? 0x000 : 0x004, 0xF, 1); // Restore the max/min behaviour of SWAP
         TTI_SFPNOP;
         TTI_SFPNOP;
     }
@@ -654,7 +664,7 @@ inline void bitonic_topk_inc_x4_dest(std::uint32_t inc, bool cr)
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false, bool FUSED = false>
 inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, const int i_start_phase, const int i_end_step, const int i_start_step)
 {
     // NOTE (stable sort): the tie-break polarity (topk_stable_descending_mode) is a property of the
@@ -667,6 +677,13 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
 
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
     topk_uint16_clear_value_tiles_high_bits();
+
+    static_assert(!(FUSED && STABLE_SORT), "fused and comparator-stable modes are mutually exclusive");
+    static_assert(!FUSED || is_fp32_dest_acc_en, "fused packed keys require 32-bit DEST");
+    static_assert(!(FUSED && TOPK_UINT16_IN_FP32_DEST), "fused keys and uint16-in-fp32-dest are mutually exclusive");
+    // Fused packed keys halve the load/store footprint; replay window bases stay put
+    // (slots 4-7 / 12-15 simply go unused in fused mode).
+    constexpr int ldst_count = FUSED ? 4 : 8;
 
     if constexpr (STABLE_SORT)
     {
@@ -700,13 +717,13 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             // Groups of 16 datums being sorted at the same time
                             if (init_load)
                             {
-                                lltt::record<lltt::Exec>(0, 8);
-                                bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
+                                lltt::record<lltt::Exec>(0, ldst_count);
+                                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED>(4, 8);
                                 init_load = false;
                             }
                             else
                             {
-                                lltt::replay(0, 8);
+                                lltt::replay(0, ldst_count);
                             }
                             if constexpr (STABLE_SORT)
                             {
@@ -730,13 +747,13 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             }
                             if (init_store)
                             {
-                                lltt::record<lltt::Exec>(8, 8);
-                                bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
+                                lltt::record<lltt::Exec>(8, ldst_count);
+                                bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED>(4, 8);
                                 init_store = false;
                             }
                             else
                             {
-                                lltt::replay(8, 8);
+                                lltt::replay(8, ldst_count);
                             }
                         }
                         break;
@@ -744,7 +761,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                         for (int d = 0; d < 4; d++)
                         {
                             // Groups of 16 datums being sorted at the same time
-                            lltt::replay(0, 8);
+                            lltt::replay(0, ldst_count);
                             if constexpr (STABLE_SORT)
                             {
                                 // Stable sequence exceeds the replay window; issue inline.
@@ -765,13 +782,13 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                                     lltt::replay(16, replay_count);
                                 }
                             }
-                            lltt::replay(8, 8);
+                            lltt::replay(8, ldst_count);
                         }
                         break;
                     case 2:
                         for (int d = 0; d < 4; d++)
                         {
-                            lltt::replay(0, 8);
+                            lltt::replay(0, ldst_count);
                             if constexpr (STABLE_SORT)
                             {
                                 // Stable sequence exceeds the replay window; issue inline.
@@ -792,15 +809,15 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                                     lltt::replay(16, replay_count);
                                 }
                             }
-                            lltt::replay(8, 8);
+                            lltt::replay(8, ldst_count);
                         }
                         break;
                     case 3:
                         for (int d = 0; d < 4; d++)
                         {
-                            lltt::replay(0, 8);
-                            bitonic_topk_ph3_st4_to_1<STABLE_SORT>(dir, init_phase, 16);
-                            lltt::replay(8, 8);
+                            lltt::replay(0, ldst_count);
+                            bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED>(dir, init_phase, 16);
+                            lltt::replay(8, ldst_count);
                             dir = !dir;
                         }
                         break;
@@ -824,9 +841,9 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                             {
                                 for (std::uint32_t ii = 0; ii < inner_d; ii++)
                                 {
-                                    bitonic_topk_load16<is_fp32_dest_acc_en>(4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
+                                    bitonic_topk_load16<is_fp32_dest_acc_en, FUSED>(4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
                                     bitonic_topk_step_N<STABLE_SORT>(dir);
-                                    bitonic_topk_store16<is_fp32_dest_acc_en, false>(
+                                    bitonic_topk_store16<is_fp32_dest_acc_en, false, FUSED>(
                                         4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
                                     std::uint32_t dst_inc = 8;
                                     dst_offset += dst_inc;
@@ -854,9 +871,9 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
                         datums_compared = 0;
                         while (datums_compared < total_datums_to_compare)
                         {
-                            lltt::replay(0, 8);
-                            bitonic_topk_ph3_st4_to_1<STABLE_SORT>(dir, init_phase, 16);
-                            lltt::replay(8, 8);
+                            lltt::replay(0, ldst_count);
+                            bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED>(dir, init_phase, 16);
+                            lltt::replay(8, ldst_count);
                             datums_compared += 16;
                             dir = (datums_compared == sorted_seq_length) ? !dir : dir;
                         }
@@ -871,11 +888,15 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
     topk_replay_init = -1;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT = false>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT = false, bool FUSED = false>
 inline void _bitonic_topk_merge(const int m_iter, const int k)
 {
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
     topk_uint16_clear_value_tiles_high_bits();
+
+    static_assert(!(FUSED && STABLE_SORT), "fused and comparator-stable modes are mutually exclusive");
+    static_assert(!FUSED || is_fp32_dest_acc_en, "fused packed keys require 32-bit DEST");
+    static_assert(!(FUSED && TOPK_UINT16_IN_FP32_DEST), "fused keys and uint16-in-fp32-dest are mutually exclusive");
 
     if constexpr (STABLE_SORT)
     {
@@ -907,7 +928,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
             {
                 for (std::uint32_t ii = 0; ii < inner_d; ii++)
                 {
-                    bitonic_topk_load8<is_fp32_dest_acc_en>(dst_offset, ld_dist);
+                    bitonic_topk_load8<is_fp32_dest_acc_en, FUSED>(dst_offset, ld_dist);
                     if constexpr (STABLE_SORT)
                     {
                         // Tie-break polarity follows top_min at compile time.
@@ -924,7 +945,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
                     {
                         TTI_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
                     }
-                    bitonic_topk_store8<is_fp32_dest_acc_en>(dst_offset, ld_dist);
+                    bitonic_topk_store8<is_fp32_dest_acc_en, FUSED>(dst_offset, ld_dist);
                     datums_compared += 8;
                     if (ii == (inner_d - 1))
                     {
@@ -945,7 +966,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false, bool FUSED = false>
 inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k, const int logk, const int skip_second)
 {
     // NOTE (stable sort): tie-break polarity comes from the kernel-level
@@ -956,6 +977,16 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
     // merge requires, misordering equal values on wide multi-core shapes.
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
     topk_uint16_clear_value_tiles_high_bits();
+
+    static_assert(!(FUSED && STABLE_SORT), "fused and comparator-stable modes are mutually exclusive");
+    static_assert(!FUSED || is_fp32_dest_acc_en, "fused packed keys require 32-bit DEST");
+    static_assert(!(FUSED && TOPK_UINT16_IN_FP32_DEST), "fused keys and uint16-in-fp32-dest are mutually exclusive");
+    // Fused packed keys halve the load/store parts of the composite replay windows.
+    constexpr int ldst_count       = FUSED ? 4 : 8;   // bare load16/store16 windows
+    constexpr int rebuild_win_ld8  = FUSED ? 18 : 22; // load8 + ph1 body + store8 + 8x INCRWC
+    constexpr int rebuild_win_ph1  = FUSED ? 18 : 26; // load16 + ph1 body + store16 + 4x INCRWC
+    constexpr int rebuild_win_ph2  = FUSED ? 21 : 29; // load16 + ph2 body + store16 + 4x INCRWC
+    constexpr int rebuild_win_st12 = FUSED ? 8 : 12;  // store16 + 4x INCRWC at base 13
 
     if constexpr (STABLE_SORT)
     {
@@ -998,9 +1029,9 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                         {
                             if constexpr (STABLE_SORT)
                             {
-                                bitonic_topk_load8<is_fp32_dest_acc_en>(0, ld_offset);
+                                bitonic_topk_load8<is_fp32_dest_acc_en, FUSED>(0, ld_offset);
                                 bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
-                                bitonic_topk_store8<is_fp32_dest_acc_en>(0, ld_offset);
+                                bitonic_topk_store8<is_fp32_dest_acc_en, FUSED>(0, ld_offset);
                                 bitonic_topk_inc_x8_dest(64, false);
                             }
                             else
@@ -1008,16 +1039,16 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                                 // Groups of 8 datums being sorted at the same time
                                 if (init_rebuild)
                                 {
-                                    lltt::record<lltt::Exec>(0, 22);
-                                    bitonic_topk_load8<is_fp32_dest_acc_en>(0, ld_offset);
+                                    lltt::record<lltt::Exec>(0, rebuild_win_ld8);
+                                    bitonic_topk_load8<is_fp32_dest_acc_en, FUSED>(0, ld_offset);
                                     bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
-                                    bitonic_topk_store8<is_fp32_dest_acc_en>(0, ld_offset);
+                                    bitonic_topk_store8<is_fp32_dest_acc_en, FUSED>(0, ld_offset);
                                     bitonic_topk_inc_x8_dest(64, false);
                                     init_rebuild = false;
                                 }
                                 else
                                 {
-                                    lltt::replay(0, 22);
+                                    lltt::replay(0, rebuild_win_ld8);
                                 }
                             }
                             datums_compared += 16;
@@ -1031,9 +1062,9 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                         {
                             if constexpr (STABLE_SORT)
                             {
-                                bitonic_topk_load16<is_fp32_dest_acc_en>(ld_offset, ld_dist);
+                                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED>(ld_offset, ld_dist);
                                 bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
-                                bitonic_topk_store16<is_fp32_dest_acc_en, true>(ld_offset, ld_dist);
+                                bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED>(ld_offset, ld_dist);
                                 TTI_INCRWC(0, 8, 0, 0);
                                 TTI_INCRWC(0, 8, 0, 0);
                                 TTI_INCRWC(0, 8, 0, 0);
@@ -1044,10 +1075,10 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                                 // Groups of 16 datums being sorted at the same time
                                 if (init_rebuild)
                                 {
-                                    lltt::record<lltt::Exec>(0, 26);
-                                    bitonic_topk_load16<is_fp32_dest_acc_en>(ld_offset, ld_dist);
+                                    lltt::record<lltt::Exec>(0, rebuild_win_ph1);
+                                    bitonic_topk_load16<is_fp32_dest_acc_en, FUSED>(ld_offset, ld_dist);
                                     bitonic_topk_ph1_st2_to_1<STABLE_SORT>();
-                                    bitonic_topk_store16<is_fp32_dest_acc_en, true>(ld_offset, ld_dist);
+                                    bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED>(ld_offset, ld_dist);
                                     TTI_INCRWC(0, 8, 0, 0);
                                     TTI_INCRWC(0, 8, 0, 0);
                                     TTI_INCRWC(0, 8, 0, 0);
@@ -1056,7 +1087,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                                 }
                                 else
                                 {
-                                    lltt::replay(0, 26);
+                                    lltt::replay(0, rebuild_win_ph1);
                                 }
                             }
                             datums_compared += 16;
@@ -1068,9 +1099,9 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                     {
                         if constexpr (STABLE_SORT)
                         {
-                            bitonic_topk_load16<is_fp32_dest_acc_en>(4, ld_offset);
+                            bitonic_topk_load16<is_fp32_dest_acc_en, FUSED>(4, ld_offset);
                             bitonic_topk_ph2_st3_to_1<STABLE_SORT>();
-                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, ld_offset);
+                            bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED>(4, ld_offset);
                             TTI_INCRWC(0, 8, 0, 0);
                             TTI_INCRWC(0, 8, 0, 0);
                             TTI_INCRWC(0, 8, 0, 0);
@@ -1081,10 +1112,10 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             // Groups of 16 datums being sorted at the same time
                             if (init_rebuild)
                             {
-                                lltt::record<lltt::Exec>(0, 29);
-                                bitonic_topk_load16<is_fp32_dest_acc_en>(4, ld_offset);
+                                lltt::record<lltt::Exec>(0, rebuild_win_ph2);
+                                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED>(4, ld_offset);
                                 bitonic_topk_ph2_st3_to_1<STABLE_SORT>();
-                                bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, ld_offset);
+                                bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED>(4, ld_offset);
                                 TTI_INCRWC(0, 8, 0, 0);
                                 TTI_INCRWC(0, 8, 0, 0);
                                 TTI_INCRWC(0, 8, 0, 0);
@@ -1093,7 +1124,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             }
                             else
                             {
-                                lltt::replay(0, 29);
+                                lltt::replay(0, rebuild_win_ph2);
                             }
                         }
                         datums_compared += 16;
@@ -1104,9 +1135,9 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                     {
                         if constexpr (STABLE_SORT)
                         {
-                            bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
-                            bitonic_topk_ph3_st4_to_1<STABLE_SORT>(dir, init_rebuild, 8);
-                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
+                            bitonic_topk_load16<is_fp32_dest_acc_en, FUSED>(4, 8);
+                            bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED>(dir, init_rebuild, 8);
+                            bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED>(4, 8);
                             TTI_INCRWC(0, 8, 0, 0);
                             TTI_INCRWC(0, 8, 0, 0);
                             TTI_INCRWC(0, 8, 0, 0);
@@ -1117,11 +1148,11 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             // Groups of 16 datums being sorted at the same time
                             if (init_rebuild)
                             {
-                                lltt::record<lltt::Exec>(0, 8);
-                                bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
-                                bitonic_topk_ph3_st4_to_1<STABLE_SORT>(dir, init_rebuild, 8);
-                                lltt::record<lltt::Exec>(13, 12);
-                                bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
+                                lltt::record<lltt::Exec>(0, ldst_count);
+                                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED>(4, 8);
+                                bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED>(dir, init_rebuild, 8);
+                                lltt::record<lltt::Exec>(13, rebuild_win_st12);
+                                bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED>(4, 8);
                                 TTI_INCRWC(0, 8, 0, 0);
                                 TTI_INCRWC(0, 8, 0, 0);
                                 TTI_INCRWC(0, 8, 0, 0);
@@ -1129,9 +1160,9 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                             }
                             else
                             {
-                                lltt::replay(0, 8);
-                                bitonic_topk_ph3_st4_to_1<STABLE_SORT>(dir, init_rebuild, 8);
-                                lltt::replay(13, 12);
+                                lltt::replay(0, ldst_count);
+                                bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED>(dir, init_rebuild, 8);
+                                lltt::replay(13, rebuild_win_st12);
                             }
                         }
                         datums_compared += 16;
@@ -1157,9 +1188,10 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                         {
                             for (std::uint32_t ii = 0; ii < inner_d; ii++)
                             {
-                                bitonic_topk_load16<is_fp32_dest_acc_en>(4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
+                                bitonic_topk_load16<is_fp32_dest_acc_en, FUSED>(4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
                                 bitonic_topk_step_N<STABLE_SORT>(dir);
-                                bitonic_topk_store16<is_fp32_dest_acc_en, false>(4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
+                                bitonic_topk_store16<is_fp32_dest_acc_en, false, FUSED>(
+                                    4, 2 * dist); // load/store with offset of face 1 (in row major face layout)
                                 std::uint32_t dst_inc = 8;
                                 dst_offset += dst_inc;
                                 bool dst_cr = false;
@@ -1188,17 +1220,17 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
                     {
                         if (init_rebuild)
                         {
-                            lltt::record<lltt::Exec>(0, 8);
-                            bitonic_topk_load16<is_fp32_dest_acc_en>(4, 8);
-                            bitonic_topk_ph3_st4_to_1<STABLE_SORT>(dir, init_rebuild, 8);
-                            lltt::record<lltt::Exec>(17, 8);
-                            bitonic_topk_store16<is_fp32_dest_acc_en, true>(4, 8);
+                            lltt::record<lltt::Exec>(0, ldst_count);
+                            bitonic_topk_load16<is_fp32_dest_acc_en, FUSED>(4, 8);
+                            bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED>(dir, init_rebuild, 8);
+                            lltt::record<lltt::Exec>(17, ldst_count);
+                            bitonic_topk_store16<is_fp32_dest_acc_en, true, FUSED>(4, 8);
                         }
                         else
                         {
-                            lltt::replay(0, 8);
-                            bitonic_topk_ph3_st4_to_1<STABLE_SORT>(dir, init_rebuild, 8);
-                            lltt::replay(17, 8);
+                            lltt::replay(0, ldst_count);
+                            bitonic_topk_ph3_st4_to_1<STABLE_SORT, FUSED>(dir, init_rebuild, 8);
+                            lltt::replay(17, ldst_count);
                         }
                         datums_compared += 16;
                         dir = (datums_compared == sorted_seq_length) ? !dir : dir;
@@ -1223,6 +1255,17 @@ inline void _init_topk()
         // Mask used to clear garbage high bits when loading UInt16 from 32-bit DEST (LREG12 / vConstIntPrgm0).
         sfpi::vConstIntPrgm0 = 0x0000FFFF;
     }
+}
+
+// Fused-key init: index tracking stays OFF (the packed key carries the index; there is no
+// L4-7 bank to mirror). Written as an explicit clear rather than a skip so a preceding
+// tracked-mode topk in the same kernel cannot leak the bit in. Programs the fuse/defuse
+// mask constant; the sweeps re-program it defensively at each entry as well.
+inline void _init_topk_fused_()
+{
+    topk_replay_init = 0;
+    _sfpu_load_config32_(0xF, 0x0, 0x0); // SFPU_CONTROL_REG: ENABLE_DEST_INDEX (bit 2) = 0
+    sfpi::vConstIntPrgm0 = 0x0000FFFF;   // LREG12: #50215 mask + tie-complement operand
 }
 
 } // namespace sfpu

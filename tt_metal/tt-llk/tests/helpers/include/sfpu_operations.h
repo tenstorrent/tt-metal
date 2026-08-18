@@ -718,7 +718,8 @@ template <
     bool STABLE_SORT        = false,
     bool CLAMP_NEGATIVE     = false,
     DataFormat TYPECAST_IN  = DataFormat::Invalid,
-    DataFormat TYPECAST_OUT = DataFormat::Invalid>
+    DataFormat TYPECAST_OUT = DataFormat::Invalid,
+    bool FUSED_SORT         = false>
 void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_format = 0, float fill_const_value = 5.0f, VectorMode vector_mode = VectorMode::None)
 {
     // Fixed dispatch constants shared with the golden (golden_generators.py:
@@ -1054,7 +1055,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _bitonic_topk_phases_steps,
-            (APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT),
+            (APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED_SORT),
             dst_index,
             vector_mode,
             0 /* idir */,
@@ -1073,7 +1074,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _bitonic_topk_merge,
-            (APPROX_MODE, is_fp32_dest_acc_en, false /* top_min (idir) */, STABLE_SORT),
+            (APPROX_MODE, is_fp32_dest_acc_en, false /* top_min (idir) */, STABLE_SORT, FUSED_SORT),
             dst_index,
             vector_mode,
             5 /* m_iter */,
@@ -1085,7 +1086,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _bitonic_topk_rebuild,
-            (APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT),
+            (APPROX_MODE, is_fp32_dest_acc_en, STABLE_SORT, FUSED_SORT),
             dst_index,
             vector_mode,
             false /* idir */,
