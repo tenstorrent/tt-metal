@@ -145,7 +145,8 @@ void kernel_main() {
 #ifdef TILIZE_IN
         DataflowBuffer dfb_in_rm_obj(dfb_in_rm_id);
         tilize_all_blocks_to_cb<block_size>(dfb_in_rm_obj, dfb_in_obj, Wt);
-        // Re-init binary ops after tilize hardware reconfiguration.
+        // Re-init binary ops after tilize/untilize reconfiguration. compute_kernel_hw_startup is call-once;
+        // TODO(#52395): replace this mid-kernel re-init with a targeted DST re-arm.
 #ifdef FUSE_PRE_ADD
         compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_x_id);
 #elif defined(RMSNORM)
@@ -231,7 +232,7 @@ void kernel_main() {
             ckl::PackTile<ckl::output(dfb_ex2pe_id)>{});
 
         // Gamma and beta each contain one row and remain resident across all NCHt rows; tile
-        // offsets select the current width block.
+        // offsets select the current width block. TODO: wait on gamma/beta only on the first NCHt row.
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         for (auto block : generic::blocks(Wt, block_size)) {
             const auto block_shape = ckl::IterationShape::tiles(block.size())

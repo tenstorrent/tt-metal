@@ -19,7 +19,7 @@ namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     const auto Ht = get_arg(args::Ht);
-    const auto Wt = get_arg(args::units_per_core);
+    const auto Wt = get_arg(args::units_per_core);  // Per-core output-column count, not tile width.
     const auto NC = get_arg(args::NC);
     constexpr uint32_t origin_H = get_arg(args::origin_H);
 

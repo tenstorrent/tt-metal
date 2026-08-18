@@ -173,6 +173,7 @@ void kernel_main() {
                                          .block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
 #ifdef TILIZE_IN
             tilize_row_major_block(dfb_in_rm_obj, dfb_in_obj, block_size, block);
+            // TODO(#52395): replace this unsafe mid-kernel startup with a targeted DST re-arm.
 #ifdef RMSNORM
             compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
 #else
@@ -293,6 +294,7 @@ void kernel_main() {
             // Reader supplies this second pass of data after the variance data.
             tilize_row_major_block(dfb_in_rm_obj, dfb_in_obj, block_size, block);
 
+            // TODO(#52395): replace this unsafe mid-kernel startup with a targeted DST re-arm.
 #ifdef RMSNORM
             compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
 #else

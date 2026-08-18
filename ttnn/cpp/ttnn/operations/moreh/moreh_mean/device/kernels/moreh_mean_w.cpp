@@ -24,7 +24,7 @@ constexpr auto kDataFormatReconfig = ckl::DataFormatReconfig::Disabled;
 #endif
 
 void kernel_main() {
-    constexpr uint32_t Ht = get_arg(args::units_per_core);
+    constexpr uint32_t Ht = get_arg(args::units_per_core);  // Per-core output-row count, not tile height.
     constexpr uint32_t Wt = get_arg(args::Wt);
     constexpr uint32_t NC = get_arg(args::NC);
     constexpr uint32_t origin_W = get_arg(args::origin_W);
@@ -59,6 +59,7 @@ void kernel_main() {
     }
 
     for (uint32_t nc = 0; nc < NC; nc++) {
+        // Input is W-contiguous; each output tile reduces one row of W tiles.
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             dfb_input_id = dfb::input;
             if constexpr (!is_w_single_tile) {

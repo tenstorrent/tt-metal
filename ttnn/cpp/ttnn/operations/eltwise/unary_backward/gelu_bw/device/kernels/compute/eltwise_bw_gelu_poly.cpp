@@ -10,7 +10,7 @@
 
 namespace ckl = compute_kernel_lib;
 
-// GELU backward using the Sollya-derived minimax derivative (maximum error: 1 ULP).
+// GELU backward using the exact (non-tanh) piecewise derivative: Sollya-fitted core and corrected negative tail.
 void kernel_main() {
     uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
 
