@@ -38,8 +38,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
-#define CMBF2D_READER_KERNEL
-#include "combine_fabric2d_kernel_interface.hpp"
+#include "combine_fabric2d_reader_ct_args.hpp"
 
 constexpr cmbf2d::ReaderCtArgs ct{};
 
