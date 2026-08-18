@@ -1003,12 +1003,26 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     # after it the bytes have already moved and only the read benefits.
     kv_dtype = ttnn.bfloat8_b if os.environ.get("DIFFVAE_KV_BF8", "0") == "1" else None
 
+    # DIFFVAE_PAD_GATHER=1: pad this shard's sequence to a whole number of tiles so the gather's
+    # alignment test passes and it takes the single-dispatch path -- which is also the path that
+    # forwards CCLManager's pre-created semaphores, and therefore the only one a trace can replay
+    # (composite's all_broadcast allocates its own semaphores per call). The pad rows land interleaved
+    # between shards; they are stripped in wrow below, in ROW_MAJOR, where the fused reader was going
+    # to untilize anyway -- so the strip costs a strided copy rather than a retile.
+    fused_reader = os.environ.get("DIFFVAE_SP_FUSED", "0") == "1"
+    pad_gather = os.environ.get("DIFFVAE_PAD_GATHER") == "1" and fused_reader and seq_local % 32 != 0
+    seq_pad = ((seq_local + 31) // 32) * 32 if pad_gather else seq_local
+
     def gathered(x: ttnn.Tensor) -> ttnn.Tensor:
         seq = to_seq(x, w_local)
         if kv_dtype is not None and seq.get_dtype() != kv_dtype:
             cast = ttnn.typecast(seq, kv_dtype)
             ttnn.deallocate(seq)
             seq = cast
+        if pad_gather:
+            padded = ttnn.pad(seq, [(0, 0), (0, 0), (0, seq_pad - seq_local), (0, 0)], value=0.0)
+            ttnn.deallocate(seq)
+            seq = padded
         return ccl_manager.all_gather(
             seq, dim=2, mesh_axis=sp_axis, use_hyperparams=False, use_persistent_buffer=persist_ccl
         )
@@ -1031,12 +1045,18 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     # K/V become the W-row-paged ROW_MAJOR layout the fused reader gathers from (grid is W-outer, so a
     # page is an inner-axis (h_full) row and the flattened (T,H) = w_full*t_full). Q + the per-device
     # offset are unchanged (verified: fused honours windowed_q_token_offset).
-    use_fused = os.environ.get("DIFFVAE_SP_FUSED", "0") == "1"
+    use_fused = fused_reader
     prog_config = None
     if use_fused:
 
         def wrow(x: ttnn.Tensor) -> ttnn.Tensor:
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            if pad_gather:
+                # Drop each shard's pad rows. Both reshapes are stride changes in ROW_MAJOR; only the
+                # slice copies.
+                x = ttnn.reshape(x, (heads, sp, seq_pad, head_dim))
+                x = ttnn.slice(x, [0, 0, 0, 0], [heads, sp, seq_local, head_dim])
+                x = ttnn.reshape(x, (batch, heads, sp * seq_local, head_dim))
             # Page = the innermost-axis row: (w,h)-paged T-rows when t_inner, else (w,t)-paged H-rows.
             if t_inner:
                 return ttnn.reshape(x, (batch, heads, w_full * h_full, t_full * head_dim))
