@@ -182,7 +182,7 @@ shield:
     bh_p150b_civ2: 33
   unit_tier2:
     wh_n150: 220
-    wh_n300: 216
+    wh_n300: 220
     bh_p150: 100
     bh_p150b_civ2: 90
   unit_tier3:
