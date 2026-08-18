@@ -415,7 +415,7 @@ void kernel_main() {
     constexpr uint32_t page_bytes = get_compile_time_arg_val(scalars + 1);
     constexpr uint32_t group_size = get_compile_time_arg_val(scalars + 2);
     constexpr uint32_t kernel_iters = get_compile_time_arg_val(scalars + 3);
-    constexpr auto mc = McastArgs<2, 2, group_size>();
+    constexpr auto mc = McastArgs<2, 2>();
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t my_index = get_arg_val<uint32_t>(1);
