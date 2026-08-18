@@ -141,6 +141,15 @@ def _load_full_weights():
 
 
 def _guard_chunk(request, chunk):
+    """Honour ``--max-prefill`` for tests that SWEEP the chunk as their prefill length.
+
+    Only for those. The long-context tests derive their chunk from the mesh (see
+    LONG_CONTEXT_CHUNK) rather than choosing it, and they declare their real cost through
+    their own ``ctx_*`` param, so applying this to them gates the wrong number: it would
+    refuse an 8192-token chunk while happily running the 262144-token prefill built out of
+    those chunks. It also made a bigger chunk look like a skip rather than the speedup it
+    is (chunk 16384 at CP=8 is ~27% faster than the 4x8 default at 256k).
+    """
     max_prefill = request.config.getoption("--max-prefill")
     if chunk > max_prefill:
         pytest.skip(f"chunk={chunk} > --max-prefill={max_prefill}")
@@ -1134,7 +1143,6 @@ def test_prefill_long_context_chunked(mesh_device, context_len, reset_seeds, req
     from models.demos.gemma4.tt.ccl import cp_degree
 
     chunk = LONG_CONTEXT_CHUNK
-    _guard_chunk(request, chunk)
     mesh_config = _mesh_config(mesh_device)
     cp = cp_degree(mesh_config)
     if cp <= 1:
@@ -1321,7 +1329,6 @@ def test_prefill_long_context_vs_cpu_reference(mesh_device, context_len, reset_s
     from models.demos.gemma4.tt.ccl import cp_degree
 
     chunk = LONG_CONTEXT_CHUNK
-    _guard_chunk(request, chunk)
     mesh_config = _mesh_config(mesh_device)
     cp = cp_degree(mesh_config)
     if cp <= 1:
@@ -1542,7 +1549,6 @@ def test_prefill_long_context_prefix_pcc(mesh_device, context_len, request, rese
     from models.demos.gemma4.tt.ccl import cp_degree
 
     chunk = LONG_CONTEXT_CHUNK
-    _guard_chunk(request, chunk)
     mesh_config = _mesh_config(mesh_device)
     cp = cp_degree(mesh_config)
     if cp <= 1:
@@ -1709,7 +1715,6 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
     from models.demos.gemma4.tt.ccl import cp_degree
 
     chunk = LONG_CONTEXT_CHUNK
-    _guard_chunk(request, chunk)
     mesh_config = _mesh_config(mesh_device)
     cp = cp_degree(mesh_config)
     if cp <= 1:
@@ -2002,7 +2007,6 @@ def test_prefill_trace_replay_stress(mesh_device, advance, reset_seeds, request)
     from models.demos.gemma4.tt.ccl import cp_degree
 
     chunk = LONG_CONTEXT_CHUNK
-    _guard_chunk(request, chunk)
     mesh_config = _mesh_config(mesh_device)
     cp = cp_degree(mesh_config)
     if cp <= 1:
@@ -2171,7 +2175,6 @@ def test_prefill_long_context_repeated(mesh_device, context_len, reset_seeds, re
 
     n_runs = int(os.environ.get("GEMMA4_REPEAT_RUNS", "10"))
     chunk = LONG_CONTEXT_CHUNK
-    _guard_chunk(request, chunk)
     mesh_config = _mesh_config(mesh_device)
     cp = cp_degree(mesh_config)
     if cp <= 1:
@@ -2439,7 +2442,6 @@ def test_prefill_layer_perf(mesh_device, layer_type, reset_seeds, request):
                        --end-signpost   gemma4-layer-sliding-stop  REPORT.csv
     """
     chunk = LONG_CONTEXT_CHUNK
-    _guard_chunk(request, chunk)
     # Warm replays are NOT profiled; exactly one replay sits between the signposts. A
     # profiled region containing N replays makes tt-perf-report aggregate N invocations
     # of every op, so the per-op table stops being per-layer, and the trace grows by N.
@@ -2629,7 +2631,6 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, reset_se
     from models.demos.gemma4.tt.ccl import cp_degree
 
     chunk = LONG_CONTEXT_CHUNK
-    _guard_chunk(request, chunk)
     context_len = PERF_CONTEXT_LEN
     mesh_config = _mesh_config(mesh_device)
     cp = cp_degree(mesh_config)
