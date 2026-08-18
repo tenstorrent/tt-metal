@@ -54,7 +54,7 @@ struct ColumnSplitConfig {
 };
 
 // num_slices_override: user-requested P (operation_attributes_t::num_slices). Validated loudly
-// against [2, 64] and the row's chunk count, clamped only against the physical grid; setting it
+// against [2, 128] and the row's chunk count, clamped only against the physical grid; setting it
 // when the column-parallel path is not selected is an error.
 ColumnSplitConfig compute_column_split_config(
     uint32_t k,

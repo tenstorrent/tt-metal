@@ -81,10 +81,10 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
     if (attrs.valid_length.has_value()) {
         const uint32_t valid_length = attrs.valid_length.value();
         TT_FATAL(valid_length > 0, "topk_large_indices valid_length must be > 0");
-        // NOTE: valid_length < k is supported by design — lanes beyond the prefix's
+        // valid_length < k is supported by design — lanes beyond the prefix's
         // capacity emit the 0xFFFFFFFF sentinel index (and -inf values when
-        // return_values is set). The public docstring's "[k, last dimension]" domain
-        // is stale; the tested contract is (0, last dimension].
+        // return_values is set); the documented and tested domain is
+        // (0, last dimension].
         TT_FATAL(
             valid_length <= n,
             "topk_large_indices valid_length {} must be <= the input last dimension {}",

@@ -170,8 +170,8 @@ constexpr uint32_t first_tested_chunk() {
 //
 // i.e. the post-rebuild descending window is COLUMN-MAJOR over the values
 // region's populated physical rows (32 rows for K=512 -- the top half-tile --
-// 64 for K=1024, 128 for K=2048), 16 words per row. Calibration data:
-// scratchpad storm/tileskip/diag/dprint_k{512,1024,2048}.txt.
+// 64 for K=1024, 128 for K=2048), 16 words per row. Calibrated on silicon
+// by exhaustive DST dumps against torch rank order at all three windows.
 //
 // Soundness note: an address error here would be UNSOUND only if it pointed
 // at a HIGHER-ranked (larger) element; the exhaustive per-rank calibration

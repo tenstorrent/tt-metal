@@ -89,9 +89,9 @@ def test_topk_large_indices_row_major_bfloat16_uint32_indices(device, k, num_row
 
 
 def test_topk_large_indices_random_k2048_multichunk_multirow(device):
-    # PR2 triage repro (minimal): row-parallel factory, llk_k=2048, num_chunks=4,
-    # multiple rows, RANDOM input — the exact op-level combo behind the routed
-    # k=2048 cells that failed on silicon. If this passes while the routed
+    # Minimal repro shape for a class of silicon failures seen during bring-up:
+    # row-parallel factory, llk_k=2048, num_chunks=4, multiple rows, RANDOM
+    # input. If this passes while the routed
     # composite fails, the composite's post-op chain (gather at index width
     # 2048 -> gather's untested RM multi-core variant) is the culprit, not
     # this op. Tie-safe value-multiset assertions (random bf16 has duplicates).
@@ -210,6 +210,10 @@ TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS = [
 ]
 
 
+@pytest.mark.skip(
+    reason="expected_duration_ns pins predate the multi-core landings and must be re-baselined "
+    "on the IOMMU perf-runner class: https://github.com/tenstorrent/tt-metal/issues/53459"
+)
 @pytest.mark.parametrize(
     "case_id,num_rows,n,valid_length,k,expected_duration_ns",
     TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS,

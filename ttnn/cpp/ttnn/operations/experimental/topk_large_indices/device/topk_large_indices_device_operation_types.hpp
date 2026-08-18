@@ -34,14 +34,14 @@ struct operation_attributes_t {
     // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
     // validated on cache hit) so a serving loop growing valid_length reuses one program.
     std::optional<uint32_t> valid_length{};
-    // Also emit the top-k VALUES (ROW_MAJOR BFLOAT16, sorted descending to match the indices;
+    // Also emit the top-k VALUES (BFLOAT16; ROW_MAJOR, or TILE under tile_output, sorted descending to match the indices;
     // exact bf16 -inf on the sentinel-index lanes). Changes kernel selection, CBs, and output
     // specs, so it is part of the program hash. Default off: indices-only, byte-identical
     // program to before this option existed.
     bool return_values{false};
     // Override the column-parallel slice count P (number of local cores splitting the row).
     // Only meaningful when the column-parallel (single-row) factory is selected: setting it on a
-    // row-parallel shape is a loud error, as are values outside [2, 64] or above the row's chunk
+    // row-parallel shape is a loud error, as are values outside [2, 128] or above the row's chunk
     // count; it is clamped only against the physical core grid (with a warning). Changes the
     // program structure, so it is part of the program hash. nullopt = the built-in cost model.
     std::optional<uint32_t> num_slices{};

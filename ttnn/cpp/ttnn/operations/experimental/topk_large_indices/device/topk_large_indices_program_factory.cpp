@@ -596,7 +596,7 @@ ColumnSplitConfig compute_column_split_config(
         log_warning(
             tt::LogOp,
             "topk_large_indices num_slices={} does not fit the {}x{} worker grid's local-core rectangle; "
-            "clamped to {} ({}x{} local cores + 1 merge core)",
+            "clamped to {} ({}x{} tree cores, in-place root)",
             requested,
             grid.x,
             grid.y,

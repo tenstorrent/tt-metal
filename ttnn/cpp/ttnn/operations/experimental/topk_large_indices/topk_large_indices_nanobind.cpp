@@ -84,14 +84,14 @@ void bind_topk_large_indices(nb::module_& mod) {
             * applied at runtime (no recompile), so a loop growing valid_length reuses one program.
 
         Args:
-            input_tensor: device tensor with ROW_MAJOR layout and BFLOAT16 dtype.
+            input_tensor: device tensor with ROW_MAJOR or TILE layout and BFLOAT16 dtype.
             k: required number of indices to return.
             valid_length: optional number of leading columns to search (default: full width).
             return_values: also return the top-k values; the result becomes a
                 (values, indices) tuple (default: False, indices tensor only).
             num_slices: optional column-parallel slice-count (core count) override.
                 Only valid when the column-parallel (single-row) factory is selected;
-                must be in [2, 64] and at most the row's LLK-window chunk count
+                must be in [2, 128] and at most the row's LLK-window chunk count
                 (loud error otherwise); clamped only against the physical core grid,
                 with a warning. Default: the built-in cost model's pick.
             tile_output: emit the output tensor(s) in TILE layout (default: False,

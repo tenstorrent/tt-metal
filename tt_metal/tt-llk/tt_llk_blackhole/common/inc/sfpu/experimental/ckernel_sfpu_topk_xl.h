@@ -350,6 +350,12 @@ inline void configure_sequences()
     TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (sequence_word(1) >> 16) & 0xFFFF);
     TTI_SFPCONFIG(0, 4 + 1, 0);
     TTI_SFPCONFIG(MISC_WORD, 8, SFPCFG_IMM16_IS_VALUE);
+    // SFPCONFIG writes to the Sequence/Misc registers take two cycles to
+    // land before an SFPLOADMACRO may consume them; issuing a macro sooner
+    // reads the stale configuration. Two NOPs is the measured minimum on
+    // BH silicon (validated by the mutation-control suite: removing either
+    // NOP flips the macro-vs-optout differential from bit-identical to
+    // divergent).
     TTI_SFPNOP;
     TTI_SFPNOP;
 }
