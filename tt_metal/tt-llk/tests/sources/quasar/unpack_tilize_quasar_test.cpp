@@ -31,7 +31,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
 #endif
-    tdma_descriptor_t td_val;
     const std::uint32_t buf_desc_id = 0;
 
     {
@@ -82,22 +81,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if (tensor_shape.face_r_dim <= ckernel::unpack::UNPACR_STRIDE_MAX_ROWS)
         {
-            td_val =
-                ckernel::trisc::construct_tdma_desc<L1AccessMode::Strided>(tensor_shape, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
+            program_buf_desc<L1AccessMode::Strided>(buf_desc_id, tensor_shape, l1_addr_16B, formats.unpack_A_src);
         }
         else
         {
-            td_val = ckernel::trisc::construct_tdma_desc(tensor_shape, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
+            program_buf_desc(buf_desc_id, tensor_shape, l1_addr_16B, formats.unpack_A_src);
         }
 
-        _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
-            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val.reg_data_format, td_val.reg_data_format);
+            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+                static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
         }
         else
         {
-            _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val.reg_data_format);
+            _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
 
         if constexpr (unpack_to_dest)
@@ -308,11 +306,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
-        tdma_descriptor_t tdma_desc =
-            ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(buffer_Res[0]) /*l1_addr_16B*/, formats.pack_dst, buf_desc_id, formats.pack_src);
-
-        _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none() /*relu_config*/);
+        program_buf_desc(buf_desc_id, tensor_shape, L1_ADDRESS(buffer_Res[0]) /*l1_addr_16B*/, formats.pack_dst);
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none() /*relu_config*/);
         _llk_pack_init_(buf_desc_id, tensor_shape, num_tiles_per_pack);
         PROFILER_SYNC();
     }

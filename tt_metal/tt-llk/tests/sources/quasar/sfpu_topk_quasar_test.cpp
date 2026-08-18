@@ -71,10 +71,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_val.f.y_dim             = FACE_R_DIM;
     bd_val.f.z_dim             = 4;
 
-    tdma_descriptor_t td_val;
-    td_val.buf_desc    = bd_val;
-    td_val.buf_desc_id = buf_desc_id;
-
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row)
     {
         const int tile_row_offset = current_tile_row * params.FULL_CT_DIM;
@@ -114,11 +110,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                     const int stage_offset = stage_index * NUM_VALUE_TILES_PER_ROW;
 
-                    td_val.buf_desc.f.format = static_cast<std::uint8_t>(unpack_src_format);
-                    td_val.reg_data_format   = static_cast<DataFormat>(unpack_dst_format);
+                    bd_val.f.format = static_cast<std::uint8_t>(unpack_src_format);
 
-                    _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
-                    _llk_unpack_configure_unary_<p_unpacr::UNP_A>(td_val.reg_data_format);
+                    _configure_buf_desc_table_(buf_desc_id, bd_val);
+                    _llk_unpack_configure_unary_<p_unpacr::UNP_A>(static_cast<DataFormat>(unpack_dst_format));
 
                     if (first_iteration)
                     {
@@ -339,12 +334,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Tile dims and buf_desc_id are stable; only the format and L1 address change
     // per stage. Keep the descriptor here and update those fields inside the loop.
-    tdma_descriptor_t tdma_desc;
-    tdma_desc.buf_desc         = buffer_descriptor_u {0};
-    tdma_desc.buf_desc.f.x_dim = FACE_C_DIM;
-    tdma_desc.buf_desc.f.y_dim = FACE_R_DIM;
-    tdma_desc.buf_desc.f.z_dim = 4;
-    tdma_desc.buf_desc_id      = buf_desc_id;
+    buffer_descriptor_u bd_val = {0};
+    bd_val.f.x_dim             = FACE_C_DIM;
+    bd_val.f.y_dim             = FACE_R_DIM;
+    bd_val.f.z_dim             = 4;
 
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row)
     {
@@ -368,27 +361,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const int tile_dest_offset = stage_index * NUM_TILES_PER_STAGE;
 
                     // Configure the per-stage format and L1 address for packing.
-                    tdma_desc.buf_desc.f.format = static_cast<std::uint8_t>(pack_dst_format);
+                    bd_val.f.format = static_cast<std::uint8_t>(pack_dst_format);
 
                     if (last_iter)
                     {
-                        const int tile_row_offset        = current_tile_row * NUM_TILES_IN_RESULT_BUFFER_PER_ROW;
-                        const int tile_L1_offset         = tile_row_offset + stage_index;
-                        tdma_desc.buf_desc.f.l1_addr_16B = params.buffer_Res[tile_L1_offset] / 16;
+                        const int tile_row_offset = current_tile_row * NUM_TILES_IN_RESULT_BUFFER_PER_ROW;
+                        const int tile_L1_offset  = tile_row_offset + stage_index;
+                        bd_val.f.l1_addr_16B      = params.buffer_Res[tile_L1_offset] / 16;
                     }
                     else
                     {
-                        const int tile_row_offset        = current_tile_row * params.FULL_CT_DIM;
-                        const int tile_pair_offset       = current_tile_pair_idx * (distance * NUM_TILES_PER_STAGE);
-                        const int stage_offset           = stage_index * NUM_VALUE_TILES_PER_ROW;
-                        const int tile_L1_offset         = tile_row_offset + stage_offset + tile_pair_offset;
-                        tdma_desc.buf_desc.f.l1_addr_16B = params.buffer_A[tile_L1_offset] / 16;
+                        const int tile_row_offset  = current_tile_row * params.FULL_CT_DIM;
+                        const int tile_pair_offset = current_tile_pair_idx * (distance * NUM_TILES_PER_STAGE);
+                        const int stage_offset     = stage_index * NUM_VALUE_TILES_PER_ROW;
+                        const int tile_L1_offset   = tile_row_offset + stage_offset + tile_pair_offset;
+                        bd_val.f.l1_addr_16B       = params.buffer_A[tile_L1_offset] / 16;
                     }
 
-                    tdma_desc.reg_data_format = static_cast<DataFormat>(pack_src_format);
-                    _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
+                    _configure_buf_desc_table_(buf_desc_id, bd_val);
 
-                    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none());
+                    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(pack_src_format), ckernel::ReluConfig::none());
                     _llk_pack_(tile_dest_offset, 0, ckernel::DEFAULT_TENSOR_SHAPE);
 
                 } // Stage loop.

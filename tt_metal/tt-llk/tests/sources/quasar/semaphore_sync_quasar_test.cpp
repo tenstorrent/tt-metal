@@ -23,8 +23,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    tdma_descriptor_t td_val_A;
-    tdma_descriptor_t td_val_B;
     const std::uint32_t buf_desc_id_a = 0;
     const std::uint32_t buf_desc_id_b = 1;
 
@@ -37,23 +35,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_val_A.f.y_dim       = params.TEST_FACE_R_DIM;
     bd_val_A.f.z_dim       = params.num_faces;
 
-    td_val_A.buf_desc        = bd_val_A;
-    td_val_A.buf_desc_id     = buf_desc_id_a;
-    td_val_A.reg_data_format = static_cast<DataFormat>(formats.unpack_A_dst);
-
     bd_val_B.f.l1_addr_16B = L1_ADDRESS(params.buffer_B[0]);
     bd_val_B.f.format      = static_cast<std::uint8_t>(formats.unpack_B_src);
     bd_val_B.f.x_dim       = params.TEST_FACE_C_DIM;
     bd_val_B.f.y_dim       = params.TEST_FACE_R_DIM;
     bd_val_B.f.z_dim       = params.num_faces;
 
-    td_val_B.buf_desc        = bd_val_B;
-    td_val_B.buf_desc_id     = buf_desc_id_b;
-    td_val_B.reg_data_format = static_cast<DataFormat>(formats.unpack_B_dst);
-
-    _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
-    _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
-    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A.reg_data_format, td_val_B.reg_data_format);
+    _configure_buf_desc_table_(buf_desc_id_a, bd_val_A);
+    _configure_buf_desc_table_(buf_desc_id_b, bd_val_B);
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
     _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(
         buf_desc_id_a, buf_desc_id_b, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/); // tiny-tiles not yet supported with reduce
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
@@ -107,7 +98,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     std::uint32_t const buf_desc_id = 8;
 
     buffer_descriptor_u bd_val = {0};
-    tdma_descriptor_t tdma_desc;
 
     bd_val.f.l1_addr_16B = L1_ADDRESS(params.buffer_Res[0]);
     bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
@@ -115,12 +105,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
     bd_val.f.z_dim       = params.num_faces;
 
-    tdma_desc.buf_desc        = bd_val;
-    tdma_desc.buf_desc_id     = buf_desc_id;
-    tdma_desc.reg_data_format = static_cast<DataFormat>(formats.pack_src);
-
-    _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none());
+    _configure_buf_desc_table_(buf_desc_id, bd_val);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
     _llk_pack_reduce_mask_config_<REDUCE_DIM>(ckernel::DEFAULT_TENSOR_SHAPE);
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)

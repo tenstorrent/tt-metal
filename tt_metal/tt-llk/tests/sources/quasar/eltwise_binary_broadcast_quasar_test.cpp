@@ -31,7 +31,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A             = params.buffer_A;
     const Operand& buffer_B             = params.buffer_B;
 #endif
-    tdma_descriptor_t td_val_A, td_val_B;
     const std::uint32_t buf_desc_id_a        = 0;
     const std::uint32_t buf_desc_id_b        = 1;
     const std::uint32_t num_tiles_per_unpack = TILE_CNT;
@@ -47,10 +46,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         bd_val_A.f.y_dim             = TEST_FACE_R_DIM;
         bd_val_A.f.z_dim             = num_faces;
 
-        td_val_A.buf_desc        = bd_val_A;
-        td_val_A.buf_desc_id     = buf_desc_id_a;
-        td_val_A.reg_data_format = static_cast<DataFormat>(formats.unpack_A_dst);
-
         buffer_descriptor_u bd_val_B = {0};
         bd_val_B.f.l1_addr_16B       = buffer_B[0] / 16;
         bd_val_B.f.format            = static_cast<std::uint8_t>(formats.unpack_B_src);
@@ -58,13 +53,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         bd_val_B.f.y_dim             = TEST_FACE_R_DIM;
         bd_val_B.f.z_dim             = num_faces;
 
-        td_val_B.buf_desc        = bd_val_B;
-        td_val_B.buf_desc_id     = buf_desc_id_b;
-        td_val_B.reg_data_format = static_cast<DataFormat>(formats.unpack_B_dst);
-
-        _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
-        _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A.reg_data_format, td_val_B.reg_data_format);
+        _configure_buf_desc_table_(buf_desc_id_a, bd_val_A);
+        _configure_buf_desc_table_(buf_desc_id_b, bd_val_B);
+        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
         _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(buf_desc_id_a, buf_desc_id_b, num_tiles_per_unpack);
         PROFILER_SYNC();
     }
@@ -223,14 +215,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         bd_val.f.y_dim             = TEST_FACE_R_DIM;
         bd_val.f.z_dim             = num_faces;
 
-        tdma_descriptor_t tdma_desc;
-
-        tdma_desc.buf_desc        = bd_val;
-        tdma_desc.buf_desc_id     = buf_desc_id;
-        tdma_desc.reg_data_format = static_cast<DataFormat>(formats.pack_src);
-
-        _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none());
+        _configure_buf_desc_table_(buf_desc_id, bd_val);
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
         PROFILER_SYNC();
     }

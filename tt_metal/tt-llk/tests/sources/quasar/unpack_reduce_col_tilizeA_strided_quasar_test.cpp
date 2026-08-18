@@ -43,16 +43,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         // SrcA is tilized out of a row-major tensor, so its descriptor must address L1 in units of a single
         // 16-datum row (y_dim = z_dim = 1) for every tile shape.
-        tdma_descriptor_t td_val_A = ckernel::trisc::construct_tdma_desc<L1AccessMode::Strided>(
-            tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src, buf_desc_id_a, formats.unpack_A_dst);
+        program_buf_desc<L1AccessMode::Strided>(buf_desc_id_a, tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
         // SrcB holds the reduce scalar and is unpacked face by face, so it uses the tile-shaped descriptor.
-        tdma_descriptor_t td_val_B =
-            ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src, buf_desc_id_b, formats.unpack_B_dst);
+        program_buf_desc(buf_desc_id_b, tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
 
-        _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
-        _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A.reg_data_format, td_val_B.reg_data_format);
+        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
 
         _llk_unpack_reduce_col_tilizeA_strided_init_<POOL_TYPE>(buf_desc_id_a, buf_desc_id_b, FULL_CT_DIM, tensor_shape);
         PROFILER_SYNC();
@@ -226,11 +223,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        tdma_descriptor_t tdma_desc =
-            ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
-
-        _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none());
+        program_buf_desc(buf_desc_id, tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
 
         _llk_pack_init_(buf_desc_id, tensor_shape, num_tiles_per_pack);
         _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape);

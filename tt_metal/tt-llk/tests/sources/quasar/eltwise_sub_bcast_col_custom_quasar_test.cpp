@@ -40,14 +40,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const auto tensor_shape = tensor_shape_from_params(params);
 
-    const tdma_descriptor_t td_val_A =
-        ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, buf_desc_id_a, formats.unpack_A_dst);
-    const tdma_descriptor_t td_val_B =
-        ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src, buf_desc_id_b, formats.unpack_B_dst);
+    program_buf_desc(buf_desc_id_a, tensor_shape, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+    program_buf_desc(buf_desc_id_b, tensor_shape, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
 
-    _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
-    _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
-    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A.reg_data_format, td_val_B.reg_data_format);
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
 
     _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);
 
@@ -115,11 +112,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const auto tensor_shape = tensor_shape_from_params(params);
 
-    const tdma_descriptor_t tdma_desc =
-        ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
-
-    _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none());
+    program_buf_desc(buf_desc_id, tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(buf_desc_id, tensor_shape, 1 /*num_tiles_per_pack*/);
 
     const std::uint32_t ct_dim     = params.OUTPUT_NUM_TILES_IN_BLOCK;
