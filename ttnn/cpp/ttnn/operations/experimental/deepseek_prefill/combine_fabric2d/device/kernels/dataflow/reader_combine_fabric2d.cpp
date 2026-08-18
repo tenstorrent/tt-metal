@@ -44,17 +44,6 @@ constexpr cmbf2d::ReaderCtArgs ct{};
 
 void kernel_main() {
     using namespace cmbf2d;
-    // Our quarter of the forwarding buffer. (plane, direction) identifies the upstream sender uniquely
-    // from the downstream chip's point of view, so we WRITE quarter q of the neighbour's buffer and READ
-    // quarter q of our own — the same q, because every chip runs this same code. It is also our slice of
-    // the same-chip run, done after all the fabric work (see the local phase at the end).
-    constexpr auto dram_in_args = TensorAccessorArgs<ct.accessor_base()>();
-    constexpr auto dram_out_args = TensorAccessorArgs<dram_in_args.next_compile_time_args_offset()>();
-    constexpr auto dram_fwd_args = TensorAccessorArgs<dram_out_args.next_compile_time_args_offset()>();
-    constexpr auto dram_meta_args = TensorAccessorArgs<dram_fwd_args.next_compile_time_args_offset()>();
-    constexpr auto dram_counts_args = TensorAccessorArgs<dram_meta_args.next_compile_time_args_offset()>();
-    constexpr auto dram_region_args = TensorAccessorArgs<dram_counts_args.next_compile_time_args_offset()>();
-    constexpr auto dram_expert_offsets_args = TensorAccessorArgs<dram_region_args.next_compile_time_args_offset()>();
     // Re-forwarding reads the token AND the two metadata words that follow it in the page.
     constexpr uint32_t FWD_EXTRA_BYTES = 16;
     constexpr uint32_t fwd_read_bytes = ct.token_size_bytes + FWD_EXTRA_BYTES;
@@ -82,13 +71,13 @@ void kernel_main() {
     // counter so the framework zeroes it before launch; a stale value here underflows the wait below.
     volatile tt_l1_ptr uint32_t* fwd_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr);
 
-    const auto dram_in = TensorAccessor(dram_in_args, ct.dram_in_base_addr);
-    const auto dram_out = TensorAccessor(dram_out_args, ct.dram_out_base_addr);
-    const auto dram_fwd = TensorAccessor(dram_fwd_args, ct.dram_fwd_base_addr);
-    const auto dram_meta = TensorAccessor(dram_meta_args, ct.dram_meta_base_addr);
-    const auto dram_counts = TensorAccessor(dram_counts_args, ct.dram_counts_base_addr);
-    const auto dram_region = TensorAccessor(dram_region_args, ct.dram_region_base_addr);
-    const auto dram_expert_offsets = TensorAccessor(dram_expert_offsets_args, ct.dram_expert_offsets_base_addr);
+    const auto dram_in = TensorAccessor(ct.dram_in_args, ct.dram_in_base_addr);
+    const auto dram_out = TensorAccessor(ct.dram_out_args, ct.dram_out_base_addr);
+    const auto dram_fwd = TensorAccessor(ct.dram_fwd_args, ct.dram_fwd_base_addr);
+    const auto dram_meta = TensorAccessor(ct.dram_meta_args, ct.dram_meta_base_addr);
+    const auto dram_counts = TensorAccessor(ct.dram_counts_args, ct.dram_counts_base_addr);
+    const auto dram_region = TensorAccessor(ct.dram_region_args, ct.dram_region_base_addr);
+    const auto dram_expert_offsets = TensorAccessor(ct.dram_expert_offsets_args, ct.dram_expert_offsets_base_addr);
 
     // ---- Control tensors, read once. All three are one row per page of `num_routed_experts` uint32:
     // expert_offsets has one row per ORIGIN chip (it is replicated along that axis so every chip sees all of
@@ -225,10 +214,10 @@ void kernel_main() {
     // one (this chip -> that chip) term, and which expert a token sat under is not something the forwarding
     // protocol needs to know.
     auto do_own_assignment = [&](uint32_t a) {
-        const uint32_t dst_chip_id = kernel_compile_time_args[ct.assignment_base() + a * ASSIGNMENT_WORDS + 0];
-        const uint32_t dst_row = kernel_compile_time_args[ct.assignment_base() + a * ASSIGNMENT_WORDS + 1];
-        const uint32_t split_idx = kernel_compile_time_args[ct.assignment_base() + a * ASSIGNMENT_WORDS + 2];
-        const uint32_t split_count = kernel_compile_time_args[ct.assignment_base() + a * ASSIGNMENT_WORDS + 3];
+        const uint32_t dst_chip_id = kernel_compile_time_args[ct.assignment_base + a * ASSIGNMENT_WORDS + 0];
+        const uint32_t dst_row = kernel_compile_time_args[ct.assignment_base + a * ASSIGNMENT_WORDS + 1];
+        const uint32_t split_idx = kernel_compile_time_args[ct.assignment_base + a * ASSIGNMENT_WORDS + 2];
+        const uint32_t split_count = kernel_compile_time_args[ct.assignment_base + a * ASSIGNMENT_WORDS + 3];
         const bool direct = (dst_chip_id == ct.nbr_chip_id);
 
         uint32_t chunk_page = 0;  // position in the downstream chunk, continuous across our experts
@@ -402,7 +391,7 @@ void kernel_main() {
     // ---- Walk the schedule. Forwarding chunks always appear in increasing order, so `consumed` stays a
     // valid watermark into our quarter however the own assignments are interleaved around them.
     for (uint32_t si = 0; si < ct.schedule_len; si++) {
-        const uint32_t entry = kernel_compile_time_args[ct.schedule_base() + si];
+        const uint32_t entry = kernel_compile_time_args[ct.schedule_base + si];
         if (entry & SCHED_FWD) {
             do_forward_chunk(entry & ~SCHED_FWD);
         } else {
