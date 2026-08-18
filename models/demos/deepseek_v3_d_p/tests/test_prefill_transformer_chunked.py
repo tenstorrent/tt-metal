@@ -1227,7 +1227,7 @@ def test_mistral4_prefill_transformer_chunked(
     [1, 2, 5, 10, 20, 51],
     ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks20", "chunks51"],
 )
-@pytest.mark.parametrize("num_layers", [1, 36], ids=["L1", "L36"])
+@pytest.mark.parametrize("num_layers", [1, 9, 36], ids=["L1", "L9", "L36"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -1250,6 +1250,25 @@ def test_mistral4_prefill_transformer_chunked(
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4",
+        ),
+        # ONE PP=4 stage's geometry (SP=8 x TP=1, 8 chips via TT_VISIBLE_DEVICES=0..7). Pair with L9.
+        # PP=4 steady state retires one chunk per SLOWEST-STAGE time, so summing this row's per-chunk
+        # medians over a context gives the PP total (at ideal overlap; scale by the measured overlap
+        # efficiency for a realistic figure). This is how the 100k / 256k PP numbers are obtained
+        # without a chunked multi-stage driver.
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "l1_small_size": 768,
+                "trace_region_size": 256 * 1024 * 1024,
+            },
+            1,
+            ttnn.Topology.Linear,
+            id="mesh-8x1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -1408,7 +1427,15 @@ def run_chunked_transformer_updated(
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[sp_axis]
     tp = mesh_shape[tp_axis]
-    assert (sp, tp) == (8, 4), f"this test targets mesh-8x4, got {mesh_shape}"
+    # mesh-8x4 is the single-rank serving shape, but this runner is also how a single PP=4 STAGE is
+    # timed at depth: (8,1) and (4,2) are the two PP=4 stage geometries (8 chips each, four of which
+    # tile the galaxy). Everything below derives from sp/tp, so the shapes just have to be ones whose
+    # per-chip token count the MoE routing setup accepts -- see the CHUNK assert a few lines down.
+    assert (sp, tp) in (
+        (8, 4),
+        (8, 1),
+        (4, 2),
+    ), f"expected mesh-8x4 (single-rank) or a PP=4 stage shape (8,1)/(4,2), got {mesh_shape}"
 
     chunk_local = CHUNK // sp  # 640
     assert preload_isl % CHUNK == 0, f"preload_isl ({preload_isl}) must be a multiple of CHUNK ({CHUNK})"
