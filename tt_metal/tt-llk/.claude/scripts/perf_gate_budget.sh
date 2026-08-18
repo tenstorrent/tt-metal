@@ -5,8 +5,8 @@
 #
 # perf_gate_budget.sh -- measure what a PR/merge perf gate would cost.
 #
-# Runs the same non-speed-of-light perf sweep three times, differing only in
-# which PerfRunTypes are measured, and reports wall time and yield for each:
+# Runs the same perf sweep three times, differing only in which PerfRunTypes are
+# measured, and reports wall time and yield for each:
 #
 #   full      every run type the tests declare (5 on Quasar)
 #   isolates  UNPACK_ISOLATE, MATH_ISOLATE, PACK_ISOLATE
@@ -34,6 +34,9 @@
 #   --jobs-run N       consumer parallelism (default: 15, matches CI)
 #   --timeout SECS     pytest --timeout (default: 60, matches CI)
 #   --configs LIST     comma-separated subset of: full,isolates,l1 (default: all)
+#   --speed-of-light   pass pytest --speed-of-light (what CI's perf job does).
+#                      Default off. Run once each way, into different --out
+#                      dirs, to get the SoL-vs-non-SoL overhead number.
 #   --keep-build       do not wipe the build tree between configs (warm compile;
 #                      use only when you want measure-phase time alone)
 #   --build-root DIR   private build tree, exported as RUNNER_TEMP so artefacts
@@ -47,8 +50,12 @@
 #   <out>/<config>/{compile,run}.log
 #   <out>/summary.md              the comparison table
 #
-# Speed of light is deliberately never passed: CI's perf job uses it, this
-# experiment asks about the non-SoL numbers.
+# Speed of light defaults to OFF: the gate is being costed for the normal
+# (runtime-parameter) build. Pass --speed-of-light to measure the same configs
+# the way CI measures them today. Running once each way is how you get the
+# SoL-vs-non-SoL overhead number, and both directions want the same hardware
+# session. Use a different --out per setting: SoL and non-SoL cycle counts must
+# never be compared per-column.
 
 set -euo pipefail
 
@@ -63,6 +70,7 @@ TIMEOUT=60
 CONFIGS="full,isolates,l1"
 KEEP_BUILD=0
 BUILD_ROOT_OPT=""
+SOL=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -77,7 +85,8 @@ while [[ $# -gt 0 ]]; do
     --configs)       CONFIGS="$2"; shift 2 ;;
     --keep-build)    KEEP_BUILD=1; shift ;;
     --build-root)    BUILD_ROOT_OPT="$2"; shift 2 ;;
-    -h|--help)       sed -n '2,50p' "$0"; exit 0 ;;
+    --speed-of-light) SOL=1; shift ;;
+    -h|--help)       awk '/^set -euo/{exit} NR>1' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -148,6 +157,8 @@ for CONFIG in ${CONFIGS//,/ }; do
   [[ -n "$RUN_TYPES" ]] && RT_FLAG=(--perf-run-types "$RUN_TYPES")
   K_FLAG=()
   [[ -n "$KFILTER" ]] && K_FLAG=(-k "$KFILTER")
+  SOL_FLAG=()
+  [[ "$SOL" -eq 1 ]] && SOL_FLAG=(--speed-of-light)
 
   echo "=== $CONFIG (run types: ${RUN_TYPES:-<all declared>}) ==="
 
@@ -166,7 +177,7 @@ for CONFIG in ${CONFIGS//,/ }; do
   set +e
   CHIP_ARCH="$ARCH" pytest -q --override-ini=log_cli=false \
     --compile-producer -n "$JOBS_COMPILE" -m "$MARKERS" --timeout="$TIMEOUT" \
-    ${RT_FLAG[@]+"${RT_FLAG[@]}"} ${K_FLAG[@]+"${K_FLAG[@]}"} "$TESTS" >"$CFG_OUT/compile.log" 2>&1
+    ${SOL_FLAG[@]+"${SOL_FLAG[@]}"} ${RT_FLAG[@]+"${RT_FLAG[@]}"} ${K_FLAG[@]+"${K_FLAG[@]}"} "$TESTS" >"$CFG_OUT/compile.log" 2>&1
   rc_compile=$?
   set -e
   t1=$(now)
@@ -174,7 +185,7 @@ for CONFIG in ${CONFIGS//,/ }; do
   set +e
   CHIP_ARCH="$ARCH" pytest -q --override-ini=log_cli=false \
     --compile-consumer -n "$JOBS_RUN" -m "$MARKERS" --timeout="$TIMEOUT" \
-    ${RT_FLAG[@]+"${RT_FLAG[@]}"} ${K_FLAG[@]+"${K_FLAG[@]}"} "$TESTS" >"$CFG_OUT/run.log" 2>&1
+    ${SOL_FLAG[@]+"${SOL_FLAG[@]}"} ${RT_FLAG[@]+"${RT_FLAG[@]}"} ${K_FLAG[@]+"${K_FLAG[@]}"} "$TESTS" >"$CFG_OUT/run.log" 2>&1
   rc_run=$?
   set -e
   t2=$(now)
@@ -191,7 +202,7 @@ done
 # points came out. Points, not rows, is what a regression check compares.
 SUMMARY="$OUT/summary.md"
 {
-  echo "# Perf gate budget -- $ARCH, non speed-of-light"
+  echo "# Perf gate budget -- $ARCH, speed-of-light $([[ $SOL -eq 1 ]] && echo ON || echo OFF)"
   echo
   echo "markers: \`$MARKERS\`${KFILTER:+, -k \`$KFILTER\`}"
   echo "compile -n $JOBS_COMPILE, measure -n $JOBS_RUN, cold build per config: $([[ $KEEP_BUILD -eq 0 ]] && echo yes || echo no)"
