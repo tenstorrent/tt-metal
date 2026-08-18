@@ -203,11 +203,13 @@ def _skip_unsupported(formats, dest_acc):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dense_packing=[False, True],
 )
-def test_custom_mm_uninit_restores_pack_mop(formats, dest_acc, dense_packing):
+def test_custom_mm_uninit_restores_pack_mop(request, formats, dest_acc, dense_packing):
     """restore_tile_pack_mop=True must leave the packer able to pack plain tiles."""
     _skip_unsupported(formats, dest_acc)
     if dense_packing and formats.output_format.is_32_bit():
-        pytest.xfail(_DENSE_FP32_XFAIL)
+        request.node.add_marker(
+            pytest.mark.xfail(reason=_DENSE_FP32_XFAIL, strict=False)
+        )
 
     golden, device = _run(
         formats, dest_acc, dense_packing, restore_mop=True, skip_uninit=False
