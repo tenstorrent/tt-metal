@@ -63,6 +63,12 @@ def _short_id(sid: str) -> str:
     return (sid or "")[:10]
 
 
+def _short_host(host_set) -> str:
+    """Shorten a host_set to just the node tags, e.g. 'bh-glx-110-d07u08,…-d08u02' -> 'd07u08·d08u02'."""
+    hs = host_set if isinstance(host_set, str) else ",".join(host_set or [])
+    return "·".join(h.split("-")[-1] for h in hs.split(",") if h) or "?"
+
+
 class SweepLog:
     """All console formatting for the sweep driver (which runs ONE combo).
 
@@ -132,7 +138,7 @@ class SweepLog:
         self.line(f"{indent}{label} {n}/{m} → {res}{dur}")
 
     def recover_start(self, indent: str, host_set: Optional[str]) -> None:
-        where = f" {host_set}" if host_set else ""
+        where = f" {_short_host(host_set)}" if host_set else ""
         self.line(f"{indent}↻ reap{where} + recover → retry")
 
     def solution_failed(self, indent: str, attempts: int) -> None:
@@ -887,7 +893,7 @@ class SolutionConsumer:
         )
         label = sol.get("id", sol["dir"])
         cmd_str = " ".join(shlex.quote(c) for c in cmd)  # exact, copy-paste-reproducible tt-run command (-> log file)
-        host = "·".join(h.split("-")[-1] for h in (sol.get("host_set") or "").split(",") if h) or "?"
+        host = _short_host(sol.get("host_set"))
         self.log.solution_start(position_label, label, host)
 
         if cfg.dry_run:
