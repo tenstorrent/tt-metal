@@ -26,17 +26,14 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < num_bands; ++b) {
         compute_kernel_lib::untilize<1, cb_in, cb_rm>(total_in_wt);
-        if constexpr (fp32_lossless) {
-            compute_kernel_lib::tilize<
-                out_wt,
-                cb_asm,
-                cb_out,
-                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
-                compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(1);
-        } else {
-            compute_kernel_lib::tilize<out_wt, cb_asm, cb_out>(1);
-        }
+        compute_kernel_lib::tilize<
+            out_wt,
+            cb_asm,
+            cb_out,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+            fp32_lossless ? compute_kernel_lib::tilize_config::Fp32Mode::Lossless
+                          : compute_kernel_lib::tilize_config::Fp32Mode::Fast>(1);
     }
 }

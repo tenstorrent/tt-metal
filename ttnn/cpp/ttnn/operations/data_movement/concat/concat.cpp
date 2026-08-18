@@ -342,7 +342,8 @@ ttnn::Tensor concat(
     // through untilize -> row assembly -> retilize. Route it straight to the device op: no
     // full-size row-major or transposed intermediates, no DRAM staging, peak memory is just
     // inputs + output + per-core CBs.
-    if (ttnn::prim::can_use_tiled_unaligned_concat(input_tensors, static_cast<uint32_t>(dim), groups, mem_config)) {
+    if (ttnn::prim::can_use_tiled_unaligned_concat(
+            input_tensors, static_cast<uint32_t>(dim), groups, mem_config, /*output_already_allocated=*/false)) {
         return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
     }
 

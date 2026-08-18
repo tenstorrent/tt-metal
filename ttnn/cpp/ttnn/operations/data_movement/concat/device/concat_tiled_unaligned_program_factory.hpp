@@ -23,11 +23,16 @@ struct ConcatTiledUnalignedProgramFactory {
 
 // True when ConcatTiledUnalignedProgramFactory can run this concat: last-dim concat of TILE
 // interleaved tensors with tile padding on the concat dim, interleaved output, groups == 1,
-// supported dtype, and per-core CBs that provably fit L1 alongside the op's own tensors.
+// supported dtype, and per-core CBs that fit in the L1 window the allocator reports as free
+// right now (accounting for every live L1 buffer). Set output_already_allocated to false at
+// routing time (before the output buffer exists) so its worst-case per-bank footprint is
+// reserved on top, and to true inside the device op, where the launch infra has already
+// allocated the output and the free window accounts for it.
 bool can_use_tiled_unaligned_concat(
     const std::vector<Tensor>& input_tensors,
     uint32_t normalized_dim,
     unsigned int groups,
-    const tt::tt_metal::MemoryConfig& output_mem_config);
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    bool output_already_allocated);
 
 }  // namespace ttnn::prim

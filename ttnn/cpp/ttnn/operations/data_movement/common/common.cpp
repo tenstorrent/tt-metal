@@ -11,6 +11,7 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 #include <numeric>
+#include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -442,7 +443,8 @@ uint32_t get_pending_l1_output_reservation(
     const ttnn::Shape& output_padded_shape,
     const MemoryConfig& output_memory_config,
     DataType output_dtype,
-    Layout output_layout) {
+    Layout output_layout,
+    bool require_constructible) {
     if (output_memory_config.buffer_type() != tt::tt_metal::BufferType::L1) {
         return 0;
     }
@@ -460,18 +462,34 @@ uint32_t get_pending_l1_output_reservation(
     }
 
     size_t total_bytes = 0;
+    size_t page_bytes = 0;
     try {
         const tt::tt_metal::TensorSpec output_spec(
             output_padded_shape,
             tt::tt_metal::TensorLayout(output_dtype, tt::tt_metal::PageConfig(output_layout), output_memory_config));
         total_bytes = output_spec.compute_packed_buffer_size_bytes();
+        page_bytes = output_spec.compute_page_size_bytes();
     } catch (...) {
+        if (require_constructible) {
+            throw;
+        }
         // If the spec cannot be constructed (unsupported dtype/layout combination), fall back
         // to reserving nothing.
         return 0;
     }
+    if (page_bytes == 0) {
+        return static_cast<uint32_t>(tt::div_up(static_cast<uint64_t>(total_bytes), static_cast<uint64_t>(num_banks)));
+    }
 
-    return static_cast<uint32_t>(tt::div_up(static_cast<uint64_t>(total_bytes), static_cast<uint64_t>(num_banks)));
+    // Interleaved pages are distributed round-robin as whole, alignment-padded pages, so the
+    // busiest bank holds ceil(num_pages / num_banks) of them. Reserving the average
+    // (total_bytes / num_banks) underestimates whenever num_pages is not a multiple of
+    // num_banks, which can still leave the CBs overlapping the output on the fullest bank.
+    const uint64_t alignment = input_tensor_a.device()->allocator()->get_alignment(tt::tt_metal::BufferType::L1);
+    const uint64_t aligned_page_bytes = tt::align(static_cast<uint64_t>(page_bytes), alignment);
+    const uint64_t num_pages = tt::div_up(static_cast<uint64_t>(total_bytes), static_cast<uint64_t>(page_bytes));
+    const uint64_t pages_on_fullest_bank = tt::div_up(num_pages, static_cast<uint64_t>(num_banks));
+    return static_cast<uint32_t>(pages_on_fullest_bank * aligned_page_bytes);
 }
 
 bool is_enough_space(

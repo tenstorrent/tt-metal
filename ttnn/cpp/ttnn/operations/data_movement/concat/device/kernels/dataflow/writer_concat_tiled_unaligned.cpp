@@ -90,6 +90,19 @@ void kernel_main() {
                     tail[k] = 0;
                 }
             }
+            // Unlike tt_memmove above, these tail stores don't self-drain. Since L1 write-requests
+            // from one client are processed in order, a blocking load of the last-written word
+            // guarantees all tail stores landed before push_back publishes the band to the compute
+            // kernel (same contract as tt_memmove's !copy_async drain in common.hpp).
+            volatile tt_l1_ptr uint32_t* drain_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                (dst_base + col_bytes + (tile_height - 1) * out_row_bytes + tail_bytes - 1) & ~uint32_t{3});
+#if defined(ARCH_QUASAR)
+            // Quasar has no ckernel::load_blocking; this factory is gated off on Quasar at host
+            // (see can_use_tiled_unaligned_concat), so this branch only keeps the kernel compiling.
+            (void)*drain_ptr;
+#else
+            (void)ckernel::load_blocking(drain_ptr);
+#endif
         }
 
         dfb_asm.push_back(out_wt);

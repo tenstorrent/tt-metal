@@ -55,15 +55,14 @@ uint64_t required_cb_bytes(const BandGeometry& g, uint32_t tile_bytes) {
     return static_cast<uint64_t>(3 * g.total_in_wt + 3 * g.out_wt) * tile_bytes;
 }
 
-}  // namespace
-
-bool can_use_tiled_unaligned_concat(
+// Static conditions only (layout, dtype, dims, alignment); no L1 budget. Shared by the
+// eligibility check and the post-selection sanity check in create_descriptor, which runs
+// after the output buffer is allocated and therefore must not re-evaluate the budget.
+bool is_supported_tiled_unaligned_config(
     const std::vector<Tensor>& input_tensors,
     uint32_t normalized_dim,
     unsigned int groups,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
-    using namespace ttnn::operations::data_movement;
-
     if (groups != 1 || input_tensors.size() < 2) {
         return false;
     }
@@ -75,6 +74,12 @@ bool can_use_tiled_unaligned_concat(
         return false;
     }
     const auto& first = input_tensors[0];
+    // The writer kernel's row assembly (tt_memmove's CPU fallback + tail stores) isn't
+    // cache-coherent on Quasar (see the TODO(ARCH_QUASAR) note in common/kernels/common.hpp),
+    // so gate this factory off until that's resolved.
+    if (first.device()->arch() == tt::ARCH::QUASAR) {
+        return false;
+    }
     const uint32_t rank = first.logical_shape().rank();
     if (rank < 2 || normalized_dim != rank - 1) {
         return false;
@@ -99,28 +104,45 @@ bool can_use_tiled_unaligned_concat(
         return false;
     }
 
-    const BandGeometry g = compute_band_geometry(input_tensors);
-    if (g.num_bands == 0) {
+    return compute_band_geometry(input_tensors).num_bands > 0;
+}
+
+}  // namespace
+
+bool can_use_tiled_unaligned_concat(
+    const std::vector<Tensor>& input_tensors,
+    uint32_t normalized_dim,
+    unsigned int groups,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    bool output_already_allocated) {
+    using namespace ttnn::operations::data_movement;
+
+    if (!is_supported_tiled_unaligned_config(input_tensors, normalized_dim, groups, output_mem_config)) {
         return false;
     }
 
+    const BandGeometry g = compute_band_geometry(input_tensors);
+    const auto& first = input_tensors[0];
+    const DataType dtype = first.dtype();
     const tt::DataFormat df = datatype_to_dataformat_converter(dtype);
     const uint32_t tile_bytes = tt::tile_size(df);
 
-    // The CBs must fit L1 alongside the tensors this op provably co-resides with: every
-    // L1-resident input and the output buffer that will be allocated right after this check.
-    auto* device = first.device();
-    const uint64_t l1_unreserved =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    ttnn::Shape out_padded_shape = first.padded_shape();
-    out_padded_shape[-1] = g.out_wt * TILE_WIDTH;
-    uint64_t reserved_bytes =
-        get_pending_l1_output_reservation(first, out_padded_shape, output_mem_config, dtype, Layout::TILE);
-    for (const auto& t : input_tensors) {
-        reserved_bytes +=
-            get_pending_l1_output_reservation(t, t.padded_shape(), t.memory_config(), t.dtype(), Layout::TILE);
+    // The CBs must fit in the L1 window that is actually free right now: get_max_l1_space
+    // reads the allocator's lowest occupied compute address, which accounts for every live
+    // L1 buffer -- this op's inputs as well as unrelated tensors a model keeps resident.
+    // When called before the output buffer exists (the routing hook in ttnn::concat), its
+    // worst-case per-bank footprint must be reserved on top; inside the device op the
+    // launch infra has already allocated it, so the free window accounts for it and
+    // reserving it again would double-count (and mis-route eligible concats).
+    const uint64_t free_l1 = get_max_l1_space(first);
+    uint64_t pending_output_bytes = 0;
+    if (!output_already_allocated) {
+        ttnn::Shape out_padded_shape = first.padded_shape();
+        out_padded_shape[-1] = g.out_wt * TILE_WIDTH;
+        pending_output_bytes = get_pending_l1_output_reservation(
+            first, out_padded_shape, output_mem_config, dtype, Layout::TILE, /*require_constructible=*/true);
     }
-    return required_cb_bytes(g, tile_bytes) + reserved_bytes <= l1_unreserved;
+    return required_cb_bytes(g, tile_bytes) + pending_output_bytes <= free_l1;
 }
 
 ProgramDescriptor ConcatTiledUnalignedProgramFactory::create_descriptor(
@@ -130,7 +152,7 @@ ProgramDescriptor ConcatTiledUnalignedProgramFactory::create_descriptor(
     const uint32_t num_tensors = input_tensors.size();
 
     TT_FATAL(
-        can_use_tiled_unaligned_concat(
+        is_supported_tiled_unaligned_config(
             input_tensors,
             operation_attributes.dim,
             operation_attributes.groups,
