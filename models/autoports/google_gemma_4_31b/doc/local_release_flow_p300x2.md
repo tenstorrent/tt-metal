@@ -139,6 +139,46 @@ Note some secondary aggregators (e.g. datalearner.com) describe 84.3/85.2 as
 *base* scores; that contradicts the primary card text, which is what this document
 follows.
 
+### Would these scores pass a graded CI check?
+
+Searched for published references (2026-08-18). Results:
+
+| Benchmark | Published reference | Applies to |
+| --- | --- | --- |
+| GPQA Diamond | **84.3%**, Google's own via the HF blog; independently confirmed by benchlm.ai citing that source | **instruction-tuned only** |
+| IFEval | **none exists.** Absent from Google's card; benchlm.ai lists Instruction Following as "Not measured, 0 benchmarks" |  |
+
+A web-search summary asserted "IFEval 95.0"; that number appears in none of the
+sources it cited and should not be used.
+
+With no `gpu_reference_score`, `compute_accuracy_check` falls back to
+`accuracy >= published_score * (1 - tolerance)`, tolerance 0.05. So if the
+instruction-tuned references were populated:
+
+| | GPQA |
+| --- | ---: |
+| Pass bar (84.3 * 0.95) | **80.09** |
+| This port, base, n-shot | **37.50** |
+| The *instruct* model on the same n-shot variant | ~53 |
+
+It would fail by a wide margin -- and so would the instruct model, because 84.3 is
+only valid paired with `r1_gpqa_diamond` plus thinking mode, which this base
+checkpoint cannot run (it needs non-greedy sampling and a thought channel the
+tokenizer does not define). There is therefore no honest way to grade this
+model's GPQA against the published figure.
+
+For IFEval there is nothing to grade against at all, so the check returns `NA`.
+Stage 11's recorded 25.18 cannot be compared to anything; against a plausible
+instruct-level bar of ~90 it would be ~28%. That is the quantitative form of the
+pipeline finding: `$tti-release` mandates `meta_ifeval` as a hard gate, and for a
+base checkpoint no reference is obtainable, because nobody publishes
+instruction-following scores for a model that was never instruction-tuned.
+
+Practically: this entry keeps both references `None`, so accuracy reports `NA`,
+and at `EXPERIMENTAL` `evals_enforced` is `False` so it would not gate even if it
+failed. The lane passes because accuracy is both ungraded and unenforced --
+promotion to `FUNCTIONAL` would require a same-task reference that does not exist.
+
 ### Benchmarks: 17/17 sweep points, zero failed requests
 
 Concurrency points (the meaningful ones):
