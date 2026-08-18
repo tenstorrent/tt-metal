@@ -10,6 +10,11 @@ set(TRACY_DEBUG_CATEGORY
     CACHE STRING
     "Tracy debug-verbosity categories to compile in: off, or a comma-separated list from tt_metal/tools/profiler/tracy_debug_categories.txt."
 )
+set(TT_X86_MARCH
+    "x86-64-v3"
+    CACHE STRING
+    "x86_64 microarchitecture level passed to -march (e.g. x86-64-v3, ivybridge). Lower it to build on older hosts."
+)
 option(ENABLE_LIBCXX "Enable using libc++" OFF)
 option(ENABLE_BUILD_TIME_TRACE "Enable build time trace (Clang only -ftime-trace)" OFF)
 option(BUILD_SHARED_LIBS "Create shared libraries" ON)
