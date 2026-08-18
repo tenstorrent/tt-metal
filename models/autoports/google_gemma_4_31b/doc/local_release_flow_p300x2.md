@@ -76,8 +76,24 @@ Two values that previously needed entrypoint code are now spec data:
 
 | Task | Samples | Score |
 | --- | ---: | ---: |
-| `mmlu_generative` 5-shot | 2127 (15% subset) | **78.37%** +/- 0.85 |
-| `gpqa_diamond_generative_n_shot` 5-shot | 40 (20% subset) | **37.50%** flexible-extract |
+| `mmlu_generative` 5-shot | 2127 (15% subset) | **78.51%** +/- 0.85 |
+| `gpqa_diamond_generative_n_shot` 5-shot | 40 (20% subset) | **40.00%** flexible-extract |
+
+Final numbers from the first fully green run (2026-08-18, `rc=0`: evals 2 blocks,
+benchmarks 17 blocks). Score history across configurations:
+
+| Configuration | MMLU | GPQA |
+| --- | ---: | ---: |
+| Direct path, before the L1 fixes (two runs, bit-identical) | 0.7837 | 0.3750 |
+| Rerouted onto the chunked `bfloat8_b` path | 0.7847 | **0.1750** |
+| Direct path + SDPA K-chunk headroom (**current**) | 0.7851 | **0.4000** |
+
+The residual movement from the original figures is a known consequence of halving
+the SDPA K chunk: it changes flash-attention accumulation order, so tiny
+floating-point differences can flip a borderline argmax. GPQA moved by **one
+sample** (16/40 vs 15/40) against a stderr of ~7.7 points, and MMLU by 3 of 2127
+against +/- 0.85 -- neither is evidence of improvement, and neither resembles the
+20-point collapse the chunked path caused.
 
 MMLU by category: social sciences 86.1, other 81.9, humanities 75.0, STEM 72.4.
 78.4% is decisive end-to-end evidence -- a numerically broken port lands near the

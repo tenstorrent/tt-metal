@@ -7,9 +7,9 @@ test in this repo.
 | # | Defect | Status |
 | --- | --- | --- |
 | 1 | Greedy-only adapter vs upstream `vllm bench serve` | Fixed (spec data) |
-| 2 | Prefill SDPA circular buffers clash with decode-resident L1 | Mitigation under test |
+| 2 | Prefill SDPA circular buffers clash with decode-resident L1 | **Fixed** (SDPA K-chunk headroom), confirmed |
 | 3 | `gcd`-sized block shard overflows L1 for 54% of prompt lengths | Fixed (code) |
-| 4 | Chunked prefill path degrades accuracy | **Open regression, caused by my own mitigation for #2** |
+| 4 | Chunked prefill path degrades accuracy | **Resolved** by reverting the reroute; GPQA 17.5 -> 40.0 |
 
 ## 1. Greedy-only vs the upstream benchmark client
 
@@ -146,3 +146,18 @@ path, keep fix #3 (a genuine bug, inert when the chunked path is unused), and re
 on the #2 headroom change instead. Then confirm GPQA returns to 0.3750. A
 direct-vs-chunked prefill-output PCC comparison at seq 1500 for both layer kinds
 is the diagnostic that localises the numerical error.
+
+## Closing state (2026-08-18)
+
+All four are closed. The release lane now completes `rc=0`: evals 2 blocks,
+benchmarks **17/17 sweep points with zero failed requests on every point**, and
+zero clash/OOM/greedy signatures in the server log.
+
+Decisively, isl=2048 through 65536 all complete on the **direct** prefill path with
+`GEMMA4_PREFILL_SDPA_MAX_SEQ` back at its default -- the exact configuration that
+crashed before -- which is what validates the SDPA K-chunk headroom as the fix for
+defect #2 rather than the reroute that caused defect #4.
+
+Final scores: MMLU 0.7851, GPQA 0.4000. See `local_release_flow_p300x2.md` for the
+score history across configurations and why the residual one-sample movement is
+attributable to the changed flash-attention accumulation order.
