@@ -266,13 +266,13 @@ AUDITED_SEEDS = {
         semantic_cpp_blocker="Semantic scoring can be fresh C++; TopK paired state, destination/RWC movement, transpose, and MOP/replay ownership need typed architectural models.",
         paired_selector_status="absent",
         test_status="not_run",
-        perf_status="blocked",
+        perf_status="not_run",
         correctness_metric="tolerance",
         correctness_threshold="values must pass the test's format tolerance/PCC gate and indices must preserve value/index association",
         correctness_source="test_sfpu_generic_moe_gate_topk.py",
-        silicon_status="blocked",
-        silicon_result="No paired isolated profiler fixture.",
-        silicon_source="f1_candidates.tsv rank 7",
+        silicon_status="not_run",
+        silicon_result="Isolated MOE_GATE_TOPK_BODY device-profile fixture landed (Lane BK 2026-08-18); no measurement yet — first numbers ride the scheduled sweeps.",
+        silicon_source="f1_candidates.tsv rank 7; test_sfpu_generic_moe_gate_topk.py::test_sfpu_generic_moe_gate_topk_device_profile",
     ),
     "legacy__ckernel_sfpu_sdpa_exp_unclamped": dict(
         semantic_cpp_class="ready",
@@ -292,13 +292,13 @@ AUDITED_SEEDS = {
         semantic_cpp_blocker="No architectural conversion blocker identified at the vFloat leaf boundary; transcendental approximation and precision parity must be characterized before promotion.",
         paired_selector_status="absent",
         test_status="not_run",
-        perf_status="blocked",
+        perf_status="not_run",
         correctness_metric="pcc",
         correctness_threshold="PCC > 0.99 plus per-format element tolerance unless the paired test establishes a stricter contract",
         correctness_source="test_sfpu_softmax_k.py; helpers/utils.py:548-785",
-        silicon_status="blocked",
-        silicon_result="No isolated paired profiler module.",
-        silicon_source="f1_candidates.tsv rank 9",
+        silicon_status="not_run",
+        silicon_result="Isolated SOFTMAX_K_BODY device-profile fixture landed (Lane BK 2026-08-18); no measurement yet — first numbers ride the scheduled sweeps.",
+        silicon_source="f1_candidates.tsv rank 9; test_sfpu_softmax_k.py::test_sfpu_softmax_k_device_profile",
     ),
     "metal__ckernel_sfpu_addcmul": dict(
         semantic_cpp_class="ready",
@@ -763,6 +763,16 @@ AUDITED_MAPPINGS = {
         perf_modules="perf_sfpu_binop_scalar.py::test_perf_sfpu_binop_scalar[formats:Float16_b->Float16_b-dest_acc:No-mathop:ScalarAdd-loop_factor:16-iterations:32-input_dimensions:[128, 64]]",
         notes="Lane AZ reclassification (was B-PERF-ONLY in the coverage-parity skip ledger): upstream 77c24691ab added test_sfpu_binop_scalar.py whose source sfpu_binop_scalar_test.cpp:68 includes llk_sfpu/ckernel_sfpu_binop_with_unary.h — audited chain test_sfpu_binop_scalar.py -> sources/sfpu_binop_scalar_test.cpp -> calculate_binop_with_scalar; exact BH-collected node recorded (representative ScalarAdd; Sub/Mul/Div/Rsub share the dispatch); perf twin perf_sfpu_binop_scalar.py collected on BH.",
     ),
+    "legacy__ckernel_sfpu_softmax_k": dict(
+        functional_modules="test_sfpu_softmax_k.py::test_sfpu_softmax_k",
+        perf_modules="test_sfpu_softmax_k.py::test_sfpu_softmax_k_device_profile",
+        notes="Audited chain: sfpu_softmax_k_test.cpp -> sfpu/experimental/ckernel_sfpu_softmax_k.h (_init_softmax_k_/_softmax_k_<k>). Perf vehicle added (Lane BK 2026-08-18): isolated SOFTMAX_K_BODY MATH-zone device-profile fixture pinned to the legal-region point Float16_b/dest_acc:No/k=16 (both functional skip predicates avoided); corr-node .text no-harm byte-proven; supersedes the f1_candidates 'no isolated perf module' prose.",
+    ),
+    "legacy__ckernel_sfpu_generic_moe_gate_topk": dict(
+        functional_modules="test_sfpu_generic_moe_gate_topk.py::test_sfpu_generic_moe_gate_topk",
+        perf_modules="test_sfpu_generic_moe_gate_topk.py::test_sfpu_generic_moe_gate_topk_device_profile",
+        notes="Audited chain: sfpu_generic_moe_gate_topk_test.cpp -> sfpu/experimental/ckernel_sfpu_generic_moe_gate_topk.h (_init_generic_moe_gate_topk_/_generic_moe_gate_topk_; self-includes its _top8/_top16 halves, both executed). Perf vehicle added (Lane BK 2026-08-18): isolated MOE_GATE_TOPK_BODY MATH-zone device-profile fixture pinned to top-8 (single-schema). NOTE the header is pure SFPU — its manifest mop=1 static flag comes from the classify() text regex; zero mop_cfg/ckernel_template/lltt::replay usage exists in the header (Lane BK grep), so the MATH zone is the honest scope; corr-node .text no-harm byte-proven; supersedes the f1_candidates 'no paired isolated cycle fixture' prose.",
+    ),
     "legacy__ckernel_sfpu_sdpa_exp_unclamped": dict(
         functional_modules="test_sfpu_sdpa_exp_unclamped.py::test_sfpu_sdpa_exp_unclamped",
         perf_modules="test_sfpu_sdpa_exp_unclamped.py::test_sfpu_sdpa_exp_unclamped_device_profile",
@@ -839,7 +849,8 @@ AUDITED_MAPPINGS = {
     ),
     "legacy__ckernel_sfpu_ema": dict(
         functional_modules="test_sfpu_ema.py::test_sfpu_ema",
-        notes="Audited chain: sfpu_ema_test.cpp -> llk_sfpu/llk_math_ema_sfpu_entry.h -> sfpu/ckernel_sfpu_ema.h (stateful two-tile EMA entry); functional-only mapping, no isolated perf fixture.",
+        perf_modules="test_sfpu_ema.py::test_sfpu_ema_device_profile",
+        notes="Audited chain: sfpu_ema_test.cpp -> llk_sfpu/llk_math_ema_sfpu_entry.h -> sfpu/ckernel_sfpu_ema.h (stateful two-tile EMA entry); functional-only mapping, no isolated perf fixture. Perf vehicle added (Lane BK 2026-08-18): isolated EMA_BODY MATH-zone device-profile fixture (Welford recipe; alpha/beta load + carry clear outside the zone; corr-node .text no-harm byte-proven) — the 'no isolated perf fixture' statement is closed.",
     ),
     "legacy__ckernel_sfpu_expm1_cw": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Expm1Cw-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
@@ -1084,7 +1095,8 @@ AUDITED_MAPPINGS = {
     ),
     "metal__ckernel_sfpu_reduce": dict(
         functional_modules="test_sfpu_reduce.py::test_int32_reduce_extreme[mixed-INT32_MAX-ReducePool.Max-MathOperation.ReduceRow],test_sfpu_reduce_multidim.py::test_sfpu_reduce_multidim[formats:Int32->Int32-reduce_pool:Max-num_row_tiles:2-dest_acc:Yes-input_bounds:(-1000, 0)]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_reduce (direct:sfpu_reduce_multidim_test.cpp); calculate_reduce (direct:sfpu_reduce_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="perf_sfpu_reduce_row_max.py::test_perf_sfpu_reduce_row_max_int32[formats:Int32->Int32-dest_acc:Yes-mathop:ReduceRow-reduce_pool:Max-loop_factor:100]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_reduce (direct:sfpu_reduce_multidim_test.cpp); calculate_reduce (direct:sfpu_reduce_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18): test_perf_sfpu_reduce_row_max_int32 mirrors the corr-gated Int32 ReduceRow/Max branch (perform_reduce_row_max_min_int32) — the module's pre-existing Float32 sweep measures a different branch of this header and stays the F1 cost-model surface; audit note: perf_sfpu_reduce_row_max.py's cpp includes llk_sfpu/ckernel_sfpu_reduce.h directly (honest evidence), while perf_reduce.py is the FPU reduce and perf_sfpu_reduce_sdpa.py is BH-skipped.",
     ),
     "metal__ckernel_sfpu_remainder": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Remainder-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
@@ -1105,11 +1117,13 @@ AUDITED_MAPPINGS = {
     ),
     "metal__ckernel_sfpu_sampling": dict(
         functional_modules="test_sfpu_sampling.py::test_sfpu_sampling[formats:Float16_b->Float16_b-dest_acc:No-op:ge-legacy_compat:True-vector_mode:C]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_sampling_binary_comp_first_column (direct:sfpu_sampling_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="test_sfpu_sampling.py::test_sfpu_sampling_device_profile",
+        notes="Audited production-header mapping (coverage parity lane): calculate_sampling_binary_comp_first_column (direct:sfpu_sampling_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18): isolated SAMPLING_BODY MATH-zone device-profile fixture pinned to recip_scalar/legacy_compat/VectorMode::None_ — the multi-DEST-tile layout is stimuli plumbing, the single unary-params call is the unambiguous zone; corr-node .text no-harm byte-proven.",
     ),
     "metal__ckernel_sfpu_sdpa": dict(
         functional_modules="test_sfpu_sdpa.py::test_sfpu_sdpa[variant:ExpPoly_scale1-precision:Fp32E2E]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_exponential_first_column (direct:sfpu_sdpa_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="test_sfpu_sdpa.py::test_sfpu_sdpa_device_profile",
+        notes="Audited production-header mapping (coverage parity lane): calculate_exponential_first_column (direct:sfpu_sdpa_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18): isolated SDPA_BODY MATH-zone device-profile fixture pinned to the corr-mapped point (ExpPoly scale +1.0, Fp32E2E) — the composite if-constexpr collapses to one body per build; corr-node .text no-harm byte-proven.",
     ),
     "metal__ckernel_sfpu_sdpa_exp_unclamped": dict(
         functional_modules="test_sfpu_sdpa_exp_unclamped.py",
@@ -1117,7 +1131,8 @@ AUDITED_MAPPINGS = {
     ),
     "metal__ckernel_sfpu_sdpa_fw": dict(
         functional_modules="test_sfpu_sdpa_fw.py::test_sfpu_sdpa_fw[variant:(<SdpaFwOp.Exp: 1>, 16000, <DestSync.Full: 'SyncFull'>, <ApproximationMode.No: False>)-precision:Fp32E2E]",
-        notes="Audited production-header mapping (coverage parity lane): calculate_exponential_first_column (direct:sfpu_sdpa_fw_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body.",
+        perf_modules="test_sfpu_sdpa_fw.py::test_sfpu_sdpa_fw_device_profile[SdpaFwOp.Exp-exp_first_column],test_sfpu_sdpa_fw.py::test_sfpu_sdpa_fw_device_profile[SdpaFwOp.Recip-recip_first_column]",
+        notes="Audited production-header mapping (coverage parity lane): calculate_exponential_first_column (direct:sfpu_sdpa_fw_test.cpp) — included directly by its test source; exact BH-collected node(s) recorded; no fresh selector, the production typed body is the compiler-path body. Perf vehicle added (Lane BK 2026-08-18): isolated SDPA_FW_BODY MATH-zone device-profile fixture, one node per body (recip/exp first-column); corr-node .text no-harm byte-proven.",
     ),
     "metal__ckernel_sfpu_selu": dict(
         functional_modules="test_sfpu_unary.py::test_eltwise_unary_sfpu[formats:Float32->Float32-approx_mode:No-mathop:Selu-fast_mode:No-dest_acc:No-input_dimensions:[64, 64]]",
