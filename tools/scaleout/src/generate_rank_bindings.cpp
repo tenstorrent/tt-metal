@@ -190,7 +190,7 @@ TopologyMappingWithLocalMaps run_topology_mapping(
     const int world_size =
         static_cast<int>(*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size());
     for (std::size_t mgi = 0; mgi < mesh_graph_descriptors.size(); ++mgi) {
-        PinningsByMesh local_pins = mesh_graph_descriptors[mgi].get_pinnings_by_mesh();
+        PinningsByMesh local_pins = mesh_graph_descriptors[mgi].get_pinnings();
 
         // Galaxy corner pins per full-galaxy mesh (local mesh id), same as the control plane / single-MGD path.
         if (cluster.is_ubb_galaxy()) {

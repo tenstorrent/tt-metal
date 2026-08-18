@@ -146,7 +146,7 @@ public:
     // There can be multiple valid groupings for each MGD instance
     // Requires a PhysicalSystemDescriptor reference for validation/filtering
     // pinnings: optional many-to-many pinning groups keyed by local mesh id (same shape as
-    // MeshGraphDescriptor::get_pinnings_by_mesh()), applied during PGD<->MGD topology matching
+    // MeshGraphDescriptor::get_pinnings()), applied during PGD<->MGD topology matching
     ValidGroupingsMap get_valid_groupings_for_mgd(
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,

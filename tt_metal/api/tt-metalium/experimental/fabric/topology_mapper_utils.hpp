@@ -50,17 +50,16 @@ using AsicPosition = tt::tt_metal::ASICPosition;
 // Required only when using pinning constraints
 using AsicPositionMap = std::map<tt::tt_metal::AsicID, AsicPosition>;
 
-// MGD many-to-many pinning group (same type as MeshGraphDescriptor::get_pinnings()).
+// MGD many-to-many pinning group (same type as MeshGraphDescriptor::get_pinnings() values).
 using PinningConstraint = ::tt::tt_fabric::AsicPinningGroup;
 
-// Pinning groups already split by local mesh id (same shape as MeshGraphDescriptor::get_pinnings_by_mesh()).
-// Incoming pins to PGD<->MGD matching are this map so the matcher looks up by mesh instead of re-indexing.
-using PinningsByMesh = std::map<uint32_t, std::vector<PinningConstraint>>;
+// Pinning groups keyed by local mesh id (same shape as MeshGraphDescriptor::get_pinnings()).
+using PinningsByMesh = std::map<::tt::tt_fabric::MeshId, std::vector<PinningConstraint>>;
 
 inline void merge_pinnings_by_mesh(PinningsByMesh& dest, const std::vector<PinningConstraint>& groups) {
     for (const auto& group : groups) {
         if (!group.fabric_nodes.empty()) {
-            dest[group.fabric_nodes.front().mesh_id.get()].push_back(group);
+            dest[group.fabric_nodes.front().mesh_id].push_back(group);
         }
     }
 }
@@ -468,7 +467,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
  * @param physical_grouping_descriptor Reference to the physical grouping descriptor containing mesh grouping
  * information
  * @param mesh_graph_descriptor Reference to the mesh graph descriptor containing logical mesh topology
- * @param pinnings Optional pinning groups keyed by local mesh id (MeshGraphDescriptor::get_pinnings_by_mesh(),
+ * @param pinnings Optional pinning groups keyed by local mesh id (MeshGraphDescriptor::get_pinnings(),
  * plus any caller-merged galaxy corner pins) used during PGD<->MGD matching and placement
  * @return PhysicalMultiMeshGraph containing mesh-level graph and internal mesh nodes
  */

@@ -463,9 +463,10 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         ::tt::tt_metal::experimental::tt_fabric::PinningsByMesh pinnings_by_mesh;
         if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
             const auto& mgd = mesh_graph_.get_mesh_graph_descriptor();
-            pinnings_by_mesh = mgd.get_pinnings_by_mesh();
-            const auto& mgd_pinnings = mgd.get_pinnings();
-            config.pinnings.insert(config.pinnings.end(), mgd_pinnings.begin(), mgd_pinnings.end());
+            pinnings_by_mesh = mgd.get_pinnings();
+            for (const auto& [_, groups] : mgd.get_pinnings()) {
+                config.pinnings.insert(config.pinnings.end(), groups.begin(), groups.end());
+            }
         }
         ::tt::tt_metal::experimental::tt_fabric::merge_pinnings_by_mesh(pinnings_by_mesh, pinning_groups_);
 

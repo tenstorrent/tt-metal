@@ -1835,7 +1835,6 @@ bool pinning_entry_uses_regex(const proto::AsicPinning& pinning) {
 
 void MeshGraphDescriptor::populate_pinnings() {
     pinnings_.clear();
-    pinnings_by_mesh_.clear();
 
     // Domain for logical-id regex expansion: instantiated local mesh ids and their chip counts.
     std::map<uint32_t, uint32_t> mesh_chip_count;  // local mesh_id -> chip count
@@ -1877,7 +1876,7 @@ void MeshGraphDescriptor::populate_pinnings() {
                     group.fabric_nodes.emplace_back(MeshId{m}, c);
                 }
                 group.asic_positions = positions;
-                pinnings_.push_back(std::move(group));
+                pinnings_[MeshId{m}].push_back(std::move(group));
             }
             continue;
         }
@@ -1933,18 +1932,13 @@ void MeshGraphDescriptor::populate_pinnings() {
                 group.fabric_nodes.emplace_back(MeshId{m}, c);
             }
             group.asic_positions = positions;
-            pinnings_.push_back(std::move(group));
+            pinnings_[MeshId{m}].push_back(std::move(group));
         }
     }
 
     // A logical fabric node may appear in several pinning groups. Each group is carried through as its own
     // constraint; the consumer filters out whatever is not present on the physical mesh being solved and
     // applies the rest, so a node listed in a wide group and in a 1:1 anchor is narrowed by the anchor.
-    for (const auto& group : pinnings_) {
-        if (!group.fabric_nodes.empty()) {
-            pinnings_by_mesh_[group.fabric_nodes.front().mesh_id.get()].push_back(group);
-        }
-    }
 }
 
 void MeshGraphDescriptor::validate_pinnings(

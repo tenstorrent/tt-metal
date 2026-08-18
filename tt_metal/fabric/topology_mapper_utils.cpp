@@ -75,11 +75,10 @@ std::vector<PinningConstraint> get_galaxy_fixed_asic_position_pinnings_for_mesh(
 
     // The four corners form ONE many-to-many pinning group: the four corner fabric nodes map bijectively to
     // the four tray-corner ASIC positions (asic_location 1 on trays 1..4). Emitting them as a SINGLE group
-    // (rather than one group per corner) is essential: downstream they are kept together as one profile, so
-    // all four corner constraints are applied in the same solve and jointly determine the mesh orientation.
-    // As four separate groups the profile-matching layer treats them as four interchangeable single-corner
-    // pins, collapses them, and only one corner survives -- which leaves the host-rank tray layout
-    // under-determined.
+    // (rather than one group per corner) is essential: a group is applied all-or-nothing, so the four corner
+    // constraints land in the same solve and jointly determine the mesh orientation. As four separate groups
+    // each corner would be an independent pin that can apply on its own, and a grouping covering only part of
+    // the tray layout would still match -- leaving the host-rank tray layout under-determined.
     pinning_groups.push_back({corner_fabric_node_ids, corner_asic_positions});
 
     // Optionally also hard-pin the NW corner (node 0) to tray 1 asic 1 to remove the remaining

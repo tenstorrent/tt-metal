@@ -31,7 +31,6 @@
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <map>
-#include <numeric>
 
 #include <google/protobuf/text_format.h>
 
@@ -837,10 +836,13 @@ std::set<uint32_t> get_mesh_ids_for_mgd_instance_name(
     return mesh_ids;
 }
 
-// Returns the number of required constraints added (one per many-to-many pinning group that resolved to >=1 PGD
-// node per side). Can be fewer than `pinnings.size()` when a group's pinned ASIC positions map to no PGD node in
-// this grouping, or when a group is unsatisfiable here; the caller requires every group to land and skips the PGD
-// variant otherwise.
+// Applies the pinning groups that this PGD grouping can actually host and returns how many were added.
+// A group whose pinned ASIC positions resolve to no node here simply does not apply and is dropped, so one
+// mesh may carry several column recipes (e.g. corners->asic 3 for the Middle column and corners->asic 2 for
+// the Edge column) and the grouping selects the applicable one. Returns 0 when nothing applies, or when the
+// groups that do apply cannot hold together -- a grouping straddling two physical columns resolves only part
+// of the 4-corner group (4 nodes, fewer positions) or intersects both corner groups to nothing, and
+// add_required_constraint rejects it. The caller skips the grouping on 0.
 std::size_t add_mgd_to_pgd_asic_position_pinning_constraints(
     MappingConstraints<uint32_t, uint32_t>& constraints,
     const GroupingInfo& pgd_grouping,
@@ -866,6 +868,137 @@ std::size_t add_mgd_to_pgd_asic_position_pinning_constraints(
     return constraints_added;
 }
 
+// One match/commit pass per distinct per-mesh pin set, taken straight from the MGD. Groups that the
+// candidate grouping cannot host are dropped at match time, so a mesh carrying several column recipes
+// needs no up-front partitioning. Pin sets are de-duplicated by content, collapsing the common case of
+// one mesh_id_regex entry expanded across every mesh into a single pass. Meshes stay separate because
+// two of them may pin different chips onto the same ASIC position. An empty variant preserves the
+// no-pin (0,0) anchor.
+std::vector<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> enumerate_pin_set_variants(
+    const tt::tt_metal::experimental::tt_fabric::PinningsByMesh& pinnings_by_mesh) {
+    std::vector<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> pin_set_variants;
+    std::set<std::string> seen_signatures;
+    for (const auto& [mesh_id, pin_set] : pinnings_by_mesh) {
+        std::string signature;
+        for (const auto& group : pin_set) {
+            for (const auto& fabric_node : group.fabric_nodes) {
+                signature += fmt::format("c{},", fabric_node.chip_id);
+            }
+            for (const auto& position : group.asic_positions) {
+                signature += fmt::format("p{}:{},", position.first.get(), position.second.get());
+            }
+            signature += ";";
+        }
+        if (seen_signatures.insert(std::move(signature)).second) {
+            pin_set_variants.push_back(pin_set);
+        }
+    }
+    if (pin_set_variants.empty()) {
+        pin_set_variants.emplace_back();
+    }
+    return pin_set_variants;
+}
+
+// Cheap necessary-condition for the topology solve: every MGD edge needs a distinct PGD edge, so
+// |E(PGD)| >= |E(MGD)|. A RING/RING MGD is a full torus (~2*N edges) while MESH/TORUSX/TORUSY
+// variants of the same grid drop wrap edges and can never contain it.
+size_t count_undirected_edges(const AdjacencyGraph<uint32_t>& g) {
+    size_t directed = 0;
+    for (uint32_t node : g.get_nodes()) {
+        directed += g.get_neighbors(node).size();
+    }
+    return directed / 2;  // each undirected edge is stored from both endpoints
+}
+
+std::vector<int32_t> normalized_grid_dims(std::vector<int32_t> dims) {
+    std::sort(dims.begin(), dims.end());
+    return dims;
+}
+
+// PGD flatten variants (MESH / TORUSX / TORUSY / TORUSXY) that have at least `required_nodes`,
+// bucketed by extra-node count. Names are sorted so order within each bucket is stable.
+std::map<size_t, std::vector<std::pair<std::string, size_t>>> collect_topology_variant_candidates(
+    const std::unordered_map<std::string, std::vector<GroupingInfo>>& mesh_flat_groupings, size_t required_nodes) {
+    std::map<size_t, std::vector<std::pair<std::string, size_t>>> candidates_by_diff;
+    std::vector<std::string> names;
+    names.reserve(mesh_flat_groupings.size());
+    for (const auto& [name, _] : mesh_flat_groupings) {
+        names.push_back(name);
+    }
+    std::sort(names.begin(), names.end());
+    for (const std::string& name : names) {
+        const auto& grouping_infos = mesh_flat_groupings.at(name);
+        for (size_t idx = 0; idx < grouping_infos.size(); ++idx) {
+            const size_t n = grouping_infos[idx].adjacency_graph.get_nodes().size();
+            if (n >= required_nodes) {
+                candidates_by_diff[n - required_nodes].emplace_back(name, idx);
+            }
+        }
+    }
+    return candidates_by_diff;
+}
+
+// Prefer the simplest topology that fits: MESH -> TORUSX -> TORUSY -> TORUSXY. Downstream set-packing
+// de-duplicates variants that cover the same physical ASIC set, so committing MESH-first keeps each
+// region in MESH form rather than a torus form.
+int torus_variant_priority(const std::string& type) {
+    if (type == "MESH") {
+        return 0;
+    }
+    if (type == "TORUSX") {
+        return 1;
+    }
+    if (type == "TORUSY") {
+        return 2;
+    }
+    if (type == "TORUSXY") {
+        return 3;
+    }
+    return 4;
+}
+
+void sort_matches_by_torus_variant_priority(
+    std::vector<MeshTopologyMatch>& matches,
+    const std::unordered_map<std::string, std::vector<GroupingInfo>>& mesh_flat_groupings) {
+    std::stable_sort(matches.begin(), matches.end(), [&](const MeshTopologyMatch& a, const MeshTopologyMatch& b) {
+        return torus_variant_priority(mesh_flat_groupings.at(a.name)[a.idx].type) <
+               torus_variant_priority(mesh_flat_groupings.at(b.name)[b.idx].type);
+    });
+}
+
+bool skip_pgd_topology_variant(
+    const GroupingInfo& grouping_info,
+    const std::string& name,
+    const std::string& mgd_name,
+    size_t required_edges,
+    const std::vector<int32_t>& required_grid_dims,
+    bool mgd_is_1xN_strip,
+    size_t node_diff) {
+    const size_t variant_edges = count_undirected_edges(grouping_info.adjacency_graph);
+    if (variant_edges < required_edges) {
+        log_debug(
+            tt::LogFabric,
+            "Skipping {} for {}: {} edges < {} MGD edges (cannot contain the topology)",
+            name,
+            mgd_name,
+            variant_edges,
+            required_edges);
+        return true;
+    }
+    if (node_diff == 0 && !required_grid_dims.empty() && grouping_info.flattened_node_grid_dims.size() >= 2 &&
+        normalized_grid_dims(grouping_info.flattened_node_grid_dims) != required_grid_dims && !mgd_is_1xN_strip) {
+        log_debug(
+            tt::LogFabric,
+            "Skipping {} for {}: flattened node grid dims [{},{}] do not match MGD device topology",
+            name,
+            mgd_name,
+            grouping_info.flattened_node_grid_dims[0],
+            grouping_info.flattened_node_grid_dims[1]);
+        return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 namespace tt::tt_fabric {
@@ -888,7 +1021,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> mgd_grouping_infos =
         PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(mesh_graph_descriptor);
 
-    // Incoming pins are already keyed by local mesh id (MGD get_pinnings_by_mesh + caller-merged galaxy pins).
+    // Incoming pins are already keyed by local mesh id (MGD get_pinnings + caller-merged galaxy pins).
     const tt::tt_metal::experimental::tt_fabric::PinningsByMesh all_pinnings_by_mesh =
         pinnings.value_or(tt::tt_metal::experimental::tt_fabric::PinningsByMesh{});
 
@@ -934,175 +1067,32 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         // 1..7), and different instances can be pinned to different physical columns (even -> Middle asic 3,
         // odd -> Edge asic 2). Incoming pins are already keyed by mesh; look up only this descriptor's
         // mesh ids so we run match/commit once per distinct pin-set.
-        std::map<uint32_t, std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> pinnings_by_mesh;
+        tt::tt_metal::experimental::tt_fabric::PinningsByMesh pinnings_by_mesh;
         for (uint32_t mesh_id : get_mesh_ids_for_mgd_instance_name(mesh_graph_descriptor, instance_name)) {
-            if (auto it = all_pinnings_by_mesh.find(mesh_id); it != all_pinnings_by_mesh.end()) {
-                pinnings_by_mesh.emplace(mesh_id, it->second);
+            if (auto it = all_pinnings_by_mesh.find(MeshId{mesh_id}); it != all_pinnings_by_mesh.end()) {
+                pinnings_by_mesh.emplace(it->first, it->second);
             }
         }
 
-        // pin_set_variants (one independent match/commit pass each) is built below, AFTER the candidate
-        // groupings are gathered, because partitioning a mesh's pins into profiles probes co-satisfiability
-        // against those candidates.
+        const std::vector<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> pin_set_variants =
+            enumerate_pin_set_variants(pinnings_by_mesh);
 
-        // Required nodes from MGD adjacency graph (this represents the topology pattern to match)
-        size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
-
-        // Cheap necessary-condition prefilter for the (expensive) topology solve. solve_topology_mapping
-        // looks for an injective edge-preserving map of the MGD graph (target) into a PGD variant (global),
-        // so every MGD edge must land on a distinct PGD edge -> |E(PGD)| >= |E(MGD)| is required. A RING/RING
-        // MGD is a full torus (degree 4 everywhere, ~2*N edges) while the MESH/TORUSX/TORUSY variants of the
-        // same grid drop wrap edges, so they have strictly fewer edges and can never contain it. Counting
-        // edges is O(V); the SAT solve it skips is many orders of magnitude slower (seconds per 128-node
-        // candidate), so this eliminates the provably-impossible variants up front instead of solving them.
-        auto count_undirected_edges = [](const AdjacencyGraph<uint32_t>& g) -> size_t {
-            size_t directed = 0;
-            for (uint32_t node : g.get_nodes()) {
-                directed += g.get_neighbors(node).size();
-            }
-            return directed / 2;  // each undirected edge is stored from both endpoints
-        };
+        const size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
         const size_t required_edges = count_undirected_edges(mgd_grouping_info.adjacency_graph);
-
         const auto device_topo = get_mgd_instance_device_topology(mesh_graph_descriptor, instance_name);
-
-        auto normalized_dims = [](std::vector<int32_t> dims) {
-            std::sort(dims.begin(), dims.end());
-            return dims;
-        };
         const std::vector<int32_t> required_grid_dims =
-            device_topo.has_value() ? normalized_dims(device_topo->dims) : std::vector<int32_t>{};
+            device_topo.has_value() ? normalized_grid_dims(device_topo->dims) : std::vector<int32_t>{};
+        const bool mgd_is_1xN_strip =
+            device_topo.has_value() && device_topo->dims.size() >= 2 &&
+            std::any_of(device_topo->dims.begin(), device_topo->dims.end(), [](int32_t d) { return d == 1; });
 
-        // Group valid candidates by node difference (map is ordered by key ascending)
-        // Store (name, index) pairs to handle multiple groupings with same name.
-        // Iterate PGD names in sorted order so candidate order within each diff bucket is stable.
         log_info(tt::LogFabric, "Grouping valid candidates by node difference");
-        std::map<size_t, std::vector<std::pair<std::string, size_t>>> candidates_by_diff;
-        std::vector<std::string> pgd_mesh_grouping_names;
-        pgd_mesh_grouping_names.reserve(mesh_flat_groupings.size());
-        for (const auto& [name, _] : mesh_flat_groupings) {
-            pgd_mesh_grouping_names.push_back(name);
-        }
-        std::sort(pgd_mesh_grouping_names.begin(), pgd_mesh_grouping_names.end());
-        for (const std::string& name : pgd_mesh_grouping_names) {
-            const auto& grouping_infos = mesh_flat_groupings.at(name);
-            for (size_t idx = 0; idx < grouping_infos.size(); ++idx) {
-                const auto& grouping_info = grouping_infos[idx];
-                size_t n = grouping_info.adjacency_graph.get_nodes().size();
-                if (n >= required_nodes) {
-                    candidates_by_diff[n - required_nodes].emplace_back(name, idx);
-                }
-            }
-        }
-
-        // Partition each mesh's pins into PROFILES and run one independent match/commit pass per distinct
-        // profile. Two pin blocks belong to the same profile iff they can BOTH fully land on at least one
-        // candidate grouping (co-satisfiable) -- this separates e.g. a Middle profile {corners->asic 3,
-        // chip1->asic 7} from an Edge profile {corners->asic 2, chip2->asic 6} WITHOUT hardcoding which asic
-        // locations form which physical column. A grouping is committed if ANY one profile fully lands (the
-        // per-variant commit loop below requires added == variant.size()), so a mesh may carry BOTH profiles
-        // and flexibly match either column. Profiles are de-duplicated by physical-position signature so a
-        // shared descriptor runs each distinct profile once. An empty variant preserves the no-pin (0,0) anchor.
-        std::vector<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> pin_set_variants;
-        if (pinnings_by_mesh.empty()) {
-            pin_set_variants.emplace_back();
-        } else {
-            // Probe co-satisfiability against exact node-count matches (node_diff 0) when present, else all
-            // candidates; using mesh-sized groupings avoids spurious co-landing on wrong-shape variants.
-            std::vector<std::pair<std::string, size_t>> probe_groupings;
-            if (auto it = candidates_by_diff.find(0); it != candidates_by_diff.end()) {
-                probe_groupings = it->second;
-            } else {
-                for (const auto& [_, pairs] : candidates_by_diff) {
-                    probe_groupings.insert(probe_groupings.end(), pairs.begin(), pairs.end());
-                }
-            }
-
-            auto block_lands_on = [&](const tt::tt_metal::experimental::tt_fabric::PinningConstraint& block,
-                                      const GroupingInfo& g) {
-                MappingConstraints<uint32_t, uint32_t> c;
-                return add_mgd_to_pgd_asic_position_pinning_constraints(c, g, {block}) == 1;
-            };
-
-            auto partition_into_profiles =
-                [&](const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>& blocks) {
-                    const size_t n = blocks.size();
-                    std::vector<size_t> parent(n);
-                    std::iota(parent.begin(), parent.end(), size_t{0});
-                    std::function<size_t(size_t)> find = [&](size_t x) {
-                        while (parent[x] != x) {
-                            parent[x] = parent[parent[x]];
-                            x = parent[x];
-                        }
-                        return x;
-                    };
-                    // Union blocks that fully land together on the same candidate grouping -- but ONLY on a
-                    // grouping that a multi-chip "anchor" block (e.g. the 4 corners spanning tray 1-4) also
-                    // fully lands on. A corner block only lands when a whole physical column is present, so this
-                    // restricts co-membership inference to CLEAN single-column groupings and ignores the
-                    // mixed-column flatten variants (where, e.g., a Middle chip-pin and an Edge chip-pin could
-                    // both land and wrongly merge the two profiles).
-                    for (const auto& [gname, gidx] : probe_groupings) {
-                        const auto& g = mesh_flat_groupings.at(gname)[gidx];
-                        std::vector<size_t> landed;
-                        bool has_anchor = false;
-                        for (size_t i = 0; i < n; ++i) {
-                            if (block_lands_on(blocks[i], g)) {
-                                landed.push_back(i);
-                                if (blocks[i].fabric_nodes.size() > 1) {
-                                    has_anchor = true;
-                                }
-                            }
-                        }
-                        if (!has_anchor) {
-                            continue;
-                        }
-                        for (size_t k = 1; k < landed.size(); ++k) {
-                            parent[find(landed[k])] = find(landed[0]);
-                        }
-                    }
-                    std::map<size_t, std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> comps;
-                    for (size_t i = 0; i < n; ++i) {
-                        comps[find(i)].push_back(blocks[i]);
-                    }
-                    std::vector<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> profiles;
-                    profiles.reserve(comps.size());
-                    for (auto& [_, v] : comps) {
-                        profiles.push_back(std::move(v));
-                    }
-                    return profiles;
-                };
-
-            auto pin_set_signature =
-                [](const std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pin_set) {
-                    std::vector<std::pair<uint32_t, uint32_t>> positions;
-                    for (const auto& group : pin_set) {
-                        for (const auto& pos : group.asic_positions) {
-                            positions.emplace_back(pos.first.get(), pos.second.get());
-                        }
-                    }
-                    std::sort(positions.begin(), positions.end());
-                    std::string sig;
-                    for (const auto& [tray, asic] : positions) {
-                        sig += fmt::format("{}:{},", tray, asic);
-                    }
-                    return sig;
-                };
-
-            std::set<std::string> seen_signatures;
-            for (const auto& [mesh_id, pin_set] : pinnings_by_mesh) {
-                for (auto& profile : partition_into_profiles(pin_set)) {
-                    if (seen_signatures.insert(pin_set_signature(profile)).second) {
-                        pin_set_variants.push_back(std::move(profile));
-                    }
-                }
-            }
-        }
+        const std::map<size_t, std::vector<std::pair<std::string, size_t>>> candidates_by_diff =
+            collect_topology_variant_candidates(mesh_flat_groupings, required_nodes);
 
         // Process difference levels from closest to farthest; commit only when embedding on PSD succeeds.
-        // Run one match/commit pass per profile (pin_set_variants); each pass commits its own groupings, so a
-        // shared descriptor accumulates both its Middle and Edge column groupings, which find_all_in_psd maps
-        // together.
+        // Run one match/commit pass per pin set; each pass commits its own groupings, so a shared descriptor
+        // accumulates both its Middle and Edge column groupings, which find_all_in_psd maps together.
         std::vector<MeshTopologyMatch> best_matches_topology;
         std::vector<MeshTopologyMatch> best_matches_psd_placed;
         size_t last_topology_match_count = 0;
@@ -1116,49 +1106,23 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
                 for (const auto& [name, idx] : name_idx_pairs) {
                     const auto& grouping_info = mesh_flat_groupings.at(name)[idx];
-
-                    // Necessary-condition prefilter: a variant with fewer edges than the MGD cannot contain it
-                    // (every MGD edge needs a distinct variant edge). Skip without paying for the SAT solve.
-                    const size_t variant_edges = count_undirected_edges(grouping_info.adjacency_graph);
-                    if (variant_edges < required_edges) {
-                        log_debug(
-                            tt::LogFabric,
-                            "Skipping {} for {}: {} edges < {} MGD edges (cannot contain the topology)",
+                    if (skip_pgd_topology_variant(
+                            grouping_info,
                             name,
                             mgd_grouping_info.name,
-                            variant_edges,
-                            required_edges);
-                        continue;
-                    }
-
-                    const bool mgd_is_1xN_strip =
-                        device_topo.has_value() && device_topo->dims.size() >= 2 &&
-                        std::any_of(
-                            device_topo->dims.begin(), device_topo->dims.end(), [](int32_t d) { return d == 1; });
-
-                    // Same ASIC count but different grid factorization (e.g. MGD 1×32 vs PGD 4×8): still allow the
-                    // topology solve unless the MGD declares a full 2D grid (both dims > 1).
-                    if (node_diff == 0 && !required_grid_dims.empty() &&
-                        grouping_info.flattened_node_grid_dims.size() >= 2 &&
-                        normalized_dims(grouping_info.flattened_node_grid_dims) != required_grid_dims &&
-                        !mgd_is_1xN_strip) {
-                        log_debug(
-                            tt::LogFabric,
-                            "Skipping {} for {}: flattened node grid dims [{},{}] do not match MGD device topology",
-                            name,
-                            mgd_grouping_info.name,
-                            grouping_info.flattened_node_grid_dims[0],
-                            grouping_info.flattened_node_grid_dims[1]);
+                            required_edges,
+                            required_grid_dims,
+                            mgd_is_1xN_strip,
+                            node_diff)) {
                         continue;
                     }
 
                     MappingConstraints<uint32_t, uint32_t> constraints;
                     if (!active_pinnings.empty()) {
-                        // Every pin in THIS group's pin-set must land on the candidate grouping (all-or-nothing);
-                        // a variant that can host only part of the set is not a valid home for this column.
-                        const std::size_t added = add_mgd_to_pgd_asic_position_pinning_constraints(
-                            constraints, grouping_info, active_pinnings);
-                        if (added != active_pinnings.size()) {
+                        // Keep only the groupings that can host at least one pin; the ones that do apply are
+                        // required to hold together, which is what rejects mixed-column variants.
+                        if (add_mgd_to_pgd_asic_position_pinning_constraints(
+                                constraints, grouping_info, active_pinnings) == 0) {
                             continue;
                         }
                     } else {
@@ -1204,33 +1168,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     return committed;
                 };
 
-                // Prefer the simplest topology that fits: order variants MESH -> TORUSX -> TORUSY -> TORUSXY so the
-                // smallest topology that matches is used. The downstream set-packing solver de-duplicates variants
-                // that cover the same physical ASIC set (find_all_in_psd / solve_for_many_groupings_to_psd), so
-                // committing variants MESH-first means each physical region keeps its MESH form rather than a torus
-                // form, while distinct physical regions (e.g. two tray-pairs for a 2x8) are each committed.
-                auto variant_priority = [&](const MeshTopologyMatch& m) -> int {
-                    const std::string& type = mesh_flat_groupings.at(m.name)[m.idx].type;
-                    if (type == "MESH") {
-                        return 0;
-                    }
-                    if (type == "TORUSX") {
-                        return 1;
-                    }
-                    if (type == "TORUSY") {
-                        return 2;
-                    }
-                    if (type == "TORUSXY") {
-                        return 3;
-                    }
-                    return 4;
-                };
-                std::stable_sort(
-                    best_matches_topology.begin(),
-                    best_matches_topology.end(),
-                    [&](const MeshTopologyMatch& a, const MeshTopologyMatch& b) {
-                        return variant_priority(a) < variant_priority(b);
-                    });
+                sort_matches_by_torus_variant_priority(best_matches_topology, mesh_flat_groupings);
 
                 if (physical_system_descriptor != nullptr) {
                     for (const auto& match : best_matches_topology) {

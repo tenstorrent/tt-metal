@@ -4404,8 +4404,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& group : pinnings) {
-        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+    for (const auto& [_, groups] : pinnings) {
+        for (const auto& group : groups) {
+            config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+        }
     }
 
     if (!config.pinnings.empty()) {
@@ -4534,8 +4536,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& group : pinnings) {
-        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+    for (const auto& [_, groups] : pinnings) {
+        for (const auto& group : groups) {
+            config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+        }
     }
 
     if (!config.pinnings.empty()) {
@@ -4664,8 +4668,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     const auto& pinnings = mgd.get_pinnings();
-    for (const auto& group : pinnings) {
-        config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+    for (const auto& [_, groups] : pinnings) {
+        for (const auto& group : groups) {
+            config.pinnings.push_back({group.fabric_nodes, group.asic_positions});
+        }
     }
 
     if (!config.pinnings.empty()) {
