@@ -39,12 +39,11 @@ from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
 from models.experimental.deepseek_v4_flash.tt.paged_cache import round_context
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight
+from models.experimental.deepseek_v4_flash.tt.system_config import SystemConfig, load_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
 DEFAULT_MODEL_DIR = os.path.expanduser("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731")
-DEFAULT_WEIGHT_DTYPE = ttnn.bfloat4_b
-DEFAULT_BLOCK_SIZE = 32
 
 
 def weight_thunk(loader: DeepseekV4WeightLoader, name: str) -> Callable[[], torch.Tensor]:
@@ -75,7 +74,7 @@ def build_rope(config, max_seq: int) -> dict:
     return rope
 
 
-def round_max_seq(config, max_seq_len: int, block_size: int = DEFAULT_BLOCK_SIZE) -> int:
+def round_max_seq(config, max_seq_len: int, block_size: int = 32) -> int:
     """Round a requested context up to a length every compressor's entry count tiles
     into whole blocks (the traced caches and RoPE tables are sized to it)."""
     return round_context(max_seq_len, {int(v) for v in config.compress_rates.values()}, block_size)
@@ -101,6 +100,11 @@ class DeepSeekV4Generator:
         eos = config.eos_token_id
         self.eos_id = eos[0] if isinstance(eos, (list, tuple)) else eos
 
+    @property
+    def system_config(self) -> SystemConfig:
+        """The machine tuning profile the model was built with."""
+        return self.model.system_config
+
     @classmethod
     def from_pretrained(
         cls,
@@ -108,17 +112,25 @@ class DeepSeekV4Generator:
         *,
         model_dir: str | Path | None = None,
         cache_dir: str | Path | None = None,
-        max_seq_len: int = 4096,
-        num_sessions: int = 1,
+        max_seq_len: int | None = None,
+        num_sessions: int | None = None,
         total_tokens: int | None = None,
         num_layers: int | None = None,
-        block_size: int = DEFAULT_BLOCK_SIZE,
-        weight_dtype=DEFAULT_WEIGHT_DTYPE,
-        traced: bool = True,
+        block_size: int | None = None,
+        weight_dtype=None,
+        traced: bool | None = None,
         prepare: bool = True,
+        system_config: SystemConfig | None = None,
+        system_profile: str | None = None,
     ) -> "DeepSeekV4Generator":
         """Load the checkpoint, build the model across the mesh and allocate the
         decode state.
+
+        Every sizing argument defaults to the machine's system profile (see
+        :mod:`.system_config`), picked by ``mesh_device``'s device count unless
+        ``system_profile`` names one or ``system_config`` hands one over. So on an
+        8-chip host this reads its context and session counts from the ``p150x8``
+        profile and on a 32-chip one from ``galaxy32``, with no caller change.
 
         ``max_seq_len`` is rounded up (see :func:`round_max_seq`); ``total_tokens`` is
         the *shared* budget the ``num_sessions`` sessions draw their blocks from and
@@ -133,6 +145,14 @@ class DeepSeekV4Generator:
         from transformers import AutoTokenizer
         from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 
+        sys_cfg = system_config or load_system_config(profile=system_profile, mesh_device=mesh_device).log()
+        decode = sys_cfg.decode
+        max_seq_len = max_seq_len if max_seq_len is not None else decode.max_context
+        num_sessions = num_sessions if num_sessions is not None else decode.num_users
+        block_size = block_size if block_size is not None else decode.block_size
+        weight_dtype = weight_dtype if weight_dtype is not None else decode.ttnn_weight_dtype
+        traced = traced if traced is not None else decode.traced
+
         model_dir = str(model_dir or os.environ.get("DEEPSEEK_V4_HF_MODEL", DEFAULT_MODEL_DIR))
         cache_dir = cache_dir if cache_dir is not None else os.environ.get("DEEPSEEK_V4_CACHE_DIR")
 
@@ -143,7 +163,7 @@ class DeepSeekV4Generator:
 
         max_seq = round_max_seq(config, max_seq_len, block_size)
         rope = build_rope(config, max_seq)
-        max_layers = num_layers or int(os.environ.get("DEEPSEEK_V4_DECODE_LAYERS", "0")) or config.num_hidden_layers
+        max_layers = num_layers or decode.resolve_num_layers(config.num_hidden_layers)
         max_layers = min(max_layers, config.num_hidden_layers)
         weight_cache = WeightCache(os.path.join(str(cache_dir), "full_decode", "ttnn")) if cache_dir else None
 
@@ -155,6 +175,7 @@ class DeepSeekV4Generator:
             weight_dtype=weight_dtype,
             max_layers=max_layers,
             use_submeshes=True,
+            system_config=sys_cfg,
         )
         lm_head = Linear(
             weight_thunk(loader, "lm_head.weight"),
@@ -174,11 +195,12 @@ class DeepSeekV4Generator:
 
     def prepare_decode(
         self,
-        num_sessions: int = 1,
+        num_sessions: int | None = None,
         total_tokens: int | None = None,
-        block_size: int = DEFAULT_BLOCK_SIZE,
+        block_size: int | None = None,
         tokens_per_block: int | None = None,
         pools: dict[int, ttnn.Tensor] | None = None,
+        batch: int | None = None,
     ) -> None:
         """Allocate the decode state: block pools, page tables and per-session buffers.
 
@@ -187,7 +209,17 @@ class DeepSeekV4Generator:
         caller-owned block pools keyed by layer index (whose geometry
         ``tokens_per_block`` describes); their block count then replaces the internal
         pool plan.
+
+        The unset arguments come from the system profile (``decode.num_users`` /
+        ``block_size`` / ``total_context`` / ``batch``), so a machine's session and
+        batch sizing lives in one file rather than at each call site.
         """
+        decode = self.system_config.decode
+        num_sessions = num_sessions if num_sessions is not None else decode.num_users
+        block_size = block_size if block_size is not None else decode.block_size
+        batch = batch if batch is not None else decode.batch
+        if total_tokens is None:
+            total_tokens = decode.resolve_total_context()
         if not self.traced:
             if num_sessions > 1:
                 raise ValueError("the eager path decodes against one dense cache; use traced=True for several sessions")
@@ -204,6 +236,7 @@ class DeepSeekV4Generator:
             block_size=block_size,
             tokens_per_block=tokens_per_block,
             pools=pools,
+            batch=batch,
         )
 
     # -- properties ------------------------------------------------------------- #

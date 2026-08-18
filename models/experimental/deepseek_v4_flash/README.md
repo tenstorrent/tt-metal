@@ -46,6 +46,63 @@ plus room for the converted tile cache — budget 300 GB.
 The first run converts every weight to `bfloat4_b` and can take over an hour.
 Point `DEEPSEEK_V4_CACHE_DIR` at a persistent directory so later runs reuse it.
 
+## System profiles (per-machine tuning)
+
+Every deployment knob — pipeline group size, prefetcher ring depth, the MoE L1
+expert block size, socket sizes, weight precision, batch/session/context sizing —
+lives in [`configs/system_configs.yaml`](configs/system_configs.yaml) as a named
+profile per machine, loaded by [`tt/system_config.py`](tt/system_config.py).
+Model geometry is deliberately *not* here: that comes from the checkpoint's own
+config.
+
+The profile is chosen automatically by the mesh's device count, so the same
+command line tunes itself to the machine it lands on:
+
+| Profile | Machine | Notes |
+| --- | --- | --- |
+| `p150x8` | 8x Blackhole P150 | The measured config: 16.2 tok/s/u at B=1, PGS=1 |
+| `galaxy32` | 32x Blackhole Galaxy | Capacity-tuned starting point (see the file's note on why 32 chips needs TP/EP for per-user speed) |
+| `single_chip` | 1x Blackhole | Capped layer stack for PCC tests and bring-up |
+| `<machine>_server` | either | Many concurrent conversations, long contexts |
+| `<machine>_throughput` | either | Batched decode: aggregate tok/s over per-user latency |
+
+Selection precedence: an explicit `system_config=` / `--system-profile`, then
+`$DEEPSEEK_V4_SYSTEM_PROFILE`, then the profile matching the device count, then
+the file's `default_profile`. `demo/server.py` additionally asks for the `server`
+variant of whichever machine matched, so `p150x8` becomes `p150x8_server`.
+
+Profiles inherit with `extends` and are merged key-by-key, so a new machine only
+states what it changes. Any single field can be overridden at runtime by its
+environment variable (each is named in a comment beside the field), which beats
+the file — handy for a one-off A/B:
+
+```bash
+# One experiment, no file edit:
+DEEPSEEK_V4_EXPERTS_BLOCK_SIZE=1 DEEPSEEK_V4_PREFETCH_PAGES=24 \
+python models/experimental/deepseek_v4_flash/demo/chat_cli.py
+
+# Force a profile that the device count would not pick:
+DEEPSEEK_V4_SYSTEM_PROFILE=p150x8_throughput python ...
+
+# Point at a local tune instead of the shipped file:
+DEEPSEEK_V4_SYSTEM_CONFIG=/path/to/my_profiles.yaml python ...
+```
+
+In code, the entry points take it directly and every knob left unset falls back
+to the profile:
+
+```python
+from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
+
+cfg = load_system_config(mesh_device=mesh_device)      # or profile="galaxy32"
+cfg = cfg.with_overrides(pipeline={"group_size": 4})   # experiment in-process
+gen = DeepSeekV4Generator.from_pretrained(mesh_device, system_config=cfg)
+```
+
+`load_system_config` rejects unknown keys with a suggestion, so a typo fails at
+load rather than silently running an untuned machine. Host-only tests:
+`pytest models/experimental/deepseek_v4_flash/tests/test_system_config.py`.
+
 ## Demo test
 
 ```bash
@@ -56,14 +113,23 @@ Builds the full ttnn `DeepSeekV4Model`, seeds the caches with a chat prompt, and
 greedily generates until EOS or the token cap. Throughput is logged every 10
 tokens. The test is skipped if the checkpoint is missing.
 
+These variables override the active system profile (see above for the full list,
+which is documented field-by-field in `configs/system_configs.yaml`):
+
 | Variable | Default | Description |
 | --- | --- | --- |
+| `DEEPSEEK_V4_SYSTEM_PROFILE` | by device count | Force a machine profile by name. |
 | `DEEPSEEK_V4_DECODE_LAYERS` | all (43) | Cap the layer count. The full bf4 stack does not fit one 32 GB Blackhole; start at `4` for bringup. |
 | `DEEPSEEK_V4_CACHE_DIR` | `../cache` | Converted ttnn weight tiles. Reuse across runs. |
 | `DEEPSEEK_V4_MAX_NEW_TOKENS` | `1024` | Generation cap. |
 | `DEEPSEEK_V4_TRACED_DECODE` | `1` | `0` for eager host-bound decode instead of captured traces. |
 | `DEEPSEEK_V4_POOL_EVERY_STEP` | `0` | Re-pool the CSA/HCA compressors every step instead of only on window closures. Bit-identical, slower, but collapses the traced path to one trace variant — use it if trace capture runs out of memory. |
 | `DEEPSEEK_V4_SDPA_CAUSAL` | `1` | Bound compressor attention with a causal `cur_pos` rather than an additive mask once the sliding ring is full. `0` forces the mask everywhere. |
+| `DEEPSEEK_V4_EXPERTS_BLOCK_SIZE` | `2` | Experts whose activations `fused_experts` holds in L1 at once. Lower this when the op's static circular buffers clash with L1 buffers; only `1` and `2` actually save L1 (the block is double-buffered). |
+| `DEEPSEEK_V4_PREFETCH_PAGES` | `16` | Weight-prefetcher GCB ring depth, i.e. how far ahead the DRISC senders may run. |
+| `DEEPSEEK_V4_PIPELINE_GROUP_SIZE` | `1` | Devices per pipeline group. `1` gives each device one contiguous slice of layers (fewest socket hops per token). |
+| `DEEPSEEK_V4_FUSE_QA_KV` | `0` | Run q_a and kv as one matmul over their concatenated weight. `auto` fuses wherever the prefetcher is off, which is the only place the fused weight works — it shares no GCB page size, so forcing `1` with the prefetcher on is rejected. |
+| `DEEPSEEK_V4_PREFETCHER` | `auto` | Force the DRISC weight prefetcher on/off; `auto` uses it wherever the device supports it. |
 
 ## Chat CLI
 
@@ -101,7 +167,9 @@ Commands: `/user N`, `/users`, `/reset [N|all]`, `/system TEXT`,
 Key flags (`--help` for all): `--num-layers`, `--num-users`, `--max-context`
 (per user), `--total-context` (shared pool), `--max-new-tokens`, `--think`
 (streams a `<think>` reasoning block inline), `--no-trace` (eager, single user
-only), `--cache-dir`, `--model-dir`.
+only), `--cache-dir`, `--model-dir`. The sizing flags default to the active
+system profile, and `--system-profile` / `--system-config-file` pick a different
+one.
 
 ## Inference server
 
