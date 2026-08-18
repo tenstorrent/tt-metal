@@ -373,6 +373,18 @@ ReduceNode<Geometry, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
     return {{}, b.get_cb_id(), scaler.get_cb_id()};
 }
 
+template <typename Geometry, ReduceAxis Axis>
+ReduceNode<Geometry, Axis, ReducePool::Max, expr::UnaryChain<>> reduce_max(
+    const ComputeBlock& b, const ComputeBlock& scaler) {
+    return {{}, b.get_cb_id(), scaler.get_cb_id()};
+}
+
+template <typename Geometry, ReduceAxis Axis>
+ReduceNode<Geometry, Axis, ReducePool::Avg, expr::UnaryChain<>> reduce_mean(
+    const ComputeBlock& b, const ComputeBlock& scaler) {
+    return {{}, b.get_cb_id(), scaler.get_cb_id()};
+}
+
 // --- NocAsyncReadTx ---
 
 template <int thread>

@@ -38,7 +38,7 @@ CB_IN0, CB_TMP0, CB_TMP1, CB_SCALER, CB_OUT = 0, 1, 2, 3, 16
 TILE = 32
 
 
-def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, seed=0):
+def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, op="sum", single_stage=False, seed=0):
     torch.manual_seed(seed)
     # One input block per (block, column): column x reads b * grid_w + x, so every
     # column reduces different data and a mis-indexed column shows up as garbage.
@@ -83,11 +83,18 @@ def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, seed=0):
         cbs=cbs,
         compile_time_args=ct_args,
         runtime_args=rt_args,
+        defines=(
+            ([("RT_MAX", "1")] if op == "max" else [])
+            + ([("RT_MEAN", "1")] if op == "mean" else [])
+            # max and mean are only correct single-stage: stage 2 would fold the
+            # zeros the packer wrote outside stage 1's result row.
+            + ([("RT_SINGLE_STAGE", "1")] if single_stage else [])
+        ),
     )
 
     logger.info(
-        f"running reduction tree: ht={ht} wt={wt} grid={grid_h}x{grid_w} "
-        f"num_blocks={num_blocks} ({ht * TILE}x{wt * TILE} per core)"
+        f"running reduction tree: op={op} single_stage={single_stage} ht={ht} wt={wt} "
+        f"grid={grid_h}x{grid_w} num_blocks={num_blocks} ({ht * TILE}x{wt * TILE} per core)"
     )
     out = ttnn.generic_op([ta, tb, tout], program)
     got_full = ttnn.to_torch(out).to(torch.float32)
@@ -102,7 +109,15 @@ def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, seed=0):
             # reading or writing the wrong index.
             k = b * grid_w + x
             block = af[0, 0, k * ht * TILE : (k + 1) * ht * TILE, :]
-            want_rows.append(block.sum(dim=0) * grid_h)
+            if op == "max":
+                folded = block.max(dim=0).values
+            elif op == "mean":
+                folded = block.mean(dim=0)
+            else:
+                folded = block.sum(dim=0)
+            # Two-stage sums grid_h copies of the column's result; single-stage is
+            # just the fold, so there is nothing to scale.
+            want_rows.append(folded if single_stage else folded * grid_h)
             got_rows.append(got_full[0, 0, b * TILE, x * wt * TILE : (x + 1) * wt * TILE])
 
     # Everything outside row 0 of each block is the packer's zeroing contract.
@@ -124,23 +139,34 @@ def main(argv=None):
     p.add_argument("--grid-h", type=int, default=2, help="core rows: the gather's height")
     p.add_argument("--grid-w", type=int, default=2, help="core columns, each reducing independently")
     p.add_argument("--num-blocks", type=int, default=1)
+    p.add_argument("--op", choices=["sum", "max", "mean"], default="sum")
+    p.add_argument("--single-stage", action="store_true", help="stage 1 only -- required for max/mean, see the kernel")
     p.add_argument("--pcc", type=float, default=0.99)
+    p.add_argument("--rtol", type=float, default=0.05, help="PCC cannot see a wrong scaler; this can")
     args = p.parse_args(argv)
 
     device = ttnn.open_device(device_id=0)
     try:
-        got, want, masked = run(device, args.ht, args.wt, args.grid_h, args.grid_w, args.num_blocks)
+        got, want, masked = run(
+            device, args.ht, args.wt, args.grid_h, args.grid_w, args.num_blocks, args.op, args.single_stage
+        )
     finally:
         ttnn.close_device(device)
 
     measured = pcc(got, want)
+    # PCC is invariant to a global scale factor, so on its own it cannot tell a
+    # mean from a sum -- a mean fed the wrong scaler is exactly N times too large
+    # and still correlates perfectly. Relative magnitude is what catches that.
+    scale = max(want.abs().max().item(), 1e-6)
+    rel = (got - want).abs().max().item() / scale
     logger.info(f"PCC = {measured:.6f} (threshold {args.pcc})")
+    logger.info(f"max |got - want| / max|want| = {rel:.4f} (threshold {args.rtol})")
     logger.info(f"got [0,:4]  = {got[0, :4].tolist()}")
     logger.info(f"want[0,:4]  = {want[0, :4].tolist()}")
     # A reduction that leaked into the masked rows is wrong even at a good PCC.
     logger.info(f"max |masked rows| = {masked:.6f}  (0 means the packer zeroed them)")
 
-    if measured < args.pcc:
+    if measured < args.pcc or rel > args.rtol:
         logger.error("FAIL")
         return 1
     if masked != 0.0:
