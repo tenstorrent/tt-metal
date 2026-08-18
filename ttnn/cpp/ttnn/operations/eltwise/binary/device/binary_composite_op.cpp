@@ -481,7 +481,8 @@ Tensor remainder(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    // The unary SFPU fast path has no int32 kernel and would reinterpret the tile as float.
+    // TODO: add INT32 support for unary SFPU fast path. Until then int32 must route through
+    // binary_ng, since the float kernel would reinterpret the tile.
     if (input.dtype() != DataType::INT32 && !output_dtype.has_value() && !sub_device_id.has_value() &&
         post_activations.empty() && lhs_activations.empty() && rhs_activations.empty()) {
         return ttnn::unary_remainder(input, scalar, output_mem_config, output_tensor, sub_core_grids);
@@ -529,8 +530,9 @@ Tensor fmod(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    // The unary SFPU fast path has no int32 kernel (it would reinterpret the tile as float)
-    // and cannot honor sub_device_id.
+    // TODO: add INT32 support for unary SFPU fast path. Until then int32 must route through
+    // binary_ng, since the float kernel would reinterpret the tile. The fast path also cannot
+    // honor sub_device_id.
     if (input.dtype() == DataType::INT32 || sub_device_id.has_value()) {
         return ttnn::detail::invoke_binary_ng(
             input,
