@@ -498,10 +498,10 @@ class RMSNORM_DEST_REUSE(TemplateParameter):
     All four are template arguments (or a template-fixed runtime argument) on the LLK
     pair, so none of them can be a runtime parameter:
 
-    ``num_tiles``
+    ``rmsnorm_num_tiles``
         Outer-loop count of the math MOP *and* the unpack MOP -- one
         ``_llk_unpack_A_`` call walks this many tiles. Bounded by DEST half-sync capacity.
-    ``num_faces``
+    ``rmsnorm_num_faces``
         Runtime argument to both ``_init_``s, but it sizes the MOP loops, so a variant
         must be built per value. Only 1, 2 and 4 are accepted (``LLK_ASSERT``).
     ``clear_dest``
@@ -511,19 +511,25 @@ class RMSNORM_DEST_REUSE(TemplateParameter):
         Drives both ``transpose_of_faces`` and ``within_face_16x16_transpose`` on the
         unpack init. This axis exists only because blaze's version of the header won the
         reconciliation, so it is new reachable surface. Its replay-buffer path is
-        restricted to ``num_tiles == 1`` and ``num_faces == 4`` by ``LLK_ASSERT``.
+        restricted to one tile and four faces by ``LLK_ASSERT``.
+
+    The two count fields carry the ``rmsnorm_`` prefix so they match the constants they
+    emit and stay globally unique: ``test_perf_header_gate.py`` requires that no two
+    parameter classes declare the same field name, because a test passing both would
+    produce two perf-CSV columns with the same header. Bare ``num_tiles`` belongs to
+    ``PACK_NUM_TILES`` and bare ``num_faces`` to ``NUM_FACES``.
     """
 
-    num_tiles: int = 1
-    num_faces: int = 4
+    rmsnorm_num_tiles: int = 1
+    rmsnorm_num_faces: int = 4
     clear_dest: bool = False
     unpack_full_transpose: bool = False
 
     def convert_to_cpp(self) -> str:
         return "\n".join(
             [
-                f"constexpr std::uint32_t RMSNORM_NUM_TILES = {self.num_tiles}u;",
-                f"constexpr std::uint32_t RMSNORM_NUM_FACES = {self.num_faces}u;",
+                f"constexpr std::uint32_t RMSNORM_NUM_TILES = {self.rmsnorm_num_tiles}u;",
+                f"constexpr std::uint32_t RMSNORM_NUM_FACES = {self.rmsnorm_num_faces}u;",
                 f"constexpr bool RMSNORM_CLEAR_DEST = {str(self.clear_dest).lower()};",
                 "constexpr bool RMSNORM_UNPACK_FULL_TRANSPOSE = "
                 f"{str(self.unpack_full_transpose).lower()};",

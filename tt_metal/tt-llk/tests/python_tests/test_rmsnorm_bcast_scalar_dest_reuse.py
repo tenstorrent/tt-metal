@@ -184,8 +184,8 @@ def _run(
             MATH_OP(mathop=mathop),
             MATH_FIDELITY(math_fidelity),
             RMSNORM_DEST_REUSE(
-                num_tiles=num_tiles,
-                num_faces=num_faces,
+                rmsnorm_num_tiles=num_tiles,
+                rmsnorm_num_faces=num_faces,
                 clear_dest=clear_dest,
                 unpack_full_transpose=unpack_full_transpose,
             ),
