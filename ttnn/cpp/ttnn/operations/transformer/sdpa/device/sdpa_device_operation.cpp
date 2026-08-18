@@ -741,6 +741,7 @@ Tensor sdpa(
     const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard,
     bool neighborhood_gather,
     const std::optional<std::array<uint32_t, 3>>& neighborhood_block,
+    bool neighborhood_block_tileskip,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -761,6 +762,7 @@ Tensor sdpa(
             .neighborhood_w_shard = neighborhood_w_shard,
             .neighborhood_gather = neighborhood_gather,
             .neighborhood_block = neighborhood_block,
+            .neighborhood_block_tileskip = neighborhood_block_tileskip,
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         },

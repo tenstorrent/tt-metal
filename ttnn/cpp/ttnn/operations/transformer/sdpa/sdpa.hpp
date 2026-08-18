@@ -52,7 +52,9 @@ ttnn::Tensor scaled_dot_product_attention(
     /// Block-permuted Q (block-permute v1): {bt, bh, bw}. When set (with neighborhood_gather) a Q chunk is
     /// one (bt,bh,bw) block of the block-order sequence, so its box is that block dilated and each query's
     /// coord is decoded from its within-block position. K/V stay strided. Zero-pad blocks (bt|T,bh|H,bw|W).
-    const std::optional<std::array<uint32_t, 3>>& neighborhood_block = std::nullopt);
+    const std::optional<std::array<uint32_t, 3>>& neighborhood_block = std::nullopt,
+    /// Box-sparse tile-skip (only with neighborhood_block): losslessly skip fully-masked k-chunks per q-tile.
+    bool neighborhood_block_tileskip = false);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).

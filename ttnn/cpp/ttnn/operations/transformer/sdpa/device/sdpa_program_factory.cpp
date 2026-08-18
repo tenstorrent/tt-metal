@@ -573,6 +573,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(static_cast<uint32_t>(is_windowed));           // arg 34: K-range narrowing
     // arg 35: fused-gather variant of 3D-neighborhood (densely gather the window into cb_k/cb_v).
     reader_compile_time_args.push_back(static_cast<uint32_t>(operation_attributes.neighborhood_gather));
+    // arg 36: box-sparse tile-skip (reader emits per-chunk active-q-tile range for compute).
+    reader_compile_time_args.push_back(static_cast<uint32_t>(operation_attributes.neighborhood_block_tileskip));
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -704,6 +706,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_partial_col,                                // arg 32: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
         static_cast<uint32_t>(is_windowed),           // arg 34: K-range narrowing (bounds from the ctrl CB)
+        static_cast<uint32_t>(operation_attributes.neighborhood_block_tileskip),  // arg 35: box-sparse tile-skip
     };
 
     std::map<std::string, std::string> defines_map;

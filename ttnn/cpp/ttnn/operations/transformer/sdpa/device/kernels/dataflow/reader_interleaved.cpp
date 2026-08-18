@@ -103,8 +103,11 @@ void kernel_main() {
     // Fused-gather variant of 3D-neighborhood: reader densely gathers each Q chunk's window rows into
     // cb_k/cb_v (row-granular) rather than streaming the box's active tiles. (Build-out in progress.)
     constexpr bool neighborhood_gather = get_compile_time_arg_val(35) == 1;
+    // Box-sparse tile-skip: emit a per-packed-k-chunk active-q-tile range so compute skips fully-masked
+    // q-tiles losslessly. Only meaningful with the block path (nb_bt != 0). See block_qtile_k_band.
+    [[maybe_unused]] constexpr bool neighborhood_block_tileskip = get_compile_time_arg_val(36) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<36>();
+    constexpr auto q_args = TensorAccessorArgs<37>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();

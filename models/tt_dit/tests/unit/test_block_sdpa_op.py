@@ -18,7 +18,7 @@ def _pcc(a, b):
     return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
 
 
-def _fused_sdpa(device, q, k, v, grid, kernel, *, block=None):
+def _fused_sdpa(device, q, k, v, grid, kernel, *, block=None, tileskip=False):
     """Fused neighborhood SDPA on a PLAIN-STRIDED (t,h,w) grid. K/V are wrow-paged (T*H, W*HD)."""
     T, H, W = grid
     kt, kh, kw = kernel
@@ -41,6 +41,7 @@ def _fused_sdpa(device, q, k, v, grid, kernel, *, block=None):
         neighborhood_3d=(T, H, W, kt, kh, kw),
         neighborhood_gather=True,
         neighborhood_block=block,
+        neighborhood_block_tileskip=tileskip,
         scale=HD**-0.5,
         windowed_q_token_offset=0,
         windowed_q_token_offset_tensor=off,
@@ -71,6 +72,34 @@ def test_block_sdpa_matches_strided(*, device, grid, kernel, block):
     pcc = _pcc(out.float(), ref.float())
     print(f"\n  grid={grid} block={block}: block-vs-strided PCC = {pcc * 100:.4f} %")
     assert pcc > 0.99, f"block SDPA != strided SDPA (PCC {pcc})"
+
+
+@pytest.mark.parametrize(
+    "grid,kernel,block",
+    [((8, 8, 8), (5, 5, 5), (4, 4, 4)), ((8, 16, 16), (5, 5, 5), (4, 8, 8))],
+    ids=["8x8x8", "8x16x16"],
+)
+def test_block_tileskip_matches_strided(*, device, grid, kernel, block):
+    """Box-sparse tile-skip must be LOSSLESS: block+tileskip == strided reference. Stage 1 (flag plumbed,
+    kernel no-op) and Stage 2 (kernel skips fully-masked q-tiles) both must pass -- the skip only drops
+    tiles that are entirely -inf, so the numerics are unchanged."""
+    T, H, W = grid
+    HD, S = 64, T * H * W
+    torch.manual_seed(0)
+    mk = lambda: ttnn.from_torch(
+        torch.randn(1, 1, S, HD, dtype=torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
+    q, k, v = mk(), mk(), mk()
+
+    ref = ttnn.to_torch(_fused_sdpa(device, q, k, v, grid, kernel))  # strided reference
+
+    q_block = to_block_order_tt(q, grid, block)
+    out = _fused_sdpa(device, q_block, k, v, grid, kernel, block=block, tileskip=True)
+    out = ttnn.to_torch(from_block_order_tt(out, grid, block))
+
+    pcc = _pcc(out.float(), ref.float())
+    print(f"\n  grid={grid} block={block}: block+TILESKIP-vs-strided PCC = {pcc * 100:.4f} %")
+    assert pcc > 0.99, f"tile-skip changed the numerics (PCC {pcc})"
 
 
 def test_block_sdpa_w_origin(*, device):

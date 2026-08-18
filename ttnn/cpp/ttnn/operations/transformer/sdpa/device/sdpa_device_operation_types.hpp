@@ -52,6 +52,10 @@ struct SDPAParams {
     // within-block position. K/V stay strided -- only the Q coord decode changes. Zero-pad blocks only
     // (bt|T, bh|H, bw|W). Absent => strided Q (existing path).
     std::optional<std::array<uint32_t, 3>> neighborhood_block;
+    // Box-sparse tile-skip (only with neighborhood_block): the flash skips k-chunks that are fully -inf for
+    // a q-tile (exp(-inf)=0, lossless). Forces qk_subblock_h=1 for tile granularity; adds a per-chunk
+    // active-q-tile-range CB (reader -> compute). See windowed_loop_geometry.hpp::block_qtile_k_band.
+    bool neighborhood_block_tileskip = false;
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;

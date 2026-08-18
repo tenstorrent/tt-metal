@@ -53,6 +53,8 @@ void kernel_main() {
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(33) == 1;
     // Windowed K-range narrowing: per-Q-chunk [k_lo, k_hi) arrives from the reader over a ctrl CB.
     constexpr bool use_windowed_narrowing = get_compile_time_arg_val(34) == 1;
+    // Box-sparse tile-skip: skip fully-masked q-tiles per k-chunk (block path only). Lossless.
+    [[maybe_unused]] constexpr bool neighborhood_block_tileskip = get_compile_time_arg_val(35) == 1;
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t num_phases = get_arg_val<uint32_t>(1);
@@ -73,7 +75,7 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = 35;
+    constexpr uint32_t cb_arg_offset = 36;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
