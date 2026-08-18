@@ -73,7 +73,7 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw):
     lh, lw = latent_hw
     torch.manual_seed(0)
     latent = torch.randn(1, config["in_channels"], 4, lh, lw)
-    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=ttnn.Topology.Linear)
     # DIFFVAE_TP_HEADS=1 adds TP-over-heads on the orthogonal (rows, size-4) mesh axis: stage-5
     # attention runs on heads/4 of the 4 heads per chip, gathered back before the output proj.
     tp_axis = 0 if os.environ.get("DIFFVAE_TP_HEADS") == "1" else None
@@ -126,7 +126,7 @@ def test_decode_gather_mesh_timing(*, mesh_device, latent_hw):
     lh, lw = latent_hw
     torch.manual_seed(0)
     latent = torch.randn(1, config["in_channels"], 4, lh, lw)
-    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=ttnn.Topology.Linear)
     dec = DiffVAEDecoder(config, mesh_device=mesh_device, ccl_manager=ccl, stage5_na3d_backend="gather")
     dec.load_checkpoint(CHECKPOINT)
 
@@ -166,7 +166,7 @@ def test_decode_1080p_tp_pcc(*, mesh_device):
     config = decoder_config(CHECKPOINT)
     torch.manual_seed(0)
     latent = torch.randn(1, config["in_channels"], 4, 34, 60)  # 1080p, 25 frames
-    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=ttnn.Topology.Linear)
 
     def timed(dec):
         dec.decode(latent, seed=0)  # warmup

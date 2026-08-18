@@ -958,13 +958,25 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     # pre-created ping-pong semaphores (instead of a fresh buffer per call). Required for ttnn tracing:
     # a trace bakes absolute addresses, so a freshly-allocated gather output is clobbered on replay.
     persist_ccl = os.environ.get("DIFFVAE_CCL_PERSISTENT", "0") == "1"
+    # DIFFVAE_KV_BF8=1 casts K/V to bfloat8_b before the gather. Both things it touches are on the
+    # critical path: the gather's page size is the tile size of the gathered dtype (1088 B against
+    # bf16's 2048 B), and the attention then reads the smaller K/V. Cast BEFORE the collective --
+    # after it the bytes have already moved and only the read benefits.
+    kv_dtype = ttnn.bfloat8_b if os.environ.get("DIFFVAE_KV_BF8", "0") == "1" else None
+
+    def gathered(x: ttnn.Tensor) -> ttnn.Tensor:
+        seq = to_seq(x, w_local)
+        if kv_dtype is not None and seq.get_dtype() != kv_dtype:
+            cast = ttnn.typecast(seq, kv_dtype)
+            ttnn.deallocate(seq)
+            seq = cast
+        return ccl_manager.all_gather(
+            seq, dim=2, mesh_axis=sp_axis, use_hyperparams=False, use_persistent_buffer=persist_ccl
+        )
+
     with _sp_w_prof(mesh, "kv-allgather"):
-        tk = ccl_manager.all_gather(
-            to_seq(k, w_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False, use_persistent_buffer=persist_ccl
-        )
-        tv = ccl_manager.all_gather(
-            to_seq(v, w_local), dim=2, mesh_axis=sp_axis, use_hyperparams=False, use_persistent_buffer=persist_ccl
-        )
+        tk = gathered(k)
+        tv = gathered(v)
     tq = to_seq(q, w_local)
 
     offsets = torch.arange(sp, dtype=torch.int32) * seq_local

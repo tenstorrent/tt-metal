@@ -627,6 +627,11 @@ class _NeighborhoodAttention3D(Module):
         # before the replicated out-proj). qkv is 3 of the 4 projections, so this reclaims the bulk
         # of the ~0.9s redundant projection compute without adding an all-reduce.
         self.tp_proj = tp_axis is not None and os.environ.get("DIFFVAE_TP_PROJ", "1") == "1"
+        # DIFFVAE_S5_FLAT_SEQ=1: hand the attention the (B, NH, S, HD) the projections already
+        # produce instead of building the 6-D volume for its to_seq to tear straight back down.
+        # Needs one head per chip: above that a frame's rows are site-major with heads inner, so
+        # the flat form would want a real permute rather than a frame-axis merge.
+        self.flat_seq = os.environ.get("DIFFVAE_S5_FLAT_SEQ", "0") == "1"
         tp = int(list(mesh_device.shape)[tp_axis]) if self.tp_proj else 1
         assert not self.tp_proj or config.num_heads % tp == 0, f"num_heads={config.num_heads} not divisible by tp={tp}"
         self.heads_local = config.num_heads // tp
@@ -636,9 +641,16 @@ class _NeighborhoodAttention3D(Module):
         if self.tp_proj:
             qkv_linear["weight_mesh_axes"] = [None, tp_axis]  # shard the output (heads) over the TP axis
             qkv_linear["bias_mesh_axes"] = [None, tp_axis]
-        self.to_q = Linear(config.dim, config.dim, **qkv_linear)
-        self.to_k = Linear(config.dim, config.dim, **qkv_linear)
-        self.to_v = Linear(config.dim, config.dim, **qkv_linear)
+        # DIFFVAE_S5_FUSED_QKV=1: keep the checkpoint's own fused qkv as one matmul instead of
+        # splitting it into three. Three column-parallel projections are 256->64 each, a narrow GEMM;
+        # fused it is one 256->192. The split then costs three slices of the packed output.
+        self.fused_qkv = os.environ.get("DIFFVAE_S5_FUSED_QKV", "0") == "1"
+        if self.fused_qkv:
+            self.qkv = Linear(config.dim, 3 * config.dim, **qkv_linear)
+        else:
+            self.to_q = Linear(config.dim, config.dim, **qkv_linear)
+            self.to_k = Linear(config.dim, config.dim, **qkv_linear)
+            self.to_v = Linear(config.dim, config.dim, **qkv_linear)
         self.proj = Linear(config.dim, config.dim, **linear)  # out-proj stays replicated (full width in)
 
         norm = {
@@ -669,6 +681,25 @@ class _NeighborhoodAttention3D(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # Checkpoints ship one Linear(dim, 3*dim) under qkv.*; the split is [q | k | v]
         # along the output dim.
+        if self.fused_qkv:
+            # Kept fused, but regrouped: a contiguous column shard must be one device's own heads of
+            # all three of q, k and v, where the shipped order would give device 0 nothing but q.
+            cfg = self.config
+            hd, hl = cfg.head_dim, self.heads_local
+            devices = cfg.num_heads // hl
+            order = torch.cat(
+                [
+                    torch.arange(part * cfg.dim + h * hd, part * cfg.dim + (h + 1) * hd)
+                    for d in range(devices)
+                    for part in range(3)
+                    for h in range(d * hl, (d + 1) * hl)
+                ]
+            )
+            for leaf in ("weight", "bias"):
+                fused = state.get(f"qkv.{leaf}")
+                if fused is not None:
+                    state[f"qkv.{leaf}"] = fused[order].clone()
+            return
         for leaf in ("weight", "bias"):
             fused = state.pop(f"qkv.{leaf}", None)
             if fused is None:
@@ -736,13 +767,43 @@ class _NeighborhoodAttention3D(Module):
                 ttnn.deallocate(x)
             return out
 
+        def to_flat(x: ttnn.Tensor) -> ttnn.Tensor:
+            """Merge the frame axis into the rows, giving the (B, NH, S, HD) the flat path wants.
+
+            A view rather than a retile: rows per frame is ``H*(W/sp)``, a whole number of tiles, so
+            the tile grid only grows taller and no tile is re-cut.
+            """
+            return ttnn.reshape(x, (grid.batch, heads, sites_local, cfg.head_dim))
+
+        flat_seq = self.flat_seq and sharded and self.tp_proj and heads == 1
+        prep = to_flat if flat_seq else to_volume
+
         # Built and consumed one at a time. Holding q, k and v plus each one's untilized copy
-        # and RoPE temporaries is what exhausts DRAM at full resolution.
-        q = to_volume(
-            self._rope(self._normed(self.q_norm, self._projected(self.to_q, y, heads_shape), scale=self.scale), tables)
-        )
-        k = to_volume(self._rope(self._normed(self.k_norm, self._projected(self.to_k, y, heads_shape)), tables))
-        v = to_volume(self._projected(self.to_v, y, heads_shape))
+        # and RoPE temporaries is what exhausts DRAM at full resolution -- which is also why the
+        # fused path slices its packed output a lane at a time rather than all three up front.
+        if self.fused_qkv:
+            packed = self.qkv(y)
+            width = self.heads_local * cfg.head_dim
+
+            def lane(index: int) -> ttnn.Tensor:
+                part = _slice_last(packed, index * width, (index + 1) * width)
+                out = _reshape_retiled(part, heads_shape)
+                if out is not part:
+                    ttnn.deallocate(part)
+                return out
+
+            q = prep(self._rope(self._normed(self.q_norm, lane(0), scale=self.scale), tables))
+            k = prep(self._rope(self._normed(self.k_norm, lane(1)), tables))
+            v = prep(lane(2))
+            ttnn.deallocate(packed)
+        else:
+            q = prep(
+                self._rope(
+                    self._normed(self.q_norm, self._projected(self.to_q, y, heads_shape), scale=self.scale), tables
+                )
+            )
+            k = prep(self._rope(self._normed(self.k_norm, self._projected(self.to_k, y, heads_shape)), tables))
+            v = prep(self._projected(self.to_v, y, heads_shape))
 
         if sharded:
             out = neighborhood_attention_3d_op_sp_w_sharded(
@@ -756,6 +817,7 @@ class _NeighborhoodAttention3D(Module):
                 scale=1.0,
                 tp_axis=self.tp_axis,
                 heads_presharded=self.tp_proj,
+                flat_seq=flat_seq,
             )
         else:
             out = neighborhood_attention_3d(
