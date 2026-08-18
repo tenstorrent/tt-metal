@@ -412,3 +412,29 @@ def test_the_trace_knob_is_derived_per_stage():
     code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
     assert 'env["TT_PERF_%s_TRACE" % str(_st).upper()] = "1"' in code
     assert 'env["TT_PERF_PREFILL_TRACE"] = "1"' in code, "an older generated test lost its trace"
+
+
+def test_an_encoder_lever_is_reachable_from_an_encoder_stage():
+    """A lever written for the VIT PATTERN -- an image encoder -- was tagged `regime: prefill,na`,
+    so a stage called `encode` could never be routed to it. Not because anyone decided encoders
+    should not have it: those were the only two values a lever could carry.
+
+    The lever's real condition is in its own body -- the activation fits L1, per_core_M is the
+    SEQUENCE rather than the batch -- which is a property of the work. The shape filters the
+    recurring stage out; the name never should have."""
+    from agent import router
+
+    idx = router.build_index()
+    assert not router.index_warnings(idx), router.index_warnings(idx)[:3]
+
+    router._DECLARED_STAGES.clear()
+    router.declare_stages(["encode", "prefill", "decode"])
+    seen = {
+        st: {h["id"] for h in router.route(idx, {"op_class": "matmul", "regime": st})}
+        for st in ("encode", "prefill", "decode")
+    }
+    router._DECLARED_STAGES.clear()
+
+    assert "mlp-program-config" in seen["encode"], "the ViT lever is still invisible to an encoder"
+    # and the genuinely stage-specific ones stay narrow
+    assert "decode-host-comm" in seen["decode"] and "decode-host-comm" not in seen["encode"]

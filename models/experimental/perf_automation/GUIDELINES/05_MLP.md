@@ -60,9 +60,21 @@ For SwiGLU/GeGLU gated MLPs, the gate can be fused similarly where the op suppor
 <!-- route
 op_class: matmul
 rank: time
-regime: prefill,na
+regime: *
 lever_type: search
 -->
+
+<!-- WHY THE STAGE IS NOT NAMED HERE. This was `regime: prefill,na`, which made a lever written for
+the VIT PATTERN -- an image encoder -- unreachable from a stage called `encode`: the tag named the
+two stages an LLM has, because until the regime axis followed the model those were the only values a
+lever could carry. Voxtral's audio tower is 32 layers of exactly this shape and could never be
+routed here.
+
+The condition this lever actually has is in its own body -- the activation fits L1, and per_core_M is
+the SEQUENCE length rather than the batch -- which is a property of the work, not of what the stage
+is called. Any stage that carries many positions through a matmul qualifies; the recurring stage,
+whose M is the batch, will not satisfy the shape conditions and is filtered by them rather than by a
+name. -->
 
 When the activation fits L1, keep FF1/FF2 block-sharded so they chain with the
 surrounding LN/residual without reshards (the ViT pattern):
