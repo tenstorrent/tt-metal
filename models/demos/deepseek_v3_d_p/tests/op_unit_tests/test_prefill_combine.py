@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
     extract_mesh_config,
+    get_dram_alignment,
     get_ep_mesh_composer,
     get_ep_mesh_mapper,
     get_expert_token_counts_mesh_mapper,
@@ -54,6 +55,24 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
+# Must match sf::MAGIC and the tail offsets in combine/device/combine_sf.hpp.
+COMBINE_SF_MAGIC = 0x5AF2C0DE
+COMBINE_SF_TAIL_MAGIC_WORD = 2
+
+
+def count_staged_pages(staging_buffer, emb_dim, use_fp8_output):
+    """Count staging pages whose tail carries the routing magic, i.e. pages actually relayed."""
+    element_bytes = 1 if use_fp8_output else 2
+    alignment = get_dram_alignment()
+    token_bytes = ((emb_dim * element_bytes + alignment - 1) // alignment) * alignment
+    magic_word_index = token_bytes // 4 + COMBINE_SF_TAIL_MAGIC_WORD
+
+    staged = 0
+    for shard in ttnn.get_device_tensors(staging_buffer):
+        pages = ttnn.to_torch(shard).reshape(-1, staging_buffer.shape[-1])
+        staged += int((pages[:, magic_word_index] == COMBINE_SF_MAGIC).sum())
+    return staged
+
 
 def run_combine(
     mesh_device,
@@ -71,6 +90,8 @@ def run_combine(
     is_ci_env,
     is_ci_v2_env,
     use_store_and_forward=False,
+    invocations=1,
+    staging_slots_per_stream=16,
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
@@ -273,6 +294,7 @@ def run_combine(
             num_links=num_links,
             topology=topology,
             cluster_axis=sp_axis,
+            slots_per_stream=staging_slots_per_stream,
         )
         if use_store_and_forward
         else None
@@ -294,12 +316,29 @@ def run_combine(
         staging_buffer=staging_buffer,
     )
 
-    tt_output = tt_combine(
-        tt_dispatched_buffer,
-        tt_dispatched_metadata,
-        tt_expert_token_counts,
-        tt_expert_region_offsets,
-    )
+    # Repeated invocations share one module and one staging buffer, which is how the model uses it.
+    # The cross-chip counters live on GlobalSemaphores that are zeroed only when they are created, so
+    # a second call is what proves they get cleared; skipping it would leave that reset unexercised.
+    for _ in range(invocations):
+        tt_output = tt_combine(
+            tt_dispatched_buffer,
+            tt_dispatched_metadata,
+            tt_expert_token_counts,
+            tt_expert_region_offsets,
+        )
+
+    # Correct output alone does not prove a token was ever relayed -- if every token happened to be
+    # one hop from home, or if the level arithmetic collapsed everything into a direct write, the
+    # result would look identical. Counting the routing tails left in the staging buffer is direct
+    # evidence that the relay path carried traffic.
+    if staging_buffer is not None:
+        ttnn.synchronize_device(mesh_device)
+        staged_pages = count_staged_pages(staging_buffer, emb_dim, use_fp8_output)
+        logger.debug(f"store-and-forward staged {staged_pages} page(s) across the mesh")
+        assert staged_pages > 0, (
+            "use_store_and_forward was set on a mesh with relay levels, but no staging page carries a "
+            "routing tail -- the relay path did not run, so a passing output proves nothing about it"
+        )
 
     if not run_pcc_check:
         ttnn.synchronize_device(mesh_device)
@@ -613,6 +652,10 @@ def test_ttnn_combine_store_and_forward(
         is_ci_env,
         is_ci_v2_env,
         use_store_and_forward=True,
+        # Several calls through one module and one staging buffer, as the model does. A single call
+        # would leave the cross-invocation counter reset untested, and that failure mode is a
+        # timing-dependent hang rather than a wrong answer.
+        invocations=3,
     )
 
 
@@ -693,3 +736,36 @@ def test_ttnn_combine_store_and_forward_rejects(
     monkeypatch.setattr(sys.modules[__name__], "TtCombineModule", FlagOffButBuffered)
     with expect_error(RuntimeError, "must not be supplied"):
         run()
+
+
+# The credit protocol is only exercised when a ring actually fills. At the default depth that may
+# never happen on a small test, so this pins the depth to the minimum the op accepts: every stream
+# is then permanently full and every token pays the credit round trip. It is also the shape a
+# deadlock would take, which is why it runs on the deepest local mesh with several invocations.
+@pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2")
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((4, 2), fabric_to_device_params(ttnn.FabricConfig.FABRIC_2D))],
+    indirect=True,
+)
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
+def test_ttnn_combine_store_and_forward_tight_rings(mesh_device, device_params, num_links, is_ci_env, is_ci_v2_env):
+    run_combine(
+        mesh_device,
+        128,
+        7168,
+        8,
+        4,
+        4,
+        num_links,
+        ttnn.Topology.Linear,
+        True,
+        True,
+        ttnn.TILE_LAYOUT,
+        False,
+        is_ci_env,
+        is_ci_v2_env,
+        use_store_and_forward=True,
+        invocations=3,
+        staging_slots_per_stream=2,
+    )

@@ -15,19 +15,40 @@
 namespace ttnn::operations::experimental::deepseek_prefill::combine::sf {
 
 // Tail words, appended after the token payload in both the L1 ring slot and the DRAM staging
-// page.  All four cross the fabric: the first two are the routing state the next hop needs, the
-// last two let the receiver reject a page it should not be reading.
+// page.  The tail is INVARIANT across hops: it names the final destination, never this hop's, so
+// a relay re-sends the page without rewriting any of it.  That is what lets re-forwarding be one
+// contiguous read into a ring slot and one contiguous write back out.
 constexpr uint32_t TAIL_OUTPUT_PAGE_IDX = 0;
 constexpr uint32_t TAIL_FINAL_DST_CHIP = 1;
-constexpr uint32_t TAIL_LEVEL = 2;
-constexpr uint32_t TAIL_SEQ = 3;
+constexpr uint32_t TAIL_MAGIC = 2;
+constexpr uint32_t TAIL_RESERVED = 3;
 constexpr uint32_t TAIL_WORDS = 4;
 
 constexpr uint32_t tail_bytes() { return TAIL_WORDS * sizeof(uint32_t); }
 
-// A live page always carries level >= 1, so a zeroed or never-written staging page fails the
-// level check.  That removes the need for a separate magic word in the 16 wire bytes.
-constexpr uint32_t LEVEL_INVALID = 0;
+// Guards against consuming a staging page that was never written.  The arrival counter is what
+// actually bounds reads; this catches an off-by-one in that accounting, which would otherwise
+// surface as one wrong token rather than as a failure.
+constexpr uint32_t MAGIC = 0x5AF2C0DEu;
+
+// A relay does not trust the tail to tell it how far the page still has to travel -- it derives
+// that from which FIFO the page arrived in, and cross-checks it against the routing invariant
+// manhattan_distance(this_chip, TAIL_FINAL_DST_CHIP) == that FIFO's level.  Checking the real
+// invariant beats checking a copy of it that the sender would have to keep re-stamping.
+
+// Reader -> writer queue header, one per queued item.  Words 0..3 keep the meaning and offsets
+// the non-store-and-forward path already uses, so the writer's packet-header construction is
+// shared between both paths.  The header occupies a full DRAM alignment so the payload that
+// follows it is a legal destination for a relay's DRAM read.
+constexpr uint32_t HDR_ROUTE = 0;     // 1D EDM direction index
+constexpr uint32_t HDR_DISTANCE = 1;  // hops for the 1D packet header; always 1 here
+constexpr uint32_t HDR_PAGE_IDX = 2;  // output page for a final write, staging page for a relay
+constexpr uint32_t HDR_DST_CHIP = 3;  // packet destination: the NEIGHBOUR, never the final chip
+constexpr uint32_t HDR_CMD = 4;
+constexpr uint32_t HDR_SEM_ADDR = 5;  // target of an atomic-inc command
+constexpr uint32_t HDR_INC_VALUE = 6;
+constexpr uint32_t HDR_INC_DIR = 7;  // direction the inc travels, which for a credit is the
+                                     // opposite of the data direction it accounts for
 
 // Reader -> writer command.  The writer holds no routing state of its own; it switches on this
 // and sends exactly one hop.
@@ -70,6 +91,34 @@ constexpr uint32_t max_distance_in_dir(uint32_t pos, uint32_t extent, bool is_ri
 constexpr bool out_live(uint32_t pos, uint32_t extent, bool is_ring, bool positive, uint32_t level) {
     return (level + 1) <= max_distance_in_dir(pos, extent, is_ring, positive);
 }
+
+// Sentinel for "no chip feeds us in this direction", which on a line is true at one end.
+constexpr uint32_t NO_POSITION = 0xFFFFFFFFu;
+
+// Position of the chip that sends INTO us travelling in this direction -- the neighbour on the far
+// side from the one we send to.
+constexpr uint32_t upstream_pos(uint32_t pos, uint32_t extent, bool is_ring, bool positive) {
+    if (is_ring) {
+        return positive ? (pos + extent - 1) % extent : (pos + 1) % extent;
+    }
+    if (positive) {
+        return pos == 0 ? NO_POSITION : pos - 1;
+    }
+    return pos + 1 >= extent ? NO_POSITION : pos + 1;
+}
+
+// Whether anything can ever arrive in our FIFO for this direction and level.  A level that is not
+// in-live needs no drain and no end-of-stream, which is what gives the termination argument its
+// base case without any cross-chip dependency.
+constexpr bool in_live(uint32_t pos, uint32_t extent, bool is_ring, bool positive, uint32_t level) {
+    const uint32_t up = upstream_pos(pos, extent, is_ring, positive);
+    return up != NO_POSITION && out_live(up, extent, is_ring, positive, level);
+}
+
+// Words in the reader -> writer queue header.  The header is padded to the DRAM alignment, so this
+// must fit: 8 words is 32 bytes, which fits Wormhole's 32-byte alignment exactly and Blackhole's
+// 64-byte alignment with room to spare.
+constexpr uint32_t HDR_WORDS = 8;
 
 // Stride of one staging page, and equally of one L1 ring slot.  Keeping them identical is what
 // lets a relay re-read a page as a single contiguous transfer straight into the slot base, with
