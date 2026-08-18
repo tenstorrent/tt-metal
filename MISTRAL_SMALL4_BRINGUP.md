@@ -410,10 +410,34 @@ real tokens (`actual_isl == window`), every row verified to sample the same toke
 | 2048 | 1681 ms | 117.7 ms | **17,403** | 14.3x |
 | 4096 | 1696 ms | 167.3 ms | **24,487** | 10.1x |
 | 5120 (production 5k) | 1990 ms | 195.4 ms | **26,202** | 10.2x |
-| 25600 (production 25k) | 1900 ms | 766.6 ms | **33,395** | 2.5x |
+| 25600 (production 25k) | 1900 ms | 766.6 ms | **33,395** ← peak | 2.5x |
+| 51200 | — | 4190.2 ms | 12,218 | — |
+| 102400 | — | **fails** | — | — |
 
 Reproduce with `40_prefill_throughput.sh` and `41_long_isl.sh`. Untraced, the same rows are
 **260–2,415 tok/s**, so the trace work is worth ~10x on this metric, not a few percent.
+
+**Single-shot has a ceiling, and throughput peaks well before it.** 51,200 still runs and still
+matches eager, but 102,400 dies on **L1, not DRAM**:
+
+```
+Statically allocated circular buffers on core range [0-1 - 10-7] grow to
+1721216 B which is beyond max L1 size of 1572864 B
+```
+
+1.72 MB of statically-allocated circular buffers against a 1.57 MB budget — on-chip buffer sizing,
+which is kernel-config work, not a memory-capacity problem.
+
+**More decisive than the ceiling is the shape of the curve.** Up to 25.6k the cost is *sub*linear
+(5,120 -> 25,600 is 5x the tokens for 3.9x the time, because the fixed ~67 ms keeps amortizing).
+From 25,600 -> 51,200 it inverts hard: 2x the tokens for **5.5x** the time, an exponent of ~2.45, as
+the quadratic attention term takes over. So **peak single-shot prefill throughput is ~33k tok/s at a
+~25k window**, and past that it falls off a cliff.
+
+That is the real argument for chunked prefill at long context: even with the L1 limit fixed, a
+single-shot 256k prefill would be catastrophically slow rather than merely large. **Chunking is what
+keeps each chunk inside the efficient regime**, and this measurement gives whoever wires the runner a
+starting point — chunk size somewhere in **8k–25k** is where this model wants to sit.
 
 **Read the speedup column — it is the cost model in one place.** Host dispatch is ~1.1–1.9 s at
 *every* window, because the op COUNT is fixed (2316 per forward) and only the work per op grows;
