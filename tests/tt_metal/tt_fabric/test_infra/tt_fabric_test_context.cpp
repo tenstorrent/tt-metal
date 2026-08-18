@@ -419,15 +419,11 @@ void TestContext::compile_programs() {
                 continue;
             }
 
-            // Report the channel recorded on the ConnectionKey rather than re-deriving it from
-            // (direction, link_idx): those disagree whenever a direction reaches more than one peer,
-            // and re-deriving here hid that disagreement. The destination is printed alongside so a
-            // repeated direction can be told apart from a repeated destination.
+            // Report the channel recorded on the ConnectionKey
             std::string eth_info;
             for (const auto& [core, sender] : senders) {
                 for (const auto& [cfg, keys] : sender.get_configs()) {
-                    // One entry per connection: a multi-output multicast root injects into several, and
-                    // printing only the first would make an under-delivering fanout look correct here.
+                    // One entry per connection
                     for (const auto& key : keys) {
                         if (!eth_info.empty()) {
                             eth_info += ", ";
