@@ -61,7 +61,7 @@ void kernel_main() {
             dfb_pre_a.wait_front(num_tiles_per_cycle);
             dfb_bcast_a.reserve_back(num_tiles_per_cycle);
             reconfig_data_format(dfb_pre_a.get_id(), dfb_pre_a.get_id());
-            pack_reconfig_data_format(dfb_bcast_a.get_id());
+            pack_reconfig_data_format(dfb_out.get_id(), dfb_bcast_a.get_id());
             unary_bcast_init<BroadcastType::ROW>(dfb_pre_a.get_id());
 
             tile_regs_acquire();
@@ -74,6 +74,11 @@ void kernel_main() {
             tile_regs_release();
 
             dfb_pre_a.pop_front(num_tiles_per_cycle);
+            // Pack data format is sticky packer state: leave every broadcast block with the packer
+            // back on dfb_out, so the ternary result below is never packed in a broadcast CB's
+            // format. The broadcast CBs carry the input dtypes while dfb_out carries the output
+            // dtype, and those differ whenever a preallocated output tensor changes the dtype.
+            pack_reconfig_data_format(dfb_bcast_a.get_id(), dfb_out.get_id());
         }
 #endif
 
@@ -82,7 +87,7 @@ void kernel_main() {
             dfb_pre_b.wait_front(num_tiles_per_cycle);
             dfb_bcast_b.reserve_back(num_tiles_per_cycle);
             reconfig_data_format(dfb_pre_b.get_id(), dfb_pre_b.get_id());
-            pack_reconfig_data_format(dfb_bcast_b.get_id());
+            pack_reconfig_data_format(dfb_out.get_id(), dfb_bcast_b.get_id());
             unary_bcast_init<BroadcastType::ROW>(dfb_pre_b.get_id());
 
             tile_regs_acquire();
@@ -95,6 +100,7 @@ void kernel_main() {
             tile_regs_release();
 
             dfb_pre_b.pop_front(num_tiles_per_cycle);
+            pack_reconfig_data_format(dfb_bcast_b.get_id(), dfb_out.get_id());
         }
 #endif
 
@@ -103,7 +109,7 @@ void kernel_main() {
             dfb_pre_c.wait_front(num_tiles_per_cycle);
             dfb_bcast_c.reserve_back(num_tiles_per_cycle);
             reconfig_data_format(dfb_pre_c.get_id(), dfb_pre_c.get_id());
-            pack_reconfig_data_format(dfb_bcast_c.get_id());
+            pack_reconfig_data_format(dfb_out.get_id(), dfb_bcast_c.get_id());
             unary_bcast_init<BroadcastType::ROW>(dfb_pre_c.get_id());
 
             tile_regs_acquire();
@@ -116,6 +122,7 @@ void kernel_main() {
             tile_regs_release();
 
             dfb_pre_c.pop_front(num_tiles_per_cycle);
+            pack_reconfig_data_format(dfb_bcast_c.get_id(), dfb_out.get_id());
         }
 #endif
 

@@ -57,7 +57,7 @@ void kernel_main() {
         dfb_in1.wait_front(num_tiles_per_cycle);
         dfb_llk_b.reserve_back(num_tiles_per_cycle);
         reconfig_data_format(dfb_in1.get_id(), dfb_in1.get_id());
-        pack_reconfig_data_format(dfb_llk_b.get_id());
+        pack_reconfig_data_format(dfb_out.get_id(), dfb_llk_b.get_id());
         unary_bcast_init<BroadcastType::ROW>(dfb_in1.get_id());
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_in1.get_id(), 0, 0);
@@ -67,6 +67,11 @@ void kernel_main() {
         dfb_llk_b.push_back(num_tiles_per_cycle);
         tile_regs_release();
         dfb_in1.pop_front(num_tiles_per_cycle);
+        // Pack data format is sticky packer state: leave every broadcast block with the packer back
+        // on dfb_out, so the addcmul/addcdiv result below is never packed in a broadcast CB's
+        // format. The broadcast CBs carry the input dtypes while dfb_out carries the output dtype,
+        // and those differ whenever a preallocated output tensor changes the dtype.
+        pack_reconfig_data_format(dfb_llk_b.get_id(), dfb_out.get_id());
 #endif
 
 // Perform LLK row broadcast for C if requested
@@ -74,7 +79,7 @@ void kernel_main() {
         dfb_in2.wait_front(num_tiles_per_cycle);
         dfb_llk_c.reserve_back(num_tiles_per_cycle);
         reconfig_data_format(dfb_in2.get_id(), dfb_in2.get_id());
-        pack_reconfig_data_format(dfb_llk_c.get_id());
+        pack_reconfig_data_format(dfb_out.get_id(), dfb_llk_c.get_id());
         unary_bcast_init<BroadcastType::ROW>(dfb_in2.get_id());
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_in2.get_id(), 0, 0);
@@ -84,6 +89,7 @@ void kernel_main() {
         dfb_llk_c.push_back(num_tiles_per_cycle);
         tile_regs_release();
         dfb_in2.pop_front(num_tiles_per_cycle);
+        pack_reconfig_data_format(dfb_llk_c.get_id(), dfb_out.get_id());
 #endif
 
 // Perform LLK row broadcast for A if requested (do this before compute regs session)
@@ -91,7 +97,7 @@ void kernel_main() {
         dfb_in0.wait_front(num_tiles_per_cycle);
         dfb_llk_a.reserve_back(num_tiles_per_cycle);
         reconfig_data_format(dfb_in0.get_id(), dfb_in0.get_id());
-        pack_reconfig_data_format(dfb_llk_a.get_id());
+        pack_reconfig_data_format(dfb_out.get_id(), dfb_llk_a.get_id());
         unary_bcast_init<BroadcastType::ROW>(dfb_in0.get_id());
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_in0.get_id(), 0, 0);
@@ -101,6 +107,7 @@ void kernel_main() {
         dfb_llk_a.push_back(num_tiles_per_cycle);
         tile_regs_release();
         dfb_in0.pop_front(num_tiles_per_cycle);
+        pack_reconfig_data_format(dfb_llk_a.get_id(), dfb_out.get_id());
 #endif
 
         // Ensure sources available

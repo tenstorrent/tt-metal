@@ -489,3 +489,74 @@ def test_ternary_addcmul_cache_hit_refreshes_operand_addresses(device):
     assert_with_pcc(reference(2), ttnn.to_torch(out1).float(), 0.99)
 
     device.disable_and_clear_program_cache()
+
+
+# Same width, one operand with H==1 -> ROW_BCAST. One case per broadcast position so each of the
+# kernels' three per-operand LLK-broadcast blocks is exercised.
+ROW_BCAST_SHAPES = [
+    pytest.param((1, 1, 1, 128), (1, 1, 64, 128), (1, 1, 64, 128), id="bcast_a"),
+    pytest.param((1, 1, 64, 128), (1, 1, 1, 128), (1, 1, 64, 128), id="bcast_b"),
+    pytest.param((1, 1, 64, 128), (1, 1, 64, 128), (1, 1, 1, 128), id="bcast_c"),
+]
+
+
+@pytest.mark.parametrize("a_shape, b_shape, c_shape", ROW_BCAST_SHAPES)
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("ttnn_op", [ttnn.addcmul, ttnn.addcdiv])
+def test_addc_row_bcast_preallocated_output_dtype(device, ttnn_op, out_dtype, a_shape, b_shape, c_shape):
+    """Guards the packer restore in ternary_addc_ops_fpu_rowbcast.cpp.
+
+    All-BFLOAT16 inputs on ROW_BCAST shapes select the LLK broadcast path, which packs into
+    c_4/c_5/c_6 (input dtype). Pack data format is sticky packer state, so without a reconfig back
+    to the output CB the addcmul/addcdiv result is packed into c_3 in the broadcast CB's format --
+    for a FLOAT32 output that writes bf16-formatted, half-length tiles and silently corrupts the
+    result. bfloat16 output is the control: same kernel, formats happen to agree.
+    """
+    torch.manual_seed(0)
+
+    torch_a = torch.rand(a_shape, dtype=torch.bfloat16).uniform_(-100, 100)
+    torch_b = torch.rand(b_shape, dtype=torch.bfloat16).uniform_(-100, 100)
+    # Keep the addcdiv denominator away from zero so the reference stays finite.
+    torch_c = torch.rand(c_shape, dtype=torch.bfloat16).uniform_(1, 100)
+    value = 2.0
+
+    golden_fn = ttnn.get_golden_function(ttnn_op)
+    torch_output = golden_fn(torch_a, torch_b, torch_c, value=value)
+
+    a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    c = ttnn.from_torch(torch_c, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros(torch_output.shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn_op(a, b, c, value=value, output_tensor=out)
+
+    assert_with_pcc(torch_output, ttnn.to_torch(out).float(), 0.999)
+
+
+@pytest.mark.parametrize("a_shape, b_shape, c_shape", ROW_BCAST_SHAPES)
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.float32])
+def test_lerp_row_bcast_preallocated_output_dtype(device, out_dtype, a_shape, b_shape, c_shape):
+    """Guards the packer restore in ternary_sfpu_row_bcast_ttt.cpp.
+
+    Same sticky-packer-state defect as test_addc_row_bcast_preallocated_output_dtype, in the TTT
+    SFPU row-broadcast kernel. A FLOAT32 output on BFLOAT16 inputs is an advertised lerp
+    configuration, and is_llk_bcast() inspects only the input dtypes, so the broadcast CBs stay
+    bfloat16 while c_3 is FLOAT32.
+    """
+    torch.manual_seed(0)
+
+    torch_input = torch.rand(a_shape, dtype=torch.bfloat16).uniform_(-100, 100)
+    torch_end = torch.rand(b_shape, dtype=torch.bfloat16).uniform_(-100, 100)
+    torch_weight = torch.rand(c_shape, dtype=torch.bfloat16).uniform_(0, 1)
+
+    golden_fn = ttnn.get_golden_function(ttnn.lerp)
+    torch_output = golden_fn(torch_input, torch_end, torch_weight)
+
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    end = ttnn.from_torch(torch_end, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros(torch_output.shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn.lerp(input_tensor, end, weight, output_tensor=out)
+
+    assert_with_pcc(torch_output, ttnn.to_torch(out).float(), 0.999)
