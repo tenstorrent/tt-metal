@@ -142,6 +142,8 @@ class DFlashRunner:
         verify_mode: str = "prefill",
         trace_verify: bool = False,
         verify_width: int = 256,
+        verify_rows: int = 32,
+        max_verify_traces: int = 24,
     ) -> None:
         self.generator = generator
         self.model = generator.model
@@ -260,7 +262,32 @@ class DFlashRunner:
         #: ``max_verify_rows`` guard enforces; making it larger costs nothing on device but
         #: does retain a wider hidden/tap set.
         self.verify_width = int(verify_width)
+        #: Rows in the traced verify window.  **32, and it must stay 32**: the
+        #: DRAM-sharded decode matmul asserts ``M == 1`` (exactly one tile row), so a
+        #: traced 32-row prefill costs 24.48 ms -- one decode step -- while 64 rows falls
+        #: back to mcast2d and costs 40.99.  The candidate count bends around this, not
+        #: the window.
+        self.verify_rows = int(verify_rows)
+        #: How many 32-row windows may hold a trace at once.  Beyond this the verify falls
+        #: back to the eager path rather than evicting: releasing a trace mid-generation
+        #: while its addresses are still live is what wedged the board twice here.
+        self.max_verify_traces = int(max_verify_traces)
+        #: Fixed drafter context width for the whole generation, or 0 to grow through
+        #: CONTEXT_BUCKETS.  Set when the verify is traced: a bucket growth is a
+        #: bucket-sized allocation between replays, inside the trace's address range.
+        #: Fixed drafter context width for the whole generation, or 0 to grow through
+        #: CONTEXT_BUCKETS.  Set from the run length when the verify is traced.
+        self.pinned_context_bucket = 0
         self._prefill_trace: dict | None = None
+        #: ``aligned_start -> {id, hidden, taps}`` for the 32-row traced verify.
+        #:
+        #: One trace per distinct start position, because ``start_pos`` is baked into the
+        #: graph -- prefill RoPE slices its tables with host indices, and the chunked SDPA
+        #: offset is a dispatch-time constant unless it is fed the device-tensor form.
+        #: That is affordable: the window advances 32 positions at a time, so a 128-token
+        #: generation needs about five, each ~140 ms to capture and reused for every
+        #: iteration that lands in the same 32-row block.
+        self._verify_traces: dict[int, dict] = {}
         #: The traced verify's two inputs.  Both addresses are **baked into the trace**
         #: at capture, so they must be allocated once, outlive the trace, and never be
         #: rebound.  The first implementation allocated them per ``generate()`` and freed
@@ -421,7 +448,9 @@ class DFlashRunner:
         if self._verify_tokens is not None:
             return
         model = self.model
-        host_ids = torch.full((1, self.verify_width), model.embed_pad_id, dtype=torch.int32)
+        # Sized to the traced window, not to verify_width: every trace reads this one
+        # buffer, and the shipped traced path is the 32-row window.
+        host_ids = torch.full((1, self.verify_rows), model.embed_pad_id, dtype=torch.int32)
         self._verify_tokens = ttnn.from_torch(
             host_ids,
             device=model.mesh_device,
@@ -543,6 +572,133 @@ class DFlashRunner:
                 if start_row <= absolute < start_row + count:
                     out.append(value)
         return out
+
+    def _trace_for(self, aligned_start: int) -> dict | None:
+        """Capture (once) and return the verify trace for this 32-row window.
+
+        Returns ``None`` when the cache is full, so the caller falls back to the eager
+        verify rather than evicting -- releasing a trace mid-generation while its
+        addresses are still baked into buffers is the hazard that wedged the board twice
+        in this project.
+        """
+        entry = self._verify_traces.get(aligned_start)
+        if entry is not None:
+            return entry
+        # Keep exactly ONE live trace.  The window advances monotonically -- once the
+        # anchor leaves a 32-row block it never returns -- so an older trace is dead
+        # weight, and what matters is how much *address range* sits under the allocation
+        # rule: every live trace's footprint is memory the loop must not be handed
+        # between replays.  Holding several took a 48-token run that worked to a
+        # 128-token run that hung, at three live traces and at five alike.  Released
+        # before the next capture, never during a replay.
+        self._release_all_verify_traces()
+        model = self.model
+        tap_layers = self._tap_layers()
+        rows = self.verify_rows
+
+        # Warm-compile before EVERY capture, not just the first.  Skipping it for later
+        # windows looks safe -- same shapes, only start_pos differs -- and is fatal:
+        # "TT_FATAL: Cannot load new binaries during trace".  The chunked SDPA offset is a
+        # dispatch-time constant, so a new start_pos is a NEW program, and capturing it
+        # uncompiled tries to compile inside the capture.  This warm pass is therefore
+        # ~66 ms per 32-token window, and it is exactly what a runtime-offset design
+        # (chunk_start_idx_tensor plus on-device prefill RoPE) would remove, along with
+        # the capture itself.
+
+        model.release_sliding_tails()
+        trace_id = ttnn.begin_trace_capture(model.mesh_device, cq_id=0)
+        model.arm_hidden_state_taps(tap_layers)
+        embedded = model.embed_prefill(self._verify_tokens)
+        hidden = model.prefill_forward(embedded, page_table=self._verify_page_table, user_id=0, start_pos=aligned_start)
+        taps = model.take_hidden_state_taps()
+        ttnn.end_trace_capture(model.mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(model.mesh_device)
+        model.note_trace_captured()
+        entry = {"id": trace_id, "hidden": hidden, "taps": taps, "rows": rows}
+        self._verify_traces[aligned_start] = entry
+        return entry
+
+    def _release_all_verify_traces(self) -> None:
+        """Release the live verify traces, keeping the shared input buffers alive."""
+        for entry in self._verify_traces.values():
+            try:
+                ttnn.release_trace(self.model.mesh_device, entry["id"])
+                self.model.note_trace_released()
+            except Exception:  # noqa: BLE001 - a failed release must not mask the caller
+                pass
+        self._verify_traces = {}
+
+    def release_verify_traces(self) -> None:
+        """Release every 32-row verify trace, then the buffers they baked in."""
+        self._release_all_verify_traces()
+        if self._verify_tokens is not None:
+            ttnn.deallocate(self._verify_tokens)
+        self._verify_tokens = None
+        self._verify_page_table = None
+        self._owns_verify_page_table = False
+
+    def _verify_traced32(self, full_sequence, candidates, anchor_pos: int, stats):
+        """Verify the block as a **32-row** traced prefill at a page-aligned start.
+
+        This is the shape that pays.  Measured warm, the same graph traced:
+
+            rows   eager ms   traced ms
+              32      66.77      24.48     <- one decode step (23.3 ms)
+              64      61.16      40.99
+             128      60.65      47.28
+
+        32 rows is a cliff rather than a slope: the DRAM-sharded decode matmul asserts
+        ``M == 1`` -- exactly one tile row -- so at 32 rows the prefill already dispatches
+        the *decode* projections and the *decode* collectives, while 64 rows falls back to
+        mcast2d at roughly half the DRAM bandwidth.  Anything wider than one tile throws
+        most of the win away, which is why the window is fixed at ``verify_rows`` and the
+        candidate count bends instead.
+
+        The window is ``[aligned_start, aligned_start + 32)`` with
+        ``aligned_start = 32 * floor(anchor_pos / 32)``, so it holds ``lead`` already
+        committed rows, the anchor, and ``31 - lead`` candidate slots.  That averages 15.5
+        usable candidates against the drafter's 15, i.e. today's block for free, and it is
+        self-correcting: a cramped iteration (``lead`` near 31) commits few tokens, which
+        moves the anchor into the next block and hands the following iteration a full one.
+
+        Re-forwarding the ``lead`` committed rows is free -- the cost is flat in rows -- and
+        rewrites byte-identical K/V at those positions.
+        """
+        model = self.model
+        rows = self.verify_rows
+        page_block = int(model.config.page_block_size)
+        aligned_start = (anchor_pos // page_block) * page_block
+        lead = anchor_pos - aligned_start
+        usable = max(0, rows - lead - 1)
+        n_cand = min(len(candidates), usable)
+        used = list(candidates[:n_cand])
+
+        entry = self._trace_for(aligned_start)
+        if entry is None:
+            return None  # cache full: caller falls back to the eager verify
+
+        t_forward = time.perf_counter()
+        host_ids = torch.full((1, rows), model.embed_pad_id, dtype=torch.int32)
+        ids = list(full_sequence[aligned_start:anchor_pos]) + [full_sequence[anchor_pos]] + used
+        host_ids[0, : len(ids)] = torch.tensor(ids, dtype=torch.int32)
+        host = ttnn.from_torch(
+            host_ids,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(host, self._verify_tokens)
+        ttnn.execute_trace(model.mesh_device, entry["id"], cq_id=0, blocking=True)
+        stats.verify_forward_seconds += time.perf_counter() - t_forward
+        stats.target_forwards += 1
+
+        t_logits = time.perf_counter()
+        # One 32-row hidden means one tile, so this is a single LM-head call at a constant
+        # shape -- unlike the 256-row form, which walked a different tile offset each
+        # iteration.
+        target_argmax = self._argmax_range(entry["hidden"], lead, n_cand + 1)
+        stats.verify_logits_seconds += time.perf_counter() - t_logits
+        return target_argmax, entry["taps"], lead, used
 
     def _verify_prefill_traced(self, full_sequence, candidates, anchor_pos: int, stats):
         """Replay the fixed-width verify trace, then read the block's rows.
@@ -980,6 +1136,12 @@ class DFlashRunner:
             # is from-zero: the first replay re-forwards the whole prefix and rewrites
             # every row it will read.  The prompt's taps and anchor have already been
             # read out above, so nothing else depends on that KV.
+            # Fix the drafter context width for the whole generation at the smallest
+            # bucket the run can need, so it never grows mid-run.  A growth is a
+            # bucket-sized allocation between replays inside the live trace's address
+            # range, and it is what hung every earlier 128-token attempt while 48-token
+            # runs -- which never leave their first bucket -- worked.
+            self.pinned_context_bucket = context_bucket(prompt_len + max_new_tokens)
             self._ensure_verify_inputs(tt_page_table)
 
         produced = [anchor]
@@ -1047,7 +1209,16 @@ class DFlashRunner:
                         f"accumulated context has {valid} rows but the anchor is at {anchor_pos}; "
                         "context rows and absolute positions have drifted apart"
                     )
-                width = context_bucket(valid) if self.pad_context else valid
+                # Held at one width for the whole generation rather than grown through the
+                # buckets.  Growing it reallocates a bucket-sized tensor mid-run -- 17 MB
+                # at 256 -- and while a verify trace is live that is a large allocation
+                # landing in the trace's address range between replays.  It is also the
+                # one thing that differs structurally between a 48-token run (bucket stays
+                # at 128, works) and a 128-token one (grows to 256, hangs).
+                if self.pinned_context_bucket and self.pad_context:
+                    width = self.pinned_context_bucket
+                else:
+                    width = context_bucket(valid) if self.pad_context else valid
                 t_up = time.perf_counter()
                 tt_context = self._upload_context(accumulated_context, pad_to=width)
                 stats.context_upload_seconds += time.perf_counter() - t_up
@@ -1082,13 +1253,12 @@ class DFlashRunner:
 
             # ------------------------------------------------------ verify
             t0 = time.perf_counter()
+            traced32 = None
             if self.trace_verify and not self.verify_mode.startswith("decode"):
-                target_argmax, verify_taps = self._verify_prefill_traced(
-                    prompt + produced, candidates, anchor_pos, stats
-                )
-                # Row index is absolute position on the from-zero path, so the block's
-                # tapped rows start exactly at the anchor.
-                lead, hidden = anchor_pos, None
+                traced32 = self._verify_traced32(prompt + produced, candidates, anchor_pos, stats)
+            if traced32 is not None:
+                target_argmax, verify_taps, lead, candidates = traced32
+                hidden = None
             elif self.verify_mode.startswith("decode"):
                 # One traced decode step over the block: the anchor and its candidates at
                 # absolute positions anchor_pos..anchor_pos+block-1, all sharing slot 0's
@@ -1137,6 +1307,7 @@ class DFlashRunner:
             anchor_pos = anchor_pos + result.n_committed
 
         drafter_cache.release()
+        self.release_verify_traces()
         # Disarm, not merely drain: release_hidden_state_taps() frees captured tensors but
         # leaves _tap_indices set, so a later non-speculative decode would keep capturing
         # and hit the sharded-clone failure above.

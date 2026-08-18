@@ -99,8 +99,26 @@ def main() -> None:
             "32-row tile."
         ),
     )
-    parser.add_argument("--trace-verify", action="store_true", help="capture and replay the verify forward")
-    parser.add_argument("--verify-width", type=int, default=256, help="padded row count of the traced verify")
+    parser.add_argument(
+        "--trace-verify",
+        action="store_true",
+        help=(
+            "verify via a 32-row traced window: 25.2 vs 64.2 ms per verify forward, and "
+            "29.9 vs 26.6 t/s/u measured at OSL 128. Off by default -- capturing a window "
+            "past the first can still hit 'Cannot load new binaries during trace'."
+        ),
+    )
+    parser.add_argument("--verify-width", type=int, default=256, help="padded row count of the from-zero traced verify")
+    parser.add_argument(
+        "--verify-rows",
+        type=int,
+        default=32,
+        help=(
+            "rows in the 32-row traced verify window. Must be 32 to get the win: the "
+            "DRAM-sharded decode matmul asserts M == 1, so traced costs 24.48 ms at 32 "
+            "rows and 40.99 at 64."
+        ),
+    )
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
@@ -117,6 +135,11 @@ def main() -> None:
         }
         if args.page_block:
             build_kwargs["page_block_size"] = args.page_block
+        elif args.trace_verify:
+            # The traced window is 32 rows and must start on a page-block boundary, so the
+            # block size has to divide it. 32 is also the floor the chunked SDPA offset can
+            # shrink to, so start_pos stays legal for every anchor.
+            build_kwargs["page_block_size"] = 32
         gen = build_generator(".", mesh, **build_kwargs)
         tok = gen.tokenizer
 
@@ -143,6 +166,7 @@ def main() -> None:
             verify_mode=args.verify if args.verify.startswith("decode") else "prefill",
             trace_verify=args.trace_verify,
             verify_width=args.verify_width,
+            verify_rows=args.verify_rows,
         )
 
         per_prompt = []

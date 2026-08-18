@@ -749,6 +749,81 @@ rather than noise, and worth knowing before anyone quotes TTFT at full context.
 Non-speculative decode is also unchanged against the pristine pre-DFlash commit: 42.92
 against 42.96 t/s/u, -0.10 %, with identical output tokens (F17).
 
+### F22 — The 32-row traced verify: built, 0.83x at OSL 48, hangs at OSL 128
+
+Built exactly what F18 pointed at, and it does what the measurement predicted -- until it
+does not.
+
+The window is `[32*floor(anchor/32), +32)` with `page_block_size = 32`, holding `lead`
+already-committed rows, the anchor, and `31 - lead` candidate slots.  The candidate count
+bends around a fixed 32-row window rather than the reverse, because 32 rows is where the
+DRAM-sharded decode matmul's `M == 1` holds.  That averages 15.5 usable candidates against
+the drafter's 15 -- today's block for free -- and it self-corrects: a cramped iteration
+commits few tokens, pushing the anchor into the next block so the following one is full.
+One trace per window, captured on first use; the window advances monotonically, so an old
+trace is dead weight and is released before the next capture.
+
+**At OSL 48 it works and it is the largest gain this project has produced:**
+
+| | t/s/u | vs baseline |
+|---|---|---|
+| DFlash, untraced verify | ~26.3 | 0.61x |
+| DFlash, **32-row traced verify** | **34.97** | **0.83x** |
+
+i.e. **+33 %** on DFlash, from the verify forward alone.
+
+**At OSL 128 the cause was found and fixed: the drafter's context bucket.**  Growing it
+from 128 to 256 mid-run reallocates a bucket-sized tensor (17 MB) *between replays*, inside
+the live trace's address range.  That is the only thing that differs structurally between a
+48-token run (never leaves its first bucket, works) and a 128-token one.  Pinning the width
+for the whole generation -- `context_bucket(prompt_len + max_new_tokens)`, so it can never
+grow -- makes OSL 128 run clean:
+
+| | verify forward | total | t/s/u |
+|---|---|---|---|
+| untraced verify | 64.2 ms | 105.8 ms/iter | 26.6 |
+| **32-row traced verify** | **25.2 ms** | 93.0 ms/iter | **29.9** |
+
+The verify forward lands at **25.2 ms against the 24.48 ms the standalone probe
+predicted** -- the model of this system is now accurate to 3 %.  That is **+13 %** on
+DFlash end to end (0.62x -> 0.70x).
+
+**Why it is still off by default.**  Two things eat most of the remaining win, and one is
+unresolved:
+
+* **29.1 ms/iteration is trace capture.**  Each new 32-row window needs a warm compile
+  (~66 ms) plus a capture (~140 ms), i.e. ~200 ms per 32 tokens generated, or ~6 ms per
+  token.  The warm compile cannot be skipped: doing so fails with
+  `TT_FATAL: Cannot load new binaries during trace`, because the chunked SDPA offset is a
+  dispatch-time constant, so a new `start_pos` is a **new program** and capturing it
+  uncompiled tries to compile inside the capture.
+* Capturing a window past the first can still hit that same `TT_FATAL` in some orderings,
+  which is not fully isolated.
+
+Both point at the same fix, and it is the one worth building next: make the graph
+**offset-independent** so there is exactly one capture for the whole generation.
+`chunked_scaled_dot_product_attention` already accepts `chunk_start_idx_tensor`, a device
+`[1]` int32 read at replay and documented for precisely this; prefill RoPE would need the
+decode path's on-device gather instead of host-index slicing.  That removes the per-window
+capture, the warm compile, and the ordering hazard together, and would take the measured
+93.0 ms/iteration to roughly 64 -- about **1.15x over non-speculative decode**, with the
+drafter's 17.4 ms the next target after that.  Three hypotheses
+were tested and all three are wrong: it is not the number of live traces (hangs at five
+and at three alike), not the eager fallback when the trace cache fills (hangs with the cap
+high enough that no fallback occurs), and not fixed by holding exactly one live trace and
+releasing on window advance.  The remaining untested candidate is the drafter's context
+bucket growing 128 -> 256 mid-run, which allocates ~17 MB between replays and is the one
+thing that differs structurally between a 48-token run and a 128-token one.
+
+So it ships **off by default**.  A path that hangs the board is not a speedup, and this
+project has already spent three `tt-smi -r` resets learning that.  What is banked is the
+design, the measurement, and the knowledge that the win is real at the shape F18 predicted.
+
+The next step is narrow: pin the drafter context bucket for the whole generation instead
+of growing it, then re-run OSL 128.  If that is the cause, the fix is one line and the
+0.83x should hold at length; if it is not, `_dram_allocated()` at `alloc_drift_budget = 0`
+will name whatever else is live across a replay.
+
 ## Artifacts
 
 | file | what |
