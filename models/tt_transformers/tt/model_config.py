@@ -2432,6 +2432,7 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
+                "Qwen2.5-Coder-32B": {"N150": None, "N300": None, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
@@ -4446,16 +4447,32 @@ class HfModelWrapper:
         position_ids = torch.tensor(
             [list(range(start_pos, start_pos + inputs_embeds.shape[1]))] * inputs_embeds.shape[0]
         )
-        logits, new_cache, hidden_states = self.model.forward(
-            inputs_embeds=inputs_embeds,
-            position_ids=position_ids,
-            use_cache=True,
-            past_key_values=self.past_key_values,
-            return_dict=False,
-            output_hidden_states=True,
-        )
+
+        # In prefill mode the reference must match the TT model, which returns the last decoder
+        # layer's output *before* the final norm. HF's output_hidden_states does not expose that
+        # tensor: the tuple is (embeddings, out_0, ..., out_{N-2}, norm(out_{N-1})), so hidden_states[-2]
+        # is the embeddings for a 1-layer model and the second-to-last layer otherwise. Capture the
+        # input to the final norm via a forward pre-hook to get the true pre-norm last-layer output.
+        captured = {}
+        handle = None
+        if mode != "decode":
+            handle = self.model.model.norm.register_forward_pre_hook(
+                lambda module, args: captured.__setitem__("pre_norm", args[0])
+            )
+        try:
+            logits, new_cache, hidden_states = self.model.forward(
+                inputs_embeds=inputs_embeds,
+                position_ids=position_ids,
+                use_cache=True,
+                past_key_values=self.past_key_values,
+                return_dict=False,
+                output_hidden_states=True,
+            )
+        finally:
+            if handle is not None:
+                handle.remove()
         self.past_key_values = new_cache
-        return logits if mode == "decode" else hidden_states[-2]  # last hidden state is final norm
+        return logits if mode == "decode" else captured["pre_norm"]
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)

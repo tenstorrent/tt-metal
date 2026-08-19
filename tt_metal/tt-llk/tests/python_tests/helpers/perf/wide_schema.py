@@ -38,11 +38,14 @@ class Column:
 # so the schema is a superset of any run config, not just what one nightly sampled.
 _TIMING_BASES = (
     "L1_TO_L1",
+    "L1_TO_L1[FPU]",
+    "L1_TO_L1[SFPU]",
     "UNPACK_ISOLATE",
     "MATH_ISOLATE",
     "PACK_ISOLATE",
     "L1_CONGESTION[UNPACK]",
     "L1_CONGESTION[PACK]",
+    "SFPU_ISOLATE",
 )
 _TIMING_COLUMNS = [
     Column(stat_column(base, kind), "float64", True, "timing")
@@ -54,8 +57,8 @@ _TIMING_COLUMNS = [
 # ── The one published table: every column, headers + provenance ─────────────
 # This IS the table handed to the data team; the Parquet is written with it. Each
 # column's `origin` says who fills it — "test" (default) or "ci".
-# TODO(counters/Quasar, deferred — see #51249): counter/metric and Quasar columns
-# join here as nullable once a counter/Quasar run captures their exact names.
+# TODO(counters, deferred — see #51249): counter/metric columns join here as
+# nullable once a counter run captures their exact names.
 DB_SCHEMA = [
     Column("marker", "string", False, "identity"),
     # formats
@@ -83,9 +86,12 @@ DB_SCHEMA = [
     Column("ct_dim", "int64", True, "configuration"),
     Column("dest_sync", "string", True, "configuration"),
     Column("dst_index", "int64", True, "configuration"),
+    Column("enable_2x_format", "bool", True, "configuration"),
+    Column("enable_direct_indexing", "bool", True, "configuration"),
     Column("fast_mode", "string", True, "configuration"),
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
+    Column("implied_math_format", "string", True, "configuration"),
     Column("in0_c_dim", "int64", True, "configuration"),
     Column("in0_r_dim", "int64", True, "configuration"),
     Column("in1_c_dim", "int64", True, "configuration"),
@@ -151,6 +157,7 @@ DROPPED_COLUMNS = {
     "TEXT_SIZE(MATH_ISOLATE)",
     "TEXT_SIZE(PACK_ISOLATE)",
     "TEXT_SIZE(UNPACK_ISOLATE)",
+    "TEXT_SIZE(SFPU_ISOLATE)",
 }
 
 # Row identity: one test config in one run. The sweep-parameter columns (which

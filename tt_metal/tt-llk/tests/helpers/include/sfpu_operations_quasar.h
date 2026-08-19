@@ -18,6 +18,7 @@
 #include "experimental/ckernel_sfpu_abs.h"
 #include "llk_sfpu/ckernel_sfpu_clamp.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
+#include "llk_sfpu/ckernel_sfpu_cumsum.h"
 #include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
@@ -124,6 +125,10 @@ void init_unary_sfpu_operation_quasar()
     {
         init_trigonometry<OPERATION, is_fp32_dest_acc_en>();
     }
+    else if constexpr (OPERATION == SfpuType::cumsum)
+    {
+        cumsum_init<APPROX>();
+    }
 }
 
 /**
@@ -197,6 +202,8 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
  * @param sfpu_format SFPU math format; only the comp family reads it (see
  *        @ref call_zero_comp_operation_quasar), float-only ops ignore it.
+ * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum
+ *        reads it. Defaults to true so each tile is independent.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
 template <
@@ -207,7 +214,7 @@ template <
     int ITERATIONS                 = SFPU_ITERATIONS,
     DataFormat TYPECAST_IN_FORMAT  = DataFormat::Float32,
     DataFormat TYPECAST_OUT_FORMAT = DataFormat::Float16_b>
-void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format = DataFormat::Float32)
+void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format = DataFormat::Float32, [[maybe_unused]] const bool first = true)
 {
     if constexpr (OPERATION == SfpuType::abs)
     {
@@ -307,6 +314,12 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     else if constexpr (OPERATION == SfpuType::typecast)
     {
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_typecast, (TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::cumsum)
+    {
+        // Whole-tile op: the accumulation chain spans all 32 tile rows and crosses the face-pair
+        // boundary, so it runs once per tile (RC_custom), not once per face.
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cumsum, (APPROX, ITERATIONS), dst_index, VectorMode::RC_custom, first);
     }
     else
     {

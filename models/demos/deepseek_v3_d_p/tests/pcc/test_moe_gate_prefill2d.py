@@ -6,6 +6,7 @@ import os
 import random
 from pathlib import Path
 from types import SimpleNamespace
+from typing import NamedTuple
 
 import pytest
 import torch
@@ -20,9 +21,12 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss.modeling_gpt_oss import GptOssTopKRouter
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    GATE_KEY_PREFIX_DEEPSEEK,
+    GATE_KEY_PREFIX_KIMI_K3,
     create_fabric_router_config,
     create_gate_weights,
     get_max_payload_size,
@@ -48,12 +52,38 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBO
 GATE_MODELS = {
     "deepseek_v3": DeepSeekV3Config,
     "kimi": KimiK26Config,
+    "kimi_k3": KimiK3Config,
     "glm_5_1": GLM51Config,
     "minimax_m2_7": MiniMaxM27Config,
     "gpt_oss_120b": GptOss120BConfig,
     "dsv4_pro": DeepSeekV4ProConfig,
     "dsv4_flash": DeepSeekV4FlashConfig,
 }
+
+# Per-chip sequence every gate case runs at. Must be passed at construction: TtMoEGateConfig re-keys
+# its tuned matmul configs by sp_dim, so assigning it afterwards silently drops to default tiling.
+GATE_SP_DIM = 640
+
+
+def _gate_config(gate_model: str) -> TtMoEGateConfig:
+    """Gate config at GATE_SP_DIM, minus tuned matmul entries authored for a different depth.
+
+    A tuned entry encodes its shard height in per_core_M, but TtMoEGateConfig re-keys every entry to
+    the sp_dim in use, so one tuned at 4096 claims to apply at 640 while still carrying per_core_M=2
+    -- and the matmul rejects it outright: "per_core_M (2) must equal shard_shape[0] (32) / in0_tile
+    height (32)". Entries that already match this depth are kept (K3's is authored at 640); the rest
+    are dropped so TTNN picks its default tiling, which is what the untuned models do here anyway.
+    """
+    config = TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model], sp_dim=GATE_SP_DIM)
+    shard_height = (config.sp_dim + config.num_cores - 1) // config.num_cores
+    shard_height = ((shard_height + 31) // 32) * 32
+    config.mm_configs = {
+        key: value
+        for key, value in config.mm_configs.items()
+        if not isinstance(key, tuple) or value.per_core_M == shard_height // 32
+    }
+    return config
+
 
 # First MoE layer in DeepSeek-V3 (metadata moe_layer_offset == 3); the golden
 # trace stores its gate input as post_attn_norm_layer_3.
@@ -67,33 +97,73 @@ _MOE_LAYER_IDX = 3
 # pcc_scores remains the correctness backstop for the selected-weight distribution.
 RECALL_WEIGHT_RTOL = 0.002
 
-_DEFAULT_HF_REPO = "deepseek-ai/DeepSeek-V3"
-_LOCAL_FALLBACKS = (
-    "models/demos/deepseek_v3/reference",
-    "/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528",
-)
+
+class _RealGateSource(NamedTuple):
+    """Where a model's real router weights live, and under which HF key layout.
+
+    The correction bias is loaded at the weight dtype (bf16) for every source, and there is no knob to
+    widen it: the device gate op requires a bf16 bias, TtMoEGatePrefill caches it as bf16 and rebuilds
+    its host-fallback torch_bias from that cache, and this test's golden downcasts the whole reference
+    router to bf16. A wider host bias would therefore not reach the device at all, and under HOST_ALL
+    it would only desynchronize the two sides at exactly the top-k tie-break the recall thresholds
+    were calibrated against.
+    """
+
+    env_var: str
+    fallbacks: tuple[str, ...]
+    hf_repo: str
+    key_prefix_template: str
 
 
-def _resolve_model_id() -> str:
+# Models with loadable real router weights; anything absent falls back to seeded random weights.
+_REAL_GATE_SOURCES = {
+    "deepseek_v3": _RealGateSource(
+        env_var="DEEPSEEK_V3_HF_MODEL",
+        fallbacks=(
+            "models/demos/deepseek_v3/reference",
+            "/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528",
+        ),
+        hf_repo="deepseek-ai/DeepSeek-V3",
+        key_prefix_template=GATE_KEY_PREFIX_DEEPSEEK,
+    ),
+    # K3's router is the one MoE tensor group the checkpoint leaves unquantized.
+    "kimi_k3": _RealGateSource(
+        env_var="KIMI_K3_HF_MODEL",
+        fallbacks=("/mnt/models/blaze/moonshotai/Kimi-K3",),
+        hf_repo="moonshotai/Kimi-K3",
+        key_prefix_template=GATE_KEY_PREFIX_KIMI_K3,
+    ),
+}
+
+
+def _resolve_model_id(source: _RealGateSource) -> str:
     """Resolve a model identifier (local dir or HF repo ID) for gate weight loading.
 
-    Checks DEEPSEEK_V3_HF_MODEL and standard local paths first; falls back to the
-    HF repo ID so that ``load_hf_state_dict_filtered`` can resolve from the HF cache.
+    Checks the model's env var and its known local paths first; falls back to the HF repo ID so that
+    ``load_hf_state_dict_filtered`` can resolve from the HF cache.
     """
-    env_path = os.getenv("DEEPSEEK_V3_HF_MODEL")
+    env_path = os.getenv(source.env_var)
     if env_path and (Path(env_path) / "model.safetensors.index.json").exists():
         return env_path
-    for fallback in _LOCAL_FALLBACKS:
+    for fallback in source.fallbacks:
         if (Path(fallback) / "model.safetensors.index.json").exists():
             return fallback
-    return _DEFAULT_HF_REPO
+    return source.hf_repo
 
 
-def _try_load_real_gate_weights(n_routed_experts: int, dim: int) -> dict | None:
-    """Try to load real gate weights from HF; return None on failure."""
-    model_id = _resolve_model_id()
+def _try_load_real_gate_weights(gate_model: str, n_routed_experts: int, dim: int) -> dict | None:
+    """Try to load real gate weights for ``gate_model``; return None if unavailable."""
+    source = _REAL_GATE_SOURCES.get(gate_model)
+    if source is None:
+        return None
+    model_id = _resolve_model_id(source)
     try:
-        gate_w = load_gate_weights_from_hf(model_id, layer_idx=3, dtype=torch.bfloat16)
+        gate_w = load_gate_weights_from_hf(
+            model_id,
+            layer_idx=_MOE_LAYER_IDX,
+            dtype=torch.bfloat16,
+            key_prefix_template=source.key_prefix_template,
+        )
         gate_w["weight"] = gate_w["weight"][:n_routed_experts, :dim]
         gate_w["e_score_correction_bias"] = gate_w["e_score_correction_bias"][:n_routed_experts]
         return gate_w
@@ -195,6 +265,8 @@ REGULAR_GATE_CASES = [
     pytest.param("deepseek_v3", GateComputeMode.DEVICE_FP32, id="deepseek_v3-device_fp32"),
     pytest.param("kimi", GateComputeMode.HOST_ALL, id="kimi-host_all"),
     pytest.param("kimi", GateComputeMode.DEVICE_FP32, id="kimi-device_fp32"),
+    pytest.param("kimi_k3", GateComputeMode.HOST_ALL, id="kimi_k3-host_all"),
+    pytest.param("kimi_k3", GateComputeMode.DEVICE_FP32, id="kimi_k3-device_fp32"),
     pytest.param("glm_5_1", GateComputeMode.HOST_ALL, id="glm_5_1-host_all"),
     pytest.param("glm_5_1", GateComputeMode.DEVICE_FP32, id="glm_5_1-device_fp32"),
     pytest.param("minimax_m2_7", GateComputeMode.HOST_ALL, id="minimax_m2_7-host_all"),
@@ -290,7 +362,7 @@ def _validate_gate(
         reference_logits,
         1,
         n_sp_devices,
-        compare_pcc(logits_pcc_threshold),
+        compare_pcc(logits_pcc_threshold, label="pcc_logits"),
         name="pcc_logits",
         broadcast_groups=n_tp_devices,
     )
@@ -300,7 +372,7 @@ def _validate_gate(
         reference_topk_scores,
         1,
         n_sp_devices,
-        compare_pcc(scores_pcc_threshold),
+        compare_pcc(scores_pcc_threshold, label="pcc_scores"),
         name="pcc_scores",
         broadcast_groups=n_tp_devices,
     )
@@ -337,16 +409,21 @@ def test_forward_pass(
     random.seed(42)
     torch.manual_seed(42)
 
-    config = TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model])
+    config = _gate_config(gate_model)
     config.ccl_config["NUM_LINKS"] = num_links
     adjust_shapes_for_testing(config, mesh_device)
 
-    # Real DeepSeek gate weights/input (V3, 256 experts, sigmoid) can't be reshaped to other expert
-    # counts or activations, so only attempt the real load for the 256-expert sigmoid path.
-    use_real = gate_model == "deepseek_v3" and config.n_routed_experts == 256 and config.score_func == "sigmoid"
-    gate_w = _try_load_real_gate_weights(config.n_routed_experts, config.dim) if use_real else None
+    # DeepSeek-V3's weights can't be reshaped to other expert counts or activations, so that path
+    # stays pinned to 256 experts + sigmoid; K3 loads its own 896-expert router.
+    use_real_weights = (
+        gate_model == "deepseek_v3" and config.n_routed_experts == 256 and config.score_func == "sigmoid"
+    ) or gate_model == "kimi_k3"
+    gate_w = _try_load_real_gate_weights(gate_model, config.n_routed_experts, config.dim) if use_real_weights else None
     if gate_w is None:
         gate_w = create_gate_weights(config.n_routed_experts, config.dim)
+
+    # The real gate input is a DeepSeek-V3 prefill trace, so it is only meaningful for that model.
+    use_real = gate_model == "deepseek_v3" and use_real_weights
 
     n_sp_devices = mesh_device.shape[0]
     total_seq_len = config.sp_dim * n_sp_devices
@@ -448,6 +525,9 @@ def test_forward_pass(
         recall_threshold = 0.95
         logits_pcc_threshold = 0.997
         scores_pcc_threshold = 0.93
+        # Device-mode scores only: at high expert counts sigmoid near-ties the top-k boundary, so a
+        # small matmul difference swaps a pick and moves the weight vector. Others keep 0.93.
+        scores_pcc_threshold = getattr(GATE_MODELS[gate_model], "GATE_SCORES_PCC_DEVICE", scores_pcc_threshold)
 
     _validate_gate(
         mesh_device,
@@ -496,7 +576,7 @@ def test_hash_gate_forward_pass(
     random.seed(42)
     torch.manual_seed(42)
 
-    config = TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model])
+    config = _gate_config(gate_model)
     config.ccl_config["NUM_LINKS"] = num_links
     adjust_shapes_for_testing(config, mesh_device)
 

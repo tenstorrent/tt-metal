@@ -4,12 +4,14 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/circular_buffer.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "cpp/ttnn/operations/ccl/common/types/fabric_directions.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
 #include "ckernel.h"
 #include <cstdint>
 
@@ -36,11 +38,31 @@ constexpr uint16_t source_chip_id = get_compile_time_arg_val(13);
 constexpr uint16_t source_mesh_id = get_compile_time_arg_val(14);
 constexpr bool is_fabric_2d = get_compile_time_arg_val(15);
 constexpr uint32_t fabric_direction_mask = get_compile_time_arg_val(16);
+constexpr uint32_t max_pages_per_packet = get_compile_time_arg_val(17);
+constexpr auto output_tensor_args = TensorAccessorArgs<18>();
+constexpr uint32_t mux_ct_base = output_tensor_args.next_compile_time_args_offset();
+constexpr bool use_worker_mux = get_compile_time_arg_val(mux_ct_base) != 0;
+constexpr uint32_t mux_num_clients = get_compile_time_arg_val(mux_ct_base + 1);
+constexpr uint32_t compile_safe_mux_num_clients = mux_num_clients == 0 ? 1 : mux_num_clients;
+constexpr bool has_fabric_connections = fabric_direction_mask != 0;
 constexpr auto fabric_directions =
     ttnn::operations::ccl::common::fabric_direction_mask_to_directions(fabric_direction_mask);
 constexpr auto num_fabric_directions = ttnn::operations::ccl::common::num_fabric_directions;
 using Fabric2DConnections = std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_fabric_directions>;
-using FabricConnections = std::conditional_t<is_fabric_2d, Fabric2DConnections, FabricConnectionManager>;
+using FabricMuxSender = tt::tt_fabric::FabricMuxV2Sender<>;
+struct FabricMuxConnection {
+    FabricMuxSender sender;
+};
+using DirectFabricConnections = std::conditional_t<is_fabric_2d, Fabric2DConnections, FabricConnectionManager>;
+using FabricConnections = std::conditional_t<use_worker_mux, FabricMuxConnection, DirectFabricConnections>;
+
+inline FabricMuxSender& select_connection(
+    FabricMuxConnection& fabric_connection,
+    [[maybe_unused]] int device_offset,
+    [[maybe_unused]] uint16_t dest_mesh_id,
+    [[maybe_unused]] uint16_t dest_chip_id) {
+    return fabric_connection.sender;
+}
 
 inline tt::tt_fabric::WorkerToFabricEdmSender& select_connection(
     Fabric2DConnections& fabric_connections,
@@ -65,43 +87,134 @@ inline void finish_open_connections(Fabric2DConnections& fabric_connections) {
 
 inline void finish_open_connections(FabricConnectionManager& fabric_connections) { fabric_connections.open_finish(); }
 
+inline void finish_open_connections(FabricMuxConnection& fabric_connection) { fabric_connection.sender.open(); }
+
 inline void close_connections(Fabric2DConnections& fabric_connections) {
     ttnn::operations::ccl::common::close_direction_connections(fabric_directions, fabric_connections);
 }
 
 inline void close_connections(FabricConnectionManager& fabric_connections) { fabric_connections.close(); }
 
-template <typename PacketHeader>
-inline void set_route(
-    volatile PacketHeader* packet_header,
-    const ccl_routing_utils::line_unicast_route_info_t& route_info,
-    [[maybe_unused]] int32_t distance,
-    Fabric2DConnections&) {
-    ccl_routing_utils::fabric_set_line_unicast_route(packet_header, route_info);
+inline void close_connections(FabricMuxConnection& fabric_connection) { fabric_connection.sender.close(); }
+
+inline void send_mux_packet_blocking(
+    FabricMuxConnection& fabric_connection, uint32_t packet_header_address, size_t packet_header_size) {
+    fabric_connection.sender.wait_for_empty_write_slot();
+    fabric_connection.sender.send_payload_flush_non_blocking_from_address(packet_header_address, packet_header_size);
+    noc_async_writes_flushed();
 }
 
-template <typename PacketHeader>
-inline void set_route(
-    volatile PacketHeader* packet_header,
-    [[maybe_unused]] const ccl_routing_utils::line_unicast_route_info_t& route_info,
-    int32_t distance,
-    FabricConnectionManager&) {
-    packet_header->to_chip_unicast(distance);
+template <tt::tt_fabric::Topology Topology, typename PacketHeader>
+void send_initialization(
+    FabricMuxConnection& fabric_connection,
+    uint32_t core_id,
+    uint32_t link_id,
+    uint32_t local_num_devices,
+    size_t device_offsets_idx,
+    uint64_t init_semaphore_noc_addr_in_pkt,
+    volatile PacketHeader* pkt_hdr_sema_forward,
+    volatile PacketHeader* pkt_hdr_sema_backward,
+    uint32_t packet_header_buffer_addr_sema_forward,
+    uint32_t packet_header_buffer_addr_sema_backward) {
+    using ttnn::operations::ccl::common::ReplicateGroup;
+    static_assert(
+        Topology == tt::tt_fabric::Topology::Linear || Topology == tt::tt_fabric::Topology::Ring,
+        "Muxed all-to-all supports only Linear or Ring topology");
+    static_assert(
+        !is_fabric_2d || replicate_axis == ReplicateGroup::COLS || replicate_axis == ReplicateGroup::ROWS,
+        "Fabric2D muxed all-to-all requires a concrete cluster axis");
+
+    if (link_id != 0) {
+        return;
+    }
+    if constexpr (Topology == tt::tt_fabric::Topology::Ring) {
+        // Ring destinations are split across direction-specific mux workers. Have link 0 send one unicast
+        // initialization increment for each unique destination owned by this worker. Ring bank schedules are striped
+        // across mux clients; the client owning destination bank 0 is the single initialization owner. This is
+        // independent of 1D hop-count versus Fabric2D mesh/chip routing and guarantees exactly one increment per
+        // source at every remote destination.
+        for (uint32_t did = 0; did < local_num_devices; ++did) {
+            const size_t target_arg_idx = device_offsets_idx + did * 7;
+            const int32_t device_offset = get_arg_val<int32_t>(target_arg_idx);
+            const uint32_t block_start = get_arg_val<uint32_t>(target_arg_idx + 1);
+            if (device_offset == 0 || block_start != 0) {
+                continue;
+            }
+
+            const ccl_routing_utils::line_unicast_route_info_t route_info = {
+                .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(target_arg_idx + 5)),
+                .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(target_arg_idx + 6))};
+            auto* packet_header = device_offset > 0 ? pkt_hdr_sema_forward : pkt_hdr_sema_backward;
+            const uint32_t packet_header_address =
+                device_offset > 0 ? packet_header_buffer_addr_sema_forward : packet_header_buffer_addr_sema_backward;
+            ccl_routing_utils::fabric_set_line_unicast_route(packet_header, route_info);
+            packet_header->to_noc_unicast_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_semaphore_noc_addr_in_pkt, 1});
+            send_mux_packet_blocking(fabric_connection, packet_header_address, sizeof(PacketHeader));
+        }
+    } else {
+        // Linear uses one multicast per direction, so only one Mux V2 client owns initialization.
+        if (core_id % compile_safe_mux_num_clients != 0) {
+            return;
+        }
+        constexpr uint32_t positive_range = num_devices - current_device_id - 1;
+        constexpr uint32_t negative_range = current_device_id;
+        constexpr uint32_t positive_direction = !is_fabric_2d || replicate_axis == ReplicateGroup::ROWS
+                                                    ? eth_chan_directions::EAST
+                                                    : eth_chan_directions::SOUTH;
+        constexpr uint32_t negative_direction = !is_fabric_2d || replicate_axis == ReplicateGroup::ROWS
+                                                    ? eth_chan_directions::WEST
+                                                    : eth_chan_directions::NORTH;
+        constexpr bool owns_positive_targets = fabric_directions[positive_direction];
+        constexpr bool owns_negative_targets = fabric_directions[negative_direction];
+
+        if constexpr (positive_range > 0) {
+            if (owns_positive_targets) {
+                if constexpr (is_fabric_2d) {
+                    constexpr uint16_t east_range = replicate_axis == ReplicateGroup::ROWS ? positive_range : 0;
+                    constexpr uint16_t south_range = replicate_axis == ReplicateGroup::COLS ? positive_range : 0;
+                    tt::tt_fabric::fabric_set_mcast_route(
+                        pkt_hdr_sema_forward, source_chip_id, source_mesh_id, east_range, 0, 0, south_range);
+                } else {
+                    pkt_hdr_sema_forward->to_chip_multicast(
+                        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(positive_range)});
+                }
+                pkt_hdr_sema_forward->to_noc_unicast_atomic_inc(
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_semaphore_noc_addr_in_pkt, 1});
+                send_mux_packet_blocking(
+                    fabric_connection, packet_header_buffer_addr_sema_forward, sizeof(PacketHeader));
+            }
+        }
+        if constexpr (negative_range > 0) {
+            if (owns_negative_targets) {
+                if constexpr (is_fabric_2d) {
+                    constexpr uint16_t west_range = replicate_axis == ReplicateGroup::ROWS ? negative_range : 0;
+                    constexpr uint16_t north_range = replicate_axis == ReplicateGroup::COLS ? negative_range : 0;
+                    tt::tt_fabric::fabric_set_mcast_route(
+                        pkt_hdr_sema_backward, source_chip_id, source_mesh_id, 0, west_range, north_range, 0);
+                } else {
+                    pkt_hdr_sema_backward->to_chip_multicast(
+                        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(negative_range)});
+                }
+                pkt_hdr_sema_backward->to_noc_unicast_atomic_inc(
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_semaphore_noc_addr_in_pkt, 1});
+                send_mux_packet_blocking(
+                    fabric_connection, packet_header_buffer_addr_sema_backward, sizeof(PacketHeader));
+            }
+        }
+    }
 }
+
 template <tt::tt_fabric::Topology Topology, typename PacketHeader>
 void send_initialization(
     Fabric2DConnections& fabric_connections,
-    uint32_t core_id,
+    [[maybe_unused]] uint32_t core_id,
     uint32_t link_id,
     [[maybe_unused]] uint32_t local_num_devices,
     [[maybe_unused]] size_t device_offsets_idx,
     uint64_t init_semaphore_noc_addr_in_pkt,
-    [[maybe_unused]] volatile PacketHeader* pkt_hdr_forward,
-    [[maybe_unused]] volatile PacketHeader* pkt_hdr_backward,
     volatile PacketHeader* pkt_hdr_sema_forward,
     volatile PacketHeader* pkt_hdr_sema_backward,
-    [[maybe_unused]] uint32_t packet_header_buffer_addr_forward,
-    [[maybe_unused]] uint32_t packet_header_buffer_addr_backward,
     uint32_t packet_header_buffer_addr_sema_forward,
     uint32_t packet_header_buffer_addr_sema_backward) {
     using ttnn::operations::ccl::common::ReplicateGroup;
@@ -112,7 +225,7 @@ void send_initialization(
         replicate_axis == ReplicateGroup::COLS || replicate_axis == ReplicateGroup::ROWS,
         "FABRIC_2D all-to-all requires a concrete cluster axis");
 
-    if (core_id != 0 || link_id != 0) {
+    if (link_id != 0) {
         return;
     }
     constexpr uint32_t positive_range = num_devices - current_device_id - 1;
@@ -122,7 +235,7 @@ void send_initialization(
     constexpr uint32_t negative_direction =
         replicate_axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;
 
-    if constexpr (positive_range > 0) {
+    if constexpr (positive_range > 0 && fabric_directions[positive_direction]) {
         constexpr uint16_t east_range = replicate_axis == ReplicateGroup::ROWS ? positive_range : 0;
         constexpr uint16_t south_range = replicate_axis == ReplicateGroup::COLS ? positive_range : 0;
         tt::tt_fabric::fabric_set_mcast_route(
@@ -134,7 +247,7 @@ void send_initialization(
         connection.send_payload_flush_blocking_from_address(
             packet_header_buffer_addr_sema_forward, sizeof(PacketHeader));
     }
-    if constexpr (negative_range > 0) {
+    if constexpr (negative_range > 0 && fabric_directions[negative_direction]) {
         constexpr uint16_t west_range = replicate_axis == ReplicateGroup::ROWS ? negative_range : 0;
         constexpr uint16_t north_range = replicate_axis == ReplicateGroup::COLS ? negative_range : 0;
         tt::tt_fabric::fabric_set_mcast_route(
@@ -156,12 +269,8 @@ void send_initialization(
     [[maybe_unused]] uint32_t local_num_devices,
     [[maybe_unused]] size_t device_offsets_idx,
     uint64_t init_semaphore_noc_addr_in_pkt,
-    volatile PacketHeader* pkt_hdr_forward,
-    volatile PacketHeader* pkt_hdr_backward,
     volatile PacketHeader* pkt_hdr_sema_forward,
     volatile PacketHeader* pkt_hdr_sema_backward,
-    uint32_t packet_header_buffer_addr_forward,
-    uint32_t packet_header_buffer_addr_backward,
     uint32_t packet_header_buffer_addr_sema_forward,
     uint32_t packet_header_buffer_addr_sema_backward) {
     static_assert(
@@ -187,27 +296,27 @@ void send_initialization(
             pkt_hdr_sema_backward->to_chip_multicast(
                 tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(current_device_id)});
             fabric_connections.get_backward_connection().wait_for_empty_write_slot();
-            fabric_connections.get_backward_connection().send_payload_non_blocking_from_address(
+            fabric_connections.get_backward_connection().send_payload_flush_blocking_from_address(
                 packet_header_buffer_addr_sema_backward, sizeof(PacketHeader));
         }
     } else {
         if (fabric_connections.has_forward_connection()) {
-            pkt_hdr_forward->to_noc_unicast_atomic_inc(
+            pkt_hdr_sema_forward->to_noc_unicast_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_semaphore_noc_addr_in_pkt, 1});
             fabric_connections.get_forward_connection().wait_for_empty_write_slot();
-            pkt_hdr_forward->to_chip_multicast(
+            pkt_hdr_sema_forward->to_chip_multicast(
                 tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_devices / 2)});
             fabric_connections.get_forward_connection().send_payload_flush_blocking_from_address(
-                packet_header_buffer_addr_forward, sizeof(PacketHeader));
+                packet_header_buffer_addr_sema_forward, sizeof(PacketHeader));
         }
         if (fabric_connections.has_backward_connection()) {
-            pkt_hdr_backward->to_noc_unicast_atomic_inc(
+            pkt_hdr_sema_backward->to_noc_unicast_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{init_semaphore_noc_addr_in_pkt, 1});
             fabric_connections.get_backward_connection().wait_for_empty_write_slot();
-            pkt_hdr_backward->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
+            pkt_hdr_sema_backward->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{
                 1, static_cast<uint8_t>(num_devices - num_devices / 2 - 1)});
             fabric_connections.get_backward_connection().send_payload_flush_blocking_from_address(
-                packet_header_buffer_addr_backward, sizeof(PacketHeader));
+                packet_header_buffer_addr_sema_backward, sizeof(PacketHeader));
         }
     }
 }
@@ -234,7 +343,6 @@ void write_data(
             noc_async_write(l1_read_addr, dest_addrs[part], payload_sizes[part]);
             l1_read_addr += payload_sizes[part];
         }
-        noc_obj.async_write_barrier();
     } else {
         if (last) {
             // TODO: reduce number of packages when atomic fused with scatter will be introduced
@@ -278,8 +386,12 @@ void write_data(
             for (uint32_t part = 0; part < parts_count; ++part) {
                 scatter_payload += payload_sizes[part];
             }
-            pkt_hdr->to_noc_unicast_scatter_write(
-                NocUnicastScatterCommandHeader(dest_addrs, payload_sizes, parts_count), scatter_payload);
+            if (parts_count == 1) {
+                pkt_hdr->to_noc_unicast_write(NocUnicastCommandHeader({dest_addrs[0]}), payload_sizes[0]);
+            } else {
+                pkt_hdr->to_noc_unicast_scatter_write(
+                    NocUnicastScatterCommandHeader(dest_addrs, payload_sizes, parts_count), scatter_payload);
+            }
             perform_payload_send(
                 select_connection(fabric_connections, device_offset, dest_mesh_id, dest_chip_id),
                 l1_read_addr,
@@ -311,15 +423,20 @@ void kernel_main() {
     uint32_t sender_core_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t sender_core_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t local_num_devices = get_arg_val<uint32_t>(arg_idx++);
-    constexpr auto output_args = TensorAccessorArgs<17>();
-    auto output_addrgen = TensorAccessor(output_args, output_address);
+    auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
     size_t device_offsets_idx = arg_idx;
-    arg_idx += local_num_devices * 5;
+    arg_idx += local_num_devices * 7;
 
     auto fabric_connections = [&]() {
-        if constexpr (is_fabric_2d) {
+        if constexpr (use_worker_mux) {
+            auto sender = FabricMuxSender::build_from_args(arg_idx);
+            return FabricMuxConnection{.sender = sender};
+        } else if constexpr (is_fabric_2d) {
             Fabric2DConnections connections;
-            ttnn::operations::ccl::common::open_direction_connections_async(fabric_directions, connections, arg_idx);
+            if constexpr (has_fabric_connections) {
+                ttnn::operations::ccl::common::open_direction_connections_async(
+                    fabric_directions, connections, arg_idx);
+            }
             return connections;
         } else {
             return FabricConnectionManager::build_from_args<
@@ -363,99 +480,108 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE* pkt_hdr_sema_backward =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_sema_backward);
 
-    finish_open_connections(fabric_connections);
+    {
+        if constexpr (has_fabric_connections) {
+            finish_open_connections(fabric_connections);
+        }
+    }
 
     constexpr bool has_pre_half_tile = has_half_tile && current_device_id % 2 == 1;
     constexpr bool has_post_half_tile = has_half_tile && current_device_id % 2 == 0;
 
-    send_initialization<topology>(
-        fabric_connections,
-        core_id,
-        link_id,
-        local_num_devices,
-        device_offsets_idx,
-        init_semaphore_noc_addr_in_pkt,
-        pkt_hdr_forward,
-        pkt_hdr_backward,
-        pkt_hdr_sema_forward,
-        pkt_hdr_sema_backward,
-        packet_header_buffer_addr_forward,
-        packet_header_buffer_addr_backward,
-        packet_header_buffer_addr_sema_forward,
-        packet_header_buffer_addr_sema_backward);
+    {
+        send_initialization<topology>(
+            fabric_connections,
+            core_id,
+            link_id,
+            local_num_devices,
+            device_offsets_idx,
+            init_semaphore_noc_addr_in_pkt,
+            pkt_hdr_sema_forward,
+            pkt_hdr_sema_backward,
+            packet_header_buffer_addr_sema_forward,
+            packet_header_buffer_addr_sema_backward);
 
-    if (core_id == 0 && link_id == 0) {
-        const uint64_t local_set_semaphore_noc_addr = get_noc_multicast_addr(
-            mcast_dest_noc_start_x,
-            mcast_dest_noc_start_y,
-            mcast_dest_noc_end_x,
-            mcast_dest_noc_end_y,
-            global_init_semaphore_addr);
-        uint32_t local_init_semaphore_addr_ptr = reinterpret_cast<uint32_t>(global_init_semaphore_addr_ptr);
+        if (core_id == 0 && link_id == 0) {
+            const uint64_t local_set_semaphore_noc_addr = get_noc_multicast_addr(
+                mcast_dest_noc_start_x,
+                mcast_dest_noc_start_y,
+                mcast_dest_noc_end_x,
+                mcast_dest_noc_end_y,
+                global_init_semaphore_addr);
+            uint32_t local_init_semaphore_addr_ptr = reinterpret_cast<uint32_t>(global_init_semaphore_addr_ptr);
 
-        if (mcast_size > 1) {
-            noc_semaphore_wait(global_init_semaphore_addr_ptr, num_devices - 1);
-            noc_semaphore_set_multicast_loopback_src(
-                local_init_semaphore_addr_ptr, local_set_semaphore_noc_addr, mcast_size, false);
-            noc_obj.async_write_barrier();
+            if (mcast_size > 1) {
+                noc_semaphore_wait(global_init_semaphore_addr_ptr, num_devices - 1);
+                noc_semaphore_set_multicast_loopback_src(
+                    local_init_semaphore_addr_ptr, local_set_semaphore_noc_addr, mcast_size, false);
+                noc_obj.async_write_barrier();
+            }
         }
+
+        noc_semaphore_wait(global_init_semaphore_addr_ptr, num_devices - 1);
+        noc_semaphore_set(global_init_semaphore_addr_ptr, 0);
     }
 
-    noc_semaphore_wait(global_init_semaphore_addr_ptr, num_devices - 1);
-    noc_semaphore_set(global_init_semaphore_addr_ptr, 0);
+    {
+        for (uint32_t did = 0; did < local_num_devices; ++did) {
+            const int32_t device_offset = get_arg_val<int32_t>(device_offsets_idx++);
+            uint32_t block_idx = get_arg_val<uint32_t>(device_offsets_idx++);
+            const uint32_t block_end_id = get_arg_val<uint32_t>(device_offsets_idx++);
+            const uint32_t block_stride = get_arg_val<uint32_t>(device_offsets_idx++);
+            const bool signal_completion = get_arg_val<uint32_t>(device_offsets_idx++) != 0;
+            const ccl_routing_utils::line_unicast_route_info_t route_info = {
+                .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(device_offsets_idx++)),
+                .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(device_offsets_idx++))};
+            const uint32_t device_id = (current_device_id + device_offset + num_devices) % num_devices;
 
-    for (uint32_t did = 0; did < local_num_devices; ++did) {
-        int32_t device_offset = get_arg_val<int32_t>(device_offsets_idx++);
-        [[maybe_unused]] int32_t distance = abs(device_offset);
-        uint32_t block_idx = get_arg_val<uint32_t>(device_offsets_idx++);
-        uint32_t block_end_id = get_arg_val<uint32_t>(device_offsets_idx++);
-        const ccl_routing_utils::line_unicast_route_info_t route_info = {
-            .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(device_offsets_idx++)),
-            .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(device_offsets_idx++))};
-        uint32_t device_id = (current_device_id + device_offset + num_devices) % num_devices;
+            volatile PACKET_HEADER_TYPE* pkt_hdr = nullptr;
+            if (device_offset > 0) {
+                pkt_hdr = pkt_hdr_forward;
+            } else if (device_offset < 0) {
+                pkt_hdr = pkt_hdr_backward;
+            }
+            if (device_offset != 0) {
+                ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, route_info);
+            }
 
-        volatile PACKET_HEADER_TYPE* pkt_hdr;
-        if (device_offset > 0) {
-            pkt_hdr = pkt_hdr_forward;
-        } else if (device_offset < 0) {
-            pkt_hdr = pkt_hdr_backward;
-        }
-        if (device_offset != 0) {
-            set_route(pkt_hdr, route_info, distance, fabric_connections);
-        }
+            auto calculate_params = [&](int b) {
+                const uint32_t o = b / (concat_num_tiles * inner_dims_size);
+                const uint32_t c = (b / inner_dims_size) % concat_num_tiles;
+                const uint32_t i = b % inner_dims_size;
+                const uint32_t dest_tile_id =
+                    o * inner_dims_size * concat_dim_size + (c + full_block_offset) * inner_dims_size + i;
+                uint16_t payload_size =
+                    ((has_pre_half_tile && c == 0) || (has_post_half_tile && c == concat_num_tiles - 1))
+                        ? output_page_size / 2
+                        : output_page_size;
+                uint32_t offset = (has_pre_half_tile && c == 0) ? (current_device_id % 2) * output_page_size / 2 : 0;
+                uint64_t dst_addr =
+                    (current_device_id == device_id)
+                        ? output_addrgen.get_noc_addr(dest_tile_id, offset)
+                        : tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, dest_tile_id, offset);
+                return std::tuple{dst_addr, payload_size};
+            };
 
-        auto calculate_params = [&](int b) {
-            const uint32_t o = b / (concat_num_tiles * inner_dims_size);
-            const uint32_t c = (b / inner_dims_size) % concat_num_tiles;
-            const uint32_t i = b % inner_dims_size;
-            const uint32_t dest_tile_id =
-                o * inner_dims_size * concat_dim_size + (c + full_block_offset) * inner_dims_size + i;
-            uint16_t payload_size = ((has_pre_half_tile && c == 0) || (has_post_half_tile && c == concat_num_tiles - 1))
-                                        ? output_page_size / 2
-                                        : output_page_size;
-            uint32_t offset = (has_pre_half_tile && c == 0) ? (current_device_id % 2) * output_page_size / 2 : 0;
-            uint64_t dst_addr =
-                (current_device_id == device_id)
-                    ? output_addrgen.get_noc_addr(dest_tile_id, offset)
-                    : tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, dest_tile_id, offset);
-            return std::tuple{dst_addr, payload_size};
-        };
+            // The generic work split can assign an empty range when there are fewer blocks than links. The reader
+            // publishes no CB entry for that range, and the host excludes it from the completion-semaphore count.
+            if (block_idx >= block_end_id) {
+                continue;
+            }
 
-        cb0.wait_front(1);
-        size_t l1_read_addr = cb0.get_read_ptr();
-        uint32_t current_package_payload = 0;
-        uint32_t current_tile = 0;
-        uint64_t dst_addrs[4] = {0};
-        uint16_t payload_sizes[4] = {0};
-        while (block_idx < block_end_id) {
-            auto [dst_addr, payload_size] = calculate_params(block_idx);
-            // If package is full, flush and start new package
-            if (current_tile == 4 || current_package_payload + payload_size > 2 * output_page_size) {
+            cb0.wait_front(1);
+            size_t l1_read_addr = cb0.get_read_ptr();
+            uint32_t pages_in_cb = 0;
+            uint32_t current_package_payload = 0;
+            uint32_t current_part = 0;
+            uint64_t dst_addrs[4] = {0};
+            uint16_t payload_sizes[4] = {0};
+            auto flush_packet = [&](bool last) {
                 write_data(
                     noc_obj,
                     dst_addrs,
                     payload_sizes,
-                    current_tile,
+                    current_part,
                     pkt_hdr,
                     fabric_connections,
                     l1_read_addr,
@@ -463,41 +589,52 @@ void kernel_main() {
                     device_offset,
                     route_info.dst_mesh_id,
                     route_info.dst_chip_id,
-                    false);
-                cb0.pop_front(1);
-                cb0.wait_front(1);
-                l1_read_addr = cb0.get_read_ptr();
+                    last);
+                l1_read_addr += current_package_payload;
                 current_package_payload = 0;
-                current_tile = 0;
-            }
-            current_package_payload += payload_size;
-            payload_sizes[current_tile] = payload_size;
-            dst_addrs[current_tile] = dst_addr;
-            current_tile++;
-            block_idx++;
-        }
+                current_part = 0;
+            };
 
-        // Flush remaining tiles in the last package
-        if (current_tile > 0) {
-            write_data(
-                noc_obj,
-                dst_addrs,
-                payload_sizes,
-                current_tile,
-                pkt_hdr,
-                fabric_connections,
-                l1_read_addr,
-                output_semaphore_noc_addr_in_pkt,
-                device_offset,
-                route_info.dst_mesh_id,
-                route_info.dst_chip_id,
-                true);
+            while (block_idx < block_end_id) {
+                auto [dst_addr, payload_size] = calculate_params(block_idx);
+                const bool extends_previous_run =
+                    current_part > 0 && dst_addr == dst_addrs[current_part - 1] + payload_sizes[current_part - 1];
+                if (!extends_previous_run && current_part == 4) {
+                    // Four is a scatter-header limit, not a page limit. Flush these runs and continue consuming the
+                    // same CB page; a bank-owned batch normally remains one run for all seven pages.
+                    flush_packet(false);
+                }
+                current_package_payload += payload_size;
+                if (extends_previous_run) {
+                    payload_sizes[current_part - 1] += payload_size;
+                } else {
+                    payload_sizes[current_part] = payload_size;
+                    dst_addrs[current_part] = dst_addr;
+                    current_part++;
+                }
+                pages_in_cb++;
+                block_idx += block_stride;
+
+                const bool schedule_complete = block_idx >= block_end_id;
+                if (pages_in_cb == max_pages_per_packet || schedule_complete) {
+                    flush_packet(schedule_complete && signal_completion);
+                    cb0.pop_front(1);
+                    pages_in_cb = 0;
+                    if (!schedule_complete) {
+                        cb0.wait_front(1);
+                        l1_read_addr = cb0.get_read_ptr();
+                    }
+                }
+            }
         }
-        cb0.pop_front(1);
     }
 
     noc_obj.async_write_barrier();
-    close_connections(fabric_connections);
+    {
+        if constexpr (has_fabric_connections) {
+            close_connections(fabric_connections);
+        }
+    }
     if (core_id == 0 && link_id == 0) {
         noc_semaphore_wait(global_semaphore_addr_ptr, semaphore_expected_value);
         noc_semaphore_set(global_semaphore_addr_ptr, 0);

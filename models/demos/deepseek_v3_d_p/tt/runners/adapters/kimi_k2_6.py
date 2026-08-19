@@ -36,6 +36,10 @@ class KimiK26Adapter(MLAPrefillAdapter):
     l1_small_size = 768
     routing_use_l1_small_for_semaphores = True
 
+    # Kimi ships a DFlash speculative drafter; the prefill runner can build its context-KV cache during
+    # prefill when a drafter checkpoint (DFLASH_HF_MODEL) is provided. K2.7 inherits this.
+    supports_dflash = True
+
     # --- test metadata (HF download coordinates + PCC thresholds) ---
     hf_repo_id = "moonshotai/Kimi-K2.6"
     env_var = "KIMI_K2_6_HF_MODEL"

@@ -82,6 +82,10 @@ while IFS= read -r FILE; do
             LLK_QUASAR_CHANGED=true
             LLK_TESTS_CHANGED=true
             ;;
+        tt_metal/tt-llk/tests/python_tests/fuser/**)
+            LLK_QUASAR_CHANGED=true
+            LLK_TESTS_CHANGED=true
+            ;;
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;

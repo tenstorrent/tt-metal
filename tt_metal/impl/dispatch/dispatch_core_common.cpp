@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/dispatch/dispatch_core_common.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 #include "dispatch_core_common.hpp"
 #include "impl/context/metal_context.hpp"
@@ -57,6 +58,14 @@ CoreType get_core_type_from_config(const DispatchCoreConfig& config) {
 CoreType resolve_dispatch_core_type(
     tt::tt_metal::MetalEnvImpl& env, ChipId device_id, const DispatchCoreConfig& dispatch_core_config) {
     return ::tt::tt_metal::detail::resolve_dispatch_core_type(env, device_id, dispatch_core_config);
+}
+
+CoreType resolve_dispatch_core_type(tt::ARCH arch, DispatchCoreType dispatch_core_type) {
+    TT_FATAL(
+        arch != tt::ARCH::QUASAR,
+        "Offline dispatch-core resolution is not implemented for Quasar; DISPATCH vs WORKER "
+        "depends on the SoC descriptor and TT_METAL_TENSIX_DISPATCH_CORES");
+    return get_core_type_from_config(DispatchCoreConfig{dispatch_core_type});
 }
 
 DispatchCoreConfig get_dispatch_core_config() {

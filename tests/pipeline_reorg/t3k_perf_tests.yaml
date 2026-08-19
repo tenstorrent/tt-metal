@@ -11,38 +11,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: t3k_CNN_resnet50_model_perf_tests
-  cmd: run_t3000_resnet50_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 75
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: resnet50
-  model-type: CNN
-
-- name: t3k_DiT_Mochi_model_perf_tests
-  cmd: run_t3000_mochi_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 75
-  owner_id: U09ELB03XRU # Stephen Osborne
-  team: models
-  model-name: mochi
-  model-type: DiT
-  save-perf-data: true
-
-- name: t3k_DiT_Motif_model_perf_tests
-  cmd: run_t3000_motif_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 15
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: motif
-  model-type: DiT
-  save-perf-data: true
-
 - name: t3k_DiT_QwenImage_model_perf_tests
   cmd: run_t3000_qwenimage_tests
   skus:

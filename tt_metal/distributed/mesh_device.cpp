@@ -1674,10 +1674,17 @@ void MeshDeviceImpl::quiesce_internal() {
             submesh_ptr->quiesce_devices();
         }
     }
-    bool have_reset_launch_msg_state = false;
-    for (auto& command_queue : mesh_command_queues_) {
-        command_queue->wait_for_completion(!have_reset_launch_msg_state);
-        have_reset_launch_msg_state = true;
+    // The launch message ring buffer and the worker GO mailboxes are shared across hardware CQs, so exactly
+    // one CQ resets them. Pick the last CQ that has work outstanding: wait_for_completion finishes each CQ in
+    // turn, so by then no other CQ can still have workers in flight whose GO mailboxes would be reset.
+    size_t launch_msg_reset_cq = mesh_command_queues_.size();
+    for (size_t cq_id = 0; cq_id < mesh_command_queues_.size(); ++cq_id) {
+        if (mesh_command_queues_[cq_id]->in_use()) {
+            launch_msg_reset_cq = cq_id;
+        }
+    }
+    for (size_t cq_id = 0; cq_id < mesh_command_queues_.size(); ++cq_id) {
+        mesh_command_queues_[cq_id]->wait_for_completion(/*reset_launch_msg_state=*/cq_id == launch_msg_reset_cq);
     }
     for (auto& command_queue : mesh_command_queues_) {
         command_queue->finish_and_reset_in_use();
@@ -1838,6 +1845,22 @@ uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRan
     return pimpl_->get_noc_multicast_encoding(noc_index, cores);
 }
 SystemMemoryManager& MeshDevice::sysmem_manager() { return pimpl_->sysmem_manager(); }
+MeshTraceId MeshDevice::begin_mesh_trace(MeshCommandQueue& cq) {
+    TT_FATAL(cq.device() == this, "MeshCommandQueue belongs to a different MeshDevice");
+    return pimpl_->begin_mesh_trace(static_cast<uint8_t>(cq.id()));
+}
+void MeshDevice::begin_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id) {
+    TT_FATAL(cq.device() == this, "MeshCommandQueue belongs to a different MeshDevice");
+    pimpl_->begin_mesh_trace(static_cast<uint8_t>(cq.id()), trace_id);
+}
+void MeshDevice::end_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id) {
+    TT_FATAL(cq.device() == this, "MeshCommandQueue belongs to a different MeshDevice");
+    pimpl_->end_mesh_trace(static_cast<uint8_t>(cq.id()), trace_id);
+}
+void MeshDevice::replay_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id, bool blocking) {
+    TT_FATAL(cq.device() == this, "MeshCommandQueue belongs to a different MeshDevice");
+    pimpl_->replay_mesh_trace(static_cast<uint8_t>(cq.id()), trace_id, blocking);
+}
 MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id) { return pimpl_->begin_mesh_trace(cq_id); }
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     pimpl_->begin_mesh_trace(cq_id, trace_id);

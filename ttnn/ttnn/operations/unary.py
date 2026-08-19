@@ -621,6 +621,15 @@ def _golden_function_celu(input_tensor_a, *args, alpha=1.0, **kwargs):
 ttnn.attach_golden_function(ttnn.celu, golden_function=_golden_function_celu)
 
 
+def _golden_function_softcap(input_tensor_a, beta, *args, **kwargs):
+    import torch
+
+    return beta * torch.tanh(input_tensor_a.to(torch.float32) / beta)
+
+
+ttnn.attach_golden_function(ttnn.softcap, golden_function=_golden_function_softcap)
+
+
 def torch_reglu(input_tensor, *args, **kwargs):
     import torch
 

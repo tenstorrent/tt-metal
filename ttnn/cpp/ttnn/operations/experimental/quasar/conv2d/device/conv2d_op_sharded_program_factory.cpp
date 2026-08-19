@@ -1386,18 +1386,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), output_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
-    // UnpackToDestEn bypass (tt-metal #49445): when TT_METAL_QSR_TILIZE_UNPACK_TO_DEST is set, inject
-    // QSR_TILIZE_UNPACK_TO_DEST so tilize.h routes the tilize unpacker straight into DEST (UNP_DEST) and turns
-    // the MATH A2D datacopy into a no-MOP sync forwarder — sidestepping the faulting Quasar tilize datacopy MOP
-    // (the 0x19: the semaphore-scheme tilize never frees the FPU dest-dvalid ring; unpack-to-dest removes the
-    // ring-advancing MOVA2D). Applies to any Quasar tilize_block path (the fused conv kernel AND the split
-    // Program-A tilize-only kernel) — excludes depthwise (no tilize_block) and the unpack-tilize reduce probe
-    // (uses tilizeA_B_reduce, not tilize_block).
-    if (arch_is_quasar && !is_conv_1d_depthwise_conv && !split_program_unpack_tilize &&
-        (std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") != nullptr)) {
-        compute_defines.insert({"QSR_TILIZE_UNPACK_TO_DEST", "1"});
-    }
-
     // ============================================================================
     //  Build the ProgramSpec
     // ============================================================================

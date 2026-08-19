@@ -17,6 +17,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
@@ -98,6 +99,23 @@ class TtMoEGateConfig:
                     mcast_in0=False,
                 )
             ),
+            # per_core_M is not free: for a height-sharded in0 the matmul asserts
+            # per_core_M == roundup32(ceil(sp_dim / num_cores)) / 32, which is 1 at K3's depths and 2
+            # at the other models' 4096. out_block_h follows it.
+            (KimiK3Config.MAX_GATE_SEQ_LEN_PER_CHIP, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=56,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    out_block_h=1,
+                    out_block_w=4,
+                    per_core_M=1,
+                    per_core_N=28,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
             "COMPUTE_CONFIG": ttnn.types.BlackholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
@@ -109,6 +127,9 @@ class TtMoEGateConfig:
 
     dim: int = DeepSeekV3Config.EMB_SIZE
     sp_dim: int = 4096  # ISL per chip
+    # Enforced in __post_init__. At high expert counts moe_grouped_topk's circular buffers stop
+    # fitting L1 alongside the height-sharded scores, and the clash names nothing useful.
+    max_sp_dim: int | None = None
     n_routed_experts: int = DeepSeekV3Config.NUM_ROUTED_EXPERTS
     n_shared_experts: int = DeepSeekV3Config.NUM_SHARED_EXPERTS  # PREVIOUS VALUE: 2 @ddjekic to check
     n_activated_experts: int = DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN
@@ -127,6 +148,13 @@ class TtMoEGateConfig:
     )
 
     def __post_init__(self):
+        if self.max_sp_dim is not None and self.sp_dim > self.max_sp_dim:
+            raise ValueError(
+                f"sp_dim={self.sp_dim} exceeds this model's gate ceiling max_sp_dim={self.max_sp_dim} "
+                f"({self.n_routed_experts} experts). moe_grouped_topk's circular buffers scale with "
+                f"experts/32 and will fail L1 allocation above it. Raise the ceiling only alongside "
+                f"the op-side CB work that makes it true."
+            )
         # The mm_configs tuple keys are authored with a placeholder seq-len. Re-key them to the
         # actual per-chip sequence length (sp_dim) so _device_matmul's lookup
         # (sp_dim, per_device_emb_dim, n_routed_experts) hits the tuned program config instead of
@@ -143,6 +171,13 @@ class TtMoEGateConfig:
     @classmethod
     def from_model_cfg(cls, model_cfg: type, **overrides) -> "TtMoEGateConfig":
         """Build from a TestVariant.model_config class. Extra kwargs override per-instance."""
+        # Merged under **overrides so an explicit kwarg still wins.
+        model_defaults = {
+            "score_func": getattr(model_cfg, "SCORE_FUNC", cls.score_func),
+            # Serves as both the default depth and the ceiling an explicit sp_dim cannot exceed.
+            "sp_dim": getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", cls.sp_dim),
+            "max_sp_dim": getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
+        }
         return cls(
             dim=model_cfg.EMB_SIZE,
             n_routed_experts=model_cfg.NUM_ROUTED_EXPERTS,
@@ -151,9 +186,7 @@ class TtMoEGateConfig:
             n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
             n_limited_groups=model_cfg.NUM_LIMITED_GROUPS,
             route_scale=model_cfg.ROUTE_SCALE,
-            # V4 variants ship SCORE_FUNC="sqrtsoftplus"; V3/Kimi omit it and keep the sigmoid default.
-            score_func=getattr(model_cfg, "SCORE_FUNC", cls.score_func),
-            **overrides,
+            **{**model_defaults, **overrides},
         )
 
 

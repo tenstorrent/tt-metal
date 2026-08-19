@@ -8,6 +8,7 @@
 
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
 
+#include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_target_device.hpp"
 
@@ -136,6 +137,11 @@ public:
     // Returns true if the CQ is in use (has had commands enqueued).
     virtual bool in_use() { return false; }
 
+    // Resets this queue's dispatch state. `reset_launch_msg_state` additionally resets state that is shared
+    // by all hardware CQs (the worker launch message ring buffer and the GO mailboxes), so exactly one CQ may
+    // be given it, and only once every other CQ has been drained. The implementation drains the CQs that are
+    // not given it, so callers must reset the CQs in order and pass it to the last one. Must be called with
+    // the MeshDevice api lock held.
     virtual void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,

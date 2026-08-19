@@ -67,8 +67,20 @@ class TtPrefillBlock(LightweightModule):
     """
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, layer_idx: int, is_dense: bool, experts_per_chip: int = 8) -> bool:
-        """Check if block cache is complete (norms + MLA + FFN/MoE)."""
+    def check_cache_complete(
+        cache_path: Path,
+        layer_idx: int,
+        is_dense: bool,
+        experts_per_chip: int = 8,
+        *,
+        model_cfg: type | None = None,
+    ) -> bool:
+        """Check if block cache is complete (norms + MLA + FFN/MoE).
+
+        ``model_cfg`` is optional but MUST be passed for a LatentMoE model (Kimi-K3): without it this
+        cannot know to look for the latent-projection cache files, and would report a cache that is
+        missing them as complete. Left optional so existing callers are unaffected.
+        """
         prefix = f"layer_{layer_idx}"
 
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm"):
@@ -82,7 +94,14 @@ class TtPrefillBlock(LightweightModule):
             if not TtFfn.check_cache_complete(cache_path, f"{prefix}.ffn"):
                 return False
         else:
-            if not TtMoe.check_cache_complete(cache_path, layer_idx, experts_per_chip):
+            if not TtMoe.check_cache_complete(
+                cache_path,
+                layer_idx,
+                experts_per_chip,
+                use_latent_moe=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None)
+                not in (None, getattr(model_cfg, "EMB_SIZE", None)),
+                latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
+            ):
                 return False
 
         return True
@@ -188,6 +207,12 @@ class TtPrefillBlock(LightweightModule):
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
                 cache_path=cache_path,
                 layer_idx=layer_idx,
+                # Must match _build_moe's reads: omitting them caches the shared expert at the wrong
+                # intermediate, which regenerates as a plausible-but-wrong cache rather than an error.
+                shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
+                routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
+                latent_weights=state_dict.get("latent_weights"),
+                latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
             )
         else:
             # Use static method (no device copy!)
@@ -322,6 +347,7 @@ class TtPrefillBlock(LightweightModule):
             self.ffn = self._build_moe(
                 mesh_device=mesh_device,
                 model_cfg=model_cfg,
+                config=config,
                 state_dict=state_dict,
                 seq_len=seq_len,
                 sp_axis=sp_axis,
@@ -363,6 +389,7 @@ class TtPrefillBlock(LightweightModule):
     def _build_moe(
         mesh_device,
         model_cfg,
+        config,
         state_dict,
         seq_len,
         sp_axis,
@@ -412,6 +439,14 @@ class TtPrefillBlock(LightweightModule):
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=emb_dim,
             hidden_dim=model_cfg.MOE_INTERMEDIATE_SIZE,
+            # getattr because every other model config lacks these; None makes TtMoe fall back.
+            routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
+            shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
+            latent_weights=state_dict.get("latent_weights"),  # None if cache exists
+            latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
+            # Same source as the block's attn_norm and ffn_norm, so the three cannot disagree.
+            rms_norm_eps=config.rms_norm_eps,
+            max_gate_seq_len_per_chip=getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists

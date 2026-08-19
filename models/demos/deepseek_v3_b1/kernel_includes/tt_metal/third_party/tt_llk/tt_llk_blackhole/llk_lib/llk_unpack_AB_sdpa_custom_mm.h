@@ -12,7 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
-#include "llk_unpack_AB_custom_mm.h"
+#include "experimental/llk_unpack_AB_custom_mm.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;

@@ -88,6 +88,7 @@ jobs:
           fi
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -101,6 +102,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   models-sweep-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/models-sweep-tests-impl.yaml
     with:

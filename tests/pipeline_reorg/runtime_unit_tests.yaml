@@ -16,6 +16,9 @@
   cmd: |
     [ "$ARCH_NAME" = "wormhole_b0" ] && export TT_METAL_GTEST_ETH_DISPATCH=1
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='-*NIGHTLY_*:RealtimeProfiler*'
+    # Offline-compile hit tests: AllSupportedProducts artifacts must load under the
+    # live ETH fast-dispatch build key without JIT (#53160).
+    ./build/test/tt_metal/unit_tests_api --gtest_filter='*Precompiled*'
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -405,6 +408,8 @@
   cmd: |
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/distributed/distributed_unit_tests \
       --gtest_filter='*DispatchContext*'
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=120 ./build/test/tt_metal/distributed/distributed_unit_tests \
+      --gtest_filter='MeshWorkloadTest4x8.UnusedDeviceKernelConfigNotOverwritten'
     TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch \
       --gtest_filter='UnitMeshCQSingleCard*Fixture.*'
   skus:

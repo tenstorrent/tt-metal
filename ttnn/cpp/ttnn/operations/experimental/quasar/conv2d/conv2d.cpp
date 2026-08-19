@@ -976,21 +976,15 @@ Result conv2d_L1(
         // 1x1-conv path uses (bias + activation folded into the matmul program config). Gate must match the
         // factory's split_program_tilize_only eligibility (height-sharded + full_inner_dim single-K-block; this
         // is the !mm_conv, non-depthwise branch already).
-        // DIAGNOSTIC (tilize isolation): TT_METAL_QSR_CONV_TILIZE_ONLY_NO_MATMUL stops after Program A and returns
-        // the tilized activation [M, K] ITSELF (skips the Program B matmul), so a test can read it back and diff
-        // against a host golden — isolating the UnpackToDestEn tilize from the matmul. Program A still ran
-        // tilize-only above (the factory keys off TT_METAL_QSR_CONV_SPLIT_PROGRAM). See test_conv2d_tilize_readback.py.
-        const bool tilize_only_no_matmul = (std::getenv("TT_METAL_QSR_CONV_TILIZE_ONLY_NO_MATMUL") != nullptr);
         // NOTE: the arch==QUASAR restriction was REMOVED so the split runs on WH/BH too (bring-up/validation with
         // working LLK). It MUST match the sharded factory's split_program_tilize_only gate, which is env-only (no
-        // arch check) — otherwise the factory builds the tilize-only Program A but conv2d.cpp skips Program B, and
-        // the op returns the raw tilized activation [M,K] instead of the conv result [M,N]. The env var is the
-        // explicit opt-in (only tests set it), so production convs on any arch are unaffected.
+        // arch check). The env var is the explicit opt-in (only tests set it), so production convs on any arch
+        // are unaffected.
         // [#48552 Stage2 REVERTED] block-sharded can't use the single-K-block split (in0_num_blocks_w>1 ->
         // needs cross-column K-reduction the split path deliberately avoids); keep height-sharded-only.
         const bool split_program_active = (std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) &&
                                           parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
-                                          conv_config.full_inner_dim && !tilize_only_no_matmul;
+                                          conv_config.full_inner_dim;
         if (split_program_active) {
             std::optional<ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig> program_config =
                 std::nullopt;

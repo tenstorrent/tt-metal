@@ -137,22 +137,9 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         globally-dense `seq = request_id * num_layers + layer_idx`); a single-rank LayerAck
         channel carries no payload and can ignore it."""
 
-    # --- OPTIONAL hooks — implement only if your model supports golden-trace bring-up / cache migration;
-    #     production serving never calls them. Keep the heavy PCC / table logic in your model's own
-    #     validation module (a thin forwarder on the runtime), not inline here — see
-    #     deepseek_v3_d_p/tt/runners/prefill_kv_validation.py. ---
-    def kv_cache_pcc_check(self, kv_cache, *, slot_id, n_chunks, trace_dir=None,
-                           first_layer_idx=0, real_len=None, pt_path_override=None) -> float:
-        """PCC slot `slot_id`'s `kv_cache` against the golden trace; return the min per-layer PCC (asserting
-        on failure). The single place your model's KV layout + golden format live. `real_len` caps the
-        compared extent to real (non-pad) tokens; `pt_path_override` selects a per-slot .pt golden (raise if
-        your model has no such path)."""
-
-    def read_slot_kv(self, kv_cache, slot) -> "list[torch.Tensor]":
-        """Read one slot's KV cache from device to host: one host tensor per cache tensor, each
-        `[num_layers, heads(or 1), seq_cache, head_dim]` (replicas collapsed to 1), in the raw on-device
-        (block-cyclic) layout — NOT un-rotated to natural token order."""
-
+    # --- OPTIONAL hooks — implement only if your model supports cache migration; the serving loop
+    #     never calls them. Keep the heavy table logic in your model's own module (a thin forwarder on
+    #     the runtime), not inline here. ---
     def build_kv_chunk_table(self, kv_cache, path: str) -> str:
         """Build + serialize the KV-chunk address table for `kv_cache` (your model's block-cyclic layout)
         to `path` and return it; issue no comms (the engine publishes it). Use the shared
@@ -239,10 +226,9 @@ PREFILL_PRODUCER_CHUNKS=11 \
 **KV PCC** — validate prefill writes correct KV. The producer reads the KV back device-lessly and PCCs
 vs the golden trace, which requires the runner to publish its KV chunk table + device map: run the runner
 with `PREFILL_MOCK_MIGRATION=1` and the producer with `PREFILL_PRODUCER_CHECK_PCC=1`. Full two-terminal
-recipe in `docs/PREFILL_MIGRATION_TESTING.md` Gate 1. On the normal serving path the runner PCCs
-nothing — the producer's read-back is the KV check; the only runner-side PCC is opt-in and single-rank
-(`PREFILL_REQUEST_LOOP_PCC` for a bring-up KV check, `PREFILL_VALIDATE_MIGRATION` for post-migration
-validation). The producer's reader knows two cache layouts — merged MLA (DeepSeek / Kimi) and MiniMax-M3's triple cache; a third
+recipe in `docs/PREFILL_MIGRATION_TESTING.md` Gate 1. The runner PCCs nothing on any path — it publishes
+the table and the device map, and every read-back runs in the reader's own process. The producer's reader
+knows two cache layouts — merged MLA (DeepSeek / Kimi) and MiniMax-M3's triple cache; a third
 layout needs a branch in `_read_slot_kv_and_check_pcc`, since that read-back is not adapter-dispatched.
 
 **Single-rank migration** — `PREFILL_ENABLE_MIGRATION=1` on the runner (requires the

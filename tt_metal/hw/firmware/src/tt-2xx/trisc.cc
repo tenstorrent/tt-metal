@@ -34,6 +34,7 @@ thread_local uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
+thread_local uint32_t hw_thread_idx __attribute__((used));
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
@@ -110,13 +111,13 @@ inline void enable_cc_stack() {
 
 extern "C" uint32_t _start1() {
     configure_csr();
-    uint32_t hartid = internal_::get_hw_thread_idx();
+    // Raw read: hw_thread_idx has not been filled yet, and do_thread_crt1() below zeroes the .tbss
+    // it lives in, so caching it any earlier would just be discarded.
+    uint32_t hartid = internal_::read_hw_thread_idx();
     uint32_t neo_id = internal_::get_neo_id();
     uint32_t trisc_id = internal_::get_trisc_id();
-    DEVICE_PRINT("hartid: {}\n", hartid);
     volatile tt_l1_ptr uint8_t* const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))
                                                        ->subordinate_sync.map[hartid];  // first entry is for NCRISC
-    WAYPOINT("I");
 
     if (neo_id == 0) {
         extern uint32_t __ldm_data_start[];
@@ -126,6 +127,12 @@ extern "C" uint32_t _start1() {
     }
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
+    // .tbss has been zeroed: cache this thread's hw index.
+    internal_::init_hw_thread_idx();
+    // DEVICE_PRINT and WAYPOINT index their per-thread slots via get_hw_thread_idx(), so they have to
+    // come after the cache is filled.
+    DEVICE_PRINT("hartid: {}\n", hartid);
+    WAYPOINT("I");
 
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
            SHARED_GLOBALS_READY_GO) {

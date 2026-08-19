@@ -107,6 +107,8 @@ class TtPrefillRuntime:
         self.compiled = False
         # Per-layer LayerAck callback, registered via set_layer_ack_channel() after compile.
         self._on_layer_complete = None
+        # Per-layer completion sink for pipelined prefill, registered via set_layer_completion_sink().
+        self._layer_completion_sink = None
 
         # The Model builds `hf_config.num_hidden_layers` decoder layers, but the KV cache (and gather /
         # PCC) is sized to `config.num_layers`. Pin them equal so a partial-model run (PREFILL_NUM_LAYERS
@@ -236,28 +238,30 @@ class TtPrefillRuntime:
 
     def _embed_tokens(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
         """Embed the SP-sharded tokens into the bf16 hidden state the layers consume, delegating to the
-        model's TtParallelEmbedding. Returns [1, 1, s_local, emb_dim] — full hidden, TP-replicated (the
-        residual-stream contract); bf16 (not bf8) preserves dynamic range. The sharding (2D vocab+hidden
-        by default, or 1D hidden-only) and its CCL live in the module (tt/parallel_embedding.py)."""
+        model's TtParallelEmbedding. Returns [1, 1, s_local, emb_dim] full hidden TP-replicated, or
+        [1, 1, s_local, emb_dim/tp] under M3_SHARDED_RESIDUAL — whichever the residual-stream contract
+        is (tt/residual.py); bf16 (not bf8) preserves dynamic range. The sharding (2D vocab+hidden by
+        default, or 1D hidden-only) and its CCL live in the module (tt/parallel_embedding.py)."""
         x = self.model.embedding(tokens)
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
         return x
 
     def compile(self, kv_cache) -> None:
-        """Warm up one zero-token chunk so the per-chunk loop hits no first-run cost (JIT-compiles all
-        ops). The engine passes the cache it owns; the warm-up writes slot 0 and is harmless."""
+        """Warm up every KV-length the served loop can reach so no served chunk pays a first-run JIT.
+        Sweep the full per-user cache in chunk steps; each warm-up writes slot 0, which the real run overwrites."""
         assert self.model_built
         chunk = self.config.chunk_size
-        logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
+        starts = list(range(0, self.config.max_seq_len - chunk + 1, chunk))
+        logger.info(f"TtPrefillRuntime.compile() — warming {len(starts)} KV-length buckets ({chunk}-token chunks)")
         t0 = time.perf_counter()
-        tt_input = self.make_chunk_input([0] * chunk)
-        self.prefill_chunk(tt_input, kv_cache, slot_id=0, actual_start=0, actual_end=chunk)
+        for start in starts:
+            self.prefill_chunk(
+                self.make_chunk_input([0] * chunk), kv_cache, slot_id=0, actual_start=start, actual_end=start + chunk
+            )
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
-        logger.info(
-            f"[prefill timing] task_id=WARMUP num_tokens={chunk} runtime.prefill_chunk(chunk) = {warmup_ms:.2f} ms"
-        )
+        logger.info(f"[prefill timing] task_id=WARMUP buckets={len(starts)} runtime.compile() = {warmup_ms:.2f} ms")
         self.compiled = True
 
     def prefill_chunk(
@@ -337,6 +341,19 @@ class TtPrefillRuntime:
         # per-chunk host reshard, and the tensors are persistent (do NOT deallocate them here). The KV
         # cache is engine-owned and passed in. If a LayerAck channel is registered, the model bumps it
         # once per layer via on_layer_complete.
+        # Pipelined mode registers a completion sink keyed by (global_layer_idx, request_id); bind request_id
+        # per call so the synchronous per-layer callback reads no mutable state. Single-host mode uses the ack.
+        if self._layer_completion_sink is not None:
+            sink = self._layer_completion_sink
+
+            def on_layer_complete(layer_idx: int) -> None:
+                # The model reports a rank-local index; the sink's seq = request_id * total_layers +
+                # layer_idx needs the GLOBAL index, else every rank's local layer k collides at one seq
+                # and all but the first rank's completion is dropped.
+                sink(self.config.first_layer_idx + layer_idx, request_id)
+
+        else:
+            on_layer_complete = self._on_layer_complete
         out = self.model.prefill_forward(
             x_embd,
             rot_mats_global=self.rope_indexed,
@@ -346,7 +363,12 @@ class TtPrefillRuntime:
             get_last_token=get_last_token,
             skip_lm_head=skip_lm_head,  # default: cache-fill only (skip final norm + lm_head)
             indexed_rope=True,
-            on_layer_complete=self._on_layer_complete,
+            on_layer_complete=on_layer_complete,
+            # Real tokens in THIS chunk. Only the final chunk of a ragged prompt is short; every other
+            # chunk is full and the MoE's padding config resolves to None. Without this the padded tail
+            # is routed and dispatched as if real: wasted dispatch work that also eats per-expert
+            # dispatch-buffer capacity.
+            actual_isl=actual_end - actual_start,
         )
         if not self.config.is_last_rank:
             # Middle rank: hand the slice's output hidden state to the next rank.
@@ -367,6 +389,15 @@ class TtPrefillRuntime:
             layer_ack_channel.inject(1)
 
         self._on_layer_complete = on_layer_complete
+
+    def set_layer_completion_sink(self, sink) -> None:
+        """Register a per-layer completion sink for pipelined (multi-rank) prefill. ``sink`` is called once
+        per layer as ``sink(layer_idx, request_id)`` — the global layer index plus the current request/chunk
+        id (bound per ``prefill_chunk`` call, so the sink reads no mutable runtime state). Replaces the
+        single-host ack-counter inject: the runner pushes a full completion into the host-local
+        LayerCompletionQueue and the LayerCompletionRouter re-emits it in seq order to the scheduler channel."""
+        assert self.compiled, "Call compile() before set_layer_completion_sink()"
+        self._layer_completion_sink = sink
 
     def gather_layer(self, kv_cache, slot_id: int, layer_idx: int, n_tokens: int):
         """Read one layer's device cache back to NATURAL token order (un-rotating the block-cyclic SP

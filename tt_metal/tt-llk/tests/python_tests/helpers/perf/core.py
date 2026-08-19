@@ -6,6 +6,7 @@ import glob
 import os
 import re
 from dataclasses import fields
+from datetime import datetime, timezone
 from functools import reduce
 from pathlib import Path
 from typing import Any, ClassVar
@@ -40,7 +41,7 @@ from .schema import (
 
 # Zone/marker names emitted by MEASURE_PERF_COUNTERS, in ID order. These must
 # match the marker values the kernels record; a mismatch silently empties the
-# TILE_LOOP mask in _postprocess_tile_loop (no KeyError raised).
+# TILE_LOOP mask in postprocess_tile_loop (no KeyError raised).
 INIT_MARKER = "INIT"
 TILE_LOOP_MARKER = "TILE_LOOP"
 
@@ -74,13 +75,22 @@ _CODE_SIZE_COMPONENTS = {
     PerfRunType.UNPACK_ISOLATE: ["unpack"],
     PerfRunType.MATH_ISOLATE: ["math"],
     PerfRunType.PACK_ISOLATE: ["pack"],
+    PerfRunType.SFPU_ISOLATE: ["sfpu"],
 }
 
 # Common postprocessing
 
 
-def _postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
+def postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
+    """Derive per-tile TILE_LOOP figures from a raw report frame.
 
+    Divides each TILE_LOOP row's un-prefixed ``mean(...)``/``std(...)`` wall-clock
+    columns by ``loop_factor * tile_cnt`` (run-type-prefixed ``*_pct`` metric
+    columns are deliberately left untouched). Pure ``DataFrame -> DataFrame``, no
+    hardware — so it is the canonical way to turn the RAW stored table (a CSV or a
+    Parquet batch) into per-tile values downstream. Non-TILE_LOOP rows pass through
+    unchanged.
+    """
     if frame.empty:
         return pd.DataFrame()
 
@@ -244,7 +254,7 @@ class PerfReport:
         frame = pd.concat(self._frames, ignore_index=True)
         mask = pd.concat(self._masks, ignore_index=True)
 
-        frame = _postprocess_tile_loop(frame[mask])
+        frame = postprocess_tile_loop(frame[mask])
 
         self._frames = [pd.DataFrame(), frame]
         self._masks = [pd.Series(), pd.Series(True, index=frame.index)]
@@ -428,11 +438,58 @@ def _assert_combined_schema(dfs: list[pd.DataFrame], label: str):
     )
 
 
+def _ci_provenance() -> dict:
+    """Run-context provenance for a published Parquet batch, read from the CI
+    environment (best-effort defaults when run off-CI)."""
+    event = os.environ.get("GITHUB_EVENT_NAME", "")
+    return {
+        "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
+        "arch": os.environ.get("CHIP_ARCH", "unknown"),
+        "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "pipeline": "PR" if event == "pull_request" else "nightly",
+        "pr_number": os.environ.get("PR_NUMBER") or None,
+    }
+
+
+def _write_run_parquet(raw_csv_paths, out_dir) -> None:
+    """Publish the run's raw per-test CSVs as one Parquet batch beside them, so a
+    nightly/PR run emits both CSV and Parquet from the same data.
+
+    Raw is the canonical stored form (matching the historical migration): the
+    per-tile figures are derivable downstream (TILE_LOOP mean/std divided by
+    ``loop_factor * tile_cnt``, both present as columns), so storing raw keeps the
+    table lossless without a redundant per-tile copy. Best-effort: Parquet is
+    additive here, so any failure is logged and never breaks the CSV report.
+    """
+    if not raw_csv_paths:
+        return
+    try:
+        from .parquet import convert_csvs_to_parquet
+
+        prov = _ci_provenance()
+        parquet_path = Path(out_dir) / f"{prov['run_id']}.parquet"
+        diagnostics = convert_csvs_to_parquet(
+            sorted(raw_csv_paths), parquet_path, strict=False, **prov
+        )
+        dropped = sum(len(v) for v in diagnostics["unknown_columns"].values())
+        if dropped:
+            logger.warning(
+                f"perf Parquet: {dropped} column(s) not in the schema were dropped"
+            )
+        logger.info(f"Wrote run Parquet batch: {parquet_path}")
+    except Exception as exc:  # noqa: BLE001 — Parquet is additive; CSV is primary
+        logger.warning(f"perf Parquet batch not written: {type(exc).__name__}: {exc}")
+
+
 def combine_perf_reports():
     """
     Combine performance report CSV files into two files per base name:
     - One for regular files (without .post.csv)
     - One for post files (with .post.csv)
+
+    Also publishes the run's raw combined CSVs as one Parquet batch
+    (perf_data/<run_id>.parquet) so a run emits both CSV and Parquet.
     """
 
     unique_module_names = get_unique_base_names(TestConfig.PERF_DATA_DIR)
@@ -444,6 +501,7 @@ def combine_perf_reports():
     if not output_dir.exists():
         output_dir.mkdir(parents=True, exist_ok=True)
 
+    raw_outputs = []  # combined raw per-test CSVs, published together as Parquet
     for base_name in unique_module_names:
         csv_files = glob.glob(
             os.path.join(TestConfig.PERF_DATA_DIR, f"{base_name}.gw*.csv")
@@ -489,6 +547,7 @@ def combine_perf_reports():
             ).reset_index(drop=True)
             output_regular = os.path.join(temp_output_dir, f"{base_name}.csv")
             combined_regular.to_csv(output_regular, index=False)
+            raw_outputs.append(output_regular)
 
         if post_files:
             dfs_post = []
@@ -537,6 +596,8 @@ def combine_perf_reports():
 
         for file in regular_files + post_files + counter_files:
             Path(file).unlink()
+
+    _write_run_parquet(raw_outputs, output_dir)
 
 
 class PerfConfig(TestConfig):
@@ -727,6 +788,11 @@ class PerfConfig(TestConfig):
                 TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
             )
             components = _CODE_SIZE_COMPONENTS.get(run_type)
+            # 4-TRISC tests include SFPU_ISOLATE; L1_TO_L1 code size must count sfpu.elf too.
+            if run_type == PerfRunType.L1_TO_L1 and any(
+                rt == PerfRunType.SFPU_ISOLATE for _, _, rt in self.run_configs
+            ):
+                components = ["unpack", "math", "pack", "sfpu"]
             if components is not None:
                 code_sizes[run_type] = sum(
                     TestConfig.get_elf_text_size(elf_dir / f"{c}.elf")

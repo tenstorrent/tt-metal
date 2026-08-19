@@ -234,6 +234,37 @@ jobs:
             echo "$CMD"
             eval "$CMD"
 
+      # The container-hook runner streams a plain `run:` step's stdout but not a
+      # composite action's, so the run-with-log test step above produces no console
+      # output there — its tee'd .log is the only copy of the run's stdout. Echo it
+      # from a plain step (which does stream) and upload it, or a failed self-
+      # allocating leg leaves nothing to diagnose.
+      - name: 🧾 Surface test log
+        if: always() && !cancelled()
+        continue-on-error: true
+        working-directory: /home/user/tt-metal
+        run: |
+          shopt -s nullglob
+          logs=(generated/test_logs/*.log)
+          if [ ${#logs[@]} -eq 0 ]; then
+            echo "No test log under generated/test_logs"
+            exit 0
+          fi
+          for f in "${logs[@]}"; do
+            echo "==================== $f ===================="
+            cat "$f"
+          done
+
+      - name: ⬆️ Upload test log
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: test-log-${{ matrix.test-group.name }} (attempt ${{ github.run_attempt }})
+          path: /home/user/tt-metal/generated/test_logs/**
+          if-no-files-found: warn
+          retention-days: 30
+
       # Only uploaded on a hang; the triage report itself is already in the test step's log.
       - name: ⬆️ Upload triage output
         if: always() && !cancelled()

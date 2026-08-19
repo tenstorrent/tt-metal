@@ -281,6 +281,38 @@
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
 
+- name: BERT-Large unit tests
+  cmd: |
+    pytest --timeout 180 \
+      models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py \
+      models/demos/metal_BERT_large_11/tests/test_demo.py
+  model: bert-large
+  model_family: BERT
+  skus:
+    wh_n150:
+      timeout: 4
+      tier: 3
+  owner_id: U024A4EFV6U # Brian Liu
+  team: ttnn
+
+- name: ResNet-50 unit tests
+  cmd: |
+    pytest --timeout 300 \
+      models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_performant.py \
+      models/demos/vision/classification/resnet50/wormhole/tests/test_ttnn_functional_resnet50_large.py
+    pytest --timeout 300 models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py
+  model: resnet50
+  model_family: ResNet
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 1
+    wh_llmbox:
+      timeout: 8
+      tier: 1
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+
 - name: Gemma-3-4B unit tests
   cmd: |
     export TT_METAL_WATCHER=30
@@ -568,24 +600,26 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-# TODO See Issue: https://github.com/tenstorrent/tt-metal/issues/42139
-# - name: Llama 3.3-70B unit tests (Galaxy)
-#   cmd: |
-#     export LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG
-#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_rms_norm.py
-#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp.py
-#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp_prefill.py
-#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention.py
-#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
-#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
-#     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
-#   model: llama3.3-70b-galaxy
-#   skus:
-#     wh_galaxy_perf:
-#       timeout: 30
-#       tier: 1
-#   owner_id: U053W15B6JF # Djordje Ivanovic
-#   team: models
+- name: Llama 3.3-70B unit tests (Galaxy)
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
+    # Fail fast (runner-health) if the system mesh degraded below 32 chips: otherwise the mesh_device
+    # fixture skips every test and the job reports a false-green with no HF/device path exercised.
+    python3 -c "import ttnn; s = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size(); assert s == 32, f'Galaxy system mesh degraded to {s} chips (expected 32); failing instead of skipping every test'"
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_rms_norm.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_mlp_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_attention_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_decoder_prefill.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
+  model: llama3.3-70b-galaxy
+  skus:
+    wh_galaxy_perf:
+      timeout: 30
+      tier: 1
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
 
 - name: Qwen3-32B unit tests (Galaxy)
   cmd: |
@@ -941,6 +975,21 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+- name: Z-Image-Turbo unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    pytest --timeout 600 models/demos/z_image_turbo/tests/test_text_encoder.py
+    pytest --timeout 600 models/demos/z_image_turbo/tests/test_dit.py
+    pytest --timeout 600 models/demos/z_image_turbo/tests/test_vae.py
+  model: z-image-turbo
+  model_family: Z-Image
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 - name: Stable Diffusion XL LoRA unit tests
   cmd: |
     export HF_HUB_OFFLINE=0
@@ -1077,6 +1126,42 @@
     wh_llmbox:
       timeout: 10
       tier: 3
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+# ── Mochi (TT-DiT) ─────────────────────────────────────────────────
+- name: TT-DiT Mochi unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    pytest --timeout 1500 models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder or conv3d_1x1x1 or (l768 and bf16)"
+    pytest --timeout 900 models/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq"
+    pytest --timeout 900 models/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "short_seq"
+  model: mochi
+  model_family: Mochi
+  skus:
+    wh_llmbox:
+      timeout: 60
+      tier: 3
+    wh_galaxy:
+      timeout: 80
+      tier: 3
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Motif-Image-6B unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE
+    pytest --timeout 300 models/tt_dit/tests/models/motif/test_attention_motif.py
+    pytest --timeout 300 models/tt_dit/tests/models/motif/test_transformer_block_motif.py
+    pytest --timeout 900 models/tt_dit/tests/models/motif/test_transformer_motif.py
+  model: motif
+  model_family: Motif
+  skus:
+    wh_llmbox:
+      timeout: 25
+      tier: 2
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -1256,3 +1341,24 @@
       tier: 3
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
+
+- name: BGE-M3 unit tests
+  cmd: |
+    export HF_MODEL=BAAI/bge-m3 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/BAAI/bge-m3
+    exit_code=0
+    pytest --timeout 300 \
+      models/demos/wormhole/bge_m3/tests/pcc/test_layernorm.py \
+      models/demos/wormhole/bge_m3/tests/pcc/test_embeddings.py \
+      models/demos/wormhole/bge_m3/tests/pcc/test_mlp.py \
+      models/demos/wormhole/bge_m3/tests/pcc/test_attention.py \
+      models/demos/wormhole/bge_m3/tests/pcc/test_transformer_block.py || exit_code=$?
+    pytest --timeout 600 models/demos/wormhole/bge_m3/tests/pcc/test_model.py || exit_code=$?
+    pytest --timeout 600 models/demos/wormhole/bge_m3/tests/pcc/test_generator_vllm.py || exit_code=$?
+    exit $exit_code
+  model: bge_m3
+  skus:
+    wh_n150:
+      timeout: 15
+      tier: 2
+  owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
+  team: models

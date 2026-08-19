@@ -12,7 +12,6 @@ own ``config.json``. See issue #49586.
 
 from __future__ import annotations
 
-import types
 from dataclasses import dataclass
 
 
@@ -50,24 +49,33 @@ class DFlashDrafterConfig:
     def target_feature_size(self) -> int:
         return len(self.target_layer_ids) * self.hidden_size  # 6 * 7168 = 43008
 
+    @classmethod
+    def from_hf_config(cls, c) -> "DFlashDrafterConfig":
+        """Build the device drafter config from an already-loaded HF config object."""
+        rs = dict(getattr(c, "rope_scaling", None) or getattr(c, "rope_parameters", None) or {})
+        dfc = dict(getattr(c, "dflash_config", None) or {})
+        d = cls()  # defaults fill anything the checkpoint config omits
+        return cls(
+            hidden_size=c.hidden_size,
+            head_dim=getattr(c, "head_dim", c.hidden_size // c.num_attention_heads),
+            num_attention_heads=c.num_attention_heads,
+            num_key_value_heads=c.num_key_value_heads,
+            num_hidden_layers=c.num_hidden_layers,
+            rms_norm_eps=c.rms_norm_eps,
+            target_layer_ids=tuple(dfc.get("target_layer_ids", d.target_layer_ids)),
+            rope_theta=float(rs.get("rope_theta") or getattr(c, "rope_theta", None) or d.rope_theta),
+            rope_factor=float(rs.get("factor", d.rope_factor)),
+            rope_beta_fast=float(rs.get("beta_fast", d.rope_beta_fast)),
+            rope_beta_slow=float(rs.get("beta_slow", d.rope_beta_slow)),
+            rope_orig_max_pos=int(rs.get("original_max_position_embeddings", d.rope_orig_max_pos)),
+            rope_mscale=float(rs.get("mscale", d.rope_mscale)),
+            rope_mscale_all_dim=float(rs.get("mscale_all_dim", d.rope_mscale_all_dim)),
+        )
 
-def build_drafter_rope_hf_config(cfg: DFlashDrafterConfig, max_seq_len: int) -> types.SimpleNamespace:
-    """SimpleNamespace shaped like the ``hf_config`` that ``rope.get_cos_sin_matrix`` consumes.
+    @classmethod
+    def from_pretrained(cls, path: str) -> "DFlashDrafterConfig":
+        """Build the device drafter config from a HF checkpoint dir (``$DFLASH_HF_MODEL``): reads
+        ``config.json`` via ``AutoConfig`` and extracts dims + rope params through :meth:`from_hf_config`."""
+        from transformers import AutoConfig
 
-    Crucially sets ``qk_rope_head_dim = cfg.head_dim`` (128) so the full head is rotated (Qwen3),
-    unlike the MLA target which rotates only the 64-dim pe slice. Feed this with ``interleave=False``
-    (half-split / rotate_half) to match the drafter's native Qwen3 weights.
-    """
-    return types.SimpleNamespace(
-        qk_rope_head_dim=cfg.head_dim,
-        max_seq_len=max_seq_len,
-        rope_theta=float(cfg.rope_theta),
-        rope_scaling={
-            "factor": cfg.rope_factor,
-            "original_max_position_embeddings": cfg.rope_orig_max_pos,
-            "beta_fast": cfg.rope_beta_fast,
-            "beta_slow": cfg.rope_beta_slow,
-            "mscale": cfg.rope_mscale,
-            "mscale_all_dim": cfg.rope_mscale_all_dim,
-        },
-    )
+        return cls.from_hf_config(AutoConfig.from_pretrained(path, trust_remote_code=True))

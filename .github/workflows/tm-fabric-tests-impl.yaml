@@ -84,16 +84,14 @@ jobs:
   wh-t3k-fabric-tests:
     if: ${{ inputs.run-wh-t3k-fabric-tests }}
     secrets: inherit
-    uses: ./.github/workflows/t3000-fast-tests-impl.yaml
+    uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
+      enabled-skus: "wh_llmbox_civ2"
       docker-image: ${{ inputs.docker-image }}
       build-artifact-name: ${{ inputs.build-artifact-name }}
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
-      timeout: 20
-      run-fabric-tests: "true"
-      run-multiprocess-tests: "false"
-      run-ccl-tests: "false"
+      test-names: "t3k_fabric_tests"
 
   # Wormhole T3K - UDM tests (separate from t3000-fast-tests to avoid affecting other pipelines)
   wh-t3k-udm-tests:

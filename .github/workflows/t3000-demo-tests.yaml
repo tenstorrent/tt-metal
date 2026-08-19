@@ -10,10 +10,7 @@ on:
         default: all
         options:
           - all
-          - resnet50
-          - motif
           - qwenimage
-          - mochi
           - qwen3_vl
       platform:
         required: false
@@ -49,7 +46,7 @@ on:
   workflow_call:
     inputs:
       model:
-        description: "Select model to test (all, resnet50, mochi, etc.)"
+        description: "Select model to test (all, qwenimage, etc.)"
         required: false
         type: string
         default: "all"
@@ -80,6 +77,7 @@ jobs:
 
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -92,6 +90,7 @@ jobs:
       build-inplace-wheel: true
   t3000-demo-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     with:

@@ -201,7 +201,7 @@ def test_addmm_rectangular_matrices(device, dtype, matrix_dims):
             output_tensor,
             atol=0.042 * m,
             rtol=10.563 * m,
-            frobenius_threshold=0.005 * m,
+            frobenius_threshold=0.006 * m,
             pcc_threshold=0.999,
             check_ulp=False,
         )

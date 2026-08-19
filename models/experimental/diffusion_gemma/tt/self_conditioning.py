@@ -15,15 +15,237 @@ transformers ``DiffusionGemmaSelfConditioning``::
 RMSNorm uses the weight **directly** (NOT the Gemma2/3 ``1+weight`` convention) —
 matches both `ttnn.rms_norm` and the reference, so weights load verbatim.
 
-Single-device (no TP): the module is small (2816→2112→2816); the QB2 PCC test uses
-the single ``device`` fixture. Weights come from a ``weight_mapping.remap_state_dict``
-self-conditioning sub-dict (short keys ``{pre_norm,gate_proj,up_proj,down_proj}.weight``).
-Validated on QB2 vs the reference oracle by ``tests/test_device_self_conditioning.py``.
+The module is small (2816→2112→2816) and is kept replicated across the mesh.
+Weights come from a ``weight_mapping.remap_state_dict`` self-conditioning
+sub-dict (short keys ``{pre_norm,gate_proj,up_proj,down_proj}.weight``).
 """
 
 from __future__ import annotations
 
+import os
+from typing import NamedTuple
+
+import torch
 import ttnn
+from models.experimental.diffusion_gemma.tt.expert_operations import apply_gelu
+
+from models.experimental.diffusion_gemma.weight_mapping import expected_self_conditioning_shapes
+
+
+class ChunkedEmbeddingWeight(NamedTuple):
+    chunks: tuple
+    shape: tuple
+    chunk_size: int
+
+
+def self_conditioning_embedding_prechunk_enabled() -> bool:
+    return os.getenv("DG_SELFCOND_PRECHUNK_EMBED", "1") != "0"
+
+
+def self_conditioning_logits_l1_mode() -> str:
+    mode = os.getenv("DG_SELFCOND_LOGITS_L1", "chain").lower()
+    if mode not in {"off", "chain"}:
+        raise ValueError("DG_SELFCOND_LOGITS_L1 must be one of: off, chain")
+    return mode
+
+
+def _config_value(config, name: str):
+    if isinstance(config, dict):
+        return config[name]
+    return getattr(config, name)
+
+
+def validate_self_conditioning_state(state_dict, *, hidden_size: int, intermediate_size: int) -> None:
+    """Validate remapped self-conditioning weights before moving them to device."""
+    expected = expected_self_conditioning_shapes(hidden_size, intermediate_size)
+    missing = sorted(set(expected) - set(state_dict))
+    if missing:
+        raise ValueError(f"missing self-conditioning weights: {missing}")
+    for key, shape in expected.items():
+        if tuple(state_dict[key].shape) != shape:
+            raise ValueError(f"{key} has shape {tuple(state_dict[key].shape)}, expected {shape}")
+
+
+def build_self_conditioning(
+    device,
+    state_dict,
+    *,
+    config=None,
+    hidden_size: int | None = None,
+    intermediate_size: int | None = None,
+    eps: float | None = None,
+    dtype=ttnn.bfloat16,
+    module_cls=None,
+):
+    """Build ``TtSelfConditioning`` from remapped checkpoint weights and config."""
+    if config is not None:
+        hidden_size = hidden_size if hidden_size is not None else _config_value(config, "hidden_size")
+        intermediate_size = (
+            intermediate_size if intermediate_size is not None else _config_value(config, "intermediate_size")
+        )
+        eps = eps if eps is not None else _config_value(config, "rms_norm_eps")
+    if hidden_size is None or intermediate_size is None:
+        raise ValueError("hidden_size and intermediate_size are required")
+    eps = 1e-6 if eps is None else eps
+    validate_self_conditioning_state(state_dict, hidden_size=hidden_size, intermediate_size=intermediate_size)
+    cls = TtSelfConditioning if module_cls is None else module_cls
+    return cls(
+        device,
+        state_dict,
+        hidden_size=hidden_size,
+        intermediate_size=intermediate_size,
+        eps=eps,
+        dtype=dtype,
+    )
+
+
+def build_self_conditioning_embedding_weight(
+    device,
+    embedding_weight,
+    *,
+    hidden_size: int | None = None,
+    dtype=ttnn.bfloat16,
+    tensor_fn=ttnn.as_tensor,
+):
+    """Move tied token embedding weights to the self-conditioning matmul layout."""
+    if len(embedding_weight.shape) != 2:
+        raise ValueError("embedding_weight must have shape [vocab, hidden]")
+    if hidden_size is not None and embedding_weight.shape[-1] != hidden_size:
+        raise ValueError(f"embedding hidden size {embedding_weight.shape[-1]} does not match expected {hidden_size}")
+    tensor_kwargs = {
+        "device": device,
+        "dtype": dtype,
+        "layout": ttnn.TILE_LAYOUT,
+        "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+    }
+    if self_conditioning_embedding_prechunk_enabled():
+        chunk_size = 8192
+        chunks = tuple(
+            tensor_fn(
+                embedding_weight[start : min(start + chunk_size, embedding_weight.shape[0])]
+                .unsqueeze(0)
+                .unsqueeze(0)
+                .contiguous(),
+                **tensor_kwargs,
+            )
+            for start in range(0, embedding_weight.shape[0], chunk_size)
+        )
+        return ChunkedEmbeddingWeight(
+            chunks=chunks,
+            shape=(1, 1, embedding_weight.shape[0], embedding_weight.shape[1]),
+            chunk_size=chunk_size,
+        )
+    return tensor_fn(embedding_weight.unsqueeze(0).unsqueeze(0), **tensor_kwargs)
+
+
+def _dram_for_rms_norm(tensor):
+    memory_config = tensor.memory_config()
+    if memory_config.buffer_type == ttnn.BufferType.DRAM and not memory_config.is_sharded():
+        return tensor
+    return ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _norm_shard_core_count(hidden_size: int) -> int:
+    tile_size = getattr(ttnn, "TILE_SIZE", 32)
+    tile_cols = hidden_size // tile_size
+    for cores in (8, 4, 2):
+        if tile_cols % cores == 0:
+            return cores
+    return 1
+
+
+def _norm_subblock_w(block_w: int) -> int:
+    for subblock_w in range(4, 0, -1):
+        if block_w % subblock_w == 0:
+            return subblock_w
+    return 1
+
+
+def _width_sharded_rms_norm(chunk, *, weight=None, epsilon: float, compute_kernel_config=None):
+    hidden_size = chunk.shape[-1]
+    tile_size = getattr(ttnn, "TILE_SIZE", 32)
+    if hidden_size % tile_size != 0 or chunk.shape[-2] != tile_size:
+        kwargs = {"epsilon": epsilon, "memory_config": ttnn.DRAM_MEMORY_CONFIG}
+        if weight is not None:
+            kwargs["weight"] = weight
+        if compute_kernel_config is not None:
+            kwargs["compute_kernel_config"] = compute_kernel_config
+        return ttnn.rms_norm(chunk, **kwargs)
+    tile_cols = hidden_size // tile_size
+    cores = _norm_shard_core_count(hidden_size)
+    if cores == 1:
+        kwargs = {"epsilon": epsilon, "memory_config": ttnn.DRAM_MEMORY_CONFIG}
+        if weight is not None:
+            kwargs["weight"] = weight
+        if compute_kernel_config is not None:
+            kwargs["compute_kernel_config"] = compute_kernel_config
+        return ttnn.rms_norm(chunk, **kwargs)
+
+    grid = ttnn.CoreGrid(x=cores, y=1)
+    sharded_mem = ttnn.create_sharded_memory_config(
+        (tile_size, hidden_size),
+        core_grid=grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(cores, 1),
+        subblock_w=_norm_subblock_w(tile_cols // cores),
+        block_h=1,
+        block_w=tile_cols // cores,
+        inplace=False,
+    )
+
+    chunk_sharded = ttnn.to_memory_config(chunk, sharded_mem)
+    weight_sharded = None
+    if weight is not None:
+        weight_sharded = ttnn.to_memory_config(weight, sharded_mem)
+    out_sharded = ttnn.rms_norm(
+        chunk_sharded,
+        weight=weight_sharded,
+        epsilon=epsilon,
+        program_config=program_config,
+        memory_config=sharded_mem,
+        compute_kernel_config=compute_kernel_config,
+    )
+    out = ttnn.sharded_to_interleaved(out_sharded, ttnn.DRAM_MEMORY_CONFIG)
+    out_sharded.deallocate(True)
+    chunk_sharded.deallocate(True)
+    if weight_sharded is not None and weight_sharded is not weight:
+        weight_sharded.deallocate(True)
+    return out
+
+
+def _rms_norm_dram(tensor, *, weight=None, epsilon: float, chunk_size: int = 32, compute_kernel_config=None):
+    norm_input = _dram_for_rms_norm(tensor)
+    seq_len = norm_input.shape[-2]
+    if seq_len <= chunk_size:
+        out = _width_sharded_rms_norm(
+            norm_input, weight=weight, epsilon=epsilon, compute_kernel_config=compute_kernel_config
+        )
+        if norm_input is not tensor:
+            norm_input.deallocate(True)
+        return out
+
+    chunks = []
+    for start in range(0, seq_len, chunk_size):
+        end = min(start + chunk_size, seq_len)
+        chunk = ttnn.slice(
+            norm_input,
+            [0, 0, start, 0],
+            [norm_input.shape[0], norm_input.shape[1], end, norm_input.shape[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        chunks.append(
+            _width_sharded_rms_norm(chunk, weight=weight, epsilon=epsilon, compute_kernel_config=compute_kernel_config)
+        )
+        chunk.deallocate(True)
+    out = ttnn.concat(chunks, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for chunk in chunks:
+        chunk.deallocate(True)
+    if norm_input is not tensor:
+        norm_input.deallocate(True)
+    return out
 
 
 class TtSelfConditioning:
@@ -40,15 +262,16 @@ class TtSelfConditioning:
         self.device = device
         self.eps = eps
         self.hidden_size = hidden_size
+        self.embed_scale = torch.tensor(hidden_size**0.5, dtype=torch.bfloat16).item()
         self.intermediate_size = intermediate_size
 
-        # scaled pre_norm weight: ROW_MAJOR, bf16, [1,1,hidden/32,32] (gemma4 RMSNorm layout).
-        pre_w = state_dict["pre_norm.weight"].reshape((1, 1, -1, ttnn.TILE_SIZE))
+        # scaled pre_norm weight for self-conditioning RMSNorm.
+        pre_w = state_dict["pre_norm.weight"].reshape((1, 1, 1, hidden_size))
         self.pre_norm_weight = ttnn.as_tensor(
             pre_w,
             device=device,
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # post_norm is scaleless — no checkpoint weight, no tensor built.
@@ -74,10 +297,10 @@ class TtSelfConditioning:
         Zero signal -> ``post_norm(inputs_embeds)`` (NOT inputs_embeds), matching the
         decoder: it always post-normalizes its input embeddings.
         """
-        normed = ttnn.rms_norm(signal_tt, weight=self.pre_norm_weight, epsilon=self.eps)
+        normed = _rms_norm_dram(signal_tt, weight=self.pre_norm_weight, epsilon=self.eps)
 
         gate = ttnn.linear(normed, self.gate_proj)
-        gate = ttnn.gelu(gate, fast_and_approximate_mode=True)  # gelu_pytorch_tanh
+        gate = apply_gelu(gate)
         up = ttnn.linear(normed, self.up_proj)
         normed.deallocate(True)
 
@@ -90,35 +313,143 @@ class TtSelfConditioning:
 
         summed = ttnn.add(inputs_embeds_tt, sc)
         sc.deallocate(True)
-        out = ttnn.rms_norm(summed, epsilon=self.eps)  # scaleless post_norm
+        out = _rms_norm_dram(summed, epsilon=self.eps)  # scaleless post_norm
         summed.deallocate(True)
         return out
 
-    def soft_embedding(self, prev_logits_tt, embedding_weight_tt, *, compute_kernel_config=None):
+    def soft_embedding(
+        self, prev_logits_tt, embedding_weight_tt, *, compute_kernel_config=None, temperature: float = 1.0
+    ):
         """Probability-weighted token embedding from prev-step logits — the decoder's
         soft-embedding step (modeling: ``softmax(logits, dim=-1) @ embed_tokens.weight``).
 
         ``prev_logits_tt`` ``[1,1,L,vocab]`` (TILE), ``embedding_weight_tt`` the tied
         table ``[1,1,vocab,hidden]`` (TILE). Returns the signal ``[1,1,L,hidden]``.
-        For the production vocab (262144) drive ``softmax`` with an fp32
-        ``compute_kernel_config`` (bf16 over a 262k-wide reduction is lossy — see the
-        bfp8 entropy drift); a moderate vocab is fine in bf16.
+        ``compute_kernel_config`` applies to the moderate-vocabulary full-softmax
+        branch. The production 262144-vocabulary path uses the ordered online
+        chunk reduction below and retains its established BF16 arithmetic; it
+        does not forward that full-softmax kernel configuration.
         """
+        vocab_size = prev_logits_tt.shape[-1]
+        vocab_chunk_size = 8192
+        processed_logits = prev_logits_tt
+        if temperature != 1.0:
+            processed_logits = ttnn.multiply(prev_logits_tt, 1.0 / temperature)
+        if isinstance(embedding_weight_tt, ChunkedEmbeddingWeight) or vocab_size > vocab_chunk_size:
+            signal = self._soft_embedding_chunked(
+                processed_logits,
+                embedding_weight_tt,
+                vocab_chunk_size=vocab_chunk_size,
+                temperature=1.0,
+            )
+            if processed_logits is not prev_logits_tt:
+                processed_logits.deallocate(True)
+            return signal
         if compute_kernel_config is not None:
             probs = ttnn.softmax(
-                prev_logits_tt, dim=-1, numeric_stable=True, compute_kernel_config=compute_kernel_config
+                processed_logits, dim=-1, numeric_stable=True, compute_kernel_config=compute_kernel_config
             )
         else:
-            probs = ttnn.softmax(prev_logits_tt, dim=-1)
+            probs = ttnn.softmax(processed_logits, dim=-1)
+        if processed_logits is not prev_logits_tt:
+            processed_logits.deallocate(True)
         signal = ttnn.matmul(probs, embedding_weight_tt)  # [1,1,L,vocab] @ [1,1,vocab,hidden] -> [1,1,L,hidden]
         probs.deallocate(True)
         # canonical: * embed_scale = hidden_size**0.5 (the tied embedding's scale). The pre_norm eps
         # floor does NOT absorb this at the tiny soft-RMS of a 262k-vocab softmax, so it is load-bearing.
-        scaled = ttnn.multiply(signal, float(self.hidden_size) ** 0.5)
+        embed_scale = getattr(self, "embed_scale", torch.tensor(self.hidden_size**0.5, dtype=torch.bfloat16).item())
+        scaled = ttnn.multiply(signal, embed_scale)
         signal.deallocate(True)
         return scaled
 
-    def condition(self, inputs_embeds_tt, prev_logits_tt, embedding_weight_tt, *, compute_kernel_config=None):
+    def _soft_embedding_chunked(
+        self, prev_logits_tt, embedding_weight_tt, *, vocab_chunk_size: int, temperature: float = 1.0
+    ):
+        """Streaming ``softmax(prev_logits) @ embedding`` over vocab chunks.
+
+        This avoids materializing a production-vocab probability tensor whose
+        softmax program has a large static circular-buffer footprint.
+        """
+        logits_max = ttnn.max(prev_logits_tt, dim=-1, keepdim=True)
+        numerator = None
+        denominator = None
+        vocab_size = prev_logits_tt.shape[-1]
+        embedding_chunks = None
+        if isinstance(embedding_weight_tt, ChunkedEmbeddingWeight):
+            embedding_chunks = embedding_weight_tt.chunks
+            vocab_chunk_size = embedding_weight_tt.chunk_size
+        hidden_size = embedding_weight_tt.shape[-1]
+        logits_l1_mode = self_conditioning_logits_l1_mode()
+        for start in range(0, vocab_size, vocab_chunk_size):
+            end = min(start + vocab_chunk_size, vocab_size)
+            logits_chunk = ttnn.slice(
+                prev_logits_tt,
+                [0, 0, 0, start],
+                [prev_logits_tt.shape[0], prev_logits_tt.shape[1], prev_logits_tt.shape[2], end],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if logits_l1_mode == "off" else ttnn.L1_MEMORY_CONFIG,
+            )
+            if logits_l1_mode == "chain":
+                shifted = ttnn.subtract(logits_chunk, logits_max, memory_config=ttnn.L1_MEMORY_CONFIG)
+            else:
+                shifted = ttnn.subtract(logits_chunk, logits_max)
+            logits_chunk.deallocate(True)
+            if temperature != 1.0:
+                scaled_shifted = ttnn.multiply(shifted, 1.0 / temperature)
+                shifted.deallocate(True)
+                shifted = scaled_shifted
+            if logits_l1_mode == "chain":
+                exp_chunk = ttnn.exp(shifted, memory_config=ttnn.L1_MEMORY_CONFIG)
+            else:
+                exp_chunk = ttnn.exp(shifted)
+            shifted.deallocate(True)
+            # TTNN reductions and binary ops inherit the first input's memory
+            # config. In chain mode this intentionally carries the denominator
+            # reduction/accumulator through L1 without changing operation order;
+            # the DRAM matmul keeps the numerator and final divide in DRAM.
+            denom_chunk = ttnn.sum(exp_chunk, dim=-1, keepdim=True)
+            if embedding_chunks is None:
+                embed_chunk = ttnn.slice(
+                    embedding_weight_tt,
+                    [0, 0, start, 0],
+                    [embedding_weight_tt.shape[0], embedding_weight_tt.shape[1], end, hidden_size],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                embed_chunk = embedding_chunks[start // vocab_chunk_size]
+            numer_chunk = ttnn.matmul(exp_chunk, embed_chunk, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            exp_chunk.deallocate(True)
+            if embedding_chunks is None:
+                embed_chunk.deallocate(True)
+            if numerator is None:
+                numerator = numer_chunk
+                denominator = denom_chunk
+            else:
+                next_numerator = ttnn.add(numerator, numer_chunk)
+                numerator.deallocate(True)
+                numer_chunk.deallocate(True)
+                numerator = next_numerator
+                next_denominator = ttnn.add(denominator, denom_chunk)
+                denominator.deallocate(True)
+                denom_chunk.deallocate(True)
+                denominator = next_denominator
+        logits_max.deallocate(True)
+        signal = ttnn.div(numerator, denominator)
+        numerator.deallocate(True)
+        denominator.deallocate(True)
+        embed_scale = getattr(self, "embed_scale", torch.tensor(self.hidden_size**0.5, dtype=torch.bfloat16).item())
+        scaled = ttnn.multiply(signal, embed_scale)
+        signal.deallocate(True)
+        return scaled
+
+    def condition(
+        self,
+        inputs_embeds_tt,
+        prev_logits_tt,
+        embedding_weight_tt,
+        *,
+        compute_kernel_config=None,
+        temperature: float = 1.0,
+    ):
         """Full self-conditioning step: soft-embed prev logits, then apply the module
         (mirrors the reference ``SelfConditioning.condition`` / decoder forward).
 
@@ -126,11 +457,13 @@ class TtSelfConditioning:
         result is ``post_norm(inputs_embeds)``.
         """
         if prev_logits_tt is None:
-            signal = ttnn.mul(inputs_embeds_tt, 0.0)  # zeros, same shape/layout/dtype
-        else:
-            signal = self.soft_embedding(
-                prev_logits_tt, embedding_weight_tt, compute_kernel_config=compute_kernel_config
-            )
+            return _rms_norm_dram(inputs_embeds_tt, epsilon=self.eps)
+        signal = self.soft_embedding(
+            prev_logits_tt,
+            embedding_weight_tt,
+            compute_kernel_config=compute_kernel_config,
+            temperature=temperature,
+        )
         out = self.forward(inputs_embeds_tt, signal)
         signal.deallocate(True)
         return out

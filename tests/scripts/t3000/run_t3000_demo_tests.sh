@@ -5,25 +5,6 @@ TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
 
 
 
-run_t3000_resnet50_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_resnet50_tests"
-
-  # resnet50 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py --timeout=720 ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_resnet50_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_dit_tests() {
   # Record the start time
   fail=0
@@ -44,49 +25,15 @@ run_t3000_dit_tests() {
   fi
 }
 
-run_t3000_motif_tests() {
-  run_t3000_dit_tests "models/tt_dit/tests/models/motif/test_pipeline_motif.py -k 2x4cfg0sp0tp1"
-}
-
 run_t3000_qwenimage_tests() {
   run_t3000_dit_tests "models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k 2x4"
 }
 
-run_t3000_mochi_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_mochi_tests"
-
-  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "dit_2x4sp0tp1_vae_1x8sp0tp1" --timeout 1500; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_mochi_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-
-
 run_t3000_tests() {
 
 
-  # Run resnet50 tests
-  run_t3000_resnet50_tests
-
-  # Run motif tests
-  run_t3000_motif_tests
-
   # Run qwenimage tests
   run_t3000_qwenimage_tests
-
-  # Run mochi tests
-  run_t3000_mochi_tests
 
 }
 

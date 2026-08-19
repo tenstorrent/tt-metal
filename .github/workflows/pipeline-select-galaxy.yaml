@@ -52,9 +52,7 @@ on:
           - llama3_70b_dp
           - whisper
           - gpt-oss
-          - motif
           - wan22
-          - mochi
           - qwen3_32b
           - qwen3_32b_long_context
           - deepseek_v3
@@ -68,11 +66,8 @@ on:
           - disabled
           - all
           - llama3
-          - resnet50
           - unit
           - wan22
-          - mochi
-          - motif
           - qwenimage
         default: "disabled"
       galaxy-perf:
@@ -86,10 +81,8 @@ on:
           #          - llama70b
           #          - llama_unit_tests
           #          - llama70b_prefill
-          - motif
           #          - sentence_bert
           - wan2-2
-          - mochi
           - qwenimage
         default: "disabled"
       galaxy-e2e:
@@ -225,6 +218,7 @@ jobs:
           esac
   build-artifact:
     needs: [check-harbor, determine-tests]
+    if: ${{ !cancelled() && needs.determine-tests.result == 'success' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read

@@ -286,15 +286,15 @@ Notes:
     Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
     Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/true);
     // 2) Capture p.trace_iters enqueues back-to-back
-    auto trace_id = Dist::BeginTraceCapture(mesh.get(), mcq.id());
+    auto trace_id = mesh->begin_mesh_trace(mcq);
     for (uint32_t i = 0; i < p.trace_iters; ++i) {
         Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
         Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/false);
     }
-    mesh->end_mesh_trace(mcq.id(), trace_id);
+    mesh->end_mesh_trace(mcq, trace_id);
     // 3) Replay measured section
     auto t0 = std::chrono::steady_clock::now();
-    mesh->replay_mesh_trace(mcq.id(), trace_id, /*blocking=*/false);
+    mesh->replay_mesh_trace(mcq, trace_id, /*blocking=*/false);
     Dist::Finish(mcq);
     auto t1 = std::chrono::steady_clock::now();
     mesh->release_mesh_trace(trace_id);

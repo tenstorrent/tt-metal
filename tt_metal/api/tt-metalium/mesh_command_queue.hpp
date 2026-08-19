@@ -27,7 +27,6 @@
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/vector_aligned.hpp>
 
 namespace tt::tt_metal {
 class HostTensor;
