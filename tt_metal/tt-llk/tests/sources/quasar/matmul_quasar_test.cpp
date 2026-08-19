@@ -44,8 +44,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Full 32x32 tiles: 2x2 faces of 16x16 (tiny tiles not supported for quasar).
         // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives
         // UNPACR0/SrcA -- so operand A is recorded under Unp1 and operand B under Unp0 (matches product).
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
+            ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_A), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+            ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_B), L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(static_cast<DataFormat>(formats.unpack_A_dst));
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(static_cast<DataFormat>(formats.unpack_B_dst));
 
@@ -202,7 +204,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         // Full 32x32 tiles: 2x2 faces of 16x16 (tiny tiles not supported for quasar).
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+            ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_matmul_init_(
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(),
