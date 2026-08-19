@@ -5,9 +5,9 @@ on:
   workflow_call:
     inputs:
       architecture:
-        description: "Architecture to run: blackhole (WH parked)" # TEMP: was all, wormhole, or blackhole
+        description: "Architecture to run: wormhole (BH parked)" # TEMP: was all, wormhole, or blackhole
         required: false
-        default: blackhole # TEMP: was all
+        default: wormhole # TEMP: was all
         type: string
       pytest-markers:
         description: "Pytest mark expression for LLK python_tests"
@@ -62,7 +62,7 @@ jobs:
     secrets: inherit
 
   # Build the WH/BH shard matrix from llk_ttnop_tests.yaml.
-  # TEMP: BH only (WH parked).
+  # TEMP: WH only (BH parked).
   load-test-matrix:
     runs-on: ubuntu-slim
     needs: [build-images]
@@ -100,12 +100,12 @@ jobs:
             # all)
             #   ENABLED_SKUS="ALL_SKUS_IN_TESTS"
             #   ;;
-            # wormhole)
-            #   ENABLED_SKUS="wh_n150_civ2"
-            #   ;;
-            blackhole)
-              ENABLED_SKUS="bh_p150b_civ2"
+            wormhole)
+              ENABLED_SKUS="wh_n150_civ2"
               ;;
+            # blackhole)
+            #   ENABLED_SKUS="bh_p150b_civ2"
+            #   ;;
             *)
               echo "::error::Unsupported architecture '$ARCHITECTURE'"
               exit 1
