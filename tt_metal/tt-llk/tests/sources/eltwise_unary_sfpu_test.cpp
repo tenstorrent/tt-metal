@@ -55,6 +55,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu_operations.h"
+
+// Fresh semantic bodies: keep after sfpu_operations.h in their own include
+// block (their templates consume its transitive typed helpers at
+// definition-time lookup; clang-format sorts blocks independently).
+#include "fresh_cpp/log1p.h"
 #include "fresh_cpp_operations.h"
 
 #ifndef FRESH_CPP_IMPL
@@ -363,6 +368,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::i1 || (!APPROX_MODE && !is_fp32_dest_acc_en),
                     "fresh i1 selector supports only non-approx, bf16 dest");
                 SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_i1_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::log1p)
+            {
+                // The fresh log1p states the bf16 production contract; guard only
+                // variants that actually select this branch.
+                static_assert(
+                    FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::log1p || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fresh log1p selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_log1p_fresh_cpp, (iterations), block_tile, VectorMode::None);
             }
             else if constexpr (RECIPROCAL_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::reciprocal)
             {

@@ -1294,6 +1294,8 @@ _CAUSAL_LIFT_B2_F16B_OPS = [
     # Batch 3 (F16b corr rows).
     MathOperation.Hardsigmoid,
     MathOperation.Gelu,
+    # Storm lane S3 (fresh_cpp/ per-op headers).
+    MathOperation.Log1p,
 ]
 
 
