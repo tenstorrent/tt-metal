@@ -175,7 +175,8 @@ TT_ZONE_DEFINE_ID(PROFILER_STALL_ZONE_ID, "PRODUCER-STALL");
 // A MARKER (ZONE_START/END/TOTAL/TS_*) carries: low27 = 16-bit zone srcloc hash (room to grow to 27),
 // payload32 = timer_low. Identity is NOT in the marker anymore -- it is reconstructed on the host from
 // three "sticky" packets that persist until updated:
-//   STICKY_PROG  (type 8): payload32 = runtime host-id. Emitted at BRISC FW start (set_host_counter).
+//   STICKY_PROG  (type 8): payload32 = runtime host-id. Emitted per RISC at its launch point
+//                (set_host_counter), so every lane's stream is self-attributing.
 //   STICKY_TIMER (type 9): low27 = timer_hi. Emitted by any RISC when its wall-clock high half ticks.
 //   STICKY_SRC   (type 7): (core,risc) lane -- injected by the drainer READER, never by the producer.
 // So a producing RISC writes ONLY markers + (rarely) a TIMER sticky; the reader knows which ring it is
@@ -404,10 +405,12 @@ inline __attribute__((always_inline)) void mark_time_at_index_inlined(
 inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValue) {
     // Assign-ID hook (DeviceZoneSetCounter): emit the runtime host-id in-band as a STICKY_PROG packet.
     // counterValue is the per-program-global runtime_id (the same id ttnn assigns and the DRAM profiler
-    // stamps into ID_LL). The host forward-fills it onto every following marker of this launch until the
-    // next STICKY_PROG. Emitted at the ID-assign call (BRISC FW start) -- it lands just after the FW
-    // ZONE_START, which carries no assigned id. Held unpublished until DeviceValidateProfiler commits the
-    // launch (an idle core rewinds it), matching the FW zone's validity gate.
+    // stamps into ID_LL). The host forward-fills it onto every following marker OF THIS LANE until the
+    // lane's next STICKY_PROG -- so EVERY RISC emits one at its launch point, not just BRISC: a lane
+    // whose ring carries no id would only be attributable at drainer-sweep granularity, which
+    // misassigns zones across op boundaries on back-to-back launches (measured ~2x unions). On BRISC
+    // it is held unpublished until DeviceValidateProfiler commits the launch (an idle core rewinds
+    // it), matching the FW zone's validity gate; subordinates only run committed launches.
     hostZoneId = counterValue;
     ring_ensure_room(SPSC_MARKER_WORDS);
     ring_write_word(ppfmt::w0(ppfmt::T_STICKY_PROG, 0));  // word0: type | (low27 unused)

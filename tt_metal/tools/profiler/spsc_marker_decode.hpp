@@ -9,7 +9,7 @@
 // profiler_common.h): a 16-word prefix whose word 1 is the payload length, the worker's 64-word control
 // vector verbatim, then each RISC's live ring window packed flat -- congruence-padded, wrap resolved
 // device-side. Inside each window is a packet run (spsc_packet.h): ZONE_START/END/TOTAL markers
-// (2 words), STICKY_TIMER (1 word, per-lane wall-clock high half), STICKY_PROG (2 words, per-core
+// (2 words), STICKY_TIMER (1 word, per-lane wall-clock high half), STICKY_PROG (2 words, per-lane
 // runtime host-id), and DATA/EVENT (2 + size words, self-describing). The producer publishes its tail
 // only on packet boundaries, so a window never ends mid-packet.
 #pragma once
@@ -68,7 +68,7 @@ static_assert(kSpscMaxFrameWords == 2656 && kSpscMaxFramePages == 166);
 // Decode state for one socket's frame stream. Written only by that socket's decode thread.
 struct SpanDecodeState {
     std::vector<uint32_t> timer_hi;  // per lane: sticky wall-clock high half
-    std::vector<uint32_t> prog;      // per core: sticky runtime host-id (each core's BRISC emits its own)
+    std::vector<uint32_t> prog;      // per lane: sticky runtime host-id (every RISC emits its own at launch)
     std::vector<uint32_t> head;      // per lane: monotonic words-consumed mirror; head(N) == tail(N-1)
     std::vector<uint8_t> seeded;
     std::unordered_map<uint32_t, uint32_t> core_of_xy;  // packed (y<<16)|x -> dense core index
@@ -81,14 +81,14 @@ struct SpanDecodeState {
 
     void reset(uint32_t num_cores) {
         timer_hi.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
-        prog.assign(num_cores, 0);
+        prog.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
         head.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
         seeded.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
     }
 };
 
 struct SpscIgnoreProg {
-    void operator()(uint32_t /*core*/, uint32_t /*prog*/) const {}
+    void operator()(uint32_t /*lane*/, uint32_t /*prog*/) const {}
 };
 
 // Sentinel default for the vectorized zone-block sink: without a real one the walk stays scalar.
@@ -106,7 +106,7 @@ inline void spsc_prefetch(const void* p) {
 //   emit(lane, wire_type, hash16, full_ts, prog)     (ZONE_START/END; ZONE_TOTAL with full_ts = the sum)
 // and for each PP_DATA/PP_EVENT
 //   emit_data(lane, wire_type, id, full_ts, prog, payload_words, n)   (payload in place, hi-word first)
-// and emit_prog(core, prog) whenever a core's sticky host-id changes.
+// and emit_prog(lane, prog) whenever a lane's sticky host-id changes.
 //
 // Returns the payload words the control vector implies -- the caller checks it against the frame's own
 // length field, since a pack-rule disagreement with the drainer desynchronizes every lane after the
@@ -139,7 +139,6 @@ inline uint32_t spsc_decode_frame(
         return 0;
     }
     const uint32_t core = xy_it->second;
-    uint32_t pg = st.prog[core];
     uint32_t off = kernel_profiler::SPSC_SPAN_PREFIX_WORDS + kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE;
     for (uint32_t r = 0; r < kSpscNRiscDecode; r++) {
         const uint32_t lane = core * kSpscNRiscDecode + r;
@@ -189,6 +188,7 @@ inline uint32_t spsc_decode_frame(
             spsc_prefetch(p + o);
         }
         uint32_t th = st.timer_hi[lane];
+        uint32_t pg = st.prog[lane];
         uint32_t i = 0;
         while (i < run) {
 #if defined(__AVX2__)
@@ -233,7 +233,7 @@ inline uint32_t spsc_decode_frame(
                 const uint32_t w1 = p[i + 1];
                 if (w1 != pg) {
                     pg = w1;
-                    emit_prog(core, pg);
+                    emit_prog(lane, pg);
                 }
                 i += 2;
             } else if (t == PP_DATA || t == PP_EVENT) {
@@ -250,8 +250,8 @@ inline uint32_t spsc_decode_frame(
             }
         }
         st.timer_hi[lane] = th;
+        st.prog[lane] = pg;
     }
-    st.prog[core] = pg;
     return off - kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
 }
 
