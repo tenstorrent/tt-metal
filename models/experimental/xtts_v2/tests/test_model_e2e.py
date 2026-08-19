@@ -11,12 +11,23 @@ real serving pattern and requires bit-identical repeats: every bucket through `g
 `compute_voice` for a NEW reference-clip length (which compiles and allocates fresh conv shapes
 after the captures) in between.
 
+Reproducibility alone is not enough — consistent corruption is still reproducible, so it also
+finishes against the CPU reference waveform once the decode trace has replayed. `generate` samples
+and so has no fixed waveform to compare against; the check instead runs reference GPT latents
+through everything it does after decode — both host interpolates and the traced vocoder.
+
 Opens its own device, like `demo/`, so the model's real trace-region and L1_SMALL sizes are the
 ones under test.
 """
 import torch
+import torch.nn.functional as F
 
-from models.experimental.xtts_v2.tt.ttnn_xtts_model import VOC_BUCKETS, XttsV2, _voc_bucket
+from models.common.utility_functions import comp_pcc
+from models.experimental.xtts_v2.reference.xtts_hifigan_ref import HifiganReference
+from models.experimental.xtts_v2.tests.reference_helpers import gpt_reference
+from models.experimental.xtts_v2.tt.ttnn_xtts_model import AR_COMP, HOP, ISR, OSR, VOC_BUCKETS, XttsV2, _voc_bucket
+
+TARGET_PCC_WAV = 0.99  # waveform vs the CPU reference, same gate as test_hifigan_pcc
 
 # max_new_tokens picks the bucket: a code is 1024 samples @22.05kHz resampled to 24 kHz, so
 # frames = codes * (1024/256) * (24000/22050) ~= codes * 4.354.
@@ -37,6 +48,16 @@ ORDER = (
     ("long", 250),
     ("long", 400),
 )
+
+
+def _latents_for(Lb):
+    """Reference GPT latents tiled to land inside bucket Lb, then the two interpolates `generate`
+    runs — only the length varies here."""
+    lat = gpt_reference()["latents"]  # [1,T,1024]
+    n = int((Lb - 7) / ((AR_COMP / HOP) * (OSR / ISR)))  # inside the bucket, so the replay pads
+    lat = lat.repeat(1, n // lat.shape[1] + 1, 1)[:, :n]
+    z = F.interpolate(lat.transpose(1, 2), scale_factor=AR_COMP / HOP, mode="linear")
+    return F.interpolate(z, scale_factor=OSR / ISR, mode="linear")
 
 
 def _clip(seconds, seed):  # a reference clip's LENGTH is what picks the conv shapes, not its content
@@ -67,16 +88,33 @@ def run_model_e2e(verbose=True):
                 worst = max(worst, d)
                 if verbose:
                     print(f"  {i}: {text:5s} max_new={n:4d} bucket {Lb:5d} repeat maxabs {d:.3e}")
+
+        # Every bucket against CPU: each has its own trace and slots, and the repeat check above
+        # reports maxabs 0 for a bucket that is consistently wrong just as it does for a clean one.
+        # The reference pads as _vocode does: conv_pre has a bias, so zero frames past L are not
+        # silence and they perturb the trailing waveform.
+        g, reference, scored = voice.speaker_embedding, HifiganReference(), []
+        for Lb in VOC_BUCKETS:
+            z = _latents_for(Lb)
+            L = z.shape[-1]
+            assert _voc_bucket(L) == Lb, f"z of {L} frames does not land in bucket {Lb}"
+            gold = reference(F.pad(z, (0, Lb - L)), g)[:, :, : L * HOP]
+            ok, pcc = comp_pcc(gold, tts._vocode(z, g), pcc=TARGET_PCC_WAV)
+            if verbose:
+                print(f"  bucket {Lb:5d} (L={L}) latents -> waveform vs CPU reference  pcc: {pcc}")
+            scored.append((Lb, ok, pcc))
+        worst_Lb, _, worst_pcc = min(scored, key=lambda r: r[2])
+        ref_ok = all(r[1] for r in scored)
     finally:
         tts.close()
 
-    msg = f"buckets {sorted(buckets)}, worst repeat maxabs {worst:.3e}"
-    return worst == 0.0 and buckets == set(VOC_BUCKETS), msg
+    msg = f"buckets {sorted(buckets)}, worst repeat maxabs {worst:.3e}, worst bucket {worst_Lb} pcc {worst_pcc}"
+    return worst == 0.0 and buckets == set(VOC_BUCKETS) and ref_ok, msg
 
 
 def test_model_e2e():
     passed, msg = run_model_e2e()
-    assert passed, f"request path is not reproducible across buckets and voices: {msg}"
+    assert passed, f"request path is not reproducible, or drifted from the reference: {msg}"
 
 
 if __name__ == "__main__":
