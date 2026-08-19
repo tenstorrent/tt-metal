@@ -93,3 +93,71 @@ def test_the_callers_pass_the_baseline_they_already_measured():
     bl = (_PA / "agent" / "before_loop.py").read_text()
     j = bl.index("_bridge_depth_env(")
     assert "full_hint=" in bl[j : j + 420], "before_loop stopped passing its measured baseline"
+
+
+# ------------------------------------- and the cache that should have deduplicated the whole thing
+
+
+def _cache_dir(root):
+    """The cache lives under repo_root/<CC_DIR>, and _depth_cache_put swallows a missing parent."""
+    from cc_optimize.run import CC_DIR
+
+    (root / CC_DIR).mkdir(parents=True, exist_ok=True)
+
+
+def test_the_fingerprint_resolves_a_repo_relative_node(tmp_path, monkeypatch):
+    """It globbed a repo-relative node against the CURRENT DIRECTORY, so a caller running from
+    elsewhere matched no files and `default=0.0` returned "0" -- a valid-looking cache key."""
+    from cc_optimize.run import _coverage_fingerprint
+
+    (tmp_path / "m" / "tests").mkdir(parents=True)
+    (tmp_path / "m" / "tests" / "t.py").write_text("x = 1\n")
+    node = "m/tests/t.py::test_x"
+
+    monkeypatch.chdir(tmp_path.parent)
+    assert _coverage_fingerprint(node) == "", "an unresolvable node still yields a usable key"
+    got = _coverage_fingerprint(node, tmp_path)
+    assert got and got != "0", got
+
+
+def test_two_callers_in_different_directories_agree(tmp_path, monkeypatch):
+    """THE POINT. The cache exists so the second caller reuses the first's verdict instead of
+    re-probing; two fingerprints for one node split it in two, and both halves ran the probe."""
+    from cc_optimize.run import _coverage_fingerprint
+
+    (tmp_path / "m" / "tests").mkdir(parents=True)
+    (tmp_path / "m" / "tests" / "t.py").write_text("x = 1\n")
+    node = "m/tests/t.py::test_x"
+
+    monkeypatch.chdir(tmp_path)
+    a = _coverage_fingerprint(node, tmp_path)
+    monkeypatch.chdir(tmp_path.parent)
+    b = _coverage_fingerprint(node, tmp_path)
+    assert a == b and a, (a, b)
+
+
+def test_an_unfingerprintable_node_is_refused_by_the_cache(tmp_path):
+    """ "" must mean "do not cache", not "cache under the empty key" -- otherwise two unrelated
+    unfingerprintable nodes collide with each other."""
+    from cc_optimize.run import _coverage_cache_get, _coverage_cache_put, _depth_cache_get, _depth_cache_put
+
+    _cache_dir(tmp_path)
+    node = "does/not/exist/t.py::test_x"
+
+    _coverage_cache_put(tmp_path, node, "case", 4)
+    assert _coverage_cache_get(tmp_path, node, "case") is None
+
+    _depth_cache_put(tmp_path, node, {"TT_PERF_LAYERS": "2"})
+    assert _depth_cache_get(tmp_path, node) is None
+
+
+def test_a_fingerprintable_node_still_round_trips(tmp_path):
+    from cc_optimize.run import _depth_cache_get, _depth_cache_put
+
+    _cache_dir(tmp_path)
+    (tmp_path / "m" / "tests").mkdir(parents=True)
+    (tmp_path / "m" / "tests" / "t.py").write_text("x = 1\n")
+    node = "m/tests/t.py::test_x"
+
+    _depth_cache_put(tmp_path, node, {"TT_PERF_LAYERS": "2"})
+    assert _depth_cache_get(tmp_path, node) == {"TT_PERF_LAYERS": "2"}

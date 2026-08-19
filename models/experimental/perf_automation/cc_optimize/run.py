@@ -833,19 +833,43 @@ def _coverage_cache_path(repo_root: Path) -> Path:
     return repo_root / CC_DIR / ".coverage_cache.json"
 
 
-def _coverage_fingerprint(node) -> str:
+def _coverage_fingerprint(node, repo_root=None) -> str:
+    """Newest .py mtime beside the node, or "" when it cannot be established.
+
+    RESOLVED AGAINST THE REPO, AND "NOTHING FOUND" IS NOT A VALUE. `node` is repo-relative, and this
+    globbed it against the CURRENT DIRECTORY -- so a caller whose cwd was elsewhere matched no files
+    and `default=0.0` handed back the string "0", which is a perfectly valid-looking cache key.
+
+    Two callers then fingerprinted the same node differently and each wrote its own slot:
+
+        depth|...test_main_perf.py::...  {'env': {'TT_PERF_LAYERS': '2', ...}, 'fp': '0'}
+        depth|...test_main_perf.py::...  {'env': {},                          'fp': '1786856611'}
+
+    The first is the working depth knob, the second is the verdict that discarded it. The cache
+    exists precisely so the second caller reuses the first's answer instead of re-probing, and a
+    bogus fingerprint split it in two -- so the expensive probe ran twice AND the second one got the
+    wrong answer.
+
+    "" now means unfingerprintable, and the cache refuses to read or write under it rather than
+    storing an entry nothing can match.
+    """
     try:
         base = Path(str(node).split("::", 1)[0])
-        mt = max((f.stat().st_mtime for f in base.parent.rglob("*.py")), default=0.0)
-        return str(int(mt))
+        if not base.is_absolute() and repo_root:
+            base = Path(repo_root) / base
+        mts = [f.stat().st_mtime for f in base.parent.rglob("*.py")]
+        return str(int(max(mts))) if mts else ""
     except Exception:  # noqa: BLE001
         return ""
 
 
 def _coverage_cache_get(repo_root: Path, node, case):
     try:
+        _fp = _coverage_fingerprint(node, repo_root)
+        if not _fp:
+            return None  # unfingerprintable: a cache that cannot be invalidated must not be read
         entry = json.loads(_coverage_cache_path(repo_root).read_text()).get(f"{node}|{case}")
-        if entry and entry.get("fp") == _coverage_fingerprint(node):
+        if entry and entry.get("fp") == _fp:
             return int(entry["k"])
     except Exception:  # noqa: BLE001
         pass
@@ -856,7 +880,10 @@ def _coverage_cache_put(repo_root: Path, node, case, k: int) -> None:
     try:
         path = _coverage_cache_path(repo_root)
         data = json.loads(path.read_text()) if path.is_file() else {}
-        data[f"{node}|{case}"] = {"k": int(k), "fp": _coverage_fingerprint(node)}
+        _fp = _coverage_fingerprint(node, repo_root)
+        if not _fp:
+            return
+        data[f"{node}|{case}"] = {"k": int(k), "fp": _fp}
         path.write_text(json.dumps(data, indent=1))
     except Exception:  # noqa: BLE001
         pass
@@ -864,8 +891,11 @@ def _coverage_cache_put(repo_root: Path, node, case, k: int) -> None:
 
 def _depth_cache_get(repo_root: Path, node):
     try:
+        _fp = _coverage_fingerprint(node, repo_root)
+        if not _fp:
+            return None
         entry = json.loads(_coverage_cache_path(repo_root).read_text()).get(f"depth|{node}")
-        if entry and entry.get("fp") == _coverage_fingerprint(node):
+        if entry and entry.get("fp") == _fp:
             return dict(entry["env"])
     except Exception:  # noqa: BLE001
         pass
@@ -876,7 +906,10 @@ def _depth_cache_put(repo_root: Path, node, env) -> None:
     try:
         path = _coverage_cache_path(repo_root)
         data = json.loads(path.read_text()) if path.is_file() else {}
-        data[f"depth|{node}"] = {"env": dict(env), "fp": _coverage_fingerprint(node)}
+        _fp = _coverage_fingerprint(node, repo_root)
+        if not _fp:
+            return
+        data[f"depth|{node}"] = {"env": dict(env), "fp": _fp}
         path.write_text(json.dumps(data, indent=1))
     except Exception:  # noqa: BLE001
         pass
