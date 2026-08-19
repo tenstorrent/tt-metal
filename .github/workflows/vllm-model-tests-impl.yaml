@@ -283,6 +283,15 @@ jobs:
             ADDITIONAL_SERVER_ARGS=()
           fi
 
+          # Quoted here rather than carried in the matrix: the tier filter
+          # interpolates the whole matrix into a single-quoted shell string, so a
+          # matrix value containing a quote breaks the jq parse.
+          if [ "${{ matrix.test-group.greedy-default }}" = "true" ]; then
+            GREEDY_DEFAULT=(--override-generation-config '{"temperature":0}')
+          else
+            GREEDY_DEFAULT=()
+          fi
+
           DEFAULT_CHAT_TEMPLATE_KWARGS_RAW='${{ matrix.test-group.default-chat-template-kwargs }}'
           if [ -n "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW" ]; then
             DEFAULT_CHAT_TEMPLATE_KWARGS=(--default-chat-template-kwargs "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW")
@@ -339,6 +348,7 @@ jobs:
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
+          VLLM_SERVER_ARGS+=("${GREEDY_DEFAULT[@]}")
           VLLM_SERVER_ARGS+=("${DEFAULT_CHAT_TEMPLATE_KWARGS[@]}")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
 
