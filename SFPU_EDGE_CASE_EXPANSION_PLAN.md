@@ -7,51 +7,22 @@ audit, and the record of every finding to date
 **Scope:** Wormhole B0 and Blackhole. Quasar keeps its own inline stimulus definitions under
 `quasar/` and is tracked separately.
 
-**Revision 18 — 2026-08-19.** Two items are deleted as finished, and the audit's own revision 18 asked
-for exactly this: *"`SFPU_EDGE_CASE_EXPANSION_PLAN.md` §4 (the NaN sign), §5 and §6 (the nocov timeouts)
-all need the corrections above applied."*
+**Updated 2026-08-19**, against `ldjurovic/sfpu_edge_cases_phase_3` @ `caf8701f973`.
 
-- **§4, the generated-NaN sign on Wormhole** (was item 1, and the only item with a deadline). Closed. It
-  is **gated, not repaired**: `nan_survives_to_l1()` + `GENERATED_NAN_SIGN_OPS` +
-  `specials_after_nan_sign_gate()` turn cat B off where Wormhole's SFPMAD leaves the sign unspecified,
-  Blackhole keeps every variant, and the reach is pinned host-side. Getting the *scope* right took three
-  passes and one red suite — audit §5.14, which is worth reading before touching a NaN sign again. The
-  one piece that survives is the comparator repair (accept **either** infinity for a substituted NaN),
-  still not done and still §4 below.
-- **§6, the non-coverage CI groups' timeouts.** Withdrawn: the premise was false. No group in
-  `llk_e2e_tests.yaml` passes `--coverage`, so the broad profile was already running nightly on both
-  arches and the companion groups were a duplicate. They are gone and the file is byte-identical to
-  `main`.
+This document contains **only work that is not done**. Finished items are deleted rather than ticked
+off, because their results live in two places that cannot drift from the code: the code itself, and the
+coverage audit. For what a finished item established, read the audit — §5 has the open divergences, §4
+has the per-op state. Durable advice from finished work survives in §8, not as a changelog.
 
-**Both arches are green at `caf8701f973`** — Wormhole n300 measured suite by suite including the `bcast`
-tests revision 17 had to exclude, Blackhole reported green at the same head. **Nothing on this list is a
-fire any more**, so the ordering below is by value rather than urgency.
-
-**Three small unblocked items now exist that did not at revision 17** — §10. `SfpuIsclose` is the last
-piece of unblocked cat-B work in any family; `ReduceScalar` has a golden and a registry entry that no
-test can reach; and whether to widen `GENERATED_NAN_SIGN_OPS` is an open judgement call.
-
-**Revision 17's text follows, with §4 and §6 retired in place.** This document contains **only work that
-is not done**. Completed items
-are deleted rather than ticked off, because their results live in two places that cannot drift from the
-code: the code itself, and the coverage audit. For what a finished item established, read the audit —
-§5 has the findings, §4 has the per-op state.
-
-Deleted in this revision because it is finished: **the Wormhole re-measurement**. The suite has now run
-on a Wormhole n300, and both halves of that item came back clean —
-[WORMHOLE_MEASUREMENT_RESULTS.md](WORMHOLE_MEASUREMENT_RESULTS.md) has the full record.
-`specials_safe()`'s 7 cells are confirmed (250 variants, 85 failing — the recorded figures to the
-variant), so the table stays un-arch-keyed and `test_specials_safe_matches_measured_matrix` keeps its
-one verdict per cell; and the total order holds, so the seven enrolled goldens need no arch-keying.
-Earlier revisions deleted cat E, the scalar tensor-operand edges, the CI gap and the cat-B tranches the
-same way. What survived from all of it is not history but advice, and it is in §8.
+**Both arches are green.** Wormhole n300 measured suite by suite (audit §1), Blackhole green at the same
+head. Nothing here is a fire, so the ordering below is by value.
 
 **Of the cat-B work, everything unblocked is done in the unary family and nearly done in the binary
 one.** 67 of the 97 unary ops are enrolled, and all 30 outside wait on §3's questions or on a harness.
-The binary family is newer: 12 of 21 enrolled, and of the 9 outside, 6 fold into §3's first question, 1
-into its third, and `SfpuLogsigmoid` is not a binary op in the sense the probe assumes — leaving
-`SfpuIsclose` as the single piece of unblocked cat-B work anywhere. Reduce is 2 of 3, with `ReduceScalar`
-blocked on a C++ source branch that does not exist.
+The binary family: 12 of 21 enrolled, and of the 9 outside, 6 fold into §3's first question, 1 into its
+third, and `SfpuLogsigmoid` is not a binary op in the sense the probe assumes — leaving `SfpuIsclose` as
+the single piece of unblocked cat-B work anywhere (§10.1). Reduce is 2 of 3, with `ReduceScalar` blocked
+on a C++ source branch that does not exist (§10.2).
 
 ---
 
@@ -66,20 +37,23 @@ blocked on a C++ source branch that does not exist.
 | 5 | **Cat F** — harnesses for 11 kernels with no enum entry | new C++ source + golden each | large, per kernel | §5 |
 | 6 | **The comparator repair** — accept either infinity for a NaN the pack path substituted, keeping the sign assertion for `Neg`/`Abs`/`Identity` | nothing | one change to `convert_nan_to_inf`'s contract | §4 |
 
-**Start with item 1**, and not because it is the most interesting: it is the only item with a deadline.
-The 49 failures are invisible on `main` — `SPECIALS_READY_OPS` is empty there, so nothing injects a NaN —
-and they appear the moment this branch lands. Both Wormhole e2e paths see them, so the group stops at the
-first one (`-x`):
+**Nothing here has a deadline.** Both arches are green, so pick by what you can unblock.
 
-- the **non-coverage** groups (`split_group` 6–10) run all 10 ops;
-- the **coverage** groups still run 6 of them — `Fmod`, `GeluAppx`, `Hardmish`, `Mish`, `Softsign`, `Tan`
-  are standard-profile, so `_skip_coverage_unsupported`'s broad-profile skip does not reach them. Only
-  `Cos`, `Rsqrt`, `Silu`, `Sin` are hidden there.
+**Start with item 1 if you can send an email.** It is two questions and it decides 30 of the 30 remaining
+unary cat-B ops plus 7 of the 9 binary ones. Nothing else on this list unblocks that much.
 
-Then item 2: it is two emails and it decides 26 of the 30 remaining cat-B ops. Item 6 bounds the value of
-everything else — coverage that no job runs can regress silently — and item 5 is the only large build
-left. Item 4 is small and easy to skip, which is exactly why it is worth naming: an arch gate that always
-XPASSes is coverage that has already gone quiet.
+**Start with item 2 if you want code.** All three are small and none is blocked; two close a coverage gap
+rather than tidying one — `SfpuIsclose` is the last unblocked cat-B work in any family, and
+`ReduceScalar` is a reduce op with a golden and a registry entry that no test can reach.
+
+**Item 6 is the one that recovers lost coverage** rather than adding new: 50 unary cells + 1 scalar are
+currently gated off because the golden cannot soundly assert a NaN sign, and the comparator repair is what
+lets them assert again.
+
+Item 4 is small and easy to skip, which is exactly why it is worth naming: an arch gate that always
+XPASSes is coverage that has already gone quiet. Both still XPASS — 6 and 16 in the latest run, the same
+figures as when they were first measured — so nothing has quietly fixed them. Item 5 is the only large
+build left.
 
 **And check the ISA before filing anything else.** The third question on this list was written as a
 kernel divergence, drafted with a measured table, and turned out to be documented behaviour with the
@@ -251,25 +225,28 @@ where it diverges, so there is no kernel contract to question. Do not re-file it
 
 ---
 
-## 4. ~~The generated-NaN sign on Wormhole~~ — gated; the comparator repair survives
+## 4. The comparator repair — accept either infinity for a substituted NaN
 
-Retired in place, keeping the number because §7, §8 and §9 refer to it and because what it settled is
-load-bearing for anything touching a NaN sign again.
+The generated-NaN sign is **gated** on Wormhole: `nan_survives_to_l1()` + `GENERATED_NAN_SIGN_OPS` +
+`specials_after_nan_sign_gate()` turn cat B off on the cells where `SFPMAD.md` leaves the emitted sign
+unspecified, and Blackhole keeps every variant. Audit §5.10 has the ISA quotations.
 
-The 49 red Wormhole variants are gone. `SFPMAD.md` makes the emitted sign canonical on Blackhole and
-explicitly unspecified on Wormhole, so the kernels were in spec and the *golden* was asserting a sign
-the ISA declines to promise. A **skip** and not an xfail, because "might or might not be set" makes an
-xfail a coin-flip gate. Audit §5.10 has the measurement, §5.14 the three passes it took to scope, and
-§5.14 is the one to read first — the scope was wrong at the class level, then the operand level, and an
-allowlist at the third attempt turned 20 variants red because it silently dropped the composition ops.
+**The gate is a withdrawal, not a fix, and this is what would restore the coverage.** It stops the
+golden asserting what it cannot know; it does not restore the assertion in the weaker form the ISA *does*
+support — **an infinity of either sign**. Until that lands, all 50 gated unary cells + 1 scalar are a
+coverage loss, pinned by `test_nan_sign_gate_matches_the_measured_wormhole_failures` so the reach cannot
+widen unnoticed.
 
-**What is left is the repair, and it is item 6.** The gate stops the golden asserting what it cannot
-know; it does not restore the assertion in the weaker form the ISA *does* support — "an infinity of
-either sign". That is a change to `convert_nan_to_inf`'s contract rather than to the gate, and it has to
-keep the sign assertion for the ops that genuinely **move** the sign bit (`Neg`, `Abs`, `Identity` —
-`SFPABS`'s summary says "-NaN is left as -NaN rather than becoming +NaN"). Until it lands, every gated
-cell is a coverage loss rather than a closed item, and `test_sfpu_domains` pins the reach at 50 unary +
-1 scalar so it cannot widen unnoticed.
+**How.** It is a change to `convert_nan_to_inf`'s contract rather than to the gate. The constraint that
+makes it more than a one-liner: it has to keep asserting the sign for the ops that genuinely **move** the
+sign bit — `Neg`, `Abs`, `Identity`, where `SFPABS`'s summary says *"-NaN is left as -NaN rather than
+becoming +NaN"*. So the comparator needs to know, per lane, whether the NaN it is about to compare was
+forwarded or emitted; `BinarySFPUGolden._canonicalise_emitted_nan` already computes exactly that mask for
+the binary family and is the model to follow.
+
+**Then remove the gate** for the cells it covers and re-run both arches: the 50 unary cells should come
+back as passes, and the pinned reach in `test_sfpu_domains` shrinks to whatever genuinely cannot be
+asserted.
 
 ## 5. Cat F — the 11 kernels with no `MathOperation` entry
 
@@ -302,25 +279,6 @@ kernel accordingly, and expect the first one to pay for the shape that the rest 
 | Medium | `AddInt32`, `SubInt32`, `AbsInt32`, `BitwiseNot` | Perf-only, blocked by the fast-tilize gap (tt-llk#495) |
 
 ---
-
-## 6. ~~Tune the non-coverage CI groups' timeouts~~ — withdrawn, the premise was false
-
-This item existed because the broad unary profile was believed to run in no automated job: llk-e2e was
-read as running under coverage, and `_skip_coverage_unsupported` drops every `BROAD_SWEEP_OPS` variant
-when it does. **No group in `llk_e2e_tests.yaml` passes `--coverage`** — all four carry
-`coverage: false`, `WITH_COVERAGE` is set solely by that CLI option, and `llk-e2e-impl.yaml` runs
-`matrix.test-group.cmd` verbatim. The skip never fires there, so the broad profile was already running
-nightly on both arches and the companion groups were a duplicate rather than new coverage. They are
-withdrawn and `tests/pipeline_reorg/llk_e2e_tests.yaml` is byte-identical to `main`.
-
-**What is left is a number to watch, not work to do.** The variants land inside the existing groups'
-`timeout: 38`, whose wall-clock is unmeasured. For scale, measured serially on a Wormhole n300:
-`test_sfpu_unary.py` runs its 6646 variants in **13m22s** of consumer time after a 2m38s producer, and
-the nightly groups run `-n auto --dist=worksteal`.
-
-**Do not re-cite tt-llk#1435 for the coverage skip.** That issue is about test *ordering*, and its one
-mention of coverage is an observation of the skip's effect rather than a reason for it. The citation was
-circular and has been removed. The real rationale is recorded nowhere; if you find out, write it down.
 
 ## 7. How to verify your work
 
@@ -443,7 +401,7 @@ Every one of these has already cost time once.
   about the hardware.
 - **Check that the comparator can see the divergence before designing around it.** `passed_test()`
   compares with `torch.isclose`, a both-NaN clause and PCC, and `-0.0 == +0.0` under every one of them.
-  Two rows sat on the blocking list for a revision because nobody checked whether a failing test could
+  Two rows sat on the blocking list for a while because nobody checked whether a failing test could
   even exist for them. The corollary: a probe whose whole point is a zero's sign needs a bitwise
   comparator first, and that is a suite-wide change.
 - **A probe that cannot be delivered is not a test.** `specials_safe()` answers whether a pipeline
@@ -516,6 +474,28 @@ Every one of these has already cost time once.
   (`CallstackEntry`, `ElfFile` — both *added* in later releases), which reads like a broken checkout. It
   is easy to misdiagnose as "the symbol moved in a newer release" and start writing shims; check the
   installed version against the pin first.
+- **List the exceptions, not the cases you remember.** The binary NaN-sign mask was keyed on an
+  *allowlist* of the four elementwise arithmetic ops. That silently zeroed it for the composition ops
+  (`div`, `fmod`, `remainder`, `xlogy`, `pow`, `atan2`), whose NaN is just as computed as `add`'s — and
+  because the `both_zero`/`nan_golden` xfails for those ops had been deleted on the premise the mask
+  would cover them, **20 Wormhole variants went red**. The host test passed throughout, because it
+  asserted only the four ops the author had listed. An exclusion list of the genuine exceptions
+  (`binary_max_min`, which *selects* an operand rather than computing) survives a new op joining; an
+  allowlist does not. The same shape appears twice more in this document's history.
+- **Ask whether an error is absolute or relative before making a tolerance per-format.** `SfpuXlogy`'s
+  is absolute (`x · abs_err(ln y)`), so the atol it needs tracks output quantization and genuinely
+  differs per format. `SfpuElwpow`'s is relative and ~flat in the operands, so one rtol fits every float
+  column — splitting it per format the way xlogy is split **failed all 15 of pow's `->Float16`
+  variants**. Only the first kind is a property of the output format. (The real bug in that entry was
+  the opposite direction: a flat override *tightened* `->Bfp8_b` from its 0.2 default, where the
+  block-lattice fallback needs the slack.)
+- **A golden that models op X as op Y must pin the agreement, not assert it in prose.** `_hardtanh`
+  calls `sfpu_clamp`, and the comment claimed the same kernel and the same dispatch constants.
+  `SfpuType::hardtanh` dispatches to `_calculate_hardtanh_` — three adds with two clamps-at-zero, bf16
+  constants — where `Clamp` dispatches to `_calculate_clamp_` with fp16 min/max. They agree at every
+  enrolled special by arithmetic, not by construction, so a plausible tightening of `sfpu_clamp` (its
+  docstring had `> max` where the kernel has `v_elseif ... >= max`) would have moved `Hardtanh` at
+  `+NaN` from `1.0` to `NaN`. Model the real sequence in a host test and let it fail.
 
 ---
 
@@ -602,7 +582,7 @@ difference with a known fix; these are undocumented disagreements with recorded 
 
 ## 10. Three small unblocked items
 
-None existed at revision 17. All three are small and none is blocked on anyone; the first two close a
+All three are small and none is blocked on anyone; the first two close a
 coverage gap rather than tidying one.
 
 ### 10.1 `SfpuIsclose` — one per-cell read-back
@@ -623,7 +603,7 @@ operand.
 enrols the op, or it is a kernel finding for §3's list.
 
 **Do not adjust the golden first.** Fixing a golden until it matches is how a kernel divergence gets
-laundered into agreement — audit §5.8 is the case where that would have written seven permanent,
+laundered into agreement — the total-order finding is the case where that would have written seven permanent,
 plausible-looking lies about documented hardware.
 
 ### 10.2 `ReduceScalar` cat B — add the missing source branch
