@@ -384,37 +384,40 @@ auto rsqrt(const ComputeBlock<S>& b);
 template <typename SA, typename SB>
 auto matmul(const ComputeBlock<SA>& a, const ComputeBlock<SB>& b);
 
-// Reduce `b`'s tile grid down one axis, within and across tiles. `Geometry` is
-// the INPUT grid, `Axis` says which dimension collapses, and the destination
-// Storage must hold Geometry::out_tiles(Axis) tiles -- see ReduceAxis in
-// tt/unified/math.hpp for the shapes.
+// Reduce `b`'s tile grid down one axis, within and across tiles. `Axis` says which
+// dimension collapses; the input grid comes from `b`'s own shape -- see ReduceAxis in
+// tt/unified/math.hpp for what each axis leaves behind.
 //
-//     u::Storage out(kCbOut, u::ReduceGeometry<4, 4>::out_tiles(u::ReduceAxis::Rows));
-//     out.store(u::reduce_sum<u::ReduceGeometry<4, 4>, u::ReduceAxis::Rows>(block, scaler));
+//     using In = u::Shape<4, 4>;
+//     u::Storage<u::reduce_shape<In, u::ReduceAxis::Rows>> out(kCbOut);   // Shape<1, 4>
+//     out.store(u::reduce_sum<u::ReduceAxis::Rows>(block, scaler));
+//
+// The destination's shape is checked against what the reduction yields, so a
+// mis-sized output buffer does not compile.
 //
 // `scaler` comes from fill_reduce_scaler and must be held at KERNEL scope: every
 // reduce_tile re-reads it, so it must not be popped until the kernel ends. Taking
 // a ComputeBlock rather than a Storage is what says so -- and proves the buffer
 // was actually filled and waited on.
-template <typename Geometry, ReduceAxis Axis, typename SB, typename SC>
-ReduceNode<Geometry, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
+template <ReduceAxis Axis, typename SB, typename SC>
+ReduceNode<SB, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
     const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler);
 
 // Same shape, different fold. The SCALER differs though, and silently: metal folds
 // it into every reduce_tile, so
 //
 //   sum, max   scaler 1               -- kReduceScalerOne
-//   mean       scaler 1/N             -- bf16_pair(1.0f / Geometry::elements(Axis))
+//   mean       scaler 1/N             -- bf16_pair(1.0f / ReduceGeometry<In>::elements(Axis))
 //              (1/sqrt(N) when both axes collapse)
 //
 // A mean fed a scaler of 1 is just a sum, with nothing to say so. The scaler is
 // the kernel's to fill, so the kernel has to match it to the fold it asks for.
-template <typename Geometry, ReduceAxis Axis, typename SB, typename SC>
-ReduceNode<Geometry, Axis, ReducePool::Max, expr::UnaryChain<>> reduce_max(
+template <ReduceAxis Axis, typename SB, typename SC>
+ReduceNode<SB, Axis, ReducePool::Max, expr::UnaryChain<>> reduce_max(
     const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler);
 
-template <typename Geometry, ReduceAxis Axis, typename SB, typename SC>
-ReduceNode<Geometry, Axis, ReducePool::Avg, expr::UnaryChain<>> reduce_mean(
+template <ReduceAxis Axis, typename SB, typename SC>
+ReduceNode<SB, Axis, ReducePool::Avg, expr::UnaryChain<>> reduce_mean(
     const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler);
 
 // ---------------------------------------------------------------------------

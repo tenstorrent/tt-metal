@@ -47,11 +47,11 @@ constexpr uint32_t kCbOut = 16;
 // negative) or a mean (they are counted, dividing by 32x too many). Use
 // RT_SINGLE_STAGE with those.
 #if defined(RT_MAX)
-#define RT_REDUCE(Geom, x) u::reduce_max<Geom, kAxis>(x, scaler)
+#define RT_REDUCE(x) u::reduce_max<kAxis>(x, scaler)
 #elif defined(RT_MEAN)
-#define RT_REDUCE(Geom, x) u::reduce_mean<Geom, kAxis>(x, scaler)
+#define RT_REDUCE(x) u::reduce_mean<kAxis>(x, scaler)
 #else
-#define RT_REDUCE(Geom, x) u::reduce_sum<Geom, kAxis>(x, scaler)
+#define RT_REDUCE(x) u::reduce_sum<kAxis>(x, scaler)
 #endif
 
 void kernel_main() {
@@ -64,11 +64,6 @@ void kernel_main() {
     // column. Stage 1 folds this core's block; stage 2 folds the column's stack of
     // stage-1 results, which the gather has laid out as num_cores_y x in_wt.
     constexpr auto kAxis = u::ReduceAxis::Rows;
-    using PerCore = u::ReduceGeometry<in_ht, in_wt>;
-#if !defined(RT_SINGLE_STAGE)
-    using PerColumn = u::ReduceGeometry<num_cores_y, in_wt>;
-#endif
-    constexpr uint32_t reduced_tiles_per_block = PerCore::out_tiles(kAxis);
 
     // TensorAccessor compile-time args, laid out in0, in1, out -- starting AFTER
     // the four scalars above.
@@ -101,7 +96,7 @@ void kernel_main() {
     // The scaler metal folds into every reduce_tile: 1 for sum and max, 1/N for a
     // mean. Getting this wrong turns a mean into a sum with nothing to say so.
 #if defined(RT_MEAN)
-    const uint32_t scaler_bits = u::bf16_pair(1.0f / static_cast<float>(PerCore::elements(kAxis)));
+    const uint32_t scaler_bits = u::bf16_pair(1.0f / static_cast<float>(u::ReduceGeometry<In>::elements(kAxis)));
 #else
     const uint32_t scaler_bits = u::kReduceScalerOne;
 #endif
@@ -119,14 +114,14 @@ void kernel_main() {
 
     // Where this core's partial lands in the gather buffer. In BYTES: the offset
     // goes straight onto a write pointer, and each core owns one slice of
-    // reduced_tiles_per_block pages.
-    const uint32_t byte_offset = this_core.y * reduced_tiles_per_block * u::cb_page_bytes(kCbTmp1);
+    // Reduced::num_pages pages.
+    const uint32_t byte_offset = this_core.y * Reduced::num_pages * u::cb_page_bytes(kCbTmp1);
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
         // Column x owns its own input block, the same index its result goes to.
         u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, b * u::kCoreGridW + this_core.x).wait();
 
-        u::Block per_core_sum = tmp0_storage.store(RT_REDUCE(PerCore, a));
+        u::Block per_core_sum = tmp0_storage.store(RT_REDUCE(a));
 
 #if defined(RT_SINGLE_STAGE)
         // Stage 1 only -- no gather, no second fold. This is the shape that
@@ -144,11 +139,11 @@ void kernel_main() {
             u::noc_core_write<0>(tmp1_storage, std::move(per_core_sum), root, true, byte_offset).wait(num_cores_y);
 
         if (this_core == root) {
-            u::Block result = out_storage.store(RT_REDUCE(PerColumn, all_per_core_sums));
+            u::Block result = out_storage.store(RT_REDUCE(all_per_core_sums));
             // Every column has a root, and they all finish block b together, so the
             // block index alone would have them all writing the same pages. Give
             // each column its own slot: `out` is num_blocks rows of kCoreGridW
-            // results, so column x's reduced_tiles_per_block tiles land contiguously
+            // results, so column x's Reduced::num_pages tiles land contiguously
             // at b * kCoreGridW + x. The width comes from the harness's core-grid
             // define, so it costs no compile-time arg.
             u::noc_store<0>(std::move(result), out, b * u::kCoreGridW + this_core.x);
