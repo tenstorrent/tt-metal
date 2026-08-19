@@ -79,6 +79,21 @@ class Qwen36DecoderLayer:
         # THE RIGHT UNLOCK IS A bf8 KV CACHE, not casts: it removes the full_attention blocker at
         # source, and it is independently the top lever at long context (KV bytes exceed all weight
         # bytes past ~32k ctx). Revisit this only after that lands.
+        # NOT DONE: bf8 attention_norm gather. It is the single largest op in a full-attention
+        # layer (1,142us at seq 2048, T3K TP=8, ~33% of the block) and narrowing it to bf8 was
+        # MEASURED at -443us, plus -149us on the qkv matmul whose in0 then inherits bf8 -- i.e.
+        # -702us/layer, the largest single win identified. It is not here because it is blocked
+        # twice over:
+        #   1. It requires a bf8 KV CACHE (paged_fill_cache rejects a bf8 K/V input against a bf16
+        #      cache), and a bf8 KV cache is impossible with today's paged_update_cache -- see the
+        #      contract contradiction documented at that call site in attention/tp.py. Needs a C++
+        #      change.
+        #   2. Even then it is FULL-ATTENTION LAYERS ONLY: on a linear_attention layer the gathered
+        #      activation reaches the GDN depthwise MAC FIR, and gdn/conv_fir_wh.py's
+        #      ttnn.addcmul(out, x_slice, weight_taps) requires all three operands to share a dtype
+        #      (ternary.cpp:268). That blocker is independent of the KV cache.
+        # NOTE the single-layer profiler does NOT catch (2) -- it takes the native conv1d path; only
+        # the demo's masked tail chunks take the FIR path. test_demo_text is the gate that matters.
         self.attention_norm = self._make_norm(
             mesh_device,
             args,
