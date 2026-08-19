@@ -480,7 +480,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // 32-bit indices require the full-width DST registers (fp32 dest accumulation) so the index values
     // survive the transpose/sort datapath without truncation.
     compute_local_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = is_fp32_input,
+        .fp32_dest_acc_en = is_fp32_input || is32_bit_data,
         .dst_full_sync_en = false,
         .unpack_to_dest_mode = unpack_local,
     };
@@ -522,7 +522,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // 32-bit indices require the full-width DST registers (fp32 dest accumulation) so the index values
     // survive the merge datapath without truncation.
     compute_final_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = is_fp32_input,
+        .fp32_dest_acc_en = is_fp32_input || is32_bit_data,
         .dst_full_sync_en = false,
         .unpack_to_dest_mode = unpack_final,
     };
