@@ -258,7 +258,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # prefill will ask for. Rather than guess it (pre-warming every batch/seq-len combination runs out
         # of DRAM), we let that first real prefill prepare whatever it needs and flush afterwards. See
         # finalize_deferred_traces, which prefill_forward_text calls once its prefill is done.
-        self._defer_trace_recording = enable_trace
         self._warmup_prefill_sweep(
             kv_cache=kv_cache,
             enable_trace=enable_trace,
@@ -270,15 +269,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             sampling_parameters_sweeped=sampling_parameters_sweeped,
         )
 
-        # At batch 1 the sweep has already covered every variant the run will ask for, so finish here: the
-        # decode trace can be prepared and captured while the model is still in its post-warmup state, which
-        # is what its compile pass expects. Deferring to after the caller's prefill would run that compile
-        # with sampling already reconfigured per prefill user, which fails.
-        self._warmup_covered_all_variants = page_table is not None and page_table.shape[0] == 1
-        if self._warmup_covered_all_variants:
-            self.finalize_deferred_traces(
-                kv_cache=kv_cache, page_table=page_table, can_sample_on_device=can_sample_on_device
-            )
 
     def finalize_deferred_traces(self, kv_cache, page_table, can_sample_on_device, prefill_samples_on_device=None):
         """Prepare the remaining traces and capture everything that is pending.
@@ -668,19 +658,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         Runs back to back with no allocation in between: each capture only binds to buffers that were
         allocated during the preparation phase, before any trace existed.
         """
-        for trace_key, prepared in self._pending_prefill_traces.items():
-            trace_id, tt_out_trace, *device_inputs = self._record_trace_prefill(prepared)
-            self.trace_id_prefill[trace_key] = trace_id
-            self.trace_inputs_prefill[trace_key] = device_inputs
-            self.trace_output_prefill[trace_key] = tt_out_trace
-        self._pending_prefill_traces = {}
-
-        for key, prepared in self._pending_prefill_sampling_traces.items():
-            s_trace_id, s_trace_output, s_trace_input = self._record_trace_prefill_sampling(prepared)
-            self.trace_id_prefill_sampling[key] = s_trace_id
-            self.trace_output_prefill_sampling[key] = s_trace_output
-            self.trace_input_prefill_sampling[key] = s_trace_input
-        self._pending_prefill_sampling_traces = {}
 
         for model_id, prepared in self._pending_post_prefill_traces.items():
             trace_id, tt_out_trace, last_token_buffer = self._record_post_prefill_trace(prepared)
@@ -964,14 +941,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 chunk_page_table = _pad_or_create_page_table(chunk_page_table, chunk_blocks)
 
         if self.trace_id_prefill[trace_key] is None:
-            # While recording is deferred this key stays unset until the flush, so a repeated warmup call
-            # (the sampling-parameter sweep hits each seq len several times) must not prepare it again --
-            # that would redo the compile pass and reallocate the trace inputs. Just re-run the body over
-            # the inputs already staged for this variant.
-            already_pending = self._pending_prefill_traces.get(trace_key)
-            if already_pending is not None:
-                return self._rerun_prefill_body(already_pending)
-
             prepared = self._prepare_trace_prefill(
                 prefill_ids,
                 page_table=page_table,
@@ -983,15 +952,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 user_id=user_id,
                 start_pos=chunk_start_idx,
             )
-            if self._defer_trace_recording:
-                # Capturing now would make every remaining prepare -- the other prefill seq lens and, more
-                # importantly, the long-lived decode trace inputs -- allocate with a trace live on device.
-                # Stash it; warmup_model_prefill records everything once preparation is finished. The
-                # compile pass already computed this warmup call's result, so hand that back directly --
-                # popping it, so only the caller holds it and it is freed at the end of this call rather
-                # than piling up one body output per prepared variant until the flush.
-                self._pending_prefill_traces[trace_key] = prepared
-                return prepared.pop("compile_output")
 
             trace_id, tt_out_trace, *device_inputs = self._record_trace_prefill(prepared)
             self.trace_id_prefill[trace_key] = trace_id
@@ -1053,9 +1013,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
     def prefill_forward_text(self, *args, **kwargs):
         """Thin wrapper that flushes deferred trace captures once the prefill that triggered warmup ends.
 
-        Warmup leaves recording deferred on purpose so the caller's own prefill can prepare the trace
-        variants warmup cannot enumerate (batched prefill carries batch_size in its trace key). Only the
-        call that armed the deferral flushes it -- the warmup sweep's own nested calls must not.
+        The first traced prefill call defers only its own decode-trace recording: it prepares decode
+        (compile pass, persistent inputs, sampling pre-compile) before its prefill captures anything, then
+        records decode here once the prefill is done. Prefill traces themselves are captured immediately,
+        as on main. Only the call that armed the deferral flushes it -- nested calls must not.
         """
         already_pending = self._deferred_finalize_args is not None
         try:
@@ -1476,18 +1437,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     )
 
                     sampling_trace_key = f"sampling_{prefill_seq_len}_{model_id}_{sampling_batch}_{sampling_dp}"
-                    # While recording is deferred, capturing here would put a live trace on device before
-                    # finalize_deferred_traces has prepared anything -- every prepare after it would then be
-                    # an unsafe allocation. Prepare it now, run this prompt eagerly, and capture at flush.
-                    if enable_trace_current_prompt and self._defer_trace_recording:
-                        if (
-                            self.trace_id_prefill_sampling[sampling_trace_key] is None
-                            and sampling_trace_key not in self._pending_prefill_sampling_traces
-                        ):
-                            self._pending_prefill_sampling_traces[
-                                sampling_trace_key
-                            ] = self._prepare_trace_prefill_sampling(model_id, sampling_batch)
-                        enable_trace_current_prompt = False
 
                     if enable_trace_current_prompt:
                         if self.trace_id_prefill_sampling[sampling_trace_key] is None:
