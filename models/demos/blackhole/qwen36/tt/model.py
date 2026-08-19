@@ -504,12 +504,15 @@ class Qwen36Model:
         from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables
 
         rd = self.args.rope_head_dim
+        w = self.rope.rope_width  # == rd, or head_dim under permuted full-width RoPE
         B = int(idx.shape[-1])
-        tbl_cos, tbl_sin = _rope_dev_tables(self.device, rd, self.args.max_seq_len, self.args.rope_theta)
+        tbl_cos, tbl_sin = _rope_dev_tables(
+            self.device, rd, self.args.max_seq_len, self.args.rope_theta, full_head_dim=self.rope.full_head_dim
+        )
 
         def _gather(tbl):
-            r = ttnn.embedding(idx, tbl)  # ROW_MAJOR [1, B, rope_dim]
-            r = ttnn.reshape(r, (1, B, 1, rd))  # metadata-only while ROW_MAJOR
+            r = ttnn.embedding(idx, tbl)  # ROW_MAJOR [1, B, w]
+            r = ttnn.reshape(r, (1, B, 1, w))  # metadata-only while ROW_MAJOR
             return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
 
         return _gather(tbl_cos), _gather(tbl_sin)
@@ -699,6 +702,7 @@ class Qwen36Model:
             self.args.max_seq_len,
             self.args.rope_theta,
             torch.tensor([pos + self.rope.rope_delta], dtype=torch.int32),
+            full_head_dim=self.rope.full_head_dim,
         )
         cur_pos_tt = ttnn.from_torch(
             torch.tensor([pos], dtype=torch.int32),
@@ -1069,7 +1073,7 @@ class Qwen36Model:
         to the eager path's). M-RoPE-aware: when a multimodal request staged a per-sequence
         table (build_request_rope) this slices it; otherwise it is ordinary 1D RoPE at
         positions [start, start+length) — byte-identical to the pre-M-RoPE behaviour."""
-        rd = self.args.rope_head_dim
+        rd = self.rope.rope_width  # rope_head_dim, or head_dim under permuted full-width RoPE
         cos_t, sin_t = self.rope.prefill_cos_sin_torch(start, length)  # [length, rd] bf16
         cos = cos_t.reshape(1, 1, length, rd)
         sin = sin_t.reshape(1, 1, length, rd)
@@ -3383,7 +3387,13 @@ class Qwen36Model:
                 cos_host, sin_host = self.rope.get_cos_sin_host(int(rope_pos_vec[0]))
                 rope_packed = pack_rope_host(cos_host, sin_host)
         else:
-            _rope_dev_tables(self.device, self.args.rope_head_dim, self.args.max_seq_len, self.args.rope_theta)
+            _rope_dev_tables(
+                self.device,
+                self.args.rope_head_dim,
+                self.args.max_seq_len,
+                self.args.rope_theta,
+                full_head_dim=self.rope.full_head_dim,
+            )
             rope_packed = ttnn.from_torch(
                 rope_pos_vec.to(torch.int32).reshape(1, B), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
