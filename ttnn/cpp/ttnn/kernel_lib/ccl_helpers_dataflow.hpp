@@ -101,9 +101,11 @@
  *   + 4-chunk SCATTER + final drain layered on the same channels (all_gather_async) — PCC-verified
  *   on a Wormhole multi-chip simulator and validated on real 4-chip Blackhole fabric. The DUPLEX +
  *   FUSED tier extends the same model to the reduction and fused collectives (all_reduce_async,
- *   reduce_scatter_minimal_async), exercised + PCC-verified on the multi-chip simulator's 8-chip
- *   Blackhole line; the duplex channels use the same set_state/with_state stateful writers as the
- *   rest of this API. Built on the LINEAR (1-D) fabric API
+ *   reduce_scatter_minimal_async), PCC-verified on the multi-chip simulator's 8-chip Blackhole
+ *   line and validated on real 4-chip Blackhole fabric (all_reduce_async on the duplex
+ *   Cast::Multicast stream; the reduce_scatter families on the unidirectional channels + MuxConn,
+ *   split open included); the duplex channels use the same set_state/with_state stateful writers
+ *   as the rest of this API. Built on the LINEAR (1-D) fabric API
  *   (@c tt_metal/fabric/hw/inc/linear/api.h), which the TT-Fabric spec guarantees runs UNCHANGED
  *   on a 2-D (mesh) fabric. Worker-mux is wrapped via the ConnT policy (MuxConn<N>); see below.
  *
