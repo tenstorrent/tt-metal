@@ -75,3 +75,26 @@ template <
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t base_ptr) {
     llk_pack_impl<is_fp32_dest_acc_en, pack_mode>(tile_index, base_ptr);
 }
+
+// Id-free packer data-format reconfigure: reprogram the packer's src/dst format registers + tile geometry
+// from an output LLKMemDescriptor, mirroring the CB-id llk_pack_reconfig_data_format(new_output). Unlike
+// llk_pack_init (which does NOT touch the format registers -- only addrmod/mop/strides), this programs the
+// out/in data formats, dest-read control and exp/section sizes. Used by the id-free pack_untilize init so
+// the packer formats are correct regardless of the prior op (the CB-id path calls reconfig for the same
+// reason). tile_size is derived from the descriptor and carries the same fifo_page_size == a single tile's
+// size ASSUMPTION as tilize/untilize: exact for linear formats, omits the block-format exponent bytes.
+template <ckernel::experimental::LLKMemDescriptor DESC, bool is_fp32_dest_acc_en = false>
+inline void llk_pack_reconfig_data_format() {
+    constexpr std::uint8_t RegFmt = static_cast<std::uint8_t>(
+        ckernel::infer_pack_src_format(static_cast<DataFormat>(DESC.format), is_fp32_dest_acc_en));
+    // tile_size in 16B words (fifo_page_size units) == a single tile's size (SCALE_DATUM_SIZE >> 4).
+    constexpr std::uint32_t tile_size =
+        SCALE_DATUM_SIZE(static_cast<std::uint32_t>(DESC.format), DESC.shape.total_tensor_size()) >> 4;
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
+        RegFmt,
+        DESC.format,
+        tile_size,
+        DESC.shape.total_col_dim(),
+        DESC.shape.total_num_faces(),
+        false /* partial_face */);
+}
