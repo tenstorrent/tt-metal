@@ -386,12 +386,120 @@ uint32_t validate_recv_contig_weight_for_matmul_1d(
     return block_count;
 }
 
+// A FIFO consumer takes K-blocks as they land, so it only needs a double-buffered window rather
+// than the whole tensor resident.
+constexpr uint32_t kFifoMinWindowBlocks = 2;
+
+// True for the mcast-in1 consumer: in1 is not partitioned across workers at all, so every worker
+// needs the same full-width weight block. That is the one 1D mode a broadcast GCB can feed.
+bool is_mcast_in1_config(const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
+    return !config.gather_in0 && !config.mcast_in0;
+}
+
+// One broadcast GCB page is one full-width in1 K-block — the same block the matmul's in1 CB holds.
+uint32_t broadcast_page_bytes(
+    const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
+    const ttnn::Tensor& weight) {
+    const uint32_t bytes_per_tile = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(weight.dtype()));
+    return static_cast<uint32_t>(program_config.in0_block_w) * program_config.per_core_N * bytes_per_tile;
+}
+
+// Broadcast (mcast-in1) weight ↔ matmul cross-checks. Returns the number of K-blocks the prefetcher
+// must multicast. The weight is a single-shard NdShardSpec tensor: one full (K, N) slab on one DRAM
+// bank, every byte of which lands on every receiver.
+uint32_t validate_broadcast_weight_for_matmul_1d(
+    const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
+    const ttnn::Tensor& weight) {
+    TT_FATAL(
+        is_mcast_in1_config(program_config),
+        "broadcast Tensor prefetcher requires the mcast-in1 consumer (gather_in0=false and mcast_in0=false)");
+    TT_FATAL(
+        !program_config.stream_in1,
+        "mcast-in1 consumes GCB blocks in natural FIFO order and requires stream_in1=false");
+
+    TT_FATAL(weight.buffer() != nullptr && weight.buffer()->is_dram(), "weight must live in DRAM");
+    const auto& nd_opt = weight.nd_shard_spec();
+    TT_FATAL(
+        nd_opt.has_value(),
+        "broadcast weight must be allocated with an NdShardSpec (ttnn.MemoryConfig(BufferType.DRAM, "
+        "NdShardSpec(...))) holding one shard on one DRAM bank");
+    const auto& shard_shape = nd_opt->shard_shape;
+    TT_FATAL(
+        shard_shape.rank() == 2,
+        "broadcast NdShardSpec shard shape must be 2D (K, N); got rank {}",
+        shard_shape.rank());
+
+    const auto& tile = weight.tensor_spec().tile();
+    const uint32_t tile_h = tile.get_height();
+    const uint32_t tile_w = tile.get_width();
+    const uint32_t shard_K = shard_shape[0];
+    const uint32_t shard_N = shard_shape[1];
+    TT_FATAL(
+        shard_K % tile_h == 0 && shard_N % tile_w == 0,
+        "broadcast shard shape ({}, {}) must be tile-aligned (tile {}x{})",
+        shard_K,
+        shard_N,
+        tile_h,
+        tile_w);
+
+    const auto& wp = weight.padded_shape();
+    TT_FATAL(wp.rank() >= 2, "weight must be at least 2D; got rank {}", wp.rank());
+    TT_FATAL(
+        shard_K == static_cast<uint32_t>(wp[-2]) && shard_N == static_cast<uint32_t>(wp[-1]),
+        "broadcast weight must be a single shard spanning the whole tensor: shard ({}, {}) vs weight ({}, {})",
+        shard_K,
+        shard_N,
+        static_cast<uint32_t>(wp[-2]),
+        static_cast<uint32_t>(wp[-1]));
+
+    const auto& bds = weight.buffer()->buffer_distribution_spec();
+    TT_FATAL(bds.has_value(), "broadcast weight buffer must have a BufferDistributionSpec");
+    TT_FATAL(
+        static_cast<uint32_t>(bds->num_shards()) == 1,
+        "broadcast weight has {} shards; it must be a single shard so one DRAM bank holds the whole weight",
+        bds->num_shards());
+
+    const uint32_t weight_K_tiles = shard_K / tile_h;
+    const uint32_t weight_N_tiles = shard_N / tile_w;
+    // Same silent-hang / over-read guard as the other consumers: an indivisible K rounds the block
+    // width up, so the kernel reads past the weight while the matmul waits on pages that never come.
+    TT_FATAL(program_config.in0_block_w > 0, "mcast-in1 requires in0_block_w > 0");
+    TT_FATAL(
+        weight_K_tiles % program_config.in0_block_w == 0,
+        "weight K ({} tiles) must be divisible by in0_block_w ({}); remainder {}",
+        weight_K_tiles,
+        program_config.in0_block_w,
+        weight_K_tiles % program_config.in0_block_w);
+
+    // mcast-in1 is M-parallel: workers split M and each holds the full weight width, so the matmul's
+    // in1 CB page (sized from per_core_N) is exactly the broadcast page.
+    TT_FATAL(
+        weight_N_tiles == program_config.per_core_N,
+        "program_config.per_core_N ({}) must equal the full weight N ({} tiles = N {} / tile_w {}); every mcast-in1 "
+        "worker receives the whole weight width",
+        program_config.per_core_N,
+        weight_N_tiles,
+        shard_N,
+        tile_w);
+    return weight_K_tiles / static_cast<uint32_t>(program_config.in0_block_w);
+}
+
 }  // namespace
 
 uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const ttnn::Tensor& weight,
     const GlobalCircularBuffer& gcb) {
+    if (is_mcast_in1_config(program_config)) {
+        const uint32_t block_count = validate_broadcast_weight_for_matmul_1d(program_config, weight);
+        const uint32_t page_bytes = broadcast_page_bytes(program_config, weight);
+        TT_FATAL(
+            gcb.size() >= kFifoMinWindowBlocks * page_bytes,
+            "mcast-in1 global_cb requires a two-page streaming window: size {} must be at least {}",
+            gcb.size(),
+            kFifoMinWindowBlocks * page_bytes);
+        return block_count;
+    }
     const uint32_t receiver_count = gcb.receiver_cores().num_cores();
     TT_FATAL(receiver_count > 0, "global_cb has no receivers");
     return validate_recv_contig_weight_for_matmul_1d(program_config, weight, receiver_count);
@@ -443,7 +551,7 @@ static GlobalCircularBuffer build_matmul_1d_gcb_recv_contig(
         } else {
             TT_FATAL(
                 grid_capacity >= receiver_count,
-                "mcast_in0 program_configs[{}] grid {}x{} has capacity for {} workers, but bank_to_receivers has "
+                "program_configs[{}] grid {}x{} has capacity for {} workers, but bank_to_receivers has "
                 "{} receivers",
                 i,
                 grid.x,
@@ -452,18 +560,28 @@ static GlobalCircularBuffer build_matmul_1d_gcb_recv_contig(
                 receiver_count);
         }
 
-        // Per-(config, weight) recv-contig cross-checks and consumer-specific K-block count.
-        const uint32_t block_count = validate_recv_contig_weight_for_matmul_1d(cfg, weights[i], receiver_count);
+        // Per-(config, weight) cross-checks, consumer-specific K-block count, and page size. The
+        // consumer mode is per config, not per GCB: an mcast-in1 config takes a broadcast weight
+        // (one shard, full width per page) while gather-in0/mcast-in0 take a scatter weight (one
+        // slab per receiver), and both may share this GCB.
+        uint32_t block_count = 0;
+        uint32_t page_bytes = 0;
+        if (is_mcast_in1_config(cfg)) {
+            block_count = validate_broadcast_weight_for_matmul_1d(cfg, weights[i]);
+            page_bytes = broadcast_page_bytes(cfg, weights[i]);
+        } else {
+            block_count = validate_recv_contig_weight_for_matmul_1d(cfg, weights[i], receiver_count);
+            const auto& w = weights[i];
+            const auto& tile = w.tensor_spec().tile();
+            const uint32_t weight_K_tiles = static_cast<uint32_t>(w.padded_shape()[-2]) / tile.get_height();
+            const uint32_t k_block_w_tiles = weight_K_tiles / block_count;
+            const uint32_t bytes_per_tile = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(w.dtype()));
+            page_bytes = k_block_w_tiles * cfg.per_core_N * bytes_per_tile;
+        }
         max_block_count = std::max(max_block_count, block_count);
-        all_configs_fifo = all_configs_fifo && (cfg.mcast_in0 || cfg.stream_in1);
-
-        // One GCB page is one consumer K-block for one receiver.
-        const auto& w = weights[i];
-        const auto& tile = w.tensor_spec().tile();
-        const uint32_t weight_K_tiles = static_cast<uint32_t>(w.padded_shape()[-2]) / tile.get_height();
-        const uint32_t k_block_w_tiles = weight_K_tiles / block_count;
-        const uint32_t bytes_per_tile = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(w.dtype()));
-        const uint32_t page_bytes = k_block_w_tiles * cfg.per_core_N * bytes_per_tile;
+        // Only a batched gather needs the whole tensor resident; every other consumer takes blocks
+        // FIFO as they land.
+        all_configs_fifo = all_configs_fifo && (!cfg.gather_in0 || cfg.stream_in1);
         TT_FATAL(page_bytes > 0, "program_configs[{}] page_bytes computed as 0", i);
         max_page_bytes = std::max(max_page_bytes, page_bytes);
     }
@@ -475,7 +593,6 @@ static GlobalCircularBuffer build_matmul_1d_gcb_recv_contig(
     // K-row-major builder (see create_global_circular_buffer_for_matmul_1d for why kMaxCbPagesBytes
     // exists); no L1 budget check — callers size to fit their own receiver L1.
     constexpr uint32_t kMaxCbPagesBytes = 131072u * 16u;
-    constexpr uint32_t kFifoMinWindowBlocks = 2;
     const uint32_t min_blocks = all_configs_fifo ? kFifoMinWindowBlocks : max_block_count;
     const uint32_t min_size = max_page_bytes * min_blocks;
     TT_FATAL(
@@ -537,7 +654,8 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
     for (size_t i = 0; i < program_configs.size(); ++i) {
         TT_FATAL(
             program_configs[i].gather_in0,
-            "program_configs[{}] uses mcast_in0, which requires a receiver-contiguous NdShardSpec weight",
+            "program_configs[{}] uses mcast_in0 or mcast_in1, which require an NdShardSpec weight (per-receiver "
+            "shards for mcast_in0, a single shard for mcast_in1)",
             i);
     }
 

@@ -56,6 +56,12 @@ enum class SenderCoreType : uint8_t {
 // single- and dual-sender banks may therefore coexist in one GCB. The Tensor prefetcher always
 // provisions both cores and routes PREFETCH requests only to this GCB's mapped sender subset.
 //
+// Broadcast delivery (one NoC multicast per chunk instead of a unicast per receiver) is NOT
+// selected here: it is a per-tensor property carried in the prefetch request, so one GCB can serve
+// scatter and broadcast tensors interchangeably. The GCB only contributes the receiver geometry
+// that a broadcast push multicasts into; the prefetcher refuses a broadcast tensor when a sender's
+// receivers do not form a single row or column.
+//
 // MeshDevice-only: the arena that backs this GCB's pages_sent allocation lives on
 // MeshDeviceImpl, so a bare IDevice cannot construct one.
 GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(

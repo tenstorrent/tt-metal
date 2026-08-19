@@ -18,6 +18,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
+#include "impl/buffers/dram_sender_state_block.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/global_circular_buffer_dram_sender_internal.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
@@ -198,6 +199,205 @@ TEST_F(DramSenderGCBFixture, SmokeOneSenderFourReceivers) {
                                << ", acked=" << acked << ")";
         EXPECT_GT(sent, 0u) << "Sender did not push any pages to receiver " << r;
     }
+}
+
+// Broadcast GCB: one DRISC sender multicasts one page to a 1-D row of receivers, so every
+// receiver ends up with byte-identical contents rather than its own stripe. This exercises the
+// NoC mechanism (DRISC multicast payload + per-receiver unicast credits) on its own; the
+// prefetcher's broadcast DMA/chunking loop is covered end to end by the ttnn broadcast
+// mcast-in1 tests.
+TEST_F(DramSenderGCBFixture, BroadcastOneSenderFourReceivers) {
+    constexpr uint32_t kNumReceivers = 4;
+    constexpr uint32_t kPageSize = 64;
+    constexpr uint32_t kNumPages = 1;
+    constexpr uint32_t kRemoteCBId = 31;
+    constexpr uint32_t kGcbSize = 1024;
+
+    const uint32_t bank_id = 0;
+    CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
+    std::vector<std::pair<uint32_t, CoreRangeSet>> bank_to_receivers = {{bank_id, receiver_cores}};
+
+    auto gcb = experimental::CreateGlobalCircularBufferForTensorPrefetcher(
+        *mesh_device_,
+        bank_to_receivers,
+        kGcbSize,
+        BufferType::L1,
+        /*support_multi_receiver_shards=*/true);
+    const CoreCoord sender_logical = gcb.sender_receiver_core_mapping().at(0).first;
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t drisc_l1_unreserved = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+
+    constexpr uint32_t kDriscSlotBytes = sizeof(uint32_t);
+    const uint32_t pages_sent_size = 2 * kDriscSlotBytes * kNumReceivers;
+    const uint32_t noc_xy_size = 2 * sizeof(uint32_t) * kNumReceivers;
+    const uint32_t config_size = 16;
+    auto align_up = [l1_alignment](uint32_t v) { return (v + l1_alignment - 1) & ~(l1_alignment - 1); };
+    uint32_t cursor = drisc_l1_unreserved;
+    const uint32_t pages_sent_addr = cursor;
+    cursor = align_up(cursor + pages_sent_size);
+    const uint32_t noc_xy_addr = cursor;
+    cursor = align_up(cursor + noc_xy_size);
+    const uint32_t config_addr = cursor;
+    cursor = align_up(cursor + config_size);
+    const uint32_t data_addr = cursor;
+
+    ASSERT_EQ(experimental::pages_sent_drisc_l1_base(gcb), pages_sent_addr);
+
+    // A single page; every receiver must end up with exactly these bytes.
+    std::vector<uint32_t> page(kPageSize / sizeof(uint32_t));
+    for (uint32_t w = 0; w < page.size(); ++w) {
+        page[w] = 0xBCA50000u + w;
+    }
+    auto sender_virtual = device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
+    const uint64_t drisc_l1_noc_addr_base =
+        hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    MetalContext::instance().get_cluster().write_core(
+        page.data(),
+        page.size() * sizeof(uint32_t),
+        tt_cxy_pair(mesh_device_->build_id(), sender_virtual),
+        drisc_l1_noc_addr_base + (data_addr - drisc_l1_unreserved));
+
+    // Multicast rectangle, derived the same way the GCB stamps it: the receivers' bounding box
+    // in virtual worker coords, min corner first.
+    const auto& receiver_phys = experimental::receiver_coords_per_sender(gcb).at(0);
+    ASSERT_EQ(receiver_phys.size(), kNumReceivers);
+    CoreCoord mcast_min = receiver_phys.front();
+    CoreCoord mcast_max = receiver_phys.front();
+    for (const auto& c : receiver_phys) {
+        mcast_min.x = std::min(mcast_min.x, c.x);
+        mcast_min.y = std::min(mcast_min.y, c.y);
+        mcast_max.x = std::max(mcast_max.x, c.x);
+        mcast_max.y = std::max(mcast_max.y, c.y);
+    }
+
+    distributed::MeshCoordinateRange device_range(distributed::MeshCoordinate(0, 0));
+    Program program = CreateProgram();
+
+    std::vector<uint32_t> sender_compile_args = {
+        kRemoteCBId,
+        kNumPages,
+        kPageSize,
+        kNumReceivers,
+        pages_sent_addr,
+        noc_xy_addr,
+        config_addr,
+        data_addr,
+        kGcbSize,
+        static_cast<uint32_t>(gcb.buffer_address()),
+        static_cast<uint32_t>(experimental::pages_sent_worker_l1_base(gcb)),
+        static_cast<uint32_t>(mcast_min.x),
+        static_cast<uint32_t>(mcast_min.y),
+        static_cast<uint32_t>(mcast_max.x),
+        static_cast<uint32_t>(mcast_max.y),
+    };
+    KernelHandle sender_kernel_id = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/gcb_smoke_sender.cpp",
+        sender_logical,
+        DramConfig{.noc = NOC::NOC_0, .compile_args = sender_compile_args, .defines = {{"BROADCAST", "1"}}});
+
+    std::vector<uint32_t> sender_rt_args;
+    sender_rt_args.reserve(2 * kNumReceivers);
+    for (const auto& c : receiver_phys) {
+        sender_rt_args.push_back(c.x);
+        sender_rt_args.push_back(c.y);
+    }
+    SetRuntimeArgs(program, sender_kernel_id, sender_logical, sender_rt_args);
+
+    CircularBufferConfig cb_config(kPageSize);
+    cb_config.remote_index(kRemoteCBId).set_page_size(kPageSize).set_data_format(tt::DataFormat::Float16_b);
+    experimental::CreateCircularBuffer(program, receiver_cores, cb_config, gcb);
+
+    std::vector<uint32_t> receiver_compile_args = {kRemoteCBId, kNumPages};
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/gcb_smoke_receiver.cpp",
+        receiver_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0, .compile_args = receiver_compile_args});
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device_->mesh_command_queue());
+
+    // Every receiver must hold the same page -- that is what "broadcast" means.
+    auto receivers_vec = corerange_to_cores(receiver_cores);
+    for (uint32_t r = 0; r < receivers_vec.size(); ++r) {
+        std::vector<uint32_t> result;
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            device_, receivers_vec[r], gcb.buffer_address(), kPageSize, result, CoreType::WORKER);
+        for (uint32_t w = 0; w < page.size(); ++w) {
+            EXPECT_EQ(result[w], page[w]) << "Receiver " << r << " word " << w << " differs from the broadcast page";
+        }
+    }
+
+    // Credits must still balance per receiver even though one multicast carried the payload.
+    std::vector<uint32_t> pages_buf(2 * kNumReceivers, 0);
+    MetalContext::instance().get_cluster().read_core(
+        pages_buf.data(),
+        pages_buf.size() * sizeof(uint32_t),
+        tt_cxy_pair(mesh_device_->build_id(), sender_virtual),
+        drisc_l1_noc_addr_base + (pages_sent_addr - drisc_l1_unreserved));
+    for (uint32_t r = 0; r < kNumReceivers; ++r) {
+        EXPECT_EQ(pages_buf[2 * r], pages_buf[2 * r + 1])
+            << "Pages sent/acked mismatch for receiver " << r << " (sent=" << pages_buf[2 * r]
+            << ", acked=" << pages_buf[2 * r + 1] << ")";
+        EXPECT_GT(pages_buf[2 * r], 0u) << "Sender did not credit receiver " << r;
+    }
+}
+
+// The multicast rectangle is stamped for every DRAM-sender GCB, because the receiver set is fixed
+// for the GCB's lifetime while the choice to push through it is made per tensor. Pin the encoding
+// so a struct-layout or coordinate-space change can't silently point a broadcast push at the wrong
+// cores.
+TEST_F(DramSenderGCBFixture, StampsMulticastRectangle) {
+    constexpr uint32_t kNumReceivers = 4;
+    constexpr uint32_t kGcbSize = 1024;
+    const uint32_t bank_id = 0;
+    CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
+
+    auto gcb = experimental::CreateGlobalCircularBufferForTensorPrefetcher(
+        *mesh_device_,
+        {{bank_id, receiver_cores}},
+        kGcbSize,
+        BufferType::L1,
+        /*support_multi_receiver_shards=*/true);
+
+    const auto& receiver_phys = experimental::receiver_coords_per_sender(gcb).at(0);
+    ASSERT_EQ(receiver_phys.size(), kNumReceivers);
+    CoreCoord expected_min = receiver_phys.front();
+    CoreCoord expected_max = receiver_phys.front();
+    for (const auto& c : receiver_phys) {
+        expected_min.x = std::min(expected_min.x, c.x);
+        expected_min.y = std::min(expected_min.y, c.y);
+        expected_max.x = std::max(expected_max.x, c.x);
+        expected_max.y = std::max(expected_max.y, c.y);
+    }
+
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t drisc_l1_unreserved = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t drisc_l1_noc_addr_base =
+        hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const auto sender_logical = gcb.sender_receiver_core_mapping().at(0).first;
+    const auto sender_virtual = device_->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
+
+    std::vector<uint8_t> block(sizeof(DramSenderStateBlock), 0);
+    MetalContext::instance().get_cluster().read_core(
+        block.data(),
+        block.size(),
+        tt_cxy_pair(mesh_device_->build_id(), sender_virtual),
+        drisc_l1_noc_addr_base +
+            (static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(gcb)) - drisc_l1_unreserved));
+    const auto* state = reinterpret_cast<const DramSenderStateBlock*>(block.data());
+
+    EXPECT_EQ(state->mcast_start_x, static_cast<uint32_t>(expected_min.x));
+    EXPECT_EQ(state->mcast_start_y, static_cast<uint32_t>(expected_min.y));
+    EXPECT_EQ(state->mcast_end_x, static_cast<uint32_t>(expected_max.x));
+    EXPECT_EQ(state->mcast_end_y, static_cast<uint32_t>(expected_max.y));
+    EXPECT_EQ(state->num_receivers, kNumReceivers);
 }
 
 // Same data flow as SmokeOneSenderFourReceivers, but the sender (DRISC) and receiver

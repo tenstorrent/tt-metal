@@ -11,6 +11,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
+#ifdef ENABLE_GLOBAL_CB_MCAST_IN1
+#include "api/remote_circular_buffer.h"
+#endif
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
@@ -99,6 +102,14 @@ void kernel_main() {
     DataflowBuffer dfb_in3(dfb_id_in3);
 #endif
 
+#ifdef ENABLE_GLOBAL_CB_MCAST_IN1
+    // in1 arrives over the global CB instead of an on-grid multicast: the Tensor prefetcher
+    // multicasts each full-width K-block straight from the DRAM core into every worker's CB slot.
+    // Bias still comes from the in1 sender core, so the semaphores above stay in use for it.
+    constexpr uint32_t remote_cb_id = tt::CBIndex::c_31;
+    const uint32_t in1_fifo_tiles = get_local_cb_interface(dfb_id_in1).fifo_num_pages;
+#endif
+
     // WRITER
     // single-tile
     const uint32_t output_single_tile_size_bytes = dfb_out.get_tile_size();
@@ -118,6 +129,22 @@ void kernel_main() {
                     // Operand 1
                     dfb_in1.reserve_back(in1_block_num_tiles);
 
+#ifdef ENABLE_GLOBAL_CB_MCAST_IN1
+                    // Mirror of the in1 sender kernel's global-CB discipline: keep one block of
+                    // lookahead, then return the previous block's remote-CB credit to the
+                    // prefetcher once the unpacker has drained it. Every worker has its own
+                    // receiver interface, so credits flow back independently.
+                    experimental::remote_cb_wait_front(remote_cb_id, block == 0 ? 1u : 2u);
+
+                    dfb_in1.push_back(in1_block_num_tiles);
+
+                    if (block >= 1) {
+                        while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles - in1_block_num_tiles)) {
+                            invalidate_l1_cache();
+                        }
+                        experimental::remote_cb_pop_front(remote_cb_id, 1);
+                    }
+#else
                     // Set in1 semaphore value to INVALID
                     receiver_sem.set(INVALID);
 
@@ -128,7 +155,16 @@ void kernel_main() {
                     receiver_sem.wait(VALID);
 
                     dfb_in1.push_back(in1_block_num_tiles);
+#endif  // ENABLE_GLOBAL_CB_MCAST_IN1
                 }
+#ifdef ENABLE_GLOBAL_CB_MCAST_IN1
+                if (num_blocks_inner_dim > 0) {
+                    while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles)) {
+                        invalidate_l1_cache();
+                    }
+                    experimental::remote_cb_pop_front(remote_cb_id, 1);
+                }
+#endif
 
 #ifdef FUSE_BIAS
                 // Only read bias on first batch, or we have multiple output blocks
@@ -235,5 +271,9 @@ void kernel_main() {
 #if OUT_SHARDED
     dfb_out.wait_front(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+#endif
+#ifdef ENABLE_GLOBAL_CB_MCAST_IN1
+    experimental::update_remote_cb_config_in_l1(remote_cb_id);
+    noc.async_atomic_barrier();
 #endif
 }

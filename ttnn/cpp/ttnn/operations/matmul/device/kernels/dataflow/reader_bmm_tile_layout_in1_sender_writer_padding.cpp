@@ -463,7 +463,11 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif  // IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
-#ifndef SKIP_MCAST
+// ENABLE_GLOBAL_CB_MCAST_IN1: the in1 block already arrived on every worker over the global CB
+// (the Tensor prefetcher multicasts it straight from the DRAM core), so this core has no in1 to
+// relay. Only the in1 multicast is suppressed — the bias multicast below still runs, keeping bias
+// at a single DRAM read for the whole grid.
+#if !defined(SKIP_MCAST) && !defined(ENABLE_GLOBAL_CB_MCAST_IN1)
                         // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
                         // zero for the next block
@@ -505,7 +509,7 @@ void kernel_main() {
                             in1_mcast_dest_noc_end_x,
                             in1_mcast_dest_noc_end_y,
                             in1_mcast_num_cores);
-#endif  // SKIP_MCAST
+#endif  // !SKIP_MCAST && !ENABLE_GLOBAL_CB_MCAST_IN1
 
 #ifndef IN1_SHARDED
                         dfb_in1.push_back(in1_block_num_tiles);

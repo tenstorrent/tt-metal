@@ -9,6 +9,12 @@
 // up by the normal CB attachment path (via experimental::CreateCircularBuffer
 // receiver overload); the sender side here is hand-managed because we don't
 // allocate a sender-side CB on DRAM cores.
+//
+// With BROADCAST defined, the per-receiver unicast scatter is replaced by one NoC
+// multicast of a single page to the whole receiver rectangle, with the credit
+// increments left per-receiver and unicast. That is the NoC mechanism the broadcast
+// Tensor prefetcher uses; this kernel exercises it independently of the prefetcher's
+// own DMA/chunking loop (which the ttnn broadcast mcast-in1 tests cover end to end).
 
 #include <stdint.h>
 
@@ -85,6 +91,54 @@ void kernel_main() {
     experimental::resize_remote_sender_cb_interface<false>(remote_cb_id, page_size, noc_index);
 
     // 5) Reserve and push num_pages, one page at a time.
+#ifdef BROADCAST
+    // Multicast rectangle in virtual worker coords, min corner first (NOC0 orientation).
+    constexpr uint32_t mcast_start_x = get_compile_time_arg_val(11);
+    constexpr uint32_t mcast_start_y = get_compile_time_arg_val(12);
+    constexpr uint32_t mcast_end_x = get_compile_time_arg_val(13);
+    constexpr uint32_t mcast_end_y = get_compile_time_arg_val(14);
+    const uint32_t sx = noc_index == 0 ? mcast_start_x : mcast_end_x;
+    const uint32_t sy = noc_index == 0 ? mcast_start_y : mcast_end_y;
+    const uint32_t ex = noc_index == 0 ? mcast_end_x : mcast_start_x;
+    const uint32_t ey = noc_index == 0 ? mcast_end_y : mcast_start_y;
+    const uint32_t mcast_noc_xy = uint32_t(NOC_MULTICAST_ENCODING(
+        DYNAMIC_NOC_X(noc_index, sx),
+        DYNAMIC_NOC_Y(noc_index, sy),
+        DYNAMIC_NOC_X(noc_index, ex),
+        DYNAMIC_NOC_Y(noc_index, ey)));
+
+    for (uint32_t i = 0; i < num_pages; ++i) {
+        experimental::remote_cb_reserve_back(remote_cb_id, 1);
+        // One multicast delivers the page to every receiver at the same fifo offset.
+        noc_async_write_multicast_one_packet(
+            data_drisc_l1_base + i * page_size,
+            get_noc_addr_helper(mcast_noc_xy, iface.fifo_wr_ptr),
+            page_size,
+            num_receivers,
+            /*linked=*/false,
+            noc_index);
+        // Multicast is non-posted; wait for the acks so the data has landed before the
+        // credits that announce it.
+        noc_async_write_barrier();
+
+        // Credits stay per-receiver and unicast, exactly as prefetcher_finalize_block does.
+        const uint32_t pages_sent = page_size / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+        volatile tt_l1_ptr uint32_t* local_sent =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_sent_ptr);
+        uint32_t remote_sent_base = remote_cb_remote_pages_sent_ptr(iface.num_receivers_and_remote_pages_sent_ptr);
+        volatile tt_l1_ptr uint32_t* xy = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr);
+        for (uint32_t r = 0; r < num_receivers; ++r) {
+            const uint32_t remote_noc_xy =
+                uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc_index, xy[0]), DYNAMIC_NOC_Y(noc_index, xy[1])));
+            *local_sent += pages_sent;
+            noc_semaphore_inc<true>(get_noc_addr_helper(remote_noc_xy, remote_sent_base), pages_sent, noc_index);
+            local_sent += experimental::REMOTE_CB_LOCAL_PAGES_STRIDE / sizeof(uint32_t);
+            remote_sent_base += 2 * L1_ALIGNMENT;
+            xy += 2;
+        }
+        iface.fifo_wr_ptr += page_size;
+    }
+#else
     for (uint32_t i = 0; i < num_pages; ++i) {
         experimental::remote_cb_reserve_back(remote_cb_id, 1);
         experimental::remote_cb_push_back_and_write_pages<false>(
@@ -97,6 +151,7 @@ void kernel_main() {
             noc_index);
         noc_async_posted_writes_flushed();
     }
+#endif  // BROADCAST
 
     experimental::remote_cb_sender_barrier(remote_cb_id);
     // Production prefetcher kernels call update_remote_cb_config_in_l1() here to checkpoint

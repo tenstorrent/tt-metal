@@ -1222,6 +1222,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     bool in0_is_sharded,
     bool output_is_sharded,
     bool untilize_out,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0}) {
     // currently only support transpose of the full tile
@@ -1229,6 +1230,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
     bool fuse_op = false;
+
+    // Broadcast Tensor prefetcher: in1 arrives on every worker over the global CB instead of being
+    // read from DRAM by the first core and multicast on-grid. Core roles, the mcast semaphores and
+    // the bias path are all untouched — only the in1 data path moves, so bias still costs exactly
+    // one DRAM read for the whole grid.
+    const bool use_global_cb = global_cb.has_value();
 
     uint32_t num_blocks = K / in0_block_w;
     // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
@@ -1280,7 +1287,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     uint32_t in0_aligned_tile_size =
         in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
-    uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
+    // Global-CB pages are packed at the natural tile size (the prefetcher writes them contiguously),
+    // so they must not be padded to the DRAM alignment the interleaved reader needs.
+    uint32_t in1_aligned_tile_size =
+        use_global_cb ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
     // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
     // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
     // Mirrors in0/in1 above and the dram_sharded factory. No-op on Wormhole and for
@@ -1582,6 +1592,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
     }
 
+    if (use_global_cb) {
+        // ENABLE_GLOBAL_CB swaps the in1 DRAM read for a remote-CB wait/pop on both kernels;
+        // ENABLE_GLOBAL_CB_MCAST_IN1 additionally drops the sender's in1 multicast (it has nothing
+        // to relay) while leaving the bias multicast — and its single DRAM read — in place.
+        mm_kernel_in1_sender_writer_defines["ENABLE_GLOBAL_CB"] = "1";
+        mm_kernel_in1_sender_writer_defines["ENABLE_GLOBAL_CB_MCAST_IN1"] = "1";
+        mm_kernel_in1_receiver_writer_defines["ENABLE_GLOBAL_CB_MCAST_IN1"] = "1";
+    }
+
     // Intermediate CB read
     /*
     Blackhole architecture alignment issue workaround for tiny tiles:
@@ -1804,11 +1823,34 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     }
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
-    tt_metal::CircularBufferConfig src1_cb_config =
-        tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_aligned_tile_size)
-            .set_tile_dims(src1_cb_index, in1_tile);
-    tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    if (use_global_cb) {
+        // Back cb_src1 with the global CB so the prefetcher's multicast lands directly in the CB
+        // every worker's compute reads. c_31 is the remote view the in1 kernels wait/pop on; the
+        // local view keeps the same index the compute kernel already uses.
+        constexpr uint32_t remote_cb_index = tt::CBIndex::c_31;
+        const uint32_t in1_block_size_bytes = in1_block_tiles * in1_single_tile_size;
+        TT_FATAL(
+            global_cb->size() >= in1_block_size_bytes,
+            "mcast-in1 global_cb size {} must hold at least one full-width in1 K-block ({} B)",
+            global_cb->size(),
+            in1_block_size_bytes);
+        tt_metal::CircularBufferConfig remote_cb_config(
+            (global_cb->size() / in1_block_size_bytes) * in1_block_size_bytes);
+        remote_cb_config.remote_index(remote_cb_index)
+            .set_page_size(in1_block_size_bytes)
+            .set_data_format(in1_data_format);
+        remote_cb_config.index(src1_cb_index)
+            .set_page_size(in1_single_tile_size)
+            .set_data_format(in1_data_format)
+            .set_tile_dims(in1_tile);
+        tt_metal::experimental::CreateCircularBuffer(program, all_cores, remote_cb_config, *global_cb);
+    } else {
+        tt_metal::CircularBufferConfig src1_cb_config =
+            tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
+                .set_page_size(src1_cb_index, in1_aligned_tile_size)
+                .set_tile_dims(src1_cb_index, in1_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    }
     log_debug(
         LogOp,
         "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -5387,6 +5429,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         a.memory_config().is_sharded(),
         output.memory_config().is_sharded(),
         untilize_out,
+        global_cb,
         operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias),
         sub_device_start_core);
 }
