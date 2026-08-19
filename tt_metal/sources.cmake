@@ -173,6 +173,7 @@ set(TT_METAL_SOURCES
     hal.cpp
     tools/profiler/perf_debug_profiler.cpp
     tools/profiler/perf_debug_profiler_tracy_handler.cpp
+    tools/profiler/perf_debug_receiver.cpp
 )
 
 set(JITAPI_FILES

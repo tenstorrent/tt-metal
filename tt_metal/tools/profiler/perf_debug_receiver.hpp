@@ -1,0 +1,146 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// Perf-debug host receiver: D2H socket streams -> in-place frame decode -> 16 B records
+// emitted DIRECTLY into per-stream BroadcastRings -> registered consumers.
+//
+// Decode threads fuse poll + in-place decode + ack: frames are decoded out of the pinned
+// FIFO itself (no staging copy), records are stored straight into ring slots (no batch
+// copy), and the ack is issued only after the peeked frames are decoded -- credit return
+// is decode-paced and the receiver is lossless by construction. One ring per socket
+// stream keeps each ring single-writer. Each registered consumer gets its own thread with
+// one reader per ring; a lagging consumer drops its own oldest records (counted) -- the
+// only place on the host where records can drop.
+#pragma once
+
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
+#include "tools/profiler/perf_debug_records.hpp"
+#include "tools/profiler/spsc_marker_decode.hpp"
+
+namespace tt::tt_metal {
+
+namespace distributed {
+class D2HSocket;
+}
+template <typename T>
+class BroadcastRing;
+
+namespace perf_debug {
+
+struct ReceiverDeviceConfig {
+    uint32_t chip_id = 0;
+    std::vector<std::unique_ptr<distributed::D2HSocket>> sockets;
+    uint32_t num_cores = 0;
+    std::vector<PerfDebugLaneInfo> lane_table;          // size num_cores * 5
+    std::unordered_map<uint32_t, uint32_t> core_of_xy;  // incl. DRISC self-zone cores
+    bool clock_synced = false;
+    double frequency_ghz = 0.0;
+};
+
+struct ReceiverConfig {
+    // Fills PerfDebugCaptureContext::zone_names; invoked once, on a consumer thread, before
+    // the first batch is delivered (zone source locations only exist after the workload's
+    // kernels JIT-compile, so this cannot run at construction).
+    std::function<void(std::unordered_map<uint16_t, std::string>&)> load_zone_names;
+    // Optional: called once per stream if it starves for the watchdog window mid-run while
+    // its producers are not done (control plane can dump drainer state; receiver has no MMIO).
+    std::function<void(uint32_t device_index, uint32_t socket_index)> starvation_diagnostic;
+};
+
+class PerfDebugReceiver {
+public:
+    PerfDebugReceiver(ReceiverConfig config, std::vector<ReceiverDeviceConfig> devices);
+    ~PerfDebugReceiver();
+
+    PerfDebugReceiver(const PerfDebugReceiver&) = delete;
+    PerfDebugReceiver& operator=(const PerfDebugReceiver&) = delete;
+
+    void start();
+
+    PerfDebugConsumerHandle add_consumer(std::string name, PerfDebugRecordCallback cb);
+    void remove_consumer(PerfDebugConsumerHandle handle);
+
+    // Every drainer owning (device, socket) has published done, which implies the device saw
+    // all its bytes acked -- so the stream retires itself after one final empty check.
+    void notify_producers_done(uint32_t device_index, uint32_t socket_index);
+
+    void shutdown();
+
+    const PerfDebugCaptureContext& capture_context() const { return ctx_; }
+    // Final per-lane words-consumed mirrors; valid after shutdown(). Feeds the control
+    // plane's completeness check against the workers' own tails.
+    std::vector<uint32_t> final_lane_heads(uint32_t device_index) const;
+    void log_report() const;
+
+private:
+    struct Stream {
+        distributed::D2HSocket* sock = nullptr;
+        uint32_t dev = 0;
+        uint32_t sock_idx = 0;
+        std::unique_ptr<BroadcastRing<PerfDebugRec>> ring;
+        profiler::SpanDecodeState decode;
+        std::vector<uint64_t> last_zone_ts;  // per lane, order invariant (must never regress)
+        std::atomic<bool> producers_done{false};
+        bool retired = false;
+
+        uint64_t passes = 0, frames = 0, records = 0, zone_markers = 0, stall_zones = 0;
+        uint64_t decode_ticks = 0;
+        uint64_t order_regressions = 0, partial_frame_polls = 0, bad_frames = 0;
+        uint64_t first_data_tsc = 0, last_commit_tsc = 0;
+        uint64_t min_zone_ts = 0, max_zone_ts = 0;
+        bool desync_warned = false;
+        bool watchdog_fired = false;
+        std::chrono::steady_clock::time_point last_progress;
+    };
+
+    struct Consumer {
+        std::string name;
+        PerfDebugRecordCallback cb;
+        PerfDebugConsumerHandle handle = 0;
+        std::atomic<int> mode{0};  // 0 = run, 1 = drain-then-stop, 2 = stop-now
+        uint64_t delivered = 0;
+        uint64_t dropped = 0;
+        std::thread thread;
+    };
+
+    void decode_thread(std::vector<Stream*> streams);
+    // One poll+decode+ack pass over a stream. Returns true if it moved data; sets
+    // s.retired when the stream is finished.
+    bool decode_pass(Stream& s);
+    void consumer_thread(Consumer& c);
+
+    ReceiverConfig cfg_;
+    std::vector<ReceiverDeviceConfig> devices_;
+    PerfDebugCaptureContext ctx_;
+    std::vector<std::unique_ptr<Stream>> streams_;
+    std::vector<std::thread> decode_threads_;
+
+    std::mutex consumers_mu_;
+    std::vector<std::unique_ptr<Consumer>> consumers_;
+    std::vector<std::unique_ptr<Consumer>> consumers_report_;
+    uint64_t next_handle_ = 1;
+    std::once_flag names_once_;
+
+    bool no_decode_ = false;
+    bool stall_only_ = false;
+    uint32_t die_after_ = 0;
+    std::chrono::seconds watchdog_{120};
+
+    std::atomic<bool> stop_{false};
+    std::atomic<bool> shutdown_done_{false};
+    bool started_ = false;
+};
+
+}  // namespace perf_debug
+}  // namespace tt::tt_metal
