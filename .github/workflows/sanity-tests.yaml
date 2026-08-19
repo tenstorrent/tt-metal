@@ -319,12 +319,31 @@ jobs:
           wh_skus=()
           bh_skus=()
           sim_skus=()
+          # wh-skus / bh-skus are per-arch lists: pass these to an impl whose tests yaml
+          # only ever defines SKUs of that one architecture (t3000-sanity-tests, umd-sanity-tests).
+          # sanity-skus is the union of every enabled arch's list below: pass this to an impl
+          # whose tests yaml spans multiple architectures in one file (ttnn-sanity-tests,
+          # ops-sanity-tests, blackhole-multi-card-fast-sanity-tests). prepare_test_matrix.py
+          # intersects whichever list it's given against each test's own `skus:` map, so handing
+          # a wider list than a given tests yaml needs is safe -- SKUs the yaml doesn't reference
+          # simply produce no matrix rows for that impl.
           if [[ "$run_wormhole" == "true" ]]; then
-            wh_skus+=("wh_n300_civ2")
+            wh_skus+=(
+              "wh_n300_civ2"
+              "wh_llmbox"
+              "wh_llmbox_civ2"
+              "wh_llmbox_civ2_viommu"
+              "wh_llmbox_perf"
+            )
             sanity_skus+=("${wh_skus[@]}")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            bh_skus+=("bh_p150b_civ2" "bh_p150b_civ2_viommu" "bh_quietbox_2" "bh_p300")
+            bh_skus+=(
+              "bh_p150b_civ2"
+              "bh_p150b_civ2_viommu"
+              "bh_quietbox_2"
+              "bh_p300"
+            )
             sanity_skus+=("${bh_skus[@]}")
           fi
           if [[ "$run_sim" == "true" ]]; then
@@ -373,7 +392,10 @@ jobs:
     uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
       summary-scope: ${{ inputs.platform }}
-      enabled-skus: "wh_llmbox_civ2"
+      # t3000_sanity_tests.yaml today only defines wh_llmbox_civ2; the other wh-skus
+      # entries (wh_n300_civ2, wh_llmbox, wh_llmbox_civ2_viommu, wh_llmbox_perf) simply
+      # produce no matrix rows here until/unless a test entry references them.
+      enabled-skus: ${{ needs.generate-sku-matrix.outputs.wh-skus }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
