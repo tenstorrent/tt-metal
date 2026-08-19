@@ -32,8 +32,10 @@ from tests.nightly.t3000.ccl.test_strided_reduce_scatter_async import run_reduce
         (1, 1, 1, 1, 1),  # finest granularity
         (4, 2, 2, 2, 1),  # multiple N-blocks
         (1, 16, 8, 8, 1),  # coarsest: single M-block (partial: slice_Ht=13), single N-block
+        (2, 8, 2, 8, 3),  # partial last chunk (chunk_w=6 into N_block=8)
+        (1, 4, 4, 3, 1),  # non-div Wt (slice_Wt=16 % 3): ghost tiles mid-packet -> unicast fallback
     ],
-    ids=["finest", "multi_N_blocks", "coarsest"],
+    ids=["finest", "multi_N_blocks", "coarsest", "partial_last_chunk", "non_div_Wt_ghost_tiles"],
 )
 def test_strided_reduce_scatter_hw_probe(
     mesh_device,

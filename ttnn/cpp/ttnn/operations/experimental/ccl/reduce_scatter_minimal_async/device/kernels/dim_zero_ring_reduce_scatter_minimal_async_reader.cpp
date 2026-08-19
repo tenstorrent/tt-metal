@@ -68,7 +68,7 @@ void kernel_main() {
     // cadence — comes from the shared header, so this reader, the compute kernel and the writer
     // walk ONE definition instead of three hand-maintained copies of the interleave.
     auto slice_cursor = sched::RingSliceCursor::starting_at(
-        sched::dim_zero_ring_first_slice(my_chip_id, direction), ring_size, direction);
+        sched::ring_neighbour_first_slice(my_chip_id, direction), ring_size, direction);
     sched::DimZeroChunkWalk walk(slice_B, tile_granularity, start_tiles_read, start_tiles_to_read, direction);
     sched::SyncCadence cadence(chunks_per_sync);
 

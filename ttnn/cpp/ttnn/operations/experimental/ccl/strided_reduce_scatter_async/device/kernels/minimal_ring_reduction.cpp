@@ -25,6 +25,9 @@
 #include "api/debug/dprint.h"
 #include "strided_ring_reduce_scatter_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/accumulate_helpers_compute.hpp"
+#include "ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp"
+
+namespace sched = ttnn::ccl::schedule;  // the neighbour-first ring slice walk
 
 void kernel_main() {
     // Compile-time arguments (must match reader/writer on same device)
@@ -96,12 +99,14 @@ void kernel_main() {
                 const auto steps_worker = decompose_tile_advance(
                     effective_worker_id, effective_subchunk_size, effective_chunk_width_in_tiles);
 
-                // Same slice_idx pattern as the reader, but starting at i=1 (skipping
-                // the read-only i=0 pass that the compute kernel does not participate in).
-                int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
-                slice_idx += direction ? -1 : 1;
+                // Same neighbour-first slice walk as the reader and writer (the shared cursor),
+                // advanced once past the read-only i=0 pass the compute kernel does not
+                // participate in.
+                auto slice_cursor = sched::RingSliceCursor::starting_at(
+                    sched::ring_neighbour_first_slice(my_chip_id, direction), ring_size, direction);
+                slice_cursor.advance();
                 for (uint32_t i = 1; i < ring_size; i++) {
-                    const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
+                    const uint32_t actual_slice_idx = slice_cursor.wrap();
                     const uint32_t mm_N_full_blocks_per_slice =
                         get_slice_N_block_info(actual_slice_idx, slice_Wt, mm_N_full_block_wt).first;
 #ifdef FUSE_RS_ADDCMUL
@@ -244,7 +249,7 @@ void kernel_main() {
 #endif
                         }
                     }
-                    slice_idx += direction ? -1 : 1;
+                    slice_cursor.advance();
                 }
             }
         }
