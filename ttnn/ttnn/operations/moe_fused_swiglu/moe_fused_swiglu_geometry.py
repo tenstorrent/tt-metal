@@ -8,60 +8,72 @@ import os
 
 TILE = 32
 
+
+def _env_int(name: str, default: int) -> int:
+    """Read a tuning override while keeping the checked-in value as the default."""
+    return int(os.environ.get(f"MOE_FUSED_SWIGLU_{name}", str(default)), 0)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(f"MOE_FUSED_SWIGLU_{name}")
+    return default if value is None else value.lower() not in ("0", "false", "no", "off")
+
+
 # --------------------------------------------------------------------------------------------
 # Tuning constants.
 # --------------------------------------------------------------------------------------------
 #: Token tile-rows per M-block — the CB SIZING bound, not the work. Power of two so every runtime
 #: `m_eff` divides it and no shrunk reserve can straddle a CB's FIFO end.
-M_BLOCK = 8
+M_BLOCK = _env_int("M_BLOCK", 8)
 
 #: DEST tile budget for one matmul output sub-block, at half sync with fp32_dest_acc_en=False.
 DEST_AUTO_LIMIT_TILES = 8
 
 #: gate/up output sub-block height. 1, because its width is already HN_PAD against a budget of 8.
-OUT_SUBBLOCK_H_GU = 1
+OUT_SUBBLOCK_H_GU = _env_int("OUT_SUBBLOCK_H_GU", 1)
 
 #: Cap on the `down` sub-block height; the real value is derived against the DEST budget below.
 #: Direct final-output packing reloads the bf16 partial before the last K-block. The host derives
 #: the uniform-safe height against ec_max (2 at 11x8 / emb=7168); device cores with narrower real
 #: ec may grow to this cap at runtime (4x2 exactly fills the eight-tile DEST).
-OUT_SUBBLOCK_H_DN_MAX = 4
+OUT_SUBBLOCK_H_DN_MAX = _env_int("OUT_SUBBLOCK_H_DN_MAX", 4)
 
 #: Eltwise DEST-window block size — tiles per acquire/commit/wait/release cycle. Worth 1.05-1.07x.
 ELTWISE_BLK = DEST_AUTO_LIMIT_TILES
 
 #: Buffer depths, in blocks. DEPTH_H = 3 so a late round's producer is not flow-controlled by its
 #: own consumption; DEPTH_X = 2 lets the reader stage M-block b+1 during block b's phase 2.
-DEPTH_W = 2
-DEPTH_X = 2
-DEPTH_H = 3
-DEPTH_OUT = 2
-XSTICK_ROWS = 1
+DEPTH_W = _env_int("DEPTH_W", 2)
+DEPTH_X = _env_int("DEPTH_X", 2)
+DEPTH_H = _env_int("DEPTH_H", 3)
+DEPTH_OUT = _env_int("DEPTH_OUT", 2)
+XSTICK_ROWS = _env_int("XSTICK_ROWS", 1)
 
 #: W_down prefetch depth in phase-2 K-blocks.
-WD_AHEAD = 1
+WD_AHEAD = _env_int("WD_AHEAD", 1)
 
 #: Use full M tile rows for the phase-2 W_down schedule.
-WD_MROW_ROUNDS = True
+WD_MROW_ROUNDS = _env_bool("WD_MROW_ROUNDS", True)
 
 #: Enable the grouped phase-2 schedule for sufficiently large M.
-WD_MGROUPS = False
-WD_MGROUP_MIN_BLOCKS = 4
+WD_MGROUPS = _env_bool("WD_MGROUPS", False)
+WD_MGROUP_MIN_BLOCKS = _env_int("WD_MGROUP_MIN_BLOCKS", 4)
+WD_MGROUP_ROWS = _env_int("WD_MGROUP_ROWS", M_BLOCK // 2)
 
 #: Keep weights resident across M-blocks when L1 permits.
-W_RESIDENT = True
-WD_RESIDENT = True
+W_RESIDENT = _env_bool("W_RESIDENT", True)
+WD_RESIDENT = _env_bool("WD_RESIDENT", True)
 
 #: Hidden-axis chunks the gate/up weight stream is published and consumed in, so the matmul on
 #: chunk c overlaps the DRAM read of c+1. Clamped below to a divisor of HN_PAD.
-GU_CHUNKS = 3
+GU_CHUNKS = _env_int("GU_CHUNKS", 3)
 
 #: Stage x before issuing the writer's W_up stream.
-XPRIO = True
+XPRIO = _env_bool("XPRIO", True)
 
 #: How many rounds' senders an h receiver acks in one reserve. THE round-cost lever; clamped to
 #: DEPTH_H - 1 below.
-HACK_AHEAD = 2
+HACK_AHEAD = _env_int("HACK_AHEAD", 2)
 
 #: Bitmask selecting full-M h rounds sent by the writer on NoC1.
 H_ROUND_NOC1_MASK = int(os.environ.get("MOE_H_ROUND_NOC1_MASK", "0"), 0) & ((1 << M_BLOCK) - 1)
@@ -70,7 +82,7 @@ H_ROUND_NOC1_MASK = int(os.environ.get("MOE_H_ROUND_NOC1_MASK", "0"), 0) & ((1 <
 SCATTER_ONE_SIGNAL = os.environ.get("MOE_SCATTER_ONE_SIGNAL", "1") not in ("0", "false", "False")
 
 #: Eighths of each phase-2 W_down K-block read by the writer on NoC1.
-WD_SPLIT = 3
+WD_SPLIT = _env_int("WD_SPLIT", 3)
 
 #: Whether phase-2 h all-gather payload multicasts are posted.
 H_MCAST_POSTED = os.environ.get("MOE_H_MCAST_POSTED", "1") not in ("0", "false", "False")
@@ -268,6 +280,7 @@ class Blocking:
         self.emb, self.hidden = emb, hidden
         self.emb_t, self.hid_t = emb // TILE, hidden // TILE
         self.m_t_max = m_t_max
+        self.gu_chunks_target = GU_CHUNKS
 
         if pow2_ceil(M_BLOCK) != M_BLOCK:
             raise ValueError(f"moe_fused_swiglu: M_BLOCK {M_BLOCK} must be a power of two")
@@ -297,16 +310,27 @@ class Blocking:
         # phase-2 CB reserves in EC_MAX-wide units, so its page count must be a multiple of it.
         self.ec_sizes, self.ec_starts = split(self.emb_t, self.num_cores)
         self.ec_max = max(self.ec_sizes)
-        self.mgroup_rows = M_BLOCK // 2
+        self.mgroup_rows = WD_MGROUP_ROWS
+        if self.mgroup_rows <= 0:
+            raise ValueError(f"moe_fused_swiglu: WD_MGROUP_ROWS must be positive, got {self.mgroup_rows}")
         self.mgroup_cores = self.hgroups * self.mgroup_rows
         self.ec_group_sizes, self.ec_group_starts = split(self.emb_t, self.mgroup_cores)
         self.ec_group_max = max(self.ec_group_sizes)
+        # The 12x8 Kimi-K3 geometry benefits strongly from the four-row down schedule: its
+        # ordinary 8x2 output shard has the same 192-tile critical work as the larger tuned
+        # models, while grouping changes that to 4x3 and halves the h all-gather. Keep the
+        # experimental global override, but promote only the measured exact shapes by default.
+        tuned_grouped_shape = (emb, hidden) in ((3584, 3072), (6144, 2048))
+        enable_wd_mgroups = WD_MGROUPS or (hgroups == 12 and kgroups == 8 and tuned_grouped_shape)
         self.wd_mgroups = bool(
-            WD_MGROUPS
+            enable_wd_mgroups
             and self.wd_mrow_rounds
-            and M_BLOCK % 2 == 0
+            and M_BLOCK % self.mgroup_rows == 0
             and self.kgroups == M_BLOCK
-            and self.ec_group_max <= DEST_AUTO_LIMIT_TILES
+            and self.kgroups % self.mgroup_rows == 0
+            # Width five produced incorrect 7168x2048 output despite fitting DEST; the resident
+            # W_down grouped path is currently validated only through width four.
+            and self.ec_group_max <= min(4, DEST_AUTO_LIMIT_TILES)
         )
         # One physical resident W_down layout serves both runtime ownership modes. The reader
         # chooses which jstart/ec payload to place in its first columns; the row stride is the
@@ -449,7 +473,7 @@ class Blocking:
         if hn_pad * (self.hgroups - 1) >= self.hid_t:
             return None, f"leaves a column group with no real column (hid_t {self.hid_t})"
         # Prefer the tuned chunk count; widen it only if the DEST budget forces smaller chunks.
-        for chunks in sorted(range(1, hn_pad + 1), key=lambda c: (abs(c - GU_CHUNKS), c)):
+        for chunks in sorted(range(1, hn_pad + 1), key=lambda c: (abs(c - self.gu_chunks_target), c)):
             if hn_pad % chunks:
                 continue
             if OUT_SUBBLOCK_H_GU * (hn_pad // chunks) > DEST_AUTO_LIMIT_TILES:
@@ -485,7 +509,7 @@ class Blocking:
         # narrowing every block's FMA steps to its real balanced width.
         if self.hgroups <= self.hid_t:
             hn_pad = floor
-            for chunks in sorted(range(1, hn_pad + 1), key=lambda c: (abs(c - GU_CHUNKS), c)):
+            for chunks in sorted(range(1, hn_pad + 1), key=lambda c: (abs(c - self.gu_chunks_target), c)):
                 if hn_pad % chunks:
                     continue
                 if OUT_SUBBLOCK_H_GU * (hn_pad // chunks) > DEST_AUTO_LIMIT_TILES:
