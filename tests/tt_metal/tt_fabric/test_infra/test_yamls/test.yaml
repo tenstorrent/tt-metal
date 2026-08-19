@@ -5,7 +5,7 @@ allocation_policies:
 Tests:
   ### NEIGHBOR EXCHANGE BANDWIDTH TESTS ###
   - name: "NeighborExchangeUnicast"
-    benchmark_mode: false
+    benchmark_mode: true
     sync: true
     fabric_setup:
       topology: NeighborExchange

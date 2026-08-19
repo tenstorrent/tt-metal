@@ -2383,7 +2383,9 @@ struct WriteValidationConfig : public TrafficValidationConfigBase {
 
 struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
     WriteAtomicIncValidationConfig(
-        const NocUnicastWriteAtomicIncFields& write_atomic_inc_fields, const ReceiverTrafficConfigMetadata& metadata) :
+        const NocUnicastWriteAtomicIncFields& write_atomic_inc_fields,
+        const ReceiverTrafficConfigMetadata& metadata,
+        uint8_t flow_id) :
         TrafficValidationConfigBase(metadata) {
         // Set up function pointers
         ops.poll = poll_impl;
@@ -2399,6 +2401,22 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
         atomic_inc_address = reinterpret_cast<tt_l1_ptr uint32_t*>(atomic_fields.dst_address);
         atomic_inc_val = atomic_fields.atomic_inc_val;
         expected_atomic_value = atomic_inc_val;
+        flow_id_ = flow_id;
+    }
+
+    // [#45872] Read-only stall probe. Fires only after a genuine multi-million-spin wait (transient
+    // per-packet waits resolve long before the first threshold), pushing at most SYNC_DBG_MAX_POLLS
+    // records per stalled packet at exponentially growing intervals -- can't flood the ring and
+    // cannot change control flow. tag: 0xE3=atomic-inc short (completion signal missing by `value`),
+    // 0xE4=atomic arrived but payload last-word missing (value=packets remaining). 0xE5 companion =
+    // num_packets_processed (how far this flow got). sync_iter byte = flow_id.
+    FORCE_INLINE void stall_dbg(uint32_t tag, uint32_t value) {
+        if (++stall_spins_ >= stall_next_ && stall_pushes_ < SYNC_DBG_MAX_POLLS) {
+            sync_dbg_push(tag, flow_id_, value);
+            sync_dbg_push(0xE5, flow_id_, num_packets_processed & 0xFFFF);
+            stall_pushes_++;
+            stall_next_ <<= SYNC_DBG_POLL_GROWTH_SHIFT;
+        }
     }
 
     static bool poll_impl(TrafficValidationConfigBase* base_config) {
@@ -2407,10 +2425,16 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
         // Check atomic increment first
         uint32_t atomic_value = *config->atomic_inc_address;
         if (atomic_value < config->expected_atomic_value) {
+            config->stall_dbg(0xE3, (config->expected_atomic_value - atomic_value) & 0xFFFF);
             return false;
         }
 
-        return config->payload_buffer_->poll_for_data(config->metadata.seed);
+        if (!config->payload_buffer_->poll_for_data(config->metadata.seed)) {
+            uint32_t remaining = config->metadata.num_packets - config->num_packets_processed;
+            config->stall_dbg(0xE4, remaining & 0xFFFF);
+            return false;
+        }
+        return true;
     }
 
     static bool validate_impl(TrafficValidationConfigBase* base_config) {
@@ -2426,6 +2450,11 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
         config->expected_atomic_value += config->atomic_inc_val;
 
         config->payload_buffer_->advance();
+
+        // packet completed -> reset stall throttle so the next packet's wait is measured fresh
+        config->stall_spins_ = 0;
+        config->stall_pushes_ = 0;
+        config->stall_next_ = SYNC_DBG_FIRST_POLL_SPINS;
     }
 
     alignas(ReceiverPayloadBuffer) std::array<char, sizeof(ReceiverPayloadBuffer)> payload_buffer_storage;
@@ -2433,6 +2462,10 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
     volatile tt_l1_ptr uint32_t* atomic_inc_address;
     uint32_t atomic_inc_val;
     uint32_t expected_atomic_value;
+    uint8_t flow_id_ = 0;
+    uint32_t stall_spins_ = 0;
+    uint32_t stall_pushes_ = 0;
+    uint32_t stall_next_ = SYNC_DBG_FIRST_POLL_SPINS;
 };
 
 struct ScatterWriteValidationConfig : public TrafficValidationConfigBase {
@@ -2629,7 +2662,7 @@ private:
                 const auto write_atomic_inc_fields =
                     NocUnicastWriteAtomicIncFields::build_from_args<false>(local_args_idx);
                 traffic_configs_[i] =
-                    new (config_storage) WriteAtomicIncValidationConfig(write_atomic_inc_fields, metadata);
+                    new (config_storage) WriteAtomicIncValidationConfig(write_atomic_inc_fields, metadata, i);
             } else if (noc_send_type == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
                 const auto scatter_write_fields = NocUnicastScatterWriteFields::build_from_args<false>(local_args_idx);
                 traffic_configs_[i] = new (config_storage) ScatterWriteValidationConfig(scatter_write_fields, metadata);

@@ -1564,12 +1564,28 @@ FORCE_INLINE void run_routing_without_noc_sync_coordinated_as_non_master(
 }
 void run_coordinated_context_switch_to_base_firmware(
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
+    // [#45872 DOORBELL PROBE] Path-independent retrain bracket around the whole context switch (covers both
+    // the 1-erisc direct path and the 2-erisc coordinated-master path, whichever this config uses).
+    // Snapshots the channel-0 free-slots doorbell (stream 22) BEFORE and AFTER recovery; on a real retrain
+    // (retrain counter advanced) emits both + the credit counters. LOST-DOORBELL SIGNATURE: fs22_after reads
+    // MAX (empty) while fs22_before was < MAX -> the reset re-initialized free-slots to full, discarding a
+    // pending sender->router decrement -> off-by-one -> end-of-run barrier hang. Read-only; ERISC0-only push.
+    const int32_t dbell_fs22_before = get_ptr_val(static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0]));
+    const uint32_t dbell_rc_before = fabric_get_retrain_count();
     if constexpr (NUM_ACTIVE_ERISCS == 1) {
         run_routing_without_noc_sync();
     } else {
         if constexpr (IS_RETRAIN_SYNC_MASTER()) {
             run_routing_without_noc_sync_coordinated_as_master(termination_signal_ptr);
         }
+    }
+    const uint32_t dbell_rc_after = fabric_get_retrain_count();
+    if (dbell_rc_after != dbell_rc_before) {
+        const int32_t dbell_fs22_after = get_ptr_val(static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0]));
+        fabric_dbg_ringbuf_push_marker(0x96000000u | (static_cast<uint32_t>(dbell_fs22_before) & 0xFFFF));
+        fabric_dbg_ringbuf_push_marker(0x97000000u | (static_cast<uint32_t>(dbell_fs22_after) & 0xFFFF));
+        fabric_dbg_ringbuf_push_marker(0x98000000u | (dbell_rc_after & 0xFFFF));
+        fabric_dbg_ringbuf_push_credits();
     }
 }
 template <typename LocalTelemetryT>
