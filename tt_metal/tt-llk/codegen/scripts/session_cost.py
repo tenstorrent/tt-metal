@@ -14,10 +14,10 @@ Each ``type: assistant`` entry carries a ``message.usage`` object with
 ``message.model``.
 
 This script sums those fields across the main jsonl plus every subagent
-jsonl at any nesting depth under the session dir (the codegen agent tree
-nests: orchestrator -> analyzer/writer/tester/...), optionally filtered to
-entries with ``timestamp >= --since``, and applies per-model Anthropic
-pricing to compute ``cost_usd``.
+transcript (``<sessionId>/subagents/agent-*.jsonl`` — stored flat, one file per
+agent regardless of spawn depth), optionally filtered to entries whose
+``timestamp`` falls in the ``--since`` .. ``--until`` window, and applies
+per-model Anthropic pricing to compute ``cost_usd``.
 
 Interactive codegen runs (the orchestrator inside ``claude``) have no
 ``cli_output.json`` to read from — this script is the live source of truth
@@ -249,10 +249,14 @@ def _collect(
                         continue
                     if until_dt is not None and ts > until_dt:
                         continue
-            split = usage.get("cache_creation") or {}
+            split = usage.get("cache_creation")
+            if not isinstance(split, dict):
+                split = {}  # None, or an unexpected scalar — never let .get() throw
             c5 = int(split.get("ephemeral_5m_input_tokens") or 0)
             c1h = int(split.get("ephemeral_1h_input_tokens") or 0)
-            if not split:
+            if not (c5 or c1h):
+                # No recognized TTL bucket (no split, or only unknown keys) — fall
+                # back to the flat total so those tokens are never silently dropped.
                 c5 = int(usage.get("cache_creation_input_tokens") or 0)
             row = [
                 int(usage.get("input_tokens") or 0),
@@ -269,7 +273,7 @@ def _collect(
                     by_req[req] = [model, *row]
                 else:
                     prev[0] = prev[0] or model
-                    for i in range(5):
+                    for i in range(len(row)):
                         if row[i] > prev[i + 1]:
                             prev[i + 1] = row[i]
             else:
@@ -389,14 +393,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--until",
         default=None,
-        help="ISO 8601 end; only usage at or before this is counted. Pass the run's "
-        "END_TIME at finalize to freeze its cost so later turns in the same session "
-        "never inflate it.",
+        help="ISO 8601 end; only usage at or before this is counted (optional "
+        "upper bound, symmetric with --since).",
     )
     ap.add_argument(
         "--model",
         default=None,
-        help="Override model tier: opus|sonnet|haiku (default: derived per message).",
+        help="Override model tier: opus|sonnet|haiku|fable (default: derived per message).",
     )
     ap.add_argument(
         "--session-pid",
@@ -500,17 +503,16 @@ def main(argv: list[str] | None = None) -> int:
         print(_last_model(main_jsonl) or "")
         return 0
 
-    # Fold the whole session tree into per-requestId max rows, then price once.
-    # Recurse every subagent transcript at ANY depth under the session dir
-    # (<proj>/<sessionId>/), not just the first `subagents/` level — the agent tree
-    # nests (orchestrator -> analyzer/writer/tester/optimizer/...) and the
-    # grandchildren are where most tokens are spent. subs_dir.parent is that dir.
+    # Fold the main jsonl + every subagent transcript into per-requestId max rows,
+    # then price once. Subagents are stored flat as subagents/agent-*.jsonl (spawn
+    # depth is recorded inside each agent-*.meta.json, not as directory nesting), so
+    # one glob covers the whole agent tree. Scope to agent-*.jsonl — matching
+    # extract_run_transcripts.py — so no unrelated .jsonl gets priced as usage.
     by_req: dict = {}
     noreq: list = []
     _collect(main_jsonl, since_dt, until_dt, args.model, by_req, noreq)
-    session_dir = subs_dir.parent
-    if session_dir.is_dir():
-        for sub in sorted(session_dir.rglob("*.jsonl")):
+    if subs_dir.is_dir():
+        for sub in sorted(subs_dir.glob("agent-*.jsonl")):
             _collect(sub, since_dt, until_dt, args.model, by_req, noreq)
 
     inp = out = cr = cc = 0
