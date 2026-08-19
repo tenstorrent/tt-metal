@@ -139,17 +139,15 @@ bool supported_by_codegen(
 }
 
 bool is_demoted(
-    const Tensor& input, uint32_t repeats, int32_t dim, const std::optional<MemoryConfig>& /*output_mem_config*/) {
-    // The one measured shape where the codegen path lost to native on device:
-    // [1, 32, 64] | dim=1 & repeats=2 | float32 | row_major.
-    const auto& shape = input.logical_shape();
-    if (shape.rank() != 3 || shape[0] != 1 || shape[1] != 32 || shape[2] != 64) {
-        return false;
-    }
-    if (repeats != 2 || normalize_dim(dim, shape.rank()) != 1) {
-        return false;
-    }
-    return input.dtype() == DataType::FLOAT32 && input.layout() == Layout::ROW_MAJOR;
+    const Tensor& /*input*/,
+    uint32_t /*repeats*/,
+    int32_t /*dim*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    // No shape is perf-demoted: every configuration supported_by_codegen() admits beats the native
+    // composite on device time on both wormhole_b0 and blackhole. The gate stays in the routing
+    // expression as the one place a genuine device regression belongs, expressed as a condition over
+    // tensor attributes.
+    return false;
 }
 
 }  // namespace ttnn::operations::data_movement::repeat_interleave_codegen

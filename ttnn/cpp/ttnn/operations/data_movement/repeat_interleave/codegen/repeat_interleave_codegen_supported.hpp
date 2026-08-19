@@ -35,8 +35,10 @@ RmCbBudget rm_cb_budget(const Tensor& input, const std::optional<MemoryConfig>& 
 // is the floor below which the kernels deadlock.
 inline constexpr uint32_t kRmCbMinSlots = 2;
 
-// Perf-demotion gate: correct but not worth the codegen path. Routing-only -- consulted by
-// ttnn::repeat_interleave only, never by validate and never by repeat_interleave_force_codegen.
+// Perf-demotion gate: true means a configuration is correct on the codegen path but not worth
+// taking it. Routing-only -- consulted by ttnn::repeat_interleave only, never by validate and never
+// by repeat_interleave_force_codegen. Demotes nothing today; no measured in-scope configuration
+// loses to native on device.
 bool is_demoted(
     const Tensor& input, uint32_t repeats, int32_t dim, const std::optional<MemoryConfig>& output_mem_config);
 
