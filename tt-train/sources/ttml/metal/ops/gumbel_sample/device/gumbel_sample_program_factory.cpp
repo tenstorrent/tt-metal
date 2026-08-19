@@ -62,15 +62,18 @@ constexpr uint32_t kReaderHtIdx = 4U;
 constexpr uint32_t kReaderPositionsBufferIdx = 5U;
 constexpr uint32_t kWriterPositionsBufferIdx = 3U;
 static_assert(kReaderPositionsBufferIdx == kReaderHtIdx + 1U);
+// The writer's merge routing (owner x/y, send slot, expected shards) occupies the four slots after
+// the positions address.
+constexpr uint32_t kWriterMergeRoutingArgs = 4U;
 // Logical token count, appended LAST in both kernels so every earlier slot keeps its index. It
 // bounds the position clamp in both kernels (they consume disjoint bit fields of the SAME clamped
 // value, so both need it). A RUNTIME arg for the same reason Ht is: it derives from the token
 // dimension, which the program hash normalizes away in position mode -- as a compile-time arg it
 // would put every prompt length back on the JIT-miss path.
 constexpr uint32_t kReaderLogicalTokensIdx = 6U;
-constexpr uint32_t kWriterLogicalTokensIdx = 5U;
+constexpr uint32_t kWriterLogicalTokensIdx = 8U;
 static_assert(kReaderLogicalTokensIdx == kReaderPositionsBufferIdx + 1U);
-static_assert(kWriterLogicalTokensIdx == kWriterPositionsBufferIdx + 1U);
+static_assert(kWriterLogicalTokensIdx == kWriterPositionsBufferIdx + kWriterMergeRoutingArgs + 1U);
 
 // Per-entry token positions live in a small device TENSOR, not in runtime args. Each core stages the
 // whole local list into L1 once at kernel start (slots are indexed by absolute entry id, so the full
@@ -395,7 +398,7 @@ tt::tt_metal::Program build_program(
     // nothing never wait on it.
     const uint32_t reduction_sem_id = tt::tt_metal::CreateSemaphore(program, layout.all_cores, 0);
 
-    // Keep this count in step with TensorAccessorArgs<7> in writer_gumbel_sample.cpp -- the
+    // Keep this count in step with TensorAccessorArgs<6> in writer_gumbel_sample.cpp -- the
     // accessor offset is hard-coded there and the positions accessor chains off it, so a mismatch
     // misdecodes the accessor words (page size read as the config flags) instead of failing to
     // compile.
