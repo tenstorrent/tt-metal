@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Read-only git commands are allowed (`git rev-parse`, `git log`, `git status`, `git diff`, `git show`). **NEVER push, commit, checkout, restore, reset, or otherwise modify** the repo via git.
 
-**Blind codegen runs are stricter.** A run that exports `CODEGEN_BLIND_RUN=1` regenerates an implementation that was deliberately hidden, so recovering it from history would invalidate the result. In that mode the `PreToolUse` hook `.claude/hooks/git-guard.sh` denies history reads (`log`, `show`, `reflog`, `rev-list`, `cat-file`, `blame`, `stash`, `fsck`, `archive`), any reference to an older revision (`HEAD~`, `HEAD^`, `@{`, a bare SHA), and direct reads under `.git/`. `git status`, `git add`, `git commit`, a bare `git diff`, and `git worktree add` on a branch stay available. Outside a blind run the hook only logs commands and the policy above applies unchanged. Every bash command is logged either way — set `CODEGEN_GUARD_LOG` to keep that log with the run's artifacts.
+**In a blind codegen run, treat git history as unavailable.** Do not read `log`, `show`, `reflog`, `rev-list`, `cat-file`, `blame`, `stash`, `fsck`, or `archive`; do not name an older revision (`HEAD~`, `HEAD^`, `@{`, a bare SHA); do not read under `.git/`. `status`, `add`, `commit`, a bare `diff`, and `worktree add` on a branch stay allowed. If a git command is denied, do not look for another route to the same information.
 
 ## LLK CodeGen System
 

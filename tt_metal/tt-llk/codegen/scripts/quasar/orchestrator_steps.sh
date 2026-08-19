@@ -369,6 +369,23 @@ execute_step_hide_existing_kernel() {
     local _L; _L="$(_LOG)"
     local hide; hide="$(sg HIDE_EXISTING_KERNEL 2>/dev/null || echo false)"
     if [ "$hide" != "true" ]; then echo "hide_existing_kernel: not requested — skipping"; return 0; fi
+
+    # Resolve the session id BEFORE touching the repo. .claude/hooks/git-guard.sh is armed by a
+    # marker file keyed on it, so without an id the op can be hidden but its recovery cannot be
+    # blocked — a run that is not blind-safe. Fail here, while the worktree is still pristine,
+    # rather than after the removals have been committed.
+    local _sid
+    _sid="$(sg SESSION_ID 2>/dev/null || echo "")"
+    [ -z "$_sid" ] && _sid="${CLAUDE_CODE_SESSION_ID:-}"
+    [ -z "$_sid" ] && _sid="$(python "$_ORCH_SCRIPTS/session_cost.py" --print-session 2>/dev/null | awk '{print $1}')"
+    if [ -z "$_sid" ]; then
+        ss GUARD_ARMED false --json
+        echo "  ERROR: SESSION_ID unresolved — git-guard cannot be armed, so a blind run cannot" >&2
+        echo "  be enforced. Nothing was hidden. Set CLAUDE_CODE_SESSION_ID or clear" >&2
+        echo "  HIDE_EXISTING_KERNEL and rerun." >&2
+        return 1
+    fi
+
     local wt kn kt gen; wt="$(_wt)"; kn="$(sg KERNEL_NAME)"; kt="$(sg KERNEL_TYPE)"; gen="$(sg GENERATED_KERNEL)"
     local -a patterns=(); [ -n "$gen" ] && patterns+=("$gen")
     if [ "$kt" = "sfpu" ]; then
@@ -408,18 +425,12 @@ execute_step_hide_existing_kernel() {
     # every git-history read, so the implementation just hidden cannot be recovered from the
     # object store the worktree shares with the parent repo. A marker file is used rather
     # than an env var because HIDE_EXISTING_KERNEL is decided after Claude has started and a
-    # running process's environment cannot be changed from outside.
-    local _sid
-    _sid="$(sg SESSION_ID 2>/dev/null || echo "")"
-    [ -z "$_sid" ] && _sid="$(python "$_ORCH_SCRIPTS/session_cost.py" --print-session 2>/dev/null | awk '{print $1}')"
-    if [ -n "$_sid" ]; then
-        _disk_guard touch "${TMPDIR:-/tmp}/codegen-blind-run-${_sid}" || return $?
-        ss GUARD_ARMED true --json
-        echo "  git-guard armed (blind mode) for session $_sid"
-    else
-        ss GUARD_ARMED false --json
-        echo "  WARNING: SESSION_ID unresolved — git-guard NOT armed; this run is not blind-safe"
-    fi
+    # running process's environment cannot be changed from outside. `_sid` was resolved and
+    # validated at the top of this function, before anything was removed.
+    _disk_guard touch "${TMPDIR:-/tmp}/codegen-blind-run-${_sid}" || return $?
+    ss GUARD_ARMED true --json
+    ss SESSION_ID "$_sid"
+    echo "  git-guard armed (blind mode) for session $_sid"
     # Guard: a test source left on the branch that #includes a header we just hid makes the
     # run's compile fail in a way no agent can repair — worst under LOCK_TESTS, where the
     # tester may not touch tests. Scan the run's own compile scope (tt-llk tests) and
@@ -1159,14 +1170,26 @@ execute_step_extract_transcripts() {
         || echo "extract_run_transcripts: skipped (non-fatal)"
 
     # Collect the git-guard command log alongside the transcripts, and record how many
-    # commands it denied. GUARD_BLOCKS is the whole audit: 0 means this run never reached
-    # for git history; anything higher names the commands in git-guard.log.
-    local guard_src="${TMPDIR:-/tmp}/codegen-git-guard-${sid}.log" blocks=0
+    # commands it denied. GUARD_BLOCKS carries the audit: 0 means the guard ran and this run
+    # never reached for git history, and anything higher names the commands in git-guard.log.
+    # With no log there is nothing to count, so GUARD_BLOCKS is null — "not measured", which
+    # must stay distinguishable from a measured zero. Reporting 0 there would make an
+    # unenforced run look like a clean one.
+    local guard_src="${TMPDIR:-/tmp}/codegen-git-guard-${sid}.log" blocks=null
     if [ -n "$sid" ] && [ -f "$guard_src" ]; then
         _disk_guard cp "$guard_src" "$_L/git-guard.log" || return $?
-        blocks="$(grep -c $'\tBLOCK\t' "$_L/git-guard.log" 2>/dev/null || echo 0)"
+        # `grep -c` prints 0 AND exits 1 when nothing matches, so the fallback has to be on
+        # the assignment — `|| echo 0` inside the substitution would append a second zero and
+        # make GUARD_BLOCKS "0\n0", which `ss --json` rejects. Match the tab-delimited verdict
+        # rather than a column index, so the count survives a change to the log's columns.
+        blocks="$(grep -c $'\tBLOCK\t' "$_L/git-guard.log" 2>/dev/null)" || blocks=0
         rm -f "${TMPDIR:-/tmp}/codegen-blind-run-${sid}"
         echo "git-guard: $(wc -l < "$_L/git-guard.log") command(s) logged, $blocks blocked"
+    elif [ "$(sg GUARD_ARMED 2>/dev/null || echo false)" = "true" ]; then
+        # Armed at hide time but no log at the end: the hook never ran, so the removals went
+        # ahead unenforced. Say so loudly — this run's blindness is unverified.
+        echo "  WARNING: git-guard was armed but produced no log for session ${sid:-<unknown>}." >&2
+        echo "  The hook did not run, so this run's blindness is UNVERIFIED (GUARD_BLOCKS=null)." >&2
     else
         echo "git-guard: no log for session ${sid:-<unknown>} (hook not active this run)"
     fi
