@@ -194,7 +194,6 @@ scaleout:
     cpu_medium: 235
     wh_llmbox: 60
     wh_galaxy: 75
-    # Fabric test list (fabric_tests.yaml) SKUs.
     wh_n300_civ2: 15
     wh_llmbox_civ2: 65
     bh_loudbox: 195
@@ -214,7 +213,6 @@ scaleout:
     bh_quietbox_2: 15
     bh_p300: 15
   perf:
-    # T3K fabric ubench (fabric_perf_tests.yaml).
     wh_llmbox_perf: 140
   e2e:
     wh_llmbox: 185
