@@ -16,11 +16,11 @@
 namespace ttnn::prim {
 
 struct DecodeGatedDeltaRuleParams {
-    uint32_t B;    // batch
-    uint32_t H;    // heads (== v heads; no GQA in the decode graph)
-    uint32_t BH;   // B * H (one core per head)
-    uint32_t K;    // key dim (multiple of 32)
-    uint32_t V;    // value dim (multiple of 32)
+    uint32_t B;   // batch
+    uint32_t H;   // heads (== v heads; no GQA in the decode graph)
+    uint32_t BH;  // B * H (one core per head)
+    uint32_t K;   // key dim (multiple of 32)
+    uint32_t V;   // value dim (multiple of 32)
     bool has_initial_state;
     bool inplace_state;  // write new state back into initial_state's buffer
     float scale;         // folded into q's L2-norm factor (K**-0.5 by default)

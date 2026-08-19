@@ -334,8 +334,8 @@ ttnn::Tensor slice(
         // shrinks the untilize input by the row ratio; the tile-window slice is exact (row
         // bounds tile-aligned) so numerics are unchanged. Interleaved + full-width + step-1
         // inputs only; everything else keeps the existing whole-tensor conversion.
-        if (input_tensor.layout() == Layout::TILE && no_step && !one_dimensional &&
-            !input_tensor.is_sharded() && modified_begins[input_rank - 1] == 0 &&
+        if (input_tensor.layout() == Layout::TILE && no_step && !one_dimensional && !input_tensor.is_sharded() &&
+            modified_begins[input_rank - 1] == 0 &&
             modified_ends[input_rank - 1] == input_tensor.padded_shape()[input_rank - 1]) {
             const uint32_t tile_h = tile_shape[0];
             const uint32_t in_rows = input_tensor.padded_shape()[input_rank - 2];

@@ -75,8 +75,8 @@ void kernel_main() {
     const uint32_t g_addr = get_arg_val<uint32_t>(6);
     const uint32_t s0_addr = get_arg_val<uint32_t>(7);
 
-    const uint32_t tb_io = get_tile_size(cb_q);   // q/k/v/g/beta/state share one dtype
-    const uint32_t elem = tb_io / 1024;           // bytes per element
+    const uint32_t tb_io = get_tile_size(cb_q);  // q/k/v/g/beta/state share one dtype
+    const uint32_t elem = tb_io / 1024;          // bytes per element
     const auto q_acc = TensorAccessor(q_a, q_addr, tb_io);
     const auto k_acc = TensorAccessor(k_a, k_addr, tb_io);
     const auto v_acc = TensorAccessor(v_a, v_addr, tb_io);
@@ -156,8 +156,8 @@ void kernel_main() {
         for (uint32_t t = 0; t < n_tiles; t++) {
             const uint32_t p = base + t * tb_io;
             if (r != 0) {
-                copy_chunk(p + src_e0 * elem, p);                  // row 0 cols 0-15
-                copy_chunk(p + src_e1 * elem, p + 256 * elem);     // row 0 cols 16-31
+                copy_chunk(p + src_e0 * elem, p);               // row 0 cols 0-15
+                copy_chunk(p + src_e1 * elem, p + 256 * elem);  // row 0 cols 16-31
             }
             // zero everything except row 0's two 16-element face chunks
             zero(p + 16 * elem, (256 - 16) * elem / 4);
@@ -227,8 +227,7 @@ void kernel_main() {
         if (has_s0) {
             const uint32_t base_page = bh * kv;
             for (uint32_t t = 0; t < kv; t++) {
-                noc.async_read(
-                    s0_acc, cbs, tb_io, {.page_id = base_page + t}, {.offset_bytes = t * tb_io});
+                noc.async_read(s0_acc, cbs, tb_io, {.page_id = base_page + t}, {.offset_bytes = t * tb_io});
             }
             noc.async_read_barrier();
         } else {

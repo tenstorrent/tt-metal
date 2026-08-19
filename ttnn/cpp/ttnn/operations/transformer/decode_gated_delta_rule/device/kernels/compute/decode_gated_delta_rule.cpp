@@ -38,9 +38,9 @@ namespace {
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_g = 3, cb_beta = 4;
 constexpr uint32_t cb_state = 5, cb_ones = 6;
 constexpr uint32_t cb_qsq = 7, cb_ksq = 8;
-constexpr uint32_t cb_sc = 9;     // 1 tile fp32 rowsum of squares
-constexpr uint32_t cb_sc2 = 28;   // 1 tile fp32 q-chain inv-rms factor (dedicated)
-constexpr uint32_t cb_sc3 = 29;   // 1 tile fp32 k-chain inv-rms factor (dedicated)
+constexpr uint32_t cb_sc = 9;    // 1 tile fp32 rowsum of squares
+constexpr uint32_t cb_sc2 = 28;  // 1 tile fp32 q-chain inv-rms factor (dedicated)
+constexpr uint32_t cb_sc3 = 29;  // 1 tile fp32 k-chain inv-rms factor (dedicated)
 constexpr uint32_t cb_qn = 10, cb_kn = 11, cb_kcol = 12, cb_gexp = 13;
 constexpr uint32_t cb_sdec = 14, cb_vread = 15, cb_delta = 16;
 constexpr uint32_t cb_outer = 17, cb_sout = 18, cb_out = 19;
@@ -262,108 +262,107 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_q, cb_k, cb_out);
 
     for (uint32_t it = 0; it < n_inst; ++it) {
+        WAIT(cb_q, Kt);
+        WAIT(cb_k, Kt);
+        WAIT(cb_v, Vt);
+        WAIT(cb_g, 1);
+        WAIT(cb_beta, 1);
+        WAIT(cb_state, kv);
+        WAIT(cb_ones, 1);
 
-    WAIT(cb_q, Kt);
-    WAIT(cb_k, Kt);
-    WAIT(cb_v, Vt);
-    WAIT(cb_g, 1);
-    WAIT(cb_beta, 1);
-    WAIT(cb_state, kv);
-    WAIT(cb_ones, 1);
+        // ---- io -> fp32: every later operand is fp32 (mixed bf16 x fp32 srcA/srcB
+        // pairs lose the fp32 side; all scratch math must be uniform fp32). ----
+        copy_tiles(cb_q, cb_qf, Kt);
+        copy_tiles(cb_k, cb_kf, Kt);
+        copy_tiles(cb_v, cb_vf, Vt);
+        copy_tiles(cb_g, cb_gf, 1);
+        copy_tiles(cb_beta, cb_betaf, 1);
+        copy_tiles(cb_state, cb_sf, kv);
+        POP(cb_q, Kt);
+        POP(cb_k, Kt);
+        POP(cb_v, Vt);
+        POP(cb_g, 1);
+        POP(cb_beta, 1);
+        POP(cb_state, kv);
 
-    // ---- io -> fp32: every later operand is fp32 (mixed bf16 x fp32 srcA/srcB
-    // pairs lose the fp32 side; all scratch math must be uniform fp32). ----
-    copy_tiles(cb_q, cb_qf, Kt);
-    copy_tiles(cb_k, cb_kf, Kt);
-    copy_tiles(cb_v, cb_vf, Vt);
-    copy_tiles(cb_g, cb_gf, 1);
-    copy_tiles(cb_beta, cb_betaf, 1);
-    copy_tiles(cb_state, cb_sf, kv);
-    POP(cb_q, Kt);
-    POP(cb_k, Kt);
-    POP(cb_v, Vt);
-    POP(cb_g, 1);
-    POP(cb_beta, 1);
-    POP(cb_state, kv);
+        // Read-back barrier discipline (the canonical layernorm pattern: every CB
+        // page this kernel packed is wait_front'ed before this kernel reads it —
+        // without the wait the unpacker can run ahead of the packer and read the
+        // page's PREVIOUS contents; ttsim showed stale/zero norm factors).
+        WAIT(cb_qf, Kt);
+        WAIT(cb_kf, Kt);
+        WAIT(cb_vf, Vt);
+        WAIT(cb_gf, 1);
+        WAIT(cb_betaf, 1);
+        WAIT(cb_sf, kv);
 
-    // Read-back barrier discipline (the canonical layernorm pattern: every CB
-    // page this kernel packed is wait_front'ed before this kernel reads it —
-    // without the wait the unpacker can run ahead of the packer and read the
-    // page's PREVIOUS contents; ttsim showed stale/zero norm factors).
-    WAIT(cb_qf, Kt);
-    WAIT(cb_kf, Kt);
-    WAIT(cb_vf, Vt);
-    WAIT(cb_gf, 1);
-    WAIT(cb_betaf, 1);
-    WAIT(cb_sf, kv);
+        // ---- L2 norm q (scale folded): qn = q * scale / sqrt(||q||^2 + eps) ----
+        ew(cb_qf, cb_qf, cb_qsq, Kt, 2);  // q^2
+        WAIT(cb_qsq, Kt);
+        rowsum_k(cb_qsq, cb_sc, Kt);  // [0,*] = ||q||^2
+        WAIT(cb_sc, 1);
+        POP(cb_qsq, Kt);
+        inv_rms(cb_sc, cb_sc2, EPS_BITS, SCALE_BITS, true);
+        POP(cb_sc, 1);    // drop the sumsq page
+        WAIT(cb_sc2, 1);  // packer drain before the read-back
+        bcast_cols_mul(cb_qf, cb_sc2, cb_qn, 1, Kt);
+        WAIT(cb_qn, Kt);
+        POP(cb_qf, Kt);
+        POP(cb_sc2, 1);
 
-    // ---- L2 norm q (scale folded): qn = q * scale / sqrt(||q||^2 + eps) ----
-    ew(cb_qf, cb_qf, cb_qsq, Kt, 2);  // q^2
-    WAIT(cb_qsq, Kt);
-    rowsum_k(cb_qsq, cb_sc, Kt);  // [0,*] = ||q||^2
-    WAIT(cb_sc, 1);
-    POP(cb_qsq, Kt);
-    inv_rms(cb_sc, cb_sc2, EPS_BITS, SCALE_BITS, true);
-    POP(cb_sc, 1);  // drop the sumsq page
-    WAIT(cb_sc2, 1);  // packer drain before the read-back
-    bcast_cols_mul(cb_qf, cb_sc2, cb_qn, 1, Kt);
-    WAIT(cb_qn, Kt);
-    POP(cb_qf, Kt);
-    POP(cb_sc2, 1);
+        // ---- L2 norm k (no scale) ----
+        ew(cb_kf, cb_kf, cb_ksq, Kt, 2);
+        WAIT(cb_ksq, Kt);
+        rowsum_k(cb_ksq, cb_sc, Kt);
+        WAIT(cb_sc, 1);
+        POP(cb_ksq, Kt);
+        inv_rms(cb_sc, cb_sc3, EPS_BITS, SCALE_BITS, false);
+        POP(cb_sc, 1);
+        WAIT(cb_sc3, 1);  // packer drain before the read-back
+        bcast_cols_mul(cb_kf, cb_sc3, cb_kn, 1, Kt);
+        WAIT(cb_kn, Kt);
+        POP(cb_kf, Kt);
+        POP(cb_sc3, 1);
 
-    // ---- L2 norm k (no scale) ----
-    ew(cb_kf, cb_kf, cb_ksq, Kt, 2);
-    WAIT(cb_ksq, Kt);
-    rowsum_k(cb_ksq, cb_sc, Kt);
-    WAIT(cb_sc, 1);
-    POP(cb_ksq, Kt);
-    inv_rms(cb_sc, cb_sc3, EPS_BITS, SCALE_BITS, false);
-    POP(cb_sc, 1);
-    WAIT(cb_sc3, 1);  // packer drain before the read-back
-    bcast_cols_mul(cb_kf, cb_sc3, cb_kn, 1, Kt);
-    WAIT(cb_kn, Kt);
-    POP(cb_kf, Kt);
-    POP(cb_sc3, 1);
+        // ---- decay: h = state * exp(g) ----
+        expc(cb_gf, cb_gexp, 1);  // [0,0] = exp(g_h)
+        WAIT(cb_gexp, 1);
+        POP(cb_gf, 1);
+        bcast_scalar_mul(cb_sf, cb_gexp, cb_sdec, kv);
+        WAIT(cb_sdec, kv);
+        POP(cb_sf, kv);
+        POP(cb_gexp, 1);
 
-    // ---- decay: h = state * exp(g) ----
-    expc(cb_gf, cb_gexp, 1);  // [0,0] = exp(g_h)
-    WAIT(cb_gexp, 1);
-    POP(cb_gf, 1);
-    bcast_scalar_mul(cb_sf, cb_gexp, cb_sdec, kv);
-    WAIT(cb_sdec, kv);
-    POP(cb_sf, kv);
-    POP(cb_gexp, 1);
+        // ---- v_read = kn @ h; delta = v - v_read; delta *= beta ----
+        mm(cb_kn, cb_sdec, cb_vread, 1, Kt, Vt, false);
+        WAIT(cb_vread, Vt);
+        ew(cb_vf, cb_vread, cb_delta, Vt, 1);  // delta = v - v_read
+        WAIT(cb_delta, Vt);
+        POP(cb_vf, Vt);
+        POP(cb_vread, Vt);
+        bcast_scalar_mul(cb_delta, cb_betaf, cb_delta, Vt);  // in-place (2-page CB)
+        POP(cb_betaf, 1);
+        POP(cb_delta, Vt);  // drop the pre-beta page
 
-    // ---- v_read = kn @ h; delta = v - v_read; delta *= beta ----
-    mm(cb_kn, cb_sdec, cb_vread, 1, Kt, Vt, false);
-    WAIT(cb_vread, Vt);
-    ew(cb_vf, cb_vread, cb_delta, Vt, 1);  // delta = v - v_read
-    WAIT(cb_delta, Vt);
-    POP(cb_vf, Vt);
-    POP(cb_vread, Vt);
-    bcast_scalar_mul(cb_delta, cb_betaf, cb_delta, Vt);  // in-place (2-page CB)
-    POP(cb_betaf, 1);
-    POP(cb_delta, Vt);  // drop the pre-beta page
+        // ---- rank-1 write: new_h = h + (kn)^T @ (beta*delta) ----
+        transpose_row(cb_kn, cb_kcol, Kt);  // kn -> column form
+        WAIT(cb_kcol, Kt);
+        POP(cb_kn, Kt);
+        mm(cb_kcol, cb_delta, cb_outer, Kt, 1, Vt, false);  // [K,1]@[1,V]
+        WAIT(cb_outer, kv);
+        POP(cb_delta, Vt);
+        POP(cb_kcol, Kt);
+        ew(cb_sdec, cb_outer, cb_snew, kv, 0);  // fp32 new state
+        WAIT(cb_snew, kv);
+        POP(cb_sdec, kv);
+        POP(cb_outer, kv);
 
-    // ---- rank-1 write: new_h = h + (kn)^T @ (beta*delta) ----
-    transpose_row(cb_kn, cb_kcol, Kt);  // kn -> column form
-    WAIT(cb_kcol, Kt);
-    POP(cb_kn, Kt);
-    mm(cb_kcol, cb_delta, cb_outer, Kt, 1, Vt, false);  // [K,1]@[1,V]
-    WAIT(cb_outer, kv);
-    POP(cb_delta, Vt);
-    POP(cb_kcol, Kt);
-    ew(cb_sdec, cb_outer, cb_snew, kv, 0);  // fp32 new state
-    WAIT(cb_snew, kv);
-    POP(cb_sdec, kv);
-    POP(cb_outer, kv);
+        // ---- o = qn @ new_h (fp32 x fp32; packed straight to io) ----
+        mm(cb_qn, cb_snew, cb_out, 1, Kt, Vt, false);
+        POP(cb_qn, Kt);
 
-    // ---- o = qn @ new_h (fp32 x fp32; packed straight to io) ----
-    mm(cb_qn, cb_snew, cb_out, 1, Kt, Vt, false);
-    POP(cb_qn, Kt);
-
-    // ---- new state -> io for the writer ----
-    copy_tiles(cb_snew, cb_sout, kv);
-    POP(cb_snew, kv);
+        // ---- new state -> io for the writer ----
+        copy_tiles(cb_snew, cb_sout, kv);
+        POP(cb_snew, kv);
     }
 }

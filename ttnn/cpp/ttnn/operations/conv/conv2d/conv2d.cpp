@@ -754,18 +754,17 @@ static uint32_t channel_chunk_count_if_needed(
     const bool weight_is_host = !ttnn::is_device_tensor(weight_tensor);
     const bool weight_is_prepared_depthwise =
         !weight_is_host && kernel_size[0] == 1 && groups == in_channels && groups == out_channels &&
-        conv_config.shard_layout.has_value() &&
-        !conv_config.enable_kernel_stride_folding.value_or(false) && !conv_config.enable_activation_reuse &&
+        conv_config.shard_layout.has_value() && !conv_config.enable_kernel_stride_folding.value_or(false) &&
+        !conv_config.enable_activation_reuse &&
         is_valid_device_conv_weights(weight_tensor, in_channels, out_channels, conv_config.weights_dtype) &&
         [kernel_taps, &weight_tensor]() {
             const auto& weight_shape = weight_tensor.logical_shape();
             return weight_shape[2] % kernel_taps == 0 &&
                    (weight_shape[2] / kernel_taps) % tt::constants::TILE_HEIGHT == 0;
         }();
-    const bool can_chunk_channels =
-        groups > 1 && in_channels % groups == 0 && out_channels % groups == 0 &&
-        (weight_is_host || weight_is_prepared_depthwise) &&
-        (!bias_tensor.has_value() || !ttnn::is_device_tensor(bias_tensor.value()));
+    const bool can_chunk_channels = groups > 1 && in_channels % groups == 0 && out_channels % groups == 0 &&
+                                    (weight_is_host || weight_is_prepared_depthwise) &&
+                                    (!bias_tensor.has_value() || !ttnn::is_device_tensor(bias_tensor.value()));
     if (!can_chunk_channels) {
         return 1;
     }
@@ -808,14 +807,12 @@ static uint32_t channel_chunk_count_if_needed(
             {0, 0},
             {output_height, output_width},
             ttnn::operations::op_slicing::Op2DSliceConfig{
-                .slice_type = ttnn::operations::op_slicing::Op2DSliceConfig::SliceType::DRAM_WIDTH,
-                .num_slices = 1});
+                .slice_type = ttnn::operations::op_slicing::Op2DSliceConfig::SliceType::DRAM_WIDTH, .num_slices = 1});
     };
 
     bool needs_channel_chunking = false;
     if (dram_slice_config_.has_value() &&
-        dram_slice_config_.value().slice_type ==
-            ttnn::operations::op_slicing::Op2DSliceConfig::SliceType::L1_FULL &&
+        dram_slice_config_.value().slice_type == ttnn::operations::op_slicing::Op2DSliceConfig::SliceType::L1_FULL &&
         dram_slice_config_.value().num_slices <= 1) {
         // Forced L1_FULL (num_slices==0 is the default for the L1_FULL slice config):
         // chunk when the single full call cannot fit in L1.
@@ -1062,16 +1059,15 @@ Result conv2d_DRAM(
         // the kernel reads each kernel tap's slab at its prepared boundaries.
         const bool chunk_prepared_device_weights = ttnn::is_device_tensor(weight_tensor);
         Tensor chunkable_weight_src;
-        std::optional<Tensor> chunkable_bias_src =
-            bias_tensor.has_value()
-                ? std::make_optional(
-                      ttnn::operations::core::to_device(bias_tensor.value(), device, ttnn::DRAM_MEMORY_CONFIG))
-                : std::nullopt;
+        std::optional<Tensor> chunkable_bias_src = bias_tensor.has_value()
+                                                       ? std::make_optional(ttnn::operations::core::to_device(
+                                                             bias_tensor.value(), device, ttnn::DRAM_MEMORY_CONFIG))
+                                                       : std::nullopt;
         Tensor prepared_weight_rm;
         Conv2dConfig chunk_conv_config = conv_config;
         if (chunk_prepared_device_weights) {
-            prepared_weight_rm = ttnn::untilize(ttnn::to_memory_config(
-                weight_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
+            prepared_weight_rm = ttnn::untilize(
+                ttnn::to_memory_config(weight_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM}));
             const uint32_t prepared_tap_slab_rows =
                 weight_tensor.logical_shape()[2] / (kernel_size[0] * kernel_size[1]);
             chunk_conv_config.act_block_h_override = prepared_tap_slab_rows;
@@ -1080,8 +1076,7 @@ Result conv2d_DRAM(
                 "Conv2D DRAM channel chunking: prepared device weights with {} rows per kernel tap slab.",
                 prepared_tap_slab_rows);
         } else {
-            chunkable_weight_src =
-                ttnn::operations::core::to_device(weight_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
+            chunkable_weight_src = ttnn::operations::core::to_device(weight_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
         }
 
         for (uint32_t chunk_index = 0; chunk_index < num_channel_chunks; chunk_index++) {
@@ -1147,8 +1142,7 @@ Result conv2d_DRAM(
                 chunk_input_memory_config);
 
             auto chunk_output_tensors = chunk_attr.run_L1_op(chunk_input_tensor, {0, 0}, {output_height, output_width});
-            TT_FATAL(
-                chunk_output_tensors.size() == 1, "Channel-chunked conv must produce exactly one output tensor.");
+            TT_FATAL(chunk_output_tensors.size() == 1, "Channel-chunked conv must produce exactly one output tensor.");
             Tensor chunk_output_tensor = chunk_output_tensors[0];
 
             // Bring the chunk output to ROW_MAJOR interleaved: slice_write's RM
