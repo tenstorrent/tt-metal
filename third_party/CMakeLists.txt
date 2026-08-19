@@ -199,7 +199,14 @@ CPMAddPackage(
 # fmt : https://github.com/fmtlib/fmt
 ############################################################################################################################
 
-CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 12.2.0 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
+CPMAddPackage(
+    NAME fmt
+    GITHUB_REPOSITORY fmtlib/fmt
+    GIT_TAG 12.2.0
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "FMT_INSTALL ON"
+)
 
 ############################################################################################################################
 # range-v3 : https://github.com/ericniebler/range-v3
@@ -415,7 +422,8 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME tt-logger
     GITHUB_REPOSITORY tenstorrent/tt-logger
-    GIT_TAG cfc210a071c0236b4bb272af0659b99c7a13021f # TEMPORARY: tt-logger fmt-12.2.0 PR head, for CI validation only. Revert to a VERSION x.y.z pin once tenstorrent/tt-logger#31 merges and a release is tagged.
+    GIT_TAG
+        e11fb3267582477803a8a9c8175b6454e073e110 # TEMPORARY: tt-logger fmt-12.2.0 PR head, for CI validation only. Revert to a VERSION x.y.z pin once tenstorrent/tt-logger#31 merges and a release is tagged.
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
