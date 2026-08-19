@@ -404,32 +404,4 @@ void MeshCommandQueueBase::enqueue_read(
     this->enqueue_read_shards_nolock(shard_data_transfers, buffer, blocking, std::move(memory_pins));
 }
 
-void MeshCommandQueue::enqueue_write_shards(
-    const std::shared_ptr<MeshBuffer>& mesh_buffer,
-    const std::vector<ShardDataTransfer>& shard_data_transfers,
-    bool blocking) {
-    std::vector<distributed::ShardDataTransfer> distributed_shard_data_transfers;
-    distributed_shard_data_transfers.reserve(shard_data_transfers.size());
-    for (const auto& shard_data_transfer : shard_data_transfers) {
-        distributed_shard_data_transfers.push_back(distributed::ShardDataTransfer{shard_data_transfer.shard_coord}
-                                                       .host_data(shard_data_transfer.host_data)
-                                                       .region(shard_data_transfer.region));
-    }
-    this->enqueue_write_shards(mesh_buffer, distributed_shard_data_transfers, blocking);
-}
-
-void MeshCommandQueue::enqueue_read_shards(
-    const std::vector<ShardDataTransfer>& shard_data_transfers,
-    const std::shared_ptr<MeshBuffer>& mesh_buffer,
-    bool blocking) {
-    std::vector<distributed::ShardDataTransfer> distributed_shard_data_transfers;
-    distributed_shard_data_transfers.reserve(shard_data_transfers.size());
-    for (const auto& shard_data_transfer : shard_data_transfers) {
-        distributed_shard_data_transfers.push_back(distributed::ShardDataTransfer{shard_data_transfer.shard_coord}
-                                                       .host_data(shard_data_transfer.host_data)
-                                                       .region(shard_data_transfer.region));
-    }
-    this->enqueue_read_shards(distributed_shard_data_transfers, mesh_buffer, blocking);
-}
-
 }  // namespace tt::tt_metal::distributed
