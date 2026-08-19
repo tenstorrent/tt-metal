@@ -57,11 +57,11 @@ class DistributedLayerNorm(LightweightModule):
             weight_dtype=weight_dtype,
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
         # Nothing to gather if we're single-chip, or if the tower keeps activations replicated so the
         # full hidden dim is already present on every device.
         if not self.is_multichip or self.replicated_input:
-            return self.norm(x)
+            return self.norm(x, memory_config=memory_config)
 
         # Gather the fractured hidden dim back into a replicated tensor.
         # Mirrors `DistributedNorm.forward` (non-TG, non-distributed-norm path):
@@ -88,7 +88,7 @@ class DistributedLayerNorm(LightweightModule):
         # Regular replicated LayerNorm on full hidden dim. The gathered buffer
         # is an intermediate we own; free it once the norm has produced its
         # own output buffer.
-        out = self.norm(gathered)
+        out = self.norm(gathered, memory_config=memory_config)
         if out is not gathered:
             ttnn.deallocate(gathered)
         return out
