@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Receiver half of a coordinated PersistentDFB page-size change:
-// consume all E1 traffic, then resize to E2 so the sender's synthetic rebase
-// credits can be acknowledged before either side resumes at E2.
+// consume all E1 traffic, then resize to E2 and consume the sender's pad
+// credits. The sender may already be configured for E2 while E1 is consumed.
 //
 // Compile-time args:
 //   [0] persistent_dfb_id

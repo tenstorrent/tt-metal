@@ -4,14 +4,13 @@
 
 // Long-running PersistentDFB sender for coordinated live-peer E1→E2.
 //
-// Fixed safe-point protocol (drain real E1 traffic before resize):
+// Mixed-size prefetch protocol:
 //   1. Construct at E1
 //   2. Push num_entries_e1 at E1
-//   3. barrier() so acked == sent on all receivers (drain)
-//   4. set_entry_size(E2) + internal barrier_sender_credits (NOC credit fixup)
-//   5. Signal host via resized_sem
-//   6. Wait on go_sem (host launches receiver C while this kernel stays alive)
-//   7. Push num_entries_e2 at E2
+//   3. set_entry_size(E2), without waiting for the E1 receiver to drain
+//   4. Signal host via resized_sem
+//   5. Wait on go_sem (host launches receiver C while this kernel stays alive)
+//   6. Push num_entries_e2 at E2
 //
 // Compile-time args:
 //   [0] persistent_dfb_id
@@ -61,8 +60,6 @@ void kernel_main() {
         gdfb.push_back(1, noc);
     }
 
-    // Author-defined safe point: drain so no in-flight work crosses the page-size change.
-    gdfb.barrier();
     gdfb.set_entry_size(entry_size_e2);
 
     noc_semaphore_set(resized_sem, 1);

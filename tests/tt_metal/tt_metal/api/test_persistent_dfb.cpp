@@ -910,14 +910,14 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_CrossProgram_DifferentEntryS
 }
 
 TEST_F(PersistentDFBFixture, PersistentDFB_CrossSubDevice_CoordinatedLivePeerNonDividingE2) {
-    // Coordinated live-peer E1→E2 with real drain and a non-dividing E2:
-    //   A (SD0): push E1 → barrier → set_entry_size(E2) → signal → wait go → push E2
+    // Live-peer E1→E2 prefetch with a non-dividing E2:
+    //   A (SD0): push E1 → set_entry_size(E2) without draining → signal → wait go → push E2
     //   B (SD1): Attach(E1), pop E1 → set_receiver_entry_size(E2), finish
     //   C (SD1): Attach(E2) while A is still alive; consume E2
     //
-    // Four E1 entries make the durable counters wrap the original 1024-byte ring.
-    // E2=384 truncates the usable ring to 768 bytes. Without credit rebase, the old
-    // 1024-byte credit total reconstructs offset 256 instead of checkpoint offset 0.
+    // A reaches set_entry_size before B is even enqueued, proving resize itself does
+    // not wait for E1 acknowledgements. E2=384 has a 768-byte usable limit in the
+    // 1024-byte allocation; the second E2 push credits the 256-byte trailing gap.
     auto mesh_device = devices_[0];
     distributed::MeshDevice& device = *mesh_device;
     constexpr uint32_t e1 = 256;
@@ -950,7 +950,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_CrossSubDevice_CoordinatedLivePeerNon
     const uint32_t staging_size =
         cross_node_dfb_test::sender_staging_size_bytes(data_pattern, e1, total_entries_e1, 1, e2, total_entries_e2);
 
-    // --- Program A (SD0): push E1 → barrier → resize → signal → wait go → push E2 ---
+    // --- Program A (SD0): push E1 → resize without drain → signal → wait go → push E2 ---
     Program program_a = CreateProgram();
     EXPECT_EQ(AttachPersistentDFB(program_a, pdfb, sender_cores), 0u);
     const KernelHandle sender_k = CreateKernel(
@@ -987,21 +987,8 @@ TEST_F(PersistentDFBFixture, PersistentDFB_CrossSubDevice_CoordinatedLivePeerNon
     // Subsequent FD work waits for SD1 idle (not long-running A on SD0).
     mesh_device->set_sub_device_stall_group({{SubDeviceId{1}}});
 
-    // --- Program B (SD1): consume E1, then rebase receiver credits to E2 ---
-    Program program_b = CreateProgram();
-    EXPECT_EQ(AttachPersistentDFB(program_b, pdfb, receiver_cores), 0u);
-    CreateKernel(
-        program_b,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/persistent_dfb_coordinated_resize_receiver.cpp",
-        receiver_cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = {0u, total_entries_e1, e2}});
-    distributed::MeshWorkload workload_b;
-    workload_b.add_program(persistent_unit_mesh_device_range(), std::move(program_b));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload_b, false);
-
+    // A must resize before any receiver is enqueued. This would time out if
+    // set_entry_size still contained an acked == sent barrier.
     const auto device_id = mesh_device->get_devices()[0]->id();
     const auto physical_sender = mesh_device->worker_core_from_logical_core(sender_core);
     bool resized = false;
@@ -1016,10 +1003,24 @@ TEST_F(PersistentDFBFixture, PersistentDFB_CrossSubDevice_CoordinatedLivePeerNon
     }
     const uint32_t credit_base = pdfb.config_address() + pdfb.credit_reset_offset();
     const auto [sender_sent, sender_acked] = cross_node_dfb_test::read_credit_pair(device, sender_core, credit_base);
-    const auto [receiver_sent, receiver_acked] =
-        cross_node_dfb_test::read_credit_pair(device, receiver_core, credit_base);
-    ASSERT_TRUE(resized) << "Timed out waiting for A set_entry_size(E2) signal; sender credits=" << sender_sent << "/"
-                         << sender_acked << ", receiver credits=" << receiver_sent << "/" << receiver_acked;
+    ASSERT_TRUE(resized) << "Timed out waiting for barrier-free set_entry_size(E2); sender credits=" << sender_sent
+                         << "/" << sender_acked;
+    EXPECT_LT(sender_acked, sender_sent) << "E1 unexpectedly drained before its receiver program was enqueued";
+
+    // --- Program B (SD1): consume E1, then consume resize pad credits at E2 ---
+    Program program_b = CreateProgram();
+    EXPECT_EQ(AttachPersistentDFB(program_b, pdfb, receiver_cores), 0u);
+    CreateKernel(
+        program_b,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/persistent_dfb_coordinated_resize_receiver.cpp",
+        receiver_cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {0u, total_entries_e1, e2}});
+    distributed::MeshWorkload workload_b;
+    workload_b.add_program(persistent_unit_mesh_device_range(), std::move(program_b));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload_b, false);
 
     // --- Program C (SD1): same-epoch Attach E2 while A is still alive ---
     Program program_c = CreateProgram();
@@ -1044,8 +1045,8 @@ TEST_F(PersistentDFBFixture, PersistentDFB_CrossSubDevice_CoordinatedLivePeerNon
     mesh_device->reset_sub_device_stall_group();
     distributed::Finish(mesh_device->mesh_command_queue());
 
-    // E2 entries must begin at checkpoint offset 0. The expected counter values
-    // continue after the four E1 entries; a stale 256-byte offset fails this comparison.
+    // E2 entries begin at checkpoint offset 0. Their expected counter values continue
+    // after the four E1 entries while the final E2 push also advances over the ring gap.
     EXPECT_TRUE(persistent_dfb_test::verify_receiver_ring(
         device,
         pdfb,
