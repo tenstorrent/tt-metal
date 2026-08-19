@@ -95,7 +95,14 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
     rope = Gemma4TextRotaryEmbedding(hf_config)
-    x_dummy = torch.randn(1, max_seq_len, hf_config.hidden_size)
+    # HF's rotary forward reads only ``x.device`` and ``x.dtype`` (and its
+    # ``dynamic_rope_update`` decorator only ``x.device``); the values are never
+    # touched. A full [1, max_seq_len, hidden] dummy therefore scaled with the
+    # context: at max_seq_len=131072 it allocated 2.62 GiB (31B) / 1.88 GiB (12B)
+    # of host RAM and paid ~3 s of RNG at every model init for nothing. One
+    # element carries the same dtype/device and yields bit-identical cos/sin
+    # (torch.equal on both configs, all layer types, at 131072).
+    x_dummy = torch.zeros(1, dtype=torch.float32)
     pos_ids = torch.arange(max_seq_len).unsqueeze(0)
 
     caches_4d = {}
