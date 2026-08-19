@@ -1,1 +1,2 @@
 {"event":"initial_implementation","note":"Mode 1 fresh op: gather-then-reduce-local-slice per op_design.md; structural clone of proven all_reduce Phase A; Phase B uses SliceRowWalker (schedule hpp) + compute_kernel_lib::sum_blocks(pop_input=true)","ts":"2026-08-19T21:59:32+00:00"}
+{"event":"test_run","result":"pass","details":"acceptance 13/13 passed on bh_quietbox_1x4_hw (all shapes, bf16+fp32, negative-dim alias, program-cache 2nd call, output_tensor path, both refusal contracts); golden 10 passed / 19 xfailed / 0 failed / 0 xpassed","ts":"2026-08-19T22:03:01+00:00"}
