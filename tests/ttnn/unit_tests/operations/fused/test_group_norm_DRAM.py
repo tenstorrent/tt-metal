@@ -56,7 +56,8 @@ GROUP_NORM_DRAM_SHAPES = [
     (1, 256 // 4, 256, 256, 32 // 4, 1, 8, 8),
     (1, 512 // 4, 128, 128, 32 // 4, 1, 8, 8),
     (1, 512 // 4, 256, 256, 32 // 4, 2, 8, 8),
-    (1, 128, 1, 262144, 32, 64, 8, 4),  # SD 1.4 VAE Issue #21131
+    # (1, 128, 1, 262144, 32, 64, 8, 4) SD 1.4 VAE Issue #21131 moved to nightly: 33.5M elements,
+    # ~16 min per welford mode on the simulator. Nightly runs it over both specify_grid values.
     # mochi
     # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
 ]
