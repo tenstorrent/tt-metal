@@ -1,0 +1,4 @@
+measured: tt free-running completion [models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/autoregressive_default_prompt_100/autoregressive_meta.json] {'source': 'words', 'num_tokens': 79, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.038}
+measured: hf/tt token agreement (informational) [models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/autoregressive_default_prompt_100/autoregressive_meta.json] {'matching_tokens': 14, 'compared_tokens': 100}
+
+No degenerate output detected.

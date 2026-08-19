@@ -1,0 +1,82 @@
+{
+  "model_id": "Qwen/Qwen3.6-35B-A3B",
+  "stage": "optimized_full_model",
+  "mesh": {
+    "shape": [2, 2],
+    "product": "Blackhole p300c",
+    "fabric_config": "FABRIC_1D_RING",
+    "num_devices": 4
+  },
+  "same_run_prompt128_gen128": {
+    "artifact": "doc/optimized_full_model/artifacts/token_out_no_readback_prompt128_gen128_warmed.json",
+    "prompt_len": 128,
+    "max_new_tokens": 128,
+    "decode_tokens": 127,
+    "before_readback_baseline": {
+      "ttft_ms": 5817.663313355297,
+      "decode_t_s_u": 16.584593393256675,
+      "decode_ms_per_token": 60.29692596543258,
+      "e2e_t_s_u": 9.49880948347213,
+      "steady_state_synchronizations": 127,
+      "steady_state_token_readbacks": 127
+    },
+    "optimized_no_readback": {
+      "ttft_ms": 5895.72538016364,
+      "trace_capture_ms": 264.6827129647136,
+      "decode_replay_t_s_u": 17.433914397834936,
+      "decode_replay_ms_per_token": 57.35946484423411,
+      "decode_including_capture_t_s_u": 16.822674346315896,
+      "decode_including_capture_ms_per_token": 59.44358069434997,
+      "e2e_t_s_u": 9.519506641034987,
+      "steady_state_synchronizations": 0,
+      "steady_state_token_readbacks": 0,
+      "terminal_validation_synchronizations": 1,
+      "terminal_validation_token_readbacks": 1
+    },
+    "matches_readback_final_token": true,
+    "decode_replay_speedup_pct": 5.121144573394232,
+    "e2e_speedup_pct": 0.21789212215352904,
+    "ttft_delta_pct": 1.3418113528354203
+  },
+  "aime24_chat_template": {
+    "reference": "doc/optimized_full_model/artifacts/aime24_chat_100.refpt",
+    "prefill": {
+      "artifact": "doc/optimized_full_model/logs/aime24_prefill_check.log",
+      "top1": "96/100",
+      "top5": "100/100",
+      "top100": "100/100"
+    },
+    "teacher_forcing": {
+      "artifact": "doc/optimized_full_model/logs/aime24_teacher_forcing.log",
+      "top1": "99/100",
+      "top5": "100/100",
+      "top100": "100/100",
+      "ttft_ms": 8749.84,
+      "decode_t_s_u": 16.38,
+      "e2e_t_s_u": 6.76
+    }
+  },
+  "layer_stack_lower_bound": {
+    "source": "doc/optimized_multichip_decoder/logs/final_perf_screen.log",
+    "linear_attention_layers": 30,
+    "full_attention_layers": 10,
+    "linear_decode_wall_ms": 1.281,
+    "full_decode_wall_ms": 1.096,
+    "decoder_stack_wall_lower_bound_ms_per_token": 49.39,
+    "terminal_path_source": "doc/full_model/artifacts/terminal_path_profile_summary.json",
+    "terminal_path_ms": 11.463640723377466,
+    "stack_plus_terminal_ms_per_token": 60.85364072337747,
+    "optimized_decode_gap_vs_stack_plus_terminal_pct": -5.7419339871986335,
+    "device_time_lower_bound_source": "doc/optimized_multichip_decoder/logs/perf_report_family_summary.csv",
+    "device_time_stack_ms": 44.25779,
+    "device_time_stack_plus_terminal_ms_per_token": 55.721430723377466,
+    "optimized_decode_gap_vs_device_time_stack_plus_terminal_pct": 2.9396842464230133
+  },
+  "terminal_sampler_choices": {
+    "artifact": "doc/optimized_full_model/artifacts/terminal_sampler_choices.json",
+    "selected_valid_choice": "common_topk1_composite_gather",
+    "common_topk1_mean_ms": 10.900997277349234,
+    "common_topk1_matches_host_argmax": true,
+    "force_argmax_result": "rejected: async full-vocab all-gather cannot route M0D1 to M0D2 on the local 2x2 p300c fabric for this flat 4-way vocab layout"
+  }
+}

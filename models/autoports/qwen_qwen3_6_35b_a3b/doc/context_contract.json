@@ -1,7 +1,7 @@
 {
   "model_id": "Qwen/Qwen3.6-35B-A3B",
   "autoport_dir": "models/autoports/qwen_qwen3_6_35b_a3b",
-  "stage": "full_model",
+  "stage": "optimized_full_model",
   "hf_advertised_context": 262144,
   "target_context": 262144,
   "current_supported_context": 262144,
@@ -228,6 +228,40 @@
         "inactive_rows_supported": true,
         "mixed_rows_synthetic_artifact": "doc/full_model/logs/runtime_fallback_audit_synthetic.log"
       }
+    },
+    "optimized_full_model": {
+      "hf_advertised_context_tokens": 262144,
+      "context_capability_reduced_from_full_model": false,
+      "largest_supported_context_tokens": 262144,
+      "largest_feasible_context_tokens": 262144,
+      "hard_physical_limit_evidence": null,
+      "context_limit_evidence": "No hard physical limit was hit in optimized-full-model. The stage preserves the completed full-model context contract and adds prompt-128/gen-128 optimized token-out evidence plus synthetic non-aligned generator coverage.",
+      "optimized_token_out": {
+        "artifact": "doc/optimized_full_model/artifacts/token_out_no_readback_prompt128_gen128_warmed.json",
+        "prompt_len": 128,
+        "max_new_tokens": 128,
+        "position_end_expected_exclusive": 256,
+        "trace_present": true,
+        "trace_generated_steps": 127,
+        "steady_state_host_syncs": 0,
+        "steady_state_token_readbacks": 0
+      },
+      "public_prompt_length_contract": {
+        "supports_valid_prompt_lengths_up_to_context": true,
+        "non_aligned_prompt_lengths_supported": true,
+        "internal_prefill_chunk_size": 64,
+        "public_generator_owns_padding_masking_cache_fill_positions_and_slicing": true,
+        "synthetic_non_aligned_lengths_tested_current_stage": [
+          5
+        ],
+        "mixed_prompt_and_inactive_rows_tested_current_stage": true
+      },
+      "batch_and_slot_contract": {
+        "default_optimized_measured_batch": 1,
+        "fixed_slot_cache_supported": true,
+        "inactive_rows_supported": true,
+        "mixed_rows_synthetic_artifact": "doc/optimized_full_model/logs/hardware_smokes_watcher_final.log"
+      }
     }
   },
   "capability_reduction": {
@@ -259,6 +293,20 @@
       "largest_feasible_context_tokens": 262144,
       "hard_physical_limit_evidence": null,
       "evidence": [
+        "doc/full_model/logs/real_full_model_load_context_alloc.log",
+        "doc/full_model/capacity.md",
+        "doc/functional_decoder/logs/context_probe_full_prefill_262144_sparse.log",
+        "doc/functional_decoder/logs/context_probe_linear_prefill_262144_chunked.log"
+      ]
+    },
+    "optimized_full_model": {
+      "prefill_reduced_from_hf_advertised_context": false,
+      "decode_reduced_from_hf_advertised_context": false,
+      "largest_feasible_context_tokens": 262144,
+      "hard_physical_limit_evidence": null,
+      "evidence": [
+        "doc/optimized_full_model/README.md",
+        "doc/optimized_full_model/artifacts/token_out_no_readback_prompt128_gen128_warmed.json",
         "doc/full_model/logs/real_full_model_load_context_alloc.log",
         "doc/full_model/capacity.md",
         "doc/functional_decoder/logs/context_probe_full_prefill_262144_sparse.log",
@@ -474,6 +522,86 @@
           "traced token-out greedy comparison against host compatibility"
         ]
       }
+    },
+    "optimized_full_model": {
+      "topk_acceptance_bar": {
+        "top5_minimum": 0.98,
+        "top100_required": 1.0
+      },
+      "fresh_aime24_chat_reference": {
+        "artifact": "doc/optimized_full_model/artifacts/aime24_chat_100.refpt",
+        "model_id": "Qwen/Qwen3.6-35B-A3B",
+        "chat_template": true,
+        "prompt_tokens": 161,
+        "generated_tokens": 100,
+        "top_k": 100
+      },
+      "run_prefill_check": {
+        "artifact": "doc/optimized_full_model/logs/aime24_prefill_check.log",
+        "top1": {
+          "count": 96,
+          "total": 100,
+          "ratio": 0.96
+        },
+        "top5": {
+          "count": 100,
+          "total": 100,
+          "ratio": 1.0
+        },
+        "top100": {
+          "count": 100,
+          "total": 100,
+          "ratio": 1.0
+        }
+      },
+      "run_teacher_forcing": {
+        "artifact": "doc/optimized_full_model/logs/aime24_teacher_forcing.log",
+        "top1": {
+          "count": 99,
+          "total": 100,
+          "ratio": 0.99
+        },
+        "top5": {
+          "count": 100,
+          "total": 100,
+          "ratio": 1.0
+        },
+        "top100": {
+          "count": 100,
+          "total": 100,
+          "ratio": 1.0
+        },
+        "ttft_ms": 8749.84,
+        "decode_t_s_u": 16.38,
+        "e2e_t_s_u": 6.76,
+        "sampling_mode": "traced low-level decode with readiness callback host-token input"
+      },
+      "run_autoregressive": {
+        "artifact": "doc/optimized_full_model/logs/run_autoregressive_default_prompt_100.log",
+        "output_dir": "doc/optimized_full_model/artifacts/autoregressive_default_prompt_100",
+        "hf_tokens": 100,
+        "tt_tokens": 100,
+        "qualitative_verdict": "TT completion is coherent English, stays on the story prompt, and has no repetition loop, wrong-language drift, or early duplicate-token failure.",
+        "degenerate_output_artifact": "doc/optimized_full_model/artifacts/autoregressive_default_prompt_100/degenerate_output_report.json",
+        "degenerate_output_result": "no findings; adjacent duplication 0.0, trigram loop fraction 0.038, hf/tt token agreement informational at 14/100"
+      },
+      "synthetic_full_model_smoke": {
+        "default_artifact": "doc/optimized_full_model/logs/pytest_full_model_contract_final.log",
+        "default_result": "2 passed, 5 skipped",
+        "runtime_fallback_artifact": "doc/optimized_full_model/logs/synthetic_full_model_no_fallback_smoke_final.log",
+        "runtime_fallback_result": "7 passed, 2 warnings",
+        "watcher_artifact": "doc/optimized_full_model/logs/hardware_smokes_watcher_final.log",
+        "watcher_result": "7 passed, 2 warnings",
+        "covered": [
+          "readiness generator exports",
+          "runtime fallback audit strings",
+          "non-aligned prompt length",
+          "mixed prompt fixed slots with inactive row",
+          "changed page-table decode override including traced decode coverage",
+          "traced token-out greedy comparison against host compatibility",
+          "optimized token-out no-readback comparison against readback baseline"
+        ]
+      }
     }
   },
   "performance_evidence": {
@@ -623,6 +751,66 @@
         "sampler_dominates_token_out_decode": false
       },
       "reported_separately": true
+    },
+    "optimized_full_model": {
+      "summary_json": "doc/optimized_full_model/artifacts/perf_summary.json",
+      "token_out_no_readback_batch1": {
+        "artifact": "doc/optimized_full_model/artifacts/token_out_no_readback_prompt128_gen128_warmed.json",
+        "prompt_len": 128,
+        "generated_tokens": 128,
+        "decode_tokens": 127,
+        "ttft_ms": 5895.72538016364,
+        "trace_capture_ms": 264.6827129647136,
+        "decode_replay_seconds": 7.284652035217732,
+        "decode_replay_t_s_u": 17.433914397834936,
+        "decode_including_capture_t_s_u": 16.822674346315896,
+        "e2e_t_s_u": 9.519506641034987,
+        "trace_present": true,
+        "trace_generated_steps": 127,
+        "position_end_expected_exclusive": 256,
+        "sampling_mode": "on-device greedy split sampling with tt_out_tok feedback and no steady-state host readback"
+      },
+      "same_run_readback_baseline_batch1": {
+        "ttft_ms": 5817.663313355297,
+        "decode_t_s_u": 16.584593393256675,
+        "e2e_t_s_u": 9.49880948347213,
+        "steady_state_synchronizations": 127,
+        "steady_state_token_readbacks": 127,
+        "matches_no_readback_final_token": true
+      },
+      "teacher_forcing": {
+        "artifact": "doc/optimized_full_model/logs/aime24_teacher_forcing.log",
+        "ttft_ms": 8749.84,
+        "decode_t_s_u": 16.38,
+        "e2e_t_s_u": 6.76,
+        "sampling_mode": "traced low-level decode with readiness callback host-token input"
+      },
+      "layer_stack_lower_bound": {
+        "source": "doc/optimized_multichip_decoder/logs/final_perf_screen.log",
+        "linear_attention_layers": 30,
+        "full_attention_layers": 10,
+        "linear_decode_wall_ms": 1.281,
+        "full_decode_wall_ms": 1.096,
+        "decoder_stack_wall_lower_bound_ms_per_token": 49.39,
+        "terminal_path_ms": 11.463640723377466,
+        "stack_plus_terminal_ms_per_token": 60.85364072337747,
+        "optimized_decode_ms_per_token": 57.35946484423411,
+        "gap_vs_stack_plus_terminal_pct": -5.7419339871986335,
+        "device_time_stack_plus_terminal_ms_per_token": 55.721430723377466,
+        "gap_vs_device_time_stack_plus_terminal_pct": 2.9396842464230133
+      },
+      "terminal_sampler_choices": {
+        "artifact": "doc/optimized_full_model/artifacts/terminal_sampler_choices.json",
+        "selected_valid_choice": "common_topk1_composite_gather",
+        "common_topk1_mean_ms": 10.900997277349234,
+        "common_topk1_matches_host_argmax": true,
+        "force_argmax_rejected": "async full-vocab all-gather cannot route M0D1 to M0D2 on the local 2x2 p300c fabric for this flat 4-way vocab layout"
+      },
+      "tt_perf_report_tables": [
+        "doc/optimized_full_model/tracy/inherited_optimized_multichip_decoder_final_reports",
+        "doc/optimized_full_model/tracy/inherited_full_model_terminal_path_reports"
+      ],
+      "reported_separately": true
     }
   },
   "runtime_fallback_audit": {
@@ -675,6 +863,51 @@
         "per-token host page-table rebuild"
       ],
       "host_sampling_compatibility_mode": "available explicitly for readiness checks and tests; excluded from optimized token-out perf claim"
+    },
+    "optimized_full_model": {
+      "source_audit_clean": true,
+      "throw_exception_on_fallback_run_clean": true,
+      "artifact": "doc/optimized_full_model/runtime_fallback_audit.md",
+      "dynamic_artifact": "doc/optimized_full_model/logs/synthetic_full_model_no_fallback_smoke_final.log",
+      "dynamic_result": "7 passed, 2 warnings with throw_exception_on_fallback=true",
+      "measured_token_out_artifact": "doc/optimized_full_model/artifacts/token_out_no_readback_prompt128_gen128_warmed.json",
+      "measured_token_out_host_boundary_counters": {
+        "trace_replays": 127,
+        "execute_trace_blocking": false,
+        "steady_state_token_refreshes": 0,
+        "steady_state_position_refreshes": 0,
+        "steady_state_rope_refreshes": 0,
+        "steady_state_page_table_refreshes": 0,
+        "steady_state_synchronizations": 0,
+        "steady_state_token_readbacks": 0,
+        "terminal_validation_synchronizations": 1,
+        "terminal_validation_token_readbacks": 1,
+        "host_sampling": false,
+        "full_logits_readbacks": 0
+      },
+      "covered_boundaries": [
+        "model wrapper",
+        "generator contract",
+        "cache ownership",
+        "page-table row selection",
+        "non-aligned prefill",
+        "mixed fixed slots and inactive rows",
+        "changed page-table decode override",
+        "on-device sampling",
+        "no-readback traced token feedback",
+        "reset/teardown behavior"
+      ],
+      "optimized_token_out_forbidden_boundaries_absent": [
+        "single-chip decoder fallback",
+        "replicated host-side decoder",
+        "host argmax",
+        "full-logits readback",
+        "untraced sampling",
+        "python token feedback loop",
+        "per-token host page-table rebuild",
+        "per-token host synchronization"
+      ],
+      "host_sampling_compatibility_mode": "available explicitly for readiness checks and tests; excluded from optimized token-out perf claim"
     }
   },
   "watcher": {
@@ -713,6 +946,20 @@
       "result": "6 passed, 2 warnings in 50.05s",
       "device_health_after_watcher": "doc/full_model/logs/tt_smi_post_watcher.log",
       "active_eth_watcher_classification": "same p300c active-Ethernet watcher lifecycle limitation recorded by decoder stages; accepted watcher evidence disables ETH"
+    },
+    "optimized_full_model": {
+      "enabled": "TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1",
+      "clean": true,
+      "artifact": "doc/optimized_full_model/logs/hardware_smokes_watcher_final.log",
+      "result": "7 passed, 2 warnings in 76.46s",
+      "covered": [
+        "non-aligned prompt length",
+        "mixed prompt fixed slots and inactive row",
+        "changed page-table decode override",
+        "traced token-out",
+        "optimized no-readback token-out measurement"
+      ],
+      "active_eth_watcher_classification": "same p300c active-Ethernet watcher lifecycle limitation recorded by decoder stages; accepted watcher evidence disables ETH"
     }
   },
   "source_revision": {
@@ -727,7 +974,11 @@
     "full_model_stage_base_sha": "8a04ad9fb674e2d0a9d14917f836019e44bbc3e6",
     "full_model_stage_base_sha_note": "Live HEAD before final full-model local commit; evidence artifacts were generated from the dirty worktree on top of this commit.",
     "full_model_stage_commit_sha": null,
-    "full_model_stage_commit_sha_note": "Recorded after final local commit; a commit cannot contain its own final SHA."
+    "full_model_stage_commit_sha_note": "Recorded after final local commit; a commit cannot contain its own final SHA.",
+    "optimized_full_model_stage_base_sha": "72fe11456451c6dc1b6e11b69d9dcadd7a40aa3e",
+    "optimized_full_model_stage_base_sha_note": "Live HEAD before final optimized-full-model local commit; evidence artifacts were generated from the dirty worktree on top of this commit.",
+    "optimized_full_model_stage_commit_sha": null,
+    "optimized_full_model_stage_commit_sha_note": "Recorded after final local commit; a commit cannot contain its own final SHA."
   },
   "multichip_decoder_contract": {
     "single_chip_baseline": "models/autoports/qwen_qwen3_6_35b_a3b/tt/optimized_decoder.py::OptimizedDecoder",
@@ -1044,5 +1295,16 @@
     ],
     "final_verdict": "clean-pass",
     "final_review_artifact": "stage-review subagent 01a019fe-bb4f-77e2-9669-be816d42d0c0"
+  },
+  "optimized_full_model_stage_review": {
+    "initial_verdict": "more-work-needed",
+    "initial_findings_fixed": [
+      "No-readback position metric now uses the canonical prompt length plus generated token count semantics.",
+      "Synthetic no-readback test asserts the canonical exclusive position for prompt length 5 and generation length 4.",
+      "Prompt-128/gen-128 no-readback benchmark artifact was rerun after the position-contract code change and records position_end_expected_exclusive=256.",
+      "README, perf_summary.json, and optimized_full_model context entries were refreshed from the rerun benchmark."
+    ],
+    "final_verdict": "clean-pass",
+    "final_review_artifact": "stage-review subagent 01a01aa9-8cf5-73f0-84f4-97a0df531484"
   }
 }

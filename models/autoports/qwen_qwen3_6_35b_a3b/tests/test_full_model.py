@@ -21,6 +21,7 @@ from models.autoports.qwen_qwen3_6_35b_a3b.tt.model import QwenFullModel, iter_r
 
 
 def _synthetic_full_model(mesh_device, *, max_batch_size: int = 1, layer_types: list[str] | None = None):
+    torch.manual_seed(0)
     cfg = copy.deepcopy(_target_text_config())
     cfg.vocab_size = 128
     cfg.max_position_embeddings = 64
@@ -150,11 +151,12 @@ def test_full_model_decode_page_table_override_smoke():
 
         trace_cache = model.allocate_cache(max_batch_size=1, max_seq_len=64, page_table=fill_page_table)
         model.prefill_forward(tokens, page_table=fill_page_table, kv_cache=trace_cache, prompt_lens=[5])
-        changed_page_table_tt = model.allocate_cache(
+        changed_page_table_cache = model.allocate_cache(
             max_batch_size=1,
             max_seq_len=64,
             page_table=changed_page_table,
-        ).page_table
+        )
+        changed_page_table_tt = changed_page_table_cache.page_table
         tt_tokens = model._tokens_to_tt_decode(torch.tensor([[6]], dtype=torch.long))
         tt_pos = model._positions_to_tt(start_pos)
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -172,6 +174,8 @@ def test_full_model_decode_page_table_override_smoke():
             ttnn.synchronize_device(mesh_device)
         finally:
             ttnn.release_trace(mesh_device, trace_id)
+            ttnn.synchronize_device(mesh_device)
+            del changed_page_table_cache
 
     _run_with_target_mesh(run, trace_region_size=64_000_000)
 
@@ -224,5 +228,56 @@ def test_full_model_traced_token_out_smoke():
         assert traced_seen == host_seen
         generator.teardown()
         assert generator._trace is None
+
+    _run_with_target_mesh(run, trace_region_size=64_000_000)
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_QWEN36_FULL_MODEL_SMOKE") != "1",
+    reason="set RUN_QWEN36_FULL_MODEL_SMOKE=1 to run the 2x2 synthetic full-model smoke",
+)
+def test_full_model_token_out_no_readback_measurement_smoke():
+    def run(mesh_device):
+        baseline_model, _ = _synthetic_full_model(mesh_device)
+        baseline_generator = QwenReadinessGenerator(
+            model_dir="models/autoports/qwen_qwen3_6_35b_a3b",
+            mesh_device=mesh_device,
+            model=baseline_model,
+            max_batch_size=1,
+            max_seq_len=64,
+        )
+        readback_tokens = baseline_generator.generate([1, 2, 3, 4, 5], 4, enable_trace=True)
+        baseline_generator.teardown()
+
+        model, _ = _synthetic_full_model(mesh_device)
+        generator = QwenReadinessGenerator(
+            model_dir="models/autoports/qwen_qwen3_6_35b_a3b",
+            mesh_device=mesh_device,
+            model=model,
+            max_batch_size=1,
+            max_seq_len=64,
+        )
+        metrics = generator.measure_token_out_no_readback([1, 2, 3, 4, 5], 4)
+        counters = metrics["host_boundary_counters"]
+        assert metrics["trace_present"] is True
+        assert metrics["trace_generated_steps"] == 3
+        assert metrics["position_end_expected_exclusive"] == 9
+        assert metrics["final_token"] is not None
+        assert counters["trace_replays"] == 3
+        assert counters["trace_decode_steps"] == 3
+        assert counters["execute_trace_blocking"] is False
+        assert counters["steady_state_token_refreshes"] == 0
+        assert counters["steady_state_position_refreshes"] == 0
+        assert counters["steady_state_page_table_refreshes"] == 0
+        assert counters["steady_state_synchronizations"] == 0
+        assert counters["steady_state_token_readbacks"] == 0
+        assert counters["terminal_validation_synchronizations"] == 1
+        assert counters["terminal_validation_token_readbacks"] == 1
+
+        assert metrics["final_token"] == readback_tokens[-1], {
+            "metrics": metrics,
+            "readback_tokens": readback_tokens,
+        }
+        generator.teardown()
 
     _run_with_target_mesh(run, trace_region_size=64_000_000)

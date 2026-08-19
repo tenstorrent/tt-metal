@@ -1,0 +1,29 @@
+{
+  "hf_model_id": "Qwen/Qwen3.6-35B-A3B",
+  "mesh_shape": [
+    2,
+    2
+  ],
+  "num_devices": 4,
+  "load_s": 320.7611080519855,
+  "expected_host_argmax": 146040,
+  "selected_valid_choice": "common_topk1_composite_gather",
+  "choices": [
+    {
+      "label": "common_topk1_composite_gather",
+      "warm_token": 146040,
+      "last_token": 146040,
+      "iterations": 5,
+      "total_s": 0.05450498638674617,
+      "mean_ms": 10.900997277349234,
+      "tokens_per_second": 91.73472615004334,
+      "matches_host_argmax": true
+    },
+    {
+      "label": "force_argmax_async_full_vocab_gather",
+      "rejected": true,
+      "rejection_summary": "TT_FATAL @ /localdev/vkovacevic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()\ninfo:\nCould not find any forwarding direction from src (M0, D1) to dst (M0, D2)",
+      "matches_host_argmax": false
+    }
+  ]
+}

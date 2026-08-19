@@ -1,0 +1,11 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Warning: Ignoring user-specified architecture: blackhole, CSV detected blackhole architecture
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'QWEN_LM_HEAD_ONLY'.
+Using operations until 'QWEN_LM_HEAD_ONLY_END'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to models/autoports/qwen_qwen3_6_35b_a3b/doc/full_model/tracy/terminal_path_reports/lm_head_blackhole_perf_report.csv
+Overall DRAM roofline (modeled ops): 62.3% (319 GB/s)
+Writing CSV stacked report to models/autoports/qwen_qwen3_6_35b_a3b/doc/full_model/tracy/terminal_path_reports/lm_head_blackhole_summary.csv
+Plotting PNG stacked report to models/autoports/qwen_qwen3_6_35b_a3b/doc/full_model/tracy/terminal_path_reports/lm_head_blackhole_summary.png

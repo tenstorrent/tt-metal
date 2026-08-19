@@ -1,0 +1,25 @@
+{
+  "hf_model_id": "Qwen/Qwen3.6-35B-A3B",
+  "tokenizer_class": "Qwen2Tokenizer",
+  "tokenizer_model_max_length": 262144,
+  "eos_token_id": 248046,
+  "pad_token_id": 248044,
+  "chat_template_present": true,
+  "chat_template_sha256": "e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259",
+  "aime24_reference": {
+    "artifact": "doc/optimized_full_model/artifacts/aime24_chat_100.refpt",
+    "format": "hf_tokenizer_chat_template",
+    "add_generation_prompt": true,
+    "prompt_tokens": 161,
+    "generated_tokens": 100,
+    "top_k": 100
+  },
+  "autoregressive_default_prompt": {
+    "prompt_source": "models/common/readiness_check/autoregressive_prompt.txt",
+    "format": "raw_completion_prompt",
+    "add_special_tokens": true,
+    "prompt_tokens": 59,
+    "generated_tokens": 100,
+    "artifact_dir": "doc/optimized_full_model/artifacts/autoregressive_default_prompt_100"
+  }
+}

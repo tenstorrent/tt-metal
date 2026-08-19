@@ -76,16 +76,24 @@ class QwenReadinessGenerator(Generator):
         self.cache: QwenFullModelCache | None = None
         self._trace: _DecodeTrace | None = None
         self.last_timings: dict[str, float] = {}
+        self.last_trace_counters: dict[str, int | bool] = {}
         self._reset_sampling_state()
 
     def reset(self) -> None:
+        released_trace = False
         if self._trace is not None:
             try:
                 ttnn.release_trace(self.mesh_device, self._trace.trace_id)
+                released_trace = True
             except Exception:
                 pass
+        if self.model.sampling is not None:
+            self.model.sampling.reset_trace()
+        if released_trace:
+            ttnn.synchronize_device(self.mesh_device)
         self._trace = None
         self.cache = None
+        self.last_trace_counters = {}
         self._reset_sampling_state()
 
     def teardown(self) -> None:
@@ -225,6 +233,112 @@ class QwenReadinessGenerator(Generator):
         }
         return predictions
 
+    def measure_token_out_no_readback(
+        self,
+        prompt_token_ids: list[int],
+        max_new_tokens: int,
+        *,
+        max_seq_len: int | None = None,
+        validate_final_token: bool = True,
+    ) -> dict[str, Any]:
+        """Measure traced token-out replay without per-token host sync/readback.
+
+        This is the serving-style hot loop: the captured graph owns token
+        feedback and position advance on device, and the host enqueues replay
+        commands back-to-back. The optional final token read is outside the
+        steady-state loop and exists only to prove the loop produced a token.
+        """
+
+        if max_new_tokens < 0:
+            raise ValueError("max_new_tokens must be non-negative")
+        if max_new_tokens == 0:
+            self.last_timings = {
+                "ttft_s": 0.0,
+                "trace_capture_s": 0.0,
+                "decode_replay_s": 0.0,
+                "decode_s": 0.0,
+                "decode_s_including_capture": 0.0,
+                "e2e_s": 0.0,
+                "generated_tokens": 0.0,
+                "decode_tokens": 0.0,
+            }
+            self.last_trace_counters = _no_readback_counters(0, validate_final_token=False)
+            return {
+                "prompt_len": len(prompt_token_ids),
+                "max_new_tokens": 0,
+                "first_token": None,
+                "final_token": None,
+                "trace_present": False,
+                "trace_generated_steps": 0,
+                "raw_timings": dict(self.last_timings),
+                "host_boundary_counters": dict(self.last_trace_counters),
+            }
+
+        self.reset()
+        prompt_len = len(prompt_token_ids)
+        if prompt_len <= 0:
+            raise ValueError("measure_token_out_no_readback requires at least one prompt token")
+        required_context = prompt_len + max(max_new_tokens - 1, 0)
+        if required_context > self.model.max_seq_len:
+            raise ValueError(
+                f"requested prompt/generation needs context {required_context}, "
+                f"but the model supports {self.model.max_seq_len}"
+            )
+        resolved_max_seq_len = max_seq_len or max(
+            required_context, self.model.prefill_chunk_size, self.model.block_size
+        )
+        self._warmup_traced_decode(prompt_len=prompt_len, max_seq_len=resolved_max_seq_len)
+        cache = self.allocate_kv_cache(max_batch_size=1, max_seq_len=resolved_max_seq_len)
+        self.cache = cache
+
+        prompt = torch.tensor([prompt_token_ids], dtype=torch.long)
+        e2e_start = time.perf_counter()
+        ttft_start = time.perf_counter()
+        first_token = self._prefill_sample_on_device(prompt, cache)
+        ttft_end = time.perf_counter()
+
+        trace_capture_s = 0.0
+        decode_replay_s = 0.0
+        final_token = first_token
+        decode_tokens = max_new_tokens - 1
+        if decode_tokens > 0:
+            capture_start = time.perf_counter()
+            trace = self._capture_decode_trace(first_token, prompt_len, cache)
+            trace_capture_s = time.perf_counter() - capture_start
+
+            replay_start = time.perf_counter()
+            for _ in range(decode_tokens):
+                ttnn.execute_trace(self.mesh_device, trace.trace_id, cq_id=0, blocking=False)
+                trace.generated += 1
+            ttnn.synchronize_device(self.mesh_device)
+            decode_replay_s = time.perf_counter() - replay_start
+            if validate_final_token:
+                final_token = self._read_active_token(trace.token_input)
+
+        e2e_s = time.perf_counter() - e2e_start
+        self.last_timings = {
+            "ttft_s": ttft_end - ttft_start,
+            "trace_capture_s": trace_capture_s,
+            "decode_replay_s": decode_replay_s,
+            "decode_s": decode_replay_s,
+            "decode_s_including_capture": trace_capture_s + decode_replay_s,
+            "e2e_s": e2e_s,
+            "generated_tokens": float(max_new_tokens),
+            "decode_tokens": float(decode_tokens),
+        }
+        self.last_trace_counters = _no_readback_counters(decode_tokens, validate_final_token=validate_final_token)
+        return {
+            "prompt_len": prompt_len,
+            "max_new_tokens": max_new_tokens,
+            "first_token": int(first_token),
+            "final_token": int(final_token) if final_token is not None else None,
+            "trace_present": self._trace is not None,
+            "trace_generated_steps": self._trace.generated if self._trace is not None else 0,
+            "position_end_expected_exclusive": prompt_len + max_new_tokens,
+            "raw_timings": dict(self.last_timings),
+            "host_boundary_counters": dict(self.last_trace_counters),
+        }
+
     def _generate_host_sampling(
         self,
         *,
@@ -257,11 +371,29 @@ class QwenReadinessGenerator(Generator):
         cache: QwenFullModelCache,
     ) -> None:
         trace = self._capture_decode_trace(first_input, prompt_len, cache)
+        per_token_syncs = 0
+        per_token_readbacks = 0
         while len(predictions) < max_new_tokens:
             ttnn.execute_trace(self.mesh_device, trace.trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(self.mesh_device)
+            per_token_syncs += 1
             predictions.append(self._read_active_token(trace.token_input))
+            per_token_readbacks += 1
             trace.generated += 1
+        self.last_trace_counters = {
+            "trace_replays": int(trace.generated),
+            "execute_trace_blocking": False,
+            "steady_state_token_refreshes": 0,
+            "steady_state_position_refreshes": 0,
+            "steady_state_rope_refreshes": 0,
+            "steady_state_page_table_refreshes": 0,
+            "steady_state_synchronizations": per_token_syncs,
+            "steady_state_token_readbacks": per_token_readbacks,
+            "terminal_validation_synchronizations": 0,
+            "terminal_validation_token_readbacks": 0,
+            "host_sampling": False,
+            "full_logits_readbacks": 0,
+        }
 
     def _generate_traced_teacher_forcing(
         self,
@@ -274,15 +406,35 @@ class QwenReadinessGenerator(Generator):
         cache: QwenFullModelCache,
     ) -> None:
         trace = self._capture_decode_trace(first_input, prompt_len, cache)
+        per_token_syncs = 0
+        per_token_readbacks = 0
+        token_refreshes = 0
         for step in range(1, max_new_tokens):
             ttnn.execute_trace(self.mesh_device, trace.trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(self.mesh_device)
+            per_token_syncs += 1
             pred = self._read_active_token(trace.token_input)
+            per_token_readbacks += 1
             predictions.append(pred)
             trace.generated += 1
             forced = next_input(step, pred)
             if step + 1 < max_new_tokens:
                 self._write_active_token(trace.token_input, forced)
+                token_refreshes += 1
+        self.last_trace_counters = {
+            "trace_replays": int(trace.generated),
+            "execute_trace_blocking": False,
+            "steady_state_token_refreshes": token_refreshes,
+            "steady_state_position_refreshes": 0,
+            "steady_state_rope_refreshes": 0,
+            "steady_state_page_table_refreshes": 0,
+            "steady_state_synchronizations": per_token_syncs + token_refreshes,
+            "steady_state_token_readbacks": per_token_readbacks,
+            "terminal_validation_synchronizations": 0,
+            "terminal_validation_token_readbacks": 0,
+            "host_sampling": False,
+            "full_logits_readbacks": 0,
+        }
 
     def _capture_decode_trace(self, first_input: int, prompt_len: int, cache: QwenFullModelCache) -> _DecodeTrace:
         token_input = self._active_token_buffer(first_input)
@@ -357,8 +509,7 @@ class QwenReadinessGenerator(Generator):
         sampled = self.model.sampling.sample(logits, enable_trace=False, tt_out_tok=token_output)
         if isinstance(sampled, tuple):
             sampled = sampled[0]
-        active_output = ttnn.slice(token_output, (0, 0, 0, 0), (1, 1, 1, 1))
-        ttnn.copy(active_output, token_input)
+        ttnn.slice(sampled, (0, 0, 0, 0), (1, 1, 1, 1), output_tensor=token_input)
         ttnn.plus_one(current_pos, skip_negative_entries=True)
 
     def _pad_logits_batch_for_sampling(self, logits: ttnn.Tensor) -> ttnn.Tensor:
@@ -417,6 +568,24 @@ class QwenReadinessGenerator(Generator):
         )
         self.model.sampling.reset_sampling_params(params, empty_slots=[])
         self.model.sampling.reset_output_state()
+
+
+def _no_readback_counters(decode_tokens: int, *, validate_final_token: bool) -> dict[str, int | bool]:
+    return {
+        "trace_replays": int(decode_tokens),
+        "trace_decode_steps": int(decode_tokens),
+        "execute_trace_blocking": False,
+        "steady_state_token_refreshes": 0,
+        "steady_state_position_refreshes": 0,
+        "steady_state_rope_refreshes": 0,
+        "steady_state_page_table_refreshes": 0,
+        "steady_state_synchronizations": 0,
+        "steady_state_token_readbacks": 0,
+        "terminal_validation_synchronizations": 1 if decode_tokens > 0 else 0,
+        "terminal_validation_token_readbacks": 1 if validate_final_token and decode_tokens > 0 else 0,
+        "host_sampling": False,
+        "full_logits_readbacks": 0,
+    }
 
 
 def build_generator(model_dir: str | Path, mesh_device, **kwargs) -> QwenReadinessGenerator:
