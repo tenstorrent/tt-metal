@@ -105,9 +105,13 @@ ttnn::device_operation::ProgramArtifacts RepeatAndInterleaveEltwiseMulProgramFac
 
     // Dataflow buffers.
     //
-    // in0_transposed and out_transposed are compute-private staging buffers: compute both fills
-    // and drains them, so each is bound as a self-loop (PRODUCER + CONSUMER on the one kernel
-    // that touches it).
+    // in0_transposed and out_transposed are compute-private. Under REPEAT_INTERLEAVE_IN1 compute
+    // both fills and drains them; without it that code is compiled out and compute merely names
+    // them — it constructs the buffers, and reads in0_transposed's data format for a pack
+    // reconfig — without touching either. Compute is the only kernel involved either way, so each
+    // is bound as a self-loop: PRODUCER and CONSUMER on that one kernel. Every DFB needs both
+    // endpoints, and the role labels only drive FIFO machinery that a non-touching kernel never
+    // invokes.
     //
     // in1_transposed carries the transposed in1 tile from compute to the reader, which slices it
     // into single rows. Under REPEAT_INTERLEAVE_IN1 compute both pushes the tile and pops it
