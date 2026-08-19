@@ -704,7 +704,9 @@ def _run_kshard_replicated_matmul(
         linear_kwargs["activation"] = activation
     start_time = start_measuring_time()
     out = ttnn.linear(ta, tb, **linear_kwargs)
-    res = mesh_tensor_to_torch(out, dev if is_mesh else None)
+    res = mesh_tensor_to_torch(
+        out, dev if is_mesh else None, scatter_placement=input_a_tensor_placement if is_mesh_device else None
+    )
     e2e_perf = stop_measuring_time(start_time)
     return [check_with_pcc_safe(golden, res, 0.99), e2e_perf]
 
@@ -1490,7 +1492,11 @@ def run(
             else:
                 raise
 
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(
+        output_tensor,
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
 
     # Partial-reduce fallback: if a K-sharded matmul produces per-chip partial
     # outputs falsely marked as Shard(-1), the reassembler concats them; the

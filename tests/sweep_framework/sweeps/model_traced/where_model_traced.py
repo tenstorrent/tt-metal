@@ -215,7 +215,11 @@ def run(
         # Op call
         start_time = start_measuring_time()
         output_tensor = ttnn.where(condition_tensor, input_tensor_b, input_tensor_c, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor,
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
         e2e_perf = stop_measuring_time(start_time)
     elif is_tensor_scalar:
         # Mixed: tensor true_value + scalar false_value
@@ -293,7 +297,11 @@ def run(
 
         start_time = start_measuring_time()
         output_tensor = ttnn.where(condition_tensor, input_tensor_b, scalar_false, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor,
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
         e2e_perf = stop_measuring_time(start_time)
 
         from tests.sweep_framework.sweep_utils.mesh_tensor_utils import reconcile_golden_to_actual
@@ -338,7 +346,11 @@ def run(
         # Op call
         start_time = start_measuring_time()
         output_tensor = ttnn.where(condition_tensor, scalar_true, scalar_false, **op_kwargs)
-        output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor,
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
         e2e_perf = stop_measuring_time(start_time)
 
     # Comparison

@@ -180,7 +180,9 @@ def run(
     # mesh_tensor_to_torch (taking just device_tensors[0] returns only the
     # chip-0 slice and leaves the rest of the global tensor empty).
     if is_mesh_device:
-        output_tensor = mesh_tensor_to_torch(output_tensor, device)
+        output_tensor = mesh_tensor_to_torch(
+            output_tensor, device, scatter_placement=input_a_tensor_placement if is_mesh_device else None
+        )
         # mesh_tensor_to_torch returns the device tensor with reduced dims still
         # tile-padded (a reduced dim of logical size 1 comes back as 32). Slice
         # back to the logical reduced shape — mirrors the single-device
