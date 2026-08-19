@@ -75,7 +75,8 @@ kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
         kernel_profiler::PROFILER_TIMER_PACKET_TYPE_MASK);
 }
 
-void add_program_sub_device_meta_data(nlohmann::json& meta_data, tt::ChipId device_id, uint32_t runtime_id) {
+void add_program_sub_device_meta_data(
+    nlohmann::json& meta_data, ContextId context_id, tt::ChipId device_id, uint32_t runtime_id) {
     using CacheKey = std::pair<tt::ChipId, uint32_t>;
     struct CacheKeyHash {
         std::size_t operator()(const CacheKey& k) const noexcept {
@@ -93,9 +94,11 @@ void add_program_sub_device_meta_data(nlohmann::json& meta_data, tt::ChipId devi
         std::lock_guard<std::mutex> lock(cache_mutex);
         auto cache_it = sub_device_info_cache.find(cache_key);
         if (cache_it == sub_device_info_cache.end()) {
-            cache_it = sub_device_info_cache
-                           .emplace(cache_key, tt::GetProgramSubDevice(device_id, static_cast<uint16_t>(runtime_id)))
-                           .first;
+            cache_it =
+                sub_device_info_cache
+                    .emplace(
+                        cache_key, tt::GetProgramSubDevice(context_id, device_id, static_cast<uint16_t>(runtime_id)))
+                    .first;
         }
         sub_device_info = cache_it->second;
     }
@@ -106,12 +109,12 @@ void add_program_sub_device_meta_data(nlohmann::json& meta_data, tt::ChipId devi
     meta_data["sub_device_manager_id"] = sub_device_info->sub_device_manager_id;
 }
 
-void add_program_sub_device_meta_data(nlohmann::json& meta_data, uint32_t encoded_run_host_id) {
+void add_program_sub_device_meta_data(nlohmann::json& meta_data, ContextId context_id, uint32_t encoded_run_host_id) {
     if (encoded_run_host_id == 0) {
         return;
     }
     const auto decoded = detail::DecodePerDeviceProgramID(encoded_run_host_id);
-    add_program_sub_device_meta_data(meta_data, decoded.device_id, decoded.base_program_id);
+    add_program_sub_device_meta_data(meta_data, context_id, decoded.device_id, decoded.base_program_id);
 }
 
 #if defined(TRACY_ENABLE)
@@ -1997,7 +2000,7 @@ void DeviceProfiler::readDeviceMarkerData(
     ZoneScoped;
 
     nlohmann::json meta_data;
-    add_program_sub_device_meta_data(meta_data, run_host_id);
+    add_program_sub_device_meta_data(meta_data, this->context_id, run_host_id);
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
     const auto [trace_id, trace_id_count] = getTraceIdAndCount(run_host_id, device_trace_counter);

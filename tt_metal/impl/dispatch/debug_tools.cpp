@@ -369,12 +369,18 @@ void dump_completion_queue_entries(
     MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
     ChipId mmio_device_id = metal_ctx.get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
     uint16_t channel = metal_ctx.get_cluster().get_assigned_channel_for_device(sysmem_manager.get_device_id());
-    uint32_t completion_write_ptr =
-        get_cq_completion_wr_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
-        << 4;
-    uint32_t completion_read_ptr =
-        get_cq_completion_rd_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
-        << 4;
+    uint32_t completion_write_ptr = get_cq_completion_wr_ptr<true>(
+                                        sysmem_manager.get_context_id(),
+                                        sysmem_manager.get_device_id(),
+                                        cq_interface.id,
+                                        sysmem_manager.get_cq_size())
+                                    << 4;
+    uint32_t completion_read_ptr = get_cq_completion_rd_ptr<true>(
+                                       sysmem_manager.get_context_id(),
+                                       sysmem_manager.get_device_id(),
+                                       cq_interface.id,
+                                       sysmem_manager.get_cq_size())
+                                   << 4;
     uint32_t completion_q_bytes = cq_interface.completion_fifo_size << 4;
     TT_ASSERT(completion_q_bytes % DispatchSettings::TRANSFER_PAGE_SIZE == 0);
     uint32_t base_addr = (cq_interface.issue_fifo_limit << 4);
@@ -467,10 +473,18 @@ void dump_issue_queue_entries(
     ChipId mmio_device_id = metal_ctx.get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
     uint16_t channel = metal_ctx.get_cluster().get_assigned_channel_for_device(sysmem_manager.get_device_id());
     // TODO: Issue Q read ptr is not prefetcly updated 0 try to read it out from chip on dump?
-    uint32_t issue_read_ptr =
-        get_cq_issue_rd_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size()) << 4;
-    uint32_t issue_write_ptr =
-        get_cq_issue_wr_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size()) << 4;
+    uint32_t issue_read_ptr = get_cq_issue_rd_ptr<true>(
+                                  sysmem_manager.get_context_id(),
+                                  sysmem_manager.get_device_id(),
+                                  cq_interface.id,
+                                  sysmem_manager.get_cq_size())
+                              << 4;
+    uint32_t issue_write_ptr = get_cq_issue_wr_ptr<true>(
+                                   sysmem_manager.get_context_id(),
+                                   sysmem_manager.get_device_id(),
+                                   cq_interface.id,
+                                   sysmem_manager.get_cq_size())
+                               << 4;
     uint32_t issue_q_bytes = cq_interface.issue_fifo_size << 4;
     uint32_t issue_q_base_addr = cq_interface.offset + cq_interface.cq_start;
 
@@ -615,22 +629,34 @@ void dump_command_queue_raw_data(
     std::string queue_type_name;
     if (queue_type == CQ_COMPLETION_QUEUE) {
         write_ptr = get_cq_completion_wr_ptr<true>(
-                        sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
+                        sysmem_manager.get_context_id(),
+                        sysmem_manager.get_device_id(),
+                        cq_interface.id,
+                        sysmem_manager.get_cq_size())
                     << 4;
         read_ptr = get_cq_completion_rd_ptr<true>(
-                       sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
+                       sysmem_manager.get_context_id(),
+                       sysmem_manager.get_device_id(),
+                       cq_interface.id,
+                       sysmem_manager.get_cq_size())
                    << 4;
         bytes_to_read = cq_interface.completion_fifo_size << 4;  // Page-aligned, Issue Q is not.
         TT_ASSERT(bytes_to_read % DispatchSettings::TRANSFER_PAGE_SIZE == 0);
         base_addr = cq_interface.issue_fifo_limit << 4;
         queue_type_name = "Completion";
     } else if (queue_type == CQ_ISSUE_QUEUE) {
-        write_ptr =
-            get_cq_issue_wr_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
-            << 4;
-        read_ptr =
-            get_cq_issue_rd_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
-            << 4;
+        write_ptr = get_cq_issue_wr_ptr<true>(
+                        sysmem_manager.get_context_id(),
+                        sysmem_manager.get_device_id(),
+                        cq_interface.id,
+                        sysmem_manager.get_cq_size())
+                    << 4;
+        read_ptr = get_cq_issue_rd_ptr<true>(
+                       sysmem_manager.get_context_id(),
+                       sysmem_manager.get_device_id(),
+                       cq_interface.id,
+                       sysmem_manager.get_cq_size())
+                   << 4;
         bytes_to_read = cq_interface.issue_fifo_size << 4;
         base_addr = cq_interface.offset + cq_interface.cq_start;
         queue_type_name = "Issue";

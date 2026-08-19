@@ -94,6 +94,7 @@ void record_program_sub_device_for_range(
         mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
     for_each_local(mesh_device, device_range, [&](const MeshCoordinate& coord) {
         tt::RecordProgramSubDevice(
+            extract_context_id(mesh_device),
             mesh_device->impl().get_device(coord)->id(),
             active_manager_id,
             runtime_id,
@@ -1267,7 +1268,7 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
         sub_device.take_ownership(sub_device_id, this->id_);
     }
 
-    auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(num_sub_devices);
+    auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(extract_context_id(mesh_device_), num_sub_devices);
 
     trace_dispatch::TraceDispatchMetadata dispatch_md(
         cmd_sequence_sizeB,

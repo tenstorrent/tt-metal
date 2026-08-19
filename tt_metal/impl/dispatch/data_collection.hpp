@@ -13,6 +13,7 @@
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "program/program_impl.hpp"
+#include "impl/context/context_types.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -43,6 +44,7 @@ using ProgramRealtimeProfilerCallbackHandle = tt::tt_metal::experimental::Progra
  *      processor - processor that this transaction is used for, only relevant for DISPATCH_DATA_BINARY transactions.
  */
 void RecordDispatchData(
+    tt::tt_metal::ContextId context_id,
     uint64_t program_id,
     data_collector_t type,
     uint32_t transaction_size,
@@ -51,15 +53,16 @@ void RecordDispatchData(
 // Record the KernelGroups present in this program (per core type). Should only be called per program created, not
 // program enqueued.
 void RecordKernelGroup(
+    tt::tt_metal::ContextId context_id,
     tt_metal::detail::ProgramImpl& program,
     tt_metal::HalProgrammableCoreType core_type,
     const tt_metal::KernelGroup& kernel_group);
 
 // Update stats with an enqueue of given program.
-void RecordProgramRun(uint64_t program_id);
+void RecordProgramRun(tt::tt_metal::ContextId context_id, uint64_t program_id);
 
 // Record metadata used by profiler lookups for this program dispatch.
-void RecordProgramMetadata(tt_metal::detail::ProgramImpl& program);
+void RecordProgramMetadata(tt::tt_metal::ContextId context_id, tt_metal::detail::ProgramImpl& program);
 
 struct ProgramSubDeviceInfo {
     uint8_t sub_device_id = 0;
@@ -70,6 +73,7 @@ struct ProgramSubDeviceInfo {
 
 // Record which sub-device a program executes on. Should be called at dispatch time when runtime_id is set.
 void RecordProgramSubDevice(
+    tt::tt_metal::ContextId context_id,
     tt::ChipId device_id,
     uint64_t sub_device_manager_id,
     uint64_t runtime_id,
@@ -77,11 +81,12 @@ void RecordProgramSubDevice(
     uint32_t num_available_worker_cores = 0);
 
 // Look up the sub-device a program was dispatched on, keyed by physical device and runtime_id.
-std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id);
+std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(
+    tt::tt_metal::ContextId context_id, tt::ChipId device_id, uint64_t runtime_id);
 
 // Look up kernel source paths by runtime_id; empty span if the runtime_id is unknown.
 // The returned span is valid until MetalContext teardown or reinitialization.
-std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id);
+std::span<const std::string_view> GetKernelSourcesForRuntimeId(tt::tt_metal::ContextId context_id, uint16_t runtime_id);
 
 // Register a callback to be invoked when real-time profiler data arrives.
 // Multiple callbacks can be registered; each callback is called from its own thread.
