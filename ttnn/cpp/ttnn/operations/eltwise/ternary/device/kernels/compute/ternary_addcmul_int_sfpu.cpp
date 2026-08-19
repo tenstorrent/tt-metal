@@ -30,7 +30,7 @@ void kernel_main() {
                 dfb_in0_id,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
-                ckl::OperandKind::Block,
+                ckl::InputTileMapping::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
         ckl::CopyTile<
@@ -38,7 +38,7 @@ void kernel_main() {
                 dfb_in1_id,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
-                ckl::OperandKind::Block,
+                ckl::InputTileMapping::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D1>{},
         ckl::CopyTile<
@@ -46,7 +46,7 @@ void kernel_main() {
                 dfb_in2_id,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
-                ckl::OperandKind::Block,
+                ckl::InputTileMapping::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D2>{},
         ckl::FillInt<ADDCMUL_DATA_FORMAT, ckl::Dst::D3>{scalar_arg},

@@ -39,12 +39,12 @@ void kernel_main() {
                 IterationShape::tiles(batch).block_size(blk),
                 BinaryFpu<
                     BinaryFpuOp::Add,
-                    input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
-                    input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block)>{},
+                    input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
+                    input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block)>{},
                 Exp<>{},
                 DestReuseBinary<
                     BinaryFpuOp::Mul,
-                    input(cb_c, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
+                    input(cb_c, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
                     DestReuseType::DEST_TO_SRCA>{},
                 PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
         }
@@ -53,12 +53,12 @@ void kernel_main() {
             IterationShape::tiles(n).block_size(blk),
             BinaryFpu<
                 BinaryFpuOp::Add,
-                input(cb_a, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block),
-                input(cb_b, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block)>{},
+                input(cb_a, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block),
+                input(cb_b, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block)>{},
             Exp<>{},
             DestReuseBinary<
                 BinaryFpuOp::Mul,
-                input(cb_c, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block),
+                input(cb_c, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block),
                 DestReuseType::DEST_TO_SRCA>{},
             PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
     }

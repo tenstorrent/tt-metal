@@ -148,9 +148,9 @@ void kernel_main() {
                     dfb_scalar_args_id,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
-                    ckl::OperandKind::Scalar,
+                    ckl::InputTileMapping::Scalar,
                     kDataFormatReconfig,
-                    ckl::TileOffset::Set),
+                    ckl::TileAddressing::Offset),
                 ckl::Dst::D0>{beta2_tile},
             ckl::Power<ckl::Dst::D0>{step},
             ckl::PackTile<ckl::output(
@@ -210,9 +210,9 @@ void kernel_main() {
                     dfb_scalar_args_id,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
-                    ckl::OperandKind::Scalar,
+                    ckl::InputTileMapping::Scalar,
                     kDataFormatReconfig,
-                    ckl::TileOffset::Set)>{0u, eps_tile},
+                    ckl::TileAddressing::Offset)>{0u, eps_tile},
             ckl::Recip<ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(
                 dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
@@ -226,9 +226,9 @@ void kernel_main() {
                     dfb_scalar_args_id,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
-                    ckl::OperandKind::Scalar,
+                    ckl::InputTileMapping::Scalar,
                     kDataFormatReconfig,
-                    ckl::TileOffset::Set),
+                    ckl::TileAddressing::Offset),
                 ckl::Dst::D0>{beta1_tile},
             ckl::Power<ckl::Dst::D0>{step},
             ckl::PackTile<ckl::output(
@@ -243,9 +243,9 @@ void kernel_main() {
                     dfb_one_id,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
-                    ckl::OperandKind::Scalar,
+                    ckl::InputTileMapping::Scalar,
                     kDataFormatReconfig,
-                    ckl::TileOffset::Set),
+                    ckl::TileAddressing::Offset),
                 ckl::input(dfb_tmp2_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
             ckl::Recip<ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(

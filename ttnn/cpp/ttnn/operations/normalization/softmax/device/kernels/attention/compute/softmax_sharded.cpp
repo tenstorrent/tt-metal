@@ -43,7 +43,7 @@ ALWI void calc_numeric_stable() {
         ckl::IterationShape::tiles(block_w).block_size(subblock_w),
         ckl::BinaryFpu<
             ckl::BinaryFpuOp::Sub,
-            ckl::input(dfb_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+            ckl::input(dfb_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
             ckl::input(dfb_max_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{},
         ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
@@ -104,7 +104,7 @@ void kernel_main() {
     for (std::uint32_t i = 0; i < block_h; i++) {
 #if FUSED_SCALE_MASK
         ckl::mul<
-            ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+            ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
             ckl::input(dfb::fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
             ckl::output(dfb::scale_mask, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
             ckl::IterationShape::tiles(block_w).block_size(subblock_w));
@@ -113,8 +113,9 @@ void kernel_main() {
             ckl::IterationShape::tiles(block_w).block_size(subblock_w),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
-                ckl::input(dfb::scale_mask, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::input(dfb::fused_attn, mask_bcast, mask_wait, mask_pop, ckl::OperandKind::Block)>{},
+                ckl::input(
+                    dfb::scale_mask, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::input(dfb::fused_attn, mask_bcast, mask_wait, mask_pop, ckl::InputTileMapping::Block)>{},
             // Exp dropped when NUMERIC_STABLE (it is fused into calc_numeric_stable below).
             ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
             ckl::PackTile<ckl::output(
@@ -137,7 +138,7 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(block_w).block_size(subblock_w),
             ckl::CopyTile<
-                ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                ckl::input(dfb::in0, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
                 ckl::Dst::D0>{},
             ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(dfb::exps, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{});
@@ -164,7 +165,7 @@ void kernel_main() {
             });
 
         ckl::mul<
-            ckl::input(dfb::exps, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+            ckl::input(dfb::exps, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
             ckl::input(dfb::recip_sum_exps, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::output(dfb::out0, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
             ckl::IterationShape::tiles(block_w).block_size(subblock_w));

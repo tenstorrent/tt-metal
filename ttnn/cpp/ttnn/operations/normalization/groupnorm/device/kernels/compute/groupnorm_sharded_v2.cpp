@@ -188,18 +188,18 @@ void kernel_main() {
             dfb_id,
             ckl::WaitPolicy::None,
             ckl::PopPolicy::None,
-            ckl::OperandKind::Col,
+            ckl::InputTileMapping::Col,
             ckl::DataFormatReconfig::Disabled,
-            ckl::TileOffset::Strided);
+            ckl::TileAddressing::Strided);
     };
     constexpr auto strided_block_input = [](uint32_t dfb_id) {
         return ckl::input(
             dfb_id,
             ckl::WaitPolicy::None,
             ckl::PopPolicy::None,
-            ckl::OperandKind::Block,
+            ckl::InputTileMapping::Block,
             ckl::DataFormatReconfig::Disabled,
-            ckl::TileOffset::Strided);
+            ckl::TileAddressing::Strided);
     };
     constexpr auto strided_output = [](uint32_t dfb_id) {
         return ckl::output(
@@ -210,7 +210,7 @@ void kernel_main() {
             ckl::PackRelu::Disabled,
             ckl::L1Accumulation::Disabled,
             ckl::DestAccumulation::Disabled,
-            ckl::TileOffset::Strided);
+            ckl::TileAddressing::Strided);
     };
 
     DataflowBuffer dfb_beta(dfb_beta_id);
@@ -428,7 +428,7 @@ void kernel_main() {
                     dfb_x_id,
                     ckl::WaitPolicy::PerBlockSize,
                     ckl::PopPolicy::PerBlockSize,
-                    ckl::OperandKind::Block,
+                    ckl::InputTileMapping::Block,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::input(
                     dfb_ex_global_id,
@@ -453,14 +453,14 @@ void kernel_main() {
                         dfb_x_id,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
-                        ckl::OperandKind::Block,
+                        ckl::InputTileMapping::Block,
                         ckl::DataFormatReconfig::Disabled),
                     ckl::input(
                         dfb_input_mask_id,
                         ckl::BroadcastDim::Row,
                         ckl::WaitPolicy::None,
                         ckl::PopPolicy::None,
-                        ckl::OperandKind::Row,
+                        ckl::InputTileMapping::Row,
                         ckl::DataFormatReconfig::Disabled),
                     ckl::output(
                         dfb_x_id,
@@ -478,13 +478,13 @@ void kernel_main() {
                         dfb_x_id,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
-                        ckl::OperandKind::Block,
+                        ckl::InputTileMapping::Block,
                         ckl::DataFormatReconfig::Disabled),
                     ckl::input(
                         dfb_mask_last_id,
                         ckl::WaitPolicy::None,
                         ckl::PopPolicy::None,
-                        ckl::OperandKind::Row,
+                        ckl::InputTileMapping::Row,
                         ckl::DataFormatReconfig::Disabled),
                     ckl::output(
                         dfb_x_id,
@@ -578,7 +578,7 @@ void kernel_main() {
                     dfb_x_id,
                     ckl::WaitPolicy::PerBlockSize,
                     ckl::PopPolicy::PerBlockSize,
-                    ckl::OperandKind::Block,
+                    ckl::InputTileMapping::Block,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::input(
                     dfb_ex2pe_id,
@@ -649,7 +649,7 @@ void kernel_main() {
                             ckl::BroadcastDim::Row,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
-                            ckl::OperandKind::Row,
+                            ckl::InputTileMapping::Row,
                             ckl::DataFormatReconfig::Disabled)>{output_range},
                     ckl::PackTile<strided_output(dfb_in_id)>{output_range});
 
@@ -728,14 +728,14 @@ void kernel_main() {
                     dfb_out_id,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::AtEnd,
-                    ckl::OperandKind::Block,
+                    ckl::InputTileMapping::Block,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::input(
                     dfb_gamma_id,
                     ckl::BroadcastDim::Row,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::None,
-                    ckl::OperandKind::Row,
+                    ckl::InputTileMapping::Row,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     dfb_outgamma_id,
@@ -757,7 +757,7 @@ void kernel_main() {
                     ckl::BroadcastDim::Row,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::None,
-                    ckl::OperandKind::Row,
+                    ckl::InputTileMapping::Row,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     dfb_in_id,
@@ -779,14 +779,14 @@ void kernel_main() {
                     dfb_inbeta_id,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::AtEnd,
-                    ckl::OperandKind::Block,
+                    ckl::InputTileMapping::Block,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::input(
                     dfb_beta_id,
                     ckl::BroadcastDim::Row,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::None,
-                    ckl::OperandKind::Row,
+                    ckl::InputTileMapping::Row,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     dfb_outbeta_id,
@@ -808,7 +808,7 @@ void kernel_main() {
                     ckl::BroadcastDim::Row,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::None,
-                    ckl::OperandKind::Row,
+                    ckl::InputTileMapping::Row,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::output(
                     dfb_in_id,

@@ -65,25 +65,25 @@ constexpr bool is_legal_output_policy(ReservePolicy reserve, PushPolicy push) no
     return false;
 }
 
-constexpr bool is_legal_input_policy_for_kind(OperandKind kind, WaitPolicy wait, PopPolicy pop) noexcept {
+constexpr bool is_legal_input_policy_for_mapping(InputTileMapping kind, WaitPolicy wait, PopPolicy pop) noexcept {
     if (!is_legal_input_policy(wait, pop)) {
         return false;
     }
 
     switch (kind) {
-        case OperandKind::Block:
+        case InputTileMapping::Block:
             return (wait == WaitPolicy::PerBlockSize && pop == PopPolicy::PerBlockSize) ||
                    (wait == WaitPolicy::Cumulative && (pop == PopPolicy::None || pop == PopPolicy::AtEnd)) ||
                    ((wait == WaitPolicy::Upfront || wait == WaitPolicy::None) &&
                     (pop == PopPolicy::None || pop == PopPolicy::AtEnd));
-        case OperandKind::Row:
+        case InputTileMapping::Row:
             return (wait == WaitPolicy::Upfront || wait == WaitPolicy::None) &&
                    (pop == PopPolicy::None || pop == PopPolicy::AtEnd);
-        case OperandKind::Col:
+        case InputTileMapping::Col:
             return (wait == WaitPolicy::PerTile && pop == PopPolicy::PerTile) ||
                    ((wait == WaitPolicy::Upfront || wait == WaitPolicy::None) &&
                     (pop == PopPolicy::None || pop == PopPolicy::AtEnd));
-        case OperandKind::Scalar:
+        case InputTileMapping::Scalar:
             return wait == WaitPolicy::None || wait == WaitPolicy::PerTile || wait == WaitPolicy::Upfront;
     }
     return false;
@@ -151,9 +151,9 @@ struct InputSpecConfig {
     // Buffer identity remains a separate Impl NTTP; this key packs only operand behavior.
     using WaitField = ConfigField<WaitPolicy, first_config_bit, WaitPolicy::Cumulative>;
     using PopField = ConfigField<PopPolicy, WaitField::end, PopPolicy::AtEnd>;
-    using IndexField = ConfigField<OperandKind, PopField::end, OperandKind::Scalar>;
-    using OffsetField = ConfigField<TileOffset, IndexField::end, TileOffset::Strided>;
-    using ReconfigField = ConfigField<DataFormatReconfig, OffsetField::end, DataFormatReconfig::Enabled>;
+    using MappingField = ConfigField<InputTileMapping, PopField::end, InputTileMapping::Scalar>;
+    using AddressingField = ConfigField<TileAddressing, MappingField::end, TileAddressing::Strided>;
+    using ReconfigField = ConfigField<DataFormatReconfig, AddressingField::end, DataFormatReconfig::Enabled>;
 
     static constexpr uint32_t used_bits = ReconfigField::end;
     static constexpr uint32_t storage_mask = low_bits_mask(used_bits);
@@ -161,8 +161,8 @@ struct InputSpecConfig {
 
     static constexpr uint16_t encode(InputSpec spec) noexcept {
         return static_cast<uint16_t>(
-            WaitField::encode(spec.wait) | PopField::encode(spec.pop) | IndexField::encode(spec.index) |
-            OffsetField::encode(spec.offset) | ReconfigField::encode(spec.reconfig));
+            WaitField::encode(spec.wait) | PopField::encode(spec.pop) | MappingField::encode(spec.mapping) |
+            AddressingField::encode(spec.addressing) | ReconfigField::encode(spec.reconfig));
     }
 
     static constexpr InputSpec decode(uint16_t storage, uint32_t cb_id) noexcept;
@@ -176,9 +176,9 @@ struct OutputSpecConfig {
     using ReluField = ConfigField<PackRelu, ReconfigField::end, PackRelu::Zero>;
     using L1AccumulationField = ConfigField<L1Accumulation, ReluField::end, L1Accumulation::AddToExisting>;
     using DestAccumulationField = ConfigField<DestAccumulation, L1AccumulationField::end, DestAccumulation::WholeShape>;
-    using OffsetField = ConfigField<TileOffset, DestAccumulationField::end, TileOffset::Strided>;
+    using AddressingField = ConfigField<TileAddressing, DestAccumulationField::end, TileAddressing::Strided>;
 
-    static constexpr uint32_t used_bits = OffsetField::end;
+    static constexpr uint32_t used_bits = AddressingField::end;
     static constexpr uint32_t storage_mask = low_bits_mask(used_bits);
     static_assert(used_bits <= sizeof(uint16_t) * CHAR_BIT, "OutputSpec behavior exceeds uint16_t storage");
 
@@ -186,7 +186,7 @@ struct OutputSpecConfig {
         return static_cast<uint16_t>(
             ReserveField::encode(spec.reserve) | PushField::encode(spec.push) | ReconfigField::encode(spec.reconfig) |
             ReluField::encode(spec.relu) | L1AccumulationField::encode(spec.l1_accumulation) |
-            DestAccumulationField::encode(spec.dest_accumulation) | OffsetField::encode(spec.offset));
+            DestAccumulationField::encode(spec.dest_accumulation) | AddressingField::encode(spec.addressing));
     }
 
     static constexpr OutputSpec decode(uint16_t storage, uint32_t cb_id) noexcept;
@@ -201,9 +201,9 @@ constexpr InputSpec InputSpecConfig::decode(uint16_t storage, uint32_t cb_id) no
         cb_id,
         WaitField::decode(storage),
         PopField::decode(storage),
-        IndexField::decode(storage),
+        MappingField::decode(storage),
         ReconfigField::decode(storage),
-        OffsetField::decode(storage)};
+        AddressingField::decode(storage)};
 }
 
 constexpr OutputSpec OutputSpecConfig::decode(uint16_t storage, uint32_t cb_id) noexcept {
@@ -215,7 +215,7 @@ constexpr OutputSpec OutputSpecConfig::decode(uint16_t storage, uint32_t cb_id) 
         ReluField::decode(storage),
         L1AccumulationField::decode(storage),
         DestAccumulationField::decode(storage),
-        OffsetField::decode(storage)};
+        AddressingField::decode(storage)};
 }
 
 }  // namespace detail
@@ -224,19 +224,19 @@ constexpr InputSpec input(
     uint32_t cb_id,
     WaitPolicy wait,
     PopPolicy pop,
-    OperandKind index,
+    InputTileMapping mapping,
     DataFormatReconfig reconfig,
-    TileOffset offset) noexcept {
-    return {cb_id, wait, pop, index, reconfig, offset};
+    TileAddressing addressing) noexcept {
+    return {cb_id, wait, pop, mapping, reconfig, addressing};
 }
 
 constexpr InputSpec input(uint32_t cb_id, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept {
-    return input(cb_id, wait, pop, OperandKind::Scalar, reconfig);
+    return input(cb_id, wait, pop, InputTileMapping::Scalar, reconfig);
 }
 
 constexpr InputSpec input(
-    uint32_t cb_id, WaitPolicy wait, PopPolicy pop, OperandKind index, TileOffset offset) noexcept {
-    return input(cb_id, wait, pop, index, DataFormatReconfig::Enabled, offset);
+    uint32_t cb_id, WaitPolicy wait, PopPolicy pop, InputTileMapping mapping, TileAddressing addressing) noexcept {
+    return input(cb_id, wait, pop, mapping, DataFormatReconfig::Enabled, addressing);
 }
 
 constexpr BinaryFpuInputSpec input(InputSpec input_spec, BroadcastDim broadcast) noexcept {
@@ -248,10 +248,10 @@ constexpr BinaryFpuInputSpec input(
     BroadcastDim broadcast,
     WaitPolicy wait,
     PopPolicy pop,
-    OperandKind index,
+    InputTileMapping mapping,
     DataFormatReconfig reconfig,
-    TileOffset offset) noexcept {
-    return {input(cb_id, wait, pop, index, reconfig, offset), broadcast};
+    TileAddressing addressing) noexcept {
+    return {input(cb_id, wait, pop, mapping, reconfig, addressing), broadcast};
 }
 
 constexpr BinaryFpuInputSpec input(
@@ -264,9 +264,9 @@ constexpr BinaryFpuInputSpec input(
     BroadcastDim broadcast,
     WaitPolicy wait,
     PopPolicy pop,
-    OperandKind index,
-    TileOffset offset) noexcept {
-    return input(input(cb_id, wait, pop, index, offset), broadcast);
+    InputTileMapping mapping,
+    TileAddressing addressing) noexcept {
+    return input(input(cb_id, wait, pop, mapping, addressing), broadcast);
 }
 
 constexpr OutputSpec output(
@@ -277,11 +277,11 @@ constexpr OutputSpec output(
     PackRelu relu,
     L1Accumulation l1_accumulation,
     DestAccumulation dest_accumulation,
-    TileOffset offset) noexcept {
-    return {cb_id, reserve, push, reconfig, relu, l1_accumulation, dest_accumulation, offset};
+    TileAddressing addressing) noexcept {
+    return {cb_id, reserve, push, reconfig, relu, l1_accumulation, dest_accumulation, addressing};
 }
 
-constexpr OutputSpec output(uint32_t cb_id, ReservePolicy reserve, PushPolicy push, TileOffset offset) noexcept {
+constexpr OutputSpec output(uint32_t cb_id, ReservePolicy reserve, PushPolicy push, TileAddressing addressing) noexcept {
     return output(
         cb_id,
         reserve,
@@ -290,7 +290,7 @@ constexpr OutputSpec output(uint32_t cb_id, ReservePolicy reserve, PushPolicy pu
         PackRelu::Disabled,
         L1Accumulation::Disabled,
         DestAccumulation::Disabled,
-        offset);
+        addressing);
 }
 
 namespace detail {
@@ -565,10 +565,10 @@ inline constexpr bool is_math_mop_op_v = is_copy_tile_op_v<T> || is_fpu_kind_op_
 // tile_base_value — orthogonal tile-index offset extractor (impl helper)
 // =============================================================================
 /// Extract the offset value stored on an element. Returns 0 (compile-time-folded) when the
-/// element's `Offset` is `Unset`, so the `+base` term and the stored field vanish.
-template <TileOffset Offset>
+/// element's `Addressing` is `Direct`, so the `+base` term and the stored field vanish.
+template <TileAddressing Addressing>
 ALWI uint32_t tile_base_value([[maybe_unused]] uint32_t stored) noexcept {
-    if constexpr (Offset == TileOffset::Unset) {
+    if constexpr (Addressing == TileAddressing::Direct) {
         return 0u;
     } else {
         return stored;
@@ -597,7 +597,6 @@ struct UnaryOp : DestOnlyTag {
     static_assert(
         to_u32(Slot) < DEST_AUTO_LIMIT, "UnaryOp: DEST slot exceeds compile-time DEST capacity (DEST_AUTO_LIMIT)");
 
-    static constexpr Dst dst_idx = Slot;
     static constexpr uint32_t max_dst() { return to_u32(Slot); }
     /// Per-lane DEST footprint. Used by chain to pick auto BlockSize.
     /// Default = `to_u32(Slot) + 1` (op writes only Slot). Override per-op when the
@@ -623,9 +622,6 @@ struct BinaryOp : DestOnlyTag {
     // also doesn't need In0 != In1. If a future op truly requires distinct DEST
     // slots, it should enforce that locally rather than at the CRTP base.
 
-    static constexpr Dst in0 = In0;
-    static constexpr Dst in1 = In1;
-    static constexpr Dst out = Out;
     static constexpr uint32_t max_dst() {
         uint32_t a = to_u32(In0), b = to_u32(In1), c = to_u32(Out);
         return a > b ? (a > c ? a : c) : (b > c ? b : c);
@@ -647,10 +643,6 @@ struct TernaryOp : DestOnlyTag {
     // future op truly requires distinct DEST slots, enforce it locally rather than at
     // the CRTP base.
 
-    static constexpr Dst in0 = In0;
-    static constexpr Dst in1 = In1;
-    static constexpr Dst in2 = In2;
-    static constexpr Dst out = Out;
     static constexpr uint32_t lane_width = []() {
         uint32_t m = to_u32(In0);
         if (to_u32(In1) > m) {
@@ -683,33 +675,33 @@ enum class Side : uint8_t { SrcA, SrcB, Pack };
 namespace detail {
 
 // =============================================================================
-// A0. 2D index-mode helpers (OperandKind → tile index / upfront window)
+// A0. 2D tile-mapping helpers (InputTileMapping → tile index / upfront window)
 //
 // Compile-time-elided `idx` / `window` (defined below), inlined by every CB-reader's
 // `exec` / `wait_upfront` — `if constexpr` collapses to one arithmetic op at run time.
 // `TileBase` layers a runtime offset on top. Policy validation lives in
-// `is_legal_input_policy_for_kind`, next to the wait/pop allow-list.
+// `is_legal_input_policy_for_mapping`, next to the wait/pop allow-list.
 // =============================================================================
 
-template <OperandKind M, TileOffset Offset>
+template <InputTileMapping M, TileAddressing Addressing>
 ALWI constexpr uint32_t idx(
     [[maybe_unused]] uint32_t flat_index,
     [[maybe_unused]] uint32_t row,
     [[maybe_unused]] uint32_t column,
     [[maybe_unused]] uint32_t row_stride) noexcept {
-    if constexpr (M == OperandKind::Scalar) {
+    if constexpr (M == InputTileMapping::Scalar) {
         return 0;
-    } else if constexpr (M == OperandKind::Row) {
+    } else if constexpr (M == InputTileMapping::Row) {
         return column;
-    } else if constexpr (M == OperandKind::Col) {
-        if constexpr (Offset == TileOffset::Strided) {
+    } else if constexpr (M == InputTileMapping::Col) {
+        if constexpr (Addressing == TileAddressing::Strided) {
             return row * row_stride;
         } else {
             return row;
         }
     } else {
-        static_assert(M == OperandKind::Block);
-        if constexpr (Offset == TileOffset::Strided) {
+        static_assert(M == InputTileMapping::Block);
+        if constexpr (Addressing == TileAddressing::Strided) {
             return row * row_stride + column;
         } else {
             return flat_index;
@@ -720,22 +712,22 @@ ALWI constexpr uint32_t idx(
 // PerTile + Col is a row-stream lifecycle rather than an Ht-tile staged window. Its front advances
 // at row boundaries, so every access within the current row uses front index 0. Other Col policies
 // retain ordinary absolute-row indexing.
-template <OperandKind M, WaitPolicy Wait, PopPolicy Pop, TileOffset Offset>
+template <InputTileMapping M, WaitPolicy Wait, PopPolicy Pop, TileAddressing Addressing>
 ALWI constexpr uint32_t input_idx(uint32_t flat_index, uint32_t row, uint32_t column, uint32_t row_stride) noexcept {
-    if constexpr (M == OperandKind::Col && Wait == WaitPolicy::PerTile && Pop == PopPolicy::PerTile) {
+    if constexpr (M == InputTileMapping::Col && Wait == WaitPolicy::PerTile && Pop == PopPolicy::PerTile) {
         return 0;
     } else {
-        return idx<M, Offset>(flat_index, row, column, row_stride);
+        return idx<M, Addressing>(flat_index, row, column, row_stride);
     }
 }
 
-template <OperandKind M>
+template <InputTileMapping M>
 ALWI constexpr uint32_t window([[maybe_unused]] uint32_t Ht, [[maybe_unused]] uint32_t Wt) noexcept {
-    if constexpr (M == OperandKind::Block) {
+    if constexpr (M == InputTileMapping::Block) {
         return Ht * Wt;
-    } else if constexpr (M == OperandKind::Row) {
+    } else if constexpr (M == InputTileMapping::Row) {
         return Wt;
-    } else if constexpr (M == OperandKind::Col) {
+    } else if constexpr (M == InputTileMapping::Col) {
         return Ht;
     } else {
         return 1u;  // Scalar
@@ -753,7 +745,7 @@ ALWI constexpr uint32_t window([[maybe_unused]] uint32_t Ht, [[maybe_unused]] ui
 // Every CB-writer element must expose:
 //   static constexpr uint32_t pack_dfb_id();
 //   static constexpr Dst pack_dst_slot;
-// (output addressing derives from the walk + TileOffset, not a pack_output_index accessor.)
+// (output addressing derives from the walk + TileAddressing, not a pack_output_index accessor.)
 // =============================================================================
 
 template <class T, class = void>
@@ -854,8 +846,8 @@ constexpr bool chain_requests_no_reconfig() {
 // 0. Operand streams — runtime state for driver-managed CB lifecycles
 //
 // Every CB-reader element's wait/pop hooks are a function of exactly one operand
-// tuple (Cb, Policy, IndexMode, Offset, tile_base); every CB-writer's reserve/push
-// hooks of one (Cb, Policy, Offset, tile_base). Cb and the spec remain compile-time
+// tuple (Cb, Policy, Mapping, Addressing, tile_base); every CB-writer's reserve/push
+// hooks of one (Cb, Policy, Addressing, tile_base). Cb and the spec remain compile-time
 // element metadata for planning/reconfig. The existing chain workers emit the lifecycle
 // operations directly and pass the CB ids to DataflowBuffer as ordinary values; ALWI
 // inlining constant-folds those values and the policy gates without creating one
@@ -901,26 +893,26 @@ struct detail::CopyTileImpl : InputStream, CopyTileTag {
     static constexpr WaitPolicy Wait = Input.wait;
     static constexpr PopPolicy Pop = Input.pop;
     static constexpr DataFormatReconfig Reconfig = Input.reconfig;
-    static constexpr OperandKind IndexMode = Input.index;
-    static constexpr TileOffset Offset = Input.offset;
+    static constexpr InputTileMapping Mapping = Input.mapping;
+    static constexpr TileAddressing Addressing = Input.addressing;
     using Base = InputStream;
     using Base::tile_base;
 
     // ---- compile-time validation ----
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "CopyTile: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(
-        is_legal_input_policy_for_kind(IndexMode, Wait, Pop),
-        "CopyTile: input wait/pop pair is incompatible with operand kind");
-    // TileOffset::Set requires (Upfront, AtEnd)-family / (None, None) lifecycle — iter-dependent
+        is_legal_input_policy_for_mapping(Mapping, Wait, Pop),
+        "CopyTile: input wait/pop pair is incompatible with input tile mapping");
+    // TileAddressing::Offset requires (Upfront, AtEnd)-family / (None, None) lifecycle — iter-dependent
     // counts
     // ((PerTile, PerTile)/(PerBlockSize, PerBlockSize)/Cumulative/Held{Stream,Cumulative}/(None, PerTile))
     // can't compose with runtime base offsets. Caller must size CB to base+window.
     static_assert(
-        Offset == TileOffset::Unset || is_legal_input_policy_with_base(Wait, Pop),
-        "CopyTile: TileOffset::Set requires an upfront, deferred-pop, or caller-managed input pair");
+        Addressing == TileAddressing::Direct || is_legal_input_policy_with_base(Wait, Pop),
+        "CopyTile: TileAddressing::Offset requires an upfront, deferred-pop, or caller-managed input pair");
     static_assert(
-        Offset != TileOffset::Strided || ((Wait == WaitPolicy::None) && (Pop == PopPolicy::None)),
-        "CopyTile: TileOffset::Strided requires caller-managed (None, None) input policies");
+        Addressing != TileAddressing::Strided || ((Wait == WaitPolicy::None) && (Pop == PopPolicy::None)),
+        "CopyTile: TileAddressing::Strided requires caller-managed (None, None) input policies");
 
     static constexpr uint32_t dfb = Cb;
     static constexpr uint32_t dfb_a_id() { return Cb; }
@@ -939,8 +931,8 @@ struct detail::CopyTileImpl : InputStream, CopyTileTag {
     static ALWI void init() { copy_tile_init(Cb); }
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
-        const uint32_t in_idx = tile_base_value<Offset>(tile_base) +
-                                detail::input_idx<IndexMode, Wait, Pop, Offset>(i_flat, ht, wt, row_stride);
+        const uint32_t in_idx = tile_base_value<Addressing>(tile_base) +
+                                detail::input_idx<Mapping, Wait, Pop, Addressing>(i_flat, ht, wt, row_stride);
         copy_tile(Cb, in_idx, to_u32(DstSlot) + slot_offset);
     }
 
@@ -965,7 +957,7 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     static constexpr L1Accumulation L1AccumulationMode = Output.l1_accumulation;
     static constexpr DestAccumulation DestAccumulationMode = Output.dest_accumulation;
     static constexpr Dst DstSlot = Config.dst();
-    static constexpr TileOffset Offset = Output.offset;
+    static constexpr TileAddressing Addressing = Output.addressing;
     using Base = OutputStream;
     using Base::tile_base;
     // Walk vs pinned output addressing is derived from reserve policy: upfront-reserve
@@ -1004,11 +996,11 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     // (PerTile, PerTile) / (PerBlockSize, PerBlockSize) reserve+push counts can't be inflated by a runtime base
     // without per-iter bookkeeping the chain doesn't own.
     static_assert(
-        Offset == TileOffset::Unset || is_legal_output_policy_with_base(Reserve, Push),
-        "PackTile: TileOffset::Set requires upfront, push-at-end, or caller-managed output policies");
+        Addressing == TileAddressing::Direct || is_legal_output_policy_with_base(Reserve, Push),
+        "PackTile: TileAddressing::Offset requires upfront, push-at-end, or caller-managed output policies");
     static_assert(
-        Offset != TileOffset::Strided || ((Reserve == ReservePolicy::None) && (Push == PushPolicy::None)),
-        "PackTile: TileOffset::Strided requires caller-managed (None, None) output policies");
+        Addressing != TileAddressing::Strided || ((Reserve == ReservePolicy::None) && (Push == PushPolicy::None)),
+        "PackTile: TileAddressing::Strided requires caller-managed (None, None) output policies");
 
     static constexpr uint32_t dfb = Cb;
     static constexpr uint32_t pack_dfb_id() { return Cb; }
@@ -1046,28 +1038,28 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     // Pack exec — walk the reserved output window (base + i_flat) for the upfront-reserve outputs
     // (Bulk / ReserveAllPushPerTile / ReserveAllPushPerBlockSize) and ReserveNonePushEnd's caller-pre-reserved
     // window, or stay pinned at base for the front-advancing policies (Streaming / PerBlockSize) whose CB front
-    // already advanced. TileOffset adds base.
+    // already advanced. TileAddressing adds base.
     //
     // OOO gating: the LLK's sequential pack path (out_of_order_output=false) derives its write
     // address from an internal running `fifo_wr_tile_ptr` and IGNORES `out_idx` entirely. That is
     // correct only when the intended index coincides with the sequential counter — i.e. when there
-    // is no base offset (walk: 0,1,2,…; pinned: 0). The moment `Offset == Set`, `out_idx` carries a
+    // is no base offset (walk: 0,1,2,…; pinned: 0). The moment `Addressing == Offset`, `out_idx` carries a
     // non-coincident base that the sequential path would silently drop (data lands at index 0, not
     // base). L1 accumulation also has to stay pinned to one output tile. Both cases use
     // `pack_tile<true>`, which honors `out_idx`
     // (addr = fifo_wr_ptr + page_size*out_idx - 1) without advancing the internal counter — exactly
-    // matching the explicit tile index we pass each iteration. Unset keeps the proven
+    // matching the explicit tile index we pass each iteration. Direct keeps the proven
     // sequential path with zero behavior change.
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
-        const uint32_t base = tile_base_value<Offset>(tile_base);
+        const uint32_t base = tile_base_value<Addressing>(tile_base);
         uint32_t out_idx;
-        if constexpr (Offset == TileOffset::Strided) {
-            out_idx = base + detail::idx<OperandKind::Block, TileOffset::Strided>(i_flat, ht, wt, row_stride);
+        if constexpr (Addressing == TileAddressing::Strided) {
+            out_idx = base + detail::idx<InputTileMapping::Block, TileAddressing::Strided>(i_flat, ht, wt, row_stride);
         } else {
             out_idx = walk ? (base + i_flat) : base;
         }
         pack_tile<
-            /*out_of_order_output=*/Offset != TileOffset::Unset || L1AccumulationMode != L1Accumulation::Disabled>(
+            /*out_of_order_output=*/Addressing != TileAddressing::Direct || L1AccumulationMode != L1Accumulation::Disabled>(
             to_u32(DstSlot) + slot_offset, Cb, out_idx);
     }
 
@@ -1094,26 +1086,26 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     static constexpr WaitPolicy BWait = BInput.wait;
     static constexpr PopPolicy BPop = BInput.pop;
     static constexpr Dst DstSlot = Config.dst();
-    static constexpr OperandKind AIndex = AInput.index;
-    static constexpr OperandKind BIndex = BInput.index;
-    static constexpr TileOffset OffsetA = AInput.offset;
-    static constexpr TileOffset OffsetB = BInput.offset;
+    static constexpr InputTileMapping AMapping = AInput.mapping;
+    static constexpr InputTileMapping BMapping = BInput.mapping;
+    static constexpr TileAddressing AddressingA = AInput.addressing;
+    static constexpr TileAddressing AddressingB = BInput.addressing;
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "BinaryFpu: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(
         Accumulation == DestAccumulation::Disabled || DstSlot == Dst::D0,
         "BinaryFpu: DEST accumulation requires Dst::D0");
     static_assert(
-        is_legal_input_policy_for_kind(AIndex, AWait, APop),
-        "BinaryFpu: A input wait/pop pair is incompatible with A operand kind");
+        is_legal_input_policy_for_mapping(AMapping, AWait, APop),
+        "BinaryFpu: A input wait/pop pair is incompatible with A input tile mapping");
     static_assert(
-        is_legal_input_policy_for_kind(BIndex, BWait, BPop),
-        "BinaryFpu: B input wait/pop pair is incompatible with B operand kind");
+        is_legal_input_policy_for_mapping(BMapping, BWait, BPop),
+        "BinaryFpu: B input wait/pop pair is incompatible with B input tile mapping");
     // same_dfb dedup safety: when CbA == CbB the B-side wait/pop is skipped. Matching
     // indices ensure both sides walk the same shared-CB range; matching lifecycles ensure
     // the retained A-side wait/pop schedule also satisfies B.
     static_assert(
-        (CbA != CbB) || AIndex == BIndex,
-        "BinaryFpu: when CbA == CbB, AIndex and BIndex must match "
+        (CbA != CbB) || AMapping == BMapping,
+        "BinaryFpu: when CbA == CbB, AMapping and BMapping must match "
         "(B-side wait/pop is deduped — asymmetric indices would under-wait).");
     static_assert(
         (CbA != CbB) || (AWait == BWait && APop == BPop),
@@ -1122,16 +1114,16 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
     // Per-operand TileBase lifecycle compatibility — (PerTile, PerTile)/(PerBlockSize, PerBlockSize)/Cumulative
     // can't compose with runtime base offsets (iter-dependent wait/pop counts).
     static_assert(
-        OffsetA == TileOffset::Unset || is_legal_input_policy_with_base(AWait, APop),
-        "BinaryFpu: OffsetA Set requires upfront, deferred-pop, or caller-managed A policies");
+        AddressingA == TileAddressing::Direct || is_legal_input_policy_with_base(AWait, APop),
+        "BinaryFpu: AddressingA Offset requires upfront, deferred-pop, or caller-managed A policies");
     static_assert(
-        OffsetB == TileOffset::Unset || is_legal_input_policy_with_base(BWait, BPop),
-        "BinaryFpu: OffsetB Set requires upfront, deferred-pop, or caller-managed B policies");
+        AddressingB == TileAddressing::Direct || is_legal_input_policy_with_base(BWait, BPop),
+        "BinaryFpu: AddressingB Offset requires upfront, deferred-pop, or caller-managed B policies");
     static_assert(
-        OffsetA != TileOffset::Strided || ((AWait == WaitPolicy::None) && (APop == PopPolicy::None)),
+        AddressingA != TileAddressing::Strided || ((AWait == WaitPolicy::None) && (APop == PopPolicy::None)),
         "BinaryFpu: strided A input requires caller-managed (None, None) policies");
     static_assert(
-        OffsetB != TileOffset::Strided || ((BWait == WaitPolicy::None) && (BPop == PopPolicy::None)),
+        AddressingB != TileAddressing::Strided || ((BWait == WaitPolicy::None) && (BPop == PopPolicy::None)),
         "BinaryFpu: strided B input requires caller-managed (None, None) policies");
     // Per-block streaming uses chunk-local CB front. When the two sides use
     // DIFFERENT regimes (one per-block → chunk-local index `j`; the other upfront /
@@ -1215,9 +1207,9 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
         }
     }
 
-    // Per-side index mode. AIndex drives a_idx, BIndex drives b_idx. The canonical
+    // Per-side tile mapping. AMapping drives a_idx, BMapping drives b_idx. The canonical
     // bcast walk is A=Block (walks the tile range) + B=Scalar (pins the
-    // scaler/vector operand at tile 0). OffsetA / OffsetB add a runtime or
+    // scaler/vector operand at tile 0). AddressingA / AddressingB add a runtime or
     // compile-time base offset to the per-iter index. The 3-arg overload accepts a
     // chunk-local index (`i_local`) and an absolute index (`i_abs`); each side
     // picks via `a_uses_local_idx` / `b_uses_local_idx`. The 2-arg overload is
@@ -1240,10 +1232,10 @@ struct detail::BinaryFpuImpl : BinaryFpuTag {
         const uint32_t b_flat = b_uses_local_idx ? i_flat_local : i_flat_abs;
         const uint32_t a_wt = a_uses_local_idx ? wt_local : wt_abs;
         const uint32_t b_wt = b_uses_local_idx ? wt_local : wt_abs;
-        const uint32_t a_idx = tile_base_value<OffsetA>(a.tile_base) +
-                               detail::input_idx<AIndex, AWait, APop, OffsetA>(a_flat, ht, a_wt, a.row_stride);
-        const uint32_t b_idx = tile_base_value<OffsetB>(b.tile_base) +
-                               detail::input_idx<BIndex, BWait, BPop, OffsetB>(b_flat, ht, b_wt, b.row_stride);
+        const uint32_t a_idx = tile_base_value<AddressingA>(a.tile_base) +
+                               detail::input_idx<AMapping, AWait, APop, AddressingA>(a_flat, ht, a_wt, a.row_stride);
+        const uint32_t b_idx = tile_base_value<AddressingB>(b.tile_base) +
+                               detail::input_idx<BMapping, BWait, BPop, AddressingB>(b_flat, ht, b_wt, b.row_stride);
         const uint32_t dst =
             Accumulation != DestAccumulation::Disabled ? to_u32(DstSlot) : to_u32(DstSlot) + slot_offset;
         if constexpr (Bcast == BroadcastDim::None) {
@@ -1284,21 +1276,21 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
     static constexpr Dst DstSlot = Config.dst();
     static constexpr WaitPolicy Wait = InputConfig.wait;
     static constexpr PopPolicy Pop = InputConfig.pop;
-    static constexpr OperandKind IndexMode = InputConfig.index;
-    static constexpr TileOffset Offset = InputConfig.offset;
+    static constexpr InputTileMapping Mapping = InputConfig.mapping;
+    static constexpr TileAddressing Addressing = InputConfig.addressing;
     using Base = InputStream;
     using Base::tile_base;
 
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(
-        is_legal_input_policy_for_kind(IndexMode, Wait, Pop),
-        "DestReuseBinary: input wait/pop pair is incompatible with operand kind");
+        is_legal_input_policy_for_mapping(Mapping, Wait, Pop),
+        "DestReuseBinary: input wait/pop pair is incompatible with input tile mapping");
     static_assert(
-        Offset == TileOffset::Unset || is_legal_input_policy_with_base(Wait, Pop),
-        "DestReuseBinary: TileOffset::Set requires upfront, deferred-pop, or caller-managed input policies");
+        Addressing == TileAddressing::Direct || is_legal_input_policy_with_base(Wait, Pop),
+        "DestReuseBinary: TileAddressing::Offset requires upfront, deferred-pop, or caller-managed input policies");
     static_assert(
-        Offset != TileOffset::Strided || ((Wait == WaitPolicy::None) && (Pop == PopPolicy::None)),
-        "DestReuseBinary: TileOffset::Strided requires caller-managed (None, None) input policies");
+        Addressing != TileAddressing::Strided || ((Wait == WaitPolicy::None) && (Pop == PopPolicy::None)),
+        "DestReuseBinary: TileAddressing::Strided requires caller-managed (None, None) input policies");
 
     // The one CB feeds the src that DEST is NOT routed to: DEST_TO_SRCB -> CB on srcA (dfb_a),
     // DEST_TO_SRCA -> CB on srcB (dfb_b). The other side is the DEST register, not a CB (INVALID_DFB).
@@ -1313,9 +1305,9 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
             INVALID_DFB,
             WaitPolicy::None,
             PopPolicy::None,
-            OperandKind::Scalar,
+            InputTileMapping::Scalar,
             DataFormatReconfig::Disabled,
-            TileOffset::Unset};
+            TileAddressing::Direct};
     }
     static constexpr InputSpec b_input() {
         if constexpr (ReuseType == DestReuseType::DEST_TO_SRCA) {
@@ -1325,9 +1317,9 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
             INVALID_DFB,
             WaitPolicy::None,
             PopPolicy::None,
-            OperandKind::Scalar,
+            InputTileMapping::Scalar,
             DataFormatReconfig::Disabled,
-            TileOffset::Unset};
+            TileAddressing::Direct};
     }
 
     // Prev-CB fold: DestReuseBinary loads CB into srca (when DEST → srcb) or srcb
@@ -1364,8 +1356,8 @@ struct detail::DestReuseBinaryImpl : InputStream, DestReuseBinaryTag {
         constexpr auto reuse = (ReuseType == DestReuseType::DEST_TO_SRCA)
                                    ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
                                    : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
-        const uint32_t in_idx = tile_base_value<Offset>(tile_base) +
-                                detail::input_idx<IndexMode, Wait, Pop, Offset>(i_flat, ht, wt, row_stride);
+        const uint32_t in_idx = tile_base_value<Addressing>(tile_base) +
+                                detail::input_idx<Mapping, Wait, Pop, Addressing>(i_flat, ht, wt, row_stride);
         if constexpr (Op == BinaryFpuOp::Add) {
             add_reuse_dest_tiles<reuse>(Cb, in_idx, to_u32(DstSlot) + slot_offset);
         } else if constexpr (Op == BinaryFpuOp::Sub) {
@@ -1545,9 +1537,9 @@ constexpr InputSpec b_input_of() {
             INVALID_DFB,
             WaitPolicy::None,
             PopPolicy::None,
-            OperandKind::Scalar,
+            InputTileMapping::Scalar,
             DataFormatReconfig::Disabled,
-            TileOffset::Unset};
+            TileAddressing::Direct};
     }
 }
 
@@ -1701,11 +1693,11 @@ constexpr uint32_t row_stream_input_b_cb_of() {
 template <class E>
 constexpr bool wait_a_per_row_of() {
     if constexpr (is_binary_fpu_op_v<E>) {
-        return E::AWait == WaitPolicy::PerTile && E::APop == PopPolicy::PerTile && E::AIndex == OperandKind::Col;
+        return E::AWait == WaitPolicy::PerTile && E::APop == PopPolicy::PerTile && E::AMapping == InputTileMapping::Col;
     } else if constexpr (is_runtime_conditional_sequence_op_v<E>) {
         return false;
     } else if constexpr (is_cb_reader_op_v<E>) {
-        return E::Wait == WaitPolicy::PerTile && E::Pop == PopPolicy::PerTile && E::IndexMode == OperandKind::Col;
+        return E::Wait == WaitPolicy::PerTile && E::Pop == PopPolicy::PerTile && E::Mapping == InputTileMapping::Col;
     } else {
         return false;
     }
@@ -1715,7 +1707,7 @@ template <class E>
 constexpr bool wait_b_per_row_of() {
     if constexpr (is_binary_fpu_op_v<E>) {
         if constexpr (!E::same_dfb) {
-            return E::BWait == WaitPolicy::PerTile && E::BPop == PopPolicy::PerTile && E::BIndex == OperandKind::Col;
+            return E::BWait == WaitPolicy::PerTile && E::BPop == PopPolicy::PerTile && E::BMapping == InputTileMapping::Col;
         }
     }
     return false;
@@ -1724,11 +1716,11 @@ constexpr bool wait_b_per_row_of() {
 template <class E>
 constexpr bool pop_a_per_row_of() {
     if constexpr (is_binary_fpu_op_v<E>) {
-        return E::AWait == WaitPolicy::PerTile && E::APop == PopPolicy::PerTile && E::AIndex == OperandKind::Col;
+        return E::AWait == WaitPolicy::PerTile && E::APop == PopPolicy::PerTile && E::AMapping == InputTileMapping::Col;
     } else if constexpr (is_runtime_conditional_sequence_op_v<E>) {
         return false;
     } else if constexpr (is_cb_reader_op_v<E>) {
-        return E::Wait == WaitPolicy::PerTile && E::Pop == PopPolicy::PerTile && E::IndexMode == OperandKind::Col;
+        return E::Wait == WaitPolicy::PerTile && E::Pop == PopPolicy::PerTile && E::Mapping == InputTileMapping::Col;
     } else {
         return false;
     }
@@ -1738,7 +1730,7 @@ template <class E>
 constexpr bool pop_b_per_row_of() {
     if constexpr (is_binary_fpu_op_v<E>) {
         if constexpr (!E::same_dfb) {
-            return E::BWait == WaitPolicy::PerTile && E::BPop == PopPolicy::PerTile && E::BIndex == OperandKind::Col;
+            return E::BWait == WaitPolicy::PerTile && E::BPop == PopPolicy::PerTile && E::BMapping == InputTileMapping::Col;
         }
     }
     return false;
@@ -2611,7 +2603,7 @@ ALWI void hoist_compute_init_one(SelectedElement<E, TransitionFacts<PrevA, PrevB
 // 11b. eltwise_chain — unified (Ht, Wt) walk with per-element broadcast indexing
 //
 // Walks an (Ht, Wt) tile grid (Ht=1 expresses the 1D case). Inner loop blocks W
-// (block_size tiles per inner iter). Per-element index mode picks the tile index
+// (block_size tiles per inner iter). Per-element tile mapping picks the tile index
 // for each CB-reader: Block → flat (ht*Wt + wt), Row → wt, Col → ht,
 // Scalar → 0.
 // =============================================================================
@@ -2668,7 +2660,7 @@ ALWI void elem_apply_compute(
         // here: it's hoisted once to the chain boundary (elem_wait_upfront, pre-loop fold), so it's
         // placed exactly once rather than re-issued per block-iter relying on idempotency.
         if constexpr (is_binary_fpu_op_v<ElemT>) {
-            if constexpr (ElemT::AWait == WaitPolicy::PerTile && ElemT::AIndex != OperandKind::Col) {
+            if constexpr (ElemT::AWait == WaitPolicy::PerTile && ElemT::AMapping != InputTileMapping::Col) {
                 emit_wait<true>(ElemT::dfb_a_id(), 1);
             } else if constexpr (ElemT::AWait == WaitPolicy::Cumulative) {
                 emit_wait<true>(ElemT::dfb_a_id(), i_flat + inner_count);
@@ -2676,7 +2668,7 @@ ALWI void elem_apply_compute(
                 emit_wait<true>(ElemT::dfb_a_id(), block_sync_count);
             }
             if constexpr (!ElemT::same_dfb) {
-                if constexpr (ElemT::BWait == WaitPolicy::PerTile && ElemT::BIndex != OperandKind::Col) {
+                if constexpr (ElemT::BWait == WaitPolicy::PerTile && ElemT::BMapping != InputTileMapping::Col) {
                     emit_wait<true>(ElemT::dfb_b_id(), 1);
                 } else if constexpr (ElemT::BWait == WaitPolicy::Cumulative) {
                     emit_wait<true>(ElemT::dfb_b_id(), i_flat + inner_count);
@@ -2685,7 +2677,7 @@ ALWI void elem_apply_compute(
                 }
             }
         } else {
-            if constexpr (ElemT::Wait == WaitPolicy::PerTile && ElemT::IndexMode != OperandKind::Col) {
+            if constexpr (ElemT::Wait == WaitPolicy::PerTile && ElemT::Mapping != InputTileMapping::Col) {
                 emit_wait<true>(ElemT::dfb, 1);
             } else if constexpr (ElemT::Wait == WaitPolicy::Cumulative) {
                 emit_wait<true>(ElemT::dfb, i_flat + inner_count);
@@ -2717,20 +2709,20 @@ ALWI void elem_apply_compute(
             }
         }
         if constexpr (is_binary_fpu_op_v<ElemT>) {
-            if constexpr (ElemT::APop == PopPolicy::PerTile && ElemT::AIndex != OperandKind::Col) {
+            if constexpr (ElemT::APop == PopPolicy::PerTile && ElemT::AMapping != InputTileMapping::Col) {
                 emit_pop<true>(ElemT::dfb_a_id(), 1);
             } else if constexpr (ElemT::APop == PopPolicy::PerBlockSize) {
                 emit_pop<true>(ElemT::dfb_a_id(), block_sync_count);
             }
             if constexpr (!ElemT::same_dfb) {
-                if constexpr (ElemT::BPop == PopPolicy::PerTile && ElemT::BIndex != OperandKind::Col) {
+                if constexpr (ElemT::BPop == PopPolicy::PerTile && ElemT::BMapping != InputTileMapping::Col) {
                     emit_pop<true>(ElemT::dfb_b_id(), 1);
                 } else if constexpr (ElemT::BPop == PopPolicy::PerBlockSize) {
                     emit_pop<true>(ElemT::dfb_b_id(), block_sync_count);
                 }
             }
         } else {
-            if constexpr (ElemT::Pop == PopPolicy::PerTile && ElemT::IndexMode != OperandKind::Col) {
+            if constexpr (ElemT::Pop == PopPolicy::PerTile && ElemT::Mapping != InputTileMapping::Col) {
                 emit_pop<true>(ElemT::dfb, 1);
             } else if constexpr (ElemT::Pop == PopPolicy::PerBlockSize) {
                 emit_pop<true>(ElemT::dfb, block_sync_count);
@@ -2816,33 +2808,33 @@ ALWI void emit_wait_upfront(SelectedElement<E> selected, uint32_t Ht, uint32_t W
     const E& e = selected.value;
     if constexpr (is_binary_fpu_op_v<E>) {
         if constexpr (E::same_dfb) {
-            const uint32_t base_a = tile_base_value<E::OffsetA>(e.a.tile_base);
-            const uint32_t base_b = tile_base_value<E::OffsetB>(e.b.tile_base);
+            const uint32_t base_a = tile_base_value<E::AddressingA>(e.a.tile_base);
+            const uint32_t base_b = tile_base_value<E::AddressingB>(e.b.tile_base);
             const uint32_t base = base_a > base_b ? base_a : base_b;
             if constexpr (E::AWait == WaitPolicy::Upfront && E::APop == PopPolicy::PerTile) {
                 emit_wait<true>(E::dfb_a_id(), Ht * Wt + base);
             } else if constexpr (E::AWait == WaitPolicy::Upfront) {
-                emit_wait<true>(E::dfb_a_id(), detail::window<E::AIndex>(Ht, Wt) + base);
+                emit_wait<true>(E::dfb_a_id(), detail::window<E::AMapping>(Ht, Wt) + base);
             }
         } else {
             if constexpr (E::AWait == WaitPolicy::Upfront && E::APop == PopPolicy::PerTile) {
-                emit_wait<true>(E::dfb_a_id(), Ht * Wt + tile_base_value<E::OffsetA>(e.a.tile_base));
+                emit_wait<true>(E::dfb_a_id(), Ht * Wt + tile_base_value<E::AddressingA>(e.a.tile_base));
             } else if constexpr (E::AWait == WaitPolicy::Upfront) {
                 emit_wait<true>(
-                    E::dfb_a_id(), detail::window<E::AIndex>(Ht, Wt) + tile_base_value<E::OffsetA>(e.a.tile_base));
+                    E::dfb_a_id(), detail::window<E::AMapping>(Ht, Wt) + tile_base_value<E::AddressingA>(e.a.tile_base));
             }
             if constexpr (E::BWait == WaitPolicy::Upfront && E::BPop == PopPolicy::PerTile) {
-                emit_wait<true>(E::dfb_b_id(), Ht * Wt + tile_base_value<E::OffsetB>(e.b.tile_base));
+                emit_wait<true>(E::dfb_b_id(), Ht * Wt + tile_base_value<E::AddressingB>(e.b.tile_base));
             } else if constexpr (E::BWait == WaitPolicy::Upfront) {
                 emit_wait<true>(
-                    E::dfb_b_id(), detail::window<E::BIndex>(Ht, Wt) + tile_base_value<E::OffsetB>(e.b.tile_base));
+                    E::dfb_b_id(), detail::window<E::BMapping>(Ht, Wt) + tile_base_value<E::AddressingB>(e.b.tile_base));
             }
         }
     } else if constexpr (is_cb_reader_op_v<E>) {
         if constexpr (E::Wait == WaitPolicy::Upfront && E::Pop == PopPolicy::PerTile) {
-            emit_wait<true>(E::dfb, Ht * Wt + tile_base_value<E::Offset>(e.tile_base));
+            emit_wait<true>(E::dfb, Ht * Wt + tile_base_value<E::Addressing>(e.tile_base));
         } else if constexpr (E::Wait == WaitPolicy::Upfront) {
-            emit_wait<true>(E::dfb, detail::window<E::IndexMode>(Ht, Wt) + tile_base_value<E::Offset>(e.tile_base));
+            emit_wait<true>(E::dfb, detail::window<E::Mapping>(Ht, Wt) + tile_base_value<E::Addressing>(e.tile_base));
         }
     }
 }
@@ -2853,7 +2845,7 @@ template <class E>
 ALWI void emit_reserve_upfront(SelectedElement<E> selected, uint32_t Ht, uint32_t Wt) {
     const E& e = selected.value;
     if constexpr (E::Reserve == ReservePolicy::Upfront) {
-        emit_reserve<true>(E::dfb, (Ht * Wt) + tile_base_value<E::Offset>(e.tile_base));
+        emit_reserve<true>(E::dfb, (Ht * Wt) + tile_base_value<E::Addressing>(e.tile_base));
     } else if constexpr (E::Reserve == ReservePolicy::OneUpfront) {
         emit_reserve<true>(E::dfb, 1);
     }
@@ -2867,24 +2859,24 @@ ALWI void emit_pop_at_end(SelectedElement<E> selected, uint32_t Ht, uint32_t Wt)
     if constexpr (is_binary_fpu_op_v<E>) {
         if constexpr (E::same_dfb) {
             if constexpr (E::APop == PopPolicy::AtEnd) {
-                const uint32_t base_a = tile_base_value<E::OffsetA>(e.a.tile_base);
-                const uint32_t base_b = tile_base_value<E::OffsetB>(e.b.tile_base);
+                const uint32_t base_a = tile_base_value<E::AddressingA>(e.a.tile_base);
+                const uint32_t base_b = tile_base_value<E::AddressingB>(e.b.tile_base);
                 const uint32_t base = base_a > base_b ? base_a : base_b;
-                emit_pop<true>(E::dfb_a_id(), detail::window<E::AIndex>(Ht, Wt) + base);
+                emit_pop<true>(E::dfb_a_id(), detail::window<E::AMapping>(Ht, Wt) + base);
             }
         } else {
             if constexpr (E::APop == PopPolicy::AtEnd) {
                 emit_pop<true>(
-                    E::dfb_a_id(), detail::window<E::AIndex>(Ht, Wt) + tile_base_value<E::OffsetA>(e.a.tile_base));
+                    E::dfb_a_id(), detail::window<E::AMapping>(Ht, Wt) + tile_base_value<E::AddressingA>(e.a.tile_base));
             }
             if constexpr (E::BPop == PopPolicy::AtEnd) {
                 emit_pop<true>(
-                    E::dfb_b_id(), detail::window<E::BIndex>(Ht, Wt) + tile_base_value<E::OffsetB>(e.b.tile_base));
+                    E::dfb_b_id(), detail::window<E::BMapping>(Ht, Wt) + tile_base_value<E::AddressingB>(e.b.tile_base));
             }
         }
     } else if constexpr (is_cb_reader_op_v<E>) {
         if constexpr (E::Pop == PopPolicy::AtEnd) {
-            emit_pop<true>(E::dfb, detail::window<E::IndexMode>(Ht, Wt) + tile_base_value<E::Offset>(e.tile_base));
+            emit_pop<true>(E::dfb, detail::window<E::Mapping>(Ht, Wt) + tile_base_value<E::Addressing>(e.tile_base));
         }
     }
 }
@@ -2895,7 +2887,7 @@ template <class E>
 ALWI void emit_push_at_end(SelectedElement<E> selected, uint32_t Ht, uint32_t Wt) {
     const E& e = selected.value;
     if constexpr (E::Push == PushPolicy::AtEnd) {
-        emit_push<true>(E::dfb, (E::walk ? (Ht * Wt) : 1u) + tile_base_value<E::Offset>(e.tile_base));
+        emit_push<true>(E::dfb, (E::walk ? (Ht * Wt) : 1u) + tile_base_value<E::Addressing>(e.tile_base));
     } else if constexpr (E::Push == PushPolicy::OneAtEnd) {
         emit_push<true>(E::dfb, 1);
     }

@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Tile-offset index test (the TileOffset axis): identity copy with a Block walker at tile `base + i`
-// (TileOffset::Set); the chain inflates its wait/pop counts by `base` and reads tiles [base, base+n).
+// Tile-offset index test (the TileAddressing axis): identity copy with a Block walker at tile `base + i`
+// (TileAddressing::Offset); the chain inflates its wait/pop counts by `base` and reads tiles [base, base+n).
 // `base` is a runtime ctor arg. output[i] must equal input[base+i] — a dropped base add reads tile 0
-// and mismatches. TileOffset::Set requires a Bulk-family lifecycle (CopyTile static_assert), so uses Bulk.
+// and mismatches. TileAddressing::Offset requires a Bulk-family lifecycle (CopyTile static_assert), so uses Bulk.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
@@ -27,9 +27,9 @@ void kernel_main() {
                 cb_in,
                 WaitPolicy::Upfront,
                 PopPolicy::AtEnd,
-                OperandKind::Block,
+                InputTileMapping::Block,
                 DataFormatReconfig::Enabled,
-                TileOffset::Set),
+                TileAddressing::Offset),
             Dst::D0>{base},
         PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
 }

@@ -16,7 +16,7 @@
 //   3     CallerManaged    nothing                      wait 1 before, pop 1 after
 //   4     DeferredPop      no wait, pop 1 at end        wait 1 before
 //
-// B uses OperandKind::Scalar (re-read at relative tile 0 each iter) — the held-operand pattern.
+// B uses InputTileMapping::Scalar (re-read at relative tile 0 each iter) — the held-operand pattern.
 
 #include <cstdint>
 // chain.hpp first: it pulls in the compute API (PACK/UNPACK macros + llk decls) that

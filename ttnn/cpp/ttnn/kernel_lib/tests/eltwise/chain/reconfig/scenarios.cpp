@@ -41,8 +41,8 @@ void kernel_main() {
         static_assert(default_input.cb_id == cb_a);
         static_assert(default_input.wait == WaitPolicy::PerTile);
         static_assert(default_input.pop == PopPolicy::PerTile);
-        static_assert(default_input.index == OperandKind::Scalar);
-        static_assert(default_input.offset == TileOffset::Unset);
+        static_assert(default_input.mapping == InputTileMapping::Scalar);
+        static_assert(default_input.addressing == TileAddressing::Direct);
         static_assert(default_input.reconfig == DataFormatReconfig::Enabled);
         static_assert(default_output.reserve == ReservePolicy::PerTile);
         static_assert(default_output.push == PushPolicy::PerTile);
@@ -51,7 +51,7 @@ void kernel_main() {
         static_assert(default_output.relu == PackRelu::Disabled);
         static_assert(default_output.l1_accumulation == L1Accumulation::Disabled);
         static_assert(default_output.dest_accumulation == DestAccumulation::Disabled);
-        static_assert(default_output.offset == TileOffset::Unset);
+        static_assert(default_output.addressing == TileAddressing::Direct);
 
         using SrcAOnly = BinaryFpu<
             BinaryFpuOp::Add,

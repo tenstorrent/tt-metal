@@ -36,9 +36,9 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
                     BroadcastDim::Row,
                     WaitPolicy::Upfront,
                     PopPolicy::None,
-                    OperandKind::Scalar,
+                    InputTileMapping::Scalar,
                     DataFormatReconfig::Disabled,
-                    compute_kernel_lib::TileOffset::Set)>{0u, in1_idx},
+                    compute_kernel_lib::TileAddressing::Offset)>{0u, in1_idx},
             PackTile<output(out_dfb_id, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
     } else {
         (void)in1_idx;

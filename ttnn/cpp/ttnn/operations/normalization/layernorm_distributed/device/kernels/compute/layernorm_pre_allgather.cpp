@@ -55,17 +55,29 @@ void kernel_main() {
             ckl::binary_sfpu<
                 ckl::AddBinary<>,
                 ckl::input(
-                    dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                    dfb::in0,
+                    ckl::WaitPolicy::PerBlockSize,
+                    ckl::PopPolicy::PerBlockSize,
+                    ckl::InputTileMapping::Block),
                 ckl::input(
-                    dfb::res, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                    dfb::res,
+                    ckl::WaitPolicy::PerBlockSize,
+                    ckl::PopPolicy::PerBlockSize,
+                    ckl::InputTileMapping::Block),
                 ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                 squaring_shape);
         } else {
             ckl::add<
                 ckl::input(
-                    dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                    dfb::in0,
+                    ckl::WaitPolicy::PerBlockSize,
+                    ckl::PopPolicy::PerBlockSize,
+                    ckl::InputTileMapping::Block),
                 ckl::input(
-                    dfb::res, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                    dfb::res,
+                    ckl::WaitPolicy::PerBlockSize,
+                    ckl::PopPolicy::PerBlockSize,
+                    ckl::InputTileMapping::Block),
                 ckl::output(dfb_inp_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                 squaring_shape);
         }
@@ -74,11 +86,11 @@ void kernel_main() {
         if constexpr (unpack_fp32_active) {
             ckl::unary<
                 ckl::Square<>,
-                ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::OperandKind::Block),
+                ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
                 ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
         } else {
             ckl::square<
-                ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::OperandKind::Block),
+                ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
                 ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
         }
 

@@ -23,8 +23,8 @@ void kernel_main() {
         ckl::BinaryFpu<
             ckl::BinaryFpuOp::Add,
             ckl::input(
-                dfb::input, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
-            ckl::input(dfb::zero, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Scalar),
+                dfb::input, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
+            ckl::input(dfb::zero, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Scalar),
             ckl::Dst::D0,
             ckl::DestAccumulation::PerRow>{},
         ckl::PackTile<ckl::output(

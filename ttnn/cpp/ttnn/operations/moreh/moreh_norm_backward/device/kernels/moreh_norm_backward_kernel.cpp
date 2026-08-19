@@ -70,9 +70,9 @@ void kernel_main() {
                     kBcast,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
-                    ckl::OperandKind::Scalar,
+                    ckl::InputTileMapping::Scalar,
                     kDataFormatReconfig,
-                    ckl::TileOffset::Set)>{},
+                    ckl::TileAddressing::Offset)>{},
             ckl::PackTile<ckl::output(
                 dfb::tmp4, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
@@ -87,9 +87,9 @@ void kernel_main() {
                     kBcast,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
-                    ckl::OperandKind::Scalar,
+                    ckl::InputTileMapping::Scalar,
                     kDataFormatReconfig,
-                    ckl::TileOffset::Set)>{},
+                    ckl::TileAddressing::Offset)>{},
             ckl::PackTile<ckl::output(
                 dfb::tmp5, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 

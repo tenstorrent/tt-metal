@@ -5,14 +5,14 @@
 """
 Index and broadcast axes for eltwise helpers.
 
-    OperandKind   per-iter tile index
+    InputTileMapping   per-iter tile index
     Scalar        0
     Block         ht*Wt + wt
     Row           wt          (one tile per column)
     Col           ht          (one tile per row)
-    TileOffset    base + index
+    TileAddressing    base + index
 
-Golden changes if the wrong tile is read: a Row<->Col swap or dropped TileOffset base fails PCC.
+Golden changes if the wrong tile is read: a Row<->Col swap or dropped TileAddressing base fails PCC.
 The broadcast case separately validates which row, column, or scalar is replicated within a tile.
 """
 
@@ -23,7 +23,7 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import comp_pcc
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
-OFFSET_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/tile_offset.cpp"
+ADDRESSING_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/tile_addressing.cpp"
 INDEX_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/index_2d.cpp"
 STRIDED_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/strided_tile_range.cpp"
 BCAST_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/bcast_binary_add.cpp"
@@ -31,10 +31,10 @@ MODE = {"row": 2, "col": 1}
 
 
 # =============================================================================
-# TileOffset — Block walker reading tiles [base, base+n). output[i] == input[base+i].
+# TileAddressing — Block walker reading tiles [base, base+n). output[i] == input[base+i].
 # =============================================================================
 @pytest.mark.parametrize("base", [0, 3])
-def test_tile_offset_base(device, base):
+def test_tile_addressing_base(device, base):
     n = 4
     dt = ttnn.bfloat16
     total = base + n  # input holds base+n tiles; chain reads the last n.
@@ -50,7 +50,7 @@ def test_tile_offset_base(device, base):
     cbs = [lib.cb_descriptor(0, dt, total, core_grid), lib.cb_descriptor(16, dt, n, core_grid)]
     reader = lib.build_reader_kernel([tt_in], total, core_grid)
     writer = lib.build_writer_1out_kernel(tt_out, n, core_grid)
-    compute = lib.build_compute_kernel_rt(OFFSET_KERNEL, [n], [base], core_grid)
+    compute = lib.build_compute_kernel_rt(ADDRESSING_KERNEL, [n], [base], core_grid)
 
     program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
     output = ttnn.generic_op([tt_in, tt_out], program)
@@ -59,7 +59,7 @@ def test_tile_offset_base(device, base):
     golden = in_f[:, :, :, 32 * base : 32 * (base + n)]
     out = ttnn.to_torch(output).to(torch.float32)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.info(f"TileOffset base={base} -> output[i]==input[base+i] | {msg}")
+    logger.debug(f"TileAddressing base={base} -> output[i]==input[base+i] | {msg}")
     assert pcc_ok, msg
 
 
@@ -103,13 +103,13 @@ def test_index_2d_axes_are_correct_and_distinct(device):
     results = {axis: _run_index_2d(device, axis) for axis in ("row", "col")}
     for axis, (golden, out) in results.items():
         pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
-        logger.info(f"index axis={axis} | {msg}")
+        logger.debug(f"index axis={axis} | {msg}")
         assert pcc_ok, msg
 
     col_golden, _ = results["col"]
     _, row_out = results["row"]
     ok_cross, msg = comp_pcc(col_golden, row_out, 0.99)
-    logger.info(f"index cross-check: ROW-out vs COL-golden (expect low) | {msg}")
+    logger.debug(f"index cross-check: ROW-out vs COL-golden (expect low) | {msg}")
     assert not ok_cross, "ROW-index output matched COL golden — a Row<->Col index swap would slip through."
 
 
@@ -144,7 +144,7 @@ def test_strided_tile_range(device):
     golden_region = torch_in.to(torch.float32)[:, :, :, 32 * input_base : 32 * (input_base + Wt)]
     output_region = out[:, :, :, 32 * output_base : 32 * (output_base + Wt)]
     pcc_ok, msg = comp_pcc(golden_region, output_region, lib.pcc_threshold([dt]))
-    logger.info(f"strided tile range | {msg}")
+    logger.debug(f"strided tile range | {msg}")
     assert pcc_ok, msg
 
 
@@ -190,11 +190,11 @@ def test_bcast_axes_are_correct_and_distinct(device):
     results = {axis: _run_bcast_add(device, axis) for axis in ("row", "col", "scalar")}
     for axis, (golden, out) in results.items():
         pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
-        logger.info(f"bcast add axis={axis} | {msg}")
+        logger.debug(f"bcast add axis={axis} | {msg}")
         assert pcc_ok, msg
 
     col_golden, _ = results["col"]
     _, row_out = results["row"]
     ok_cross, msg = comp_pcc(col_golden, row_out, 0.99)
-    logger.info(f"cross-check: ROW-out vs COL-golden pcc (expect low) | {msg}")
+    logger.debug(f"cross-check: ROW-out vs COL-golden pcc (expect low) | {msg}")
     assert not ok_cross, "ROW output matched COL golden; an axis swap would slip through."

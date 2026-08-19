@@ -29,7 +29,7 @@ void kernel_main() {
                 dfb_grad_out_id,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
-                ckl::OperandKind::Block,
+                ckl::InputTileMapping::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
         ckl::CopyTile<
@@ -37,7 +37,7 @@ void kernel_main() {
                 dfb_input_id,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
-                ckl::OperandKind::Block,
+                ckl::InputTileMapping::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D1>{},
         ckl::GeluDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},

@@ -38,7 +38,7 @@ constexpr auto dfb_output_idx_id = tt::CBIndex::c_16;
 constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 
-template <uint32_t Dfb, bool Consume, ckl::OperandKind Kind = ckl::OperandKind::Block>
+template <uint32_t Dfb, bool Consume, ckl::InputTileMapping Kind = ckl::InputTileMapping::Block>
 constexpr ckl::InputSpec block_input() {
     if constexpr (Consume) {
         return ckl::input(Dfb, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, Kind);
@@ -55,7 +55,7 @@ template <
     ckl::BroadcastDim Bcast = ckl::BroadcastDim::None,
     bool ConsumeA = true,
     bool ConsumeB = true,
-    ckl::OperandKind BKind = ckl::OperandKind::Block>
+    ckl::InputTileMapping BKind = ckl::InputTileMapping::Block>
 ALWI void binary_block() {
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(block_size).block_size(block_size),
@@ -97,7 +97,7 @@ ALWI void finish_momentum() {
         ckl::BroadcastDim::Scalar,
         true,
         false,
-        ckl::OperandKind::Scalar>();
+        ckl::InputTileMapping::Scalar>();
     binary_block<
         dfb_nesterov_momentum_idx_id,
         GradDfb,
@@ -123,7 +123,7 @@ ALWI void process_update(bool use_dampening, DataflowBuffer& dfb_param_in) {
         ckl::BroadcastDim::Scalar,
         true,
         false,
-        ckl::OperandKind::Scalar>();
+        ckl::InputTileMapping::Scalar>();
 
     if (use_dampening) {
         binary_block<
@@ -134,7 +134,7 @@ ALWI void process_update(bool use_dampening, DataflowBuffer& dfb_param_in) {
             ckl::BroadcastDim::Scalar,
             true,
             false,
-            ckl::OperandKind::Scalar>();
+            ckl::InputTileMapping::Scalar>();
         finish_momentum<dfb_grad_dampened_idx_id>();
     } else {
         finish_momentum<GradDfb>();
@@ -157,7 +157,7 @@ ALWI void process_update(bool use_dampening, DataflowBuffer& dfb_param_in) {
         ckl::BroadcastDim::Scalar,
         true,
         false,
-        ckl::OperandKind::Scalar>();
+        ckl::InputTileMapping::Scalar>();
     binary_block<
         dfb_param_in_idx_id,
         dfb_update_idx_id,
@@ -197,7 +197,7 @@ void kernel_main() {
                 ckl::BroadcastDim::Scalar,
                 false,
                 false,
-                ckl::OperandKind::Scalar>();
+                ckl::InputTileMapping::Scalar>();
             binary_block<dfb_param_wd_idx_id, dfb_grad_idx_id, dfb_grad_wd_idx_id, ckl::BinaryFpuOp::Add>();
             process_update<dfb_grad_wd_idx_id>(use_dampening, dfb_param_in);
         } else {

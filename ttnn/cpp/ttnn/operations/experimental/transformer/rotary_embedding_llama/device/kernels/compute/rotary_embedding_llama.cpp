@@ -41,7 +41,7 @@ void kernel_main() {
             dfb_id,
             ckl::WaitPolicy::Upfront,
             ckl::PopPolicy::AtEnd,
-            ckl::OperandKind::Block,
+            ckl::InputTileMapping::Block,
             ckl::DataFormatReconfig::Disabled);
     };
     constexpr auto bulk_output = [](auto dfb_id) {
@@ -52,9 +52,9 @@ void kernel_main() {
             dfb_id,
             RELOAD_IMPL == 0 ? ckl::WaitPolicy::None : ckl::WaitPolicy::Upfront,
             RELOAD_IMPL == 0 ? ckl::PopPolicy::None : ckl::PopPolicy::AtEnd,
-            ckl::OperandKind::Block,
+            ckl::InputTileMapping::Block,
             ckl::DataFormatReconfig::Disabled,
-            RELOAD_IMPL == 0 ? ckl::TileOffset::Set : ckl::TileOffset::Unset);
+            RELOAD_IMPL == 0 ? ckl::TileAddressing::Offset : ckl::TileAddressing::Direct);
     };
 
     DataflowBuffer in_dfb_obj(dfb::input);
@@ -138,7 +138,7 @@ void kernel_main() {
                             dfb::input,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::AtEnd,
-                            ckl::OperandKind::Block,
+                            ckl::InputTileMapping::Block,
                             ckl::DataFormatReconfig::Disabled),
                         sin_cos_input(dfb::cos)>{0u, sin_cos_row_cnt * Wt},
                     ckl::PackTile<bulk_output(dfb::cos_interm)>{});

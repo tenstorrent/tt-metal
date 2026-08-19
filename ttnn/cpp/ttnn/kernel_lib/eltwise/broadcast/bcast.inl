@@ -41,21 +41,21 @@ struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
     static constexpr Dst DstSlot = Config.dst();
     static constexpr WaitPolicy Wait = Input.wait;
     static constexpr PopPolicy Pop = Input.pop;
-    static constexpr OperandKind IndexMode = Input.index;
-    static constexpr TileOffset Offset = Input.offset;
+    static constexpr InputTileMapping Mapping = Input.mapping;
+    static constexpr TileAddressing Addressing = Input.addressing;
     using Base = InputStream;
     using Base::tile_base;
 
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(
-        is_legal_input_policy_for_kind(IndexMode, Wait, Pop),
-        "UnaryBcast: input wait/pop pair is incompatible with operand kind");
+        is_legal_input_policy_for_mapping(Mapping, Wait, Pop),
+        "UnaryBcast: input wait/pop pair is incompatible with input tile mapping");
     static_assert(
-        Offset == TileOffset::Unset || is_legal_input_policy_with_base(Wait, Pop),
-        "UnaryBcast: TileOffset::Set requires an upfront, deferred-pop, or caller-managed input pair");
+        Addressing == TileAddressing::Direct || is_legal_input_policy_with_base(Wait, Pop),
+        "UnaryBcast: TileAddressing::Offset requires an upfront, deferred-pop, or caller-managed input pair");
     static_assert(
-        Offset != TileOffset::Strided || ((Wait == WaitPolicy::None) && (Pop == PopPolicy::None)),
-        "UnaryBcast: TileOffset::Strided requires caller-managed (None, None) input policies");
+        Addressing != TileAddressing::Strided || ((Wait == WaitPolicy::None) && (Pop == PopPolicy::None)),
+        "UnaryBcast: TileAddressing::Strided requires caller-managed (None, None) input policies");
 
     static constexpr uint32_t dfb = Cb;
     static constexpr uint32_t dfb_a_id() { return Cb; }
@@ -75,8 +75,8 @@ struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
         constexpr ckernel::BroadcastType bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
-        const uint32_t in_idx = tile_base_value<Offset>(tile_base) +
-                                detail::input_idx<IndexMode, Wait, Pop, Offset>(i_flat, ht, wt, row_stride);
+        const uint32_t in_idx = tile_base_value<Addressing>(tile_base) +
+                                detail::input_idx<Mapping, Wait, Pop, Addressing>(i_flat, ht, wt, row_stride);
         ::unary_bcast<bt>(Cb, in_idx, to_u32(DstSlot) + slot_offset);
     }
 

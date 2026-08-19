@@ -97,7 +97,7 @@ void kernel_main() {
                 dfb_norm_x_input_id,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
-                ckl::OperandKind::Block),
+                ckl::InputTileMapping::Block),
             ckl::input(dfb_recip_sqrt_var_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::output(normed_output_dfb_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
@@ -108,13 +108,13 @@ void kernel_main() {
                     dfb_x_normed_id,
                     ckl::WaitPolicy::PerBlockSize,
                     ckl::PopPolicy::PerBlockSize,
-                    ckl::OperandKind::Block),
+                    ckl::InputTileMapping::Block),
                 ckl::input(
                     dfb_gamma_id,
                     ckl::BroadcastDim::Row,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::None,
-                    ckl::OperandKind::Block),
+                    ckl::InputTileMapping::Block),
                 ckl::output(dfb_times_gamma_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                 ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
 
@@ -124,13 +124,13 @@ void kernel_main() {
                         dfb_times_gamma_out_id,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
-                        ckl::OperandKind::Block),
+                        ckl::InputTileMapping::Block),
                     ckl::input(
                         dfb_beta_id,
                         ckl::BroadcastDim::Row,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::None,
-                        ckl::OperandKind::Block),
+                        ckl::InputTileMapping::Block),
                     ckl::output(dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                     ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
             }

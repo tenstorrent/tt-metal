@@ -35,7 +35,7 @@ void kernel_main() {
                 CHAIN_BCAST_DIM,
                 ckl::WaitPolicy::PerTile,
                 ckl::PopPolicy::PerTile,
-                ckl::OperandKind::Col,
+                ckl::InputTileMapping::Col,
                 ckl::DataFormatReconfig::Disabled)>{},
         // Output remains one tile per (row,col); only the column-shaped input is streamed per row.
         ckl::PackTile<ckl::output(

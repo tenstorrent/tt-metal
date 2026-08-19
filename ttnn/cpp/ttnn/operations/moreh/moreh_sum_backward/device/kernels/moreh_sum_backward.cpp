@@ -34,7 +34,7 @@ void kernel_main() {
                     dfb::in1,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::AtEnd,
-                    ckl::OperandKind::Scalar,
+                    ckl::InputTileMapping::Scalar,
                     ckl::DataFormatReconfig::Disabled),
                 ckl::input(
                     dfb::in0,

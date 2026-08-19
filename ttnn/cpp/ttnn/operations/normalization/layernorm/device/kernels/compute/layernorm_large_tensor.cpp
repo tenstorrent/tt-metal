@@ -189,7 +189,7 @@ void kernel_main() {
                             dfb_in_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block),
+                            ckl::InputTileMapping::Block),
                         ckl::Dst::D0>>{},
                 ckl::Optional<
                     !is_rmsnorm,  // LayerNorm: x - E[x] (reads dfb_ex_id; stripped under RMSNORM)
@@ -199,7 +199,7 @@ void kernel_main() {
                             dfb_in_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block),
+                            ckl::InputTileMapping::Block),
                         ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>>{},
                 ckl::Optional<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
@@ -209,7 +209,7 @@ void kernel_main() {
                             dfb_inb_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block),
+                            ckl::InputTileMapping::Block),
                         ckl::DestReuseType::DEST_TO_SRCB>>{},
                 ckl::Square<ckl::Dst::D0>{},
                 ckl::PackTile<ckl::output(
@@ -313,7 +313,7 @@ void kernel_main() {
                             dfb_in_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block),
+                            ckl::InputTileMapping::Block),
                         ckl::Dst::D0>>{},
                 ckl::Optional<
                     !is_rmsnorm,  // LayerNorm: x - E[x] (reads dfb_ex_id; stripped under RMSNORM)
@@ -323,7 +323,7 @@ void kernel_main() {
                             dfb_in_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block),
+                            ckl::InputTileMapping::Block),
                         ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>>{},
                 ckl::Optional<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
@@ -333,7 +333,7 @@ void kernel_main() {
                             dfb_inb_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block),
+                            ckl::InputTileMapping::Block),
                         ckl::DestReuseType::DEST_TO_SRCB>>{},
                 ckl::PackTile<ckl::output(
                     dfb_xmm_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
@@ -346,7 +346,7 @@ void kernel_main() {
                         dfb_xmm_id,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
-                        ckl::OperandKind::Block),
+                        ckl::InputTileMapping::Block),
                     ckl::input(dfb_ex2pe_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{},
                 ckl::Optional<activate_after_normalize, FusedActivation>{},
                 ckl::PackTile<ckl::output(
@@ -362,13 +362,13 @@ void kernel_main() {
                             dfb_fusion_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block),
+                            ckl::InputTileMapping::Block),
                         ckl::input(
                             dfb_gamma_id,
                             ckl::BroadcastDim::Row,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block)>{},
+                            ckl::InputTileMapping::Block)>{},
                     ckl::Optional<activate_after_gamma, FusedActivation>{},
                     ckl::PackTile<ckl::output(
                         dfb_gamma_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
@@ -382,13 +382,13 @@ void kernel_main() {
                             dfb_fusion_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block),
+                            ckl::InputTileMapping::Block),
                         ckl::input(
                             dfb_beta_id,
                             ckl::BroadcastDim::Row,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block)>{},
+                            ckl::InputTileMapping::Block)>{},
                     ckl::Optional<fused_activation_enabled, FusedActivation>{},
                     ckl::PackTile<ckl::output(
                         dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});

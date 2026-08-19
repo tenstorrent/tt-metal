@@ -98,9 +98,10 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             ckl::IterationShape::tiles(block.size()).block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
         // Keep pre-add in a separate DFB to avoid the transpose_dest aliasing issue.
         ckl::add<
-            ckl::input(dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::input(
-                dfb_inb_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
+            ckl::input(
+                dfb_inb_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
             ckl::output(dfb_interm_pre_add_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
             block_shape);
 
@@ -552,13 +553,13 @@ void kernel_main() {
                         dfb_xmm_id,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
-                        ckl::OperandKind::Block),
+                        ckl::InputTileMapping::Block),
                     ckl::input(
                         dfb_gamma_id,
                         ckl::BroadcastDim::Row,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
-                        ckl::OperandKind::Block),
+                        ckl::InputTileMapping::Block),
                     ckl::output(dfb_gamma_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                     block_shape);
             }
@@ -570,13 +571,13 @@ void kernel_main() {
                         dfb_beta_input_id,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
-                        ckl::OperandKind::Block),
+                        ckl::InputTileMapping::Block),
                     ckl::input(
                         dfb_beta_id,
                         ckl::BroadcastDim::Row,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
-                        ckl::OperandKind::Block),
+                        ckl::InputTileMapping::Block),
                     ckl::output(dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                     block_shape);
             }

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Inter-tile index test (the OperandKind *index* axis, not broadcast).
+// Inter-tile index test (the InputTileMapping *index* axis, not broadcast).
 // 2D grid(Ht, Wt) add: out(ht,wt) = A(ht,wt) + B tile selected by B's index mode.
 //   A: Block -> tile ht*Wt + wt (full walk)
 //   B: Row   -> tile wt (one per COLUMN, Wt tiles)    Col -> tile ht (one per ROW, Ht tiles)
@@ -29,16 +29,16 @@ void kernel_main() {
             IterationShape::grid(Ht, Wt),
             BinaryFpu<
                 BinaryFpuOp::Add,
-                input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
-                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Row)>{},
+                input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
+                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Row)>{},
             PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
     } else {  // Col index on B
         eltwise_chain(
             IterationShape::grid(Ht, Wt),
             BinaryFpu<
                 BinaryFpuOp::Add,
-                input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
-                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Col)>{},
+                input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
+                input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Col)>{},
             PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
     }
 }

@@ -89,8 +89,8 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     compute_kernel_hw_startup(dfb_in0_id, dfb_in1_id, dfb_in_id);
     ckl::add<
-        ckl::input(dfb_in0_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
-        ckl::input(dfb_in1_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
+        ckl::input(dfb_in0_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+        ckl::input(dfb_in1_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
         ckl::output(dfb_in_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
         ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w));
     index_h_offset += block_w;
@@ -102,7 +102,7 @@ void kernel_main() {
 #endif
 
     ckl::square<
-        ckl::input(dfb_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
+        ckl::input(dfb_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
         ckl::output(dfb_x2_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>(
         ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w));
 
@@ -198,19 +198,19 @@ void kernel_main() {
     }
     // Normalize x with the gathered reciprocal RMS, then apply gamma.
     ckl::mul<
-        ckl::input(dfb_xmm_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+        ckl::input(dfb_xmm_id, ckl::WaitPolicy::None, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
         ckl::input(dfb_ex_global_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
         ckl::output(dfb_im_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
         ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w));
 
     ckl::mul<
-        ckl::input(dfb_im_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+        ckl::input(dfb_im_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
         ckl::input(
             dfb_gamma_id,
             ckl::BroadcastDim::Row,
             ckl::WaitPolicy::Upfront,
             ckl::PopPolicy::None,
-            ckl::OperandKind::Block),
+            ckl::InputTileMapping::Block),
         ckl::output(dfb_outgamma_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::PerBlockSize)>(
         ckl::IterationShape::tiles(num_tiles_per_block).block_size(subblock_w));
 }

@@ -31,8 +31,8 @@ void kernel_main() {
 
         using PerRowAccumulate = BinaryFpu<
             BinaryFpuOp::Add,
-            input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
-            input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
+            input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
+            input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
             Dst::D0,
             DestAccumulation::PerRow>;
         using PerRowManagedPack = PackTile<output(
@@ -53,8 +53,8 @@ void kernel_main() {
             DestAccumulation::PerRow)>;
         using WholeShapeAccumulate = BinaryFpu<
             BinaryFpuOp::Add,
-            input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
-            input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
+            input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
+            input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
             Dst::D0,
             DestAccumulation::WholeShape>;
         using WholeShapeManagedPack = PackTile<output(

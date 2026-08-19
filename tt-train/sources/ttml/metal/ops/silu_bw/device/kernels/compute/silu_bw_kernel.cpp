@@ -31,7 +31,10 @@ void kernel_main() {
         ckl::IterationShape::grid(num_rows_per_core, padded_Wt).block_size(block_size),
         ckl::CopyTile<
             ckl::input(
-                dfb_input_idx_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                dfb_input_idx_id,
+                ckl::WaitPolicy::PerBlockSize,
+                ckl::PopPolicy::PerBlockSize,
+                ckl::InputTileMapping::Block),
             ckl::Dst::D0>{},
         ckl::CopyDest<ckl::Dst::D0, ckl::Dst::D1>{},
         ckl::Sigmoid<ckl::Dst::D1>{},
@@ -45,7 +48,7 @@ void kernel_main() {
                 dfb_dL_out_idx_id,
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
-                ckl::OperandKind::Block),
+                ckl::InputTileMapping::Block),
             ckl::Dst::D2>{},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(

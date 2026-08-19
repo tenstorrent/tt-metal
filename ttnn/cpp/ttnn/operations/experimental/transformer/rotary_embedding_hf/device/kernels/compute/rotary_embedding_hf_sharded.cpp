@@ -36,7 +36,7 @@ void kernel_main() {
             dfb_id,
             ckl::WaitPolicy::Upfront,
             ckl::PopPolicy::AtEnd,
-            ckl::OperandKind::Block,
+            ckl::InputTileMapping::Block,
             ckl::DataFormatReconfig::Disabled);
     };
     constexpr auto held_block_input = [](uint32_t dfb_id) {
@@ -44,7 +44,7 @@ void kernel_main() {
             dfb_id,
             ckl::WaitPolicy::Upfront,
             ckl::PopPolicy::None,
-            ckl::OperandKind::Block,
+            ckl::InputTileMapping::Block,
             ckl::DataFormatReconfig::Disabled);
     };
     constexpr auto bulk_output = [](uint32_t dfb_id) {
@@ -55,7 +55,7 @@ void kernel_main() {
         in_dfb_id,
         ckl::WaitPolicy::None,
         ckl::PopPolicy::AtEnd,
-        ckl::OperandKind::Block,
+        ckl::InputTileMapping::Block,
         ckl::DataFormatReconfig::Disabled);
     constexpr auto sin_input = held_block_input(sin_dfb_id);
     constexpr auto cos_input = held_block_input(cos_dfb_id);
@@ -107,26 +107,26 @@ void kernel_main() {
                         in_dfb_id,
                         ckl::WaitPolicy::None,
                         ckl::PopPolicy::None,
-                        ckl::OperandKind::Block,
-                        ckl::TileOffset::Set),
+                        ckl::InputTileMapping::Block,
+                        ckl::TileAddressing::Offset),
                     ckl::input(scalar_dfb_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{
                     half_Wt, 0u},
                 ckl::CopyTile<
-                    ckl::input(in_dfb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
+                    ckl::input(in_dfb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
                     ckl::Dst::D1>{},
                 ckl::PackTile<
                     ckl::output(
                         rotated_in_interm_dfb_id,
                         ckl::ReservePolicy::None,
                         ckl::PushPolicy::None,
-                        ckl::TileOffset::Set),
+                        ckl::TileAddressing::Offset),
                     ckl::Dst::D0>{0u},
                 ckl::PackTile<
                     ckl::output(
                         rotated_in_interm_dfb_id,
                         ckl::ReservePolicy::None,
                         ckl::PushPolicy::None,
-                        ckl::TileOffset::Set),
+                        ckl::TileAddressing::Offset),
                     ckl::Dst::D1>{half_Wt});
             dfb_rotated_in_interm.push_back(Wt);
 

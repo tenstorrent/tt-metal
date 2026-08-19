@@ -57,9 +57,9 @@ void kernel_main() {
             dfb_mask_h_w_id,
             ckl::WaitPolicy::None,
             ckl::PopPolicy::None,
-            ckl::OperandKind::Scalar,
+            ckl::InputTileMapping::Scalar,
             data_format_reconfig,
-            ckl::TileOffset::Set),
+            ckl::TileAddressing::Offset),
         ckl::Dst::D1>;
 
     constexpr uint32_t TILE_H = 32;

@@ -124,7 +124,12 @@ void kernel_main() {
 
     constexpr auto offset_scalar_input = [](uint32_t dfb_id, ckl::WaitPolicy wait, ckl::PopPolicy pop) {
         return ckl::input(
-            dfb_id, wait, pop, ckl::OperandKind::Scalar, ckl::DataFormatReconfig::Disabled, ckl::TileOffset::Set);
+            dfb_id,
+            wait,
+            pop,
+            ckl::InputTileMapping::Scalar,
+            ckl::DataFormatReconfig::Disabled,
+            ckl::TileAddressing::Offset);
     };
     constexpr auto streaming_input = [](uint32_t dfb_id) {
         return ckl::input(dfb_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled);

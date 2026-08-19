@@ -160,9 +160,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
         // The reader streams block-sized chunks, so waiting for the whole row would deadlock.
         ckl::add<
-            ckl::input(dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
             ckl::input(
-                dfb_inb_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
+            ckl::input(
+                dfb_inb_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
             ckl::output(dfb_x_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(row_shape);
 #ifndef RMSNORM
         reconfig_data_format(dfb_in_id, dfb_x_id, dfb_inb_id, dfb_scaler_id);
@@ -185,7 +186,8 @@ void kernel_main() {
 
         // x - E[x]; the mean stays resident for the whole row.
         ckl::sub<
-            ckl::input(dfb_x_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+            ckl::input(
+                dfb_x_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
             ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::output(
                 dfb_xmm_id,
@@ -205,7 +207,7 @@ void kernel_main() {
                 dfb_xmm_id,
                 ckl::WaitPolicy::Cumulative,
                 ckl::PopPolicy::None,
-                ckl::OperandKind::Block,
+                ckl::InputTileMapping::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::output(
                 dfb_xmm2_id,
@@ -246,9 +248,9 @@ void kernel_main() {
                         dfb_xmm_id,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::None,
-                        ckl::OperandKind::Block,
+                        ckl::InputTileMapping::Block,
                         ckl::DataFormatReconfig::Enabled,
-                        ckl::TileOffset::Set),
+                        ckl::TileAddressing::Offset),
                     ckl::input(dfb_ex2pe_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{
                     block.start(), 0u},
                 ckl::Optional<activate_after_normalize, FusedActivation>{},
@@ -274,16 +276,16 @@ void kernel_main() {
                             dfb_fusion_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block,
+                            ckl::InputTileMapping::Block,
                             ckl::DataFormatReconfig::Disabled),
                         ckl::input(
                             dfb_gamma_id,
                             ckl::BroadcastDim::Row,
                             ckl::WaitPolicy::Upfront,
                             ckl::PopPolicy::None,
-                            ckl::OperandKind::Block,
+                            ckl::InputTileMapping::Block,
                             ckl::DataFormatReconfig::Disabled,
-                            ckl::TileOffset::Set)>{0u, block.start()},
+                            ckl::TileAddressing::Offset)>{0u, block.start()},
                     ckl::Optional<activate_after_gamma, FusedActivation>{},
                     ckl::PackTile<ckl::output(
                         dfb_outg_id,
@@ -306,16 +308,16 @@ void kernel_main() {
                             dfb_fusion_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block,
+                            ckl::InputTileMapping::Block,
                             ckl::DataFormatReconfig::Disabled),
                         ckl::input(
                             dfb_beta_id,
                             ckl::BroadcastDim::Row,
                             ckl::WaitPolicy::Upfront,
                             ckl::PopPolicy::None,
-                            ckl::OperandKind::Block,
+                            ckl::InputTileMapping::Block,
                             ckl::DataFormatReconfig::Disabled,
-                            ckl::TileOffset::Set)>{0u, block.start()},
+                            ckl::TileAddressing::Offset)>{0u, block.start()},
                     ckl::Optional<fused_activation_enabled, FusedActivation>{},
                     ckl::PackTile<ckl::output(
                         dfb_out_id,

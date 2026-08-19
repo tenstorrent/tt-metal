@@ -114,7 +114,7 @@ void kernel_main() {
         dfb_reduce_result.wait_front(1);
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
             ckl::mul<
-                ckl::input(input_dfb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                ckl::input(input_dfb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
                 ckl::input(reduce_result_dfb_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::output(mul_rms_result_dfb_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
                 ckl::IterationShape::tiles(block_size).block_size(block_size));
@@ -133,15 +133,15 @@ void kernel_main() {
                             mul_rms_result_dfb_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block),
+                            ckl::InputTileMapping::Block),
                         ckl::input(
                             weight_dfb_id,
                             ckl::BroadcastDim::Row,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
-                            ckl::OperandKind::Block,
+                            ckl::InputTileMapping::Block,
                             ckl::DataFormatReconfig::Enabled,
-                            ckl::TileOffset::Set)>{0u, col_tile},
+                            ckl::TileAddressing::Offset)>{0u, col_tile},
                     ckl::PackTile<ckl::output(
                         mul_weight_result_dfb_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }
@@ -229,9 +229,15 @@ void kernel_main() {
 
                 ckl::add<
                     ckl::input(
-                        intermediate_dfb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                        intermediate_dfb_id,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::InputTileMapping::Block),
                     ckl::input(
-                        rotated_input_dfb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                        rotated_input_dfb_id,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::InputTileMapping::Block),
                     ckl::output(output_dfb_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
                     ckl::IterationShape::tiles(block_size).block_size(block_size));
 

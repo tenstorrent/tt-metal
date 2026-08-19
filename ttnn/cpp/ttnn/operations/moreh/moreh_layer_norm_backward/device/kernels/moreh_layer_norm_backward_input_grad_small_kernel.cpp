@@ -98,9 +98,9 @@ void kernel_main() {
                     dfb_n_recip_n_id,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
-                    ckl::OperandKind::Scalar,
+                    ckl::InputTileMapping::Scalar,
                     kDataFormatReconfig,
-                    ckl::TileOffset::Set),
+                    ckl::TileAddressing::Offset),
                 ckl::input(
                     dfb_rstd_id,
                     is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,
@@ -133,9 +133,9 @@ void kernel_main() {
                             dfb_mask_h_w_id,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
-                            ckl::OperandKind::Scalar,
+                            ckl::InputTileMapping::Scalar,
                             kDataFormatReconfig,
-                            ckl::TileOffset::Set),
+                            ckl::TileAddressing::Offset),
                         ckl::Dst::D1>{0},
                     ckl::Mask<>{}),
                 ckl::runtime_if(
@@ -145,9 +145,9 @@ void kernel_main() {
                             dfb_mask_h_w_id,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
-                            ckl::OperandKind::Scalar,
+                            ckl::InputTileMapping::Scalar,
                             kDataFormatReconfig,
-                            ckl::TileOffset::Set),
+                            ckl::TileAddressing::Offset),
                         ckl::Dst::D1>{1},
                     ckl::Mask<>{}),
                 ckl::PackTile<ckl::output(
@@ -196,9 +196,9 @@ void kernel_main() {
                             dfb_mask_h_w_id,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
-                            ckl::OperandKind::Scalar,
+                            ckl::InputTileMapping::Scalar,
                             kDataFormatReconfig,
-                            ckl::TileOffset::Set),
+                            ckl::TileAddressing::Offset),
                         ckl::Dst::D1>{0},
                     ckl::Mask<>{}),
                 ckl::runtime_if(
@@ -208,9 +208,9 @@ void kernel_main() {
                             dfb_mask_h_w_id,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
-                            ckl::OperandKind::Scalar,
+                            ckl::InputTileMapping::Scalar,
                             kDataFormatReconfig,
-                            ckl::TileOffset::Set),
+                            ckl::TileAddressing::Offset),
                         ckl::Dst::D1>{1},
                     ckl::Mask<>{}),
                 ckl::PackTile<ckl::output(
@@ -227,9 +227,9 @@ void kernel_main() {
                         dfb_dycopy_id,
                         ckl::WaitPolicy::None,
                         ckl::PopPolicy::None,
-                        ckl::OperandKind::Scalar,
+                        ckl::InputTileMapping::Scalar,
                         kDataFormatReconfig,
-                        ckl::TileOffset::Set),
+                        ckl::TileAddressing::Offset),
                     ckl::output(
                         dfb_dyadd_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
                     ckl::IterationShape::one_tile());
@@ -244,9 +244,9 @@ void kernel_main() {
                             dfb_dycopy_id,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
-                            ckl::OperandKind::Scalar,
+                            ckl::InputTileMapping::Scalar,
                             kDataFormatReconfig,
-                            ckl::TileOffset::Set)>{0, wt},
+                            ckl::TileAddressing::Offset)>{0, wt},
                     ckl::PackTile<ckl::output(
                         dfb_dyadd_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
             }
@@ -271,16 +271,16 @@ void kernel_main() {
                         dfb_y_id,
                         ckl::WaitPolicy::None,
                         ckl::PopPolicy::None,
-                        ckl::OperandKind::Scalar,
+                        ckl::InputTileMapping::Scalar,
                         kDataFormatReconfig,
-                        ckl::TileOffset::Set),
+                        ckl::TileAddressing::Offset),
                     ckl::input(
                         dfb_dycopy_id,
                         ckl::WaitPolicy::None,
                         ckl::PopPolicy::None,
-                        ckl::OperandKind::Scalar,
+                        ckl::InputTileMapping::Scalar,
                         kDataFormatReconfig,
-                        ckl::TileOffset::Set)>{wt, wt},
+                        ckl::TileAddressing::Offset)>{wt, wt},
                 ckl::PackTile<ckl::output(
                     dfb_ydy_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
@@ -325,9 +325,9 @@ void kernel_main() {
                         dfb_dycopy_id,
                         ckl::WaitPolicy::None,
                         ckl::PopPolicy::None,
-                        ckl::OperandKind::Scalar,
+                        ckl::InputTileMapping::Scalar,
                         kDataFormatReconfig,
-                        ckl::TileOffset::Set)>{0u, wt},
+                        ckl::TileAddressing::Offset)>{0u, wt},
                 ckl::PackTile<ckl::output(
                     dfb_ndy_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
@@ -357,9 +357,9 @@ void kernel_main() {
                         dfb_y_id,
                         ckl::WaitPolicy::None,
                         ckl::PopPolicy::None,
-                        ckl::OperandKind::Scalar,
+                        ckl::InputTileMapping::Scalar,
                         kDataFormatReconfig,
-                        ckl::TileOffset::Set),
+                        ckl::TileAddressing::Offset),
                     ckl::input(
                         dfb_ydysum_id,
                         is_lastdim_layernorm ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Scalar,

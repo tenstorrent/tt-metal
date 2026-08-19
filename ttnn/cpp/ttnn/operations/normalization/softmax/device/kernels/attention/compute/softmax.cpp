@@ -48,7 +48,7 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
                 dfb_in_id,
                 ckl::WaitPolicy::Upfront,
                 ckl::PopPolicy::AtEnd,
-                ckl::OperandKind::Block,
+                ckl::InputTileMapping::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::input(dfb_max_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{},
         ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
@@ -155,7 +155,8 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #if FUSED_SCALE_MASK
         ckl::mul<
-            ckl::input(dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+            ckl::input(
+                dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
             ckl::input(dfb::fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::output(dfb::scale_mask, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
             ckl::IterationShape::tiles(Wt).block_size(ndst));
@@ -174,8 +175,9 @@ void kernel_main() {
                     dfb::scale_mask,
                     ckl::WaitPolicy::PerBlockSize,
                     ckl::PopPolicy::PerBlockSize,
-                    ckl::OperandKind::Block),
-                ckl::input(dfb::fused_attn, mask_bcast, attn_wait, ckl::PopPolicy::None, ckl::OperandKind::Block)>{},
+                    ckl::InputTileMapping::Block),
+                ckl::input(
+                    dfb::fused_attn, mask_bcast, attn_wait, ckl::PopPolicy::None, ckl::InputTileMapping::Block)>{},
             ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
             ckl::PackTile<ckl::output(
                 dfb_x_id,
@@ -222,7 +224,7 @@ void kernel_main() {
                         dfb::in0,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
-                        ckl::OperandKind::Block)>{},
+                        ckl::InputTileMapping::Block)>{},
                     ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
                     ckl::PackTile<ckl::output(
                         dfb_x_id,
@@ -265,7 +267,10 @@ void kernel_main() {
             ckl::unary<
                 ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>,
                 ckl::input(
-                    dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                    dfb::in0,
+                    ckl::WaitPolicy::PerBlockSize,
+                    ckl::PopPolicy::PerBlockSize,
+                    ckl::InputTileMapping::Block),
                 ckl::output(
                     dfb::exps,
                     ckl::ReservePolicy::PerBlockSize,
@@ -293,7 +298,7 @@ void kernel_main() {
             });
 
         ckl::mul<
-            ckl::input(dfb::exps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+            ckl::input(dfb::exps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
             ckl::input(dfb::recip_sum_exps, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::output(dfb::out0, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
             ckl::IterationShape::tiles(Wt).block_size(ndst));

@@ -42,9 +42,9 @@ inline constexpr auto moreh_input = ckl::input(
     Dfb,
     ckl::WaitPolicy::None,
     ckl::PopPolicy::None,
-    ckl::OperandKind::Scalar,
+    ckl::InputTileMapping::Scalar,
     moreh_data_format_reconfig,
-    ckl::TileOffset::Set);
+    ckl::TileAddressing::Offset);
 
 template <uint32_t Dfb>
 inline constexpr auto moreh_output =

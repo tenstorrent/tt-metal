@@ -36,7 +36,7 @@ void kernel_main() {
                 cb_b,
                 ckl::WaitPolicy::PerTile,
                 ckl::PopPolicy::PerTile,
-                ckl::OperandKind::Col,
+                ckl::InputTileMapping::Col,
                 ckl::DataFormatReconfig::Disabled)>{},
         ckl::PackTile<ckl::output(cb_out)>{});
 }

@@ -40,7 +40,7 @@ void kernel_main() {
     // Stage 0: Bulk-fill cb_x from the reader; after this cb_x is owned entirely by compute.
     eltwise_chain(
         IterationShape::tiles(n),
-        CopyTile<input(cb_src, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block), Dst::D0>{},
+        CopyTile<input(cb_src, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block), Dst::D0>{},
         PackTile<output(cb_x, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
 
     // Stage A: exp(x) IN PLACE on cb_x (read cb_x -> DEST -> exp -> pack cb_x). THE CASE UNDER TEST.
@@ -55,7 +55,9 @@ void kernel_main() {
         // Chunk lockstep: pop/reserve K per chunk. Block index walks the K-tile front window.
         eltwise_chain(
             IterationShape::tiles(n).block_size(blk),
-            CopyTile<input(cb_x, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block), Dst::D0>{},
+            CopyTile<
+                input(cb_x, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block),
+                Dst::D0>{},
             Exp<>{},
             PackTile<output(cb_x, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
     } else {  // life == 2
@@ -66,6 +68,6 @@ void kernel_main() {
     // Stage B: copy cb_x -> cb_out (plain Bulk copy) so the DRAM writer drains cb_out, never cb_x.
     eltwise_chain(
         IterationShape::tiles(n),
-        CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block), Dst::D0>{},
+        CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block), Dst::D0>{},
         PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
 }

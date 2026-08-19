@@ -31,13 +31,17 @@ void kernel_main() {
     if constexpr (Ht == 1) {
         eltwise_chain(
             IterationShape::tiles(Wt).block_size(block_size, tail_sync),
-            CopyTile<input(cb_in, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block), Dst::D0>{},
+            CopyTile<
+                input(cb_in, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block),
+                Dst::D0>{},
             Exp<>{},
             PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
     } else {
         eltwise_chain(
             IterationShape::grid(Ht, Wt).block_size(block_size, tail_sync),
-            CopyTile<input(cb_in, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, OperandKind::Block), Dst::D0>{},
+            CopyTile<
+                input(cb_in, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block),
+                Dst::D0>{},
             Exp<>{},
             PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
     }

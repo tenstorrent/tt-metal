@@ -36,13 +36,19 @@ void kernel_main() {
         // D0 = U, D1 = sigmoid(U), D2 = dL/dprod.
         ckl::CopyTile<
             ckl::input(
-                dfb_linear1_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                dfb_linear1_id,
+                ckl::WaitPolicy::PerBlockSize,
+                ckl::PopPolicy::PerBlockSize,
+                ckl::InputTileMapping::Block),
             ckl::Dst::D0>{},
         ckl::CopyDest<ckl::Dst::D0, ckl::Dst::D1>{},
         ckl::Sigmoid<ckl::Dst::D1>{},
         ckl::CopyTile<
             ckl::input(
-                dfb_dL_dprod_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                dfb_dL_dprod_id,
+                ckl::WaitPolicy::PerBlockSize,
+                ckl::PopPolicy::PerBlockSize,
+                ckl::InputTileMapping::Block),
             ckl::Dst::D2>{},
         // D3 = dL/dgate = dL/dprod * U * sigmoid(U).
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D3>{},
@@ -65,7 +71,7 @@ void kernel_main() {
         ckl::AddBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
         ckl::CopyTile<
             ckl::input(
-                dfb_gate_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                dfb_gate_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
             ckl::Dst::D2>{},
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<

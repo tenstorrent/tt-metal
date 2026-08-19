@@ -47,12 +47,15 @@ void kernel_main() {
         // cond -> D0 (block read, init_short for dfb_cond_id).
         ckl::CopyTile<
             ckl::input(
-                dfb_cond_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                dfb_cond_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
             ckl::Dst::D0>{},
         // tensor -> D1 (TTS) / D2 (TST) (block read, init_short for dfb_tensor_id).
         ckl::CopyTile<
             ckl::input(
-                dfb_tensor_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+                dfb_tensor_id,
+                ckl::WaitPolicy::PerBlockSize,
+                ckl::PopPolicy::PerBlockSize,
+                ckl::InputTileMapping::Block),
             kTensorSlot>{},
         // scalar fill -> the other slot. Inactive flavor folds to a no-op.
         ckl::Optional<kIsInt, ckl::FillInt<kWhereDF, kFillSlot>>{scalar_value},

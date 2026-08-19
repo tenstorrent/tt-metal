@@ -22,7 +22,8 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in, cb_out);
 
     using namespace compute_kernel_lib;
-    using SafeBlockedInput = CopyTile<input(cb_in, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block), Dst::D0>;
+    using SafeBlockedInput =
+        CopyTile<input(cb_in, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block), Dst::D0>;
     using UnsafeBlockedInput = CopyTile<input(cb_in, WaitPolicy::Upfront, PopPolicy::PerTile), Dst::D0>;
     using SafeBlockedOutput = PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>;
     using UnsafeBlockedOutput = PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::PerTile)>;
@@ -31,7 +32,7 @@ void kernel_main() {
     static_assert(!chain_supports_block_v<EltwiseChain<SafeBlockedInput, Exp<>, UnsafeBlockedOutput>>);
     eltwise_chain(
         IterationShape::tiles(n).block_size(blk),
-        CopyTile<input(cb_in, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block), Dst::D0>{},
+        CopyTile<input(cb_in, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block), Dst::D0>{},
         Exp<>{},
         PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
 }

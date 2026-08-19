@@ -127,12 +127,12 @@ void kernel_main() {
                         dfb_in_id,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
-                        ckl::OperandKind::Block),
+                        ckl::InputTileMapping::Block),
                     ckl::input(
                         dfb_inb_id,
                         ckl::WaitPolicy::PerBlockSize,
                         ckl::PopPolicy::PerBlockSize,
-                        ckl::OperandKind::Block),
+                        ckl::InputTileMapping::Block),
                     ckl::output(dfb_x_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                     block_shape);
                 if constexpr (welford_fp32_alias) {
@@ -273,7 +273,8 @@ void kernel_main() {
 
         dfb_ex_obj.wait_front(onetile);
         ckl::sub<
-            ckl::input(dfb_x_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
+            ckl::input(
+                dfb_x_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
             ckl::input(dfb_ex_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::output(
                 dfb_xmm_id,
@@ -316,9 +317,9 @@ void kernel_main() {
                         dfb_xmm_id,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::None,
-                        ckl::OperandKind::Block,
+                        ckl::InputTileMapping::Block,
                         ckl::DataFormatReconfig::Enabled,
-                        ckl::TileOffset::Set),
+                        ckl::TileAddressing::Offset),
                     ckl::input(dfb_ex2pe_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{
                     block.start(), 0u},
                 ckl::PackTile<ckl::output(
@@ -334,15 +335,15 @@ void kernel_main() {
                             dfb_fusion_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block),
+                            ckl::InputTileMapping::Block),
                         ckl::input(
                             dfb_gamma_id,
                             ckl::BroadcastDim::Row,
                             ckl::WaitPolicy::Upfront,
                             ckl::PopPolicy::None,
-                            ckl::OperandKind::Block,
+                            ckl::InputTileMapping::Block,
                             ckl::DataFormatReconfig::Enabled,
-                            ckl::TileOffset::Set)>{0u, block.start()},
+                            ckl::TileAddressing::Offset)>{0u, block.start()},
                     ckl::PackTile<ckl::output(
                         dfb_outg_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }
@@ -355,15 +356,15 @@ void kernel_main() {
                             dfb_fusion_id,
                             ckl::WaitPolicy::PerBlockSize,
                             ckl::PopPolicy::PerBlockSize,
-                            ckl::OperandKind::Block),
+                            ckl::InputTileMapping::Block),
                         ckl::input(
                             dfb_beta_id,
                             ckl::BroadcastDim::Row,
                             ckl::WaitPolicy::Upfront,
                             ckl::PopPolicy::None,
-                            ckl::OperandKind::Block,
+                            ckl::InputTileMapping::Block,
                             ckl::DataFormatReconfig::Enabled,
-                            ckl::TileOffset::Set)>{0u, block.start()},
+                            ckl::TileAddressing::Offset)>{0u, block.start()},
                     ckl::PackTile<ckl::output(
                         dfb_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }

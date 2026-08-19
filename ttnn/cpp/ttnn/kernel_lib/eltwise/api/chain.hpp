@@ -215,7 +215,7 @@ enum class InitReconfigOwner {
 // 1b. Input and output CB synchronization policies
 // =============================================================================
 
-/// Lifecycle policies control FIFO synchronization together with `OperandKind`, which controls tile
+/// Lifecycle policies control FIFO synchronization together with `InputTileMapping`, which controls tile
 /// indexing. `PerBlockSize` synchronizes once per `IterationShape::block_size` group. For an input,
 /// `PerTile + Col` denotes a streamed column: the chain waits for one tile at each grid-row boundary,
 /// reuses the current front tile across that row, then pops it. `Upfront + Col` instead stages an
@@ -243,13 +243,13 @@ enum class PushPolicy : uint8_t { None, PerTile, PerBlockSize, AtEnd, PerOuter, 
 ///   - Col    — with a staged lifecycle, indexed by row so the same tile-column is re-read for every
 ///              output column ([Ht, 1] input); with PerTile/PerTile, streamed one tile per row.
 ///   - Scalar — contribute index 0 every step, pinning the read to the operand's base tile
-///              (`TileOffset::Set` may make that base nonzero). This is inter-tile indexing, not a
+///              (`TileAddressing::Offset` may make that base nonzero). This is inter-tile indexing, not a
 ///              hardware scalar broadcast; it is independent of `BroadcastDim`.
-/// The size aspect only matters with an upfront-wait policy, where the kind also sets
+/// The size aspect only matters with an upfront-wait policy, where the mapping also sets
 /// how many tiles are waited/popped upfront: Scalar 1, Row Wt, Col Ht, Block Ht x Wt.
 /// The 1D tiles(n) shape allows only Block and Scalar; Row and Col need the 2D grid(H, W) shape.
-/// The output is always Block, so there is no output kind.
-enum class OperandKind : uint8_t {
+/// The output is always Block, so there is no output mapping.
+enum class InputTileMapping : uint8_t {
     Block,
     Row,
     Col,
@@ -257,20 +257,20 @@ enum class OperandKind : uint8_t {
 };
 
 // =============================================================================
-// 1c. TileOffset — orthogonal tile-index addressing
+// 1c. TileAddressing — orthogonal tile-index addressing
 // =============================================================================
 //
-// Composes with `OperandKind`: `tile_id = base + derived_from_kind(r, c)`, where
-// TileOffset supplies `base` and OperandKind supplies the kind-derived term.
-//   - `Unset` (default): no offset, zero overhead — the `+base` term and stored value
+// Composes with `InputTileMapping`: `tile_id = base + derived_from_mapping(r, c)`, where
+// TileAddressing supplies `base` and InputTileMapping supplies the mapping-derived term.
+//   - `Direct` (default): no base offset, zero overhead — the `+base` term and stored value
 //     are compile-time-elided.
-//   - `Set`: offset present; its value comes from the element's constructor (runtime, or
-//     a compile-time constant that constant-propagates into the address add).
+//   - `Offset`: base offset present; its value comes from the element's constructor (runtime,
+//     or a compile-time constant that constant-propagates into the address add).
 //   - `Strided`: base and row stride come from a `StridedTileRange`. Block maps to
 //     `base + r * row_stride + c`, Col to `base + r * row_stride`, while Row and
 //     Scalar retain their ordinary column/pinned behavior.
 //
-// `Set` is restricted to upfront/deferred-pop or caller-managed wait/pop pairs.
+// `Offset` is restricted to upfront/deferred-pop or caller-managed wait/pop pairs.
 // Iter-dependent wait/pop counts can't compose with a runtime base. Caller must
 // size the CB for `base + window`; the chain inflates its wait/reserve/pop/push counts
 // by `base` at runtime.
@@ -278,7 +278,7 @@ enum class OperandKind : uint8_t {
 // `Strided` is restricted to caller-managed `(None, None)` policies: a gapped window cannot be
 // represented by a single wait/pop/reserve/push count, so the enclosing kernel owns it.
 
-enum class TileOffset : uint8_t { Unset, Set, Strided };
+enum class TileAddressing : uint8_t { Direct, Offset, Strided };
 
 struct StridedTileRange {
     uint32_t base;
@@ -332,9 +332,9 @@ struct InputSpec {
     uint32_t cb_id;
     WaitPolicy wait;
     PopPolicy pop;
-    OperandKind index;
+    InputTileMapping mapping;
     DataFormatReconfig reconfig;
-    TileOffset offset;
+    TileAddressing addressing;
 };
 
 /// Binary-FPU srcB configuration. Broadcast is kept out of `InputSpec` because ordinary inputs
@@ -352,23 +352,23 @@ struct OutputSpec {
     PackRelu relu;
     L1Accumulation l1_accumulation;
     DestAccumulation dest_accumulation;
-    TileOffset offset;
+    TileAddressing addressing;
 };
 
 /// Bind one input buffer id to its configuration.
-/// Defaults: wait/pop per tile, Scalar indexing, reconfig enabled, and no tile offset.
+/// Defaults: wait/pop per tile, Scalar mapping, reconfig enabled, and Direct addressing.
 /// `PerTile/PerTile + Col` streams one front tile per grid row; other `Col` lifecycles retain
 /// row-indexed window semantics.
 constexpr InputSpec input(
     uint32_t cb_id,
     WaitPolicy wait = WaitPolicy::PerTile,
     PopPolicy pop = PopPolicy::PerTile,
-    OperandKind index = OperandKind::Scalar,
+    InputTileMapping mapping = InputTileMapping::Scalar,
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
-    TileOffset offset = TileOffset::Unset) noexcept;
+    TileAddressing addressing = TileAddressing::Direct) noexcept;
 constexpr InputSpec input(uint32_t cb_id, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept;
 constexpr InputSpec input(
-    uint32_t cb_id, WaitPolicy wait, PopPolicy pop, OperandKind index, TileOffset offset) noexcept;
+    uint32_t cb_id, WaitPolicy wait, PopPolicy pop, InputTileMapping mapping, TileAddressing addressing) noexcept;
 
 /// Bind srcB of a BinaryFpu and optionally select its intra-tile broadcast. The overload taking
 /// an existing InputSpec makes compile-time helper-produced input configurations composable.
@@ -378,9 +378,9 @@ constexpr BinaryFpuInputSpec input(
     BroadcastDim broadcast,
     WaitPolicy wait = WaitPolicy::PerTile,
     PopPolicy pop = PopPolicy::PerTile,
-    OperandKind index = OperandKind::Scalar,
+    InputTileMapping mapping = InputTileMapping::Scalar,
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
-    TileOffset offset = TileOffset::Unset) noexcept;
+    TileAddressing addressing = TileAddressing::Direct) noexcept;
 constexpr BinaryFpuInputSpec input(
     uint32_t cb_id, BroadcastDim broadcast, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept;
 constexpr BinaryFpuInputSpec input(
@@ -388,12 +388,12 @@ constexpr BinaryFpuInputSpec input(
     BroadcastDim broadcast,
     WaitPolicy wait,
     PopPolicy pop,
-    OperandKind index,
-    TileOffset offset) noexcept;
+    InputTileMapping mapping,
+    TileAddressing addressing) noexcept;
 
 /// Bind one output buffer id to its configuration.
 /// Defaults: reserve/push per tile, reconfig enabled, no accumulation, no pack ReLU,
-/// and no tile offset.
+/// and Direct addressing.
 constexpr OutputSpec output(
     uint32_t cb_id,
     ReservePolicy reserve = ReservePolicy::PerTile,
@@ -402,8 +402,8 @@ constexpr OutputSpec output(
     PackRelu relu = PackRelu::Disabled,
     L1Accumulation l1_accumulation = L1Accumulation::Disabled,
     DestAccumulation dest_accumulation = DestAccumulation::Disabled,
-    TileOffset offset = TileOffset::Unset) noexcept;
-constexpr OutputSpec output(uint32_t cb_id, ReservePolicy reserve, PushPolicy push, TileOffset offset) noexcept;
+    TileAddressing addressing = TileAddressing::Direct) noexcept;
+constexpr OutputSpec output(uint32_t cb_id, ReservePolicy reserve, PushPolicy push, TileAddressing addressing) noexcept;
 
 // =============================================================================
 // 2. DEST slot enum — capped at compile-time DEST capacity
@@ -547,11 +547,11 @@ using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bit
 /// A bare number is not accepted — write `IterationShape::tiles(n)` (or
 /// `IterationShape::one_tile()` for one tile) so the iteration shape is always explicit.
 ///
-/// Compile-time validation static_asserts on: illegal (Policy × IndexMode) cells,
+/// Compile-time validation static_asserts on: illegal (Policy × Mapping) cells,
 /// duplicate upfront CBs across CB-readers, colliding pack writes, and hoist requested on
 /// a non-hoist-safe chain.
 ///
-/// Index-mode (OperandKind) and block-mode behavior match the enum docs above: Block /
+/// Index-mode (InputTileMapping) and block-mode behavior match the enum docs above: Block /
 /// Row / Col / Scalar pick the per-iter tile index; input policies that own a staged CB
 /// window take the upfront-block path; chains with per-tile input or output lifecycles clamp block_size to 1.
 /// `BlockTailSync` affects only per-block-size synchronization counts. Row/Col need a non-streaming policy.

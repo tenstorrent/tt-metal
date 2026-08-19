@@ -110,7 +110,7 @@ struct RuntimeConditionalSequenceBase<true> : CbReaderTag {
 
     static constexpr uint32_t dfb_a_id() { return INVALID_DFB; }
     static constexpr InputSpec a_input() {
-        return {INVALID_DFB, Wait, Pop, OperandKind::Scalar, DataFormatReconfig::Disabled, TileOffset::Unset};
+        return {INVALID_DFB, Wait, Pop, InputTileMapping::Scalar, DataFormatReconfig::Disabled, TileAddressing::Direct};
     }
 };
 

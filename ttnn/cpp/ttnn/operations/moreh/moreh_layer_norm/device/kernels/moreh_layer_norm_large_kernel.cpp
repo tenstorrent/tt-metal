@@ -100,9 +100,9 @@ void kernel_main() {
                             dfb_x_id,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
-                            ckl::OperandKind::Scalar,
+                            ckl::InputTileMapping::Scalar,
                             kDataFormatReconfig,
-                            ckl::TileOffset::Set)>{first_tile},
+                            ckl::TileAddressing::Offset)>{first_tile},
                         ckl::runtime_if(
                             do_mask_h && need_to_do_mask_h(w_idx, origin_Ht, origin_Wt),
                             ckl::CopyTile<
@@ -110,9 +110,9 @@ void kernel_main() {
                                     dfb_mask_h_id,
                                     ckl::WaitPolicy::None,
                                     ckl::PopPolicy::None,
-                                    ckl::OperandKind::Scalar,
+                                    ckl::InputTileMapping::Scalar,
                                     kDataFormatReconfig,
-                                    ckl::TileOffset::Set),
+                                    ckl::TileAddressing::Offset),
                                 ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
                         ckl::runtime_if(
@@ -122,9 +122,9 @@ void kernel_main() {
                                     dfb_mask_w_id,
                                     ckl::WaitPolicy::None,
                                     ckl::PopPolicy::None,
-                                    ckl::OperandKind::Scalar,
+                                    ckl::InputTileMapping::Scalar,
                                     kDataFormatReconfig,
-                                    ckl::TileOffset::Set),
+                                    ckl::TileAddressing::Offset),
                                 ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
                         ckl::PackTile<ckl::output(
@@ -141,9 +141,9 @@ void kernel_main() {
                             dfb_x_id,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
-                            ckl::OperandKind::Scalar,
+                            ckl::InputTileMapping::Scalar,
                             kDataFormatReconfig,
-                            ckl::TileOffset::Set)>{j},
+                            ckl::TileAddressing::Offset)>{j},
                         ckl::runtime_if(
                             do_mask_h && need_to_do_mask_h(w_idx, origin_Ht, origin_Wt),
                             ckl::CopyTile<
@@ -151,9 +151,9 @@ void kernel_main() {
                                     dfb_mask_h_id,
                                     ckl::WaitPolicy::None,
                                     ckl::PopPolicy::None,
-                                    ckl::OperandKind::Scalar,
+                                    ckl::InputTileMapping::Scalar,
                                     kDataFormatReconfig,
-                                    ckl::TileOffset::Set),
+                                    ckl::TileAddressing::Offset),
                                 ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
                         ckl::runtime_if(
@@ -163,9 +163,9 @@ void kernel_main() {
                                     dfb_mask_w_id,
                                     ckl::WaitPolicy::None,
                                     ckl::PopPolicy::None,
-                                    ckl::OperandKind::Scalar,
+                                    ckl::InputTileMapping::Scalar,
                                     kDataFormatReconfig,
-                                    ckl::TileOffset::Set),
+                                    ckl::TileAddressing::Offset),
                                 ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
                         ckl::PackTile<ckl::output(
@@ -212,7 +212,7 @@ void kernel_main() {
                     dfb_x_id,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::AtEnd,
-                    ckl::OperandKind::Block,
+                    ckl::InputTileMapping::Block,
                     kDataFormatReconfig),
                 ckl::input(
                     dfb_ex_id,
@@ -240,9 +240,9 @@ void kernel_main() {
                                     dfb_mask_h_id,
                                     ckl::WaitPolicy::None,
                                     ckl::PopPolicy::None,
-                                    ckl::OperandKind::Scalar,
+                                    ckl::InputTileMapping::Scalar,
                                     kDataFormatReconfig,
-                                    ckl::TileOffset::Set),
+                                    ckl::TileAddressing::Offset),
                                 ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
                         ckl::runtime_if(
@@ -252,9 +252,9 @@ void kernel_main() {
                                     dfb_mask_w_id,
                                     ckl::WaitPolicy::None,
                                     ckl::PopPolicy::None,
-                                    ckl::OperandKind::Scalar,
+                                    ckl::InputTileMapping::Scalar,
                                     kDataFormatReconfig,
-                                    ckl::TileOffset::Set),
+                                    ckl::TileAddressing::Offset),
                                 ckl::Dst::D1>{first_tile},
                             ckl::Mask<>{}),
                         ckl::PackTile<ckl::output(
@@ -271,7 +271,7 @@ void kernel_main() {
                     dfb_xmm_id,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::AtEnd,
-                    ckl::OperandKind::Block,
+                    ckl::InputTileMapping::Block,
                     kDataFormatReconfig),
                 ckl::output(dfb_xmm2_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
                 ckl::IterationShape::tiles(block_size).block_size(block_size));
@@ -347,7 +347,7 @@ void kernel_main() {
                     dfb_x_id,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::AtEnd,
-                    ckl::OperandKind::Block,
+                    ckl::InputTileMapping::Block,
                     kDataFormatReconfig),
                 ckl::input(
                     dfb_ex_id,
@@ -369,7 +369,7 @@ void kernel_main() {
                     dfb_reuse_id,
                     ckl::WaitPolicy::Upfront,
                     ckl::PopPolicy::AtEnd,
-                    ckl::OperandKind::Block,
+                    ckl::InputTileMapping::Block,
                     kDataFormatReconfig),
                 ckl::input(
                     dfb_recip_std_id,
@@ -393,14 +393,14 @@ void kernel_main() {
                         dfb_gamma_beta_or_out_id,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::AtEnd,
-                        ckl::OperandKind::Block,
+                        ckl::InputTileMapping::Block,
                         kDataFormatReconfig),
                     ckl::input(
                         dfb_gamma_id,
                         gamma_bcast,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::AtEnd,
-                        ckl::OperandKind::Block,
+                        ckl::InputTileMapping::Block,
                         kDataFormatReconfig),
                     ckl::output(dfb_outg_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
                     ckl::IterationShape::tiles(block_size).block_size(block_size));
@@ -415,14 +415,14 @@ void kernel_main() {
                         dfb_gamma_beta_id,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::AtEnd,
-                        ckl::OperandKind::Block,
+                        ckl::InputTileMapping::Block,
                         kDataFormatReconfig),
                     ckl::input(
                         dfb_beta_id,
                         beta_bcast,
                         ckl::WaitPolicy::Upfront,
                         ckl::PopPolicy::AtEnd,
-                        ckl::OperandKind::Block,
+                        ckl::InputTileMapping::Block,
                         kDataFormatReconfig),
                     ckl::output(dfb_out_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
                     ckl::IterationShape::tiles(block_size).block_size(block_size));
