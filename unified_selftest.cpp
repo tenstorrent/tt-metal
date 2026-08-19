@@ -259,10 +259,11 @@ void example_eltwise() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t1 = TensorAccessor(FakeArgs{1}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
-    Storage lhs_storage(0, 2);
-    Storage rhs_storage(1, 2);
-    Storage tmp_storage(2, 2);
-    Storage out_storage(3, 2);
+    using Row2 = Shape<1, 2>;
+    Storage<Row2> lhs_storage(0);
+    Storage<Row2> rhs_storage(1);
+    Storage<Row2> tmp_storage(2);
+    Storage<Row2> out_storage(3);
 
     for (int i = 0; i < 1; ++i) {
         ComputeBlock lhs = noc_load<0>(lhs_storage, t0, i).wait();
@@ -279,8 +280,9 @@ void example_eltwise() {
 void example_unary() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
-    Storage in_storage(0, 2);
-    Storage out_storage(3, 2);
+    using Row2 = Shape<1, 2>;
+    Storage<Row2> in_storage(0);
+    Storage<Row2> out_storage(3);
 
     ComputeBlock x = noc_load<1>(in_storage, t0, 0).wait();
     noc_store<0>(out_storage.store(x.exp()), t2, 0);
@@ -293,9 +295,10 @@ void example_peer_hop() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
     LogicalCoord peer{0, 0};
-    Storage in_storage(0, 2);
-    Storage hop_storage(1, 2);
-    Storage out_storage(3, 2);
+    using Row2 = Shape<1, 2>;
+    Storage<Row2> in_storage(0);
+    Storage<Row2> hop_storage(1);
+    Storage<Row2> out_storage(3);
 
     ComputeBlock x = noc_load<1>(in_storage, t0, 0).wait();
     Block staged = hop_storage.store(x.exp());
@@ -316,7 +319,10 @@ void example_peer_hop() {
 void example_syntax_free() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
-    Storage in0(0, 2), in1(1, 2), out(2, 2), scaler(3, 1), red(4, 1);
+    using Row2 = Shape<1, 2>;
+    using One = Shape<1, 1>;
+    Storage<Row2> in0(0), in1(1), out(2);
+    Storage<One> scaler(3), red(4);
     using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2>;
     using RG = ReduceGeometry</*ht=*/2, /*wt=*/1>;
 
@@ -349,7 +355,10 @@ void example_syntax_free() {
 void example_syntax_method() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
-    Storage in0(0, 2), in1(1, 2), out(2, 2), scaler(3, 1), red(4, 1);
+    using Row2 = Shape<1, 2>;
+    using One = Shape<1, 1>;
+    Storage<Row2> in0(0), in1(1), out(2);
+    Storage<One> scaler(3), red(4);
     using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2>;
     using RG = ReduceGeometry</*ht=*/2, /*wt=*/1>;
 
@@ -387,9 +396,10 @@ void example_matmul_single() {
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
     using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2>;
 
-    Storage a_storage(0, 4);
-    Storage b_storage(1, 4);
-    Storage out_storage(3, 4);
+    using Sq2 = Shape<2, 2>;
+    Storage<Sq2> a_storage(0);
+    Storage<Sq2> b_storage(1);
+    Storage<Sq2> out_storage(3);
 
     ComputeBlock a = noc_load<1>(a_storage, t0, 0).wait();
     ComputeBlock b = noc_load<1>(b_storage, t1, 0).wait();
@@ -405,12 +415,13 @@ void example_matmul_acc() {
 
     using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2, /*num_blocks=*/2>;
 
-    Storage a_storage(0, 4);
-    Storage b_storage(1, 4);
-    Storage acc_storage(24, 4);  // running total -- a different CB from out
-    Storage out_storage(3, 4);
+    using Sq2 = Shape<2, 2>;
+    Storage<Sq2> a_storage(0);
+    Storage<Sq2> b_storage(1);
+    Storage<Sq2> acc_storage(24);  // running total -- a different CB from out
+    Storage<Sq2> out_storage(3);
 
-    Accumulator<AccumulatorMode::Dst> acc(acc_storage, out_storage);
+    Accumulator<AccumulatorMode::Dst, Sq2> acc(acc_storage, out_storage);
     acc.clear();
 
     for (uint32_t k = 0; k < Geom::num_blocks; ++k) {

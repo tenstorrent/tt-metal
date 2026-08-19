@@ -5,6 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # `Shape` as a template parameter -- what it looks like, and what it costs
 
+> **Status.** The `Extent` rename and Stage 1 (mechanical templating) have landed.
+> Stages 2-4 are still outlined below. Stage 1 came in at **+188/-158 lines** across
+> `api.h`, `impl_v1.hpp`, `shape.hpp`, seven kernels and the selftest, with all three
+> selftest traces byte-identical and all eight device tests passing.
+
 Outline for phase 5 of [unified_llama_prefill.md](unified_llama_prefill.md). Every
 code block below either compiles today (the `Shape` type and its metafunctions were
 built and verified at `-std=c++17 -Wall -Wextra -Werror`) or is a mechanical rewrite

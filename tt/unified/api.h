@@ -29,7 +29,9 @@
 namespace tt {
 namespace unified {
 
+template <typename S>
 struct Block;
+template <typename S>
 class ComputeBlock;
 
 // ---------------------------------------------------------------------------
@@ -144,8 +146,11 @@ struct LogicalMcast {
 // Storage -- a circular buffer
 // ---------------------------------------------------------------------------
 
+template <typename S>
 struct Storage {
-    Storage(uint32_t cb_id, uint32_t num_pages) : cb_id(cb_id), num_pages(num_pages) {}
+    using shape = S;
+
+    explicit Storage(uint32_t cb_id) : cb_id(cb_id) {}
 
     Storage(Storage&&) = delete;
     Storage(const Storage&) = delete;
@@ -155,14 +160,17 @@ struct Storage {
     // Evaluate a compute fusion into this buffer. The loop shape is chosen by the
     // fusion's kind; see Strategy in tt/unified/math.hpp.
     template <typename Node>
-    Block store(const Node& node);
+    Block<S> store(const Node& node);
 
     uint32_t cb_id;
     // PAGES, which is what the circular-buffer protocol counts -- reserve, push,
     // wait and pop are all in pages, and cb_page_bytes() sizes one. The compute
     // strategies then walk it as a TILE count, which holds only because this model
     // configures one tile per page; see Storage::store.
-    uint32_t num_pages;  // could eventually be N dimensional, here and below
+    //
+    // Static now that the shape is: reading it off an instance still compiles, so
+    // every `storage.num_pages` in the implementation is unchanged.
+    static constexpr uint32_t num_pages = S::num_pages;
 };
 
 // This core's own pages, handed to a custom load or store routine. The harness has
@@ -199,12 +207,15 @@ struct L1Pages {
 // exactly one consumer; consumers take it by value.
 // ---------------------------------------------------------------------------
 
-template <AccumulatorMode Mode = AccumulatorMode::Dst>
+template <AccumulatorMode Mode, typename S>
 class Accumulator;
 
+template <typename S>
 struct Block {
-    explicit Block(const Storage& storage);
-    Block(uint32_t cb_id, uint32_t num_pages);
+    using shape = S;
+
+    explicit Block(const Storage<S>& storage);
+    explicit Block(uint32_t cb_id);
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     ~Block();
 #endif
@@ -228,7 +239,7 @@ struct Block {
     void consume();
 
     uint32_t cb_id;
-    uint32_t num_pages;
+    static constexpr uint32_t num_pages = S::num_pages;
 
 private:
     // A RETAINED block: one the Accumulator hands back mid-accumulation. Its pages
@@ -236,9 +247,9 @@ private:
     // another thread nor consumed -- only the next accumulate() call may touch
     // them. Only Accumulator can make one.
     struct Retained {};
-    Block(const Storage& storage, Retained);
+    Block(const Storage<S>& storage, Retained);
 
-    template <AccumulatorMode M>
+    template <AccumulatorMode M, typename S2>
     friend class Accumulator;
 
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
@@ -250,7 +261,9 @@ private:
     bool must_consume = true;
     bool consumed = false;
 
-    // Poison value stamped into a moved-from Block's fields.
+    // Poison stamped into a moved-from Block's cb_id. num_pages is part of the
+    // type now, so there is one field left to poison -- which is enough, since any
+    // use of a moved-from Block goes through cb_id.
     static constexpr uint32_t kMovedFrom = ~uint32_t(0);
 #endif
 };
@@ -278,10 +291,12 @@ private:
 // warning in api/compute/cb_api.h).
 // ---------------------------------------------------------------------------
 
-template <AccumulatorMode Mode>
+template <AccumulatorMode Mode, typename S>
 class Accumulator {
 public:
-    Accumulator(const Storage& acc_storage, const Storage& out_storage);
+    using shape = S;
+
+    Accumulator(const Storage<S>& acc_storage, const Storage<S>& out_storage);
 
     // Fold one k-block into the running total. `finish` selects the pack target:
     // the accumulation buffer, or the output buffer on the last block.
@@ -302,14 +317,14 @@ public:
     // Only the Block returned on the finishing call is meaningful; earlier ones
     // describe the accumulation buffer, which the next call re-consumes.
     template <typename Node, typename Epilogue = std::nullptr_t>
-    Block accumulate(const Node& node, bool finish, Epilogue epilogue = nullptr);
+    Block<S> accumulate(const Node& node, bool finish, Epilogue epilogue = nullptr);
 
     // Reset between output blocks.
     void clear();
 
 private:
-    const Storage& acc_storage;
-    const Storage& out_storage;
+    const Storage<S>& acc_storage;
+    const Storage<S>& out_storage;
     bool reload = false;
 };
 
@@ -317,9 +332,12 @@ private:
 // ComputeBlock -- compute-side consumption of a Block, and an expression leaf
 // ---------------------------------------------------------------------------
 
-class ComputeBlock : public expr::Fluent<ComputeBlock> {
+template <typename S>
+class ComputeBlock : public expr::Fluent<ComputeBlock<S>> {
 public:
-    ComputeBlock(Block block);
+    using shape = S;
+
+    ComputeBlock(Block<S> block);
     ~ComputeBlock();
 
     ComputeBlock(const ComputeBlock&) = delete;
@@ -328,11 +346,11 @@ public:
     ComputeBlock& operator=(ComputeBlock&&) = delete;
 
     uint32_t get_cb_id() const { return cb_id; }
-    uint32_t get_num_pages() const { return num_pages; }
+    static constexpr uint32_t get_num_pages() { return S::num_pages; }
 
 private:
     uint32_t cb_id;
-    uint32_t num_pages;
+    static constexpr uint32_t num_pages = S::num_pages;
 };
 
 // ---------------------------------------------------------------------------
@@ -343,19 +361,25 @@ private:
 
 // Without this the operator+ in tt/unified/math.hpp is SFINAE'd out and
 // `lhs + rhs` does not resolve.
-template <>
-struct is_operand<ComputeBlock> : std::true_type {};
+template <typename S>
+struct is_operand<ComputeBlock<S>> : std::true_type {};
 
-TileSource as_node(const ComputeBlock& b);
+template <typename S>
+TileSource as_node(const ComputeBlock<S>& b);
 
-auto relu(const ComputeBlock& b);
-auto exp_(const ComputeBlock& b);
-auto recip(const ComputeBlock& b);
-auto sqrt_(const ComputeBlock& b);
-auto rsqrt(const ComputeBlock& b);
+template <typename S>
+auto relu(const ComputeBlock<S>& b);
+template <typename S>
+auto exp_(const ComputeBlock<S>& b);
+template <typename S>
+auto recip(const ComputeBlock<S>& b);
+template <typename S>
+auto sqrt_(const ComputeBlock<S>& b);
+template <typename S>
+auto rsqrt(const ComputeBlock<S>& b);
 
-template <typename Geometry>
-auto matmul(const ComputeBlock& a, const ComputeBlock& b);
+template <typename Geometry, typename SA, typename SB>
+auto matmul(const ComputeBlock<SA>& a, const ComputeBlock<SB>& b);
 
 // Reduce `b`'s tile grid down one axis, within and across tiles. `Geometry` is
 // the INPUT grid, `Axis` says which dimension collapses, and the destination
@@ -369,9 +393,9 @@ auto matmul(const ComputeBlock& a, const ComputeBlock& b);
 // reduce_tile re-reads it, so it must not be popped until the kernel ends. Taking
 // a ComputeBlock rather than a Storage is what says so -- and proves the buffer
 // was actually filled and waited on.
-template <typename Geometry, ReduceAxis Axis>
+template <typename Geometry, ReduceAxis Axis, typename SB, typename SC>
 ReduceNode<Geometry, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
-    const ComputeBlock& b, const ComputeBlock& scaler);
+    const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler);
 
 // Same shape, different fold. The SCALER differs though, and silently: metal folds
 // it into every reduce_tile, so
@@ -382,13 +406,13 @@ ReduceNode<Geometry, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
 //
 // A mean fed a scaler of 1 is just a sum, with nothing to say so. The scaler is
 // the kernel's to fill, so the kernel has to match it to the fold it asks for.
-template <typename Geometry, ReduceAxis Axis>
+template <typename Geometry, ReduceAxis Axis, typename SB, typename SC>
 ReduceNode<Geometry, Axis, ReducePool::Max, expr::UnaryChain<>> reduce_max(
-    const ComputeBlock& b, const ComputeBlock& scaler);
+    const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler);
 
-template <typename Geometry, ReduceAxis Axis>
+template <typename Geometry, ReduceAxis Axis, typename SB, typename SC>
 ReduceNode<Geometry, Axis, ReducePool::Avg, expr::UnaryChain<>> reduce_mean(
-    const ComputeBlock& b, const ComputeBlock& scaler);
+    const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler);
 
 // ---------------------------------------------------------------------------
 // Reserved multicast semaphores
@@ -542,10 +566,12 @@ private:
 // needs *landed* rather than *departed*.
 // ---------------------------------------------------------------------------
 
-template <int thread>
+template <int thread, typename S>
 struct NocAsyncReadTx {
-    explicit NocAsyncReadTx(const Storage& storage);
-    NocAsyncReadTx(uint32_t cb_id, uint32_t num_pages);
+    using shape = S;
+
+    explicit NocAsyncReadTx(const Storage<S>& storage);
+    explicit NocAsyncReadTx(uint32_t cb_id);
 
     NocAsyncReadTx(const NocAsyncReadTx&) = delete;
     NocAsyncReadTx& operator=(const NocAsyncReadTx&) = delete;
@@ -557,20 +583,22 @@ struct NocAsyncReadTx {
 #endif
 
     // Completes the read and publishes the destination.
-    Block wait() const;
+    Block<S> wait() const;
 
     uint32_t cb_id;
-    uint32_t num_pages;
+    static constexpr uint32_t num_pages = S::num_pages;
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
     mutable bool waited = false;
 #endif
 };
 
-template <int thread>
+template <int thread, typename S>
 struct NocAsyncWriteTx {
-    explicit NocAsyncWriteTx(const Storage& storage);
-    NocAsyncWriteTx(uint32_t cb_id, uint32_t num_pages);
+    using shape = S;
+
+    explicit NocAsyncWriteTx(const Storage<S>& storage);
+    explicit NocAsyncWriteTx(uint32_t cb_id);
 
     NocAsyncWriteTx(const NocAsyncWriteTx&) = delete;
     NocAsyncWriteTx& operator=(const NocAsyncWriteTx&) = delete;
@@ -584,7 +612,7 @@ struct NocAsyncWriteTx {
     void wait() const;
 
     uint32_t cb_id;
-    uint32_t num_pages;
+    static constexpr uint32_t num_pages = S::num_pages;
 };
 
 // A core-to-core copy has both halves: a local source Block to release and a
@@ -594,9 +622,9 @@ struct NocAsyncWriteTx {
 // Pull: the source is the PEER's L1 and the local Block is only a handle, so the
 // destructor pops it bare, and this core's own read barrier is proof the data
 // landed -- it landed here.
-template <int thread>
+template <int thread, typename D, typename S>
 struct NocAsyncReadCoreTx {
-    NocAsyncReadCoreTx(const Storage& dst, const Block& src);
+    NocAsyncReadCoreTx(const Storage<D>& dst, const Block<S>& src);
 
     NocAsyncReadCoreTx(const NocAsyncReadCoreTx&) = delete;
     NocAsyncReadCoreTx& operator=(const NocAsyncReadCoreTx&) = delete;
@@ -605,12 +633,12 @@ struct NocAsyncReadCoreTx {
 
     ~NocAsyncReadCoreTx();
 
-    Block wait() const;
+    Block<D> wait() const;
 
     uint32_t dst_cb;
-    uint32_t dst_pages;
+    static constexpr uint32_t dst_pages = D::num_pages;
     uint32_t src_cb;
-    uint32_t src_pages;
+    static constexpr uint32_t src_pages = S::num_pages;
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
     mutable bool waited = false;
@@ -631,10 +659,10 @@ struct NocAsyncReadCoreTx {
 // host-reserved slot (kCopyArrivedSem), the same argument that makes the reserved
 // broadcast pair preferable to a caller-supplied one. It sits unused on the
 // unicast form, where construction costs only an L1 address.
-template <int thread>
+template <int thread, typename D, typename S>
 struct NocAsyncWriteCoreTx {
-    NocAsyncWriteCoreTx(const Storage& dst, const Block& src, PhysicalMcast dst_range, uint32_t semaphore_id);
-    NocAsyncWriteCoreTx(const Storage& dst, const Block& src, bool reader, uint32_t semaphore_id);
+    NocAsyncWriteCoreTx(const Storage<D>& dst, const Block<S>& src, PhysicalMcast dst_range, uint32_t semaphore_id);
+    NocAsyncWriteCoreTx(const Storage<D>& dst, const Block<S>& src, bool reader, uint32_t semaphore_id);
 
     NocAsyncWriteCoreTx(const NocAsyncWriteCoreTx&) = delete;
     NocAsyncWriteCoreTx& operator=(const NocAsyncWriteCoreTx&) = delete;
@@ -643,12 +671,12 @@ struct NocAsyncWriteCoreTx {
 
     ~NocAsyncWriteCoreTx();
 
-    Block wait(uint32_t num_writers) const;
+    Block<D> wait(uint32_t num_writers) const;
 
     uint32_t dst_cb;
-    uint32_t dst_pages;
+    static constexpr uint32_t dst_pages = D::num_pages;
     uint32_t src_cb;
-    uint32_t src_pages;
+    static constexpr uint32_t src_pages = S::num_pages;
 
     // mutable: wait() is const across the whole API, and signalling is what a
     // wait on this handle does.
@@ -667,8 +695,8 @@ struct NocAsyncWriteCoreTx {
 
 // Reads `storage.num_pages` pages into the buffer, starting at page
 // `block_idx * storage.num_pages`. The returned handle publishes them.
-template <int thread, typename Accessor>
-NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uint32_t block_idx);
+template <int thread, typename S, typename Accessor>
+NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, const Accessor& acc, uint32_t block_idx);
 
 // Custom load, for routines the built-in overload cannot express. The harness
 // keeps the circular-buffer protocol -- cb_reserve_back, the write pointer, and
@@ -691,8 +719,8 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uin
 // `fn` is only CALLED on the owning data-movement thread, but its body is
 // COMPILED on all five projections, so the intrinsics it names have to resolve
 // everywhere; see tt/unified/adaptor_v1.hpp.
-template <int thread, typename Fn>
-NocAsyncReadTx<thread> noc_load(const Storage& storage, Fn fn);
+template <int thread, typename S, typename Fn>
+NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, Fn fn);
 
 // Multicast load: one core in the rectangle reads the block from `acc` and
 // multicasts it into the SAME circular buffer on every core of the rectangle.
@@ -708,18 +736,18 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, Fn fn);
 // -- a semaphore that keeps its count lets the NEXT call fall straight through
 // the handshake. `receivers_ready` is cleared by the sender once it has counted
 // everyone in; `data_sent` is cleared by each receiver after it observes it.
-template <int thread, typename Accessor>
-NocAsyncReadTx<thread> noc_load(
-    const Storage& storage,
+template <int thread, typename S, typename Accessor>
+NocAsyncReadTx<thread, S> noc_load(
+    const Storage<S>& storage,
     PhysicalMcast mcast,
     Semaphore<thread>& receivers_ready,
     Semaphore<thread>& data_sent,
     const Accessor& acc,
     uint32_t block_idx);
 
-template <int thread, typename Accessor>
-NocAsyncReadTx<thread> noc_load(
-    const Storage& storage,
+template <int thread, typename S, typename Accessor>
+NocAsyncReadTx<thread, S> noc_load(
+    const Storage<S>& storage,
     LogicalMcast mcast,
     Semaphore<thread>& receivers_ready,
     Semaphore<thread>& data_sent,
@@ -736,11 +764,13 @@ NocAsyncReadTx<thread> noc_load(
 // default is right when they run on different threads (the usual case: one per
 // NOC, overlapping). Name the pair explicitly to put two broadcasts on ONE thread
 // and still keep them apart.
-template <int thread, int pair = thread, typename Accessor>
-NocAsyncReadTx<thread> noc_load(const Storage& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx);
+template <int thread, int pair = thread, typename S, typename Accessor>
+NocAsyncReadTx<thread, S> noc_load(
+    const Storage<S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
-template <int thread, int pair = thread, typename Accessor>
-NocAsyncReadTx<thread> noc_load(const Storage& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx);
+template <int thread, int pair = thread, typename S, typename Accessor>
+NocAsyncReadTx<thread, S> noc_load(
+    const Storage<S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
 // Fill a one-page Storage with the constant metal's reduce folds in: the value in
 // the first row of each of the tile's four 16x16 faces, zero everywhere else.
@@ -754,12 +784,12 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, LogicalMcast mcast, cons
 // as a ComputeBlock at KERNEL scope. That is what makes the wait happen once, in
 // its constructor, and the pop happen at the end of the kernel rather than after
 // the first reduction.
-template <int thread>
-Block fill_reduce_scaler(const Storage& scaler, uint32_t value_bits = kReduceScalerOne);
+template <int thread, typename S>
+Block<S> fill_reduce_scaler(const Storage<S>& scaler, uint32_t value_bits = kReduceScalerOne);
 
 // Drains a Block to a tensor. Takes the Block by value: this call consumes it.
-template <int thread, typename Accessor>
-NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, uint32_t block_idx);
+template <int thread, typename S, typename Accessor>
+NocAsyncWriteTx<thread, S> noc_store(Block<S> block, const Accessor& acc, uint32_t block_idx);
 
 // Custom store: the mirror of the custom noc_load. `fn` is called as
 // fn(L1Pages pages) over `block`'s pages -- pages.count is the number the handle
@@ -770,8 +800,8 @@ NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, uint32_t blo
 // covers writes departing local L1 on a single NOC. Reads issued here, or writes
 // on the other NOC, are not covered, so the pop can hand the pages back while
 // they are still being sourced.
-template <int thread, typename Fn>
-NocAsyncWriteTx<thread> noc_store(Block block, Fn fn);
+template <int thread, typename S, typename Fn>
+NocAsyncWriteTx<thread, S> noc_store(Block<S> block, Fn fn);
 
 // ---------------------------------------------------------------------------
 // Core-to-core movement: pull a peer's block into this core's Storage
@@ -789,8 +819,9 @@ NocAsyncWriteTx<thread> noc_store(Block block, Fn fn);
 // the explicit semaphore handshake the matmul mcast kernels use.
 // ---------------------------------------------------------------------------
 
-template <int thread>
-NocAsyncReadCoreTx<thread> noc_core_read(const Storage& dst, Block src, PhysicalCoord coord, uint32_t byte_offset = 0);
+template <int thread, typename D, typename S>
+NocAsyncReadCoreTx<thread, D, S> noc_core_read(
+    const Storage<D>& dst, Block<S> src, PhysicalCoord coord, uint32_t byte_offset = 0);
 
 // EVERY core in the exchange runs one statement and takes its side from its own
 // coordinate and predicate:
@@ -820,24 +851,25 @@ NocAsyncReadCoreTx<thread> noc_core_read(const Storage& dst, Block src, Physical
 //
 //   2. Addressing. The destination is computed from the WRITER's local view of
 //      `dst`, so the copies have to stay in step (see the NOTE above).
-template <int thread>
-NocAsyncWriteCoreTx<thread> noc_core_write(
-    const Storage& dst, Block src, PhysicalCoord coord, bool write_predicate, uint32_t byte_offset = 0);
+template <int thread, typename D, typename S>
+NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
+    const Storage<D>& dst, Block<S> src, PhysicalCoord coord, bool write_predicate, uint32_t byte_offset = 0);
 
-template <int thread>
-NocAsyncWriteCoreTx<thread> noc_core_write(
-    const Storage& dst, Block src, PhysicalMcast dst_range, bool write_predicate, uint32_t byte_offset = 0);
+template <int thread, typename D, typename S>
+NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
+    const Storage<D>& dst, Block<S> src, PhysicalMcast dst_range, bool write_predicate, uint32_t byte_offset = 0);
 
-template <int thread>
-NocAsyncReadCoreTx<thread> noc_core_read(const Storage& dst, Block src, LogicalCoord coord, uint32_t byte_offset = 0);
+template <int thread, typename D, typename S>
+NocAsyncReadCoreTx<thread, D, S> noc_core_read(
+    const Storage<D>& dst, Block<S> src, LogicalCoord coord, uint32_t byte_offset = 0);
 
-template <int thread>
-NocAsyncWriteCoreTx<thread> noc_core_write(
-    const Storage& dst, Block src, LogicalCoord coord, bool write_predicate, uint32_t byte_offset = 0);
+template <int thread, typename D, typename S>
+NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
+    const Storage<D>& dst, Block<S> src, LogicalCoord coord, bool write_predicate, uint32_t byte_offset = 0);
 
-template <int thread>
-NocAsyncWriteCoreTx<thread> noc_core_write(
-    const Storage& dst, Block src, LogicalMcast dst_range, bool write_predicate, uint32_t byte_offset = 0);
+template <int thread, typename D, typename S>
+NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
+    const Storage<D>& dst, Block<S> src, LogicalMcast dst_range, bool write_predicate, uint32_t byte_offset = 0);
 
 }  // namespace unified
 }  // namespace tt
