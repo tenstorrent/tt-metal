@@ -138,6 +138,7 @@ public:
     std::vector<uint32_t> kr_sizes;
     std::vector<uint32_t> kr_starts;
     uint32_t kr_pad;
+    uint32_t gu_chunks_target;
     uint32_t hn_pad;
     uint32_t gu_chunks;
     uint32_t gu_chunk_w;
