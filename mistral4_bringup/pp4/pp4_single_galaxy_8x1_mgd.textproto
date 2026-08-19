@@ -1,0 +1,60 @@
+# Single-galaxy 4-stage pipeline: ONE 32-chip BH galaxy carved into four 8-chip meshes.
+#
+# Every shipped prefill PP descriptor (pipeline_prefill_{2,4,8}galaxy_connected_*) gives each stage a
+# WHOLE galaxy on its own host, so a 4-stage run needs 4 physical galaxies. This one instead puts all
+# four stages on a single galaxy, which is the only way to exercise PP when you have one machine.
+#
+# The carve is NOT expressed here — it is per-rank TT_VISIBLE_DEVICES in the rank binding, which is the
+# only mechanism that works when several ranks share a host (tt-run blocklists TT_VISIBLE_DEVICES from
+# shell passthrough precisely so it can only come from the binding; ttrun.py:1585). This file only
+# declares that four meshes exist and how they chain.
+#
+# Mesh shape [8,1] = (sp, tp), matching the runner's GLOBAL_MESH_SHAPE = (PREFILL_SP, PREFILL_TP), so
+# the binding MUST set PREFILL_SP=8 / PREFILL_TP=1. tt-train's proven single-galaxy PP4 declares the
+# same 8-chip carve transposed as [1,8] (pipeline_parallel_training/configurations/1galaxy_pp4/
+# mgd.textproto) — same physical line, but prefill needs the 8 on the SP (row) axis.
+#
+# dim_types [LINE, LINE], not [RING, RING] as the multi-galaxy descriptors use: a RING on the 1-wide tp
+# axis is meaningless, and the sp axis is a serpentine path through the carve rather than a closed loop.
+# Pair with PREFILL_FABRIC_MODE=2d (NOT a torus mode — a Ring collective on an axis the fabric does not
+# wrap hangs). 2d rather than 1d because a MeshSocket routes over 2D fabric, which the D2D pipeline
+# needs even at sp<=8 where the runner would otherwise default to 1D (runner_utils.py:41-43).
+#
+# Chained 0->1->2->3, no 3->0 wrap: pipeline stages form a line, and this mirrors the shipped
+# multi-galaxy descriptors. (tt-train closes the ring because its example is generic, not because PP
+# needs it.)
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    channels { count: 8 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
