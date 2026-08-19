@@ -61,7 +61,6 @@ uint32_t prepare_chunk_recurrence_cb_size_bytes(
     add(cc, 1, format(6));
     add(cv, 1, format(0));
     add(ck);
-    add(cv, 2, bf16);
     add(std::max(cv, 3U));
     add(ck, 1, format(1));
     add(ck, 1, format(2));
@@ -129,7 +128,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const m2::DFBSpecName T_INV{"t_inv"};
     const m2::DFBSpecName V_BETA{"v_beta"};
     const m2::DFBSpecName K_BETA{"k_beta"};
-    const m2::DFBSpecName OUTPUT{"output"};
     const m2::DFBSpecName U{"u"};
     const m2::DFBSpecName W{"w"};
     const m2::DFBSpecName Q_DECAY{"q_decay"};
@@ -194,7 +192,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         make_dfb(T_INV, cc, output_formats[6]),
         make_dfb(V_BETA, cv, output_formats[0]),
         make_dfb(K_BETA, ck, fp32),
-        make_dfb(OUTPUT, cv * 2, bf16),
         make_dfb(U, std::max(cv, 3U), fp32),
         make_dfb(W, ck, output_formats[1]),
         make_dfb(Q_DECAY, ck, output_formats[2]),
@@ -305,7 +302,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     unpack_modes[T_INV] = UnpackMode::UnpackToSrc;
     unpack_modes[V_BETA] = UnpackMode::UnpackToSrc;
     unpack_modes[K_BETA] = UnpackMode::UnpackToSrc;
-    unpack_modes[OUTPUT] = UnpackMode::UnpackToSrc;
     unpack_modes[U] = UnpackMode::UnpackToSrc;
     unpack_modes[W] = UnpackMode::UnpackToSrc;
     unpack_modes[Q_DECAY] = UnpackMode::UnpackToSrc;
@@ -349,8 +345,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{LOWER_MASK, "lower_mask", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{K_BETA, "k_beta", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{K_BETA, "k_beta", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{OUTPUT, "output", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{OUTPUT, "output", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{STATE_TWO, "state_two", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{STATE_TWO, "state_two", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{OUTPUT_INTERMEDIATE, "output_intermediate", m2::DFBEndpointType::PRODUCER},
