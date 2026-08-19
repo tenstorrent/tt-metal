@@ -73,7 +73,7 @@ std::vector<std::vector<uint32_t>> partition_fsd_hosts_by_connectivity(
             if (a == b) {
                 continue;
             }
-            if (static_cast<int>(a) >= num_hosts || static_cast<int>(b) >= num_hosts) {
+            if (a >= static_cast<uint32_t>(num_hosts) || b >= static_cast<uint32_t>(num_hosts)) {
                 throw std::runtime_error(fmt::format(
                     "FSD eth_connection references host_id {}/{} but only {} hosts are defined", a, b, num_hosts));
             }
@@ -92,11 +92,20 @@ std::vector<std::vector<uint32_t>> partition_fsd_hosts_by_connectivity(
     for (auto& [root, members] : components) {
         ordered.push_back(std::move(members));
     }
-    // Order groups by their lowest member host name for deterministic output.
-    std::sort(ordered.begin(), ordered.end(), [&fsd](const std::vector<uint32_t>& a, const std::vector<uint32_t>& b) {
-        const std::string& na = fsd.hosts(static_cast<int>(a.front())).hostname();
-        const std::string& nb = fsd.hosts(static_cast<int>(b.front())).hostname();
-        return na < nb;
+    // Order groups by their lexicographically lowest member host NAME for deterministic output. (Members are
+    // collected by host index, so the lowest hostname is not necessarily members.front().)
+    auto min_hostname = [&fsd](const std::vector<uint32_t>& members) -> const std::string& {
+        const std::string* best = &fsd.hosts(static_cast<int>(members.front())).hostname();
+        for (uint32_t m : members) {
+            const std::string& n = fsd.hosts(static_cast<int>(m)).hostname();
+            if (n < *best) {
+                best = &n;
+            }
+        }
+        return *best;
+    };
+    std::sort(ordered.begin(), ordered.end(), [&min_hostname](const auto& a, const auto& b) {
+        return min_hostname(a) < min_hostname(b);
     });
     return ordered;
 }
@@ -178,7 +187,7 @@ std::vector<std::vector<uint32_t>> partition_fsd_hosts_by_connectivity(
         fsd.has_eth_connections() ? fsd.eth_connections().connection_size() : 0);
 
     auto hostname_of = [&](uint32_t host_id) -> const std::string& {
-        if (static_cast<int>(host_id) >= num_hosts) {
+        if (host_id >= static_cast<uint32_t>(num_hosts)) {
             throw std::runtime_error(
                 fmt::format("FSD references host_id {} but only {} hosts are defined", host_id, num_hosts));
         }

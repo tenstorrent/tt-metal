@@ -33,7 +33,11 @@ target_include_directories(
 )
 
 # The physical_descriptor_builder test includes generated FSD/PSD proto headers.
-add_dependencies(fabric_unit_tests scaleout_generated_protos topology_generated_protos)
+add_dependencies(
+    fabric_unit_tests
+    scaleout_generated_protos
+    topology_generated_protos
+)
 
 set_target_properties(
     fabric_unit_tests

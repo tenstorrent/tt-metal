@@ -167,8 +167,10 @@ is pure data-structure / graph work that touches no hardware.
 target_link_libraries(tt-fabric-manager-controller PRIVATE TT::ScaleoutTopology protobuf::libprotobuf)
 ```
 
-**Proof it works:** the unit test `fabric_unit_tests (fabric_router/test_physical_descriptor_builder)` links `TT::ScaleoutTopology` and — per `ldd` — **does not link
-`libtt_metal`**; it runs the FSD→PSD path with zero runtime. FM's controller gets the same lightweight closure.
+**Verification:** `TT::ScaleoutTopology`'s link interface pulls no runtime target (only `TT::ScaleoutTools` +
+protobuf/cadical/umd/fmt/tt-logger/STL/HostDevCommon). Note the current FSD→PSD test runs inside `fabric_unit_tests`,
+which *does* link `tt_metal`, so that binary is **not** a proof of runtime-free linkage. A dedicated executable that
+links **only** `TT::ScaleoutTopology` (and exercises MGD + FSD→PSD) is a follow-up to lock this down (see review).
 
 **Only compile-time requirement:** the tt-metalium API *headers* must be available (installed with the package, or
 via FM's vendored submodule) and FM must use the same protobuf. Those are headers/ABI — not the runtime library.

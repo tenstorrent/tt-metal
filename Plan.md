@@ -4,11 +4,11 @@ Tracking issue: [#52859](https://github.com/tenstorrent/tt-metal/issues/52859) �
 
 Today the auto-mapper flow (`tt-run -m/--mesh-graph-descriptor` + `--hosts`, and Fabric Manager's `generate_rank_bindings`) always maps against a **Physical System Descriptor (PSD)** that is **discovered live** from the cluster at runtime. The goal is to optionally map against the **Factory System Descriptor (FSD)** — the "what the cluster *should* look like" descriptor — and fall back to live PSD discovery when no FSD is supplied or it does not cover the requested topology.
 
-This work is split into two stages. **Stage 1 (this PR) is plumbing only** — the FSD path travels end-to-end but is not yet consumed for mapping. **Stage 2 is the consumption** — actually deriving the topology from the FSD.
+This work is split into two stages. **Stage 1 (PR #53451) is plumbing only** — the FSD path travels end-to-end but is not yet consumed for mapping. **Stage 2 is the consumption** — actually deriving the topology from the FSD. This PR is the shared-library prerequisite for Stage 2 (the runtime-free topology library).
 
 ---
 
-## Stage 1 — Plumbing (DONE in this PR)
+## Stage 1 — Plumbing (DONE in PR #53451)
 
 The FSD path is threaded from the `tt-run` CLI down to `generate_rank_bindings` (Phase 1) and the workload (Phase 2), carried by a new RTOption and its environment variable. Nothing consumes it for mapping yet — `generate_rank_bindings` still runs live PSD discovery and only logs that an FSD was supplied.
 

@@ -13,9 +13,11 @@
 #include <unordered_map>
 #include <variant>
 #include <atomic>
+#include <optional>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/device_types.hpp>  // ChipId
 
 // Forward declaration
 namespace tt::tt_fabric {
@@ -212,6 +214,12 @@ public:
     // Example: [8, 2] = 8 × 2 = 16 chips
     uint32_t get_switch_chip_count(GlobalNodeId switch_instance_id) const;
     uint32_t get_switch_chip_count(const InstanceData& switch_instance) const;
+
+    // Which host rank owns a given chip within a mesh, derived from the mesh's device_topology vs.
+    // host_topology dims (host ranks tile the device grid row-major, mirroring MeshGraph). `mesh_id` is the
+    // mesh instance's local id (MeshId{instance.local_id}); `chip_id` is the row-major device index within
+    // that mesh. Returns std::nullopt if the mesh is unknown or the chip index is out of range.
+    std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const;
 
     // Count instances by type
     // Returns a map from type name to count of instances with that type

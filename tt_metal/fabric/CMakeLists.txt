@@ -64,12 +64,26 @@ endforeach()
 # in fabric. Pulls tt-metalium headers via include-dirs only (no libtt_metal link), so FM/offline tools can link
 # just this lib without the metal runtime.
 # ---------------------------------------------------------------------------
-add_library(scaleout_topology STATIC ${TOPOLOGY_SOURCES} ${TOPOLOGY_GENERATED_PROTO_SRCS})
+add_library(
+    scaleout_topology
+    STATIC
+    ${TOPOLOGY_SOURCES}
+    ${TOPOLOGY_GENERATED_PROTO_SRCS}
+)
 add_library(TT::ScaleoutTopology ALIAS scaleout_topology)
-set_source_files_properties(${TOPOLOGY_GENERATED_PROTO_SRCS} PROPERTIES SKIP_UNITY_BUILD_INCLUSION TRUE)
+set_source_files_properties(
+    ${TOPOLOGY_GENERATED_PROTO_SRCS}
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            TRUE
+)
 
 add_custom_target(topology_generated_protos DEPENDS ${TOPOLOGY_GENERATED_PROTO_SRCS})
-add_dependencies(scaleout_topology topology_generated_protos scaleout_generated_protos)
+add_dependencies(
+    scaleout_topology
+    topology_generated_protos
+    scaleout_generated_protos
+)
 if(TARGET all_generated_files)
     add_dependencies(all_generated_files topology_generated_protos)
 endif()
@@ -101,6 +115,10 @@ target_link_libraries(
         cadical::cadical
 )
 target_compile_features(scaleout_topology PUBLIC cxx_std_20)
+# Repo build accelerators (match fabric / scaleout_tools): unity build + shared PCH. Generated proto sources are
+# already excluded from unity above via SKIP_UNITY_BUILD_INCLUSION.
+TT_ENABLE_UNITY_BUILD(scaleout_topology)
+tt_reuse_precompile_headers(scaleout_topology TT::CommonPCH)
 # Hidden visibility (same as TT::ScaleoutTools): this lib carries protobuf message classes, so its descriptor
 # symbols must be hidden to avoid cross-module "File already exists in database" aborts. Consumers reaching these
 # symbols only transitively through libtt_metal.so must therefore link TT::ScaleoutTopology explicitly.
@@ -113,14 +131,34 @@ set_target_properties(
             TRUE
 )
 
+# Install the archive so external consumers (e.g. Fabric Manager) can link it. Not added to the "Metalium"
+# EXPORT set: as a STATIC lib its private deps (protobuf/cadical/yaml-cpp) become link-interface requirements,
+# and install(EXPORT) would need each of those in an export set too. Wiring find_package(Metalium) to
+# re-find_dependency() them is a follow-up; for now consumers link the installed archive directly.
+install(
+    TARGETS
+        scaleout_topology
+    ARCHIVE
+        COMPONENT metalium-dev
+)
+
 # --- fabric: remaining runtime protos + link the topology lib -------
 add_custom_target(fabric_generated_protos DEPENDS ${FABRIC_GENERATED_PROTO_SRCS})
-add_dependencies(fabric fabric_generated_protos scaleout_topology)
+add_dependencies(
+    fabric
+    fabric_generated_protos
+    scaleout_topology
+)
 if(TARGET all_generated_files)
     add_dependencies(all_generated_files fabric_generated_protos)
 endif()
 
-set_source_files_properties(${FABRIC_GENERATED_PROTO_SRCS} PROPERTIES SKIP_UNITY_BUILD_INCLUSION TRUE)
+set_source_files_properties(
+    ${FABRIC_GENERATED_PROTO_SRCS}
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            TRUE
+)
 
 target_sources(fabric PRIVATE ${FABRIC_GENERATED_PROTO_SRCS})
 
