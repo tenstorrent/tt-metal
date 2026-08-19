@@ -1050,3 +1050,773 @@ TEST(CclLineSchedule, SyncCadencePairing) {
         }
     }
 }
+
+// =============================================================================================
+// DIM-ZERO schedule equivalence sweeps.
+//
+// GOLDEN: the pre-migration dim_zero_ring / dim_zero_line reader + writer loops, transcribed
+// verbatim from their last unmigrated revision (this branch, pre-migration) — the interleaved
+// own/other chunk pairing (ring), the plain line walk with slice_B in the channel role (line),
+// dense tile-id arithmetic, and the chunks-per-sync cadence. CANDIDATE: DimZeroChunkWalk +
+// RingSliceCursor::starting_at (ring) / LineSliceCursor + LineChannelWalk (line) + SyncCadence +
+// SequentialTileWalker, composed exactly as the migrated kernels drive them.
+// =============================================================================================
+
+namespace {
+
+struct DzCfg {
+    uint32_t ring, chip;
+    bool dir;  // ring: direction; line: is_forward
+    bool is_first_dev, do_final, sync_other;
+    uint32_t num_targets;  // line only
+    uint32_t sliceB, gran, cps, npack;
+    uint32_t start, end;
+    uint32_t out_num_pages, batch_num_pages, in_num_pages;
+};
+
+std::string dz_cfg_str(const DzCfg& g) {
+    std::ostringstream os;
+    os << "ring=" << g.ring << " chip=" << g.chip << " dir=" << g.dir << " first=" << g.is_first_dev
+       << " final=" << g.do_final << " sync=" << g.sync_other << " targets=" << g.num_targets << " B=" << g.sliceB
+       << " gran=" << g.gran << " cps=" << g.cps << " npack=" << g.npack << " start=" << g.start << " end=" << g.end;
+    return os.str();
+}
+
+// One record per own-chunk (ring) or chunk (line); tail records carry only tail_inc.
+struct DzEv {
+    uint32_t kind, step, slice_idx, b;
+    uint32_t tiles, pos;
+    bool waited, fwdbwd, inc_after, tail_inc, do_reduce;
+    std::vector<uint32_t> ids;   // main (input / intermediate-write / output) ids
+    std::vector<uint32_t> ids2;  // reader: intermediate-read ids
+    std::vector<uint32_t> packets;
+
+    bool operator==(const DzEv& o) const {
+        return kind == o.kind && step == o.step && slice_idx == o.slice_idx && b == o.b && tiles == o.tiles &&
+               pos == o.pos && waited == o.waited && fwdbwd == o.fwdbwd && inc_after == o.inc_after &&
+               tail_inc == o.tail_inc && do_reduce == o.do_reduce && ids == o.ids && ids2 == o.ids2 &&
+               packets == o.packets;
+    }
+};
+
+std::string dz_ev_str(const DzEv& e) {
+    std::ostringstream os;
+    os << "kind=" << e.kind << " step=" << e.step << " slice=" << e.slice_idx << " b=" << e.b << " tiles=" << e.tiles
+       << " pos=" << e.pos << " waited=" << e.waited << " fwdbwd=" << e.fwdbwd << " inc=" << e.inc_after
+       << " tail=" << e.tail_inc << " red=" << e.do_reduce << " ids=[";
+    for (auto v : e.ids) {
+        os << v << ",";
+    }
+    os << "] ids2=[";
+    for (auto v : e.ids2) {
+        os << v << ",";
+    }
+    os << "] pkts=[";
+    for (auto v : e.packets) {
+        os << v << ",";
+    }
+    os << "]";
+    return os.str();
+}
+
+// --------------------------- dim-zero RING: pre-migration goldens ---------------------------
+void dz_ring_reader_golden(const DzCfg& g, std::vector<DzEv>& out) {
+    out.clear();
+    uint32_t sem_target = 0;
+    (void)sem_target;
+    int slice_idx = g.dir ? static_cast<int>(g.chip) - 1 : static_cast<int>(g.chip) + 1;
+    for (uint32_t i = 0; i < g.ring; ++i) {
+        const bool do_reduce = i != 0;
+        uint32_t actual;
+        if (g.dir) {
+            actual = slice_idx < 0 ? static_cast<uint32_t>(slice_idx + static_cast<int>(g.ring))
+                                   : static_cast<uint32_t>(slice_idx);
+        } else {
+            actual = slice_idx >= static_cast<int>(g.ring) ? static_cast<uint32_t>(slice_idx) - g.ring
+                                                           : static_cast<uint32_t>(slice_idx);
+        }
+        uint32_t base = actual * g.out_num_pages;
+        uint32_t chunk_count = 0;
+        for (uint32_t b = 0; b < g.sliceB; ++b) {
+            uint32_t tiles_read = g.start;
+            if (!g.dir && g.end > tiles_read) {
+                tiles_read += std::min((g.end - tiles_read) / 2, g.gran);
+            }
+            while (tiles_read < g.end) {
+                DzEv ev{};
+                ev.kind = 0;
+                ev.step = i;
+                ev.slice_idx = actual;
+                ev.b = b;
+                ev.do_reduce = do_reduce;
+                if (do_reduce && (chunk_count % g.cps == 0)) {
+                    ev.waited = true;
+                    ++sem_target;
+                }
+                ++chunk_count;
+                const uint32_t rem = g.end - tiles_read;
+                const uint32_t own = g.dir ? std::min(rem / 2, g.gran) : std::min(rem, g.gran);
+                ev.tiles = own;
+                ev.pos = tiles_read;
+                for (uint32_t j = 0; j < own; ++j) {
+                    ev.ids.push_back(base + tiles_read + j);
+                    if (do_reduce) {
+                        ev.ids2.push_back(base + tiles_read + j);
+                    }
+                }
+                tiles_read += own;
+                const uint32_t rem2 = g.end > tiles_read ? g.end - tiles_read : 0;
+                if (rem2 > 0) {
+                    tiles_read += g.dir ? std::min(rem2, g.gran) : std::min(rem2 / 2, g.gran);
+                }
+                out.push_back(std::move(ev));
+            }
+            base += g.batch_num_pages;
+        }
+        slice_idx += g.dir ? -1 : 1;
+    }
+}
+
+void dz_ring_writer_golden(const DzCfg& g, std::vector<DzEv>& out) {
+    out.clear();
+    int slice_idx = g.dir ? static_cast<int>(g.chip) - 1 : static_cast<int>(g.chip) + 1;
+    for (uint32_t i = 0; i < g.ring; ++i) {
+        uint32_t actual;
+        if (g.dir) {
+            actual = slice_idx < 0 ? static_cast<uint32_t>(slice_idx + static_cast<int>(g.ring))
+                                   : static_cast<uint32_t>(slice_idx);
+        } else {
+            actual = slice_idx >= static_cast<int>(g.ring) ? static_cast<uint32_t>(slice_idx) - g.ring
+                                                           : static_cast<uint32_t>(slice_idx);
+        }
+        if (i < g.ring - 1) {
+            uint32_t base = actual * g.out_num_pages;
+            uint32_t chunk_count = 0;
+            for (uint32_t b = 0; b < g.sliceB; ++b) {
+                uint32_t tiles_read = g.start;
+                if (!g.dir && g.end > tiles_read) {
+                    tiles_read += std::min((g.end - tiles_read) / 2, g.gran);
+                }
+                while (tiles_read < g.end) {
+                    DzEv ev{};
+                    ev.kind = 1;
+                    ev.step = i;
+                    ev.slice_idx = actual;
+                    ev.b = b;
+                    const uint32_t rem = g.end - tiles_read;
+                    const uint32_t own = g.dir ? std::min(rem / 2, g.gran) : std::min(rem, g.gran);
+                    ev.tiles = own;
+                    ev.pos = tiles_read;
+                    uint32_t done = 0;
+                    while (done < own) {
+                        const uint32_t p = std::min(own - done, g.npack);
+                        ev.packets.push_back(p);
+                        for (uint32_t k = 0; k < p; ++k) {
+                            ev.ids.push_back(base + tiles_read);
+                            ++tiles_read;
+                            ++done;
+                        }
+                    }
+                    const uint32_t rem2 = g.end > tiles_read ? g.end - tiles_read : 0;
+                    if (rem2 > 0) {
+                        tiles_read += g.dir ? std::min(rem2, g.gran) : std::min(rem2 / 2, g.gran);
+                    }
+                    ++chunk_count;
+                    ev.inc_after = (chunk_count % g.cps == 0);
+                    out.push_back(std::move(ev));
+                }
+                base += g.batch_num_pages;
+            }
+            DzEv tail{};
+            tail.kind = 2;
+            tail.step = i;
+            tail.slice_idx = actual;
+            tail.tail_inc = (chunk_count % g.cps != 0);
+            out.push_back(std::move(tail));
+        } else {
+            uint32_t base = 0;
+            for (uint32_t b = 0; b < g.sliceB; ++b) {
+                uint32_t tiles_read = g.start;
+                if (!g.dir && g.end > tiles_read) {
+                    tiles_read += std::min((g.end - tiles_read) / 2, g.gran);
+                }
+                while (tiles_read < g.end) {
+                    DzEv ev{};
+                    ev.kind = 3;
+                    ev.step = i;
+                    ev.slice_idx = actual;
+                    ev.b = b;
+                    const uint32_t rem = g.end - tiles_read;
+                    const uint32_t own = g.dir ? std::min(rem / 2, g.gran) : std::min(rem, g.gran);
+                    ev.tiles = own;
+                    ev.pos = tiles_read;
+                    for (uint32_t j = 0; j < own; ++j) {
+                        ev.ids.push_back(base + tiles_read);
+                        ++tiles_read;
+                    }
+                    const uint32_t rem2 = g.end > tiles_read ? g.end - tiles_read : 0;
+                    if (rem2 > 0) {
+                        tiles_read += g.dir ? std::min(rem2, g.gran) : std::min(rem2 / 2, g.gran);
+                    }
+                    out.push_back(std::move(ev));
+                }
+                base += g.batch_num_pages;
+            }
+        }
+        slice_idx += g.dir ? -1 : 1;
+    }
+}
+
+// ----------------------- dim-zero RING: candidates (kernel-shaped) --------------------------
+void dz_ring_reader_candidate(const DzCfg& g, std::vector<DzEv>& out) {
+    out.clear();
+    auto cursor = sched::RingSliceCursor::starting_at(sched::dim_zero_ring_first_slice(g.chip, g.dir), g.ring, g.dir);
+    sched::DimZeroChunkWalk walk(g.sliceB, g.gran, g.start, g.end, g.dir);
+    sched::SyncCadence cadence(g.cps);
+    uint32_t sem_target = 0;
+    (void)sem_target;
+
+    for (uint32_t i = 0; i < g.ring; ++i) {
+        const bool do_reduce = i != 0;
+        const uint32_t slice = cursor.wrap();
+        uint32_t base = slice * g.out_num_pages;
+        cadence.reset();
+        walk.reset();
+        while (walk.next_batch()) {
+            while (walk.next_chunk()) {
+                DzEv ev{};
+                ev.kind = 0;
+                ev.step = i;
+                ev.slice_idx = slice;
+                ev.b = walk.batch_idx();
+                ev.do_reduce = do_reduce;
+                if (do_reduce && cadence.wait_due()) {
+                    ev.waited = true;
+                    ++sem_target;
+                }
+                cadence.advance();
+                const uint32_t n = walk.tiles_this_chunk();
+                ev.tiles = n;
+                ev.pos = walk.position();
+                for (uint32_t j = 0; j < n; ++j) {
+                    ev.ids.push_back(base + walk.position() + j);
+                    if (do_reduce) {
+                        ev.ids2.push_back(base + walk.position() + j);
+                    }
+                }
+                out.push_back(std::move(ev));
+            }
+            base += g.batch_num_pages;
+        }
+        cursor.advance();
+    }
+}
+
+void dz_ring_writer_candidate(const DzCfg& g, std::vector<DzEv>& out) {
+    out.clear();
+    auto cursor = sched::RingSliceCursor::starting_at(sched::dim_zero_ring_first_slice(g.chip, g.dir), g.ring, g.dir);
+    sched::DimZeroChunkWalk walk(g.sliceB, g.gran, g.start, g.end, g.dir);
+    sched::SyncCadence cadence(g.cps);
+
+    for (uint32_t i = 0; i < g.ring; ++i) {
+        const uint32_t slice = cursor.wrap();
+        if (i < g.ring - 1) {
+            uint32_t base = slice * g.out_num_pages;
+            cadence.reset();
+            walk.reset();
+            while (walk.next_batch()) {
+                while (walk.next_chunk()) {
+                    DzEv ev{};
+                    ev.kind = 1;
+                    ev.step = i;
+                    ev.slice_idx = slice;
+                    ev.b = walk.batch_idx();
+                    const uint32_t n = walk.tiles_this_chunk();
+                    ev.tiles = n;
+                    ev.pos = walk.position();
+                    for (uint32_t j = 0; j < n; j += g.npack) {
+                        const uint32_t p = std::min(g.npack, n - j);
+                        ev.packets.push_back(p);
+                        for (uint32_t k = 0; k < p; ++k) {
+                            ev.ids.push_back(base + walk.position() + j + k);
+                        }
+                    }
+                    cadence.advance();
+                    ev.inc_after = cadence.signal_due();
+                    out.push_back(std::move(ev));
+                }
+                base += g.batch_num_pages;
+            }
+            DzEv tail{};
+            tail.kind = 2;
+            tail.step = i;
+            tail.slice_idx = slice;
+            tail.tail_inc = cadence.tail_due();
+            out.push_back(std::move(tail));
+        } else {
+            uint32_t base = 0;
+            walk.reset();
+            while (walk.next_batch()) {
+                while (walk.next_chunk()) {
+                    DzEv ev{};
+                    ev.kind = 3;
+                    ev.step = i;
+                    ev.slice_idx = slice;
+                    ev.b = walk.batch_idx();
+                    const uint32_t n = walk.tiles_this_chunk();
+                    ev.tiles = n;
+                    ev.pos = walk.position();
+                    for (uint32_t j = 0; j < n; ++j) {
+                        ev.ids.push_back(base + walk.position() + j);
+                    }
+                    out.push_back(std::move(ev));
+                }
+                base += g.batch_num_pages;
+            }
+        }
+        cursor.advance();
+    }
+}
+
+// --------------------------- dim-zero LINE: pre-migration goldens ---------------------------
+void dz_line_reader_golden(const DzCfg& g, std::vector<DzEv>& out) {
+    out.clear();
+    const uint32_t interm_full = g.dir ? 0 : g.in_num_pages;
+    uint32_t chunk_count = 0;
+    uint32_t sem_target = 0;
+    uint32_t fwd_sync_cnt = 0;
+    (void)sem_target;
+    (void)fwd_sync_cnt;
+    int slice_idx = g.dir ? static_cast<int>(g.ring) - 1 : 0;
+
+    for (uint32_t iter = 0; iter < g.num_targets; ++iter) {
+        chunk_count = 0;
+        uint32_t in_base = static_cast<uint32_t>(slice_idx) * g.out_num_pages;
+        uint32_t it_base = in_base + interm_full;
+        for (uint32_t b = 0; b < g.sliceB; ++b) {
+            uint32_t tiles_read = g.start;
+            while (tiles_read < g.end) {
+                const uint32_t n = std::min(g.end - tiles_read, g.gran);
+                DzEv ev{};
+                ev.kind = 0;
+                ev.step = iter;
+                ev.slice_idx = static_cast<uint32_t>(slice_idx);
+                ev.b = b;
+                ev.tiles = n;
+                ev.pos = tiles_read;
+                if (!g.is_first_dev) {
+                    if (chunk_count % g.cps == 0) {
+                        ev.waited = true;
+                        ++sem_target;
+                    }
+                    ++chunk_count;
+                }
+                for (uint32_t j = 0; j < n; ++j) {
+                    ev.ids.push_back(in_base + tiles_read + j);
+                    if (!g.is_first_dev) {
+                        ev.ids2.push_back(it_base + tiles_read + j);
+                    }
+                }
+                tiles_read += n;
+                out.push_back(std::move(ev));
+            }
+            in_base += g.batch_num_pages;
+            it_base += g.batch_num_pages;
+        }
+        slice_idx += g.dir ? -1 : 1;
+    }
+
+    if (g.do_final) {
+        chunk_count = 0;
+        const bool acc = g.sync_other && !g.dir;
+        uint32_t in_base = g.chip * g.out_num_pages;
+        uint32_t it_base = in_base + interm_full;
+        uint32_t main_base = acc ? 0 : in_base;
+        for (uint32_t b = 0; b < g.sliceB; ++b) {
+            uint32_t tiles_read = g.start;
+            while (tiles_read < g.end) {
+                const uint32_t n = std::min(g.end - tiles_read, g.gran);
+                DzEv ev{};
+                ev.kind = 4;
+                ev.slice_idx = g.chip;
+                ev.b = b;
+                ev.tiles = n;
+                ev.pos = tiles_read;
+                ev.fwdbwd = acc;
+                if (acc) {
+                    ++fwd_sync_cnt;
+                }
+                if (chunk_count % g.cps == 0) {
+                    ev.waited = true;
+                    ++sem_target;
+                }
+                ++chunk_count;
+                for (uint32_t j = 0; j < n; ++j) {
+                    ev.ids.push_back(main_base + tiles_read + j);
+                    ev.ids2.push_back(it_base + tiles_read + j);
+                }
+                tiles_read += n;
+                out.push_back(std::move(ev));
+            }
+            main_base += g.batch_num_pages;
+            it_base += g.batch_num_pages;
+        }
+    }
+}
+
+void dz_line_writer_golden(const DzCfg& g, std::vector<DzEv>& out) {
+    out.clear();
+    const uint32_t interm_full = g.dir ? 0 : g.in_num_pages;
+    int slice_idx = g.dir ? static_cast<int>(g.ring) - 1 : 0;
+
+    for (uint32_t iter = 0; iter < g.num_targets; ++iter) {
+        uint32_t chunk_count = 0;
+        uint32_t it_base = static_cast<uint32_t>(slice_idx) * g.out_num_pages + interm_full;
+        for (uint32_t b = 0; b < g.sliceB; ++b) {
+            uint32_t tiles_read = g.start;
+            while (tiles_read < g.end) {
+                const uint32_t n = std::min(g.end - tiles_read, g.gran);
+                DzEv ev{};
+                ev.kind = 1;
+                ev.step = iter;
+                ev.slice_idx = static_cast<uint32_t>(slice_idx);
+                ev.b = b;
+                ev.tiles = n;
+                ev.pos = tiles_read;
+                for (uint32_t j = 0; j < n; j += g.npack) {
+                    const uint32_t p = std::min(g.npack, n - j);
+                    ev.packets.push_back(p);
+                    for (uint32_t k = 0; k < p; ++k) {
+                        ev.ids.push_back(it_base + tiles_read);
+                        ++tiles_read;
+                    }
+                }
+                ++chunk_count;
+                ev.inc_after = (chunk_count % g.cps == 0);
+                out.push_back(std::move(ev));
+            }
+            it_base += g.batch_num_pages;
+        }
+        DzEv tail{};
+        tail.kind = 2;
+        tail.step = iter;
+        tail.slice_idx = static_cast<uint32_t>(slice_idx);
+        tail.tail_inc = (chunk_count % g.cps != 0);
+        out.push_back(std::move(tail));
+        slice_idx += g.dir ? -1 : 1;
+    }
+
+    if (g.do_final) {
+        const bool hands_off = g.sync_other && g.dir;
+        uint32_t out_base = 0;
+        for (uint32_t b = 0; b < g.sliceB; ++b) {
+            uint32_t tiles_read = g.start;
+            while (tiles_read < g.end) {
+                const uint32_t n = std::min(g.end - tiles_read, g.gran);
+                DzEv ev{};
+                ev.kind = 3;
+                ev.b = b;
+                ev.tiles = n;
+                ev.pos = tiles_read;
+                ev.fwdbwd = hands_off;
+                for (uint32_t j = 0; j < n; ++j) {
+                    ev.ids.push_back(out_base + tiles_read);
+                    ++tiles_read;
+                }
+                out.push_back(std::move(ev));
+            }
+            out_base += g.batch_num_pages;
+        }
+    }
+}
+
+// ----------------------- dim-zero LINE: candidates (kernel-shaped) --------------------------
+void dz_line_reader_candidate(const DzCfg& g, std::vector<DzEv>& out) {
+    out.clear();
+    const uint32_t interm_full = g.dir ? 0 : g.in_num_pages;
+    sched::LineSliceCursor cursor(g.dir, g.ring);
+    sched::LineChannelWalk walk(g.sliceB, g.gran, g.start, g.end);  // slice_B plays the channel role
+    sched::SyncCadence cadence(g.cps);
+    sched::SequentialTileWalker in_walker, it_walker;
+    uint32_t sem_target = 0;
+    uint32_t fwd_sync_cnt = 0;
+    (void)sem_target;
+    (void)fwd_sync_cnt;
+
+    for (uint32_t iter = 0; iter < g.num_targets; ++iter) {
+        cadence.reset();
+        in_walker.set_base(cursor.slice() * g.out_num_pages);
+        it_walker.set_base(cursor.slice() * g.out_num_pages + interm_full);
+        walk.reset();
+        while (walk.next_channel()) {
+            in_walker.reset_offsets(g.start);
+            it_walker.reset_offsets(g.start);
+            while (walk.next_chunk()) {
+                const uint32_t n = walk.tiles_this_chunk();
+                DzEv ev{};
+                ev.kind = 0;
+                ev.step = iter;
+                ev.slice_idx = cursor.slice();
+                ev.b = walk.channel_idx();
+                ev.tiles = n;
+                if (!g.is_first_dev) {
+                    if (cadence.wait_due()) {
+                        ev.waited = true;
+                        ++sem_target;
+                    }
+                    cadence.advance();
+                }
+                // Dense ids straight off the walkers (walkers ARE the position).
+                uint32_t first_id = 0;
+                for (uint32_t j = 0; j < n; ++j) {
+                    const uint32_t id = in_walker.next();
+                    if (j == 0) {
+                        first_id = id;
+                    }
+                    ev.ids.push_back(id);
+                    if (!g.is_first_dev) {
+                        ev.ids2.push_back(it_walker.next());
+                    }
+                }
+                if (g.is_first_dev) {
+                    it_walker.advance(n);
+                }
+                ev.pos = first_id - (cursor.slice() * g.out_num_pages) -
+                         (walk.channel_idx() * g.batch_num_pages);  // recover position for the trace
+                out.push_back(std::move(ev));
+            }
+            in_walker.bump_base(g.batch_num_pages);
+            it_walker.bump_base(g.batch_num_pages);
+        }
+        cursor.advance();
+    }
+
+    if (g.do_final) {
+        cadence.reset();
+        const bool acc = sched::line_rs_accumulate_output(g.sync_other, g.dir);
+        sched::SequentialTileWalker main_walker;
+        main_walker.set_base(acc ? 0 : g.chip * g.out_num_pages);
+        it_walker.set_base(g.chip * g.out_num_pages + interm_full);
+        walk.reset();
+        while (walk.next_channel()) {
+            main_walker.reset_offsets(g.start);
+            it_walker.reset_offsets(g.start);
+            while (walk.next_chunk()) {
+                const uint32_t n = walk.tiles_this_chunk();
+                DzEv ev{};
+                ev.kind = 4;
+                ev.slice_idx = g.chip;
+                ev.b = walk.channel_idx();
+                ev.tiles = n;
+                ev.fwdbwd = acc;
+                if (acc) {
+                    ++fwd_sync_cnt;
+                }
+                if (cadence.wait_due()) {
+                    ev.waited = true;
+                    ++sem_target;
+                }
+                cadence.advance();
+                uint32_t first_id = 0;
+                for (uint32_t j = 0; j < n; ++j) {
+                    const uint32_t id = main_walker.next();
+                    if (j == 0) {
+                        first_id = id;
+                    }
+                    ev.ids.push_back(id);
+                    ev.ids2.push_back(it_walker.next());
+                }
+                ev.pos = first_id - (acc ? 0 : g.chip * g.out_num_pages) - (walk.channel_idx() * g.batch_num_pages);
+                out.push_back(std::move(ev));
+            }
+            main_walker.bump_base(g.batch_num_pages);
+            it_walker.bump_base(g.batch_num_pages);
+        }
+    }
+}
+
+void dz_line_writer_candidate(const DzCfg& g, std::vector<DzEv>& out) {
+    out.clear();
+    const uint32_t interm_full = g.dir ? 0 : g.in_num_pages;
+    sched::LineSliceCursor cursor(g.dir, g.ring);
+    sched::LineChannelWalk walk(g.sliceB, g.gran, g.start, g.end);
+    sched::SyncCadence cadence(g.cps);
+    sched::SequentialTileWalker it_walker, out_walker;
+
+    for (uint32_t iter = 0; iter < g.num_targets; ++iter) {
+        cadence.reset();
+        it_walker.set_base(cursor.slice() * g.out_num_pages + interm_full);
+        walk.reset();
+        while (walk.next_channel()) {
+            it_walker.reset_offsets(g.start);
+            while (walk.next_chunk()) {
+                const uint32_t n = walk.tiles_this_chunk();
+                DzEv ev{};
+                ev.kind = 1;
+                ev.step = iter;
+                ev.slice_idx = cursor.slice();
+                ev.b = walk.channel_idx();
+                ev.tiles = n;
+                uint32_t first_id = 0;
+                bool got_first = false;
+                for (uint32_t j = 0; j < n; j += g.npack) {
+                    const uint32_t p = std::min(g.npack, n - j);
+                    ev.packets.push_back(p);
+                    for (uint32_t k = 0; k < p; ++k) {
+                        const uint32_t id = it_walker.next();
+                        if (!got_first) {
+                            first_id = id;
+                            got_first = true;
+                        }
+                        ev.ids.push_back(id);
+                    }
+                }
+                ev.pos = got_first ? first_id - (cursor.slice() * g.out_num_pages + interm_full) -
+                                         (walk.channel_idx() * g.batch_num_pages)
+                                   : 0;
+                cadence.advance();
+                ev.inc_after = cadence.signal_due();
+                out.push_back(std::move(ev));
+            }
+            it_walker.bump_base(g.batch_num_pages);
+        }
+        DzEv tail{};
+        tail.kind = 2;
+        tail.step = iter;
+        tail.slice_idx = cursor.slice();
+        tail.tail_inc = cadence.tail_due();
+        out.push_back(std::move(tail));
+        cursor.advance();
+    }
+
+    if (g.do_final) {
+        const bool hands_off = sched::line_rs_forward_hands_off(g.sync_other, g.dir);
+        out_walker.set_base(0);
+        walk.reset();
+        while (walk.next_channel()) {
+            out_walker.reset_offsets(g.start);
+            while (walk.next_chunk()) {
+                const uint32_t n = walk.tiles_this_chunk();
+                DzEv ev{};
+                ev.kind = 3;
+                ev.b = walk.channel_idx();
+                ev.tiles = n;
+                ev.fwdbwd = hands_off;
+                uint32_t first_id = 0;
+                for (uint32_t j = 0; j < n; ++j) {
+                    const uint32_t id = out_walker.next();
+                    if (j == 0) {
+                        first_id = id;
+                    }
+                    ev.ids.push_back(id);
+                }
+                ev.pos = first_id - (walk.channel_idx() * g.batch_num_pages);
+                out.push_back(std::move(ev));
+            }
+            out_walker.bump_base(g.batch_num_pages);
+        }
+    }
+}
+
+void dz_compare(const char* who, const DzCfg& g, const std::vector<DzEv>& gold, const std::vector<DzEv>& cand) {
+    ASSERT_EQ(gold.size(), cand.size()) << who << " " << dz_cfg_str(g);
+    for (size_t k = 0; k < gold.size(); ++k) {
+        ASSERT_TRUE(gold[k] == cand[k]) << who << " " << dz_cfg_str(g) << "\n  record " << k
+                                        << "\n  gold: " << dz_ev_str(gold[k]) << "\n  cand: " << dz_ev_str(cand[k]);
+    }
+}
+
+}  // namespace
+
+TEST(CclDimZeroSchedule, RingGoldenEquivalenceSweep) {
+    std::vector<DzEv> gold, cand;
+    uint64_t configs = 0;
+    for (uint32_t ring : {2u, 3u, 4u, 8u}) {
+        for (uint32_t chip = 0; chip < ring; ++chip) {
+            for (int dir = 0; dir <= 1; ++dir) {
+                for (uint32_t gran : {1u, 2u, 4u}) {
+                    for (uint32_t cps : {1u, 2u, 3u}) {
+                        for (uint32_t npack : {1u, 2u}) {
+                            for (uint32_t sliceB : {1u, 2u, 3u}) {
+                                for (uint32_t total : {0u, 1u, 5u, 8u, 13u}) {
+                                    DzCfg g{};
+                                    g.ring = ring;
+                                    g.chip = chip;
+                                    g.dir = dir;
+                                    g.sliceB = sliceB;
+                                    g.gran = gran;
+                                    g.cps = cps;
+                                    g.npack = npack;
+                                    g.start = 2;
+                                    g.end = 2 + total;
+                                    g.out_num_pages = 64;
+                                    g.batch_num_pages = 16;
+                                    dz_ring_reader_golden(g, gold);
+                                    dz_ring_reader_candidate(g, cand);
+                                    dz_compare("dz_ring_reader", g, gold, cand);
+                                    dz_ring_writer_golden(g, gold);
+                                    dz_ring_writer_candidate(g, cand);
+                                    dz_compare("dz_ring_writer", g, gold, cand);
+                                    ++configs;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ASSERT_GT(configs, 0u);
+}
+
+TEST(CclDimZeroSchedule, LineGoldenEquivalenceSweep) {
+    std::vector<DzEv> gold, cand;
+    uint64_t configs = 0;
+    for (uint32_t ring : {2u, 3u, 4u, 8u}) {
+        for (uint32_t chip = 0; chip < ring; ++chip) {
+            for (int dir = 0; dir <= 1; ++dir) {
+                for (uint32_t targets = 0; targets <= ring - 1; ++targets) {
+                    for (uint32_t gran : {2u, 4u}) {
+                        for (uint32_t cps : {1u, 3u}) {
+                            for (uint32_t npack : {1u, 2u}) {
+                                for (int first = 0; first <= 1; ++first) {
+                                    for (int fin = 0; fin <= 1; ++fin) {
+                                        for (int sync = 0; sync <= 1; ++sync) {
+                                            for (uint32_t total : {0u, 5u, 13u}) {
+                                                DzCfg g{};
+                                                g.ring = ring;
+                                                g.chip = chip;
+                                                g.dir = dir;
+                                                g.is_first_dev = first;
+                                                g.do_final = fin;
+                                                g.sync_other = sync;
+                                                g.num_targets = targets;
+                                                g.sliceB = 2;
+                                                g.gran = gran;
+                                                g.cps = cps;
+                                                g.npack = npack;
+                                                g.start = 3;
+                                                g.end = 3 + total;
+                                                g.out_num_pages = 64;
+                                                g.batch_num_pages = 16;
+                                                g.in_num_pages = 128;
+                                                dz_line_reader_golden(g, gold);
+                                                dz_line_reader_candidate(g, cand);
+                                                dz_compare("dz_line_reader", g, gold, cand);
+                                                dz_line_writer_golden(g, gold);
+                                                dz_line_writer_candidate(g, cand);
+                                                dz_compare("dz_line_writer", g, gold, cand);
+                                                ++configs;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ASSERT_GT(configs, 0u);
+}

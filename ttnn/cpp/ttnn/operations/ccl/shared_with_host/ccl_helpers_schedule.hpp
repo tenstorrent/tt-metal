@@ -59,7 +59,9 @@
  *   S1-S5: the schedule behind @c reduce_scatter_minimal_async's bidirectional RING variant,
  *   which @c all_reduce_async's reduce half also follows. S6-S7: the pieces its LINE variant
  *   shares between reader and writer (the line's slice cursor, the chunks-per-sync wait/signal
- *   cadence, the final-reduction mode split, and the plain channel/chunk walk).
+ *   cadence, the final-reduction mode split, and the plain channel/chunk walk). S8: the DIM-ZERO
+ *   ring family's interleaved own/other chunk walk and its neighbour-first slice seed (the
+ *   dim-zero LINE family composes S6-S7 with slice_B in the channel role).
  *
  * @par The RING schedule (S1-S5). Four nested levels, in this exact order,
  *   because that nesting is itself part of the contract the three kernels share:
@@ -414,6 +416,16 @@ public:
         ring_size_(static_cast<int32_t>(ring_size)),
         direction_(direction) {}
 
+    /// Build a cursor starting at an EXPLICIT (possibly out-of-range; wrapped on first use) slice.
+    /// The dim-zero ring walk starts at my_chip_id -/+ 1 (dim_zero_ring_first_slice) instead of
+    /// half-way across the ring; its advance and wrap are otherwise identical.
+    static RingSliceCursor starting_at(int32_t first_slice, uint32_t ring_size, bool direction) {
+        RingSliceCursor c(0, ring_size, direction);
+        c.slice_idx_ = first_slice;
+        c.first_slice_ = first_slice;
+        return c;
+    }
+
     /// Restart the walk at the first slice. Equivalent to re-constructing; use whichever makes the
     /// per-batch cadence more obvious at the call site.
     void reset() { slice_idx_ = first_slice_; }
@@ -737,6 +749,134 @@ private:
     uint32_t tiles_read_ = 0;
     uint32_t tiles_this_chunk_ = 0;
     bool channel_started_ = false;
+    bool chunk_started_ = false;
+};
+
+// ===========================================================================
+// S8 — the DIM-ZERO RING reduce-scatter schedule pieces
+// ===========================================================================
+
+/// First slice a dim-zero ring worker processes: its nearest neighbour's, walking away from
+/// itself (the dim-3 ring starts half-way across instead). May be -1; RingSliceCursor wraps it.
+constexpr int32_t dim_zero_ring_first_slice(uint32_t my_chip_id, bool direction) {
+    return direction ? static_cast<int32_t>(my_chip_id) - 1 : static_cast<int32_t>(my_chip_id) + 1;
+}
+
+/**
+ * @brief The dim-zero ring family's batch -> chunk walk: the two directions interleave over each
+ *        slice as alternating own/other chunk PAIRS — one worker takes the halved chunks, its
+ *        opposite the full-width ones — with the opposite parity's chunk stepped over in the same
+ *        call.
+ *
+ * This is the SAME chunk-size sequence the dim-3 RingRsSchedule emits (even = remaining/2, odd =
+ * remaining, both capped at granularity), spelled the way the dim-zero kernels consume it, with
+ * one PROTOCOL DIFFERENCE that is the reason this is a separate type: a ZERO-TILE own chunk still
+ * runs the full CB protocol (reserve/push or wait/pop of one granule with no tiles touched),
+ * where the dim-3 schedule's skip() elides the CBs entirely. The dim-zero reader, compute kernel
+ * and writer all push/pop that empty granule in lockstep; eliding it on one side is a CB-wait
+ * deadlock.
+ *
+ * Tile ids in this family are DENSE (base + position() + j) — there are no row walkers.
+ *
+ * Nest exactly (the reduction kernel drives the same walk with no ids):
+ * @code
+ *   walk.reset();                       // per ring step
+ *   while (walk.next_batch()) {         // slice_B
+ *       while (walk.next_chunk()) {     // one OWN chunk per call; opposite parity auto-stepped
+ *           const uint32_t n = walk.tiles_this_chunk();   // 0..granularity; 0 still does CBs
+ *           // ids: base + walk.position() + j for j in [0, n)
+ *       }
+ *       // per-batch: bump the dense base by batch_num_pages
+ *   }
+ * @endcode
+ */
+class DimZeroChunkWalk {
+public:
+    /**
+     * @param batches          Inner batch count (slice_B — dim 0 scatters ON the batch dim).
+     * @param tile_granularity Maximum tiles per chunk (also the CB protocol granule).
+     * @param start_tiles_read This worker's first tile index within a batch.
+     * @param start_tiles_to_read This worker's end tile index within a batch (exclusive).
+     * @param direction        Ring direction; selects which half of the pair this worker owns
+     *                         (direction takes the halved chunk, !direction the full-width one
+     *                         after an initial half-step).
+     */
+    DimZeroChunkWalk(
+        uint32_t batches,
+        uint32_t tile_granularity,
+        uint32_t start_tiles_read,
+        uint32_t start_tiles_to_read,
+        bool direction) :
+        batches_(batches),
+        granularity_(tile_granularity),
+        start_(start_tiles_read),
+        end_(start_tiles_to_read),
+        direction_(direction) {}
+
+    /// Re-arm the walk for the next ring step.
+    void reset() {
+        batch_ = 0;
+        batch_started_ = false;
+    }
+
+    /// Advance to the next batch, re-arming the chunk walk (including the backward worker's
+    /// initial step over the forward worker's first chunk). False when batches are exhausted.
+    bool next_batch() {
+        if (batch_started_) {
+            ++batch_;
+        } else {
+            batch_started_ = true;
+        }
+        if (batch_ >= batches_) {
+            return false;
+        }
+        tiles_read_ = start_;
+        if (!direction_ && end_ > tiles_read_) {
+            tiles_read_ += std::min((end_ - tiles_read_) / 2, granularity_);
+        }
+        chunk_started_ = false;
+        tiles_this_chunk_ = 0;
+        return true;
+    }
+
+    /// Advance to this worker's next own chunk, stepping over the opposite parity's chunk that
+    /// follows it. False when the batch's tile range is exhausted.
+    bool next_chunk() {
+        if (chunk_started_) {
+            tiles_read_ += tiles_this_chunk_;
+            const uint32_t remaining = end_ > tiles_read_ ? end_ - tiles_read_ : 0;
+            if (remaining > 0) {
+                // Step over the opposite direction's chunk.
+                tiles_read_ += direction_ ? std::min(remaining, granularity_) : std::min(remaining / 2, granularity_);
+            }
+        } else {
+            chunk_started_ = true;
+        }
+        if (tiles_read_ >= end_) {
+            return false;
+        }
+        const uint32_t remaining = end_ - tiles_read_;
+        tiles_this_chunk_ = direction_ ? std::min(remaining / 2, granularity_) : std::min(remaining, granularity_);
+        return true;
+    }
+
+    uint32_t batch_idx() const { return batch_; }
+    /// Tiles in the current own chunk — ZERO IS LEGAL and still runs the full CB protocol.
+    uint32_t tiles_this_chunk() const { return tiles_this_chunk_; }
+    /// The current chunk's first tile index within [start, end) — the dense-id offset.
+    uint32_t position() const { return tiles_read_; }
+
+private:
+    uint32_t batches_ = 0;
+    uint32_t granularity_ = 0;
+    uint32_t start_ = 0;
+    uint32_t end_ = 0;
+    bool direction_ = false;
+
+    uint32_t batch_ = 0;
+    uint32_t tiles_read_ = 0;
+    uint32_t tiles_this_chunk_ = 0;
+    bool batch_started_ = false;
     bool chunk_started_ = false;
 };
 

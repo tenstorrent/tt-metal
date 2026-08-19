@@ -6,6 +6,9 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/accumulate_helpers_compute.hpp"
+#include "ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp"
+
+namespace sched = ttnn::ccl::schedule;
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
@@ -27,15 +30,16 @@ void kernel_main() {
     // Arm once: hoists add_init out of the chunk loop and asserts tile_granularity fits DEST.
     auto acc = compute_kernel_lib::BlockAccumulate::arm(input_cb_id, intermediate_cb, output_cb, tile_granularity);
 
-    for (uint32_t i = 0; i < num_total_reduction_steps; i++) {  // Don't reduce on the first slice
-        for (uint32_t b = 0; b < slice_B; ++b) {
-            uint32_t tiles_read = start_tiles_read;
-            const uint32_t tiles_to_read = start_tiles_to_read;
+    // The same chunk walk the reader and writer drive (slice_B plays the channel role in the
+    // dim-zero family), so the three kernels' chunk boundaries cannot drift. The step count is
+    // host-computed, which is why this kernel never reproduces the reader/writer phase logic.
+    sched::LineChannelWalk walk(slice_B, tile_granularity, start_tiles_read, start_tiles_to_read);
 
-            while (tiles_read < tiles_to_read) {
-                const uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
-                acc.run(num_pages_to_read);
-                tiles_read += num_pages_to_read;
+    for (uint32_t i = 0; i < num_total_reduction_steps; i++) {  // Don't reduce on the first slice
+        walk.reset();
+        while (walk.next_channel()) {
+            while (walk.next_chunk()) {
+                acc.run(walk.tiles_this_chunk());
             }
         }
     }
