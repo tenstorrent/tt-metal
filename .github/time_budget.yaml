@@ -336,9 +336,9 @@ models:
   e2e_tier3:
     wh_llmbox_perf: 180
     wh_galaxy_perf: 55
-    wh_n150: 81
+    wh_n150: 91
     wh_n300: 60
-    bh_p150: 23
+    bh_p150: 33
     bh_p300: 8
     bh_quietbox_2: 42
   unit:

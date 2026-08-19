@@ -795,6 +795,12 @@ class SeedManager:
                 self.seed_counters[slot] = 0
                 self.seed_salts[slot] = 0
         self._seed_active = any(s is not None for s in self.seeds)
+        if not self._seed_active:
+            # Re-enter the unseeded three-state machine. The device still holds
+            # the seeded path's non-SKIP reinit values; without a fresh init+SKIP
+            # push, get_new_values early-returns and the device reinitializes
+            # every user's PRNG to the same stale seed on every token.
+            self._reseted = True
 
     def _seed_from_slot_params(self, seeds, slot: int):
         if seeds is None:
@@ -926,6 +932,10 @@ class SeedManager:
             self.seed_counters[old_slot] = 0
             self.seed_salts[old_slot] = 0
         self._seed_active = any(s is not None for s in self.seeds)
+        if not self._seed_active:
+            # Same re-arm as deactivate_slots_except: a remap that overwrites the
+            # last seeded slot must push init+SKIP or the device PRNG freezes.
+            self._reseted = True
 
     def reset_seed(self, seeds, user_ids):
         """Update RNG state for the given user slots after a prefill.

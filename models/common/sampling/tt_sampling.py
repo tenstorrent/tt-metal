@@ -91,15 +91,25 @@ class TTSampling(LightweightModule):
     def _untilize_chunk_count(width):
         """Fewest tile-aligned even chunks of at most TOPK_MAX_WIDTH each, or 1
         when the row is narrow enough (<= 2 * TOPK_MAX_WIDTH, the widest row
-        known to untilize in one program) or no such cut exists."""
+        known to untilize in one program).
+
+        Raise rather than fall back: a wide row that cannot be cut would either
+        recreate the full-row circular-buffer/L1 compile clash (silent return 1)
+        or explode into thousands of tiny chunks (unbounded search), and both
+        are better caught at the source. The search is bounded so chunks stay at
+        least half of TOPK_MAX_WIDTH wide.
+        """
         if width <= 2 * TOPK_MAX_WIDTH:
             return 1
         num_chunks = -(-width // TOPK_MAX_WIDTH)
-        while num_chunks <= width // ttnn.TILE_SIZE:
+        max_chunks = 2 * num_chunks
+        while num_chunks <= max_chunks:
             if width % num_chunks == 0 and (width // num_chunks) % ttnn.TILE_SIZE == 0:
                 return num_chunks
             num_chunks += 1
-        return 1
+        raise ValueError(
+            f"cannot cut an untilize row of width {width} into tile-aligned chunks of at most {TOPK_MAX_WIDTH}"
+        )
 
     def _is_force_argmax_sampling(self, k, p, temp):
         """Detect whether all users request deterministic greedy decoding.
@@ -796,8 +806,13 @@ class TTSampling(LightweightModule):
                 # full padded vocab onto every device and hits the same wall. Untilize
                 # in tile-aligned chunks and concat row-major instead.
                 x_chunks = ttnn.split(x, x.shape[-1] // num_untilize_chunks, dim=3)
-                untilized_chunks = [ttnn.untilize(chunk, use_multicore=True) for chunk in x_chunks]
+                untilized_chunks = []
                 for chunk in x_chunks:
+                    # Free each tiled chunk as soon as its row-major copy exists,
+                    # so peak memory holds ~1 full-vocab buffer less than freeing
+                    # after the loop (this runs inside the captured decode trace,
+                    # so the peak is baked into the trace region size).
+                    untilized_chunks.append(ttnn.untilize(chunk, use_multicore=True))
                     chunk.deallocate()
                 x_untilized = ttnn.concat(untilized_chunks, dim=3)
                 for chunk in untilized_chunks:

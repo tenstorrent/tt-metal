@@ -261,6 +261,33 @@ def test_finished_tail_request_ghost_seed_is_cleared():
     assert seed_manager.seed_salts[1] == 0
 
 
+def test_deactivating_last_seeded_slot_rearms_the_unseeded_push():
+    """When the last seeded request finishes, the device still holds non-SKIP
+    reinit values; unless _reseted is set, get_new_values early-returns forever
+    and every surviving user's PRNG reinitializes to the same stale seed each
+    token (frozen sampling)."""
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42], [3])
+    seed_manager._reseted = False  # simulate the post-push steady state
+
+    seed_manager.deactivate_slots_except([0])
+
+    assert seed_manager._seed_active is False
+    assert seed_manager._reseted is True
+
+
+def test_remap_overwriting_last_seeded_slot_rearms_the_unseeded_push():
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42], [0])
+    seed_manager._reseted = False
+
+    # Condense moves the (unseeded) request from slot 1 over the seeded slot 0.
+    seed_manager.apply_slot_remap(torch.tensor([1, 1, 2, 3], dtype=torch.int32))
+
+    assert seed_manager._seed_active is False
+    assert seed_manager._reseted is True
+
+
 def test_prefill_admission_into_same_slot_fully_resets_seed_state():
     """reset_seed registers a NEW request: even when the slot already holds the
     same seed value, the counter must restart and the salt must be recomputed
