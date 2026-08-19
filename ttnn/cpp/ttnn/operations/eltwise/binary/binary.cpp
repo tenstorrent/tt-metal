@@ -1026,12 +1026,309 @@ TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(logical_xor, LOGICAL_XOR)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(ldexp, LDEXP)
 TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(ldexp, LDEXP)
 TTNN_BINARY_OP_INPLACE_IMPL(ldexp_, LDEXP)
-TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logaddexp, LOGADDEXP)
-TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(logaddexp, LOGADDEXP)
-TTNN_BINARY_OP_INPLACE_IMPL(logaddexp_, LOGADDEXP)
-TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logaddexp2, LOGADDEXP2)
-TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(logaddexp2, LOGADDEXP2)
-TTNN_BINARY_OP_INPLACE_IMPL(logaddexp2_, LOGADDEXP2)
+namespace {
+
+std::optional<CoreRangeSet> resolve_sub_core_grids(
+    const Tensor& input_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    auto resolved_sub_core_grids = sub_core_grids;
+    if (sub_device_id.has_value()) {
+        TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
+        auto* device = input_tensor.device();
+        resolved_sub_core_grids =
+            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+    }
+    return resolved_sub_core_grids;
+}
+
+Tensor stable_logaddexp_tensor(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const auto resolved_sub_core_grids = resolve_sub_core_grids(lhs, sub_core_grids, sub_device_id);
+    const std::optional<MemoryConfig> resolved_memory_config =
+        output.has_value() ? std::optional<MemoryConfig>(output.value().memory_config()) : memory_config;
+
+    const Tensor max_tensor =
+        ttnn::maximum(lhs, rhs, std::nullopt, resolved_memory_config, std::nullopt, {}, {}, {}, resolved_sub_core_grids, sub_device_id);
+    const Tensor diff = ttnn::subtract(
+        lhs, rhs, std::nullopt, resolved_memory_config, std::nullopt, {}, {}, {}, resolved_sub_core_grids, sub_device_id);
+    const Tensor tail = ttnn::log1p(
+        ttnn::exp(ttnn::neg(ttnn::abs(diff, resolved_memory_config, std::nullopt, resolved_sub_core_grids),
+                            resolved_memory_config),
+                  false,
+                  resolved_memory_config,
+                  std::nullopt,
+                  resolved_sub_core_grids),
+        false,
+        resolved_memory_config,
+        std::nullopt,
+        resolved_sub_core_grids);
+
+    return ttnn::add(
+        max_tensor,
+        tail,
+        output_dtype,
+        resolved_memory_config,
+        output,
+        {},
+        {},
+        {},
+        resolved_sub_core_grids,
+        sub_device_id);
+}
+
+Tensor stable_logaddexp_scalar(
+    const Tensor& lhs,
+    operations::unary::ScalarVariant rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const auto resolved_sub_core_grids = resolve_sub_core_grids(lhs, sub_core_grids, sub_device_id);
+    const std::optional<MemoryConfig> resolved_memory_config =
+        output.has_value() ? std::optional<MemoryConfig>(output.value().memory_config()) : memory_config;
+
+    const Tensor max_tensor =
+        ttnn::maximum(lhs, rhs, std::nullopt, resolved_memory_config, std::nullopt, {}, {}, {}, resolved_sub_core_grids, sub_device_id);
+    const Tensor diff = ttnn::subtract(
+        lhs, rhs, std::nullopt, resolved_memory_config, std::nullopt, {}, {}, {}, resolved_sub_core_grids, sub_device_id);
+    const Tensor tail = ttnn::log1p(
+        ttnn::exp(ttnn::neg(ttnn::abs(diff, resolved_memory_config, std::nullopt, resolved_sub_core_grids),
+                            resolved_memory_config),
+                  false,
+                  resolved_memory_config,
+                  std::nullopt,
+                  resolved_sub_core_grids),
+        false,
+        resolved_memory_config,
+        std::nullopt,
+        resolved_sub_core_grids);
+
+    return ttnn::add(
+        max_tensor,
+        tail,
+        output_dtype,
+        resolved_memory_config,
+        output,
+        {},
+        {},
+        {},
+        resolved_sub_core_grids,
+        sub_device_id);
+}
+
+Tensor stable_logaddexp2_tensor(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const auto resolved_sub_core_grids = resolve_sub_core_grids(lhs, sub_core_grids, sub_device_id);
+    const std::optional<MemoryConfig> resolved_memory_config =
+        output.has_value() ? std::optional<MemoryConfig>(output.value().memory_config()) : memory_config;
+
+    const Tensor max_tensor =
+        ttnn::maximum(lhs, rhs, std::nullopt, resolved_memory_config, std::nullopt, {}, {}, {}, resolved_sub_core_grids, sub_device_id);
+    const Tensor diff = ttnn::subtract(
+        lhs, rhs, std::nullopt, resolved_memory_config, std::nullopt, {}, {}, {}, resolved_sub_core_grids, sub_device_id);
+    const Tensor tail = ttnn::log2(
+        ttnn::add(
+            ttnn::exp2(
+                ttnn::neg(ttnn::abs(diff, resolved_memory_config, std::nullopt, resolved_sub_core_grids),
+                          resolved_memory_config),
+                false,
+                resolved_memory_config,
+                std::nullopt,
+                resolved_sub_core_grids),
+            1.0f,
+            std::nullopt,
+            resolved_memory_config,
+            std::nullopt,
+            {},
+            {},
+            {},
+            resolved_sub_core_grids,
+            sub_device_id),
+        false,
+        resolved_memory_config,
+        std::nullopt,
+        resolved_sub_core_grids);
+
+    return ttnn::add(
+        max_tensor,
+        tail,
+        output_dtype,
+        resolved_memory_config,
+        output,
+        {},
+        {},
+        {},
+        resolved_sub_core_grids,
+        sub_device_id);
+}
+
+Tensor stable_logaddexp2_scalar(
+    const Tensor& lhs,
+    operations::unary::ScalarVariant rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const auto resolved_sub_core_grids = resolve_sub_core_grids(lhs, sub_core_grids, sub_device_id);
+    const std::optional<MemoryConfig> resolved_memory_config =
+        output.has_value() ? std::optional<MemoryConfig>(output.value().memory_config()) : memory_config;
+
+    const Tensor max_tensor =
+        ttnn::maximum(lhs, rhs, std::nullopt, resolved_memory_config, std::nullopt, {}, {}, {}, resolved_sub_core_grids, sub_device_id);
+    const Tensor diff = ttnn::subtract(
+        lhs, rhs, std::nullopt, resolved_memory_config, std::nullopt, {}, {}, {}, resolved_sub_core_grids, sub_device_id);
+    const Tensor tail = ttnn::log2(
+        ttnn::add(
+            ttnn::exp2(
+                ttnn::neg(ttnn::abs(diff, resolved_memory_config, std::nullopt, resolved_sub_core_grids),
+                          resolved_memory_config),
+                false,
+                resolved_memory_config,
+                std::nullopt,
+                resolved_sub_core_grids),
+            1.0f,
+            std::nullopt,
+            resolved_memory_config,
+            std::nullopt,
+            {},
+            {},
+            {},
+            resolved_sub_core_grids,
+            sub_device_id),
+        false,
+        resolved_memory_config,
+        std::nullopt,
+        resolved_sub_core_grids);
+
+    return ttnn::add(
+        max_tensor,
+        tail,
+        output_dtype,
+        resolved_memory_config,
+        output,
+        {},
+        {},
+        {},
+        resolved_sub_core_grids,
+        sub_device_id);
+}
+
+}  // namespace
+
+Tensor logaddexp(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return stable_logaddexp_tensor(lhs, rhs, output_dtype, memory_config, output, sub_core_grids, sub_device_id);
+}
+
+Tensor logaddexp(
+    const Tensor& lhs,
+    operations::unary::ScalarVariant rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return stable_logaddexp_scalar(lhs, rhs, output_dtype, memory_config, output, sub_core_grids, sub_device_id);
+}
+
+Tensor logaddexp_(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return stable_logaddexp_tensor(lhs, rhs, std::nullopt, std::nullopt, lhs, sub_core_grids, sub_device_id);
+}
+
+Tensor logaddexp_(
+    const Tensor& lhs,
+    operations::unary::ScalarVariant rhs,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return stable_logaddexp_scalar(lhs, rhs, std::nullopt, std::nullopt, lhs, sub_core_grids, sub_device_id);
+}
+
+Tensor logaddexp2(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return stable_logaddexp2_tensor(lhs, rhs, output_dtype, memory_config, output, sub_core_grids, sub_device_id);
+}
+
+Tensor logaddexp2(
+    const Tensor& lhs,
+    operations::unary::ScalarVariant rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return stable_logaddexp2_scalar(lhs, rhs, output_dtype, memory_config, output, sub_core_grids, sub_device_id);
+}
+
+Tensor logaddexp2_(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return stable_logaddexp2_tensor(lhs, rhs, std::nullopt, std::nullopt, lhs, sub_core_grids, sub_device_id);
+}
+
+Tensor logaddexp2_(
+    const Tensor& lhs,
+    operations::unary::ScalarVariant rhs,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam>,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return stable_logaddexp2_scalar(lhs, rhs, std::nullopt, std::nullopt, lhs, sub_core_grids, sub_device_id);
+}
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(squared_difference, SQUARED_DIFFERENCE)
 TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(squared_difference, SQUARED_DIFFERENCE)
 TTNN_BINARY_OP_INPLACE_IMPL(squared_difference_, SQUARED_DIFFERENCE)
