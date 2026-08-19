@@ -1,0 +1,151 @@
+================================================================================
+isl=131072 benchmark point — investigation record
+RESULT: the point COMPLETED SUCCESSFULLY in 94.4 minutes. Nothing was stuck,
+        nothing was killed, and no recovery action was needed or taken.
+================================================================================
+
+MEASURED OUTCOME (ground truth, from the artifact the sweep itself wrote:
+bench/benchmark_..._2026-08-19_02-41-37_isl-131072_osl-128_maxcon-1_n-1.json)
+
+    completed              1 / 1          failed: 0
+    total_input_tokens     131072
+    total_output_tokens    128
+    mean_ttft_ms           5,662,485.6    = 5662.5 s = 94.4 minutes
+    mean_tpot_ms           289.7
+    mean_e2el_ms           5,699,275.9
+    duration               5699.3 s       = 95.0 minutes
+
+The release workflow then finished normally:
+    llm_benchmark  ✅ 19 blocks (13669.7 s)
+    spec_tests     no-op
+    Acceptance     PASS (0 blockers)
+    run.py         EXIT_CODE=0
+
+The output was valid. There is NO correctness defect, NO hang, NO context cap,
+and NO client bug. 131072 is inside the advertised and contracted context
+(262144) and is served correctly.
+
+--------------------------------------------------------------------------------
+WHAT THE FINDING ACTUALLY IS: severe superlinear long-context prefill cost
+--------------------------------------------------------------------------------
+
+Compared with the next point down, at half the input length:
+
+    isl=65536    TTFT   926.8 s     14.14 ms per input token
+    isl=131072   TTFT  5662.5 s     43.20 ms per input token
+
+    2x the input costs 6.11x the wall clock -> 3.05x worse PER TOKEN
+
+Compared with this port's own context contract. The contract's
+`prefill_sweep_seconds` are SINGLE-LAYER probe numbers; the only 48-layer
+prefill ever verified end-to-end was a 128-token prompt (context_contract.json,
+"stage 05 shipped with prefill unprofiled and disclosed it as a gap; stage 06
+closes it. One verified 48-layer prefill of a 128-token prompt..."). Scaling the
+single-layer sweep by the 48 layers gives a naive expectation:
+
+    isl      1-layer probe   x48 layers    measured      measured / (48 x probe)
+    65536         42.05 s      2018.4 s      926.8 s          0.46
+    131072        85.85 s      4120.8 s     5662.5 s          1.37
+
+    -> a 2.99x degradation relative to naive layer scaling between 65536 and
+       131072. 65536 beats the naive estimate; 131072 badly misses it.
+
+Extrapolating to the advertised maximum: 48 x the contract's 262144 single-layer
+probe (192.23 s) is 2.56 hours as a LOWER bound, and that bound ignores the
+superlinearity above, so a full 262144 prefill would plausibly take several
+hours. This has never been measured end-to-end and should not be quoted as if it
+had been.
+
+MECHANISM — HYPOTHESIS, NOT PROVEN. `moe_prefill_optimized`
+(tt/optimized_decoder.py) loops over the sequence in EXPERT_CHUNK_SIZE=32 chunks
+and appends one device tensor per chunk to `outputs` before a single
+ttnn.concat: 4096 live tensors at 131072 versus 2048 at 65536, on top of a KV
+cache already allocated for 263168 tokens (8224 blocks x 32). That is consistent
+with allocator pressure, but what exists is py-spy stacks showing the loop —
+there is NO measurement isolating the allocator. Treat the mechanism as an
+untested hypothesis.
+
+Live stack during the prefill (py-spy on EngineCore, MainThread ACTIVE):
+    __call__                        ttnn/decorators.py:650
+    moe_prefill_optimized           tt/optimized_decoder.py:861/862
+    decoder_layer_prefill_multichip tt/multichip_decoder.py:1698
+    prefill_hidden                  tt/model.py:1244
+    prefill_forward                 tt/generator_vllm.py:578
+    submit_prefill                  vllm_tt_plugin/model_runner.py:2420
+
+Corroborating evidence from the sweep itself — the cold/warm inversion. For each
+input length the sweep runs max_concurrency=1 FIRST and the concurrent point
+second (verified from the result-file timestamps):
+
+    isl        c=1 (cold, first)   concurrent (warm)   ratio
+    128              0.4 s            5.4 s (c=32)     0.07x
+    1024             5.0 s           31.0 s (c=32)     0.16x
+    2048             9.4 s           60.6 s (c=32)     0.16x
+    4096            14.3 s          121.7 s (c=32)     0.12x
+    8192            49.9 s          242.4 s (c=31)     0.21x
+    16384          100.2 s          249.6 s (c=15)     0.40x
+    32768          394.2 s          263.5 s (c=7)      1.50x   <-- inverts here
+    65536          926.8 s          276.9 s (c=3)      3.35x
+    131072        5662.5 s          none in sweep       n/a
+
+From isl=32768 the single request becomes SLOWER than three or seven served
+together, which is only possible if the first request at a shape pays a one-time
+cost the second does not. isl=131072 has no concurrent counterpart in the
+generated sweep, so its number is entirely a first-touch measurement and the
+steady-state cost at that length was never measured.
+
+--------------------------------------------------------------------------------
+THREE SUPERSEDED CONCLUSIONS, AND WHY EACH WAS WRONG
+--------------------------------------------------------------------------------
+
+This investigation reached three wrong conclusions before the point simply
+finished. They are kept because the failure mode they share is the useful part:
+EACH EXTRAPOLATED FROM A PARTIAL OBSERVATION WITHOUT A CONTROL.
+
+(1) "The benchmark client is hung; the server answered and it never noticed."
+    Rested on: a uvicorn access-log line "POST /v1/chat/completions 200 OK".
+    Why wrong: uvicorn logs that line at http.response.start — when the response
+    HEADERS are sent — not when a streaming body completes. For an SSE response
+    it says nothing about completion. Refuted by reproducing the identical
+    behaviour with a plain `requests` client, which ruled the harness out.
+
+(2) "It is on trend and minutes from completing."
+    Rested on: extrapolating the end-to-end TTFT curve up to 65536.
+    Why wrong: it never checked how far through the request the engine actually
+    was. The curve was fitted to completed points and applied to an in-flight
+    one.
+
+(3) "It is ~40 hours away."
+    Rested on: sampling the chunk loop at 43.0 tok/s and multiplying one layer's
+    rate by 48 layers.
+    Why wrong: it assumed uniform per-layer cost. Every py-spy --locals sample
+    taken during the prefill showed layer_idx=0, the last of them 73 minutes
+    after the request was issued -- a LOWER BOUND of >=73 of the 94.4 minutes
+    (>=77%) inside layer 0, not a measured split. The residual ~21.4 minutes is
+    unattributed: it holds the rest of layer 0, the other 47 layers, the final
+    concat and the first decode step, and sampling had stopped by then. The raw
+    sampling timeline was not retained. Layer 0 carries one-off costs --
+    first-touch allocation, kernel compilation for these shapes, cache warm-up
+    -- that the other 47 layers do not. Multiplying the WORST layer by 48
+    overstated the total by roughly 25x. The true answer was 94.4 minutes.
+
+No 40-hour, 25-hour or "hang" figure in this file is a result. The only
+measured number is 94.4 minutes.
+
+--------------------------------------------------------------------------------
+CORRECTION TO AN EARLIER RECOMMENDATION
+--------------------------------------------------------------------------------
+An earlier draft claimed that killing the `vllm bench serve` client would not
+free the device, because the engine would keep grinding for ~40 hours. That
+claim rested entirely on conclusion (3) and is withdrawn. The client was never
+killed, the point completed on its own, and run.py continued normally to
+spec_tests and to a clean EXIT_CODE=0.
+
+--------------------------------------------------------------------------------
+HOW TO JUDGE THE ROW
+--------------------------------------------------------------------------------
+isl=131072 is a COMPLETED, in-contract sweep point, served correctly and
+uncapped, whose prefill is impractically slow: 94.4 minutes for a single
+request. It is a long-context prefill PERFORMANCE defect, to be disclosed and
+fixed — not waived, not a hang, and not a reason to lower the advertised
+context.

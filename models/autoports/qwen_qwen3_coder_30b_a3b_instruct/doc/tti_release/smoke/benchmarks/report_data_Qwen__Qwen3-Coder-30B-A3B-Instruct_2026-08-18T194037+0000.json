@@ -1,0 +1,89 @@
+{
+    "metadata": {
+        "model_name": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+        "device": "P300X2",
+        "generated_at": "2026-08-18T19:40:37+00:00",
+        "report_id": "Qwen__Qwen3-Coder-30B-A3B-Instruct_2026-08-18T194037+0000",
+        "workflow": "benchmarks",
+        "server_mode": "API",
+        "run_command": "python run.py --model Qwen3-Coder-30B-A3B-Instruct --impl qwen3-coder-30b-a3b-autoport --tt-device p300x2 --workflow benchmarks --dev-mode --server-url http://127.0.0.1:8100 --service-port 8100 --limit-samples-mode smoke-test --disable-trace-capture --no-auth --skip-system-sw-validation",
+        "runtime_model_spec_json": "/home/raahem/tt-inference-server/workflow_logs/runtime_model_specs/runtime_model_spec_2026-08-18_19-40-18_id_qwen3-coder-30b-a3b-autoport_Qwen3-Coder-30B-A3B-Instruct_p300x2_B91Prs82.json",
+        "model_id": "id_qwen3-coder-30b-a3b-autoport_Qwen3-Coder-30B-A3B-Instruct_p300x2",
+        "model_repo": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+        "inference_engine": "vLLM",
+        "tt_metal_commit": null,
+        "vllm_commit": null,
+        "model_impl": "qwen3-coder-30b-a3b-autoport"
+    },
+    "sections": [
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 8,
+                "input_sequence_length": 16,
+                "output_sequence_length": 4.0,
+                "mean_ttft_ms": 296.227,
+                "p50_ttft": 294.819,
+                "p99_ttft": 316.1374,
+                "mean_tpot_ms": 230.1615,
+                "mean_e2el_ms": 986.7115,
+                "tps_decode_throughput": 4.0528,
+                "request_throughput": 1.0132,
+                "error_request_count": null,
+                "status": "na",
+                "target_check": 1
+            },
+            "title": "vLLM Benchmark",
+            "id": "Qwen__Qwen3-Coder-30B-A3B-Instruct_P300X2",
+            "targets": {
+                "tool": "vllm",
+                "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+                "device": "P300X2",
+                "timestamp": "2026-08-18 19:40:37"
+            }
+        }
+    ],
+    "acceptance_criteria": true,
+    "acceptance_blockers": {},
+    "acceptance_criteria_metadata": {
+        "enforcement_result": "PASS",
+        "model_status": "EXPERIMENTAL",
+        "categories": [
+            {
+                "name": "Benchmarks",
+                "status": "NA",
+                "total": 1,
+                "passed": 0,
+                "failed": 0,
+                "na": 1,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Evals",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Spec Tests",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            }
+        ]
+    },
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: \u2705 `PASS`\n- Model status: `EXPERIMENTAL`\n- Benchmarks: \ud83d\udfe8 `NA` (0/1 passed, 1 NA)\n- Evals: \ud83d\udfe8 `NA` (no blocks present)\n- Spec Tests: \ud83d\udfe8 `NA` (no blocks present)\n- All acceptance criteria passed."
+}

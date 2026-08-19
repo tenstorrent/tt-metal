@@ -1,0 +1,398 @@
+whoami: raahemnabeel
+gpqa accessible, gated = auto
+=== preflight OK, launching lm_eval at Wed Aug 19 04:17:22 AM UTC 2026 ===
+2026-08-19:04:17:22 INFO     [config.evaluate_config:301] Using default fewshot_as_multiturn=True.
+2026-08-19:04:17:24 INFO     [_cli.run:376] Selected Tasks: ['gpqa_diamond_cot_zeroshot']
+2026-08-19:04:17:25 INFO     [evaluator:210] Setting random seed to 42 | Setting numpy seed to 42 | Setting torch manual seed to 42 | Setting fewshot manual seed to 42
+2026-08-19:04:17:25 WARNING  [evaluator:222] generation_kwargs: {'max_gen_toks': 4096, 'do_sample': False, 'stream': False, 'seed': 42} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
+2026-08-19:04:17:25 INFO     [evaluator:235] Initializing local-completions model, with arguments: {'model': 'Qwen/Qwen3-Coder-30B-A3B-Instruct', 'base_url': 'http://127.0.0.1:8100/v1/completions', 'tokenizer_backend': 'huggingface', 'max_length': 262144, 'timeout': 7200, 'num_concurrent': 32, 'trust_remote_code': True}
+2026-08-19:04:17:25 INFO     [models.api_models:284] Using max length 262144 - 1
+2026-08-19:04:17:25 INFO     [models.api_models:305] Using tokenizer huggingface
+
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]
+Map: 100%|██████████| 198/198 [00:00<00:00, 4535.89 examples/s]
+2026-08-19:04:17:27 INFO     [tasks:700] Selected tasks:
+2026-08-19:04:17:27 INFO     [tasks:691] Task: gpqa_diamond_cot_zeroshot (gpqa/cot_zeroshot/gpqa_diamond_cot_zeroshot.yaml)
+2026-08-19:04:17:27 INFO     [evaluator:313] gpqa_diamond_cot_zeroshot: Using gen_kwargs: {'until': ['</s>'], 'do_sample': False, 'temperature': 0.0, 'max_gen_toks': 4096, 'stream': False, 'seed': 42}
+2026-08-19:04:17:27 INFO     [evaluator:328] num_fewshot has been set to 0 for gpqa_diamond_cot_zeroshot in its config. Manual configuration will be ignored.
+2026-08-19:04:17:27 WARNING  [evaluator:489] Chat template formatting change affects loglikelihood and multiple-choice tasks. See docs/chat-template-readme.md for details.
+2026-08-19:04:17:27 INFO     [api.task:310] Building contexts for gpqa_diamond_cot_zeroshot on rank 0...
+
+2026-08-19:04:17:27 INFO     [evaluator:583] Running generate_until requests
+
+Requesting API:   0%|          | 0/198 [00:00<?, ?it/s]
+Requesting API:   1%|          | 1/198 [08:58<29:29:21, 538.89s/it]
+Requesting API:   1%|          | 2/198 [09:26<12:58:41, 238.38s/it]
+Requesting API:   2%|▏         | 3/198 [09:55<7:43:20, 142.56s/it]
+Requesting API:   2%|▏         | 4/198 [10:01<4:46:29, 88.60s/it]
+Requesting API:   3%|▎         | 5/198 [10:07<3:09:32, 58.92s/it]
+Requesting API:   3%|▎         | 6/198 [10:27<2:25:45, 45.55s/it]
+Requesting API:   4%|▎         | 7/198 [11:12<2:24:56, 45.53s/it]
+Requesting API:   4%|▍         | 8/198 [11:16<1:41:42, 32.12s/it]
+Requesting API:   5%|▍         | 9/198 [11:38<1:32:03, 29.22s/it]
+Requesting API:   5%|▌         | 10/198 [11:59<1:23:02, 26.50s/it]
+Requesting API:   6%|▌         | 11/198 [12:11<1:08:45, 22.06s/it]
+Requesting API:   6%|▌         | 12/198 [12:41<1:16:17, 24.61s/it]
+Requesting API:   7%|▋         | 13/198 [12:44<55:47, 18.09s/it]
+Requesting API:   7%|▋         | 14/198 [12:53<46:58, 15.32s/it]
+Requesting API:   8%|▊         | 15/198 [13:25<1:01:27, 20.15s/it]
+Requesting API:   8%|▊         | 16/198 [13:29<46:30, 15.33s/it]
+Requesting API:   9%|▊         | 17/198 [13:46<48:14, 15.99s/it]
+Requesting API:   9%|▉         | 18/198 [13:47<33:47, 11.27s/it]
+Requesting API:  10%|▉         | 19/198 [13:48<25:07,  8.42s/it]
+Requesting API:  10%|█         | 20/198 [13:56<24:13,  8.16s/it]
+Requesting API:  11%|█         | 21/198 [14:07<26:45,  9.07s/it]
+Requesting API:  11%|█         | 22/198 [14:28<36:56, 12.60s/it]
+Requesting API:  12%|█▏        | 23/198 [14:29<26:25,  9.06s/it]
+Requesting API:  12%|█▏        | 24/198 [14:46<33:10, 11.44s/it]
+Requesting API:  13%|█▎        | 25/198 [14:49<25:58,  9.01s/it]
+Requesting API:  13%|█▎        | 26/198 [14:55<22:48,  7.96s/it]
+Requesting API:  14%|█▎        | 27/198 [14:57<18:09,  6.37s/it]
+Requesting API:  14%|█▍        | 28/198 [14:58<13:18,  4.69s/it]
+Requesting API:  15%|█▍        | 29/198 [15:28<34:54, 12.40s/it]
+Requesting API:  15%|█▌        | 30/198 [15:30<25:52,  9.24s/it]
+Requesting API:  16%|█▌        | 31/198 [15:54<38:03, 13.67s/it]
+Requesting API:  16%|█▌        | 32/198 [16:54<1:16:14, 27.56s/it]
+Requesting API:  17%|█▋        | 33/198 [17:05<1:01:57, 22.53s/it]
+Requesting API:  17%|█▋        | 34/198 [17:20<55:33, 20.33s/it]
+Requesting API:  18%|█▊        | 35/198 [17:46<59:47, 22.01s/it]
+Requesting API:  18%|█▊        | 36/198 [17:48<43:19, 16.05s/it]
+Requesting API:  19%|█▊        | 37/198 [17:55<35:36, 13.27s/it]
+Requesting API:  19%|█▉        | 38/198 [17:59<27:40, 10.38s/it]
+Requesting API:  20%|█▉        | 39/198 [18:03<22:47,  8.60s/it]
+Requesting API:  20%|██        | 40/198 [18:35<40:58, 15.56s/it]
+Requesting API:  21%|██        | 41/198 [18:53<42:24, 16.21s/it]
+Requesting API:  21%|██        | 42/198 [18:58<33:45, 12.98s/it]
+Requesting API:  22%|██▏       | 43/198 [19:03<26:53, 10.41s/it]
+Requesting API:  22%|██▏       | 44/198 [19:16<28:46, 11.21s/it]
+Requesting API:  23%|██▎       | 45/198 [19:52<47:40, 18.70s/it]
+Requesting API:  23%|██▎       | 46/198 [20:16<51:14, 20.22s/it]
+Requesting API:  24%|██▎       | 47/198 [20:39<53:27, 21.24s/it]
+Requesting API:  24%|██▍       | 48/198 [21:28<1:13:46, 29.51s/it]
+Requesting API:  25%|██▍       | 49/198 [21:37<57:42, 23.24s/it]
+Requesting API:  25%|██▌       | 50/198 [22:14<1:07:27, 27.35s/it]
+Requesting API:  26%|██▌       | 51/198 [22:43<1:08:32, 27.98s/it]
+Requesting API:  26%|██▋       | 52/198 [22:51<53:35, 22.02s/it]
+Requesting API:  27%|██▋       | 53/198 [23:19<57:25, 23.76s/it]
+Requesting API:  27%|██▋       | 54/198 [23:25<44:06, 18.38s/it]
+Requesting API:  28%|██▊       | 55/198 [23:32<35:52, 15.05s/it]
+Requesting API:  28%|██▊       | 56/198 [23:50<37:26, 15.82s/it]
+Requesting API:  29%|██▉       | 57/198 [23:50<26:34, 11.31s/it]
+Requesting API:  29%|██▉       | 58/198 [23:52<19:27,  8.34s/it]
+Requesting API:  30%|██▉       | 59/198 [24:18<31:26, 13.57s/it]
+Requesting API:  30%|███       | 60/198 [24:20<23:48, 10.35s/it]
+Requesting API:  31%|███       | 61/198 [24:43<32:01, 14.03s/it]
+Requesting API:  31%|███▏      | 62/198 [24:47<24:42, 10.90s/it]
+Requesting API:  32%|███▏      | 63/198 [24:47<17:40,  7.86s/it]
+Requesting API:  32%|███▏      | 64/198 [24:55<17:29,  7.83s/it]
+Requesting API:  33%|███▎      | 65/198 [24:58<14:12,  6.41s/it]
+Requesting API:  33%|███▎      | 66/198 [25:21<24:47, 11.27s/it]
+Requesting API:  34%|███▍      | 67/198 [25:36<27:02, 12.39s/it]
+Requesting API:  34%|███▍      | 68/198 [25:58<33:26, 15.43s/it]
+Requesting API:  35%|███▍      | 69/198 [26:05<27:28, 12.78s/it]
+Requesting API:  35%|███▌      | 70/198 [26:08<21:15,  9.97s/it]
+Requesting API:  36%|███▌      | 71/198 [26:23<24:08, 11.40s/it]
+Requesting API:  36%|███▋      | 72/198 [26:55<36:58, 17.60s/it]
+Requesting API:  37%|███▋      | 73/198 [26:57<26:56, 12.93s/it]
+Requesting API:  37%|███▋      | 74/198 [27:10<26:39, 12.90s/it]
+Requesting API:  38%|███▊      | 75/198 [27:31<31:25, 15.33s/it]
+Requesting API:  38%|███▊      | 76/198 [27:51<34:02, 16.74s/it]
+Requesting API:  39%|███▉      | 77/198 [28:17<39:24, 19.54s/it]
+Requesting API:  39%|███▉      | 78/198 [28:19<28:35, 14.30s/it]
+Requesting API:  40%|███▉      | 79/198 [28:20<20:00, 10.09s/it]
+Requesting API:  40%|████      | 80/198 [28:23<15:56,  8.11s/it]
+Requesting API:  41%|████      | 81/198 [28:46<24:34, 12.60s/it]
+Requesting API:  41%|████▏     | 82/198 [28:58<23:53, 12.36s/it]
+Requesting API:  42%|████▏     | 83/198 [29:29<34:36, 18.05s/it]
+Requesting API:  42%|████▏     | 84/198 [30:00<41:41, 21.94s/it]
+Requesting API:  43%|████▎     | 85/198 [30:11<34:43, 18.43s/it]
+Requesting API:  43%|████▎     | 86/198 [30:42<41:48, 22.40s/it]
+Requesting API:  44%|████▍     | 87/198 [31:13<46:13, 24.98s/it]
+Requesting API:  44%|████▍     | 88/198 [31:16<33:18, 18.17s/it]
+Requesting API:  45%|████▍     | 89/198 [31:38<35:27, 19.52s/it]
+Requesting API:  45%|████▌     | 90/198 [32:01<36:49, 20.46s/it]
+Requesting API:  46%|████▌     | 91/198 [32:21<36:30, 20.47s/it]
+Requesting API:  46%|████▋     | 92/198 [32:30<29:53, 16.92s/it]
+Requesting API:  47%|████▋     | 93/198 [32:41<26:33, 15.17s/it]
+Requesting API:  47%|████▋     | 94/198 [32:46<21:05, 12.17s/it]
+Requesting API:  48%|████▊     | 95/198 [33:08<25:39, 14.94s/it]
+Requesting API:  48%|████▊     | 96/198 [33:15<21:46, 12.80s/it]
+Requesting API:  49%|████▉     | 97/198 [33:49<31:52, 18.94s/it]
+Requesting API:  49%|████▉     | 98/198 [33:57<26:10, 15.70s/it]
+Requesting API:  50%|█████     | 99/198 [33:58<18:45, 11.37s/it]
+Requesting API:  51%|█████     | 100/198 [34:20<23:29, 14.38s/it]
+Requesting API:  51%|█████     | 101/198 [34:29<20:42, 12.81s/it]
+Requesting API:  52%|█████▏    | 102/198 [35:00<29:21, 18.35s/it]
+Requesting API:  52%|█████▏    | 103/198 [35:18<28:57, 18.29s/it]
+Requesting API:  53%|█████▎    | 104/198 [35:32<26:26, 16.87s/it]
+Requesting API:  53%|█████▎    | 105/198 [35:37<20:58, 13.53s/it]
+Requesting API:  54%|█████▎    | 106/198 [36:04<26:35, 17.35s/it]
+Requesting API:  54%|█████▍    | 107/198 [36:07<19:49, 13.07s/it]
+Requesting API:  55%|█████▍    | 108/198 [36:12<16:02, 10.69s/it]
+Requesting API:  55%|█████▌    | 109/198 [36:18<13:44,  9.26s/it]
+Requesting API:  56%|█████▌    | 110/198 [36:22<11:18,  7.71s/it]
+Requesting API:  56%|█████▌    | 111/198 [36:36<13:51,  9.55s/it]
+Requesting API:  57%|█████▋    | 112/198 [36:38<10:41,  7.46s/it]
+Requesting API:  57%|█████▋    | 113/198 [36:40<08:09,  5.76s/it]
+Requesting API:  58%|█████▊    | 114/198 [36:48<08:48,  6.29s/it]
+Requesting API:  58%|█████▊    | 115/198 [37:13<16:30, 11.93s/it]
+Requesting API:  59%|█████▊    | 116/198 [37:21<14:56, 10.93s/it]
+Requesting API:  59%|█████▉    | 117/198 [37:45<19:50, 14.70s/it]
+Requesting API:  60%|█████▉    | 118/198 [37:56<18:12, 13.66s/it]
+Requesting API:  60%|██████    | 119/198 [38:03<15:14, 11.58s/it]
+Requesting API:  61%|██████    | 120/198 [38:09<12:57,  9.97s/it]
+Requesting API:  61%|██████    | 121/198 [38:31<17:13, 13.43s/it]
+Requesting API:  62%|██████▏   | 122/198 [39:00<23:14, 18.35s/it]
+Requesting API:  62%|██████▏   | 123/198 [39:05<17:47, 14.23s/it]
+Requesting API:  63%|██████▎   | 124/198 [39:22<18:41, 15.16s/it]
+Requesting API:  63%|██████▎   | 125/198 [39:23<13:20, 10.97s/it]
+Requesting API:  64%|██████▎   | 126/198 [40:09<25:30, 21.25s/it]
+Requesting API:  64%|██████▍   | 127/198 [40:18<21:02, 17.78s/it]
+Requesting API:  65%|██████▍   | 128/198 [40:28<17:47, 15.26s/it]
+Requesting API:  65%|██████▌   | 129/198 [40:31<13:15, 11.53s/it]
+Requesting API:  66%|██████▌   | 130/198 [40:41<12:36, 11.13s/it]
+Requesting API:  66%|██████▌   | 131/198 [40:46<10:19,  9.25s/it]
+Requesting API:  67%|██████▋   | 132/198 [40:53<09:26,  8.59s/it]
+Requesting API:  67%|██████▋   | 133/198 [40:59<08:36,  7.94s/it]
+Requesting API:  68%|██████▊   | 134/198 [41:05<07:44,  7.26s/it]
+Requesting API:  68%|██████▊   | 135/198 [41:09<06:33,  6.25s/it]
+Requesting API:  69%|██████▊   | 136/198 [41:09<04:45,  4.60s/it]
+Requesting API:  69%|██████▉   | 137/198 [41:20<06:20,  6.24s/it]
+Requesting API:  70%|██████▉   | 138/198 [41:20<04:34,  4.58s/it]
+Requesting API:  70%|███████   | 139/198 [41:40<08:54,  9.05s/it]
+Requesting API:  71%|███████   | 140/198 [42:04<13:06, 13.56s/it]
+Requesting API:  71%|███████   | 141/198 [42:11<11:00, 11.58s/it]
+Requesting API:  72%|███████▏  | 142/198 [42:18<09:40, 10.36s/it]
+Requesting API:  72%|███████▏  | 143/198 [42:30<09:52, 10.77s/it]
+Requesting API:  73%|███████▎  | 144/198 [42:46<11:09, 12.39s/it]
+Requesting API:  73%|███████▎  | 145/198 [43:09<13:42, 15.51s/it]
+Requesting API:  74%|███████▎  | 146/198 [43:40<17:36, 20.32s/it]
+Requesting API:  74%|███████▍  | 147/198 [44:06<18:30, 21.78s/it]
+Requesting API:  75%|███████▍  | 148/198 [44:54<24:40, 29.61s/it]
+Requesting API:  75%|███████▌  | 149/198 [45:05<19:36, 24.01s/it]
+Requesting API:  76%|███████▌  | 150/198 [45:07<13:55, 17.41s/it]
+Requesting API:  76%|███████▋  | 151/198 [45:09<10:04, 12.86s/it]
+Requesting API:  77%|███████▋  | 152/198 [45:17<08:52, 11.58s/it]
+Requesting API:  77%|███████▋  | 153/198 [45:19<06:28,  8.62s/it]
+Requesting API:  78%|███████▊  | 154/198 [45:33<07:25, 10.12s/it]
+Requesting API:  78%|███████▊  | 155/198 [45:58<10:29, 14.63s/it]
+Requesting API:  79%|███████▉  | 156/198 [46:36<15:05, 21.55s/it]
+Requesting API:  79%|███████▉  | 157/198 [46:36<10:21, 15.17s/it]
+Requesting API:  80%|███████▉  | 158/198 [46:43<08:33, 12.83s/it]
+Requesting API:  80%|████████  | 159/198 [46:47<06:31, 10.04s/it]
+Requesting API:  81%|████████  | 160/198 [46:47<04:34,  7.23s/it]
+Requesting API:  81%|████████▏ | 161/198 [46:53<04:12,  6.83s/it]
+Requesting API:  82%|████████▏ | 162/198 [47:13<06:27, 10.75s/it]
+Requesting API:  82%|████████▏ | 163/198 [47:19<05:25,  9.30s/it]
+Requesting API:  83%|████████▎ | 164/198 [47:25<04:36,  8.13s/it]
+Requesting API:  83%|████████▎ | 165/198 [47:27<03:29,  6.34s/it]
+Requesting API:  84%|████████▍ | 166/198 [47:39<04:19,  8.10s/it]
+Requesting API:  84%|████████▍ | 167/198 [48:01<06:22, 12.33s/it]
+Requesting API:  85%|████████▍ | 168/198 [48:33<09:04, 18.15s/it]
+Requesting API:  85%|████████▌ | 169/198 [48:34<06:22, 13.18s/it]
+Requesting API:  86%|████████▌ | 170/198 [48:36<04:33,  9.77s/it]
+Requesting API:  86%|████████▋ | 171/198 [48:37<03:11,  7.08s/it]
+Requesting API:  87%|████████▋ | 172/198 [48:45<03:07,  7.20s/it]
+Requesting API:  87%|████████▋ | 173/198 [48:52<03:04,  7.36s/it]
+Requesting API:  88%|████████▊ | 174/198 [49:05<03:35,  8.99s/it]
+Requesting API:  88%|████████▊ | 175/198 [49:14<03:28,  9.05s/it]
+Requesting API:  89%|████████▉ | 176/198 [49:16<02:31,  6.87s/it]
+Requesting API:  89%|████████▉ | 177/198 [49:32<03:22,  9.67s/it]
+Requesting API:  90%|████████▉ | 178/198 [49:34<02:24,  7.22s/it]
+Requesting API:  90%|█████████ | 179/198 [49:57<03:50, 12.14s/it]
+Requesting API:  91%|█████████ | 180/198 [50:02<02:58,  9.92s/it]
+Requesting API:  91%|█████████▏| 181/198 [50:27<04:06, 14.48s/it]
+Requesting API:  92%|█████████▏| 182/198 [50:47<04:17, 16.08s/it]
+Requesting API:  92%|█████████▏| 183/198 [50:54<03:22, 13.48s/it]
+Requesting API:  93%|█████████▎| 184/198 [51:10<03:16, 14.00s/it]
+Requesting API:  93%|█████████▎| 185/198 [51:14<02:23, 11.05s/it]
+Requesting API:  94%|█████████▍| 186/198 [51:53<03:55, 19.65s/it]
+Requesting API:  94%|█████████▍| 187/198 [52:36<04:50, 26.41s/it]
+Requesting API:  95%|█████████▍| 188/198 [52:48<03:41, 22.19s/it]
+Requesting API:  95%|█████████▌| 189/198 [53:41<04:42, 31.36s/it]
+Requesting API:  96%|█████████▌| 190/198 [54:11<04:07, 30.95s/it]
+Requesting API:  96%|█████████▋| 191/198 [54:35<03:21, 28.83s/it]
+Requesting API:  97%|█████████▋| 192/198 [54:47<02:23, 23.89s/it]
+Requesting API:  97%|█████████▋| 193/198 [56:11<03:29, 41.92s/it]
+Requesting API:  98%|█████████▊| 194/198 [57:23<03:23, 50.89s/it]
+Requesting API:  98%|█████████▊| 195/198 [57:25<01:49, 36.40s/it]
+Requesting API:  99%|█████████▉| 196/198 [59:07<01:51, 55.84s/it]
+Requesting API:  99%|█████████▉| 197/198 [59:13<00:40, 40.97s/it]
+Requesting API: 100%|██████████| 198/198 [59:33<00:00, 34.78s/it]
+Requesting API: 100%|██████████| 198/198 [59:33<00:00, 18.05s/it]
+{
+  "results": {
+    "gpqa_diamond_cot_zeroshot": {
+      "alias": "gpqa_diamond_cot_zeroshot",
+      "exact_match,strict-match": 0.0,
+      "exact_match_stderr,strict-match": 0.0,
+      "exact_match,flexible-extract": 0.5606060606060606,
+      "exact_match_stderr,flexible-extract": 0.0353608594752948
+    }
+  },
+  "group_subtasks": {
+    "gpqa_diamond_cot_zeroshot": []
+  },
+  "configs": {
+    "gpqa_diamond_cot_zeroshot": {
+      "task": "gpqa_diamond_cot_zeroshot",
+      "tag": "gpqa",
+      "dataset_path": "Idavidrein/gpqa",
+      "dataset_name": "gpqa_diamond",
+      "training_split": "train",
+      "validation_split": "train",
+      "process_docs": "def process_docs(dataset: datasets.Dataset) -> datasets.Dataset:\n    def _process_doc(doc):\n        choices = [\n            preprocess(doc[\"Incorrect Answer 1\"]),\n            preprocess(doc[\"Incorrect Answer 2\"]),\n            preprocess(doc[\"Incorrect Answer 3\"]),\n            preprocess(doc[\"Correct Answer\"]),\n        ]\n\n        random.shuffle(choices)\n        correct_answer_index = choices.index(preprocess(doc[\"Correct Answer\"]))\n\n        out_doc = {\n            \"choice1\": choices[0],\n            \"choice2\": choices[1],\n            \"choice3\": choices[2],\n            \"choice4\": choices[3],\n            \"choices\": [choices[0], choices[1], choices[2], choices[3]],\n            \"answer\": f\"({chr(65 + correct_answer_index)})\",\n        }\n        return out_doc\n\n    return dataset.map(_process_doc)\n",
+      "doc_to_text": "What is the correct answer to this question:{{Question}}\nChoices:\n(A) {{choice1}}\n(B) {{choice2}}\n(C) {{choice3}}\n(D) {{choice4}}\nPlease reason step by step, and put your final answer (only the letter A, B, C, or D) within \\boxed{}.\nAnswer:",
+      "doc_to_target": "answer",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "default",
+        "split": null,
+        "process_docs": "<function process_docs at 0x779fd8332f80>",
+        "fewshot_indices": null,
+        "samples": null,
+        "doc_to_text": "What is the correct answer to this question:{{Question}}\nChoices:\n(A) {{choice1}}\n(B) {{choice2}}\n(C) {{choice3}}\n(D) {{choice4}}\nPlease reason step by step, and put your final answer (only the letter A, B, C, or D) within \\boxed{}.\nAnswer:",
+        "doc_to_choice": null,
+        "doc_to_target": "answer",
+        "gen_prefix": null,
+        "fewshot_delimiter": "\n\n",
+        "target_delimiter": " "
+      },
+      "num_fewshot": 0,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "until": [
+          "</s>"
+        ],
+        "do_sample": false,
+        "temperature": 0.0,
+        "max_gen_toks": 4096,
+        "stream": false,
+        "seed": 42
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict-match",
+          "filter": [
+            {
+              "function": "regex",
+              "regex_pattern": "(?<=The answer is )(.*)(?=.)"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        },
+        {
+          "name": "flexible-extract",
+          "filter": [
+            {
+              "function": "boxed_choice"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "metadata": {
+        "version": 1.0,
+        "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+        "base_url": "http://127.0.0.1:8100/v1/completions",
+        "tokenizer_backend": "huggingface",
+        "max_length": 262144,
+        "timeout": 7200,
+        "num_concurrent": 32
+      }
+    }
+  },
+  "versions": {
+    "gpqa_diamond_cot_zeroshot": 1.0
+  },
+  "n-shot": {
+    "gpqa_diamond_cot_zeroshot": 0
+  },
+  "higher_is_better": {
+    "gpqa_diamond_cot_zeroshot": {
+      "exact_match": true
+    }
+  },
+  "n-samples": {
+    "gpqa_diamond_cot_zeroshot": {
+      "original": 198,
+      "effective": 198
+    }
+  },
+  "config": {
+    "model": "local-completions",
+    "model_args": {
+      "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+      "base_url": "http://127.0.0.1:8100/v1/completions",
+      "tokenizer_backend": "huggingface",
+      "max_length": 262144,
+      "timeout": 7200,
+      "num_concurrent": 32,
+      "trust_remote_code": true
+    },
+    "batch_size": "1",
+    "batch_sizes": [],
+    "device": "cuda:0",
+    "use_cache": null,
+    "limit": null,
+    "bootstrap_iters": 100000,
+    "gen_kwargs": {
+      "max_gen_toks": 4096,
+      "do_sample": false,
+      "stream": false,
+      "seed": 42
+    },
+    "random_seed": 42,
+    "numpy_seed": 42,
+    "torch_seed": 42,
+    "fewshot_seed": 42
+  },
+  "git_hash": "v0.77.0-dev20260812-41-g24092f5381f",
+  "date": 1787113044.506423,
+  "pretty_env_info": "PyTorch version: 2.13.0+cpu\nIs debug build: False\nCUDA used to build PyTorch: None\nROCM used to build PyTorch: N/A\n\nOS: Ubuntu 24.04.3 LTS (x86_64)\nGCC version: (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nClang version: Could not collect\nCMake version: version 4.0.2\nLibc version: glibc-2.39\n\nPython version: 3.10.20 (main, Jun 23 2026, 15:20:26) [Clang 22.1.3 ] (64-bit runtime)\nPython platform: Linux-7.0.0-28-generic-x86_64-with-glibc2.39\nIs CUDA available: False\nCUDA runtime version: No CUDA\nCUDA_MODULE_LOADING set to: N/A\nGPU models and configuration: No CUDA\nNvidia driver version: No CUDA\ncuDNN version: No CUDA\nIs XPU available: False\nHIP runtime version: N/A\nMIOpen runtime version: N/A\nIs XNNPACK available: False\nCaching allocator config: N/A\n\nCPU:\nArchitecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  16\nOn-line CPU(s) list:                     0-15\nVendor ID:                               AuthenticAMD\nModel name:                              AMD Ryzen 7 9700X 8-Core Processor\nCPU family:                              26\nModel:                                   68\nThread(s) per core:                      2\nCore(s) per socket:                      8\nSocket(s):                               1\nStepping:                                0\nFrequency boost:                         enabled\nCPU(s) scaling MHz:                      64%\nCPU max MHz:                             5582.3008\nCPU min MHz:                             605.3100\nBogoMIPS:                                7586.17\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good amd_lbr_v2 nopl xtopology nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpuid_fault cpb cat_l3 cdp_l3 hw_pstate ssbd mba perfmon_v2 ibrs ibpb stibp ibrs_enhanced vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk avx_vnni avx512_bf16 clzero irperf xsaveerptr rdpru wbnoinvd cppc arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif x2avic v_spec_ctrl vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid bus_lock_detect movdiri movdir64b overflow_recov succor smca fsrm avx512_vp2intersect flush_l1d amd_lbr_pmc_freeze\nVirtualization:                          AMD-V\nL1d cache:                               384 KiB (8 instances)\nL1i cache:                               256 KiB (8 instances)\nL2 cache:                                8 MiB (8 instances)\nL3 cache:                                32 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-15\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Mitigation; IBPB on VMEXIT only\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; STIBP always-on; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Mitigation; IBPB on VMEXIT\n\nVersions of relevant libraries:\n[pip3] Could not collect\n[conda] Could not collect",
+  "transformers_version": "5.15.0",
+  "lm_eval_version": "0.4.10.dev0",
+  "upper_git_hash": null,
+  "tokenizer_pad_token": [
+    "<|endoftext|>",
+    "151643"
+  ],
+  "tokenizer_eos_token": [
+    "<|im_end|>",
+    "151645"
+  ],
+  "tokenizer_bos_token": [
+    null,
+    "None"
+  ],
+  "eot_token_id": 151645,
+  "max_length": 262143
+}2026-08-19:05:17:02 INFO     [loggers.evaluation_tracker:269] Saving results aggregated
+2026-08-19:05:17:02 INFO     [loggers.evaluation_tracker:119] Saving per-task samples to /home/raahem/tt-inference-server/workflow_logs/reports_output/release/Qwen3-Coder-30B-A3B-Instruct_p300x2_release/eval_id_qwen3-coder-30b-a3b-autoport_Qwen3-Coder-30B-A3B-Instruct_p300x2/Qwen__Qwen3-Coder-30B-A3B-Instruct/*.jsonl
+
+local-completions ({'model': 'Qwen/Qwen3-Coder-30B-A3B-Instruct', 'base_url': 'http://127.0.0.1:8100/v1/completions', 'tokenizer_backend': 'huggingface', 'max_length': 262144, 'timeout': 7200, 'num_concurrent': 32}), gen_kwargs: ({'max_gen_toks': 4096, 'do_sample': False, 'stream': False, 'seed': 42}), limit: None, num_fewshot: 0, batch_size: 1
+|          Tasks          |Version|     Filter     |n-shot|  Metric   |   |Value |   |Stderr|
+|-------------------------|------:|----------------|-----:|-----------|---|-----:|---|-----:|
+|gpqa_diamond_cot_zeroshot|      1|flexible-extract|     0|exact_match|↑  |0.5606|±  |0.0354|
+|                         |       |strict-match    |     0|exact_match|↑  |0.0000|±  |0.0000|
+
+GPQA_EXIT_CODE=0
+=== finished at Wed Aug 19 05:17:02 AM UTC 2026 ===

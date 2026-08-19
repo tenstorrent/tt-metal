@@ -1,0 +1,143 @@
+INFO 08-18 19:23:32 [__init__.py:44] Available plugins for group vllm.platform_plugins:
+INFO 08-18 19:23:32 [__init__.py:46] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 08-18 19:23:32 [__init__.py:49] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+2026-08-18 19:23:33.113 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+INFO 08-18 19:23:33 [__init__.py:237] Platform plugin tt is activated
+INFO 08-18 19:23:35 [importing.py:46] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-18 19:23:35 [importing.py:81] Triton not installed or not compatible; certain GPU-related functions will not be available.
+INFO 08-18 19:23:36 [platform.py:499] Registered TT model TTQwen3MoeForCausalLM -> tt_qwen3_coder_30b_a3b_instruct:Qwen3CoderForCausalLM (from EXTRA_MODELS_DIR/qwen3_coder_30b_a3b_instruct)
+(APIServer pid=3658527) INFO 08-18 19:23:36 [api_utils.py:339]
+(APIServer pid=3658527) INFO 08-18 19:23:36 [api_utils.py:339]        █     █     █▄   ▄█
+(APIServer pid=3658527) INFO 08-18 19:23:36 [api_utils.py:339]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.24.0
+(APIServer pid=3658527) INFO 08-18 19:23:36 [api_utils.py:339]   █▄█▀ █     █     █     █  model   Qwen/Qwen3-Coder-30B-A3B-Instruct
+(APIServer pid=3658527) INFO 08-18 19:23:36 [api_utils.py:339]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=3658527) INFO 08-18 19:23:36 [api_utils.py:339]
+(APIServer pid=3658527) INFO 08-18 19:23:36 [api_utils.py:273] non-default args: {'port': 8100, 'model': 'Qwen/Qwen3-Coder-30B-A3B-Instruct', 'max_model_len': 262144, 'generation_config': 'vllm', 'block_size': 32, 'max_num_seqs': 32, 'additional_config': {'tt': {'sample_on_device_mode': 'all', 'trace_region_size': 50331648, 'fabric_config': 'FABRIC_1D_RING'}}}
+(APIServer pid=3658527) WARNING 08-18 19:23:36 [envs.py:2004] Unknown vLLM environment variable detected: VLLM_RPC_TIMEOUT
+(APIServer pid=3658527) Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+(APIServer pid=3658527) INFO 08-18 19:23:36 [model.py:598] Resolved architecture: Qwen3MoeForCausalLM
+(APIServer pid=3658527) INFO 08-18 19:23:36 [model.py:1725] Using max model len 262144
+(APIServer pid=3658527) INFO 08-18 19:23:36 [vllm.py:1006] Asynchronous scheduling is enabled.
+(APIServer pid=3658527) WARNING 08-18 19:23:36 [vllm.py:1110] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+(APIServer pid=3658527) INFO 08-18 19:23:36 [kernel.py:276] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'])
+(APIServer pid=3658527) INFO 08-18 19:23:36 [platform.py:791] Chunked prefill is not yet supported for TT backend
+(APIServer pid=3658527) WARNING 08-18 19:23:36 [platform.py:802] max_num_batched_tokens=2048 < max_model_len=262144 with chunked prefill disabled, bumping max_num_batched_tokens to match.
+(APIServer pid=3658527) INFO 08-18 19:23:36 [platform.py:499] Registered TT model TTQwen3MoeForCausalLM -> tt_qwen3_coder_30b_a3b_instruct:Qwen3CoderForCausalLM (from EXTRA_MODELS_DIR/qwen3_coder_30b_a3b_instruct)
+(APIServer pid=3658527) WARNING 08-18 19:23:36 [platform.py:1032] Prefix caching is not supported in TT backend for models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm, disabling it
+(APIServer pid=3658527) INFO 08-18 19:23:36 [platform.py:1049] Automatic prefix caching is disabled
+(APIServer pid=3658527) INFO 08-18 19:23:36 [compilation.py:310] Enabled custom fusions: norm_quant, act_quant
+INFO 08-18 19:23:39 [__init__.py:44] Available plugins for group vllm.platform_plugins:
+INFO 08-18 19:23:39 [__init__.py:46] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 08-18 19:23:39 [__init__.py:49] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+2026-08-18 19:23:40.276 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+INFO 08-18 19:23:40 [__init__.py:237] Platform plugin tt is activated
+INFO 08-18 19:23:42 [importing.py:46] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-18 19:23:42 [importing.py:81] Triton not installed or not compatible; certain GPU-related functions will not be available.
+(EngineCore pid=3658835) INFO 08-18 19:23:43 [platform.py:499] Registered TT model TTQwen3MoeForCausalLM -> tt_qwen3_coder_30b_a3b_instruct:Qwen3CoderForCausalLM (from EXTRA_MODELS_DIR/qwen3_coder_30b_a3b_instruct)
+(EngineCore pid=3658835) INFO 08-18 19:23:43 [core.py:114] Initializing a V1 LLM engine (v0.24.0) with config: model='Qwen/Qwen3-Coder-30B-A3B-Instruct', speculative_config=None, tokenizer='Qwen/Qwen3-Coder-30B-A3B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=262144, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=True, quantization=None, quantization_config=None, enforce_eager=False, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=None, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=True, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_verbose=False), seed=0, served_model_name=Qwen/Qwen3-Coder-30B-A3B-Instruct, enable_prefix_caching=False, enable_chunked_prefill=False, pooler_config=None, compilation_config={'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'eager', 'custom_ops': ['all'], 'ir_enable_torch_wrap': False, 'splitting_ops': ['vllm::unified_attention_with_output', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::linear_attention', 'vllm::plamo2_mamba_mixer', 'vllm::qwen_gdn_attention_core', 'vllm::gdn_attention_core_xpu', 'vllm::olmo_hybrid_gdn_full_forward', 'vllm::kda_attention', 'vllm::sparse_attn_indexer', 'vllm::rocm_aiter_sparse_attn_indexer', 'vllm::deepseek_v4_attention', 'vllm::unified_kv_cache_update', 'vllm::unified_mla_kv_cache_update'], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': None, 'compile_ranges_endpoints': [262144], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'size_asserts': False, 'alignment_asserts': False, 'scalar_asserts': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': None, 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False}, 'max_cudagraph_capture_size': None, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native']), enable_flashinfer_autotune=True, moe_backend='auto', linear_backend='auto')
+(EngineCore pid=3658835) INFO 08-18 19:23:43 [platform.py:499] Registered TT model TTQwen3MoeForCausalLM -> tt_qwen3_coder_30b_a3b_instruct:Qwen3CoderForCausalLM (from EXTRA_MODELS_DIR/qwen3_coder_30b_a3b_instruct)
+(EngineCore pid=3658835) INFO 08-18 19:23:43 [platform.py:499] Registered TT model TTQwen3MoeForCausalLM -> tt_qwen3_coder_30b_a3b_instruct:Qwen3CoderForCausalLM (from EXTRA_MODELS_DIR/qwen3_coder_30b_a3b_instruct)
+(EngineCore pid=3658835) INFO 08-18 19:23:43 [platform.py:1049] Automatic prefix caching is disabled
+(EngineCore pid=3658835) INFO 08-18 19:23:43 [worker.py:214] TT worker standard-DP binding: data_parallel_index=0 data_parallel_rank_local=0 TT_VISIBLE_DEVICES=None MESH_DEVICE=P300x2
+2026-08-18 19:23:43.317 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-18 19:23:43.317 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-18 19:23:43.317 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-18 19:23:43.317 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-18 19:23:43.328 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-18 19:23:43.329 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-18 19:23:43.413 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-18 19:23:43.413 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-18 19:23:43.413 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-18 19:23:43.413 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-18 19:23:43.414 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-18 19:23:43.586 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+(EngineCore pid=3658835) INFO 08-18 19:23:43 [worker.py:840] Attempting to open mesh device with grid shape (1, 4)
+(EngineCore pid=3658835) INFO 08-18 19:23:43 [worker.py:774] Setting fabric config: FabricConfig.FABRIC_1D_RING, reliability mode: FabricReliabilityMode.STRICT_INIT
+2026-08-18 19:23:43.702 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-18 19:23:43.702 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-18 19:23:43.702 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-18 19:23:43.702 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-18 19:23:43.702 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-18 19:23:43.751 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-18 19:23:43.793 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-18 19:23:43.793 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+(EngineCore pid=3658835) INFO 08-18 19:23:44 [worker.py:853] multidevice with 4 devices and grid (1, 4) is created
+(EngineCore pid=3658835) INFO 08-18 19:23:44 [model_runner.py:167] TTModelRunner: trace_mode=all, sample_on_device_mode=all, enable_model_warmup=True
+(EngineCore pid=3658835) 2026-08-18 19:26:47.239 | INFO     | models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm:initialize_vllm_model:228 - Qwen3-Coder-30B-A3B vLLM init: max_num_seqs=32 max_model_len=262144 precision=/home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/datatype_sweep/selected_precision_config.json active_row_gating=True optimizations=None
+(EngineCore pid=3658835) INFO 08-18 19:26:47 [worker.py:632] Getting max_tokens_all_users=262144 for number of blocks in KV cache from generator '<class 'models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm.Qwen3CoderForCausalLM'>'.
+(EngineCore pid=3658835) INFO 08-18 19:26:47 [kv_cache_utils.py:2084] Overriding num_gpu_blocks=8224 with num_gpu_blocks_override=8224
+(EngineCore pid=3658835) INFO 08-18 19:26:47 [kv_cache_utils.py:2146] GPU KV cache size: 263,168 tokens
+(EngineCore pid=3658835) INFO 08-18 19:26:47 [kv_cache_utils.py:2147] Maximum concurrency for 262,144 tokens per request: 1.00x
+(EngineCore pid=3658835) 2026-08-18 19:26:47.243 | INFO     | models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm:allocate_kv_cache:349 - vLLM-owned KV cache: 8224 blocks x 32 tokens = 263168 tokens, 1 local KV heads, dtype DataType.BFLOAT16 (from the selected precision config; vLLM asked for torch.bfloat16)
+(EngineCore pid=3658835) 2026-08-18 19:26:50.961 | INFO     | models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm:warmup_model_prefill:386 - Prefill warmup done (lengths 129, 128; 129 is deliberately non-page-aligned)
+(EngineCore pid=3658835) 2026-08-18 19:26:51.850 | INFO     | models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm:warmup_model_decode:424 - Decode warmup done (batch 32, enable_trace=False)
+(EngineCore pid=3658835) 2026-08-18 19:26:52.122 | INFO     | models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm:warmup_model_decode:424 - Decode warmup done (batch 32, enable_trace=True)
+(EngineCore pid=3658835) INFO 08-18 19:26:52 [core.py:337] init engine (profile, create kv cache, warmup model) took 4.88 s (compilation: 1.61 s)
+(EngineCore pid=3658835) Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+(EngineCore pid=3658835) WARNING 08-18 19:26:52 [scheduler.py:192] Using custom scheduler class vllm_tt_plugin.scheduler.TTScheduler. This scheduler interface is not public and compatibility may not be maintained. If you have subclassed Scheduler instead of AsyncScheduler, you will see degraded performance due to async scheduling being disabled.
+(EngineCore pid=3658835) INFO 08-18 19:26:53 [vllm.py:1006] Asynchronous scheduling is enabled.
+(EngineCore pid=3658835) WARNING 08-18 19:26:53 [vllm.py:1110] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+(EngineCore pid=3658835) INFO 08-18 19:26:53 [kernel.py:276] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'])
+(EngineCore pid=3658835) INFO 08-18 19:26:53 [platform.py:499] Registered TT model TTQwen3MoeForCausalLM -> tt_qwen3_coder_30b_a3b_instruct:Qwen3CoderForCausalLM (from EXTRA_MODELS_DIR/qwen3_coder_30b_a3b_instruct)
+(EngineCore pid=3658835) INFO 08-18 19:26:53 [platform.py:1049] Automatic prefix caching is disabled
+(EngineCore pid=3658835) INFO 08-18 19:26:53 [compilation.py:310] Enabled custom fusions: norm_quant, act_quant
+(APIServer pid=3658527) INFO 08-18 19:26:53 [api_server.py:577] Supported tasks: ['generate']
+(APIServer pid=3658527) INFO 08-18 19:26:54 [hf.py:548] Detected the chat template content format to be 'string'. You can set `--chat-template-content-format` to override this.
+(APIServer pid=3658527) INFO 08-18 19:26:54 [api_server.py:581] Starting vLLM server on http://0.0.0.0:8100
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:37] Available routes are:
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /openapi.json, Methods: GET, HEAD
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /docs, Methods: GET, HEAD
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /docs/oauth2-redirect, Methods: GET, HEAD
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /redoc, Methods: GET, HEAD
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /load, Methods: GET
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /version, Methods: GET
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /health, Methods: GET
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /metrics, Methods: GET
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /tokenize, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /detokenize, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /v1/models, Methods: GET
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /ping, Methods: GET
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /ping, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /invocations, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /v1/chat/completions, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /v1/chat/completions/batch, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /v1/responses, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /v1/responses/{response_id}, Methods: GET
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /v1/responses/{response_id}/cancel, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /v1/completions, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /v1/messages, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /v1/messages/count_tokens, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /generative_scoring, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /inference/v1/generate, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /scale_elastic_ep, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /is_scaling_elastic_ep, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /v1/chat/completions/render, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /v1/completions/render, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /v1/chat/completions/derender, Methods: POST
+(APIServer pid=3658527) INFO 08-18 19:26:54 [launcher.py:46] Route: /v1/completions/derender, Methods: POST
+(APIServer pid=3658527) INFO:     Started server process [3658527]
+(APIServer pid=3658527) INFO:     Waiting for application startup.
+(APIServer pid=3658527) INFO:     Application startup complete.
+(APIServer pid=3658527) INFO:     127.0.0.1:45148 - "GET /health HTTP/1.1" 200 OK
+(APIServer pid=3658527) INFO:     127.0.0.1:45164 - "GET /health HTTP/1.1" 200 OK
+(APIServer pid=3658527) INFO:     127.0.0.1:38890 - "GET /health HTTP/1.1" 200 OK
+(APIServer pid=3658527) INFO:     127.0.0.1:38900 - "GET /v1/models HTTP/1.1" 200 OK
+(EngineCore pid=3658835) 2026-08-18 19:27:07.599 | WARNING  | models.autoports.qwen_qwen3_coder_30b_a3b_instruct.tt.generator_vllm:_warn_once:278 - vLLM took the async decode split: read_decode_output(async_read=True) on a device handle returned by decode_forward(read_from_device=False). supports_async_decode is being exercised, not merely declared.
+(APIServer pid=3658527) INFO:     127.0.0.1:38902 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=3658527) INFO 08-18 19:27:14 [loggers.py:273] Engine 000: Avg prompt throughput: 2.1 tokens/s, Avg generation throughput: 2.4 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.0%
+(APIServer pid=3658527) INFO 08-18 19:27:24 [loggers.py:273] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.0%
+(APIServer pid=3658527) INFO:     127.0.0.1:38820 - "GET /v1/models HTTP/1.1" 200 OK
+(APIServer pid=3658527) INFO:     127.0.0.1:38836 - "GET /v1/models HTTP/1.1" 200 OK
+(APIServer pid=3658527) INFO:     127.0.0.1:39310 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=3658527) INFO:     127.0.0.1:39310 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=3658527) INFO:     127.0.0.1:39310 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=3658527) INFO:     127.0.0.1:39310 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=3658527) INFO:     127.0.0.1:39310 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=3658527) INFO:     127.0.0.1:39310 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=3658527) INFO 08-18 19:40:34 [loggers.py:273] Engine 000: Avg prompt throughput: 12.0 tokens/s, Avg generation throughput: 2.0 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.0%
+(APIServer pid=3658527) INFO:     127.0.0.1:39310 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=3658527) INFO:     127.0.0.1:39310 - "POST /v1/chat/completions HTTP/1.1" 200 OK
+(APIServer pid=3658527) INFO 08-18 19:40:44 [loggers.py:273] Engine 000: Avg prompt throughput: 7.2 tokens/s, Avg generation throughput: 1.2 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.0%
+(APIServer pid=3658527) INFO 08-18 19:40:54 [loggers.py:273] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 0 reqs, Waiting: 0 reqs, GPU KV cache usage: 0.0%, Prefix cache hit rate: 0.0%

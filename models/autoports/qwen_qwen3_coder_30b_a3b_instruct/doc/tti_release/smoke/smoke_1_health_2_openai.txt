@@ -1,0 +1,9 @@
+=== 1. health ===
+$ curl -fsS -w "\nHTTP %{http_code}\n" http://127.0.0.1:8100/health
+
+HTTP 200
+
+=== /v1/models ===
+{"object":"list","data":[{"id":"Qwen/Qwen3-Coder-30B-A3B-Instruct","object":"model","created":1787081227,"owned_by":"vllm","root":"Qwen/Qwen3-Coder-30B-A3B-Instruct","parent":null,"max_model_len":262144,"permission":[{"id":"modelperm-bdbda95051588a7a","object":"model_permission","created":1787081227,"allow_create_engine":false,"allow_sampling":true,"allow_logprobs":true,"allow_search_indices":false,"allow_view":true,"allow_fine_tuning":false,"organization":"*","group":null,"is_blocking":false}]}]}
+=== 2. OpenAI chat completion ===
+{"id":"chatcmpl-a218a516762a8207","object":"chat.completion","created":1787081227,"model":"Qwen/Qwen3-Coder-30B-A3B-Instruct","choices":[{"index":0,"message":{"role":"assistant","content":"A Python list comprehension is a concise way to create lists by applying an expression to each item in an existing iterable.","refusal":null,"annotations":null,"audio":null,"function_call":null,"reasoning":null},"logprobs":null,"finish_reason":"stop","stop_reason":null,"token_ids":null,"routed_experts":null}],"service_tier":null,"system_fingerprint":"vllm-0.24.0-53f7d47e","usage":{"prompt_tokens":21,"total_tokens":45,"completion_tokens":24,"prompt_tokens_details":null},"prompt_logprobs":null,"prompt_token_ids":null,"prompt_text":null,"kv_transfer_params":null}

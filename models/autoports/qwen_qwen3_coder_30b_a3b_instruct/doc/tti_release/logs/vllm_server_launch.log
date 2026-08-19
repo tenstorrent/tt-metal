@@ -1,0 +1,86 @@
++ cd /home/raahem/tt-metal
++ source python_env/bin/activate
+++ '[' -z '' ']'
+++ '[' -n x ']'
+++ SCRIPT_PATH=python_env/bin/activate
+++ '[' python_env/bin/activate = /tmp/claude-1001/-home-raahem-tt-metal/ad4804b7-3765-440c-8fb1-dec6c8fa23f6/scratchpad/launch_server.sh ']'
+++ deactivate nondestructive
+++ unset -f pydoc
+++ '[' -z '' ']'
+++ '[' -z '' ']'
+++ hash -r
+++ '[' -z '' ']'
+++ unset VIRTUAL_ENV
+++ unset VIRTUAL_ENV_PROMPT
+++ '[' '!' nondestructive = nondestructive ']'
+++ '[' -n python_env/bin/activate ']'
++++++ realpath -- python_env/bin/activate
+++++ dirname -- /home/raahem/tt-metal/python_env/bin/activate
++++ dirname -- /home/raahem/tt-metal/python_env/bin
+++ VIRTUAL_ENV=/home/raahem/tt-metal/python_env
+++ '[' linux-gnu = cygwin ']'
+++ '[' linux-gnu = msys ']'
+++ export VIRTUAL_ENV
+++ '[' -z '' ']'
+++ unset SCRIPT_PATH
+++ _OLD_VIRTUAL_PATH=/home/raahem/.local/bin:/home/raahem/.opencode/bin:/home/raahem/.nvm/versions/node/v24.18.0/bin:/home/raahem/.cursor-server/bin/linux-x64/6b2afae0257df2bb5e1835f15165dc2f0de056b0/bin/remote-cli:/home/raahem/.local/bin:/home/raahem/.opencode/bin:/home/raahem/.nvm/versions/node/v24.18.0/bin:/home/raahem/.cursor-server/bin/linux-x64/6b2afae0257df2bb5e1835f15165dc2f0de056b0/bin/remote-cli:/home/raahem/.local/bin:/home/raahem/.nvm/versions/node/v24.18.0/bin:/home/raahem/.nvm/versions/node/v24.18.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+++ PATH=/home/raahem/tt-metal/python_env/bin:/home/raahem/.local/bin:/home/raahem/.opencode/bin:/home/raahem/.nvm/versions/node/v24.18.0/bin:/home/raahem/.cursor-server/bin/linux-x64/6b2afae0257df2bb5e1835f15165dc2f0de056b0/bin/remote-cli:/home/raahem/.local/bin:/home/raahem/.opencode/bin:/home/raahem/.nvm/versions/node/v24.18.0/bin:/home/raahem/.cursor-server/bin/linux-x64/6b2afae0257df2bb5e1835f15165dc2f0de056b0/bin/remote-cli:/home/raahem/.local/bin:/home/raahem/.nvm/versions/node/v24.18.0/bin:/home/raahem/.nvm/versions/node/v24.18.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+++ export PATH
+++ '[' x '!=' x ']'
++++ basename /home/raahem/tt-metal/python_env
+++ VIRTUAL_ENV_PROMPT=python_env
+++ export VIRTUAL_ENV_PROMPT
+++ '[' -z '' ']'
+++ '[' -z '' ']'
+++ _OLD_VIRTUAL_PS1=
+++ PS1='(python_env) '
+++ export PS1
+++ alias pydoc
+++ true
+++ hash -r
++ export EXTRA_MODELS_DIR=/home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/vllm_bundle
++ EXTRA_MODELS_DIR=/home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/vllm_bundle
++ exec python -m models.common.readiness_check.run_vllm_server --model-dir /tmp/claude-1001/-home-raahem-tt-metal/ad4804b7-3765-440c-8fb1-dec6c8fa23f6/scratchpad/tti_server_scratch --hf-model Qwen/Qwen3-Coder-30B-A3B-Instruct --mesh-device P300x2 --max-num-seqs 32 --max-model-len 262144 --block-size 32 --port 8100 --stages serve --tt-config '{"trace_region_size": 50331648, "fabric_config": "FABRIC_1D_RING"}' --additional-server-args '--generation-config vllm'
+Launching vLLM server for Qwen/Qwen3-Coder-30B-A3B-Instruct on P300x2
+  cmd: /home/raahem/tt-metal/python_env/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3-Coder-30B-A3B-Instruct --block_size 32 --max_num_seqs 32 --port 8100 --max_model_len 262144 --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 50331648, "fabric_config": "FABRIC_1D_RING"}}' --generation-config vllm
+  log: /tmp/claude-1001/-home-raahem-tt-metal/ad4804b7-3765-440c-8fb1-dec6c8fa23f6/scratchpad/tti_server_scratch/readiness_vllm/server.log
+Waiting up to 1200s for server to become ready...
+  Server ready after ~210s
+
+Server ready at http://localhost:8100
+Server is running. Press Ctrl-C (or send SIGTERM) to stop.
+
+Shutting down server (PID 3658527)...
+  Terminated cleanly.
+
+=== Server log tail (/tmp/claude-1001/-home-raahem-tt-metal/ad4804b7-3765-440c-8fb1-dec6c8fa23f6/scratchpad/tti_server_scratch/readiness_vllm/server.log, last 30 lines) ===
+ - leaked instance 0x9d98800 of type "ttnn._ttnn.operations.unary.bitcast_t"
+ - leaked instance 0xa694d70 of type "ttnn._ttnn.operations.unary.ltz_t"
+ - leaked instance 0x7c1364f89b18 of type "ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig"
+ - ... skipped remainder
+nanobind: leaked 953 types!
+ - leaked type "SocketEndpoint"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.gt__t"
+ - leaked type "ttnn._ttnn.d2d_stream_service.D2DStreamServiceSender"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.SliceDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "ttnn._ttnn.operations.binary.lt__t"
+ - leaked type "ttnn._ttnn.operations.binary_backward.xlogy_bw_t"
+ - leaked type "ttnn._ttnn.operations.experimental.insert_t"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.isclose_t"
+ - leaked type "ttnn._ttnn.operations.reduction.var_t"
+ - ... skipped remainder
+nanobind: leaked 4378 functions!
+ - leaked function ""
+ - leaked function "__setitem__"
+ - leaked function ""
+ - leaked function "__call__"
+ - leaked function "__call__"
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html
