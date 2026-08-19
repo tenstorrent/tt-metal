@@ -77,7 +77,8 @@ template <
 ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
     // Compile-time validation
     static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
-    static_assert(input_dfb != output_dfb, "Tilize cannot be done in-place: input_dfb and output_dfb must be different");
+    static_assert(
+        input_dfb != output_dfb, "Tilize cannot be done in-place: input_dfb and output_dfb must be different");
     static_assert(input_dfb < 32, "Invalid input_dfb: must be less than 32");
     static_assert(output_dfb < 32, "Invalid output_dfb: must be less than 32");
 
@@ -89,7 +90,8 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
     // (fast tilize truncates fp32 → tf32). Has no effect on non-fp32 formats.
     constexpr bool lossless_fp32_override =
         (fp32_mode == tilize_config::Fp32Mode::Lossless) && is_fp32_input_format<input_dfb>();
-    constexpr bool use_fast = can_use_fast_tilize<block_width_tiles, input_dfb, output_dfb>() && !lossless_fp32_override;
+    constexpr bool use_fast =
+        can_use_fast_tilize<block_width_tiles, input_dfb, output_dfb>() && !lossless_fp32_override;
 
     // Determine if we're doing data type reconfiguration
     constexpr bool use_unpack_reconfig =
@@ -154,7 +156,18 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         }
     }
 
-    // Validate DFB capacity
+    // Construct DataflowBuffer objects for sync operations.
+    //
+    // The constructor runs dfb_ensure_ready(), which blocks until this buffer's producer has
+    // published its tile-counter state (buf_capacity et al.). The capacity ASSERTs below read
+    // buf_capacity through get_dfb_num_pages(), so they must come AFTER construction: placed before
+    // it, they race the producer's publish and can read a stale/zero capacity, tripping a false
+    // assert that only surfaces under timing shifts (e.g. multicore, or an extra unpack-thread init).
+    DataflowBuffer in_dfb(input_dfb);
+    DataflowBuffer out_dfb(output_dfb);
+
+    // Validate DFB capacity — race-free here because the DataflowBuffer constructors above ran
+    // dfb_ensure_ready(), guaranteeing the producer has programmed the tile counters.
     if (asymmetric_dfb_pages) {
         uint32_t max_in = (*total_input_pages < 32) ? *total_input_pages : 32;
         UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= max_in));
@@ -162,10 +175,6 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= block_width_tiles));
     }
     PACK(ASSERT(get_dfb_num_pages(output_dfb) >= block_width_tiles));
-
-    // Construct DataflowBuffer objects for sync operations
-    DataflowBuffer in_dfb(input_dfb);
-    DataflowBuffer out_dfb(output_dfb);
 
     // Upfront wait (when requested)
     if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {
