@@ -5815,3 +5815,19 @@ and PCIe write (29-37) layers sit.
 
 READ_ONLY's stall count (307,897) slots between the max-ack floor (~290k) and decode-paced (~361k),
 consistent with the layer costs above.
+
+## §N+54 — AVX2 zone-block decode: 2.1x, SUSTAINED busy 5.8 -> 12.2 GB/s D2H, 667 Mzones/s (bh-18, 2026-08-19)
+
+The scalar walk's ~12-14 cycles per 8 B marker (§N+53) was the D2H wall. The decode SSoT now screens each
+16-word block with one AVX2 shift+compare over the deinterleaved word0s; when all eight packets are plain
+zone markers -- the dominant case in a full span -- the receiver's vectorized sink builds all eight records
+in registers (timestamps th<<32|w1 via cvtepu32, meta by masked shift/or with the bit-field layout pinned by
+a TT_FATAL bit_cast probe, order/stall/min-max stats vectorized) and issues eight 16 B NT stores. Any other
+type in the block falls back to the scalar walk.
+
+Judged run: decode 189.5 -> 89.6/90.5 ms per thread; SUSTAINED busy 12.19 GB/s D2H / 10.67 GB/s marker-wire
+/ 666.9 Mzones/s. Capture stays count-exact (zones == 60M + 352,217 stall-pairs + 600 wrappers, matching the
+L1 stall counters exactly), 0 order regressions, 0 consumer drops. Producer stalls 361k -> 352,217,
+converging toward the ~290k device floor (§N+51). Per-thread decode is now 6.2 GB/s against the 13.6 GB/s
+raw-read ceiling (§N+53), so roughly another 2x of headroom remains in the scalar residue (screen misses,
+sub-16-word tails, per-block overheads) before reads become the wall.

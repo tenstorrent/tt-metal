@@ -16,11 +16,15 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
 #if defined(__x86_64__)
 #include <xmmintrin.h>
+#endif
+#if defined(__AVX2__)
+#include <immintrin.h>
 #endif
 
 #include "hostdevcommon/profiler_common.h"
@@ -88,6 +92,9 @@ struct SpscIgnoreProg {
     void operator()(uint32_t /*core*/, uint32_t /*prog*/) const {}
 };
 
+// Sentinel default for the vectorized zone-block sink: without a real one the walk stays scalar.
+struct SpscNoZones8 {};
+
 inline void spsc_prefetch(const void* p) {
 #if defined(__x86_64__)
     _mm_prefetch(static_cast<const char*>(p), _MM_HINT_T0);
@@ -106,13 +113,22 @@ inline void spsc_prefetch(const void* p) {
 // the mirror after a frame was lost upstream (device credit-timeout drop), the frame field when the
 // drainer's write-back lagged the snapshot -- so the larger one is always the truth. Adopting it makes an
 // upstream loss a counted resync instead of re-decoding overwritten ring words as markers.
-template <typename EmitMarker, typename EmitData, typename EmitProg = SpscIgnoreProg>
+// The optional emit_zones8(lane, timer_hi, prog, w0s, w1s) sink receives EIGHT consecutive 2-word zone
+// markers at once, deinterleaved into AVX2 vectors of word0s and word1s, whenever a 16-word block passes
+// the all-zone type screen -- the dominant case in a full span, and where the scalar walk's per-record
+// cost lives.
+template <
+    typename EmitMarker,
+    typename EmitData,
+    typename EmitProg = SpscIgnoreProg,
+    typename EmitZones8 = SpscNoZones8>
 inline void spsc_decode_frame(
     SpanDecodeState& st,
     const uint32_t* frame,
     EmitMarker&& emit,
     EmitData&& emit_data,
-    EmitProg&& emit_prog = SpscIgnoreProg{}) {
+    EmitProg&& emit_prog = SpscIgnoreProg{},
+    EmitZones8&& emit_zones8 = SpscNoZones8{}) {
     const uint32_t* ctrl = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
     const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_CORE_XY]);
     if (xy_it == st.core_of_xy.end()) {
@@ -161,6 +177,27 @@ inline void spsc_decode_frame(
         uint32_t th = st.timer_hi[lane];
         uint32_t i = 0;
         while (i < run) {
+#if defined(__AVX2__)
+            if constexpr (!std::is_same_v<std::decay_t<EmitZones8>, SpscNoZones8>) {
+                const uint32_t idx = (hm + i) & kSpscRingMask;
+                if (i + 16 <= run && idx + 16 <= kSpscRingCap) {
+                    const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ring + idx));
+                    const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ring + idx + 8));
+                    const __m256i even = _mm256_castps_si256(
+                        _mm256_shuffle_ps(_mm256_castsi256_ps(v0), _mm256_castsi256_ps(v1), _MM_SHUFFLE(2, 0, 2, 0)));
+                    const __m256i odd = _mm256_castps_si256(
+                        _mm256_shuffle_ps(_mm256_castsi256_ps(v0), _mm256_castsi256_ps(v1), _MM_SHUFFLE(3, 1, 3, 1)));
+                    const __m256i w0s = _mm256_permute4x64_epi64(even, _MM_SHUFFLE(3, 1, 2, 0));
+                    const __m256i w1s = _mm256_permute4x64_epi64(odd, _MM_SHUFFLE(3, 1, 2, 0));
+                    const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
+                    if (_mm256_movemask_epi8(_mm256_cmpgt_epi32(types, _mm256_set1_epi32(1))) == 0) {
+                        emit_zones8(lane, th, pg, w0s, w1s);
+                        i += 16;
+                        continue;
+                    }
+                }
+            }
+#endif
             const uint32_t w0 = ring[(hm + i) & kSpscRingMask];
             const uint32_t t = pp_type(w0);
             if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
