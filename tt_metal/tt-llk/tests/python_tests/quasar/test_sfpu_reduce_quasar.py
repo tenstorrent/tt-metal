@@ -65,13 +65,19 @@ dimension_combinations = [
 ]
 
 
-def get_format_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]:
+def get_format_input_bounds(
+    formats: InputOutputFormat, reduce_pool: ReducePool
+) -> list[tuple[int, int]]:
     """Get valid stimuli bounds based on data format.
 
-    Range is cut off at 1000 for Sum reduction kernels with UInt16 input format
-    to avoid overflow.
+    UInt16 Sum folds up to ``max_tiles * TILE_DIM`` terms into a 16-bit result.
+    Cap the exclusive upper bound so that product cannot overflow UInt16; Average
+    and Max/Min stay at the unsigned (0, 1000) window.
     """
     if formats.input_format == DataFormat.UInt16:
+        if reduce_pool == ReducePool.Sum:
+            max_terms = max_tiles * TILE_DIM
+            return [(0, UINT16_MAX // max_terms)]
         return [(0, 1000)]
     return [(-1000, 1000), (0, 1000), (-1000, 0)]
 
@@ -152,16 +158,14 @@ REDUCE_BASE_FORMATS = [
 ]
 
 
-def get_reduce_formats(reduce_pool: ReducePool) -> list[InputOutputFormat]:
+def get_reduce_formats() -> list[InputOutputFormat]:
     """Input/output format pairs for the reduce suite.
 
-    UInt16 Sum/Average can overflow a 16-bit accumulator, so those pools skip
-    UInt16. Every other case keeps input == output.
+    Every pool keeps input == output, including UInt16 Sum/Average. Overflow on
+    those pools is avoided by shrinking the UInt16 Sum stimuli range in
+    ``get_format_input_bounds`` rather than widening the pack format.
     """
-    formats = REDUCE_BASE_FORMATS
-    if reduce_pool in (ReducePool.Sum, ReducePool.Average):
-        formats = [fmt for fmt in formats if fmt != DataFormat.UInt16]
-    return [InputOutputFormat(fmt, fmt) for fmt in formats]
+    return [InputOutputFormat(fmt, fmt) for fmt in REDUCE_BASE_FORMATS]
 
 
 _FLOAT_FORMAT_EPS = {
