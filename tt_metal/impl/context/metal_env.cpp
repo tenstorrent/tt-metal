@@ -288,7 +288,11 @@ bool MetalEnvImpl::set_fabric_config(
     }
 
     if (num_routing_planes.has_value() && num_routing_planes.value() < this->num_fabric_active_routing_planes_) {
-        log_warning(
+        // This is the expected, common case: DeviceManager's legacy dispatch-fallback path (see
+        // DeviceManager::initialize) always requests num_routing_planes=1 to enable minimal fabric for dispatch,
+        // regardless of how many routing planes the control plane already has active. Silently keeping the higher
+        // existing value is correct behavior, not a misconfiguration, so this does not warrant warning severity.
+        log_debug(
             tt::LogMetal,
             "Got num_routing_planes: {}, which is less than current value: {}, ignoring the override",
             num_routing_planes.value(),
