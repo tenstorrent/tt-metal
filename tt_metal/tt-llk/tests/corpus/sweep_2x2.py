@@ -1318,30 +1318,37 @@ exit $RC
         the ON set CHANGES this row's bytes, the measured silicon legs MUST
         have carried the ON set.  A row measured at default/OFF flags while
         classify says CHANGED is benchmarking with the mechanism available
-        but unrequested — RED, never silent."""
+        but unrequested — RED, never silent.
+
+        Must run AFTER measurement: on the pre-measurement skeleton
+        result["runs"] is empty, which RED'd every byte-changing row
+        (the s3rows-20260819 false-positive)."""
         changed = any(
             (classifications.get(sel) or {}).get("all") == "CHANGED"
             for sel in ("sem-perf", "sem-corr")
         )
         if not changed:
             return
-        for run_key, run in (result.get("runs") or {}).items():
-            flags = (run or {}).get("flags", "")
-            leg = str(run_key)
-            if (
-                ("-on" in leg or leg.endswith("on"))
-                and flags
-                and "-mtt-tensix" not in flags
-            ):
+        if self.a.dry_run:
+            return  # a dry run proves wiring, never carries measured legs
+        if any(str(n).startswith("STOP:") for n in result.get("notes") or []):
+            return  # correctness STOP already withheld perf — that RED owns the row
+        if row["kind"] == "pinpair":
+            # pinpair rows measure at the row's pinned flag set: RED unless
+            # that set actually requests a mechanism.
+            if "-mtt-tensix-optimize" not in (row.get("pin_flags") or ""):
                 msg = (
-                    f"{row['op']}: classify says ON CHANGES bytes but measured leg "
-                    f"{leg} carried no ON flags — the mechanism was available and "
-                    f"unrequested (stale row wiring): RED"
+                    f"{row['op']}: classify says ON CHANGES bytes but the pinned "
+                    f"flag set requests no mechanism (stale pinpair wiring): RED"
                 )
                 self.reds.append(msg)
                 result["notes"].append(msg)
-        # default-flag-only rows (legacy pinpair shape) with CHANGED classify
-        if not any("-on" in str(k) for k in (result.get("runs") or {})):
+            return
+        on_measured = any(
+            str(k).endswith("_on_samples") and v
+            for k, v in (result.get("runs") or {}).items()
+        ) or any(str(k).endswith("/corr-on") for k in (result.get("runs") or {}))
+        if not on_measured:
             msg = (
                 f"{row['op']}: classify says ON CHANGES bytes but the row has no "
                 f"ON-flag measured leg (legacy pinpair wiring): RED"
@@ -1409,7 +1416,6 @@ exit $RC
         selector alternating gen/hand, hash-matched resume per job."""
         result = self._result_skeleton(row, classifications)
         self._macro_lb_gate(row, classifications, result)
-        self._measured_flags_gate(row, classifications, result)
         if self.a.dry_run:
             result["notes"].append(
                 "DRY-RUN: device jobs printed, not executed; no cells expected"
@@ -1458,6 +1464,7 @@ exit $RC
         gen, hand = c.get("generated"), c.get("handwritten_replay")
         if isinstance(gen, (int, float)) and isinstance(hand, (int, float)) and hand:
             result["vs_hand_pct"] = 100.0 * (gen - hand) / hand
+        self._measured_flags_gate(row, classifications, result)
         return result
 
     def silicon(self, row, classifications):
@@ -1465,7 +1472,6 @@ exit $RC
             return self.silicon_pinpair(row, classifications)
         result = self._result_skeleton(row, classifications)
         self._macro_lb_gate(row, classifications, result)
-        self._measured_flags_gate(row, classifications, result)
         if self.a.dry_run:
             # A dry run proves gate wiring, never metrics: mark the row so
             # report() treats its empty cells as blocked-by-design instead
@@ -1553,6 +1559,7 @@ exit $RC
             result["causal_pct"] = 100.0 * (c["sem_on"] - c["sem_off"]) / c["sem_off"]
         if num(c.get("sem_on")) and num(c.get("hand_on")) and c["hand_on"]:
             result["vs_hand_pct"] = 100.0 * (c["sem_on"] - c["hand_on"]) / c["hand_on"]
+        self._measured_flags_gate(row, classifications, result)
         return result
 
     # ---------------- weekly: per-knob attribution ----------------
