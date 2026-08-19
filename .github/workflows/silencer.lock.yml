@@ -620,7 +620,7 @@ jobs:
           mkdir -p /tmp/gh-aw/safeoutputs
           mkdir -p /tmp/gh-aw/mcp-logs/safeoutputs
           cat > "${RUNNER_TEMP}/gh-aw/safeoutputs/config.json" << 'GH_AW_SAFE_OUTPUTS_CONFIG_d6399602373fe0d4_EOF'
-          {"add_comment":{"github-token":"${GH_AW_SECRET_CODEOWNERS_GROUP_ANALYSIS_PAT}","max":5,"target":"*"},"create_issue":{"labels":["automation"],"max":1,"title_prefix":"[silencer] "},"create_pull_request":{"allowed_files":["**/*.cpp","**/*.cc","**/*.cxx","**/*.h","**/*.hpp","**/*.inl","**/*.py","**/*.pyi","**/*.cmake","**/CMakeLists.txt"],"draft":true,"labels":["automation","silencer"],"max":1,"max_patch_files":100,"max_patch_size":4096,"preserve_branch_name":true,"protect_top_level_dot_folders":true,"protected_files":["package.json","bun.lockb","bunfig.toml","deno.json","deno.jsonc","deno.lock","global.json","NuGet.Config","Directory.Packages.props","mix.exs","mix.lock","go.mod","go.sum","stack.yaml","stack.yaml.lock","pom.xml","build.gradle","build.gradle.kts","settings.gradle","settings.gradle.kts","gradle.properties","package-lock.json","yarn.lock","pnpm-lock.yaml","npm-shrinkwrap.json","requirements.txt","Pipfile","Pipfile.lock","pyproject.toml","setup.py","setup.cfg","Gemfile","Gemfile.lock","uv.lock","CODEOWNERS","DESIGN.md","README.md","CONTRIBUTING.md","CHANGELOG.md","SECURITY.md","CODE_OF_CONDUCT.md","AGENTS.md"],"protected_files_policy":"request_review","title_prefix":"[silencer] "},"create_report_incomplete_issue":{},"dispatch_workflow":{"allowed_refs":["silencer/*"],"max":1,"workflow_files":{"blackhole-e2e-tests":".yaml","galaxy-deepseek-tests":".yaml","galaxy-demo-tests":".yaml","galaxy-e2e-tests":".yaml","galaxy-health":".yaml","galaxy-integration-tests":".yaml","galaxy-multi-user-isolation-tests":".yaml","galaxy-perf-tests":".yaml","galaxy-profiler-tests":".yaml","galaxy-sanity":".yaml","galaxy-stress-tests":".yaml","galaxy-unit-tests":".yaml","merge-gate":".yaml","models-t1-e2e-tests":".yaml","models-t1-unit-tests":".yaml","models-t2-e2e-tests":".yaml","models-t2-unit-tests":".yaml","models-t3-e2e-tests":".yaml","models-t3-unit-tests":".yaml","perf-device-models":".yaml","pipeline-select-profiler":".yaml","pr-gate":".yaml","runtime-integration-tests":".yaml","runtime-perf-tests":".yaml","runtime-sanity-tests":".yaml","runtime-unit-tests":".yaml","sanity-tests":".yaml","sanity-tests-debug":".yaml","single-card-profiler-tests":".yaml","single-card-ttnn-models-frequent-tests":".yaml","t3000-e2e-tests":".yaml","t3000-integration-tests":".yaml","t3000-profiler-tests":".yaml","t3000-unit-tests":".yaml","tt-metal-l2-nightly":".yaml","vllm-model-tests":".yaml"},"workflows":["sanity-tests","blackhole-e2e-tests","galaxy-profiler-tests","galaxy-multi-user-isolation-tests","galaxy-deepseek-tests","galaxy-perf-tests","galaxy-demo-tests","galaxy-unit-tests","galaxy-integration-tests","galaxy-stress-tests","galaxy-e2e-tests","galaxy-sanity","galaxy-health","t3000-e2e-tests","t3000-integration-tests","t3000-profiler-tests","single-card-profiler-tests","pipeline-select-profiler","t3000-unit-tests","models-t1-e2e-tests","models-t1-unit-tests","models-t2-e2e-tests","models-t2-unit-tests","models-t3-e2e-tests","models-t3-unit-tests","perf-device-models","single-card-ttnn-models-frequent-tests","tt-metal-l2-nightly","vllm-model-tests","sanity-tests-debug","merge-gate","pr-gate","runtime-sanity-tests","runtime-unit-tests","runtime-integration-tests","runtime-perf-tests"]},"mark_pull_request_as_ready_for_review":{"max":1,"required_title_prefix":"[silencer] ","target":"*"},"mentions":{"enabled":false},"missing_data":{},"missing_tool":{},"noop":{"max":1,"report-as-issue":"false"},"push_repo_memory":{"memories":[{"dir":"/tmp/gh-aw/repo-memory/default","id":"default","max_file_count":100,"max_file_size":102400,"max_patch_size":10240}]},"push_to_pull_request_branch":{"if_no_changes":"warn","max":1,"max_patch_size":4096,"protect_top_level_dot_folders":true,"protected_files":["package.json","bun.lockb","bunfig.toml","deno.json","deno.jsonc","deno.lock","global.json","NuGet.Config","Directory.Packages.props","mix.exs","mix.lock","go.mod","go.sum","stack.yaml","stack.yaml.lock","pom.xml","build.gradle","build.gradle.kts","settings.gradle","settings.gradle.kts","gradle.properties","package-lock.json","yarn.lock","pnpm-lock.yaml","npm-shrinkwrap.json","requirements.txt","Pipfile","Pipfile.lock","pyproject.toml","setup.py","setup.cfg","Gemfile","Gemfile.lock","uv.lock","CODEOWNERS","DESIGN.md","README.md","CONTRIBUTING.md","CHANGELOG.md","SECURITY.md","CODE_OF_CONDUCT.md","AGENTS.md"],"target":"*","title_prefix":"[silencer] "},"report_incomplete":{},"update_issue":{"allow_body":true,"max":1,"required_title_prefix":"[silencer] ","target":"*"}}
+          {"add_comment":{"github-token":"${GH_AW_SECRET_CODEOWNERS_GROUP_ANALYSIS_PAT}","max":5,"target":"*"},"create_issue":{"labels":["automation"],"max":1,"title_prefix":"[silencer] "},"create_pull_request":{"allowed_files":["**/*.cpp","**/*.cc","**/*.cxx","**/*.h","**/*.hpp","**/*.inl","**/*.py","**/*.pyi","**/*.cmake","**/CMakeLists.txt"],"draft":true,"labels":["automation","silencer"],"max":1,"max_patch_files":100,"max_patch_size":4096,"preserve_branch_name":true,"protect_top_level_dot_folders":true,"protected_files":["package.json","bun.lockb","bunfig.toml","deno.json","deno.jsonc","deno.lock","global.json","NuGet.Config","Directory.Packages.props","mix.exs","mix.lock","go.mod","go.sum","stack.yaml","stack.yaml.lock","pom.xml","build.gradle","build.gradle.kts","settings.gradle","settings.gradle.kts","gradle.properties","package-lock.json","yarn.lock","pnpm-lock.yaml","npm-shrinkwrap.json","requirements.txt","Pipfile","Pipfile.lock","pyproject.toml","setup.py","setup.cfg","Gemfile","Gemfile.lock","uv.lock","CODEOWNERS","DESIGN.md","README.md","CONTRIBUTING.md","CHANGELOG.md","SECURITY.md","CODE_OF_CONDUCT.md","AGENTS.md"],"protected_files_policy":"request_review","title_prefix":"[silencer] "},"create_report_incomplete_issue":{},"dispatch_workflow":{"allowed_refs":["silencer/*"],"max":1,"workflow_files":{"blackhole-e2e-tests":".yaml","galaxy-deepseek-tests":".yaml","galaxy-demo-tests":".yaml","galaxy-e2e-tests":".yaml","galaxy-health":".yaml","galaxy-integration-tests":".yaml","galaxy-multi-user-isolation-tests":".yaml","galaxy-perf-tests":".yaml","galaxy-sanity":".yaml","galaxy-stress-tests":".yaml","galaxy-unit-tests":".yaml","merge-gate":".yaml","models-t1-e2e-tests":".yaml","models-t1-unit-tests":".yaml","models-t2-e2e-tests":".yaml","models-t2-unit-tests":".yaml","models-t3-e2e-tests":".yaml","models-t3-unit-tests":".yaml","perf-device-models":".yaml","pipeline-select-profiler":".yaml","pr-gate":".yaml","runtime-integration-tests":".yaml","runtime-perf-tests":".yaml","runtime-sanity-tests":".yaml","runtime-unit-tests":".yaml","sanity-tests":".yaml","sanity-tests-debug":".yaml","single-card-ttnn-models-frequent-tests":".yaml","t3000-demo-tests":".yaml","t3000-e2e-tests":".yaml","t3000-integration-tests":".yaml","t3000-perf-tests":".yaml","t3000-profiler-tests":".yaml","t3000-unit-tests":".yaml","tt-metal-l2-nightly":".yaml","vllm-model-tests":".yaml"},"workflows":["sanity-tests","blackhole-e2e-tests","galaxy-multi-user-isolation-tests","galaxy-deepseek-tests","galaxy-perf-tests","galaxy-demo-tests","galaxy-unit-tests","galaxy-integration-tests","galaxy-stress-tests","galaxy-e2e-tests","galaxy-sanity","galaxy-health","t3000-perf-tests","t3000-e2e-tests","t3000-integration-tests","t3000-profiler-tests","pipeline-select-profiler","t3000-demo-tests","t3000-unit-tests","models-t1-e2e-tests","models-t1-unit-tests","models-t2-e2e-tests","models-t2-unit-tests","models-t3-e2e-tests","models-t3-unit-tests","perf-device-models","single-card-ttnn-models-frequent-tests","tt-metal-l2-nightly","vllm-model-tests","sanity-tests-debug","merge-gate","pr-gate","runtime-sanity-tests","runtime-unit-tests","runtime-integration-tests","runtime-perf-tests"]},"mark_pull_request_as_ready_for_review":{"max":1,"required_title_prefix":"[silencer] ","target":"*"},"mentions":{"enabled":false},"missing_data":{},"missing_tool":{},"noop":{"max":1,"report-as-issue":"false"},"push_repo_memory":{"memories":[{"dir":"/tmp/gh-aw/repo-memory/default","id":"default","max_file_count":100,"max_file_size":102400,"max_patch_size":10240}]},"push_to_pull_request_branch":{"if_no_changes":"warn","max":1,"max_patch_size":4096,"protect_top_level_dot_folders":true,"protected_files":["package.json","bun.lockb","bunfig.toml","deno.json","deno.jsonc","deno.lock","global.json","NuGet.Config","Directory.Packages.props","mix.exs","mix.lock","go.mod","go.sum","stack.yaml","stack.yaml.lock","pom.xml","build.gradle","build.gradle.kts","settings.gradle","settings.gradle.kts","gradle.properties","package-lock.json","yarn.lock","pnpm-lock.yaml","npm-shrinkwrap.json","requirements.txt","Pipfile","Pipfile.lock","pyproject.toml","setup.py","setup.cfg","Gemfile","Gemfile.lock","uv.lock","CODEOWNERS","DESIGN.md","README.md","CONTRIBUTING.md","CHANGELOG.md","SECURITY.md","CODE_OF_CONDUCT.md","AGENTS.md"],"target":"*","title_prefix":"[silencer] "},"report_incomplete":{},"update_issue":{"allow_body":true,"max":1,"required_title_prefix":"[silencer] ","target":"*"}}
           GH_AW_SAFE_OUTPUTS_CONFIG_d6399602373fe0d4_EOF
       - name: Generate Safe Outputs Tools
         env:
@@ -822,47 +822,6 @@ jobs:
                     "type": "object"
                   },
                   "name": "blackhole_e2e_tests"
-                },
-                {
-                  "_workflow_name": "galaxy-profiler-tests",
-                  "description": "Dispatch the 'galaxy-profiler-tests' workflow with workflow_dispatch trigger. This workflow must support workflow_dispatch and be in .github/workflows/ directory in the same repository. Use the 'ref' parameter to target a specific branch or tag (allowed patterns: silencer/*).",
-                  "inputSchema": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "build-type": {
-                        "default": "Release",
-                        "description": "Build type configuration",
-                        "enum": [
-                          "Release",
-                          "Debug",
-                          "RelWithDebInfo",
-                          "ASan",
-                          "TSan"
-                        ],
-                        "type": "string"
-                      },
-                      "enable-lto": {
-                        "default": false,
-                        "description": "Enable Link Time Optimization (LTO)",
-                        "type": "boolean"
-                      },
-                      "platform": {
-                        "default": "Ubuntu 22.04",
-                        "description": "Platform to build and test",
-                        "enum": [
-                          "Ubuntu 22.04",
-                          "Ubuntu 24.04"
-                        ],
-                        "type": "string"
-                      },
-                      "ref": {
-                        "description": "The git ref (branch, tag, or SHA) to dispatch the workflow on. Must match one of the configured allowed ref patterns: silencer/*. If omitted, the dispatching workflow's ref is used.",
-                        "type": "string"
-                      }
-                    },
-                    "type": "object"
-                  },
-                  "name": "galaxy_profiler_tests"
                 },
                 {
                   "_workflow_name": "galaxy-multi-user-isolation-tests",
@@ -1550,67 +1509,6 @@ jobs:
                   "name": "t3000_profiler_tests"
                 },
                 {
-                  "_workflow_name": "single-card-profiler-tests",
-                  "description": "Dispatch the 'single-card-profiler-tests' workflow with workflow_dispatch trigger. This workflow must support workflow_dispatch and be in .github/workflows/ directory in the same repository. Use the 'ref' parameter to target a specific branch or tag (allowed patterns: silencer/*).",
-                  "inputSchema": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "build-type": {
-                        "default": "Release",
-                        "description": "Build type configuration",
-                        "enum": [
-                          "Release",
-                          "Debug",
-                          "RelWithDebInfo",
-                          "ASan",
-                          "TSan"
-                        ],
-                        "type": "string"
-                      },
-                      "enable-lto": {
-                        "default": false,
-                        "description": "Enable Link Time Optimization (LTO)",
-                        "type": "boolean"
-                      },
-                      "platform": {
-                        "default": "Ubuntu 22.04",
-                        "description": "Platform to build and test",
-                        "enum": [
-                          "Ubuntu 22.04",
-                          "Ubuntu 24.04"
-                        ],
-                        "type": "string"
-                      },
-                      "post-commit-only": {
-                        "default": false,
-                        "description": "Whether to only run tests on post-commit branches (i.e. not on PRs)",
-                        "type": "boolean"
-                      },
-                      "ref": {
-                        "description": "The git ref (branch, tag, or SHA) to dispatch the workflow on. Must match one of the configured allowed ref patterns: silencer/*. If omitted, the dispatching workflow's ref is used.",
-                        "type": "string"
-                      },
-                      "run-blackhole-profiler": {
-                        "default": true,
-                        "description": "Blackhole profiler",
-                        "type": "boolean"
-                      },
-                      "run-n150-profiler": {
-                        "default": true,
-                        "description": "N150 profiler",
-                        "type": "boolean"
-                      },
-                      "run-n300-profiler": {
-                        "default": true,
-                        "description": "N300 profiler",
-                        "type": "boolean"
-                      }
-                    },
-                    "type": "object"
-                  },
-                  "name": "single_card_profiler_tests"
-                },
-                {
                   "_workflow_name": "pipeline-select-profiler",
                   "description": "Dispatch the 'pipeline-select-profiler' workflow with workflow_dispatch trigger. This workflow must support workflow_dispatch and be in .github/workflows/ directory in the same repository. Use the 'ref' parameter to target a specific branch or tag (allowed patterns: silencer/*).",
                   "inputSchema": {
@@ -1645,26 +1543,6 @@ jobs:
                       "ref": {
                         "description": "The git ref (branch, tag, or SHA) to dispatch the workflow on. Must match one of the configured allowed ref patterns: silencer/*. If omitted, the dispatching workflow's ref is used.",
                         "type": "string"
-                      },
-                      "run-blackhole-profiler": {
-                        "default": true,
-                        "description": "Blackhole profiler",
-                        "type": "boolean"
-                      },
-                      "run-galaxy-profiler": {
-                        "default": false,
-                        "description": "Galaxy profiler",
-                        "type": "boolean"
-                      },
-                      "run-n150-profiler": {
-                        "default": true,
-                        "description": "N150 profiler",
-                        "type": "boolean"
-                      },
-                      "run-n300-profiler": {
-                        "default": true,
-                        "description": "N300 profiler",
-                        "type": "boolean"
                       },
                       "run-t3k-profiler": {
                         "default": true,
@@ -4493,7 +4371,7 @@ jobs:
           GH_AW_ALLOWED_DOMAINS: "api.business.githubcopilot.com,api.enterprise.githubcopilot.com,api.github.com,api.githubcopilot.com,api.individual.githubcopilot.com,api.snapcraft.io,archive.ubuntu.com,azure.archive.ubuntu.com,crl.geotrust.com,crl.globalsign.com,crl.identrust.com,crl.sectigo.com,crl.thawte.com,crl.usertrust.com,crl.verisign.com,crl3.digicert.com,crl4.digicert.com,crls.ssl.com,github.com,host.docker.internal,json-schema.org,json.schemastore.org,keyserver.ubuntu.com,ocsp.digicert.com,ocsp.geotrust.com,ocsp.globalsign.com,ocsp.identrust.com,ocsp.sectigo.com,ocsp.ssl.com,ocsp.thawte.com,ocsp.usertrust.com,ocsp.verisign.com,packagecloud.io,packages.cloud.google.com,packages.microsoft.com,ppa.launchpad.net,raw.githubusercontent.com,registry.npmjs.org,s.symcb.com,s.symcd.com,security.ubuntu.com,telemetry.enterprise.githubcopilot.com,ts-crl.ws.symantec.com,ts-ocsp.ws.symantec.com,www.googleapis.com"
           GITHUB_SERVER_URL: ${{ github.server_url }}
           GITHUB_API_URL: ${{ github.api_url }}
-          GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG: "{\"add_comment\":{\"github-token\":\"${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}\",\"max\":5,\"target\":\"*\"},\"create_issue\":{\"labels\":[\"automation\"],\"max\":1,\"title_prefix\":\"[silencer] \"},\"create_pull_request\":{\"allowed_files\":[\"**/*.cpp\",\"**/*.cc\",\"**/*.cxx\",\"**/*.h\",\"**/*.hpp\",\"**/*.inl\",\"**/*.py\",\"**/*.pyi\",\"**/*.cmake\",\"**/CMakeLists.txt\"],\"draft\":true,\"labels\":[\"automation\",\"silencer\"],\"max\":1,\"max_patch_files\":100,\"max_patch_size\":4096,\"preserve_branch_name\":true,\"protect_top_level_dot_folders\":true,\"protected_files\":[\"package.json\",\"bun.lockb\",\"bunfig.toml\",\"deno.json\",\"deno.jsonc\",\"deno.lock\",\"global.json\",\"NuGet.Config\",\"Directory.Packages.props\",\"mix.exs\",\"mix.lock\",\"go.mod\",\"go.sum\",\"stack.yaml\",\"stack.yaml.lock\",\"pom.xml\",\"build.gradle\",\"build.gradle.kts\",\"settings.gradle\",\"settings.gradle.kts\",\"gradle.properties\",\"package-lock.json\",\"yarn.lock\",\"pnpm-lock.yaml\",\"npm-shrinkwrap.json\",\"requirements.txt\",\"Pipfile\",\"Pipfile.lock\",\"pyproject.toml\",\"setup.py\",\"setup.cfg\",\"Gemfile\",\"Gemfile.lock\",\"uv.lock\",\"CODEOWNERS\",\"DESIGN.md\",\"README.md\",\"CONTRIBUTING.md\",\"CHANGELOG.md\",\"SECURITY.md\",\"CODE_OF_CONDUCT.md\",\"AGENTS.md\"],\"protected_files_policy\":\"request_review\",\"title_prefix\":\"[silencer] \"},\"create_report_incomplete_issue\":{},\"dispatch_workflow\":{\"allowed_refs\":[\"silencer/*\"],\"max\":1,\"workflow_files\":{\"blackhole-e2e-tests\":\".yaml\",\"galaxy-deepseek-tests\":\".yaml\",\"galaxy-demo-tests\":\".yaml\",\"galaxy-e2e-tests\":\".yaml\",\"galaxy-health\":\".yaml\",\"galaxy-integration-tests\":\".yaml\",\"galaxy-multi-user-isolation-tests\":\".yaml\",\"galaxy-perf-tests\":\".yaml\",\"galaxy-profiler-tests\":\".yaml\",\"galaxy-sanity\":\".yaml\",\"galaxy-stress-tests\":\".yaml\",\"galaxy-unit-tests\":\".yaml\",\"merge-gate\":\".yaml\",\"models-t1-e2e-tests\":\".yaml\",\"models-t1-unit-tests\":\".yaml\",\"models-t2-e2e-tests\":\".yaml\",\"models-t2-unit-tests\":\".yaml\",\"models-t3-e2e-tests\":\".yaml\",\"models-t3-unit-tests\":\".yaml\",\"perf-device-models\":\".yaml\",\"pipeline-select-profiler\":\".yaml\",\"pr-gate\":\".yaml\",\"runtime-integration-tests\":\".yaml\",\"runtime-perf-tests\":\".yaml\",\"runtime-sanity-tests\":\".yaml\",\"runtime-unit-tests\":\".yaml\",\"sanity-tests\":\".yaml\",\"sanity-tests-debug\":\".yaml\",\"single-card-profiler-tests\":\".yaml\",\"single-card-ttnn-models-frequent-tests\":\".yaml\",\"t3000-e2e-tests\":\".yaml\",\"t3000-integration-tests\":\".yaml\",\"t3000-profiler-tests\":\".yaml\",\"t3000-unit-tests\":\".yaml\",\"tt-metal-l2-nightly\":\".yaml\",\"vllm-model-tests\":\".yaml\"},\"workflows\":[\"sanity-tests\",\"blackhole-e2e-tests\",\"galaxy-profiler-tests\",\"galaxy-multi-user-isolation-tests\",\"galaxy-deepseek-tests\",\"galaxy-perf-tests\",\"galaxy-demo-tests\",\"galaxy-unit-tests\",\"galaxy-integration-tests\",\"galaxy-stress-tests\",\"galaxy-e2e-tests\",\"galaxy-sanity\",\"galaxy-health\",\"t3000-e2e-tests\",\"t3000-integration-tests\",\"t3000-profiler-tests\",\"single-card-profiler-tests\",\"pipeline-select-profiler\",\"t3000-unit-tests\",\"models-t1-e2e-tests\",\"models-t1-unit-tests\",\"models-t2-e2e-tests\",\"models-t2-unit-tests\",\"models-t3-e2e-tests\",\"models-t3-unit-tests\",\"perf-device-models\",\"single-card-ttnn-models-frequent-tests\",\"tt-metal-l2-nightly\",\"vllm-model-tests\",\"sanity-tests-debug\",\"merge-gate\",\"pr-gate\",\"runtime-sanity-tests\",\"runtime-unit-tests\",\"runtime-integration-tests\",\"runtime-perf-tests\"]},\"mark_pull_request_as_ready_for_review\":{\"max\":1,\"required_title_prefix\":\"[silencer] \",\"target\":\"*\"},\"mentions\":{\"enabled\":false},\"missing_data\":{},\"missing_tool\":{},\"noop\":{\"max\":1,\"report-as-issue\":\"false\"},\"push_to_pull_request_branch\":{\"if_no_changes\":\"warn\",\"max\":1,\"max_patch_size\":4096,\"protect_top_level_dot_folders\":true,\"protected_files\":[\"package.json\",\"bun.lockb\",\"bunfig.toml\",\"deno.json\",\"deno.jsonc\",\"deno.lock\",\"global.json\",\"NuGet.Config\",\"Directory.Packages.props\",\"mix.exs\",\"mix.lock\",\"go.mod\",\"go.sum\",\"stack.yaml\",\"stack.yaml.lock\",\"pom.xml\",\"build.gradle\",\"build.gradle.kts\",\"settings.gradle\",\"settings.gradle.kts\",\"gradle.properties\",\"package-lock.json\",\"yarn.lock\",\"pnpm-lock.yaml\",\"npm-shrinkwrap.json\",\"requirements.txt\",\"Pipfile\",\"Pipfile.lock\",\"pyproject.toml\",\"setup.py\",\"setup.cfg\",\"Gemfile\",\"Gemfile.lock\",\"uv.lock\",\"CODEOWNERS\",\"DESIGN.md\",\"README.md\",\"CONTRIBUTING.md\",\"CHANGELOG.md\",\"SECURITY.md\",\"CODE_OF_CONDUCT.md\",\"AGENTS.md\"],\"target\":\"*\",\"title_prefix\":\"[silencer] \"},\"report_incomplete\":{},\"update_issue\":{\"allow_body\":true,\"max\":1,\"required_title_prefix\":\"[silencer] \",\"target\":\"*\"}}"
+          GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG: "{\"add_comment\":{\"github-token\":\"${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}\",\"max\":5,\"target\":\"*\"},\"create_issue\":{\"labels\":[\"automation\"],\"max\":1,\"title_prefix\":\"[silencer] \"},\"create_pull_request\":{\"allowed_files\":[\"**/*.cpp\",\"**/*.cc\",\"**/*.cxx\",\"**/*.h\",\"**/*.hpp\",\"**/*.inl\",\"**/*.py\",\"**/*.pyi\",\"**/*.cmake\",\"**/CMakeLists.txt\"],\"draft\":true,\"labels\":[\"automation\",\"silencer\"],\"max\":1,\"max_patch_files\":100,\"max_patch_size\":4096,\"preserve_branch_name\":true,\"protect_top_level_dot_folders\":true,\"protected_files\":[\"package.json\",\"bun.lockb\",\"bunfig.toml\",\"deno.json\",\"deno.jsonc\",\"deno.lock\",\"global.json\",\"NuGet.Config\",\"Directory.Packages.props\",\"mix.exs\",\"mix.lock\",\"go.mod\",\"go.sum\",\"stack.yaml\",\"stack.yaml.lock\",\"pom.xml\",\"build.gradle\",\"build.gradle.kts\",\"settings.gradle\",\"settings.gradle.kts\",\"gradle.properties\",\"package-lock.json\",\"yarn.lock\",\"pnpm-lock.yaml\",\"npm-shrinkwrap.json\",\"requirements.txt\",\"Pipfile\",\"Pipfile.lock\",\"pyproject.toml\",\"setup.py\",\"setup.cfg\",\"Gemfile\",\"Gemfile.lock\",\"uv.lock\",\"CODEOWNERS\",\"DESIGN.md\",\"README.md\",\"CONTRIBUTING.md\",\"CHANGELOG.md\",\"SECURITY.md\",\"CODE_OF_CONDUCT.md\",\"AGENTS.md\"],\"protected_files_policy\":\"request_review\",\"title_prefix\":\"[silencer] \"},\"create_report_incomplete_issue\":{},\"dispatch_workflow\":{\"allowed_refs\":[\"silencer/*\"],\"max\":1,\"workflow_files\":{\"blackhole-e2e-tests\":\".yaml\",\"galaxy-deepseek-tests\":\".yaml\",\"galaxy-demo-tests\":\".yaml\",\"galaxy-e2e-tests\":\".yaml\",\"galaxy-health\":\".yaml\",\"galaxy-integration-tests\":\".yaml\",\"galaxy-multi-user-isolation-tests\":\".yaml\",\"galaxy-perf-tests\":\".yaml\",\"galaxy-sanity\":\".yaml\",\"galaxy-stress-tests\":\".yaml\",\"galaxy-unit-tests\":\".yaml\",\"merge-gate\":\".yaml\",\"models-t1-e2e-tests\":\".yaml\",\"models-t1-unit-tests\":\".yaml\",\"models-t2-e2e-tests\":\".yaml\",\"models-t2-unit-tests\":\".yaml\",\"models-t3-e2e-tests\":\".yaml\",\"models-t3-unit-tests\":\".yaml\",\"perf-device-models\":\".yaml\",\"pipeline-select-profiler\":\".yaml\",\"pr-gate\":\".yaml\",\"runtime-integration-tests\":\".yaml\",\"runtime-perf-tests\":\".yaml\",\"runtime-sanity-tests\":\".yaml\",\"runtime-unit-tests\":\".yaml\",\"sanity-tests\":\".yaml\",\"sanity-tests-debug\":\".yaml\",\"single-card-ttnn-models-frequent-tests\":\".yaml\",\"t3000-demo-tests\":\".yaml\",\"t3000-e2e-tests\":\".yaml\",\"t3000-integration-tests\":\".yaml\",\"t3000-perf-tests\":\".yaml\",\"t3000-profiler-tests\":\".yaml\",\"t3000-unit-tests\":\".yaml\",\"tt-metal-l2-nightly\":\".yaml\",\"vllm-model-tests\":\".yaml\"},\"workflows\":[\"sanity-tests\",\"blackhole-e2e-tests\",\"galaxy-multi-user-isolation-tests\",\"galaxy-deepseek-tests\",\"galaxy-perf-tests\",\"galaxy-demo-tests\",\"galaxy-unit-tests\",\"galaxy-integration-tests\",\"galaxy-stress-tests\",\"galaxy-e2e-tests\",\"galaxy-sanity\",\"galaxy-health\",\"t3000-perf-tests\",\"t3000-e2e-tests\",\"t3000-integration-tests\",\"t3000-profiler-tests\",\"pipeline-select-profiler\",\"t3000-demo-tests\",\"t3000-unit-tests\",\"models-t1-e2e-tests\",\"models-t1-unit-tests\",\"models-t2-e2e-tests\",\"models-t2-unit-tests\",\"models-t3-e2e-tests\",\"models-t3-unit-tests\",\"perf-device-models\",\"single-card-ttnn-models-frequent-tests\",\"tt-metal-l2-nightly\",\"vllm-model-tests\",\"sanity-tests-debug\",\"merge-gate\",\"pr-gate\",\"runtime-sanity-tests\",\"runtime-unit-tests\",\"runtime-integration-tests\",\"runtime-perf-tests\"]},\"mark_pull_request_as_ready_for_review\":{\"max\":1,\"required_title_prefix\":\"[silencer] \",\"target\":\"*\"},\"mentions\":{\"enabled\":false},\"missing_data\":{},\"missing_tool\":{},\"noop\":{\"max\":1,\"report-as-issue\":\"false\"},\"push_to_pull_request_branch\":{\"if_no_changes\":\"warn\",\"max\":1,\"max_patch_size\":4096,\"protect_top_level_dot_folders\":true,\"protected_files\":[\"package.json\",\"bun.lockb\",\"bunfig.toml\",\"deno.json\",\"deno.jsonc\",\"deno.lock\",\"global.json\",\"NuGet.Config\",\"Directory.Packages.props\",\"mix.exs\",\"mix.lock\",\"go.mod\",\"go.sum\",\"stack.yaml\",\"stack.yaml.lock\",\"pom.xml\",\"build.gradle\",\"build.gradle.kts\",\"settings.gradle\",\"settings.gradle.kts\",\"gradle.properties\",\"package-lock.json\",\"yarn.lock\",\"pnpm-lock.yaml\",\"npm-shrinkwrap.json\",\"requirements.txt\",\"Pipfile\",\"Pipfile.lock\",\"pyproject.toml\",\"setup.py\",\"setup.cfg\",\"Gemfile\",\"Gemfile.lock\",\"uv.lock\",\"CODEOWNERS\",\"DESIGN.md\",\"README.md\",\"CONTRIBUTING.md\",\"CHANGELOG.md\",\"SECURITY.md\",\"CODE_OF_CONDUCT.md\",\"AGENTS.md\"],\"target\":\"*\",\"title_prefix\":\"[silencer] \"},\"report_incomplete\":{},\"update_issue\":{\"allow_body\":true,\"max\":1,\"required_title_prefix\":\"[silencer] \",\"target\":\"*\"}}"
           GH_AW_CI_TRIGGER_TOKEN: ${{ secrets.GH_AW_CI_TRIGGER_TOKEN }}
         with:
           github-token: ${{ secrets.GH_AW_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}

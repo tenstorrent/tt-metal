@@ -169,7 +169,7 @@
     export DONT_USE_VIRTUAL_ENVIRONMENT=1
     bash tests/scripts/t3000/run_t3000_profiler_tests.sh run_mid_run_data_dump
   skus:
-    wh_llmbox:
+    wh_llmbox_civ2:
       timeout: 8
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
@@ -199,7 +199,7 @@
     export DONT_USE_VIRTUAL_ENVIRONMENT=1
     bash tests/scripts/t3000/run_t3000_profiler_tests.sh run_perf_op_report_test
   skus:
-    wh_llmbox:
+    wh_llmbox_civ2:
       timeout: 8
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
@@ -228,7 +228,7 @@
     export DONT_USE_VIRTUAL_ENVIRONMENT=1
     bash tests/scripts/t3000/run_t3000_profiler_tests.sh run_ccl_T3000_test
   skus:
-    wh_llmbox:
+    wh_llmbox_civ2:
       timeout: 10
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
@@ -238,7 +238,7 @@
     export DONT_USE_VIRTUAL_ENVIRONMENT=1
     bash tests/scripts/t3000/run_t3000_profiler_tests.sh run_multi_host_tracy_smoke
   skus:
-    wh_llmbox:
+    wh_llmbox_civ2:
       timeout: 10
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime

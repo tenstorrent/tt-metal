@@ -470,7 +470,7 @@
     export DONT_USE_VIRTUAL_ENVIRONMENT=1
     bash tests/scripts/t3000/run_t3000_profiler_tests.sh run_device_profiler_test
   skus:
-    wh_llmbox:
+    wh_llmbox_civ2:
       timeout: 25
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
