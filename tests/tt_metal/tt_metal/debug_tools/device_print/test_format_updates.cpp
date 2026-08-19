@@ -226,6 +226,22 @@ TEST_F(DevicePrintFormatUpdatesFixture, PrintStringTypes) {
         "tests/tt_metal/tt_metal/test_kernels/device_print/print_string_types.cpp", ttsl::make_span(messages));
 }
 
+// dp_type_name_t<T> carries no data: the type name is stored in .device_print_strings and the
+// argument is the pointer to it, so it uses the same type specifier as CTSTR.
+TEST_F(DevicePrintFormatUpdatesFixture, PrintTypeName) {
+    std::vector<std::string_view> messages = {
+        "builtin type: {0,s}\n"sv,
+        "struct type: {0,s}\n"sv,
+        "enum type: {0,s}\n"sv,
+        "template type: {0,s}\n"sv,
+        "decltype: {0,s}\n"sv,
+        "with value: {0,s} = {1,f}\n"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_type_name.cpp", ttsl::make_span(messages));
+}
+
 TEST_F(DevicePrintFormatUpdatesFixture, PrintReorder) {
     std::vector<std::string_view> messages = {
         "u16_1: {4,H} u16_2: {5,H} u32_1: {0,I} u32_2: {1,I} u32_3: {2,I} u32_4: {3,I}\n"sv,

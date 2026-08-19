@@ -228,10 +228,10 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
 
 # indexer_score is Blackhole-only (the nightly suite has the full coverage); this reuses the accuracy
-# test's sp_rank-7 GLM5.1/DSv32 deployment cases (8h/16h, bf16 + bfp8 q, deployed bfp8 k) so post-commit/
+# test's sp_rank-7 GLM5.1 deployment cases (8h, bf16 + bfp8 q, deployed bfp8 k) so post-commit/
 # sanity catches deployment regressions and the op gets watcher coverage, without re-running them nightly.
 - name: "ttnn indexer_score group"
-  cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py -k "accuracy and rank7" -xv'
+  cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py -k "accuracy and rank7" -xv'
   skus:
     wh_n300_civ2:
       timeout: 10
