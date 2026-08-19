@@ -25,7 +25,10 @@ import ttnn
 
 ROWS, COLS = 4, 8
 GALAXY_NUM_DEVICES = 32
-SMALL, LARGE = 1024, 10240
+# Sizes overridable via env: 1k/8k is the 128k-context pair (131072 = 128*1024 = 16*8192);
+# 10240 was the original large size (does NOT divide 128k).
+SMALL = int(os.getenv("VARCHUNK_SMALL", "1024"))
+LARGE = int(os.getenv("VARCHUNK_LARGE", "10240"))
 
 
 def _raise_nproc_limit():
