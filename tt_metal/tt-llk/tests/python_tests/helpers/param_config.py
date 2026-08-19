@@ -3,8 +3,9 @@
 
 import inspect
 import math
+from dataclasses import dataclass
 from itertools import product
-from typing import Iterator, List, Tuple
+from typing import Iterator, List, Optional, Tuple
 
 import pytest
 from helpers.tile_shape import construct_tile_shape
@@ -18,7 +19,12 @@ from .format_config import (
     InputOutputFormat,
 )
 from .golden_generators import TILE_DIMENSIONS
-from .llk_params import BlocksCalculationAlgorithm, DestAccumulation, DestSync
+from .llk_params import (
+    BlocksCalculationAlgorithm,
+    DestAccumulation,
+    DestSync,
+    MathOperation,
+)
 
 RUNTIME_AXES_MARK = "runtime_axes"
 
@@ -461,83 +467,462 @@ def generate_combination(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]
     ]
 
 
-def is_invalid_quasar_sfpu_format_combination(
-    fmt: FormatConfig, dest_acc: DestAccumulation, unpack_to_dest: bool = False
+@dataclass(frozen=True)
+class QuasarSfpuVariant:
+    """One executable Quasar SFPU format and data-movement configuration."""
+
+    formats: InputOutputFormat
+    dest_acc: DestAccumulation
+    unpack_to_dest: bool
+    unpack_dst: DataFormat
+    sfpu_src: DataFormat
+    sfpu_dst: DataFormat
+    pack_src: DataFormat
+    int32_dest: bool = False
+
+    @property
+    def uses_fpu(self) -> bool:
+        return not self.unpack_to_dest
+
+    def apply_formats(self, formats_config: List[FormatConfig]) -> None:
+        """Apply the resolved Dest-facing formats after generic inference."""
+        for config in formats_config:
+            config.unpack_A_dst = self.unpack_dst
+            config.unpack_B_dst = self.unpack_dst
+            config.unpack_S_dst = self.unpack_dst
+            config.math = self.unpack_dst
+            config.sfpu_src = self.sfpu_src
+            config.sfpu_dst = self.sfpu_dst
+            config.pack_src = self.pack_src
+            config.pack_S_src = self.pack_src
+
+
+# Quasar conversion capabilities for L1 -> registers, SrcA -> Dest, and
+# Dest -> L1. Sources: Tensix unpacker/packer conversions and Neo FPU formats.
+_QUASAR_NARROW_FORMATS = frozenset(
+    {
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.Fp8_e4m3,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
+    }
+)
+_QUASAR_NARROW_FLOAT_DEST_FORMATS = frozenset(
+    {DataFormat.Float16, DataFormat.Float16_b}
+)
+_QUASAR_UNPACK_TO_DEST_FORMATS = {
+    # TF32 is stored in a 32-bit Float32 container in Dest.
+    DataFormat.Float32: {DataFormat.Float32} | _QUASAR_NARROW_FLOAT_DEST_FORMATS,
+    DataFormat.Tf32: {DataFormat.Float32} | _QUASAR_NARROW_FLOAT_DEST_FORMATS,
+    **{
+        input_format: _QUASAR_NARROW_FLOAT_DEST_FORMATS
+        for input_format in _QUASAR_NARROW_FORMATS
+    },
+    DataFormat.Int32: {DataFormat.Int32},
+    DataFormat.Int16: {DataFormat.Int16},
+    DataFormat.Int8: {DataFormat.Int8},
+    DataFormat.UInt8: {DataFormat.UInt8},
+}
+
+# SrcA/B additionally permit a TF32 result for narrow floating-point inputs.
+_QUASAR_UNPACK_TO_SRCA_FORMATS = {
+    **{
+        input_format: output_formats
+        for input_format, output_formats in _QUASAR_UNPACK_TO_DEST_FORMATS.items()
+        # Int32 may be unpacked only to Dest or SrcS, not SrcA/B.
+        if input_format != DataFormat.Int32
+    },
+    DataFormat.Float32: {DataFormat.Tf32} | _QUASAR_NARROW_FLOAT_DEST_FORMATS,
+    DataFormat.Tf32: {DataFormat.Tf32} | _QUASAR_NARROW_FLOAT_DEST_FORMATS,
+    **{
+        input_format: {DataFormat.Tf32} | _QUASAR_NARROW_FLOAT_DEST_FORMATS
+        for input_format in _QUASAR_NARROW_FORMATS
+    },
+    # Quasar-only 2x-packed register formats are legal only for MXFP4 -> SrcA/B.
+    DataFormat.MxFp4: {
+        DataFormat.Tf32,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.MxFp4_2x_A,
+        DataFormat.MxFp4_2x_B,
+    },
+}
+
+# Effective SrcA -> Dest conversions supported by Quasar unary datacopy. The
+# LLK selects MOVA2D/MOVB2D for narrow Dest and ELWADD for 32-bit Dest; test
+# generation only needs to know whether the complete datacopy path is executable.
+_QUASAR_FPU_DATACOPY_DEST_FORMATS = {
+    DataFormat.Float16: {DataFormat.Float16, DataFormat.Float32},
+    DataFormat.Float16_b: {DataFormat.Float16_b, DataFormat.Float32},
+    DataFormat.Tf32: {DataFormat.Float32},
+    DataFormat.Int8: {DataFormat.Int8, DataFormat.Int32},
+    DataFormat.UInt8: {DataFormat.UInt8, DataFormat.Int32},
+    DataFormat.Int16: {DataFormat.Int16},
+}
+
+_QUASAR_PACK_OUTPUTS = {
+    DataFormat.Float32: {
+        DataFormat.Float32,
+        DataFormat.Tf32,
+    }
+    | _QUASAR_NARROW_FORMATS,
+    DataFormat.Float16: _QUASAR_NARROW_FORMATS,
+    DataFormat.Float16_b: _QUASAR_NARROW_FORMATS,
+    DataFormat.Int32: {DataFormat.Int32, DataFormat.Int8, DataFormat.UInt8},
+    DataFormat.Int16: {DataFormat.Int16},
+    DataFormat.Int8: {DataFormat.Int8},
+    DataFormat.UInt8: {DataFormat.UInt8},
+}
+
+
+def _quasar_sfpu_hardware_format(fmt: DataFormat) -> DataFormat:
+    """Map an SFPU-visible logical format to its Quasar hardware encoding."""
+    return DataFormat.Int16 if fmt == DataFormat.UInt16 else fmt
+
+
+def _quasar_dest_hardware_format(fmt: DataFormat) -> DataFormat:
+    if fmt == DataFormat.Tf32:
+        return DataFormat.Float32
+    return _quasar_sfpu_hardware_format(fmt)
+
+
+def _quasar_effective_sfpu_format(fmt: DataFormat) -> DataFormat:
+    """Return the register format exposed to SFPU after Quasar unpacking."""
+    if fmt.is_mx_format():
+        return DataFormat.Float16_b
+    if fmt == DataFormat.Fp8_e4m3:
+        return DataFormat.Float16
+    if fmt == DataFormat.Tf32:
+        return DataFormat.Float32
+    return _quasar_sfpu_hardware_format(fmt)
+
+
+def _quasar_fpu_source_format(fmt: DataFormat) -> DataFormat:
+    """Return the SrcA format consumed by the FPU datacopy staging path."""
+    if fmt in (DataFormat.Float32, DataFormat.Tf32):
+        return DataFormat.Tf32
+    if fmt.is_mx_format():
+        return DataFormat.Float16_b
+    if fmt == DataFormat.Fp8_e4m3:
+        return DataFormat.Float16
+    return _quasar_sfpu_hardware_format(fmt)
+
+
+def _quasar_dest_format_matches_mode(
+    dest_format: DataFormat, dest_acc: DestAccumulation
 ) -> bool:
-    """
-    Check if a Quasar SFPU (input_format, output_format, dest_acc) combination
-    is unsupported by the hardware and should be skipped by the parametrize sweep.
+    is_32_bit = dest_format in (DataFormat.Float32, DataFormat.Int32)
+    return is_32_bit == (dest_acc == DestAccumulation.Yes)
 
-    ``unpack_to_dest`` relaxes the sub-32-bit-integer-input guard: when the input is written
-    straight to a 32-bit Dest via UNPACR_DEST the narrow datum lands fine (the all-zeros failure
-    is specific to the FPU datacopy path), so the guard only fires when not unpacking to Dest.
-    Mirrors the ``not unpacking_to_dest`` gate in data_format_inference.
-    """
-    in_fmt = fmt.input_format
-    out_fmt = fmt.output_format
 
-    # Quasar packer does not support non-Float32 to Float32 conversion when dest_acc=No
-    if (
-        in_fmt != DataFormat.Float32
-        and out_fmt == DataFormat.Float32
-        and dest_acc == DestAccumulation.No
+def is_valid_quasar_unpack_to_dest(
+    input_format: DataFormat,
+    unpack_output_format: DataFormat,
+    dest_acc: DestAccumulation,
+    *,
+    allow_narrow_in_32bit_dest: bool = False,
+) -> bool:
+    """Validate an L1 -> Dest unpack conversion against the Tensix table.
+
+    Non-32bit -> 32bit data conversions are not supported by unpacker.
+    That layout is accepted only for SFPU typecast, which reads the
+    narrow representation and overwrites it with the converted result.
+    """
+    l1_input_format = _quasar_sfpu_hardware_format(input_format)
+    unpack_out_format = _quasar_dest_hardware_format(unpack_output_format)
+
+    # Check whether the unpacker supports the requested conversion.
+    if unpack_out_format not in _QUASAR_UNPACK_TO_DEST_FORMATS.get(
+        l1_input_format, set()
     ):
+        return False
+
+    # Check that the register format matches the configured Dest width.
+    if _quasar_dest_format_matches_mode(unpack_out_format, dest_acc):
         return True
 
-    # Quasar SFPU with Float32 input and Float16 output requires dest_acc=Yes
-    if (
-        in_fmt == DataFormat.Float32
-        and out_fmt == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
+    # Typecast may temporarily hold a narrow input in a 32-bit Dest slot; SFPU
+    # overwrites it with the converted 32-bit result.
+    return allow_narrow_in_32bit_dest and dest_acc == DestAccumulation.Yes
+
+
+def is_valid_quasar_fpu_path(
+    input_format: DataFormat,
+    unpack_output_format: DataFormat,
+    dest_format: DataFormat,
+    dest_acc: DestAccumulation,
+) -> bool:
+    """Validate the complete Unpack-to-SrcA + FPU datacopy -> Dest path."""
+    # UInt16 uses the Int16 encoding for SFPU input/output, but Quasar does not
+    # support an Int16 Src -> UInt16 Dest FPU datacopy.
+    if dest_format == DataFormat.UInt16:
+        return False
+
+    # L1 input format.
+    hardware_input = _quasar_sfpu_hardware_format(input_format)
+    # SrcA/B format, also used as the math format.
+    hardware_unpack_output = _quasar_sfpu_hardware_format(unpack_output_format)
+    # Dest format, also used as the SFPU and packer input format.
+    hardware_dest = _quasar_sfpu_hardware_format(dest_format)
+
+    return (
+        hardware_unpack_output
+        in _QUASAR_UNPACK_TO_SRCA_FORMATS.get(hardware_input, set())
+        and hardware_dest
+        in _QUASAR_FPU_DATACOPY_DEST_FORMATS.get(hardware_unpack_output, set())
+        and _quasar_dest_format_matches_mode(hardware_dest, dest_acc)
+    )
+
+
+def is_valid_quasar_packer_conversion(
+    pack_input_format: DataFormat, output_format: DataFormat
+) -> bool:
+    """Validate a Dest -> L1 conversion against the Tensix packer table."""
+    hardware_input = _quasar_sfpu_hardware_format(pack_input_format)
+    hardware_output = _quasar_sfpu_hardware_format(output_format)
+    return hardware_output in _QUASAR_PACK_OUTPUTS.get(hardware_input, set())
+
+
+def _quasar_narrow_dest_candidates(
+    input_format: DataFormat, output_format: DataFormat
+) -> Tuple[DataFormat, ...]:
+    candidates = []
+    for candidate in (
+        _quasar_effective_sfpu_format(input_format),
+        _quasar_effective_sfpu_format(output_format),
     ):
-        return True
+        if not candidate.is_32_bit() and candidate not in candidates:
+            candidates.append(candidate)
+    return tuple(candidates)
 
-    # Sub-32-bit integer input cannot use a 32-bit dest through the FPU datacopy: the packer input
-    # format must stay at the narrow width (UInt16 collapses to Int16). Mirrors the
-    # data_format_inference guard, which only rejects this on the non-unpack-to-Dest path — so a
-    # 32-bit-Dest case that unpacks straight to Dest is exempt.
-    if (
-        not unpack_to_dest
-        and in_fmt in (DataFormat.Int16, DataFormat.UInt16)
-        and dest_acc == DestAccumulation.Yes
+
+def _make_quasar_sfpu_variant(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    *,
+    unpack_to_dest: bool,
+    unpack_dst: DataFormat,
+    sfpu_src: DataFormat,
+    sfpu_dst: DataFormat,
+    pack_src: DataFormat,
+    int32_dest: bool = False,
+) -> Optional[QuasarSfpuVariant]:
+    if not is_valid_quasar_packer_conversion(pack_src, formats.output_format):
+        return None
+    return QuasarSfpuVariant(
+        formats=formats,
+        dest_acc=dest_acc,
+        unpack_to_dest=unpack_to_dest,
+        unpack_dst=unpack_dst,
+        sfpu_src=sfpu_src,
+        sfpu_dst=sfpu_dst,
+        pack_src=pack_src,
+        int32_dest=int32_dest,
+    )
+
+
+def _resolve_quasar_typecast_variant(
+    formats: InputOutputFormat, dest_acc: DestAccumulation
+) -> Optional[QuasarSfpuVariant]:
+    input_format = formats.input_format
+    output_format = formats.output_format
+    requires_32bit_dest = input_format.is_32_bit() or output_format.is_32_bit()
+
+    if requires_32bit_dest != (dest_acc == DestAccumulation.Yes):
+        return None
+
+    unpack_dst_format = _quasar_effective_sfpu_format(input_format)
+    if not is_valid_quasar_unpack_to_dest(
+        input_format,
+        unpack_dst_format,
+        dest_acc,
+        allow_narrow_in_32bit_dest=True,
     ):
-        return True
+        return None
 
-    return False
+    if output_format.is_integer():
+        pack_src = _quasar_sfpu_hardware_format(output_format)
+    elif dest_acc == DestAccumulation.Yes:
+        pack_src = DataFormat.Float32
+    else:
+        pack_src = output_format
+
+    # SFPU consumes the narrow input representation and overwrites Dest with
+    # the converted output, so widening before SFPU is not required.
+    return _make_quasar_sfpu_variant(
+        formats,
+        dest_acc,
+        unpack_to_dest=True,
+        unpack_dst=unpack_dst_format,
+        sfpu_src=input_format,
+        sfpu_dst=output_format,
+        pack_src=pack_src,
+    )
 
 
-def generate_sfpu_format_dest_acc_combinations(
-    formats_list: List[FormatConfig],
-) -> List[Tuple[FormatConfig, DestAccumulation]]:
+def _resolve_quasar_direct_sfpu_variant(
+    formats: InputOutputFormat, dest_acc: DestAccumulation, dest_format: DataFormat
+) -> Optional[QuasarSfpuVariant]:
+    if not is_valid_quasar_unpack_to_dest(formats.input_format, dest_format, dest_acc):
+        return None
+
+    sfpu_format = (
+        DataFormat.UInt16
+        if formats.input_format == DataFormat.UInt16 and dest_format == DataFormat.Int16
+        else dest_format
+    )
+    return _make_quasar_sfpu_variant(
+        formats,
+        dest_acc,
+        unpack_to_dest=True,
+        unpack_dst=dest_format,
+        sfpu_src=sfpu_format,
+        sfpu_dst=sfpu_format,
+        pack_src=dest_format,
+    )
+
+
+def _resolve_quasar_fpu_sfpu_variant(
+    formats: InputOutputFormat, dest_acc: DestAccumulation, dest_format: DataFormat
+) -> Optional[QuasarSfpuVariant]:
+    fpu_source = _quasar_fpu_source_format(formats.input_format)
+    if not is_valid_quasar_fpu_path(
+        formats.input_format, fpu_source, dest_format, dest_acc
+    ):
+        return None
+
+    return _make_quasar_sfpu_variant(
+        formats,
+        dest_acc,
+        unpack_to_dest=False,
+        unpack_dst=fpu_source,
+        sfpu_src=dest_format,
+        sfpu_dst=dest_format,
+        pack_src=dest_format,
+        int32_dest=(
+            fpu_source in (DataFormat.Int8, DataFormat.UInt8)
+            and dest_format == DataFormat.Int32
+        ),
+    )
+
+
+def resolve_quasar_sfpu_variant(
+    op: Optional[MathOperation],
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+) -> Optional[QuasarSfpuVariant]:
+    """Resolve one exact requested external format and Dest configuration."""
+    if op == MathOperation.Typecast:
+        return _resolve_quasar_typecast_variant(formats, dest_acc)
+
+    # Only SFPU typecast may cross the integer/float boundary.
+    if formats.input_format.is_integer() != formats.output_format.is_integer():
+        return None
+
+    dest_candidates = (
+        (DataFormat.Int32 if formats.input_format.is_integer() else DataFormat.Float32,)
+        if dest_acc == DestAccumulation.Yes
+        else _quasar_narrow_dest_candidates(formats.input_format, formats.output_format)
+    )
+    for dest_format in dest_candidates:
+        variant = _resolve_quasar_direct_sfpu_variant(formats, dest_acc, dest_format)
+        if variant is not None:
+            return variant
+        variant = _resolve_quasar_fpu_sfpu_variant(formats, dest_acc, dest_format)
+        if variant is not None:
+            return variant
+    return None
+
+
+def _quasar_sfpu_state_key(variant: QuasarSfpuVariant) -> Tuple:
+    return (
+        variant.dest_acc,
+        variant.sfpu_src,
+        variant.sfpu_dst,
+        variant.pack_src,
+    )
+
+
+def _deduplicate_quasar_sfpu_operation_variants(
+    variants: List[QuasarSfpuVariant],
+) -> List[QuasarSfpuVariant]:
+    representatives = {}
+    for variant in variants:
+        key = _quasar_sfpu_state_key(variant)
+        current = representatives.get(key)
+
+        # Keep one route per state. Prefer direct Unpack-to-Dest, then prefer a
+        # route with no L1-to-Dest or Dest-to-L1 format conversion.
+        variant_is_identity = (
+            variant.formats.input_format == variant.unpack_dst
+            and variant.pack_src == variant.formats.output_format
+        )
+        current_is_identity = current is not None and (
+            current.formats.input_format == current.unpack_dst
+            and current.pack_src == current.formats.output_format
+        )
+        if (
+            current is None
+            or (variant.unpack_to_dest and not current.unpack_to_dest)
+            or (
+                variant.unpack_to_dest == current.unpack_to_dest
+                and variant_is_identity
+                and not current_is_identity
+            )
+        ):
+            representatives[key] = variant
+
+    return list(representatives.values())
+
+
+def generate_quasar_sfpu_format_variants(
+    op: Optional[MathOperation],
+    formats_list: List[InputOutputFormat],
+    *,
+    full_format_route_sweep: bool = False,
+) -> List[QuasarSfpuVariant]:
+    """Generate executable Quasar SFPU variants.
+
+    By default, keep one variant for each format combination seen by SFPU and
+    the packer. Set ``full_format_route_sweep=True`` to keep every valid
+    Unpack-to-Dest and FPU-to-Dest path. Typecast keeps each input/output
+    conversion.
+
+    Args:
+        full_format_route_sweep: Include every valid input/output format
+            conversion and data path (Unpack-to-Dest or FPU-to-Dest). When
+            false, keep only one representative for each format seen by SFPU.
     """
-    Generate (format, dest_acc) pairs for Quasar SFPU tests.
+    variants = []
+    for formats in formats_list:
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
+            variant = resolve_quasar_sfpu_variant(op, formats, dest_acc)
+            if variant is not None:
+                variants.append(variant)
 
-    `dest_acc` modes are chosen based on the input format:
-    - 32-bit inputs: DestAccumulation.Yes only
-    - MX formats:    DestAccumulation.No only
-    - Otherwise:     both No and Yes
+    if full_format_route_sweep:
+        return variants
 
-    Invalid Quasar combinations (see `is_invalid_quasar_sfpu_format_combination`)
-    are filtered out.
-    """
-    combinations: List[Tuple[FormatConfig, DestAccumulation]] = []
+    # Remove variants that present the same Dest and pack-source formats to SFPU.
+    # For example, with DestAccumulation.Yes, Float32 -> Float16 through
+    # Unpack-to-Dest duplicates Float16 -> Float16 through FPU widening: both
+    # run SFPU on Float32 in Dest and pack from Float32 to Float16.
+    return _deduplicate_quasar_sfpu_operation_variants(variants)
 
-    for fmt in formats_list:
-        in_fmt = fmt.input_format
 
-        if in_fmt.is_32_bit():
-            dest_acc_modes = (DestAccumulation.Yes,)
-        elif in_fmt.is_mx_format():
-            dest_acc_modes = (DestAccumulation.No,)
-        else:
-            dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
-
-        for dest_acc in dest_acc_modes:
-            if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
-                continue
-            combinations.append((fmt, dest_acc))
-
-    return combinations
+def generate_quasar_srcs_format_dest_acc_combinations(
+    formats_list: List[InputOutputFormat],
+) -> List[Tuple[InputOutputFormat, DestAccumulation]]:
+    return [
+        (variant.formats, variant.dest_acc)
+        for variant in generate_quasar_sfpu_format_variants(None, formats_list)
+        if variant.unpack_to_dest
+    ]
 
 
 def calculate_edgecase_dest_indices(

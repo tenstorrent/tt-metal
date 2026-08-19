@@ -15,7 +15,7 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import ImpliedMathFormat, MathOperation, format_dict
 from helpers.param_config import (
-    generate_sfpu_format_dest_acc_combinations,
+    generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
     runtime,
@@ -43,8 +43,6 @@ SQUARE_RANGE_SAFETY_FACTOR = 0.9
 
 SFPU_SQUARE_FORMATS = input_output_formats(
     [
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
@@ -53,7 +51,9 @@ SFPU_SQUARE_FORMATS = input_output_formats(
 
 SFPU_SQUARE_COMBINATIONS = [
     (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(SFPU_SQUARE_FORMATS)
+    for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
+        SFPU_SQUARE_FORMATS
+    )
     for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
     for input_dimensions in [[32, 32], [64, 64]]
 ]
@@ -79,16 +79,10 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         input_dimensions_B=input_dimensions,
     )
 
-    # Both caps invert the squaring op so x² stays representable. For the input
-    # cap this is because the SFPU squares in the input format's math precision
-    # (except for MX, where squaring uses a wider intermediate and |x| itself
-    # is the binding constraint -- mx_elem_max is already small).
+    # Both caps invert the squaring op so x² stays representable in the input
+    # format's math precision and in the requested output format.
     input_elem_max = format_elem_max(formats.input_format)
-    input_magnitude_cap = (
-        input_elem_max
-        if formats.input_format.is_mx_format()
-        else math.sqrt(input_elem_max)
-    ) * SQUARE_RANGE_SAFETY_FACTOR
+    input_magnitude_cap = math.sqrt(input_elem_max) * SQUARE_RANGE_SAFETY_FACTOR
     output_magnitude_cap = (
         math.sqrt(format_elem_max(formats.output_format)) * SQUARE_RANGE_SAFETY_FACTOR
     )
@@ -144,8 +138,6 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         ),
         unpack_to_srcs=True,
         dest_acc=dest_acc,
-        # Input MX formats require disable_format_inference
-        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result
