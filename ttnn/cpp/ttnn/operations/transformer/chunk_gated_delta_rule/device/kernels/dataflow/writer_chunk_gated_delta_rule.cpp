@@ -8,6 +8,10 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
+// Speed-of-light switch: 1 = strip the actual NoC DRAM writes but KEEP wait/pop
+// flow control so the compute kernel never blocks on cb_out backpressure.
+#define GDN_SOL_NO_DM 0
+
 constexpr uint32_t cb_out = 16, cb_final = 27;
 
 void kernel_main() {
@@ -40,23 +44,27 @@ void kernel_main() {
 
     for (uint32_t c = 0; c < NC; c++) {
         cbout.wait_front(cv);
+#if !GDN_SOL_NO_DM
         const uint32_t base = (h * NC + c) * cv;
         auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbout);
         for (uint32_t t = 0; t < cv; t++) {
             noc.async_write(src, o_acc, tb_o, {.offset_bytes = t * tb_o}, {.page_id = base + t});
         }
         noc.async_write_barrier();
+#endif
         cbout.pop_front(cv);
     }
 
     // final_state
     CircularBuffer cbfs(cb_final);
     cbfs.wait_front(kv);
+#if !GDN_SOL_NO_DM
     const uint32_t base = h * kv;
     auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cbfs);
     for (uint32_t t = 0; t < kv; t++) {
         noc.async_write(src, fs_acc, tb_fs, {.offset_bytes = t * tb_fs}, {.page_id = base + t});
     }
     noc.async_write_barrier();
+#endif
     cbfs.pop_front(kv);
 }

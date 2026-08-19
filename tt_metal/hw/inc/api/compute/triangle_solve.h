@@ -8,11 +8,12 @@
 #include "api/dataflow/circular_buffer.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary_sfpu_macros.h"
-// Blackhole-only: the SFPU triangle-solve LLK lives only in the Blackhole llk_lib. Gating the
-// include keeps this Compute API header parseable on every architecture (the public entry points
-// below are likewise compiled only for Blackhole), rather than failing JIT on a missing header.
+// Blackhole-only: the SFPU triangle-solve LLK lives only in the Blackhole tt-llk sfpu section.
+// Gating the include keeps this Compute API header parseable on every architecture (the public
+// entry points below are likewise compiled only for Blackhole), rather than failing JIT on a
+// missing header.
 #if defined(ARCH_BLACKHOLE)
-#include "ckernel_sfpu_triangle_solve.h"
+#include "sfpu/ckernel_sfpu_triangle_solve.h"
 #endif
 #endif
 
@@ -23,8 +24,8 @@ namespace ckernel {
 // clang-format off
 /**
  * Per-tile forward-substitution triangle solve of  L X = RHS  for a 32x32 tile. L is the unit
- * lower-triangular matrix, supplied NEGATED (strict-lower entries pre-multiplied by -1) so the
- * per-column update is an accumulate; it is read element-by-element straight from L1 (not a DST
+ * lower-triangular matrix, supplied plain (strict-lower entries NOT negated); the per-column update
+ * subtracts L[row][col] * X[col] directly. L is read element-by-element straight from L1 (not a DST
  * register), so only the RHS occupies a DST input. The DST register buffer must be in the acquired
  * state via *tile_regs_acquire*, and the L tile must be resident in cb_l (*cb_wait_front* done).
  * The solution is left in DST[idst_out] in standard tile layout. Blocking; compute-engine only.
@@ -32,7 +33,7 @@ namespace ckernel {
  * | Argument     | Description                                                                | Type            |
  * |--------------|----------------------------------------------------------------------------|-----------------|
  * | DATA_FORMAT  | Data format of the DST tiles                                               | DataFormat      |
- * | cb_l         | CircularBuffer holding the negated unit-lower-tri L tile (bf16)            | CircularBuffer& |
+ * | cb_l         | CircularBuffer holding the unit-lower-tri L tile (bf16)                    | CircularBuffer& |
  * | l_tile_idx   | Tile index of L within cb_l (front-relative)                              | uint32_t        |
  * | idst_in      | DST index of the right-hand-side tile (RHS)                               | uint32_t        |
  * | idst_out     | DST index that receives the solution X of  L X = RHS                       | uint32_t        |

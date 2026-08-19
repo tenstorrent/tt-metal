@@ -28,6 +28,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
 #include "api/compute/reconfig_data_format.h"
+#include "api/compute/triangle_solve.h"
 #include "api/dataflow/circular_buffer.h"
 
 namespace {
@@ -500,10 +501,29 @@ void kernel_main() {
         POP(cb_scr2, cc);
 
         if constexpr (Ct == 1) {
-            // Single 32x32 block: T_inv is just its inverse.
-            invert_block(cb_scr3, 0, cb_Tinv, cb_scr1, cb_scr2);
-            WAIT(cb_Tinv, cc);
+            // Single 32x32 block: T_inv = L^-1 via the triangle_solve SFPU LLK — solve L X = eye
+            // (so X = L^-1), with L = eye - negN (unit lower-triangular). ~2x cheaper than the
+            // quadrant-split invert_block here (~3.5% faster end-to-end; PCC 0.9998 vs invert_block).
+            // L is staged as a real bf16 tile in cb_out (c_16, unused by prep) for triangle_solve's
+            // element-wise bf16 L1 read; t_inv is packed back out fp32.
+            ew(cb_eye, cb_scr3, cb_out, cc, 1);  // L = eye - negN -> cb_out (bf16)
+            WAIT(cb_out, cc);
             POP(cb_scr3, cc);
+            CircularBuffer cb_l_o(cb_out);
+            cb_reserve_back(cb_Tinv, cc);
+            triangle_solve_tile_init();
+            tile_regs_acquire();
+            copy_tile_init(cb_eye);
+            copy_tile(cb_eye, 0, 0);               // RHS = identity -> DST[0]
+            triangle_solve_tile(cb_l_o, 0, 0, 1);  // solve L X = eye -> X = L^-1 in DST[1]
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_Tinv);
+            pack_tile(1, cb_Tinv, 0);
+            tile_regs_release();
+            cb_push_back(cb_Tinv, cc);
+            WAIT(cb_Tinv, cc);
+            POP(cb_out, cc);
         } else if constexpr (Ct == 2) {
             // 2x2 tile-block lower-triangular. negN tiles: 0=(0,0), 2=(1,0), 3=(1,1); (0,1)=0.
             // Diagonal inverses Mi11, Mi22, then off-diagonal Mi21 = -Mi22 @ A21 @ Mi11.

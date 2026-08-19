@@ -9,6 +9,11 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
+// Speed-of-light switch: 1 = strip the actual NoC DRAM reads but KEEP the CB
+// reserve/push flow control, so the compute kernel is never starved and never
+// hangs on backpressure. Measures compute speed as if data movement were free.
+#define GDN_SOL_NO_DM 0
+
 // CB indices (must match program factory).
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_g = 3, cb_beta = 4;
 constexpr uint32_t cb_eye = 5, cb_tril = 6, cb_ones = 7, cb_S = 8;
@@ -66,10 +71,12 @@ void kernel_main() {
     auto read_into = [&](const auto& acc, uint32_t cb_id, uint32_t base, uint32_t n, uint32_t tb) {
         CircularBuffer cb(cb_id);
         cb.reserve_back(n);
+#if !GDN_SOL_NO_DM
         for (uint32_t t = 0; t < n; t++) {
             noc.async_read(acc, cb, tb, {.page_id = base + t}, {.offset_bytes = t * tb});
         }
         noc.async_read_barrier();
+#endif
         cb.push_back(n);
     };
 

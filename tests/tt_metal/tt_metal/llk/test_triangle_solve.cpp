@@ -9,9 +9,9 @@
 // forward-substitution golden with PCC >= 0.99 (bf16 accumulation tolerance).
 //
 // Input convention (matches the ckernel): L is unit lower-triangular (diagonal an implicit 1) and
-// is supplied NEGATED on its strict-lower part, so the solve folds the subtraction
+// is supplied with its plain (non-negated) strict-lower entries; the solve subtracts them directly
 //   X[row] = RHS[row] - sum_{col<row} L[row][col] * X[col]
-// into an SFPMAD accumulate of L_neg[row][col] * X[col].
+// via an SFPMAD that negates the L[row][col] * X[col] product.
 
 #include <gtest/gtest.h>
 
@@ -52,7 +52,7 @@ constexpr uint32_t SINGLE_TILE_SIZE = TILE_ELEMS * 2;  // bf16 => 2048 bytes
 inline float to_bf16(float x) { return static_cast<float>(bfloat16(x)); }
 
 struct SolveInputs {
-    std::vector<bfloat16> l_neg_rm;  // row-major NxN, negated unit-lower-tri (diagonal = 1)
+    std::vector<bfloat16> l_rm;      // row-major NxN, unit-lower-tri (diagonal = 1)
     std::vector<bfloat16> rhs_rm;    // row-major NxN
     std::vector<float> x_golden_rm;  // row-major NxN, fp32
 };
@@ -79,12 +79,12 @@ SolveInputs make_inputs(uint32_t seed, float strict_lower_scale, bool identity_o
         v = dist(gen);
     }
 
-    // L_neg = identity + negated strict-lower, as bf16 (exactly what the device reads).
-    std::vector<bfloat16> l_neg(TILE_ELEMS, bfloat16(0.0f));
+    // L = identity + strict-lower, as bf16 (exactly what the device reads).
+    std::vector<bfloat16> l(TILE_ELEMS, bfloat16(0.0f));
     for (uint32_t r = 0; r < N; r++) {
-        l_neg[r * N + r] = bfloat16(1.0f);
+        l[r * N + r] = bfloat16(1.0f);
         for (uint32_t c = 0; c < r; c++) {
-            l_neg[r * N + c] = bfloat16(-l_strict[r * N + c]);
+            l[r * N + c] = bfloat16(l_strict[r * N + c]);
         }
     }
     std::vector<bfloat16> rhs_bf(TILE_ELEMS);
@@ -99,13 +99,13 @@ SolveInputs make_inputs(uint32_t seed, float strict_lower_scale, bool identity_o
         for (uint32_t j = 0; j < N; j++) {
             float acc = static_cast<float>(rhs_bf[row * N + j]);
             for (uint32_t col = 0; col < row; col++) {
-                acc += static_cast<float>(l_neg[row * N + col]) * x[col * N + j];
+                acc -= static_cast<float>(l[row * N + col]) * x[col * N + j];
             }
             x[row * N + j] = to_bf16(acc);
         }
     }
 
-    return {std::move(l_neg), std::move(rhs_bf), std::move(x)};
+    return {std::move(l), std::move(rhs_bf), std::move(x)};
 }
 
 // Run one solve on device and compare against the golden. Combines two checks so a systematic
@@ -127,7 +127,7 @@ bool run_triangle_solve(
 
     constexpr CoreCoord core = {0, 0};
 
-    // ---- DRAM buffers: two inputs (L_neg, RHS), one output (X). One tile each. ----
+    // ---- DRAM buffers: two inputs (L, RHS), one output (X). One tile each. ----
     tt_metal::InterleavedBufferConfig dram_config{
         .device = device,
         .size = SINGLE_TILE_SIZE,
@@ -138,7 +138,7 @@ bool run_triangle_solve(
     std::shared_ptr<Buffer> rhs_dram = CreateBuffer(dram_config);
     std::shared_ptr<Buffer> x_dram = CreateBuffer(dram_config);
 
-    // ---- CBs: c_0 = L_neg, c_1 = RHS, c_2 = X. One bf16 tile each. ----
+    // ---- CBs: c_0 = L, c_1 = RHS, c_2 = X. One bf16 tile each. ----
     auto make_cb = [&](uint32_t cb_index) {
         CircularBufferConfig cfg =
             CircularBufferConfig(SINGLE_TILE_SIZE, {{cb_index, tt::DataFormat::Float16_b}})
@@ -149,7 +149,7 @@ bool run_triangle_solve(
     make_cb(CBIndex::c_1);
     make_cb(CBIndex::c_2);
 
-    // ---- Reader: L_neg -> c_0, RHS -> c_1. CT args are the two TensorAccessors. ----
+    // ---- Reader: L -> c_0, RHS -> c_1. CT args are the two TensorAccessors. ----
     std::vector<uint32_t> reader_ct_args;
     TensorAccessorArgs(l_dram).append_to(reader_ct_args);
     TensorAccessorArgs(rhs_dram).append_to(reader_ct_args);
@@ -184,7 +184,7 @@ bool run_triangle_solve(
     // ---- Tilize row-major inputs and stage them in DRAM. ----
     ::unit_tests::compute::GoldenConfig golden_config = {.num_tiles_r_dim = 1, .num_tiles_c_dim = 1};
     std::vector<uint32_t> l_tilized =
-        ::unit_tests::compute::gold_standard_tilize(pack_vector<uint32_t, bfloat16>(in.l_neg_rm), golden_config);
+        ::unit_tests::compute::gold_standard_tilize(pack_vector<uint32_t, bfloat16>(in.l_rm), golden_config);
     std::vector<uint32_t> rhs_tilized =
         ::unit_tests::compute::gold_standard_tilize(pack_vector<uint32_t, bfloat16>(in.rhs_rm), golden_config);
 
