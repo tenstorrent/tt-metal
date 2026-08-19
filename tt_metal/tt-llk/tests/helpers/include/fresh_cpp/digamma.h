@@ -24,7 +24,7 @@ namespace ckernel::sfpu
 // tricks", IEEE CG&A 1997) refined by three Newton steps y <- y*(2 - x*y);
 // relative error ~1 ulp fp32 after refinement.  Header of record for the
 // helper (erfinv.h reuses it and fresh_ln_positive via this include).
-sfpi_inline sfpi::vFloat fresh_recip_positive(const sfpi::vFloat x)
+sfpi_inline sfpi::vFloat fresh_recip_positive_blinn(const sfpi::vFloat x)
 {
     sfpi::vFloat y = sfpi::as<sfpi::vFloat>(sfpi::vInt(0x7EF311C3) - sfpi::as<sfpi::vInt>(x));
     y              = y * (2.0f - x * y);
@@ -72,12 +72,12 @@ __attribute__((noinline)) void calculate_digamma_fresh_cpp()
         {
             v_if (x < 6.0f)
             {
-                acc = acc + fresh_recip_positive(x);
+                acc = acc + fresh_recip_positive_blinn(x);
                 x   = x + 1.0f;
             }
             v_endif;
         }
-        const sfpi::vFloat r  = fresh_recip_positive(x);
+        const sfpi::vFloat r  = fresh_recip_positive_blinn(x);
         const sfpi::vFloat r2 = r * r;
         sfpi::vFloat tail     = A3;
         tail                  = tail * r2 + A2;

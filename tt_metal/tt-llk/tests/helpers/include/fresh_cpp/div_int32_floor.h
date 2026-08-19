@@ -12,7 +12,7 @@
 //   exact residual r = a - q*b (integers < 2^24 make the fp32 product and
 //   subtraction exact) until 0 <= r < b.
 // 1/b is the magic-constant Newton reciprocal (three refinements, ~1 ulp:
-// fresh_cpp/digamma.h fresh_recip_positive, the header of record); the
+// fresh_cpp/digamma.h fresh_recip_positive_blinn, the header of record); the
 // round-nearest integer split uses the 2^23 rounding-bias identity (valid
 // for 0 <= q < 2^23, which the domain guarantees).  Exactness validated
 // over 2e5 random domain samples: laneS2-evidence-20260819/fit_s2.py.
@@ -43,7 +43,7 @@ __attribute__((noinline)) void calculate_div_int32_floor_fresh_cpp()
             const sfpi::vFloat fb = sfpi::int32_to_float(b, sfpi::RoundMode::Nearest);
 
             // Nearest-integer quotient estimate from the refined reciprocal.
-            const sfpi::vFloat q_est = fa * fresh_recip_positive(fb);
+            const sfpi::vFloat q_est = fa * fresh_recip_positive_blinn(fb);
             const sfpi::vFloat t     = q_est + BIAS;
             sfpi::vInt qi            = sfpi::as<sfpi::vInt>(t) - sfpi::as<sfpi::vInt>(sfpi::vFloat(BIAS));
             sfpi::vFloat qf          = t - BIAS;
