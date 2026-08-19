@@ -9,7 +9,7 @@
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_custom_mm_api.h"
 #endif
 #ifdef TRISC_UNPACK
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_custom_mm_api.h"
+#include "experimental/llk_unpack_AB_custom_mm_api.h"
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_sdpa_custom_mm_api.h"
 #endif
 namespace ckernel {

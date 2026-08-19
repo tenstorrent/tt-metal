@@ -26,8 +26,8 @@ struct Config {
         std::filesystem::path tmp_dir = "/tmp/ttnn";
         bool enable_model_cache = false;
         bool enable_fast_runtime_mode = true;
-        // Validate the Metal 2.0 host-side program args: the ProgramSpec on MakeProgramFromSpec and the
-        // ProgramRunArgs on Set/UpdateProgramRunArgs. Off by default; CI turns it on.
+        // Re-validate Metal 2.0 program args on the cache-hit fast path (Update{Tensor,ProgramRun}Args).
+        // The cache-miss build path always validates. Off by default; CI turns it on.
         bool validate_program_args = false;
         bool throw_exception_on_fallback = false;
         bool enable_logging = false;

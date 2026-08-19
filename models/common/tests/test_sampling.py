@@ -13,6 +13,7 @@ from models.common.sampling import (
     SamplingGenerator,
     SamplingParams,
     SeedManager,
+    TTSampling,
     broadcast_sampling_params,
     format_sampling_params,
     scatter_sampling_params_to_slots,
@@ -781,3 +782,85 @@ def test_top_k_logprobs_pcc_torch_vs_tt(shape, mesh_device):
             f"  device: {top_lps_device[:5].tolist()}...\n"
             f"  torch:  {top_lps_torch[:5].tolist()}..."
         )
+
+
+# ===========================================================================
+# TTSampling top-k path on a single device
+# ===========================================================================
+
+
+def _single_device_sampling_args(mesh_device, vocab_size, max_top_k=32, max_batch_size=32):
+    """Minimal args for TTSampling on a 1x1 mesh: no vocab padding, no force-argmax."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    sub_core_grids = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    return SimpleNamespace(
+        vocab_size=vocab_size,
+        padded_vocab_size=vocab_size,
+        max_batch_size=max_batch_size,
+        max_top_k=max_top_k,
+        cluster_shape=(1, 1),
+        sub_core_grids=sub_core_grids,
+        sub_core_grid_topk=sub_core_grids,
+        start_core=ttnn.CoreCoord(0, 0),
+    )
+
+
+@pytest.mark.parametrize(
+    "vocab_size",
+    [
+        # Half the vocab is a power of two >= 8192, so each half reaches the multi-core top-k
+        # factory. Mistral-7B-Instruct-v0.3 has exactly this vocab size.
+        pytest.param(32768, id="v32768_multicore_halves"),
+        # Half the vocab is not a power of two, so each half falls back to the single-core factory.
+        pytest.param(32000, id="v32000_single_core_halves"),
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_topk_matches_argmax_on_single_device(vocab_size, mesh_device):
+    """top-k=1 through TTSampling must select the row maximum on a 1x1 mesh.
+
+    On a single device TTSampling splits the logits in half and runs ttnn.topk on each half
+    (``multi_step_reduction``), so this covers the split path end to end for both top-k program
+    factories. Regression test for the half-width local indices buffer, which made the multi-core
+    factory page its index tiles past the end of that buffer and return indices that did not
+    belong to the values it returned.
+    """
+    torch.manual_seed(42)
+    batch_size = 32
+
+    sampler = TTSampling(
+        args=_single_device_sampling_args(mesh_device, vocab_size),
+        mesh_device=mesh_device,
+        tt_ccl=None,
+        k=torch.ones(batch_size),  # top-1
+        p=torch.zeros(batch_size),
+        temp=torch.ones(batch_size),
+    )
+    assert sampler.multi_step_reduction, "a 1x1 mesh is expected to take the split top-k path"
+    assert not sampler.force_argmax_sampling, "this test must exercise the top-k path, not argmax"
+
+    logits_host = torch.randn(1, 1, batch_size, vocab_size)
+    logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    # Compare against what the device actually holds: bfloat16 rounding creates ties, so the
+    # sampled token need not be torch.argmax of the fp32 logits, but its value must be the maximum.
+    logits_bf16 = ttnn.to_torch(logits_tt).float().reshape(batch_size, vocab_size)
+
+    tokens_tt, _log_probs = sampler(logits_tt)
+    tokens = ttnn.to_torch(tokens_tt).flatten()[:batch_size].long()
+
+    row_max = logits_bf16.max(dim=-1).values
+    failures = []
+    for user in range(batch_size):
+        token = int(tokens[user])
+        if not 0 <= token < vocab_size:
+            failures.append(f"  user {user}: token {token} outside [0, {vocab_size})")
+            continue
+        value = logits_bf16[user, token].item()
+        if value < row_max[user].item():
+            failures.append(
+                f"  user {user}: token {token} has logit {value:.6f}, but the row maximum is "
+                f"{row_max[user].item():.6f} at index {int(logits_bf16[user].argmax())}"
+            )
+
+    header = f"{len(failures)}/{batch_size} users did not sample the row maximum (vocab_size={vocab_size})"
+    assert not failures, header + ":\n" + "\n".join(failures)
