@@ -521,11 +521,48 @@ attention's `1/sqrt(d)` and this kernel's epsilon -- and both match torch, so no
 
 ## Phase 9 -- RoPE
 
-Also no new library work once phase 2 lands. ttnn's
-`rotary_embedding_llama.cpp` is 167 lines and uses only `mul_tiles`, `add_tiles`
-and a matmul against a 32x32 `trans_mat` for the rotate-half.
+**DONE, with zero library changes** -- the second phase in a row where the prediction held.
 
-- [ ] `unified_kernels/rope.cpp` + test, including the `trans_mat` construction
+    out = x * cos + (x @ M) * sin
+
+M is one 32x32 tile with `M[2i][2i+1] = +1` and `M[2i+1][2i] = -1`, so `x @ M` sends each
+adjacent pair `(x[2i], x[2i+1])` to `(-x[2i+1], x[2i])` -- the rotate-half as a matmul, which
+is how ttnn does it. Six configurations, max absolute error 0.004-0.005.
+
+### Why it fits the model unchanged
+
+**The rotation is PER TILE**, because the pairing never crosses a 32-element boundary. A
+block matmul expresses that exactly when `kt_dim == 1`: `out(rt x 1) = A(rt x 1) @ B(1 x 1)`
+has no sum over k, so each output tile is one input tile times the single M tile. ttnn spells
+the same thing as a `matmul_tiles` loop; here it is one `matmul(x, m)`.
+
+**And because the op is per-tile, the block's 2-D shape is irrelevant.** A chunk of N tiles
+is declared `Shape<N, 1>` whatever the sequence and head dimensions are. N is capped at 8 by
+the matmul's DST budget, so the kernel walks the tensor in chunks -- and the chunk size being
+a free parameter is what the test sweeps.
+
+**The rest is one SFPU pass.** `x * cos + rot * sin` is a four-leaf tree needing three DST
+slots -- the deepest expression this model has run, and the first to exercise phase 4's
+per-leaf format reconfig across four distinct buffers.
+
+It also alternates matmul and SFPU work every iteration, which is precisely what phase 7's
+composability fix made legal.
+
+### Two gates, and neither is sufficient alone
+
+That is the finding worth keeping, established by sabotage rather than asserted:
+
+| sabotage | max abs error | pair-norm deviation |
+|---|---|---|
+| sign-flipped M (device only) | **0.98 FAIL** | 0.004 pass |
+| `cos` used where `sin` belongs | 0.70 FAIL | **0.61 FAIL** |
+
+A rotation preserves the length of every `(x[2i], x[2i+1])` pair, so `pair_norm(out)` must
+equal `pair_norm(x)`. That is a property of the op rather than of any reference -- but a
+SIGN error is still a rotation, so it sails through. Conversely the error-versus-reference
+check cannot catch a misunderstanding shared by the kernel and the reference, which is why
+the reference applies the permutation directly and never multiplies by M. The two together
+cover both; either alone has a blind spot.
 
 ## Phase 10 -- Flash chunking / online softmax
 
