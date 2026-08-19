@@ -277,6 +277,130 @@ class DFlashDrafterCache:
         self.positions = torch.empty(0, dtype=torch.long)
 
 
+#: Rows the anchor cache reserves past its capacity for the live noise window.  One tile,
+#: because the window is 16 rows and ``fill_cache`` writes whole tiles.
+ANCHOR_WINDOW_ROWS = 32
+
+#: Largest single ``fill_cache`` this grid admits.  Its program factory computes
+#: ``num_blocks_of_work = heads * rows / 32`` and advances ``Wt`` tiles per block *without*
+#: accounting for head boundaries, so a core handed blocks that straddle one writes to the
+#: wrong tiles.  8 heads x (rows/32) must stay inside the core count; 384 rows is 96 blocks,
+#: comfortably under the 110-core grid measured by ``tests/dflash_fill_cache_probe.py``.
+ANCHOR_FILL_MAX_ROWS = 384
+
+
+class DFlashAnchorCache:
+    """Fixed-capacity per-layer anchor K/V for the drafter.
+
+    Replaces re-uploading and re-projecting the whole padded context every iteration.  Each
+    layer owns one K and one V tensor of ``[1, kv_heads, capacity + 32, head_dim]``; row ``i``
+    of ``[0, capacity)`` holds absolute position ``i``, the same "row i is position i"
+    invariant the padded path already relies on.
+
+    **Why this cannot reintroduce F6's recompile storm.**  F6 measured 82x from ttnn program
+    compilation because the incremental path grew *two* shapes every iteration: the delta
+    length (1..16) and the cache length.  Here neither is a shape.  The window write always
+    covers a whole tile at a **constant** offset, the anchor write always covers the whole
+    32-row verify tile, and the destination row is a ``fill_cache`` runtime argument that
+    ``UpdateKVCacheOperation::compute_program_hash`` deliberately excludes -- measured in
+    ``tests/dflash_fill_cache_probe.py``, where seven distinct destinations produce exactly
+    the programs the first one did.  The accepted count never reaches a shape at all: it moves
+    ``valid_len``, which only changes the *contents* of the mask.
+
+    Region map of one layer, with ``C = capacity``:
+
+    ==================  ===========================================  ==============
+    rows                contents                                     read?
+    ==================  ===========================================  ==============
+    ``[0, valid_len)``  committed anchors, post ``k_norm`` post RoPE  yes
+    ``[valid_len, C)``  stale, zero at allocation                     no, ``kv_valid``
+    ``[C, C + block)``  this step's noise window                      yes
+    ``[C + block, C+32)``  tile padding                              no, ``kv_valid``
+    ==================  ===========================================  ==============
+
+    The window living at a *constant* offset past the anchor region is the one deliberate
+    departure from the reference implementation, which writes its window into the anchor
+    region itself and relies on the next proposal overwriting rejected rows before anything
+    reads them.  Reserving a tile makes the write index a compile-time constant and keeps the
+    anchor region containing only committed anchors, so that argument is not needed.
+    """
+
+    def __init__(
+        self,
+        *,
+        config: DFlashConfig,
+        mesh_device: ttnn.MeshDevice,
+        capacity: int,
+        num_layers: int,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+    ) -> None:
+        if capacity % ANCHOR_WINDOW_ROWS:
+            raise ValueError(f"anchor capacity {capacity} must be a multiple of {ANCHOR_WINDOW_ROWS}")
+        self.config = config
+        self.mesh_device = mesh_device
+        self.capacity = int(capacity)
+        self.block = int(config.block_size)
+        self.valid_len = 0
+        rows = self.capacity + ANCHOR_WINDOW_ROWS
+        self.rows = rows
+        shape = (1, config.num_key_value_heads, rows, config.head_dim)
+        # Zero-filled, and that is load-bearing rather than tidy: garbage rows are excluded by
+        # ``kv_valid``, but ``scores + finfo.min`` then ``softmax`` only tolerates *finite*
+        # garbage.  Zeros are safe under that masking; uninitialised DRAM is not.
+        self.k = [
+            _to_device(torch.zeros(shape, dtype=torch.bfloat16), mesh_device=mesh_device, dtype=dtype)
+            for _ in range(num_layers)
+        ]
+        self.v = [
+            _to_device(torch.zeros(shape, dtype=torch.bfloat16), mesh_device=mesh_device, dtype=dtype)
+            for _ in range(num_layers)
+        ]
+
+    @property
+    def window_start(self) -> int:
+        """Constant row the live noise window is written at."""
+        return self.capacity
+
+    def note_committed(self, n: int) -> None:
+        """Advance the committed prefix, refusing to outrun what was written."""
+        if n < 0:
+            raise ValueError(f"committed count must not be negative, got {n}")
+        if self.valid_len + n + self.block > self.capacity:
+            raise ValueError(
+                f"anchor cache capacity {self.capacity} exhausted: {self.valid_len} committed + {n} "
+                f"new + one {self.block}-token block. Size it from prompt_len + max_new_tokens + "
+                "block_size."
+            )
+        self.valid_len += int(n)
+
+    def kv_layout(self, noise_start: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """``(kv_positions, kv_valid)`` for the whole cache sequence.
+
+        Padding rows are given position 0 and marked invalid.  Position 0 is a *real* position
+        for the first token, which is exactly why ``kv_valid`` is not optional: the sliding
+        window's lower bound admits a row parked at 0 for every query below 2048, and drafter
+        attention is bidirectional, so an admitted pad row corrupts the real slots rather than
+        being harmlessly ignored.
+        """
+        positions = torch.zeros(self.rows, dtype=torch.long)
+        valid = torch.zeros(self.rows, dtype=torch.bool)
+        if self.valid_len:
+            positions[: self.valid_len] = torch.arange(self.valid_len)
+            valid[: self.valid_len] = True
+        start = self.window_start
+        positions[start : start + self.block] = torch.arange(noise_start, noise_start + self.block)
+        valid[start : start + self.block] = True
+        return positions, valid
+
+    def release(self) -> None:
+        for tensor in (*self.k, *self.v):
+            if tensor is not None:
+                ttnn.deallocate(tensor)
+        self.k = []
+        self.v = []
+        self.valid_len = 0
+
+
 class _PlainNorm(LightweightModule):
     """``rms_norm(x) * w`` - the drafter's norm, *not* the target's centered variant."""
 
@@ -591,6 +715,74 @@ class _DFlashLayer(LightweightModule):
         # ``_attend`` owns only ``query``; these concat buffers belong to this call.
         ttnn.deallocate(key)
         ttnn.deallocate(value)
+        return self._feed_forward(hidden_states, attn_out)
+
+    def append_anchor_kv(
+        self,
+        context_projected: ttnn.Tensor,
+        *,
+        cache: "DFlashAnchorCache",
+        layer_idx: int,
+        rows: int,
+        dest_row: int,
+        rope: tuple[ttnn.Tensor, ttnn.Tensor],
+    ) -> None:
+        """Project ``rows`` encoder rows into K/V and write them at ``dest_row``.
+
+        ``context_projected`` is the shared ``encoder.fc`` + ``output_norm_enc`` output: the
+        context half of K/V is deliberately *not* re-normalised per layer (see the module
+        docstring's fourth difference), so one projection serves all five layers.
+        """
+        if dest_row % ANCHOR_WINDOW_ROWS or rows % ANCHOR_WINDOW_ROWS:
+            raise ValueError(f"anchor writes must be tile-aligned, got rows={rows} dest_row={dest_row}")
+        if rows > ANCHOR_FILL_MAX_ROWS:
+            raise ValueError(
+                f"a single fill_cache of {rows} rows exceeds the {ANCHOR_FILL_MAX_ROWS}-row work-split "
+                "limit; chunk it (see ANCHOR_FILL_MAX_ROWS)"
+            )
+        key, value = self._project_kv(context_projected, rows, rope=rope)
+        ttnn.fill_cache(cache.k[layer_idx], key, 0, update_idx=dest_row)
+        ttnn.fill_cache(cache.v[layer_idx], value, 0, update_idx=dest_row)
+        ttnn.deallocate(key)
+        ttnn.deallocate(value)
+
+    def forward_anchored(
+        self,
+        hidden_states: ttnn.Tensor,
+        *,
+        cache: "DFlashAnchorCache",
+        layer_idx: int,
+        rope_win: tuple[ttnn.Tensor, ttnn.Tensor],
+        mask: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """One layer against the persistent cache: write this step's window, attend to all of it."""
+        config = self.config
+        block = int(hidden_states.shape[2])
+        normed = self.input_layernorm(hidden_states)
+
+        query = ttnn.linear(
+            normed,
+            self.wq,
+            dtype=self.activation_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        query = self._split_heads(query, block, config.num_attention_heads)
+        query = self._per_head_norm(query, self.q_norm_weight)
+        query = self._apply_rope(query, *rope_win)
+
+        key_win, value_win = self._project_kv(normed, block, rope=rope_win)
+        ttnn.deallocate(normed)
+        # The window's own K/V goes into the reserved tail, so attention reads anchors and
+        # window through one tensor and needs no concat.
+        ttnn.fill_cache(cache.k[layer_idx], key_win, 0, update_idx=cache.window_start)
+        ttnn.fill_cache(cache.v[layer_idx], value_win, 0, update_idx=cache.window_start)
+        ttnn.deallocate(key_win)
+        ttnn.deallocate(value_win)
+
+        # ``_attend`` owns ``query`` and does not own K/V -- which is what makes it safe to
+        # hand it the cache tensors directly.
+        attn_out = self._attend(query, cache.k[layer_idx], cache.v[layer_idx], mask, block)
         return self._feed_forward(hidden_states, attn_out)
 
     def forward(
@@ -954,6 +1146,113 @@ class DFlashDrafter(LightweightModule):
         kv_valid[bucket:] = True  # the window's own rows are always real
 
         return self._forward_with_positions(noise_embeds, context_hidden_states, position_ids, kv_valid=kv_valid)
+
+    def _upload_rope(self, positions: torch.Tensor, rows: int):
+        cos, sin = rope_tables(positions, self.config.head_dim, self.config.rope_theta)
+
+        def up(t: torch.Tensor) -> ttnn.Tensor:
+            return _to_device(
+                t.reshape(1, 1, rows, self.config.head_dim).to(torch.bfloat16),
+                mesh_device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+            )
+
+        return up(cos), up(sin)
+
+    def append_anchors(
+        self,
+        context_hidden_states: ttnn.Tensor,
+        *,
+        cache: DFlashAnchorCache,
+        dest_row: int,
+        positions: torch.Tensor,
+    ) -> None:
+        """Project committed target taps into the cache at ``dest_row``.
+
+        ``context_hidden_states`` is ``[1, 1, rows, 5 * hidden]``, i.e. exactly what
+        :func:`build_context_hidden_states` produces on device from the verify's taps -- no
+        host round trip.  ``rows`` is tile-aligned by construction (the traced verify window is
+        32 rows), and larger prompt-sized appends are chunked to respect ``fill_cache``'s
+        work-split limit.
+        """
+        rows = int(context_hidden_states.shape[2])
+        if positions.numel() != rows:
+            raise ValueError(f"positions has {positions.numel()} entries for {rows} context rows")
+        projected = self.project_context(context_hidden_states)
+        try:
+            offset = 0
+            while offset < rows:
+                take = min(ANCHOR_FILL_MAX_ROWS, rows - offset)
+                piece = (
+                    projected
+                    if take == rows
+                    else ttnn.slice(
+                        projected,
+                        [0, 0, offset, 0],
+                        [1, 1, offset + take, self.config.hidden_size],
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                )
+                rope = self._upload_rope(positions[offset : offset + take], take)
+                try:
+                    for layer_idx, layer in enumerate(self.layers):
+                        layer.append_anchor_kv(
+                            piece,
+                            cache=cache,
+                            layer_idx=layer_idx,
+                            rows=take,
+                            dest_row=dest_row + offset,
+                            rope=rope,
+                        )
+                finally:
+                    for tensor in rope:
+                        ttnn.deallocate(tensor)
+                    if piece is not projected:
+                        ttnn.deallocate(piece)
+                offset += take
+        finally:
+            ttnn.deallocate(projected)
+
+    def forward_anchored(
+        self,
+        noise_embeds: ttnn.Tensor,
+        *,
+        cache: DFlashAnchorCache,
+        noise_start: int,
+    ) -> ttnn.Tensor:
+        """Draft a block against the persistent anchor cache.
+
+        Every shape here is a function of ``{block, capacity, hidden, kv_heads, head_dim}``
+        alone; nothing depends on how many tokens were accepted.  The only per-iteration
+        variation is the *contents* of the mask and the window's RoPE tables, which are 17 KB
+        and 4 KB -- against the 34 MB the padded path re-uploaded to every device.
+        """
+        config = self.config
+        block = int(noise_embeds.shape[2])
+        if block != cache.block:
+            raise ValueError(f"noise block is {block} rows, cache was sized for {cache.block}")
+
+        kv_positions, kv_valid = cache.kv_layout(noise_start)
+        q_positions = torch.arange(noise_start, noise_start + block)
+        rope_win = self._upload_rope(q_positions, block)
+        mask = _to_device(
+            bidirectional_sliding_mask(
+                q_positions, kv_positions, config.sliding_window, torch.bfloat16, kv_valid=kv_valid
+            ),
+            mesh_device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+        )
+
+        hidden = noise_embeds
+        try:
+            for layer_idx, layer in enumerate(self.layers):
+                hidden = layer.forward_anchored(hidden, cache=cache, layer_idx=layer_idx, rope_win=rope_win, mask=mask)
+        finally:
+            for tensor in (*rope_win, mask):
+                ttnn.deallocate(tensor)
+        out = self.final_norm(hidden)
+        ttnn.deallocate(hidden)
+        return out
 
     def forward(
         self,
