@@ -25,7 +25,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "tools/profiler/perf_debug_records.hpp"
+#include "tools/profiler/perf_debug_consumer.hpp"
 #include "tools/profiler/spsc_marker_decode.hpp"
 
 namespace tt::tt_metal {

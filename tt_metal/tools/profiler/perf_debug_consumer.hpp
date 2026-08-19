@@ -95,4 +95,22 @@ struct PerfDebugRecordBatch {
 using PerfDebugRecordCallback = std::function<void(const PerfDebugRecordBatch&)>;
 using PerfDebugConsumerHandle = uint64_t;
 
+// ---- Consumer registration (internal) ---------------------------------------------------------
+//
+// Registers with a process-wide registry rather than a live receiver, so it works at any time:
+// before the profiler boots, mid-capture, between captures. The profiler attaches every registered
+// consumer at capture start, a mid-capture registration attaches immediately, and registrations
+// persist across captures until unregistered. Each attached consumer gets its own delivery thread;
+// a slow consumer drops only its own records, reported per batch via dropped_delta. Must not be
+// called from inside a consumer callback.
+PerfDebugConsumerHandle register_consumer(std::string name, PerfDebugRecordCallback cb);
+void unregister_consumer(PerfDebugConsumerHandle handle);
+
+class PerfDebugReceiver;
+// Capture-lifetime glue for the profiler control plane only: attach binds every registered
+// consumer to the receiver and routes later registrations to it; detach must precede the
+// receiver's shutdown so a concurrent registration cannot attach to a dying receiver.
+void attach_registered_consumers(PerfDebugReceiver& receiver);
+void detach_registered_consumers();
+
 }  // namespace tt::tt_metal::perf_debug
