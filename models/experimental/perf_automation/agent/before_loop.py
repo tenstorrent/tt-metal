@@ -971,7 +971,9 @@ def before_loop(
     # _record_baseline_anchor already reads profile["perf_layers"] and had been getting None, so the
     # anchor said "all" whatever the truth was. The cap is expressed by ABSENCE, so absent means all.
     if isinstance(profile, dict) and "perf_layers" not in profile:
-        profile["perf_layers"] = os.environ.get("TT_PERF_LAYERS") or "all"
+        from .layer_depth import depth_in_force as _depth_in_force
+
+        profile["perf_layers"] = _depth_in_force()
     # Persist the tagged buckets for the loop: ROUTE reads this, not the CSVs.
     (Path(run.profiles_dir) / "baseline_profile.json").write_text(json.dumps(profile, indent=2, sort_keys=True))
     # ...and record the SAME profile as the ledger's eager anchor, right here. This file and the

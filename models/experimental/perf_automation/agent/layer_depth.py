@@ -228,6 +228,22 @@ def set_depth(env, depth, key: str | None = None) -> dict:
     return env
 
 
+def stage_layers_var(stage) -> str:
+    """The depth variable for a declared stage. THE ONE PLACE THIS NAME IS SPELLED.
+
+    test_one_depth_vocabulary states the rule the knob repair, the perf-test generator and the depth
+    bridge share: the knob for stage X is the build argument X_layers, set by TT_PERF_X_LAYERS.
+    stack_knob_repair.stage_names() owns WHICH stages exist; this owns how one is spelled as an
+    environment variable, which was written out longhand in four separate places.
+    """
+    return "TT_PERF_%s_LAYERS" % str(stage).strip().upper()
+
+
+def stack_layers_var(i) -> str:
+    """The positional form, for a model that declares no stages -- what the generator emits then."""
+    return "TT_PERF_STACK%d_LAYERS" % int(i)
+
+
 def active_depth_caps(environ=None, model_root=None, stages=None) -> dict:
     """Every depth cap in force, as {variable: layers}. Empty means full depth.
 
@@ -267,10 +283,10 @@ def active_depth_caps(environ=None, model_root=None, stages=None) -> dict:
             _stages = list(stage_names(model_root) or [])
         except Exception:  # noqa: BLE001 -- an unreadable source leaves the positional form below
             _stages = []
-    names += ["TT_PERF_%s_LAYERS" % str(st).strip().upper() for st in _stages]
+    names += [stage_layers_var(st) for st in _stages]
     # The positional vocabulary the generator uses for a model that declares no stages. Bounded by
     # the stacks a model can plausibly have; a cap set beyond it would also have no generated reader.
-    names += ["TT_PERF_STACK%d_LAYERS" % i for i in range(8)]
+    names += [stack_layers_var(i) for i in range(8)]
 
     out: dict = {}
     for name in names:
@@ -278,6 +294,32 @@ def active_depth_caps(environ=None, model_root=None, stages=None) -> dict:
         if n:
             out[name] = n
     return out
+
+
+def depth_in_force(environ=None, model_root=None, stages=None) -> str:
+    """The depth this process is building at: the tightest cap as a string, or "all".
+
+    THE ONE ANSWER TO "WHAT DEPTH IS THIS". Seven places computed it as
+
+        (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all"
+
+    -- perf_mcp's perf_layers, its anchor depth and its window label, run.py's capped test and its
+    window label, before_loop's profile stamp, and summary's _depth_label -- each with the same
+    blind spot: a multi-stack model is capped by TT_PERF_<STAGE>_LAYERS or TT_PERF_STACK{i}_LAYERS
+    while TT_PERF_LAYERS stays unset, so all seven reported "all" for a two-layer build.
+
+    Measured, run 11: the census pinned 1.247 B parameters of a 4.676 B model as the whole thing,
+    and the report's depth-mismatch guard -- which exists to withhold a measurement taken at one
+    depth against a ceiling for another -- could not fire, because both sides read "all".
+    """
+    caps = active_depth_caps(environ, model_root, stages)
+    return str(min(caps.values())) if caps else "all"
+
+
+def capping_var(environ=None, model_root=None, stages=None) -> str:
+    """Which variable holds the tightest cap, for a message that has to say what shrank the build."""
+    caps = active_depth_caps(environ, model_root, stages)
+    return min(caps, key=lambda k: caps[k]) if caps else ""
 
 
 def read_depth(environ=None):

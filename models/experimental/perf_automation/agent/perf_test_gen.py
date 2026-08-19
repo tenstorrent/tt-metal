@@ -701,6 +701,20 @@ _KNOWN_WORKLOAD_VARS = ("TT_PERF_ISL_TOKENS", "TT_PERF_OSL_TOKENS", "TT_PERF_BAT
 _ENV_INT_DEFAULT_RE = re.compile(r'os\.environ\.get\(\s*"(TT_PERF_[A-Z0-9_]+)"\s*,\s*"(\d+)"\s*\)')
 
 
+def _stage_layers_var(stage) -> str:
+    """layer_depth owns this spelling. Imported lazily, not at module scope: this module is loaded
+    BY PATH in places (spec_from_file_location), where a relative import has no parent package --
+    the same failure that stopped a refusal being reported from before_loop on 2026-08-17."""
+    try:
+        from .layer_depth import stage_layers_var
+
+        return stage_layers_var(stage)
+    except Exception:  # noqa: BLE001
+        from layer_depth import stage_layers_var  # type: ignore[no-redef]
+
+        return stage_layers_var(stage)
+
+
 def invented_workload_vars(src: str, stages=()) -> list:
     """Env-driven counts the generated test invented, with a literal default that SHRINKS the work.
 
@@ -731,7 +745,7 @@ def invented_workload_vars(src: str, stages=()) -> list:
     """
     allowed = (
         set(_KNOWN_WORKLOAD_VARS)
-        | {"TT_PERF_%s_LAYERS" % str(st).upper() for st in (stages or ())}
+        | {_stage_layers_var(st) for st in (stages or ())}
         # The per-stage trace knob, derived from the same declaration as the depth knob beside it.
         | {"TT_PERF_%s_TRACE" % str(st).upper() for st in (stages or ())}
     )

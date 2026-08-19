@@ -1967,7 +1967,7 @@ def profile_model() -> dict:
                 f"recorded — auto-heal could not get a clean run. Re-profile a smaller/signposted region."
             ),
         }
-    prof.setdefault("perf_layers", (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all")
+    prof.setdefault("perf_layers", _depth_in_force())
     prof = _promote_baseline(prof)
     _ledger_record(prof)
     dev = round(float(prof.get("device_ms", 0.0)), 4)
@@ -2290,6 +2290,16 @@ def _stage_ms_path():
     model = _MODEL_ROOT.name if _MODEL_ROOT else "model"
     task = os.environ.get("PERF_MCP_TASK", "main")
     return state_dir() / ("perf_mcp_stage_ms_%s_%s.json" % (model, task))
+
+
+def _depth_in_force() -> str:
+    """The one answer to "what depth is this". See layer_depth.depth_in_force."""
+    try:
+        from agent.layer_depth import depth_in_force
+
+        return depth_in_force()
+    except Exception:  # noqa: BLE001 -- unknown depth reads as full, exactly as it did before
+        return "all"
 
 
 def _stage_run_stamp() -> str:
@@ -4397,7 +4407,7 @@ def _record_committed_win(message: str) -> None:
                 _led.KIND_EAGER,
                 _led.PHASE_AFTER,
                 t.get("measured_ms"),
-                depth=(os.environ.get("TT_PERF_LAYERS") or "").strip() or "all",
+                depth=_depth_in_force(),
                 mode="eager",
                 source="git_commit",
                 model=_MODEL_ROOT.name if _MODEL_ROOT else "",
@@ -5496,7 +5506,7 @@ def _persist_throughput(rep: dict) -> None:
     55% at-floor while measuring FASTER, purely because the floor was recomputed each round."""
     try:
         target, scope, is_llm = _select_perf_target(rep)
-        _win = (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all"
+        _win = _depth_in_force()
         snap = {
             "scope": scope,
             "has_unit_ceiling": bool(is_llm),

@@ -122,9 +122,12 @@ def test_the_bridge_exports_the_stage_names_too():
     src = (_PA / "cc_optimize" / "run.py").read_text()
     i = src.index("def _bridge_depth_env(")
     body = src[i : src.index("\ndef ", i + 1)]
-    assert 'env["TT_PERF_%s_LAYERS" % str(_stage).upper()]' in body, "the bridge does not export stage names"
+    # Spelled by layer_depth.stage_layers_var now: the rule this file states was written out
+    # longhand in four places, and the bridge was one of them. What matters is that the bridge
+    # exports a PER-STAGE name, not which module formats the string.
+    assert "_stage_layers_var(_stage)" in body, "the bridge does not export stage names"
     assert "stage_depths" in body, "the bridge is not given the stage mapping"
-    assert "TT_PERF_STACK" in body, "the positional fallback was removed with nothing to replace it"
+    assert "_stack_layers_var(" in body, "the positional fallback was removed with nothing to replace it"
 
 
 def test_the_per_stage_mapping_is_published_not_just_printed():

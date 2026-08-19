@@ -1015,6 +1015,43 @@ def _knob_cache_put(model_root, env) -> None:
         pass
 
 
+def _stage_layers_var(stage) -> str:
+    """layer_depth owns the spelling; lazy import for the same reason _set_depth is."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from agent.layer_depth import stage_layers_var
+
+    return stage_layers_var(stage)
+
+
+def _stack_layers_var(i) -> str:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from agent.layer_depth import stack_layers_var
+
+    return stack_layers_var(i)
+
+
+def _depth_in_force() -> str:
+    """The one answer to "what depth is this". See layer_depth.depth_in_force."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    try:
+        from agent.layer_depth import depth_in_force
+
+        return depth_in_force()
+    except Exception:  # noqa: BLE001
+        return "all"
+
+
+def _active_depth_caps(env=None) -> dict:
+    """Every depth cap in force in `env`. See layer_depth.active_depth_caps."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    try:
+        from agent.layer_depth import active_depth_caps
+
+        return active_depth_caps(env)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _set_depth(env, depth, key=None):
     """Module-level shim for layer_depth.set_depth (imported lazily; the package pulls in device
     deps that must not load at import time)."""
@@ -1441,10 +1478,10 @@ def _bridge_depth_env(
     _per_stage = dict(stage_depths or {})
     if _per_stage:
         for _stage, _depth in sorted(_per_stage.items()):
-            env["TT_PERF_%s_LAYERS" % str(_stage).upper()] = str(_depth)
+            env[_stage_layers_var(_stage)] = str(_depth)
     elif isinstance(cov, dict) and len(cov) > 1:
         for _i, (_sid, _depth) in enumerate(sorted(cov.items())):
-            _stack_key = f"TT_PERF_STACK{_i}_LAYERS"
+            _stack_key = _stack_layers_var(_i)
             env[_stack_key] = str(_depth)
     probe_env = dict(mcp_env)
     probe_env.update(env)
@@ -3190,7 +3227,7 @@ def timed_op_for(env, fallback: str = "profile") -> str:
     the hardcode instead of adding another, and no call site can mislabel a run again.
     """
     try:
-        capped = str((env or {}).get("TT_PERF_LAYERS") or "").strip().isdigit()
+        capped = bool(_active_depth_caps(env or {}))
     except Exception:  # noqa: BLE001
         capped = True
     return fallback if capped else "fullpipe"
@@ -4149,7 +4186,7 @@ def _emit_summary(
             # comparable to a measurement taken at the same depth. This snapshot survives between
             # runs; drop THE FLOOR when the window moved -- but keep the ceiling, which is per-unit
             # physics and never depended on the window.
-            _wl = (os.environ.get("TT_PERF_LAYERS") or "").strip() or "all"
+            _wl = _depth_in_force()
             _sl = str((_throughput or {}).get("perf_layers", "")).strip()
             _throughput = _depth_scoped_throughput(_throughput, _wl)
             if (_throughput or {}).get("modeled_floor_ms") is None:
@@ -4556,7 +4593,7 @@ def optimize_pipeline(
             # Multi-stack: set TT_PERF_STACK{N}_LAYERS for each stack in sorted order.
             _profile_extra: dict = {}
             for _i, (_sid, _depth) in enumerate(sorted(_cov.items())):
-                _stack_key = f"TT_PERF_STACK{_i}_LAYERS"
+                _stack_key = _stack_layers_var(_i)
                 _cov_env[_stack_key] = str(_depth)
                 _profile_extra[_stack_key] = str(_depth)
             # Merge per-stack vars into PERF_MCP_PROFILE_ENV so the tracy subprocess sees them.

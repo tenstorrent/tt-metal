@@ -641,6 +641,16 @@ def _ledger_line(kind: str, title: str, model: str = "", task: str = ""):
         return None
 
 
+def _depth_in_force() -> str:
+    """The one answer to "what depth is this". See layer_depth.depth_in_force."""
+    try:
+        from agent.layer_depth import depth_in_force
+
+        return depth_in_force()
+    except Exception:  # noqa: BLE001 -- unknown depth reads as full, exactly as it did before
+        return "all"
+
+
 def _depth_label(profile: dict | None = None) -> str:
     """How much of the model the tracy numbers cover. A ms figure means nothing without it: the whole
     2-layer-vs-16-layer confusion came from a headline that printed neither side's depth.
@@ -654,7 +664,7 @@ def _depth_label(profile: dict | None = None) -> str:
     if isinstance(profile, dict):
         raw = str(profile.get("perf_layers") or "").strip()
     if not raw:
-        raw = (os.environ.get("TT_PERF_LAYERS") or "").strip()
+        raw = "" if _depth_in_force() == "all" else _depth_in_force()
     # A partial window means the tracy numbers are a COVERAGE SAMPLE -- a few layers holding every op
     # type -- not the whole model. But the COUNT is not reliable: it comes from TT_PERF_LAYERS, which
     # usually still holds the coverage default (2) and does NOT track the depth the search actually
