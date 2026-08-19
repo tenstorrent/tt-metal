@@ -42,9 +42,12 @@ namespace experimental {
 
 // PersistentDFB: device-side kernel class for a cross-program durable remote DFB (WH/BH).
 // Config pages + credits persist across programs; ctor loads word[4]
-// (PERSISTENT_DFB_CFG_FIFO_PTR_CHECKPOINT — durable sender wr / receiver rd cursor)
-// and may resize to this launch's dense entry_size. commit() / dtor store ptr back
-// when the epoch (word[2] fifo_start, word[5] applied_entry_size) matches the iface.
+// (PERSISTENT_DFB_CFG_FIFO_PTR_CHECKPOINT — durable sender wr / receiver rd cursor).
+// If this Attach's dense entry_size differs from word[5] (applied_entry_size), ctor
+// resizes with NOC credit fixup (+ sender barrier). Same-epoch relaunch skips that so
+// a producer can keep filling free space while outstanding credits wait for a consumer.
+// commit() / dtor store ptr back when the epoch (word[2] fifo_start, word[5]
+// applied_entry_size) matches the iface.
 //
 // Same push/pop/write API as CrossNodeDFB. Mid-flight page-size changes use
 // set_entry_size / set_receiver_entry_size at author-defined
@@ -162,15 +165,22 @@ public:
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.sender.config_ptr);
         const bool is_sender = static_cast<bool>(l1_config[REMOTE_DFB_CFG_IS_SENDER]);
         const uint32_t dense_entry_size = slot[1];
-        const uint8_t noc_id = noc_index;
-        if (is_sender) {
-            sync_sender_wr_ptr_from_credits();
-            resize_sender_interface<true>(dense_entry_size, noc_id);
-            l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE] = interface_.sender.fifo_page_size;
-            barrier_sender_credits();
-        } else {
-            resize_receiver_interface<true>(dense_entry_size, noc_id);
-            l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE] = interface_.receiver.fifo_page_size;
+        const uint32_t applied_entry_size = l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE];
+        // Same-epoch relaunch: setup already restored the checkpoint + this Attach's
+        // entry size. Skip resize/sync/barrier so a producer can relaunch and keep
+        // filling free space while outstanding credits wait for an offline consumer.
+        // Only when Attach changes the page size do we snap + NOC-fixup + drain pad.
+        if (dense_entry_size != applied_entry_size) {
+            const uint8_t noc_id = noc_index;
+            if (is_sender) {
+                sync_sender_wr_ptr_from_credits();
+                resize_sender_interface<true>(dense_entry_size, noc_id);
+                l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE] = interface_.sender.fifo_page_size;
+                barrier_sender_credits();
+            } else {
+                resize_receiver_interface<true>(dense_entry_size, noc_id);
+                l1_config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE] = interface_.receiver.fifo_page_size;
+            }
         }
 #endif
     }
@@ -231,8 +241,9 @@ public:
     FORCE_INLINE void reserve_back(uint32_t num_entries) {
         WAYPOINT("GSRW");
         CrossNodeSenderDFBInterface& iface = interface_.sender;
-        const uint32_t fifo_size = get_config_word(iface.config_ptr, 3);
-        const uint32_t num_units = fifo_size / L1_ALIGNMENT;
+        // Capacity is the usable (page-aligned) ring, not the raw fifo allocation.
+        // Non-dividing page sizes leave a trailing gap that is never part of the credit stream.
+        const uint32_t num_units = wrap_offset(iface) / L1_ALIGNMENT;
         const uint32_t num_recv = cross_node_dfb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
         const uint32_t total_units_needed = units_for_write(iface, num_entries);
 
@@ -252,8 +263,7 @@ public:
     FORCE_INLINE void reserve_back_for_receiver(uint32_t receiver_idx, uint32_t num_entries) {
         WAYPOINT("GSRW");
         CrossNodeSenderDFBInterface& iface = interface_.sender;
-        const uint32_t fifo_size = get_config_word(iface.config_ptr, 3);
-        const uint32_t num_units = fifo_size / L1_ALIGNMENT;
+        const uint32_t num_units = wrap_offset(iface) / L1_ALIGNMENT;
         const uint32_t total_units_needed = units_for_write(iface, num_entries);
 
         volatile tt_l1_ptr uint32_t* sent_ptr = local_sent_ptr(iface, receiver_idx);
@@ -452,16 +462,13 @@ public:
     // -----------------------------------------------------------------------
 
     // Spin until pages_sent - pages_acked >= num_entries (in L1_ALIGNMENT units).
+    // Credits track only the usable ring (see wr_offset_from_sent)
     FORCE_INLINE void wait_front(uint32_t num_entries) {
         WAYPOINT("CNWF");
         CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         const uint32_t entry_size = iface.fifo_page_size;
-        const uint32_t fifo_size = get_config_word(iface.config_ptr, 3);
-
-        uint32_t len_bytes = num_entries * entry_size;
-        if (iface.fifo_rd_ptr + len_bytes >= iface.fifo_limit_page_aligned) {
-            len_bytes += iface.fifo_start_addr + fifo_size - iface.fifo_limit_page_aligned;
-        }
+        const uint32_t len_bytes = num_entries * entry_size;
+        ASSERT(iface.fifo_rd_ptr + len_bytes <= iface.fifo_limit_page_aligned);
         const uint32_t units_needed = len_bytes / L1_ALIGNMENT;
 
         // pages_sent is at aligned_pages_acked_ptr - L1_ALIGNMENT (same as GlobalCB).
@@ -480,20 +487,19 @@ public:
     FORCE_INLINE void pop_front(uint32_t num_entries, const Noc& noc = Noc{}) {
         CrossNodeReceiverDFBInterface& iface = interface_.receiver;
         const uint32_t entry_size = iface.fifo_page_size;
-        const uint32_t fifo_size = get_config_word(iface.config_ptr, 3);
-
-        uint32_t len_bytes = num_entries * entry_size;
-        if (iface.fifo_rd_ptr + len_bytes >= iface.fifo_limit_page_aligned) {
-            iface.fifo_rd_ptr = iface.fifo_start_addr + (iface.fifo_rd_ptr + len_bytes - iface.fifo_limit_page_aligned);
-            len_bytes += iface.fifo_start_addr + fifo_size - iface.fifo_limit_page_aligned;
-        } else {
-            iface.fifo_rd_ptr += len_bytes;
+        const uint32_t len_bytes = num_entries * entry_size;
+        ASSERT(iface.fifo_rd_ptr + len_bytes <= iface.fifo_limit_page_aligned);
+        iface.fifo_rd_ptr += len_bytes;
+        if (iface.fifo_rd_ptr >= iface.fifo_limit_page_aligned) {
+            iface.fifo_rd_ptr = iface.fifo_start_addr;
         }
         const uint32_t num_units = len_bytes / L1_ALIGNMENT;
 
+        // Posted: peer visibility is eventual; senders discover the ack by polling
+        // pages_acked (reserve_back / barrier). Matches push_back's posted sent-incs.
         const uint8_t noc_id = noc.get_noc_id();
         detail::update_pages_acked(
-            reinterpret_cast<const RemoteReceiverCBInterface&>(iface), num_units, noc_id, false, write_at_cmd_buf);
+            reinterpret_cast<const RemoteReceiverCBInterface&>(iface), num_units, noc_id, true, write_at_cmd_buf);
     }
 #endif  // KERNEL_BUILD && !COMPILE_FOR_TRISC
 
@@ -585,9 +591,9 @@ private:
         return iface.fifo_limit_page_aligned - iface.fifo_start_addr;
     }
 
-    // Byte offset of a receiver's next free slot given its entries_sent counter value.
-    // The counter is monotonic and resets to zero on every launch, so the credited byte
-    // count modulo the ring size is exactly the write position — no stored cursor needed.
+    // Byte offset of a receiver's next free slot given its durable entries_sent counter.
+    // Resize rebases the monotonic counter forward so its modulus under the new usable
+    // ring still names the snapped checkpoint — no stored per-receiver cursor needed.
     FORCE_INLINE static uint32_t wr_offset_from_sent(const CrossNodeSenderDFBInterface& iface, uint32_t sent_units) {
         const uint32_t ring_units = wrap_offset(iface) / L1_ALIGNMENT;
         return (sent_units % ring_units) * L1_ALIGNMENT;
@@ -629,8 +635,55 @@ private:
     }
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
-    // Snap sender wr_ptr / page size to `page_size`. When update_remote_over_noc, also NOC-adjust
-    // remote pages_sent for any pad/wrap introduced by the snap.
+    // Monotonic increment that makes counter % new_ring_units equal target_offset_units.
+    // This is stronger than ordinary resize padding: when a non-dividing page size
+    // truncates the usable ring, the modulus itself changes (e.g. 1024 -> 768 bytes).
+    FORCE_INLINE static uint32_t credit_rebase_adjustment(
+        uint32_t counter, uint32_t target_offset_bytes, uint32_t new_ring_bytes) {
+        ASSERT(new_ring_bytes != 0);
+        ASSERT(new_ring_bytes % L1_ALIGNMENT == 0);
+        ASSERT(target_offset_bytes < new_ring_bytes);
+        ASSERT(target_offset_bytes % L1_ALIGNMENT == 0);
+        const uint32_t ring_units = new_ring_bytes / L1_ALIGNMENT;
+        const uint32_t target_units = target_offset_bytes / L1_ALIGNMENT;
+        return (target_units + ring_units - (counter % ring_units)) % ring_units;
+    }
+
+    template <uint8_t nm>
+    FORCE_INLINE static void increment_sender_credits_for_receiver(
+        CrossNodeSenderDFBInterface& iface,
+        uint32_t receiver_idx,
+        uint32_t adjustment,
+        uint8_t noc,
+        bool posted,
+        uint8_t cmd_buf) {
+        if (adjustment == 0) {
+            return;
+        }
+        volatile tt_l1_ptr uint32_t* sent_ptr = local_sent_ptr(iface, receiver_idx);
+        volatile tt_l1_ptr uint32_t* xy =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + 2 * receiver_idx;
+        const uint32_t remote_sent_ptr =
+            cross_node_dfb_remote_pages_sent_ptr(iface.num_receivers_and_remote_pages_sent_ptr) +
+            2 * receiver_idx * L1_ALIGNMENT;
+        const uint32_t remote_noc_xy = uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, xy[0]), DYNAMIC_NOC_Y(noc, xy[1])));
+
+        *sent_ptr += adjustment;
+        noc_fast_atomic_increment<nm>(
+            noc,
+            cmd_buf,
+            get_noc_addr_helper(remote_noc_xy, remote_sent_ptr),
+            NOC_UNICAST_WRITE_VC,
+            adjustment,
+            31 /*wrap*/,
+            false /*linked*/,
+            posted,
+            MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    }
+
+    // Snap sender wr_ptr / page size to `page_size`. When update_remote_over_noc,
+    // rebase each durable pages_sent counter forward so credit-derived writes map
+    // to the snapped cursor under the new (possibly truncated) usable-ring modulus.
     template <bool update_remote_over_noc = false>
     FORCE_INLINE void resize_sender_interface(
         uint32_t page_size,
@@ -649,42 +702,33 @@ private:
         uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
 
         uint32_t next_fifo_wr_ptr = fifo_start_addr + align(fifo_wr_ptr - fifo_start_addr, page_size);
+        if (next_fifo_wr_ptr >= fifo_limit_page_aligned) {
+            next_fifo_wr_ptr = fifo_start_addr;
+        }
         if constexpr (update_remote_over_noc) {
-            uint32_t aligned_page_adjustment = 0;
-            if (next_fifo_wr_ptr >= fifo_limit_page_aligned) {
-                aligned_page_adjustment =
-                    (fifo_start_addr + fifo_size - fifo_wr_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
-                next_fifo_wr_ptr = fifo_start_addr;
-            } else if (next_fifo_wr_ptr != fifo_wr_ptr) {
-                aligned_page_adjustment = (next_fifo_wr_ptr - fifo_wr_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
-            }
-            if (aligned_page_adjustment != 0) {
+            const uint32_t target_offset = next_fifo_wr_ptr - fifo_start_addr;
+            const uint32_t num_recv =
+                cross_node_dfb_num_receivers(sender_cb_interface.num_receivers_and_remote_pages_sent_ptr);
+            for (uint32_t i = 0; i < num_recv; ++i) {
+                const uint32_t adjustment = credit_rebase_adjustment(
+                    *local_sent_ptr(sender_cb_interface, i), target_offset, cb_size_page_aligned);
                 if (nm == DM_DYNAMIC_NOC) {
-                    detail::update_pages_sent<DM_DYNAMIC_NOC>(
-                        reinterpret_cast<const RemoteSenderCBInterface&>(sender_cb_interface),
-                        aligned_page_adjustment,
-                        noc,
-                        posted,
-                        cmd_buf);
+                    increment_sender_credits_for_receiver<DM_DYNAMIC_NOC>(
+                        sender_cb_interface, i, adjustment, noc, posted, cmd_buf);
                 } else {
-                    detail::update_pages_sent<DM_DEDICATED_NOC>(
-                        reinterpret_cast<const RemoteSenderCBInterface&>(sender_cb_interface),
-                        aligned_page_adjustment,
-                        noc,
-                        posted,
-                        cmd_buf);
+                    increment_sender_credits_for_receiver<DM_DEDICATED_NOC>(
+                        sender_cb_interface, i, adjustment, noc, posted, cmd_buf);
                 }
             }
-        } else if (next_fifo_wr_ptr >= fifo_limit_page_aligned) {
-            next_fifo_wr_ptr = fifo_start_addr;
         }
         sender_cb_interface.fifo_wr_ptr = next_fifo_wr_ptr;
         sender_cb_interface.fifo_limit_page_aligned = fifo_limit_page_aligned;
         sender_cb_interface.fifo_page_size = page_size;
     }
 
-    // Snap receiver rd_ptr / page size to `page_size`. When update_remote_over_noc, also NOC-adjust
-    // remote pages_acked for any pad/wrap introduced by the snap.
+    // Snap receiver rd_ptr / page size to `page_size`. When update_remote_over_noc,
+    // rebase durable pages_acked to the same snapped offset. The sender publishes
+    // matching synthetic sent credits first; wait before acknowledging them.
     template <bool update_remote_over_noc = false>
     FORCE_INLINE void resize_receiver_interface(
         uint32_t page_size,
@@ -703,21 +747,18 @@ private:
         uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
 
         uint32_t next_fifo_rd_ptr = fifo_start_addr + align(fifo_rd_ptr - fifo_start_addr, page_size);
+        if (next_fifo_rd_ptr >= fifo_limit_page_aligned) {
+            next_fifo_rd_ptr = fifo_start_addr;
+        }
         if constexpr (update_remote_over_noc) {
-            uint32_t aligned_page_adjustment = 0;
-            if (next_fifo_rd_ptr >= fifo_limit_page_aligned) {
-                aligned_page_adjustment =
-                    (fifo_start_addr + fifo_size - fifo_rd_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
-                next_fifo_rd_ptr = fifo_start_addr;
-            } else if (next_fifo_rd_ptr != fifo_rd_ptr) {
-                aligned_page_adjustment = (next_fifo_rd_ptr - fifo_rd_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
-            }
-            if (aligned_page_adjustment != 0) {
+            volatile tt_l1_ptr uint32_t* pages_acked_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_cb_interface.aligned_pages_acked_ptr);
+            const uint32_t target_offset = next_fifo_rd_ptr - fifo_start_addr;
+            const uint32_t adjustment = credit_rebase_adjustment(*pages_acked_ptr, target_offset, cb_size_page_aligned);
+            if (adjustment != 0) {
                 uint32_t pages_acked = 0;
                 uint32_t pages_sent = 0;
                 uint32_t num_pages_recv = 0;
-                volatile tt_l1_ptr uint32_t* pages_acked_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_cb_interface.aligned_pages_acked_ptr);
                 volatile tt_l1_ptr uint32_t* pages_sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                     receiver_cb_interface.aligned_pages_acked_ptr - L1_ALIGNMENT);
                 do {
@@ -725,26 +766,24 @@ private:
                     pages_acked = *pages_acked_ptr;
                     pages_sent = *pages_sent_ptr;
                     num_pages_recv = pages_sent - pages_acked;
-                } while (num_pages_recv < aligned_page_adjustment);
+                } while (num_pages_recv < adjustment);
 
                 if (nm == DM_DYNAMIC_NOC) {
                     detail::update_pages_acked<DM_DYNAMIC_NOC>(
                         reinterpret_cast<const RemoteReceiverCBInterface&>(receiver_cb_interface),
-                        aligned_page_adjustment,
+                        adjustment,
                         noc,
                         posted,
                         cmd_buf);
                 } else {
                     detail::update_pages_acked<DM_DEDICATED_NOC>(
                         reinterpret_cast<const RemoteReceiverCBInterface&>(receiver_cb_interface),
-                        aligned_page_adjustment,
+                        adjustment,
                         noc,
                         posted,
                         cmd_buf);
                 }
             }
-        } else if (next_fifo_rd_ptr >= fifo_limit_page_aligned) {
-            next_fifo_rd_ptr = fifo_start_addr;
         }
         receiver_cb_interface.fifo_rd_ptr = next_fifo_rd_ptr;
         receiver_cb_interface.fifo_limit_page_aligned = fifo_limit_page_aligned;

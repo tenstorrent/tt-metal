@@ -1417,6 +1417,15 @@ const experimental::PersistentDFB& detail::ProgramImpl::get_persistent_dfb_attac
     return *it->second;
 }
 
+std::optional<uint8_t> detail::ProgramImpl::get_persistent_dfb_id_for_relay(uint32_t relay_dfb_host_id) const {
+    for (const auto& [persistent_dfb_id, registered_relay_host_id] : persistent_relay_host_ids_) {
+        if (registered_relay_host_id == relay_dfb_host_id) {
+            return persistent_dfb_id;
+        }
+    }
+    return std::nullopt;
+}
+
 void detail::ProgramImpl::register_persistent_relay_dfb(
     const CoreRangeSet& receiver_cores, uint8_t persistent_dfb_id, uint32_t relay_dfb_host_id) {
     TT_FATAL(
