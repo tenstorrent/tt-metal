@@ -41,15 +41,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
-        // Full 32x32 tiles: 2x2 faces of 16x16 (tiny tiles not supported for quasar). srcA before srcB.
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        // Full 32x32 tiles: 2x2 faces of 16x16 (tiny tiles not supported for quasar).
+        // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives
+        // UNPACR0/SrcA -- so operand A is recorded under Unp1 and operand B under Unp0 (matches product).
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(static_cast<DataFormat>(formats.unpack_A_dst));
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(static_cast<DataFormat>(formats.unpack_B_dst));
 
         _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
             CT_DIM,
             RT_DIM,
             KT_DIM); // transpose in src_A not supported for quasar

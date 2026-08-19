@@ -59,14 +59,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_A_src);
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_A_src);
+        // Record the descriptor under the engine UNPACKER_ENGINE_SEL actually drives (UNP_B -> UNPACR1/Unp1).
+        constexpr auto unp_res = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B) ? ckernel::trisc::BfdResource::Unp1 : ckernel::trisc::BfdResource::Unp0;
+        ckernel::trisc::bfd_alloc_and_program<unp_res>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_A_src);
 
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, unpack_to_dest>(
-            unpack_to_dest ? ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>()
-                           : ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-            num_tiles_per_unpack);
+            ckernel::trisc::bfd_current<unp_res>(), num_tiles_per_unpack);
 
         PROFILER_SYNC();
     }

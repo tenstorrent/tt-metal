@@ -79,15 +79,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             l1_addr_16B = L1_ADDRESS(buffer_B[0]);
         }
 
+        // Record the descriptor under the engine UNPACKER_ENGINE_SEL actually drives (UNP_B -> UNPACR1/Unp1).
+        constexpr auto unp_res = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B) ? ckernel::trisc::BfdResource::Unp1 : ckernel::trisc::BfdResource::Unp0;
         if (tensor_shape.face_r_dim <= ckernel::unpack::UNPACR_STRIDE_MAX_ROWS)
         {
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(
-                tensor_shape, l1_addr_16B, formats.unpack_A_src);
+            ckernel::trisc::bfd_alloc_and_program<unp_res, ckernel::trisc::L1AccessMode::Strided>(tensor_shape, l1_addr_16B, formats.unpack_A_src);
         }
         else
         {
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Continuous>(
-                tensor_shape, l1_addr_16B, formats.unpack_A_src);
+            ckernel::trisc::bfd_alloc_and_program<unp_res, ckernel::trisc::L1AccessMode::Continuous>(tensor_shape, l1_addr_16B, formats.unpack_A_src);
         }
 
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
@@ -102,17 +102,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (unpack_to_dest)
         {
-            _llk_unpack_tilize_block_init_<FULL_CT_DIM, BLOCK_CT_DIM>(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape);
+            _llk_unpack_tilize_block_init_<FULL_CT_DIM, BLOCK_CT_DIM>(ckernel::trisc::bfd_current<unp_res>(), tensor_shape);
         }
         else if (tensor_shape.face_r_dim < FACE_R_DIM)
         {
             _llk_unpack_tilize_strided_init_small_faces_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(
-                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, FULL_CT_DIM, BLOCK_CT_DIM);
+                ckernel::trisc::bfd_current<unp_res>(), tensor_shape, FULL_CT_DIM, BLOCK_CT_DIM);
         }
         else
         {
-            _llk_unpack_tilize_init_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(
-                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), FULL_CT_DIM, BLOCK_CT_DIM, tensor_shape);
+            _llk_unpack_tilize_init_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(ckernel::trisc::bfd_current<unp_res>(), FULL_CT_DIM, BLOCK_CT_DIM, tensor_shape);
         }
         PROFILER_SYNC();
     }

@@ -69,7 +69,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             l1_addr_16B = L1_ADDRESS(buffer_B[0]);
         }
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
+        // Record the descriptor under the engine UNPACKER_ENGINE_SEL actually drives (UNP_B -> UNPACR1/Unp1).
+        constexpr auto unp_res = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B) ? ckernel::trisc::BfdResource::Unp1 : ckernel::trisc::BfdResource::Unp0;
+        ckernel::trisc::bfd_alloc_and_program<unp_res>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
 
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
@@ -82,7 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, TRANSPOSE_EN, is_fp32_dest_acc_en>(
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape_A, num_tiles_per_unpack);
+            ckernel::trisc::bfd_current<unp_res>(), tensor_shape_A, num_tiles_per_unpack);
         PROFILER_SYNC();
     }
     {
