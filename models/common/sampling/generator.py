@@ -307,11 +307,12 @@ class SamplingGenerator:
         *,
         penalties_on: bool,
         tt_out_tok: Optional[ttnn.Tensor],
+        count_tokens: bool = True,
     ):
         if penalties_on:
             logits = self.tt_penalties.apply(logits)
         tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
-        if penalties_on:
+        if penalties_on and count_tokens:
             # Fold the penalty bookkeeping into the sampled step rather than running it afterwards in
             # sample(). The order is unchanged -- penalties are applied to this step's logits from the
             # previous steps' counts, then the new token is counted -- but doing it here means it is part
@@ -324,10 +325,9 @@ class SamplingGenerator:
     def reset_penalty_counts(self):
         """Zero the output-token penalty counters, if penalties are active.
 
-        Needed after any pass that runs the sampling pipeline for its side effects rather than its result:
-        _run_sampling now counts the sampled token, so a pre-compile or a trace capture over dummy inputs
-        would otherwise leave those phantom tokens in the counts and skew the next real step's penalties.
-        In-place, so it allocates nothing.
+        Side-effect passes (pre-compile, trace capture) pass ``count_tokens=False`` to _run_sampling
+        instead, so they never add phantom tokens and nothing needs undoing. This remains for callers that
+        genuinely want the counters cleared. In-place, so it allocates nothing.
         """
         if self._penalties_active:
             self.tt_penalties.reset_output_tokens()
@@ -351,8 +351,8 @@ class SamplingGenerator:
             logits,
             penalties_on=self._penalties_active,
             tt_out_tok=tt_out_tok,
+            count_tokens=False,
         )
-        self.reset_penalty_counts()
 
     def capture_trace(
         self,
@@ -378,6 +378,7 @@ class SamplingGenerator:
                 logits,
                 penalties_on=penalties_on,
                 tt_out_tok=tt_out_tok,
+                count_tokens=False,
             )
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
@@ -388,7 +389,6 @@ class SamplingGenerator:
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
         ttnn.synchronize_device(self.mesh_device)
-        self.reset_penalty_counts()
 
         if tt_out_tok is not None:
             if isinstance(sampled, tuple):
@@ -423,6 +423,7 @@ class SamplingGenerator:
         enable_trace: bool = True,
         tt_out_tok: Optional[ttnn.Tensor] = None,
         skip_precompile: bool = False,
+        count_tokens: bool = True,
     ) -> ttnn.Tensor:
         """
         Convenience wrapper that either runs the sampling module directly or
@@ -441,6 +442,7 @@ class SamplingGenerator:
                 logits,
                 penalties_on=penalties_on,
                 tt_out_tok=tt_out_tok,
+                count_tokens=count_tokens,
             )
         else:
             key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
