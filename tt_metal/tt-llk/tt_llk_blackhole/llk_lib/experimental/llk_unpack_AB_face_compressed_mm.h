@@ -480,5 +480,6 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_MATH, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
     TTI_SETADCXY_THREAD_OVERRIDE(p_setadc::UNP_AB, p_setadc::THREAD_OVRD_PACK, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
     TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
+    TTI_SETADCXY(p_setadc::UNP_AB, 0, 0, 0, 0, SETADC_CH01(p_setadc::Y));
     t6_mutex_release(mutex::THREAD2_ADC);
 }
