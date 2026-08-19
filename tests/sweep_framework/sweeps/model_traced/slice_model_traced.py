@@ -320,6 +320,9 @@ def run(
     # recorded shape is fully concrete — some traces have a None dim, which
     # would crash torch.zeros; skip pre-allocation and let the op allocate).
     output_tensor_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
+    # Initialised unconditionally: the traced-output block below is conditional, and the gather
+    # references this, so leaving it unbound raises UnboundLocalError on every vector that skips it.
+    ot_placement = None
     if output_tensor_info and output_tensor_info.get("shape") and None not in tuple(output_tensor_info["shape"]):
         ot_shape = tuple(output_tensor_info["shape"])
         ot_dtype = output_tensor_info.get("dtype") or input_a_dtype
