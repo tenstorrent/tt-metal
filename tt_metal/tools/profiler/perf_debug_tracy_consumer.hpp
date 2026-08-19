@@ -12,7 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "tools/profiler/perf_debug_records.hpp"
+#include "tools/profiler/perf_debug_consumer.hpp"
 
 namespace tt::tt_metal {
 

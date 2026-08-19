@@ -47,6 +47,7 @@
 #include "hostdevcommon/profiler_common.h"
 
 #include "tools/profiler/spsc_marker_decode.hpp"
+#include "tools/profiler/perf_debug_consumer.hpp"
 #include "tools/profiler/perf_debug_env.hpp"
 #include "tools/profiler/perf_debug_profiler_tracy_handler.hpp"
 #include "tools/profiler/perf_debug_receiver.hpp"
@@ -939,6 +940,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
             receiver_->add_consumer(
                 "tracy", [c = tracy_consumer_.get()](const perf_debug::PerfDebugRecordBatch& b) { (*c)(b); });
         }
+        perf_debug::attach_registered_consumers(*receiver_);
         receiver_->start();
     }
     if (!devices_.empty()) {
@@ -2995,6 +2997,7 @@ void PerfDebugProfiler::stop() {
         }
     }
     if (receiver_ != nullptr) {
+        perf_debug::detach_registered_consumers();
         receiver_->shutdown();
     }
     for (auto& ctx : devices_) {
