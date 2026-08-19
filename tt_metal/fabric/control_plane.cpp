@@ -2467,22 +2467,6 @@ ControlPlane::get_global_logical_bindings() const {
     return global_logical_bindings_;
 }
 
-#if defined(TT_METAL_USE_EMULE)
-void ControlPlane::bind_in_process_ranks(uint32_t k) {
-    // Only ever reached from emule's install_virtual_ranks; under MPI the real bindings are built at
-    // construction and nothing calls this.
-    global_logical_bindings_.clear();
-    if (k <= 1) {
-        return;
-    }
-    TT_FATAL(!local_mesh_binding_.mesh_ids.empty(), "in-process rank binding: this host binds no mesh");
-    const auto binding = std::make_pair(local_mesh_binding_.mesh_ids.front(), local_mesh_binding_.host_rank);
-    for (uint32_t r = 0; r < k; ++r) {
-        global_logical_bindings_[tt_metal::distributed::multihost::Rank{static_cast<int>(r)}] = binding;
-    }
-}
-#endif
-
 // Helper function to fill connection info with common fields for fabric router configs
 void fill_connection_info_fields(
     tt::tt_fabric::fabric_connection_info_t& connection_info,
