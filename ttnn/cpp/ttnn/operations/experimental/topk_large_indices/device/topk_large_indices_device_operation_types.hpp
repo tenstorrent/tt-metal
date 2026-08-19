@@ -52,6 +52,10 @@ struct operation_attributes_t {
     // already capture any structural difference.
     std::optional<uint32_t> row_start{};
     std::optional<uint32_t> row_count{};
+    // Sequential tie-breaking: equal values return their indices in ascending
+    // global-index order (the stable=True contract of ttnn.topk). Selects the
+    // TOPK_XL_STABLE_TIES kernel compile, so it is part of the program hash.
+    bool stable{false};
 };
 
 struct tensor_args_t {
