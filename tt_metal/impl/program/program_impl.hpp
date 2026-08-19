@@ -369,6 +369,7 @@ public:
         std::optional<uint32_t> entry_size_override);
 
     const experimental::PersistentDFB& get_persistent_dfb_attachment(uint8_t persistent_dfb_id) const;
+    std::optional<uint8_t> get_persistent_dfb_id_for_relay(uint32_t relay_dfb_host_id) const;
 
     // Mark a normal local DFB as the typed relay for a PersistentDFB this core participates in.
     // The local DFB borrows the Persistent data buffer; its device_slot is emitted

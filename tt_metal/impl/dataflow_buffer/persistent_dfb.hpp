@@ -53,8 +53,8 @@ public:
 
     PersistentDFB(const PersistentDFB&) = delete;
     PersistentDFB& operator=(const PersistentDFB&) = delete;
-    PersistentDFB(PersistentDFB&&) noexcept = default;
-    PersistentDFB& operator=(PersistentDFB&&) noexcept = default;
+    PersistentDFB(PersistentDFB&&) = delete;
+    PersistentDFB& operator=(PersistentDFB&&) = delete;
 
     uint32_t buffer_address() const;
     const Buffer& config_buffer() const;

@@ -25,6 +25,7 @@
 
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/dataflow_buffer/persistent_dfb.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/program/dispatch.hpp"
 #include "impl/context/metal_context.hpp"
@@ -320,6 +321,23 @@ TEST_F(PersistentDFBFixture, PersistentDFB_CrossProgramPersistence) {
     EXPECT_EQ(run_persistent_receiver_pop(mesh_device, pdfb, 256, 4, 0u), 1u);
 }
 
+TEST_F(PersistentDFBFixture, PersistentDFB_ProducerRelaunchWithOutstandingCredits) {
+    // Same-epoch producer relaunch must not barrier on durable outstanding entries:
+    // fill half the ring, relaunch sender to fill the rest, then drain once.
+    auto mesh_device = devices_[0];
+    constexpr uint32_t entry_size = 256;
+    constexpr uint32_t ring_depth = 4;
+    constexpr uint32_t first_push = 2;
+    constexpr uint32_t second_push = 2;
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {
+        {CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {1, 0}))}};
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, entry_size, ring_depth);
+
+    EXPECT_EQ(run_persistent_sender_push(mesh_device, pdfb, entry_size, first_push, 0u), 1u);
+    EXPECT_EQ(run_persistent_sender_push(mesh_device, pdfb, entry_size, second_push, 0u), 1u);
+    EXPECT_EQ(run_persistent_receiver_pop(mesh_device, pdfb, entry_size, first_push + second_push, 0u), 1u);
+}
+
 TEST_F(PersistentDFBFixture, PersistentDFB_BackToBackRelaunch) {
     // Two cross-program push→pop cycles on the same PersistentDFB.
     auto mesh_device = devices_[0];
@@ -607,8 +625,13 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_HostRelationshipValidation) 
         experimental::dfb::DataflowBufferConfig config{.entry_size = 256, .num_entries = 4};
         const uint32_t relay_host_id =
             experimental::CreatePersistentRelayDataflowBuffer(program, receiver_cores, config, /*persistent_dfb_id=*/0);
-        const uint8_t expected_slot =
-            static_cast<uint8_t>(program.impl().get_dataflow_buffer(relay_host_id)->device_slot);
+        const auto* relay_dfb = program.impl().get_dataflow_buffer(relay_host_id).get();
+        ASSERT_NE(relay_dfb, nullptr);
+        EXPECT_TRUE(relay_dfb->config.is_relay);
+        const auto persistent_dfb_id = program.impl().get_persistent_dfb_id_for_relay(relay_host_id);
+        ASSERT_TRUE(persistent_dfb_id.has_value());
+        EXPECT_EQ(*persistent_dfb_id, 0u);
+        const uint8_t expected_slot = static_cast<uint8_t>(relay_dfb->device_slot);
         for (const CoreCoord& core : corerange_to_cores(receiver_cores)) {
             const auto& participant = program.impl().get_per_core_persistent_dfbs().at(core).at(0);
             EXPECT_EQ(participant.relay_dfb_id, expected_slot);
@@ -616,7 +639,35 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_HostRelationshipValidation) 
         EXPECT_EQ(
             program.impl().get_per_core_persistent_dfbs().at(sender_core).at(0).relay_dfb_id,
             std::numeric_limits<uint8_t>::max());
-        EXPECT_EQ(program.impl().get_dataflow_buffer(relay_host_id)->borrowed_addr_, pdfb.buffer_address());
+        EXPECT_EQ(relay_dfb->borrowed_addr_, pdfb.buffer_address());
+
+        // Metal 2.0 genfiles reads DataflowBufferBindingHandle.persistent_dfb_id when emitting
+        // RelayDFBBindingToken. Mirror MakeDataflowBufferBindingHandles and verify the callback
+        // genfiles uses sees the Persistent slot (not the 0xFF default).
+        DataflowBufferBindingHandleMap handles;
+        handles.emplace(
+            "relay_dfb",
+            DataflowBufferBindingHandle{
+                .logical_dfb_id = static_cast<uint16_t>(relay_dfb->device_slot),
+                .is_relay = relay_dfb->config.is_relay,
+                .persistent_dfb_id = *persistent_dfb_id});
+        auto kernel = std::make_shared<ComputeKernel>(
+            program.impl().get_context_id(),
+            KernelSource::from_source("void kernel_main() {}"),
+            receiver_cores,
+            ComputeConfig{},
+            /*is_metal2_kernel=*/true,
+            handles);
+        bool saw_binding = false;
+        kernel->process_dataflow_buffer_binding_handles(
+            [&](const std::string& name, uint16_t logical_id, bool is_relay, uint8_t persistent_dfb_id) {
+                EXPECT_EQ(name, "relay_dfb");
+                EXPECT_EQ(logical_id, expected_slot);
+                EXPECT_TRUE(is_relay);
+                EXPECT_EQ(persistent_dfb_id, 0u);
+                saw_binding = true;
+            });
+        EXPECT_TRUE(saw_binding);
     }
 
     {
@@ -855,19 +906,22 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_CrossProgram_DifferentEntryS
         1u);
 }
 
-TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_CrossSubDevice_CoordinatedLivePeerE2) {
-    // Coordinated live-peer E1→E2 with real drain before resize:
+TEST_F(PersistentDFBFixture, PersistentDFB_CrossSubDevice_CoordinatedLivePeerNonDividingE2) {
+    // Coordinated live-peer E1→E2 with real drain and a non-dividing E2:
     //   A (SD0): push E1 → barrier → set_entry_size(E2) → signal → wait go → push E2
-    //   B (SD1): Attach(E1), pop E1, finish
-    //   C (SD1): Attach(E2)+relay while A is still alive; consume E2
+    //   B (SD1): Attach(E1), pop E1 → set_receiver_entry_size(E2), finish
+    //   C (SD1): Attach(E2) while A is still alive; consume E2
+    //
+    // Four E1 entries make the durable counters wrap the original 1024-byte ring.
+    // E2=384 truncates the usable ring to 768 bytes. Without credit rebase, the old
+    // 1024-byte credit total reconstructs offset 256 instead of checkpoint offset 0.
     auto mesh_device = devices_[0];
     IDevice* device = mesh_device.get();
     constexpr uint32_t e1 = 256;
-    constexpr uint32_t e2 = 512;
-    constexpr uint32_t ring_depth_e1 = 4;  // ring bytes = 1024 → 2 entries at E2
-    constexpr uint32_t total_entries_e1 = 2;
+    constexpr uint32_t e2 = 384;
+    constexpr uint32_t ring_depth_e1 = 4;  // 1024 bytes → 768 usable bytes / 2 entries at E2
+    constexpr uint32_t total_entries_e1 = 4;
     constexpr uint32_t total_entries_e2 = 2;
-    constexpr uint32_t batch_size = 1;
     constexpr uint32_t data_pattern = 0;  // multicast counter
 
     const CoreCoord sender_core(0, 0);
@@ -881,18 +935,17 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_CrossSubDevice_CoordinatedLi
         mesh_device->create_sub_device_manager({sender_sub_device, receiver_sub_device}, /*local_l1_size=*/0);
     mesh_device->load_sub_device_manager(sub_device_manager);
 
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, e1, ring_depth_e1);
-    const uint32_t recv_num_entries = pdfb.ring_size() / e2;
-
+    // Semaphores are allocated before the PersistentDFB so they sit above it in L1;
+    // the sender staging scratch (placed just below the pdfb) must not overlap them.
     auto resized_sem = CreateGlobalSemaphore(mesh_device.get(), sender_cores, /*initial_value=*/0);
     auto go_sem = CreateGlobalSemaphore(mesh_device.get(), sender_cores, /*initial_value=*/0);
+
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
+    auto pdfb = experimental::CreatePersistentDFB(mesh_device.get(), mapping, e1, ring_depth_e1);
     distributed::Synchronize(*mesh_device, std::nullopt);
 
     const uint32_t staging_size =
         cross_node_dfb_test::sender_staging_size_bytes(data_pattern, e1, total_entries_e1, 1, e2, total_entries_e2);
-    constexpr uint32_t result_page_size = 32;
-    auto result_buffer = cross_node_dfb_test::make_cross_node_data_buffer(device, receiver_cores, result_page_size, 1);
 
     // --- Program A (SD0): push E1 → barrier → resize → signal → wait go → push E2 ---
     Program program_a = CreateProgram();
@@ -931,17 +984,17 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_CrossSubDevice_CoordinatedLi
     // Subsequent FD work waits for SD1 idle (not long-running A on SD0).
     mesh_device->set_sub_device_stall_group({{SubDeviceId{1}}});
 
-    // --- Program B (SD1): consume E1 so A's barrier can complete ---
+    // --- Program B (SD1): consume E1, then rebase receiver credits to E2 ---
     Program program_b = CreateProgram();
     EXPECT_EQ(AttachPersistentDFB(program_b, pdfb, receiver_cores), 0u);
     CreateKernel(
         program_b,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/persistent_dfb_receiver.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/persistent_dfb_coordinated_resize_receiver.cpp",
         receiver_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {0u, e1, total_entries_e1, 0u}});
+            .compile_args = {0u, total_entries_e1, e2}});
     distributed::MeshWorkload workload_b;
     workload_b.add_program(persistent_unit_mesh_device_range(), std::move(program_b));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload_b, false);
@@ -958,32 +1011,24 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_CrossSubDevice_CoordinatedLi
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    ASSERT_TRUE(resized) << "Timed out waiting for A set_entry_size(E2) signal";
+    const uint32_t credit_base = pdfb.config_address() + pdfb.credit_reset_offset();
+    const auto [sender_sent, sender_acked] = cross_node_dfb_test::read_credit_pair(device, sender_core, credit_base);
+    const auto [receiver_sent, receiver_acked] =
+        cross_node_dfb_test::read_credit_pair(device, receiver_core, credit_base);
+    ASSERT_TRUE(resized) << "Timed out waiting for A set_entry_size(E2) signal; sender credits=" << sender_sent << "/"
+                         << sender_acked << ", receiver credits=" << receiver_sent << "/" << receiver_acked;
 
-    // --- Program C (SD1): Attach E2 + relay while A is still alive (FD waits for B to finish) ---
+    // --- Program C (SD1): same-epoch Attach E2 while A is still alive ---
     Program program_c = CreateProgram();
     EXPECT_EQ(AttachPersistentDFB(program_c, pdfb, receiver_cores, e2), 0u);
-    experimental::dfb::DataflowBufferConfig relay_config{.entry_size = e2, .num_entries = recv_num_entries};
-    const uint32_t relay_host_id =
-        experimental::CreatePersistentRelayDataflowBuffer(program_c, receiver_cores, relay_config, 0);
-    const uint32_t relay_device_slot = program_c.impl().get_dataflow_buffer(relay_host_id)->device_slot;
-
-    const KernelHandle receiver_kernel = CreateKernel(
+    CreateKernel(
         program_c,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/persistent_dfb_relay_receiver.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/persistent_dfb_receiver.cpp",
         receiver_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = {0u, total_entries_e2, batch_size}});
-    const KernelHandle trisc_kernel = CreateKernel(
-        program_c,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/persistent_dfb_relay_trisc.cpp",
-        receiver_cores,
-        ComputeConfig{.compile_args = {relay_device_slot, total_entries_e2, batch_size, 0u, 0u}});
-    experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-        program_c, relay_host_id, receiver_kernel, trisc_kernel);
-    SetRuntimeArgs(program_c, trisc_kernel, receiver_cores, {static_cast<uint32_t>(result_buffer->address())});
+            .compile_args = {0u, e2, total_entries_e2, 0u}});
 
     distributed::MeshWorkload workload_c;
     workload_c.add_program(persistent_unit_mesh_device_range(), std::move(program_c));
@@ -996,21 +1041,18 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_CrossSubDevice_CoordinatedLi
     mesh_device->reset_sub_device_stall_group();
     distributed::Finish(mesh_device->mesh_command_queue());
 
-    // E2 staging continues the multicast counter after E1 (bytes total_entries_e1 ..).
-    uint32_t expected_checksum = 0;
-    for (uint32_t i = 0; i < total_entries_e2; ++i) {
-        expected_checksum += static_cast<uint32_t>(static_cast<uint8_t>(total_entries_e1 + i)) * 0x01010101u;
-    }
-
-    std::vector<uint32_t> result(2, 0);
-    detail::ReadFromDeviceL1(
-        cross_node_dfb_test::local_physical_device(device),
+    // E2 entries must begin at checkpoint offset 0. The expected counter values
+    // continue after the four E1 entries; a stale 256-byte offset fails this comparison.
+    EXPECT_TRUE(persistent_dfb_test::verify_receiver_ring(
+        device,
+        pdfb,
         receiver_core,
-        static_cast<uint32_t>(result_buffer->address()),
-        std::span<uint8_t>(reinterpret_cast<uint8_t*>(result.data()), result.size() * sizeof(uint32_t)),
-        CoreType::WORKER);
-    EXPECT_EQ(result[0], total_entries_e2);
-    EXPECT_EQ(result[1], expected_checksum);
+        data_pattern,
+        e2,
+        total_entries_e2,
+        /*receiver_idx=*/0,
+        /*num_receivers=*/1,
+        /*counter_base=*/total_entries_e1));
 
     mesh_device->clear_loaded_sub_device_manager();
 }
