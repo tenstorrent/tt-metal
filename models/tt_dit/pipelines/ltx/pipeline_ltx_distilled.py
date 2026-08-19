@@ -670,18 +670,7 @@ class LTXDistilledPipeline(LTXPipeline):
         assert height % 64 == 0, f"Height must be divisible by 64 (got {height})"
         assert width % 64 == 0, f"Width must be divisible by 64 (got {width})"
 
-        # Reject rather than substitute: silently generating at self.fps while the caller
-        # (and the MP4 container, which uses the value passed here) believes another rate
-        # is exactly the desync this plumbing exists to prevent.
-        if fps is None:
-            fps = self.fps
-        elif float(fps) != self.fps:
-            msg = (
-                f"fps={fps} does not match the pipeline's fps={self.fps}. FPS is fixed at "
-                "pipeline construction (it sets the audio latent length and the A/V cross-PE, "
-                "both baked into the captured traces). Build a pipeline with the desired fps."
-            )
-            raise ValueError(msg)
+        fps = self._resolve_fps(fps)
 
         s1_height = height // 2
         s1_width = width // 2

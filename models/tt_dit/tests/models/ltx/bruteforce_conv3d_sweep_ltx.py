@@ -21,27 +21,40 @@ from ..wan2_2.bruteforce_conv3d_sweep import TRACE_REGION_SIZE, run_sweep
 # T is post-temporal-pad; H/W are per-device conv INPUT dims = _BLOCKINGS output-dim key + (kH-1, kW-1).
 # Names carry the table-key (output) H, so e.g. _h9 sweeps input H=11. Ordered by compute volume.
 _SWEEP_LAYERS_LTX_1080P_153F = [
-    # (name,                 C_in, C_out, kernel,    stride,    padding,    T,   H,  W, h, w)
+    # (name,                C_in, C_out, kernel,    stride,    padding,    T,   H,  W, h, w)
     # --- 94% of total volume: the T=155 / T=79 decoder convs ---
-    ("t155_c128x128", 128, 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 70, 62, 4, 8),
-    ("t155_c128x48", 128, 48, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 70, 62, 4, 8),
-    ("t79_c512x512", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 79, 36, 32, 4, 8),
-    ("t155_c256x512", 256, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 36, 32, 4, 8),
-    ("t155_c256x256", 256, 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 36, 32, 4, 8),
+    ("t155_c128x128", 128, 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 70, 62, 4, 8),  # key 68x60
+    ("t155_c128x48", 128, 48, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 70, 62, 4, 8),  # key 68x60
+    ("t79_c512x512", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 79, 36, 32, 4, 8),  # key 34x30
+    ("t155_c256x512", 256, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 36, 32, 4, 8),  # key 34x30
+    ("t155_c256x256", 256, 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 36, 32, 4, 8),  # key 34x30
     # --- mid volume ---
-    ("t41_c512x4096", 512, 4096, (3, 3, 3), (1, 1, 1), (0, 0, 0), 41, 19, 17, 4, 8),
-    ("t41_c512x512", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 41, 19, 17, 4, 8),
+    ("t41_c512x4096", 512, 4096, (3, 3, 3), (1, 1, 1), (0, 0, 0), 41, 19, 17, 4, 8),  # key 17x15
+    ("t41_c512x512", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 41, 19, 17, 4, 8),  # key 17x15
     # --- the latent upsampler (separate 0.20s -> 0.62s regression) ---
-    ("t20_ups_c1024x4096", 1024, 4096, (1, 3, 3), (1, 1, 1), (0, 0, 0), 20, 7, 6, 4, 8),
+    ("t20_ups_c1024x4096", 1024, 4096, (1, 3, 3), (1, 1, 1), (0, 0, 0), 20, 7, 6, 4, 8),  # key 5x4
     # --- small: T=22 sites ---
-    ("t22_c1024x1024_h10", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 12, 10, 4, 8),
-    ("t22_c1024x128_h10", 1024, 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 12, 10, 4, 8),
-    ("t22_c1024x4096_h9", 1024, 4096, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 11, 10, 4, 8),
-    ("t22_c1024x1024_h9", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 11, 10, 4, 8),
-    ("t22_c1024x1024_h5", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 7, 6, 4, 8),
-    ("t22_c128x1024_h9", 128, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 11, 10, 4, 8),
-    ("t22_c128x1024_h5", 128, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 7, 6, 4, 8),
+    ("t22_c1024x1024_h10", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 12, 10, 4, 8),  # key 10x8
+    ("t22_c1024x128_h10", 1024, 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 12, 10, 4, 8),  # key 10x8
+    ("t22_c1024x4096_h9", 1024, 4096, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 11, 10, 4, 8),  # key 9x8
+    ("t22_c1024x1024_h9", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 11, 10, 4, 8),  # key 9x8
+    ("t22_c1024x1024_h5", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 7, 6, 4, 8),  # key 5x4
+    ("t22_c128x1024_h9", 128, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 11, 10, 4, 8),  # key 9x8
+    ("t22_c128x1024_h5", 128, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 7, 6, 4, 8),  # key 5x4
 ]
+
+
+def _hw_product(kernel, h_in: int, w_in: int) -> int:
+    """Largest sweep-supported H_blk*W_blk (32, matching wan2_2 h4w8; else 16) achievable within the OUTPUT dims.
+
+    run_sweep's filter is an exact match, so an unreachable product sweeps zero combos; 5x4-output sites cap at 16.
+    """
+    h_out, w_out = h_in - (kernel[1] - 1), w_in - (kernel[2] - 1)
+    for product in (32, 16):
+        if any(product % h == 0 and h <= h_out and product // h <= w_out for h in range(1, product + 1)):
+            return product
+    msg = f"no achievable hw_product for output {h_out}x{w_out}"
+    raise ValueError(msg)
 
 
 @pytest.mark.parametrize(
@@ -61,8 +74,6 @@ def test_bruteforce_sweep_ltx_1080p_153f(
     parent_mesh = mesh_device
     device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
     output = f"sweep_results_ltx_1080p_153f/{layer_name}_{C_in}x{C_out}.json"
-    H_out = H - (kernel[1] - 1)
-    W_out = W - (kernel[2] - 1)
     run_sweep(
         device,
         C_in,
@@ -78,7 +89,6 @@ def test_bruteforce_sweep_ltx_1080p_153f(
         w_factor=w_factor,
         max_combos=500,
         max_t_block=8,
-        # Exact-match filter on H_blk*W_blk: 32 (BH-safe, matches wan2_2 h4w8), or 16 where the
-        # output dims can't reach 32 (5x4 sites). Never None: the search balloons past 500 combos.
-        hw_product=32 if H_out * W_out >= 32 else 16,
+        # Never None: unconstrained, the search balloons past 500 combos with minutes-long compiles.
+        hw_product=_hw_product(kernel, H, W),
     )
