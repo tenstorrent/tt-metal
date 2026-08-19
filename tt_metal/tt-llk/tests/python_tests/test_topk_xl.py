@@ -861,13 +861,7 @@ def test_topk_xl_dest_sync_half(K):
 
 @parametrize(K=[512, 1024, 2048])
 def test_topk_xl_local_sort_order(K):
-    """
-    local_sort leaves the whole K-element sequence sorted descending in Dest.
-
-    Nothing else here reads Dest lane order, but the early-exit sort below is defined in
-    terms of it, so pin `_sort_position` against a full sort: a wrong permutation would
-    make that test's notion of a column meaningless.
-    """
+    """local_sort leaves the whole K-element sequence sorted descending in Dest."""
     (K,) = K
 
     values = [hi16 for hi16, _ in _sorted_sequence(K)]
@@ -878,9 +872,6 @@ def test_topk_xl_local_sort_order(K):
     )
 
 
-# _topk_xl_local_sort_generic_ is the body _topk_xl_local_sort_ dispatches to below
-# K = 2048; the compute API now exposes it directly as well. K = 2048 has no generic
-# full sort and is rejected by static_assert, hence its absence here.
 @parametrize(K=[512, 1024], num_chunks=[1, 2])
 def test_topk_xl_local_sort_generic(K, num_chunks):
     _run_test_topk(
@@ -947,11 +938,7 @@ def test_topk_xl_add_lsb_indices_row_major(K, core_id):
     )
 
 
-# The tt-blaze merge tree copies each incoming operand into Dest, so the copy init is
-# the last thing to touch the math thread's config before the merge: it rewrites
-# ADDR_MOD_0/3 and reprograms the MOP Expander for datacopy. The two reinit entry
-# points restore that much, in place of the full topk_xl_init this test issues per
-# merge stage otherwise.
+# Check reinits that run after copy init.
 @parametrize(K=[512, 1024, 2048], num_chunks=[2, 4], fused=[False, True])
 def test_topk_xl_reinit_after_copy(K, num_chunks, fused):
     if not fused:

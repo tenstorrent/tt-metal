@@ -807,14 +807,7 @@ class TopKXLChunkBaseMode(Enum):
 
 
 class TopKXLSortMode(Enum):
-    """Which local-sort entry point the topk_xl kernel calls.
-
-    ``Dispatch`` goes through ``_topk_xl_local_sort_``, which routes K=2048 to its
-    fast path and K=512/1024 to the generic body. ``Generic`` calls
-    ``_topk_xl_local_sort_generic_`` directly, reaching the generic body for K=2048
-    as well. ``EarlyExitK64`` stops the generic body after the per-column len-64
-    builds, leaving each 64-element column sorted in isolation (K >= 1024).
-    """
+    """Which local-sort entry point the topk_xl kernel calls."""
 
     Dispatch = 0
     Generic = 1
