@@ -45,13 +45,15 @@ struct TopkLargeIndicesDeviceOperation {
         std::optional<uint32_t> valid_length,
         std::optional<uint32_t> num_slices = std::nullopt,
         std::optional<uint32_t> row_start = std::nullopt,
-        std::optional<uint32_t> row_count = std::nullopt);
+        std::optional<uint32_t> row_count = std::nullopt,
+        bool stable = false);
 };
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
 
 namespace ttnn::experimental {
 
-Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length = std::nullopt);
+Tensor topk_large_indices(
+    const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length = std::nullopt, bool stable = false);
 
 }  // namespace ttnn::experimental

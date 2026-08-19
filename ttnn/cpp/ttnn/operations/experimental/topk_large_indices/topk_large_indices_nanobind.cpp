@@ -49,16 +49,23 @@ void bind_topk_large_indices(nb::module_& mod) {
               sentinel index 0xFFFFFFFF;
             * applied at runtime (no recompile), so a loop growing valid_length reuses one program.
 
+        stable (optional, default False):
+            * sequential tie-breaking: equal values return their indices in
+              ascending global-index order (the stable=True contract of
+              ttnn.topk); False keeps the faster non-sequential tie order.
+
         Args:
             input_tensor: device tensor with ROW_MAJOR layout and BFLOAT16 dtype.
             k: required number of indices to return.
             valid_length: optional number of leading columns to search (default: full width).
+            stable: optional sequential (lowest-index-first) tie-breaking (default: False).
         )doc",
         &ttnn::experimental::topk_large_indices,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("k"),
-        nb::arg("valid_length") = std::nullopt);
+        nb::arg("valid_length") = std::nullopt,
+        nb::arg("stable") = false);
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::detail
