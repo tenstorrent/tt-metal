@@ -41,14 +41,14 @@ namespace compute_kernel_lib {
 // Defaults: no broadcast, both operands per-tile streaming.
 // ---------------------------------------------------------------------------
 
-template <InputSpec AInput, auto BInput, OutputSpec Output, IterationShapeKind Kind>
-ALWI void add(TypedIterationShape<Kind> shape);
+template <InputSpec AInput, auto BInput, OutputSpec Output>
+ALWI void add(IterationShape shape);
 
-template <InputSpec AInput, auto BInput, OutputSpec Output, IterationShapeKind Kind>
-ALWI void sub(TypedIterationShape<Kind> shape);
+template <InputSpec AInput, auto BInput, OutputSpec Output>
+ALWI void sub(IterationShape shape);
 
-template <InputSpec AInput, auto BInput, OutputSpec Output, IterationShapeKind Kind>
-ALWI void mul(TypedIterationShape<Kind> shape);
+template <InputSpec AInput, auto BInput, OutputSpec Output>
+ALWI void mul(IterationShape shape);
 
 // ---------------------------------------------------------------------------
 // FPU square — x * x, via BinaryFpu reading the one input buffer for both operands
@@ -57,34 +57,34 @@ ALWI void mul(TypedIterationShape<Kind> shape);
 // operand lifecycle / index instead of separate A/B.
 // ---------------------------------------------------------------------------
 
-template <InputSpec Input, OutputSpec Output, IterationShapeKind Kind>
-ALWI void square(TypedIterationShape<Kind> shape);
+template <InputSpec Input, OutputSpec Output>
+ALWI void square(IterationShape shape);
 
 // ---------------------------------------------------------------------------
 // SFPU unary — CopyTile(D0) -> SfpuOp -> PackTile(D0). SfpuOp is the (DEST-only) op type.
 // ---------------------------------------------------------------------------
 
-template <class SfpuOp, InputSpec Input, OutputSpec Output, IterationShapeKind Kind>
-ALWI void unary(TypedIterationShape<Kind> shape);
+template <class SfpuOp, InputSpec Input, OutputSpec Output>
+ALWI void unary(IterationShape shape);
 
 // Typecast — derives the LLK input/output formats from the bound buffers.
-template <InputSpec Input, OutputSpec Output, IterationShapeKind Kind>
-ALWI void typecast(TypedIterationShape<Kind> shape);
+template <InputSpec Input, OutputSpec Output>
+ALWI void typecast(IterationShape shape);
 
 // ---------------------------------------------------------------------------
 // SFPU binary — two CopyTile loads (D0, D1) -> SfpuBinOp -> PackTile(D0).
 // SfpuBinOp is a DEST-only SFPU binary op type (e.g. DivBinary<>, BinaryMax<>).
 // ---------------------------------------------------------------------------
 
-template <class SfpuBinOp, InputSpec AInput, InputSpec BInput, OutputSpec Output, IterationShapeKind Kind>
-ALWI void binary_sfpu(TypedIterationShape<Kind> shape);
+template <class SfpuBinOp, InputSpec AInput, InputSpec BInput, OutputSpec Output>
+ALWI void binary_sfpu(IterationShape shape);
 
 // ---------------------------------------------------------------------------
 // Pure copy — CopyTile(D0) -> PackTile(D0).
 // ---------------------------------------------------------------------------
 
-template <InputSpec Input, OutputSpec Output, IterationShapeKind Kind>
-ALWI void copy(TypedIterationShape<Kind> shape);
+template <InputSpec Input, OutputSpec Output>
+ALWI void copy(IterationShape shape);
 
 }  // namespace compute_kernel_lib
 

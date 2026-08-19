@@ -34,9 +34,8 @@
  *     `ConfigField` encode/decode: equal specs canonicalize to the same instantiation, mangled
  *     symbol names stay short (kernel debug info is a real budget), and the explicit bit layout
  *     is deterministic and width-checked — which implementation-defined C++ bitfields are not.
- *   - One core-walk instantiation. Typed wrappers (e.g. `TypedIterationShape<Kind>`) exist only
- *     in the thin public validation layer and decay to the untyped runtime payload before
- *     `eltwise_chain_impl`, so compile-time tags never multiply the heavy template's
+ *   - One core-walk instantiation. The iteration shape is a plain runtime struct and contributes
+ *     no template parameters, so shape construction can never multiply the heavy walk template's
  *     instantiations (kernel code size and JIT time are part of the budget).
  *   - Cross-element scheduling (reconfig folding, init hoisting, DEST slot allocation) depends
  *     on facts no single element can know, so it lives in the chain pipeline; per-element logic
@@ -117,18 +116,6 @@ enum class BlockTailSync : uint8_t {
     FullBlock,   // synchronize block_size even when fewer tiles are mathematically valid
 };
 
-/// Compile-time dimensional intent of an elementwise walk.
-///
-/// The tag is carried by the factory return type rather than stored in the runtime shape, so
-/// APIs can reject dimensionally meaningless combinations without adding a device-side field.
-enum class IterationShapeKind : uint8_t {
-    Tiles,  // one contiguous 1D tile sequence
-    Grid,   // a 2D row/column walk, including grid(1, W)
-};
-
-template <IterationShapeKind Kind>
-struct TypedIterationShape;
-
 /// Looping shape for `eltwise_chain`. `Ht`, `Wt`, and `block_size` describe how the chain driver
 /// iterates and groups its work; they do not necessarily equal the number of tiles present on any
 /// input or output. Operand indexing and lifecycle policies may pin, reuse, accumulate, or defer
@@ -136,11 +123,11 @@ struct TypedIterationShape;
 /// linear walk); the `Row`/`Col` indexing modes degenerate for 1D usage but remain well-defined.
 ///
 /// Factories establish the iteration extent. Blocking is configured fluently when needed:
-///   - `IterationShape::tiles(n)` — 1D, block_size = 1
+///   - `IterationShape::tiles(n)` — 1D, block size 1
 ///   - `IterationShape::tiles(n).block_size(blk)` — 1D + block
 ///   - `IterationShape::tiles(n).block_size(blk, BlockTailSync::FullBlock)`
 ///                                                   — 1D fixed-size physical blocks
-///   - `IterationShape::grid(H, W)` — 2D, block_size = 1
+///   - `IterationShape::grid(H, W)` — 2D, block size 1
 ///   - `IterationShape::grid(H, W).block_size(blk)` — 2D + block
 ///   - `IterationShape::grid(H, W).block_size(blk, BlockTailSync::FullBlock)`
 ///                                                   — 2D row-blocked fixed-size physical blocks
@@ -154,7 +141,7 @@ struct TypedIterationShape;
 struct IterationShape {
     uint32_t Ht;
     uint32_t Wt;
-    uint32_t block_size;
+    uint32_t block_tiles;  // tiles per inner block iteration; named apart from the fluent method
     BlockTailSync tail_sync;
 
     constexpr IterationShape(uint32_t H, uint32_t W);
@@ -163,31 +150,16 @@ struct IterationShape {
     // IterationShape::one_tile() so the iteration shape is always written out.
     explicit constexpr IterationShape(uint32_t n_tiles);
 
-    static constexpr TypedIterationShape<IterationShapeKind::Tiles> tiles(uint32_t n);
-    static constexpr TypedIterationShape<IterationShapeKind::Grid> grid(uint32_t H, uint32_t W);
+    static constexpr IterationShape tiles(uint32_t n);
+    static constexpr IterationShape grid(uint32_t H, uint32_t W);
 
-    static constexpr TypedIterationShape<IterationShapeKind::Grid> row(uint32_t c);
-    static constexpr TypedIterationShape<IterationShapeKind::Grid> col(uint32_t r);
-    static constexpr TypedIterationShape<IterationShapeKind::Tiles> one_tile();
-};
+    static constexpr IterationShape row(uint32_t c);
+    static constexpr IterationShape col(uint32_t r);
+    static constexpr IterationShape one_tile();
 
-/// Zero-overhead factory tag around the common runtime shape payload.
-///
-/// `eltwise_chain_impl` still accepts the untyped base, so Kind affects only the thin public
-/// validation wrapper and does not multiply the core walk implementation.
-template <IterationShapeKind Kind>
-struct TypedIterationShape : IterationShape {
-    static constexpr IterationShapeKind kind = Kind;
-
-    constexpr TypedIterationShape(uint32_t H, uint32_t W) : IterationShape(H, W) {}
-
-    constexpr TypedIterationShape block_size(
-        uint32_t value, BlockTailSync tail_sync = BlockTailSync::ValidTiles) const {
-        auto shape = *this;
-        shape.IterationShape::block_size = value;
-        shape.tail_sync = tail_sync;
-        return shape;
-    }
+    /// Configures blocking and returns the shape, so it chains on factory temporaries:
+    /// `IterationShape::tiles(n).block_size(blk)`.
+    constexpr IterationShape block_size(uint32_t value, BlockTailSync tail = BlockTailSync::ValidTiles);
 };
 
 /// Who performs the chain's one-time setup — init + reconfig — the leading template arg to
@@ -318,9 +290,9 @@ enum class L1Accumulation : uint8_t {
 
 /// Scope of an FPU binary's persistent DEST accumulation.
 ///
-/// PerRow acquires, packs, and clears DEST once per row of a 2D grid. WholeShape keeps DEST
-/// acquired across the complete shape and emits one tile. `tiles(...)` is intrinsically one
-/// contiguous shape, so PerRow is rejected at compile time; spell WholeShape for a 1D reduction.
+/// PerRow acquires, packs, and clears DEST once per row of the walk. WholeShape keeps DEST
+/// acquired across the complete shape and emits one tile. With a single-row shape (`tiles(n)`)
+/// the two coincide; spell WholeShape for a 1D reduction.
 enum class DestAccumulation : uint8_t {
     Disabled,
     PerRow,
@@ -576,8 +548,8 @@ using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bit
 /// Row / Col / Scalar pick the per-iter tile index; input policies that own a staged CB
 /// window take the upfront-block path; chains with per-tile input or output lifecycles clamp block_size to 1.
 /// `BlockTailSync` affects only per-block-size synchronization counts. Row/Col need a non-streaming policy.
-template <InitReconfigOwner Owner = InitReconfigOwner::Chain, IterationShapeKind Kind, class... Es>
-ALWI void eltwise_chain(TypedIterationShape<Kind> shape, Es... elts);
+template <InitReconfigOwner Owner = InitReconfigOwner::Chain, class... Es>
+ALWI void eltwise_chain(IterationShape shape, Es... elts);
 
 }  // namespace compute_kernel_lib
 

@@ -83,8 +83,8 @@ struct detail::UnaryBcastImpl : InputStream, UnaryBcastTag {
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 };
 
-template <BroadcastDim Dim, InputSpec Input, OutputSpec Output, IterationShapeKind Kind>
-ALWI void unary_bcast(TypedIterationShape<Kind> shape) {
+template <BroadcastDim Dim, InputSpec Input, OutputSpec Output>
+ALWI void unary_bcast(IterationShape shape) {
     eltwise_chain(shape, UnaryBcast<Dim, Input>{}, PackTile<Output>{});
 }
 

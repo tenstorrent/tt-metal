@@ -27,19 +27,25 @@
 namespace compute_kernel_lib {
 
 constexpr IterationShape::IterationShape(uint32_t H, uint32_t W) :
-    Ht(H), Wt(W), block_size(1), tail_sync(BlockTailSync::ValidTiles) {}
+    Ht(H), Wt(W), block_tiles(1), tail_sync(BlockTailSync::ValidTiles) {}
 
 constexpr IterationShape::IterationShape(uint32_t n_tiles) : IterationShape(1, n_tiles) {}
 
-constexpr TypedIterationShape<IterationShapeKind::Tiles> IterationShape::tiles(uint32_t n) { return {1, n}; }
+constexpr IterationShape IterationShape::tiles(uint32_t n) { return {1, n}; }
 
-constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::grid(uint32_t H, uint32_t W) { return {H, W}; }
+constexpr IterationShape IterationShape::grid(uint32_t H, uint32_t W) { return {H, W}; }
 
-constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::row(uint32_t c) { return {1, c}; }
+constexpr IterationShape IterationShape::row(uint32_t c) { return {1, c}; }
 
-constexpr TypedIterationShape<IterationShapeKind::Grid> IterationShape::col(uint32_t r) { return {r, 1}; }
+constexpr IterationShape IterationShape::col(uint32_t r) { return {r, 1}; }
 
-constexpr TypedIterationShape<IterationShapeKind::Tiles> IterationShape::one_tile() { return {1, 1}; }
+constexpr IterationShape IterationShape::one_tile() { return {1, 1}; }
+
+constexpr IterationShape IterationShape::block_size(uint32_t value, BlockTailSync tail) {
+    block_tiles = value;
+    tail_sync = tail;
+    return *this;
+}
 
 constexpr bool is_legal_input_policy(WaitPolicy wait, PopPolicy pop) noexcept {
     switch (wait) {
@@ -3025,7 +3031,7 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     constexpr uint32_t chain_lane_w = detail::ChainTraits<Es...>::any_dest_accumulation
                                           ? chain_transient_lane_width_v<Chain>
                                           : chain_lane_width_v<Chain>;
-    uint32_t block_size = shape.block_size;
+    uint32_t block_size = shape.block_tiles;
     ASSERT(shape.Ht > 0);
     ASSERT(shape.Wt > 0);
     ASSERT(block_size > 0);
@@ -3225,13 +3231,8 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
 // Chain = this call emits it; Caller = the caller emitted it once, outside its loop (see the
 // InitReconfigOwner enum doc). It never changes which init is hoistable. (default lives on the
 // declaration in chain.hpp.)
-template <InitReconfigOwner Owner, IterationShapeKind Kind, class... Es>
-ALWI void eltwise_chain(TypedIterationShape<Kind> shape, Es... elts) {
-    static_assert(
-        Kind != IterationShapeKind::Tiles ||
-            detail::ChainTraits<Es...>::dest_accumulation_mode != DestAccumulation::PerRow,
-        "eltwise_chain: DestAccumulation::PerRow requires IterationShape::grid(...); "
-        "use DestAccumulation::WholeShape with IterationShape::tiles(...)");
+template <InitReconfigOwner Owner, class... Es>
+ALWI void eltwise_chain(IterationShape shape, Es... elts) {
     eltwise_chain_impl<Owner>(std::index_sequence_for<Es...>{}, shape, elts...);
 }
 
