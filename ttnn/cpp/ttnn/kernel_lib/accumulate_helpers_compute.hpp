@@ -197,8 +197,10 @@ private:
  *        one input CB and are summed into a single output block.
  *
  * Owns the CB protocol this shape actually has: waits the WHOLE input
- * (num_blocks * block_num_tiles) up front, reserves/pushes one output block — and deliberately
- * NEVER POPS the input, whose CB is a shell over the gathered data that the op keeps resident.
+ * (num_blocks * block_num_tiles) up front, reserves/pushes one output block — and pops the input
+ * only when @c pop_input is set: all_reduce's input CB is a shell over the gathered data that the
+ * op keeps resident (pop_input = false), while llama_reduce_scatter's fabric-receiver CB is a real
+ * producer/consumer CB (pop_input = true, popped before the output push, as it always was).
  * Owns the DST-capacity chunking against @c DEST_AUTO_LIMIT (retiring the hand-rolled
  * `max_dst_tiles = 8` it replaces, which ignored fp32 dest-accum), and the ODD block count: an odd
  * count copy_tile-seeds DST with block 0 and accumulates the remaining PAIRS — replacing an empty
@@ -210,12 +212,14 @@ private:
  * @post @c add_tiles_init is left in acc_to_dest mode; a BlockAccumulate live in the same kernel
  *       must @c rearm() before its next run().
  *
- * @param cb_in           CB holding the num_blocks gathered blocks (never popped here).
+ * @param cb_in           CB holding the num_blocks gathered blocks.
  * @param cb_out          Destination CB for the single summed block.
  * @param num_blocks      Blocks to sum (>= 1; 1 degenerates to a copy of block 0).
  * @param block_num_tiles Tiles per block.
+ * @param pop_input       Pop the whole input after the sum (see the ownership note above).
  */
-ALWI void sum_blocks(uint32_t cb_in, uint32_t cb_out, uint32_t num_blocks, uint32_t block_num_tiles);
+ALWI void sum_blocks(
+    uint32_t cb_in, uint32_t cb_out, uint32_t num_blocks, uint32_t block_num_tiles, bool pop_input = false);
 
 }  // namespace compute_kernel_lib
 
