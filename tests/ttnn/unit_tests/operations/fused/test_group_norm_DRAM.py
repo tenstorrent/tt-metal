@@ -13,7 +13,7 @@ import math
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
-from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole
+from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole, skip_for_blackhole
 
 
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
@@ -22,9 +22,7 @@ NON_TILE_ALIGNED_ATOL = 0.08
 WELFORD_MODES = ("legacy", "welford_normal", "welford_reciprocal")
 
 GROUP_NORM_DRAM_SHAPES = [
-    (8, 768, 1, 512, 32, 2, 8, 8),  # base case
     (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
-    (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
     (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
     (1, 2560, 1, 512, 32, 2, 8, 8),  # test mcast num_out_blocks 2
     (1, 2560, 1, 1024, 32, 4, 8, 8),  # test mcast num_out_blocks 4
@@ -42,27 +40,23 @@ GROUP_NORM_DRAM_SHAPES = [
         4,
         4,
     ),  # test all groups on core fit in less than one tile, so need to reduce col core count
-    # All SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
+    # SDXL/sd35 test cases. Additional slower test cases in nightly test.
     # SDXL Base
     (1, 1920, 16, 16, 32, 1, 4, 4),
-    # SDXL VAE
-    (1, 256, 256, 256, 32, 4, 8, 8),
-    (1, 512, 256, 256, 32, 4, 8, 8),
     # SDXL Refiner
     (1, 1536, 8, 8, 32, 1, 2, 8),
     (1, 1152, 128, 128, 32, 2, 8, 4),
     (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
     (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
-    (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE
     (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
     # sd35. 4 indicates the number of device.
     (1, 256 // 4, 256, 256, 32 // 4, 1, 8, 8),
     (1, 512 // 4, 128, 128, 32 // 4, 1, 8, 8),
     (1, 512 // 4, 256, 256, 32 // 4, 2, 8, 8),
-    (1, 128, 1, 262144, 32, 64, 8, 4),  # SD 1.4 VAE Issue #21131
     # mochi
     # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
 ]
+
 
 GROUP_NORM_NO_INPUT_MASK_DRAM_SHAPES = [
     (8, 768, 1, 512, 32, 2, 8, 8),  # base case
@@ -185,6 +179,8 @@ def run_group_norm_DRAM(
     use_input_mask,
     perf_test_mode=False,
     specify_grid=True,
+    input_layout=ttnn.TILE_LAYOUT,
+    output_layout=ttnn.TILE_LAYOUT,
 ):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
@@ -231,7 +227,10 @@ def run_group_norm_DRAM(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
+    if input_layout == ttnn.TILE_LAYOUT:
+        input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
+
+    gn_input_tensor = input_tensor_tilized if input_layout == ttnn.TILE_LAYOUT else input_tensor_row_major
 
     # Create dram group norm params
     [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
@@ -277,13 +276,13 @@ def run_group_norm_DRAM(
         num_itr = 1  # one iter if it is too slow
     for _ in range(num_itr):
         output_tensor = ttnn.group_norm(
-            input_tensor_tilized,
+            gn_input_tensor,
             num_groups=num_groups,
             input_mask=input_mask_tensor if use_input_mask else None,
             weight=gamma_t,
             bias=beta_t,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_layout=ttnn.TILE_LAYOUT,
+            output_layout=output_layout,
             core_grid=grid_size if specify_grid else None,
             inplace=False,
             num_out_blocks=num_out_blocks if specify_grid else None,
@@ -357,6 +356,38 @@ def test_group_norm_DRAM(
         use_input_mask=True,
         perf_test_mode=perf_test_mode,
         specify_grid=specify_grid,
+    )
+
+
+# Post-commit smoke coverage for the ROW_MAJOR path; the full sweep over GROUP_NORM_ROW_MAJOR_SHAPES
+# lives in nightly. Tests across all three layout combinations that involve ROW_MAJOR.
+@skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize(
+    "input_layout, output_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT"],
+)
+def test_group_norm_DRAM_row_major_smoke(device, input_layout, output_layout):
+    # Issue #26594: N=1, C=480, H=1, W=64, num_groups=8 on a 1x1 grid.
+    run_group_norm_DRAM(
+        device,
+        1,
+        480,
+        1,
+        64,
+        8,
+        1,
+        1,
+        1,
+        "legacy",
+        use_input_mask=True,
+        input_layout=input_layout,
+        output_layout=output_layout,
     )
 
 
@@ -666,17 +697,9 @@ def test_group_norm_non_tile_aligned_shifted_input_DRAM(device, input_shift, max
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.xfail(
-    strict=True,
-    reason="tt-metal #50682: the analytical correction requires the tile-padding rows to hold "
-    "exact zeros (every TILE-layout producer supplies them). With garbage in the padding the "
-    "reduce ingests it and the result is meaningless -- measured ~1.92 vs ~0.045. If this XPASSes, "
-    "the padding rows are being masked and the precondition can be dropped from the kernel docs.",
-)
 def test_group_norm_non_tile_aligned_garbage_padding_DRAM(device):
-    # Documents (as a strict xfail) the precondition the correction depends on. The op reduced over
-    # the padding rows before the fix too, so the dependence is not new -- but the fix is what makes
-    # "correct for non-tile-aligned H*W" a claim, and this is its boundary.
+    # Was a strict xfail while group_norm reduced over the tile padding (measured ~1.92 vs ~0.045);
+    # the padding rows are masked out now, so it is a plain test.
     if device.core_grid.y == 7:
         pytest.skip()
 
@@ -702,6 +725,97 @@ def test_group_norm_non_tile_aligned_garbage_padding_DRAM(device):
     max_abs_err = (out - ref).abs().max().item()
     logger.info(f"garbage tile-padding rows: max_abs_err={max_abs_err}")
     assert max_abs_err < 0.08, f"max abs error {max_abs_err} with garbage padding rows (see #50682)"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize(
+    "N, cores_y, num_out_blocks",
+    [
+        # The grid fixes num_virtual_rows, hence whether a batch is split across core rows and so
+        # which cores hold the padding row-tile.
+        pytest.param(1, 1, None, id="N1_grid1x8_whole_batch_per_core"),
+        pytest.param(1, 2, None, id="N1_grid2x8_batch_split_2"),
+        pytest.param(1, 4, None, id="N1_grid4x8_batch_split_4_block_h_1"),
+        pytest.param(2, 1, None, id="N2_grid1x8_two_batches_per_core"),
+        pytest.param(2, 4, None, id="N2_grid4x8_batch_split_2"),
+        # num_out_blocks=3 over block_h=4 leaves the last out-block empty -- the case that breaks a
+        # naive "last block, last row" test.
+        pytest.param(1, 1, 3, id="N1_grid1x8_num_out_blocks_3_empty_last_block"),
+        pytest.param(1, 1, 4, id="N1_grid1x8_num_out_blocks_4"),
+    ],
+)
+def test_group_norm_non_tile_aligned_dirty_padding_grids_DRAM(device, N, cores_y, num_out_blocks):
+    # Which core applies the row mask depends on how the grid splits H*W, and with N > 1 the padding
+    # recurs once per batch on the same core -- a single auto-selected grid reaches neither. Also
+    # pins the out-block indexing: num_out_blocks not dividing block_h can leave the last out-block
+    # with zero rows, so the final row-tile is found by its global index within the batch.
+    cores_x = 8
+    if device.core_grid.y < cores_y or device.core_grid.x < cores_x:
+        pytest.skip(f"device grid too small for {cores_x}x{cores_y}")
+
+    torch.manual_seed(0)
+    C, HW, G, padded = 512, 100, 32, 128
+
+    real = torch.rand((N, 1, HW, C), dtype=torch.bfloat16)
+    ref = torch.nn.functional.group_norm(real.view(N, HW, C).permute(0, 2, 1).reshape(N, C, 1, HW).float(), G)
+    ref = ref.permute(0, 2, 3, 1).reshape(N, 1, HW, C)
+
+    buf = torch.zeros((N, 1, padded, C), dtype=torch.bfloat16)
+    buf[:, :, :HW, :] = real
+    buf[:, :, HW:, :] = 7.0
+
+    tt = ttnn.from_torch(
+        buf, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt = ttnn.reshape(tt, ttnn.Shape([N, 1, HW, C]), ttnn.Shape([N, 1, padded, C]))
+    out = ttnn.group_norm(
+        tt,
+        num_groups=G,
+        inplace=False,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        core_grid=ttnn.CoreGrid(y=cores_y, x=cores_x),
+        num_out_blocks=num_out_blocks,
+    )
+    out = ttnn.to_torch(ttnn.from_device(out)).float()[:, :, :HW, :]
+
+    max_abs_err = (out - ref).abs().max().item()
+    pcc = torch.corrcoef(torch.stack([out.flatten(), ref.flatten()]))[0, 1].item()
+    logger.info(f"N={N} grid={cores_x}x{cores_y} num_out_blocks={num_out_blocks}: max_abs_err={max_abs_err} pcc={pcc}")
+    assert max_abs_err < 0.08, (
+        f"max abs error {max_abs_err} with dirty tile padding at N={N} grid={cores_x}x{cores_y} "
+        f"num_out_blocks={num_out_blocks}; group_norm must be independent of its padding (see #52685)"
+    )
+    assert pcc > 0.999, f"pcc {pcc} with dirty tile padding (see #52685)"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+def test_group_norm_non_tile_aligned_dirty_padding_is_ignored_DRAM(device):
+    # The same logical rows with different padding bytes must give bit-identical output -- unlike an
+    # error threshold, this cannot be satisfied by merely keeping the damage small.
+    torch.manual_seed(0)
+    N, C, HW, G, padded = 1, 512, 100, 32, 128
+
+    real = torch.rand((N, 1, HW, C), dtype=torch.bfloat16)
+
+    def run(padding_value):
+        buf = torch.zeros((N, 1, padded, C), dtype=torch.bfloat16)
+        buf[:, :, :HW, :] = real
+        buf[:, :, HW:, :] = padding_value
+        tt = ttnn.from_torch(
+            buf, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt = ttnn.reshape(tt, ttnn.Shape([N, 1, HW, C]), ttnn.Shape([N, 1, padded, C]))
+        out = ttnn.group_norm(tt, num_groups=G, inplace=False, memory_config=ttnn.DRAM_MEMORY_CONFIG, core_grid=None)
+        return ttnn.to_torch(ttnn.from_device(out)).float()[:, :, :HW, :]
+
+    baseline = run(0.0)
+    for padding_value in (7.0, 1.0, -3.5, 0.5, 100.0):
+        other = run(padding_value)
+        assert torch.equal(baseline, other), (
+            f"group_norm output changed when the tile padding changed from 0.0 to {padding_value} "
+            f"(max delta {(baseline - other).abs().max().item()}); the padding rows must not reach "
+            f"either accumulation pass (see #52685)"
+        )
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
@@ -899,4 +1013,114 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
         rtol=0.09,
         atol=0.09,
         frobenius_threshold=0.03,
+    )
+
+
+GN_INTERLEAVED_SHAPES = [
+    (1, 320, 32, 32, 16, 1, 1, 8),  # base config (original single-shape test)
+    (1, 480, 1, 64, 8, 1, 1, 1),  # single core, last group ends less than max tile span
+    (1, 768, 1, 512, 32, 2, 8, 8),  # group channel count less than tile size
+    (2, 768, 1, 512, 32, 2, 8, 8),  # batch 2 (still multicast), num_out_blocks 2
+    (1, 2560, 1, 512, 32, 2, 8, 8),  # mcast num_out_blocks 2
+    (1, 128, 1, 512, 32, 2, 4, 4),  # all groups on core fit in less than one tile
+    (8, 768, 1, 512, 32, 3, 8, 8),  # batch 8 (no multicast), uneven num_out_blocks divisor
+]
+
+
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_INTERLEAVED_SHAPES)
+@pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize("welford_mode", WELFORD_MODES)
+def test_group_norm_interleaved_all_config(
+    device, N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x, in_dtype, gb_dtype, welford_mode
+):
+    # Interleaved (DRAM) group_norm across all WELFORD_MODES. The modes differ only in
+    # use_welford/use_reciprocals and the accuracy thresholds; everything else (fp32/bf16 input,
+    # fp32/bf16 gamma-beta, gamma/beta/mask prep via dram_group_norm_params_from_torch) is identical.
+    # Interleaved input/output is TILE-only (ROW_MAJOR is rejected by the op for non-sharded tensors).
+    grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
+    torch.manual_seed(0)
+
+    # Determine welford and reciprocals settings
+    use_welford = welford_mode in ("welford_normal", "welford_reciprocal")
+    use_reciprocals = welford_mode == "welford_reciprocal"
+
+    x = torch.rand((N, C, H, W), dtype=torch.float32)
+    w = torch.rand((C,), dtype=torch.float32)
+    b = torch.rand((C,), dtype=torch.float32)
+    ref = torch.nn.functional.group_norm(x, num_groups, weight=w, bias=b).permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    ck = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # required for FP32 (Welford path, or legacy fp32 DEST accumulation)
+        packer_l1_acc=False,
+    )
+
+    xt = x.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    xt = ttnn.from_torch(
+        xt, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    [gt, bt], mask = ttnn.dram_group_norm_params_from_torch(
+        [w, b], C, num_groups, device, core_grid=grid, return_mask=True, dtype=gb_dtype
+    )
+
+    # Create reciprocals tensor if needed (host-precomputed 1/count fed via the reciprocals= arg)
+    reciprocals_tensor = None
+    if use_reciprocals:
+        torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, grid)
+        reciprocals_tensor = ttnn.from_torch(
+            torch_reciprocals,
+            dtype=ttnn.DataType.FLOAT32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}),
+                    (torch_reciprocals.shape[0] // (grid.x * grid.y), torch_reciprocals.shape[1]),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        )
+
+    out = ttnn.group_norm(
+        xt,
+        num_groups=num_groups,
+        input_mask=mask,
+        weight=gt,
+        bias=bt,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        core_grid=grid,
+        dtype=in_dtype,
+        compute_kernel_config=ck,
+        use_welford=use_welford,
+        num_out_blocks=num_out_blocks,
+        inplace=False,
+        reciprocals=reciprocals_tensor,
+    )
+    out = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
+
+    # Thresholds branch on the reduction path and the input dtype (bf16 input is the dominant error
+    # source); each bound sits ~1.4x above the worst observed value across the shape/gamma-beta matrix.
+    if use_welford:
+        if in_dtype == ttnn.bfloat16:
+            pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.06, 0.015
+        else:
+            pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.02, 0.004
+    else:
+        if in_dtype == ttnn.bfloat16:
+            pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.01, 0.10, 0.03
+        else:
+            pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.008, 0.03, 0.01
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
     )

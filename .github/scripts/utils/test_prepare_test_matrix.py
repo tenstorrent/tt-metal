@@ -49,13 +49,14 @@ def run_matrix(
     enabled: str,
     *extra: str,
     env: dict | None = None,
+    sku_config: Path | None = None,
 ) -> list:
     cmd = [
         sys.executable,
         str(SCRIPT),
         str(tests_yaml),
         enabled,
-        str(SKU_CONFIG),
+        str(sku_config or SKU_CONFIG),
         *extra,
     ]
     run_env = os.environ.copy()
@@ -305,6 +306,40 @@ def test_all_skus_on_comment_only_yaml_yields_empty_matrix(tmp_path: Path):
     assert matrix == []
 
 
+def test_cmd_strips_indented_comments(tmp_path: Path):
+    """Whole-line '#' comments inside a cmd block are dropped from the matrix cmd.
+
+    Regression for galaxy_stress_tests.yaml: a comment carrying a lone apostrophe
+    and parentheses (e.g. "overrides setup-job's 5s default") otherwise lands in
+    the matrix JSON's cmd and breaks downstream shell single-quoting of the cmd.
+    """
+    path = tmp_path / "comment_cmd.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """\
+            - name: commented test
+              cmd: |
+                # 0 disables the timeout (overrides setup-job's 5s default), which
+                # else false-fails slow subtests (size_4096 unicast ~6.2s).
+                run_the_thing --filter 'name.*_short'
+              skus:
+                wh_n150_civ2:
+                  timeout: 15
+              team: runtime
+              owner_id: U000
+            """
+        )
+    )
+    matrix = run_matrix(path, "wh_n150_civ2")
+    assert len(matrix) == 1
+    cmd = matrix[0]["cmd"]
+    # Comment lines (and their apostrophes/parentheses) are gone; the real
+    # command line — including its own single-quoted arg — survives intact.
+    assert "#" not in cmd
+    assert "setup-job's" not in cmd
+    assert "run_the_thing --filter 'name.*_short'" in cmd
+
+
 def test_models_merge_gate_placeholder_skips(tmp_path: Path):
     """The real (currently empty) models gate list must not fail on merge_group."""
     matrix = run_matrix(
@@ -373,6 +408,100 @@ def test_sku_config_aliases_point_at_grouped_prio_skus():
         alias = cfg[logical]["merge_queue_sku"]
         assert alias in cfg
         assert "runs_on" in cfg[alias]
+
+
+# ---------------------------------------------------------------------------
+# Multihost routing (single-host vs exabox workflow split)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "sku_name,sku_yaml,expected_multihost",
+    [
+        (
+            "legacy_alloc",
+            """\
+              legacy_alloc:
+                runs_on: [exabox-multihost-with-nfs]
+                allocation:
+                  type: Count
+                  count: 4
+            """,
+            True,
+        ),
+        (
+            "exabox_label",
+            """\
+              exabox_label:
+                runs_on: [exabox-multihost-ci-sc4]
+            """,
+            True,
+        ),
+        (
+            "ordinary",
+            """\
+              ordinary:
+                runs_on: [arch-blackhole, in-service]
+            """,
+            False,
+        ),
+    ],
+    ids=["legacy_allocation", "exabox_multihost_label", "ordinary_runner"],
+)
+def test_multihost_flag_from_sku_config(tmp_path: Path, sku_name: str, sku_yaml: str, expected_multihost: bool):
+    """Legs with allocation or an exabox-multihost* runs_on label are multihost."""
+    tests = tmp_path / "tests.yaml"
+    tests.write_text(
+        textwrap.dedent(
+            f"""\
+            - name: routing probe
+              cmd: echo ok
+              skus:
+                {sku_name}:
+                  timeout: 10
+              team: models
+            """
+        )
+    )
+    cfg = tmp_path / "sku_config.yaml"
+    cfg.write_text(textwrap.dedent(f"skus:\n{sku_yaml}"))
+    matrix = run_matrix(tests, "ALL_SKUS_IN_TESTS", sku_config=cfg)
+    assert len(matrix) == 1
+    assert matrix[0]["sku"] == sku_name
+    assert matrix[0]["multihost"] is expected_multihost
+
+
+def test_real_exabox_skus_are_marked_multihost(tmp_path: Path):
+    """Production bh_sc* SKUs route via exabox-multihost-ci-* labels in sku_config."""
+    tests = tmp_path / "tests.yaml"
+    tests.write_text(
+        textwrap.dedent(
+            """\
+            - name: sc1 probe
+              cmd: echo ok
+              skus:
+                bh_sc1:
+                  timeout: 10
+              team: models
+            - name: sc4 probe
+              cmd: echo ok
+              skus:
+                bh_sc4:
+                  timeout: 10
+              team: models
+            - name: single-host probe
+              cmd: echo ok
+              skus:
+                bh_p150:
+                  timeout: 10
+              team: models
+            """
+        )
+    )
+    by_sku = {e["sku"]: e for e in run_matrix(tests, "bh_sc1,bh_sc4,bh_p150")}
+    assert by_sku["bh_sc1"]["multihost"] is True
+    assert by_sku["bh_sc4"]["multihost"] is True
+    assert by_sku["bh_p150"]["multihost"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -551,3 +680,97 @@ def test_present_but_empty_cmd_is_always_rejected(tmp_path: Path, empty_cmd: str
     result = _run_matrix_raw(path, *extra)
     assert result.returncode != 0, result.stdout
     assert "cmd is present but empty" in result.stdout + result.stderr
+
+
+def _run_with_skus(tests_yaml: Path, enabled: str, *extra: str) -> subprocess.CompletedProcess:
+    """Invoke the script with an explicit enabled-SKU list, without asserting success."""
+    run_env = os.environ.copy()
+    run_env.pop("GITHUB_OUTPUT", None)
+    run_env.pop("MATRIX_EVENT_NAME", None)
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), str(tests_yaml), enabled, str(SKU_CONFIG), *extra],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=run_env,
+    )
+
+
+def sim_libs_line(result) -> str:
+    """The sim-libs value the script printed (stdout form, no GITHUB_OUTPUT)."""
+    for line in reversed(result.stdout.splitlines()):
+        if line.startswith("sim-libs="):
+            return line[len("sim-libs=") :]
+    raise AssertionError(f"No sim-libs= in output:\n{result.stdout}")
+
+
+def test_sim_libs_lists_only_selected_sim_skus(tmp_path: Path):
+    """sim-libs carries each selected sim SKU's ttsim_lib, deduped, and nothing for HW SKUs."""
+    path = tmp_path / "tests.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """\
+            - name: sim and hw test
+              cmd: echo ok
+              skus:
+                wh_n300_civ2:
+                  timeout: 15
+                sim_wh_n300:
+                  timeout: 15
+                sim_bh_p150:
+                  timeout: 15
+              team: runtime
+              owner_id: U000
+            - name: second test on the same sim sku
+              cmd: echo ok
+              skus:
+                sim_wh_n300:
+                  timeout: 15
+              team: runtime
+              owner_id: U000
+            """
+        )
+    )
+    result = _run_with_skus(path, "wh_n300_civ2,sim_wh_n300,sim_bh_p150")
+    assert result.returncode == 0, result.stdout + result.stderr
+    # sorted + unique, despite sim_wh_n300 appearing in two entries
+    assert json.loads(sim_libs_line(result)) == ["libttsim_bh.so", "libttsim_wh_x2.so"]
+
+    # Every sim leg also carries its own lib, which is what setup-ttsim installs.
+    matrix = json.loads(re.search(r"^matrix=(.*)$", result.stdout, re.M).group(1))
+    libs = {e["sku"]: e.get("ttsim_lib") for e in matrix}
+    assert libs["sim_wh_n300"] == "libttsim_wh_x2.so"
+    assert libs["sim_bh_p150"] == "libttsim_bh.so"
+    assert libs["wh_n300_civ2"] is None
+
+
+def test_sim_libs_empty_for_hardware_only_matrix(tmp_path: Path, tests_yaml: Path):
+    """No sim SKUs selected -> empty sim-libs, which is how impls skip fetch-ttsim."""
+    result = _run_with_skus(tests_yaml, "wh_n150_civ2")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert sim_libs_line(result) == "[]"
+
+
+def test_tests_present_but_no_enabled_sku_is_fatal(tests_yaml: Path):
+    """Tests exist and the SKU set cannot run any of them: a miswired pipeline, so fail."""
+    result = _run_with_skus(tests_yaml, "bh_galaxy")
+    assert result.returncode != 0, result.stdout
+    assert "No tests selected for enabled SKUs" in result.stdout
+
+
+@pytest.mark.parametrize("body", ["", "# placeholder, no tests yet\n"])
+@pytest.mark.parametrize("enabled", ["wh_n150_civ2", "ALL_SKUS_IN_TESTS"])
+def test_no_tests_in_yaml_warns_and_passes(tmp_path: Path, body: str, enabled: str):
+    """An empty / placeholder tests YAML is vacuously correct: warn, emit matrix=[], exit 0.
+
+    Covers both SKU forms because the explicit-list form reaches build_test_matrix while
+    ALL_SKUS_IN_TESTS short-circuits in main; e.g. l2-nightly drives the placeholder
+    ttsim_unit_tests.yaml with an explicit list.
+    """
+    path = tmp_path / "tests.yaml"
+    path.write_text(body)
+    result = _run_with_skus(path, enabled)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+    assert re.search(r"^matrix=\[\]$", result.stdout, re.M)
+    assert sim_libs_line(result) == "[]"

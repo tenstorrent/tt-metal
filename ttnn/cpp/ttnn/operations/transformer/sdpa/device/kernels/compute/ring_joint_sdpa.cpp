@@ -251,9 +251,8 @@ void kernel_main() {
             continue;
         }
         // Sharded joint: one L/P shard per ring iteration — process joint K/V on every iteration.
-        // Replicated joint: Already present full joint K/V is processd after all spatial K/V is consumed.
-        const bool do_joint_kv =
-            has_gathered_joint_k ? true : is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+        // Replicated joint: All data already present process joint when ring_id == ring_size-1
+        const bool do_joint_kv = has_gathered_joint_k ? true : (ring_id == ring_size - 1);
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;

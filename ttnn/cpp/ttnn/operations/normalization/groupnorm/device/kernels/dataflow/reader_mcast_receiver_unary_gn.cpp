@@ -11,6 +11,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "groupnorm_reader_rm.hpp"
 
 void kernel_main() {
     // clang-format off
@@ -74,6 +75,7 @@ void kernel_main() {
     constexpr uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
     const uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
     const uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
+    constexpr uint32_t datum_size_bytes = get_named_compile_time_arg_val("datum_size_bytes");
     constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
     constexpr uint32_t tile_height = get_named_compile_time_arg_val("TILE_HEIGHT");
 
@@ -122,6 +124,10 @@ void kernel_main() {
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
     constexpr uint32_t dfb_x_id = tt::CBIndex::c_24;
     constexpr uint32_t dfb_reread_out_id = tt::CBIndex::c_23;
+#ifdef UNTILIZE_OUT
+    // Scratch for the row-major output reread; compute tilizes it into c_23.
+    constexpr uint32_t dfb_reread_rm_id = tt::CBIndex::c_20;
+#endif
 
     Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
@@ -135,9 +141,11 @@ void kernel_main() {
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
     DataflowBuffer dfb_out0(dfb_out0_id);
     DataflowBuffer dfb_reread_out(dfb_reread_out_id);
+#ifdef UNTILIZE_OUT
+    DataflowBuffer dfb_reread_rm(dfb_reread_rm_id);
+#endif
 
-    const uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
-    const DataFormat out_data_format = get_dataformat(dfb_out0_id);
+    const uint32_t single_tile_size_bytes = dfb_ex_partial.get_tile_size();
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
@@ -193,7 +201,24 @@ void kernel_main() {
                         out_block_h_actual = out_block_h_normal;
                     }
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
-                    const uint32_t src0_tile_bytes = get_tile_size(dfb_in0_id);
+#ifdef TILIZE_IN
+                    // Read once: the tilized group stays in L1 for all three passes.
+                    if (cur_read_iteration == 0) {
+                        const auto src_a = TensorAccessor(src0_args, src_addr);
+                        groupnorm_gather_rm_block<tile_width, tile_height, block_w, datum_size_bytes>(
+                            noc,
+                            src_a,
+                            dfb_in0,
+                            start_id,
+                            out_block_start_id_offset,
+                            index_b_offset,
+                            index_g_offset,
+                            num_channels_tiles,
+                            out_block_h_actual,
+                            out_block_hw_normal);
+                    }
+#else
+                    const uint32_t src0_tile_bytes = dfb_in0.get_tile_size();
                     const auto src_a = TensorAccessor(src0_args, src_addr);
                     uint32_t l1_write_addr;
                     l1_write_addr = dfb_in0.get_write_ptr();
@@ -212,6 +237,7 @@ void kernel_main() {
                         }
                     }
                     dfb_in0.push_back(out_block_hw_normal);
+#endif
 
 #endif
                     if (cur_read_iteration == 0 || cur_read_iteration == 1) {
@@ -238,25 +264,43 @@ void kernel_main() {
 
                         uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
-                        const uint32_t dst_tile_bytes = get_tile_size(dfb_reread_out_id);
+#ifdef UNTILIZE_OUT
+                        // Reread the rows written; the next group accumulates onto them.
+                        groupnorm_gather_rm_block<tile_width, tile_height, block_w, datum_size_bytes>(
+                            noc,
+                            dst_a,
+                            dfb_reread_rm,
+                            out_start_id,
+                            out_block_start_id_offset,
+                            index_b_offset,
+                            index_g_offset,
+                            num_channels_tiles,
+                            out_block_h_actual,
+                            out_block_hw_normal);
+#else
+                        const uint32_t dst_tile_bytes = dfb_reread_out.get_tile_size();
                         uint32_t l1_write_addr;
                         l1_write_addr = dfb_reread_out.get_write_ptr();
                         dfb_reread_out.reserve_back(out_block_hw_normal);
 
                         for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                             for (uint32_t nt = 0; nt < block_w_curr; nt++) {
-                                noc.async_read(
-                                    dst_a,
-                                    CoreLocalMem<uint32_t>(l1_write_addr),
-                                    single_tile_size_bytes,
-                                    {.page_id = out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
-                                        index_b_offset + index_g_offset},
-                                    {});
+                                // Skip tiles the writer never wrote; rereading them pulls uninitialized DRAM (fp32 = huge garbage). Keep advancing l1_write_addr to stay aligned.
+                                if ((index_g_offset + nt) < per_core_N) {
+                                    noc.async_read(
+                                        dst_a,
+                                        CoreLocalMem<uint32_t>(l1_write_addr),
+                                        single_tile_size_bytes,
+                                        {.page_id = out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
+                                            index_b_offset + index_g_offset},
+                                        {});
+                                    noc.async_read_barrier();
+                                }
                                 l1_write_addr += dst_tile_bytes;
-                                noc.async_read_barrier();
                             }
                         }
                         dfb_reread_out.push_back(out_block_hw_normal);
+#endif
                     }
                     out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                 }

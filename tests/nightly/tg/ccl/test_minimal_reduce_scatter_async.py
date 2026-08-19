@@ -276,7 +276,7 @@ def test_reduce_scatter_async_quad_host_mesh(
     "mesh_device, device_params, topology, cluster_axis",
     [
         ((8, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear, 1),
-        ((8, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, ttnn.Topology.Ring, None),
+        ((8, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, ttnn.Topology.Ring, None),
     ],
     indirect=["mesh_device", "device_params"],
     ids=["linear", "ring"],

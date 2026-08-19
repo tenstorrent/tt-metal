@@ -29,14 +29,15 @@ void kernel_main() {
 
     constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
 
+    DataflowBuffer dfb_out(dfb_id_out0);
+
     // single-tile
-    const uint32_t single_tile_size_bytes = get_tile_size(dfb_id_out0);
+    const uint32_t single_tile_size_bytes = dfb_out.get_tile_size();
 
     constexpr auto out_args = TensorAccessorArgs<0>();
     const auto s = TensorAccessor(out_args, out_tensor_addr);
 
     Noc noc;
-    DataflowBuffer dfb_out(dfb_id_out0);
 
     bool one_time_profile = true;
     for (uint32_t b = 0; b < batch; b++) {

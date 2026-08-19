@@ -2389,8 +2389,8 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 //    boundaries by walking handles. See KernelCrtaLayout in jit_build_settings.hpp.
 struct TensorBindingsForKernel {
     std::vector<TensorBindingHandle> handles;
-    std::vector<uint32_t> cta_words;  // appended after any pre-existing positional CTAs
-                                      // (currently, this is the only Metal 2.0 use of positional CTAs)
+    // Binding-only CTA payload; appended after the user CTA-vararg positional prefix.
+    std::vector<uint32_t> cta_words;
     KernelCrtaLayout crta_layout;
 };
 
@@ -2410,11 +2410,14 @@ struct TensorBindingsForKernel {
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
     const std::unordered_map<TensorParamName, ResolvedTensorParameter>& resolved_tensor_parameters,
-    size_t base_named_crta_count) {
+    size_t base_named_crta_count,
+    uint32_t base_cta_offset) {
     TensorBindingsForKernel out;
     out.handles.reserve(kernel.tensor_bindings.size());
 
-    uint32_t cta_word_offset = 0;
+    // Absolute word index into the unified positional CTA buffer:
+    //   [ CTA varargs (base_cta_offset words) | TensorBinding payloads ... ]
+    uint32_t cta_word_offset = base_cta_offset;
     size_t crta_word_index = base_named_crta_count;
     uint32_t binding_section_words = 0;
     for (const auto& binding : kernel.tensor_bindings) {
@@ -2617,16 +2620,16 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
 // MakeKernelSource: Create a KernelSource from a KernelSpec
 // ----------------------------------------------------------------------------
 
-KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
+KernelSource MakeKernelSource(const KernelSpec& kernel_spec, ContextId context_id) {
     return std::visit(
         [&](const auto& src) -> KernelSource {
             using T = std::decay_t<decltype(src)>;
             if constexpr (std::is_same_v<T, std::filesystem::path>) {
                 TT_FATAL(!src.empty(), "KernelSpec '{}' has empty source file path", kernel_spec.unique_id);
-                return KernelSource(src.string(), KernelSource::SourceType::FILE_PATH);
+                return KernelSource::from_path(context_id, src);
             } else if constexpr (std::is_same_v<T, KernelSpec::SourceCode>) {
                 TT_FATAL(!src.code.empty(), "KernelSpec '{}' has empty inline source code", kernel_spec.unique_id);
-                return KernelSource(src.code, KernelSource::SourceType::SOURCE_CODE);
+                return KernelSource::from_source(src.code);
             } else {
                 static_assert(!sizeof(T*), "Unhandled KernelSpec::source alternative");
             }
@@ -2926,7 +2929,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     //
     // TensorBindings ride two existing kernel-arg channels:
     //   - Static layout (rank, shape, bank coords, ...) flows through the kernel's positional
-    //     CTA buffer. (Empty in Metal 2.0 today; the binding payload is its first user.)
+    //     CTA buffer, after any user CTA-vararg prefix (KernelAdvancedOptions::compile_time_varargs).
     //   - Per-enqueue base address flows through a reserved-prefix named CRTA, appended to
     //     the kernel's user-named CRTAs and filled by SetProgramRunArgs from the
     //     corresponding TensorArgument entry. TensorParameters that opt into a dynamic accessor
@@ -2940,7 +2943,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     }
 
     // Step 3: Build the Program
-    auto program_impl = std::make_shared<detail::ProgramImpl>();
+    auto program_impl = std::make_shared<detail::ProgramImpl>(extract_context_id(&mesh_device));
     program_impl->mark_created_from_spec();  // mark as Metal 2.0 ProgramSpec-created (for legality checks)
 
     // Register TensorParameters with the program for ValidateProgramRunArgs to consult at enqueue.
@@ -3018,7 +3021,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
     // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
-        KernelSource kernel_src = MakeKernelSource(kernel_spec);
+        KernelSource kernel_src = MakeKernelSource(kernel_spec, program_impl->get_context_id());
         const NodeRangeSet& node_ranges = collected.kernel_node_set.at(kernel_spec.unique_id);
 
         // Make the local accessor name -> DFB device slot map for this kernel
@@ -3029,10 +3032,16 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
+        //    (after the user CTA-vararg prefix)
         //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section)
         const auto& user_named_crtas = kernel_spec.runtime_arg_schema.common_runtime_arg_names;
+        const auto& cta_varargs = kernel_spec.advanced_options.compile_time_varargs;
+        const uint32_t vararg_cta_count = static_cast<uint32_t>(cta_varargs.size());
         TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
-            kernel_spec, resolved_tensor_parameters, /*base_named_crta_count=*/user_named_crtas.size());
+            kernel_spec,
+            resolved_tensor_parameters,
+            /*base_named_crta_count=*/user_named_crtas.size(),
+            /*base_cta_offset=*/vararg_cta_count);
 
         // Create TensorBindingHandles for this kernel
         const std::vector<TensorBindingHandle>& tensor_binding_handles = ta_bindings.handles;
@@ -3054,6 +3063,10 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // CRTA list through unchanged.
         const auto& named_rtas = kernel_spec.runtime_arg_schema.runtime_arg_names;
 
+        // Positional CTAs: [ user CTA varargs | TensorBinding CTA payloads ]
+        std::vector<uint32_t> compile_args = cta_varargs;
+        compile_args.insert(compile_args.end(), ta_bindings.cta_words.begin(), ta_bindings.cta_words.end());
+
         // Create the kernel object
         std::shared_ptr<Kernel> kernel;
 
@@ -3064,9 +3077,10 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
             uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
             if (kernel_spec.is_data_movement_kernel()) {
                 auto config = MakeQuasarDataMovementConfig(kernel_spec);
-                config.compile_args = ta_bindings.cta_words;  // populate positional CTAs from tensor bindings
+                config.compile_args = std::move(compile_args);
                 auto processors = GetDMProcessorSet(DMProcessorMask{(uint8_t)(risc_mask & 0xFF)});
                 kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
+                    program_impl->get_context_id(),
                     kernel_src,
                     node_ranges,
                     config,
@@ -3080,9 +3094,10 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                     ta_bindings.crta_layout);
             } else {
                 auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_slot);
-                config.compile_args = ta_bindings.cta_words;
+                config.compile_args = std::move(compile_args);
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
+                    program_impl->get_context_id(),
                     kernel_src,
                     node_ranges,
                     config,
@@ -3098,8 +3113,9 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         } else {  // gen1
             if (kernel_spec.is_data_movement_kernel()) {
                 auto config = MakeGen1DataMovementConfig(kernel_spec);
-                config.compile_args = ta_bindings.cta_words;
+                config.compile_args = std::move(compile_args);
                 kernel = std::make_shared<DataMovementKernel>(
+                    program_impl->get_context_id(),
                     kernel_src,
                     node_ranges,
                     config,
@@ -3112,8 +3128,9 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                     ta_bindings.crta_layout);
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_slot);
-                config.compile_args = ta_bindings.cta_words;
+                config.compile_args = std::move(compile_args);
                 kernel = std::make_shared<ComputeKernel>(
+                    program_impl->get_context_id(),
                     kernel_src,
                     node_ranges,
                     config,
@@ -3131,6 +3148,9 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // part of the kernel cache key, so this must run before the kernel is compiled). allocate_scratchpads
         // will later fill each handle's allocated_address.
         kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
+
+        // Prefix length for device get_compile_time_vararg* bounds (values are in compile_time_args_).
+        kernel->set_compile_time_vararg_count(vararg_cta_count);
 
         // Add the kernel to the ProgramImpl and register the name -> handle mapping
         KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);

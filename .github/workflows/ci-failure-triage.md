@@ -74,6 +74,7 @@ safe-outputs:
   report-incomplete: false
 
 tools:
+  bash: [] # no shell access needed — triage works entirely through the GitHub MCP toolset
   github:
     # Only the toolsets triage needs: run/job/log access plus issue search.
     toolsets: [actions, repos, issues, search, context]

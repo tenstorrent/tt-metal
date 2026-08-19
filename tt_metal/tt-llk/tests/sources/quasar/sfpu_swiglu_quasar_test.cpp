@@ -54,18 +54,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_descriptor_t td_val;
     td_val.buf_desc        = bd_val;
     td_val.buf_desc_id     = buf_desc_id;
-    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
+    td_val.reg_data_format = static_cast<DataFormat>(formats.unpack_A_dst);
     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
 
     if (is_fp32_dest_acc_en && !unpack_to_dest)
     {
         // Same workaround as unary tests: MOVA2D for 32-bit dest requires both
         // SrcA/B format configs because the datacopy uses ELWADD internally.
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val, td_val);
+        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val.reg_data_format, td_val.reg_data_format);
     }
     else
     {
-        _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
+        _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val.reg_data_format);
     }
 
     _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_input_tiles);
@@ -212,10 +212,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_descriptor_t tdma_desc;
     tdma_desc.buf_desc        = bd_val;
     tdma_desc.buf_desc_id     = buf_desc_id;
-    tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
+    tdma_desc.reg_data_format = static_cast<DataFormat>(formats.pack_src);
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
-    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none());
     _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_output_tiles);
 
     // Output lives at Dest tile index 2 — this is the layout *this driver*

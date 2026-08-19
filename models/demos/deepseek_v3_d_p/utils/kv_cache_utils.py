@@ -763,7 +763,7 @@ def allocate_dflash_kv_cache(
     dtype: ttnn.DataType = ttnn.bfloat8_b,  # align w/ decode KV cache (init_kvpe_cache default is bf8); bf8/TILE
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Allocate the DFlash drafter's separate K and V context caches, owned OUTSIDE the module by the
-    caller (prefill runner / test) and passed into ``TtDFlashDrafter.write_kv_cache`` — the drafter analog
+    caller (prefill runner / test) and passed into ``TtDFlashDrafter.forward`` — the drafter analog
     of ``allocate_mla_kvpe_cache`` above: one file owns each model's KV layout, and the model module only
     consumes the cache handed in (like the MLA model's ``forward(..., kvpe_cache=...)``). Keeping ownership
     with the caller lets it drive cache lifecycle (the migration hand-off to the decode mesh) and dtype

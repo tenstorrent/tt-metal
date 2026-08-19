@@ -95,6 +95,51 @@ inline void _generic_moe_gate_store_8_rows_even_odd_split_()
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, generic_moe_gate_scores_tile + 4 + offset);
 }
 
+template <int num_selected_experts>
+inline void _generic_moe_gate_zero_tail_lregs_()
+{
+    static_assert(num_selected_experts >= 1 && num_selected_experts <= 8);
+
+    if constexpr (num_selected_experts > 4)
+    {
+        TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile);
+        TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile + 2);
+    }
+    else
+    {
+        TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    }
+    if constexpr (num_selected_experts != 4 && num_selected_experts != 8)
+    {
+        TTI_SFPTRANSP(0, 0, 0, 0);
+
+        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+        if constexpr (num_selected_experts != 7 && num_selected_experts != 3)
+        {
+            TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+            if constexpr (num_selected_experts != 6 && num_selected_experts != 2)
+            {
+                TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+            }
+        }
+
+        TTI_SFPTRANSP(0, 0, 0, 0);
+    }
+    if constexpr (num_selected_experts > 4)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile);
+        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_7, generic_moe_gate_interm_tile + 2);
+    }
+}
+
+template <int num_selected_experts, std::uint32_t offset>
+inline void _generic_moe_gate_zero_tail_()
+{
+    _generic_moe_gate_load_8_rows_even_odd_split_<offset>();
+    _generic_moe_gate_zero_tail_lregs_<num_selected_experts>();
+    _generic_moe_gate_store_8_rows_even_odd_split_<offset>();
+}
+
 // Shared P1-P3 network: build a length-16 bitonic sequence in LREG0-3.
 inline void _generic_moe_gate_build_bitonic8_()
 {
@@ -244,9 +289,9 @@ inline void _generic_moe_gate_topk_(std::uint32_t eps, std::uint32_t scale)
     }
     TTI_SFPCONFIG(0x4, 0xF, 1);
 
-    if constexpr (num_selected_experts == 16)
+    if constexpr (num_selected_experts > 8)
     {
-        _generic_moe_gate_top16_<normalize, num_total_experts>(eps, scale);
+        _generic_moe_gate_top16_<normalize, num_selected_experts, num_total_experts, zero_tail, full_sort>(eps, scale);
     }
     else
     {
