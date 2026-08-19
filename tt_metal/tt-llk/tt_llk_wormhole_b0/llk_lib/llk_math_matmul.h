@@ -857,9 +857,9 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
     // PRESERVE and no format-changing reconfig ran before this matmul, MVMUL silently
     // keeps denormals. This assert catches exactly that leak (fires only under LLK asserts).
     LLK_ASSERT(
-        math::src_zero_flag_state == math::SrcZeroFlagState::DEFAULT,
-        "matmul: Src zero-substitution flag is not in DEFAULT state — a prior op (copy_init/datacopy) leaked "
-        "PRESERVE into MVMUL without a format-changing reconfig; denormal Src results will differ");
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "matmul: Src zero-substitution flag does not hold the operand-driven value — a prior op (copy_init/datacopy) left "
+        "a keep flag before MVMUL without a format-changing reconfig; denormal Src results will differ");
 
     const bool reuse_a           = ct_dim >= rt_dim;
     const std::uint32_t t_dim    = reuse_a ? rt_dim : ct_dim;

@@ -682,7 +682,7 @@ inline void _llk_math_eltwise_binary_(const ckernel::TensorShape &tensor_shape, 
     // copy_init/datacopy op leaking PRESERVE here changes denormal Src results. eltwise_binary_init
     // must have re-established the format-driven DEFAULT (fires only under LLK asserts).
     LLK_ASSERT(
-        math::src_zero_flag_state == math::SrcZeroFlagState::DEFAULT,
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
         "eltwise_binary: Src zero-substitution flag is not in DEFAULT state — a prior op (copy_init/datacopy) leaked "
         "PRESERVE into ELWADD/ELWMUL/ELWSUB without a format-changing reconfig; denormal Src results will differ");
 
@@ -854,7 +854,7 @@ inline void _llk_math_eltwise_binary_(std::uint32_t dst_index)
 {
     // Zero-flag leak guard (tt-metal#49924) — see the TensorShape overload above.
     LLK_ASSERT(
-        math::src_zero_flag_state == math::SrcZeroFlagState::DEFAULT,
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
         "eltwise_binary (SDPA): Src zero-substitution flag is not in DEFAULT state — a prior op leaked "
         "PRESERVE into ELWADD/ELWMUL/ELWSUB without a format-changing reconfig; denormal Src results will differ");
 
