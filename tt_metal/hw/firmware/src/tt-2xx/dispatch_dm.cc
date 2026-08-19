@@ -43,6 +43,7 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
 thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
+thread_local uint32_t hw_thread_idx __attribute__((used));
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
@@ -98,7 +99,9 @@ volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used
 
 extern "C" uint32_t _start1() {
     configure_csr();
-    uint32_t hartid = internal_::get_hw_thread_idx();
+    // Raw read: hw_thread_idx has not been filled yet, and do_thread_crt1() below zeroes the .tbss
+    // it lives in, so caching it any earlier would just be discarded.
+    uint32_t hartid = internal_::read_hw_thread_idx();
     if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
@@ -106,6 +109,8 @@ extern "C" uint32_t _start1() {
     }
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
+    // .tbss has been zeroed: cache this thread's hw index.
+    internal_::init_hw_thread_idx();
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
     }
     WAYPOINT("I");

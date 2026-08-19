@@ -43,6 +43,8 @@ class Packer(Golden):
 
     pack_mode: str = "PackMode::Default"
 
+    requires_dest_remap: bool = False
+
     def get_headers(self) -> List[str]:
         """Return the list of C++ LLK header filenames required by this packer.
 
