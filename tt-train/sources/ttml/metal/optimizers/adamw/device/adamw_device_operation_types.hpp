@@ -33,6 +33,13 @@ struct tensor_args_t {
     const ttnn::Tensor& exp_avg;
     const ttnn::Tensor& exp_avg_sq;
     std::optional<ttnn::Tensor> max_exp_avg_sq = std::nullopt;
+
+    // Single-element f32 tensors carrying the step-varying scalars (see
+    // ttml::metal::adamw_tensor_scalars). Engaged together; when set, the
+    // lr / beta*_pow / weight_decay attributes are ignored.
+    std::optional<ttnn::Tensor> step_size = std::nullopt;
+    std::optional<ttnn::Tensor> inv_sqrt_bc2 = std::nullopt;
+    std::optional<ttnn::Tensor> decay_factor = std::nullopt;
 };
 
 using tensor_return_value_t = ttnn::Tensor;

@@ -33,6 +33,9 @@ constexpr uint32_t kGradAddrIdx = 1U;
 constexpr uint32_t kExpAvgAddrIdx = 2U;
 constexpr uint32_t kExpAvgSqAddrIdx = 3U;
 constexpr uint32_t kMaxExpAvgSqAddrIdx = 4U;
+constexpr uint32_t kStepSizeAddrIdx = 7U;
+constexpr uint32_t kInvSqrtBc2AddrIdx = 8U;
+constexpr uint32_t kDecayFactorAddrIdx = 9U;
 // compute runtime args
 constexpr uint32_t kComputeBeta1Idx = 0U;
 constexpr uint32_t kComputeBeta2Idx = 1U;
@@ -54,6 +57,7 @@ constexpr auto kGradCbIndex = tt::CBIndex::c_1;
 constexpr auto kExpAvgCbIndex = tt::CBIndex::c_2;
 constexpr auto kExpAvgSqCbIndex = tt::CBIndex::c_3;
 constexpr auto kMaxExpAvgSqInCbIndex = tt::CBIndex::c_4;
+constexpr auto kScalarsCbIndex = tt::CBIndex::c_5;
 
 constexpr auto kOutputCbIndex = tt::CBIndex::c_16;
 constexpr auto kExpAvgOutCbIndex = tt::CBIndex::c_17;
@@ -113,6 +117,9 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* exp_avg_buffer,
     const tt::tt_metal::Buffer* exp_avg_sq_buffer,
     const tt::tt_metal::Buffer* max_exp_avg_sq_buffer,
+    const tt::tt_metal::Buffer* step_size_buffer,
+    const tt::tt_metal::Buffer* inv_sqrt_bc2_buffer,
+    const tt::tt_metal::Buffer* decay_factor_buffer,
     const tt::tt_metal::Buffer* output_buffer,
     const operation_attributes_t& attrs,
     uint32_t num_cores,
@@ -172,7 +179,10 @@ void assign_per_core_runtime_args(
              exp_avg_sq_buffer->address(),
              max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U,
              num_tiles_per_core,
-             num_tiles_written});
+             num_tiles_written,
+             step_size_buffer != nullptr ? step_size_buffer->address() : 0U,
+             inv_sqrt_bc2_buffer != nullptr ? inv_sqrt_bc2_buffer->address() : 0U,
+             decay_factor_buffer != nullptr ? decay_factor_buffer->address() : 0U});
 
         // Compute kernel
         compute_args[kComputeSeedIdx] = seeds[i];
@@ -339,8 +349,19 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     auto* max_exp_avg_sq_buffer = max_exp_avg_sq_opt.has_value() ? max_exp_avg_sq_opt.value().buffer() : nullptr;
     auto* output_buffer = output.buffer();
 
+    const bool scalars_from_tensor = tensor_args.step_size.has_value();
+    auto* step_size_buffer = scalars_from_tensor ? tensor_args.step_size->buffer() : nullptr;
+    auto* inv_sqrt_bc2_buffer = scalars_from_tensor ? tensor_args.inv_sqrt_bc2->buffer() : nullptr;
+    auto* decay_factor_buffer = scalars_from_tensor ? tensor_args.decay_factor->buffer() : nullptr;
+
+    if (scalars_from_tensor) {
+        [[maybe_unused]] auto cb_scalars = create_circular_buffer(
+            program, all_cores, kScalarsCbIndex, tt::DataFormat::Float32, float32_single_tile_size_bytes, 3U);
+    }
+
     std::map<std::string, std::string> defines;
     defines["AMSGRAD"] = operation_attributes.amsgrad ? "1" : "0";
+    defines["SCALARS_FROM_TENSOR"] = scalars_from_tensor ? "1" : "0";
     defines["STOCH_ROUND"] = operation_attributes.stochastic_rounding == StochasticRounding::Enabled ? "1" : "0";
 
     AdamWKernels kernels{};
@@ -351,6 +372,9 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(exp_avg_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(exp_avg_sq_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(max_exp_avg_sq_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(step_size_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(inv_sqrt_bc2_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(decay_factor_buffer).append_to(reader_compile_time_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_time_args{block_size};
@@ -401,6 +425,9 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
         exp_avg_buffer,
         exp_avg_sq_buffer,
         max_exp_avg_sq_buffer,
+        step_size_buffer,
+        inv_sqrt_bc2_buffer,
+        decay_factor_buffer,
         output_buffer,
         operation_attributes,
         num_cores,
@@ -451,6 +478,9 @@ void AdamWProgramFactory::override_runtime_arguments(
     auto* exp_avg_sq_buffer = tensor_args.exp_avg_sq.buffer();
     auto* max_exp_avg_sq_buffer =
         tensor_args.max_exp_avg_sq.has_value() ? tensor_args.max_exp_avg_sq.value().buffer() : nullptr;
+    auto* step_size_buffer = tensor_args.step_size.has_value() ? tensor_args.step_size->buffer() : nullptr;
+    auto* inv_sqrt_bc2_buffer = tensor_args.inv_sqrt_bc2.has_value() ? tensor_args.inv_sqrt_bc2->buffer() : nullptr;
+    auto* decay_factor_buffer = tensor_args.decay_factor.has_value() ? tensor_args.decay_factor->buffer() : nullptr;
     auto* output_buffer = tensor_return_value.buffer();
 
     // Only address arguments need updating here; tile counts remain the same as in create().
@@ -497,6 +527,9 @@ void AdamWProgramFactory::override_runtime_arguments(
             runtime_args[kExpAvgSqAddrIdx] = exp_avg_sq_buffer->address();
             runtime_args[kMaxExpAvgSqAddrIdx] =
                 max_exp_avg_sq_buffer != nullptr ? max_exp_avg_sq_buffer->address() : 0U;
+            runtime_args[kStepSizeAddrIdx] = step_size_buffer != nullptr ? step_size_buffer->address() : 0U;
+            runtime_args[kInvSqrtBc2AddrIdx] = inv_sqrt_bc2_buffer != nullptr ? inv_sqrt_bc2_buffer->address() : 0U;
+            runtime_args[kDecayFactorAddrIdx] = decay_factor_buffer != nullptr ? decay_factor_buffer->address() : 0U;
         }
         // Update compute kernel args
         {

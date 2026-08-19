@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
@@ -22,6 +23,7 @@ constexpr auto cb_grad_idx = tt::CBIndex::c_1;
 constexpr auto cb_exp_avg_idx = tt::CBIndex::c_2;
 constexpr auto cb_exp_avg_sq_idx = tt::CBIndex::c_3;
 constexpr auto cb_max_exp_avg_sq_in_idx = tt::CBIndex::c_4;
+constexpr auto cb_scalars_idx = tt::CBIndex::c_5;
 
 constexpr auto cb_output_idx = tt::CBIndex::c_16;
 constexpr auto cb_exp_avg_out_idx = tt::CBIndex::c_17;
@@ -54,6 +56,14 @@ void kernel_main() {
     uint32_t one_minus_beta2 = get_arg_val<uint32_t>(args_idx++);
     uint32_t decay_factor = get_arg_val<uint32_t>(args_idx++);
     [[maybe_unused]] uint32_t seed = get_arg_val<uint32_t>(args_idx++);
+
+#if SCALARS_FROM_TENSOR
+    cb_wait_front(cb_scalars_idx, 3U);
+    step_size = ckernel::read_tile_value(cb_scalars_idx, 0, 0);
+    inv_sqrt_bc2 = ckernel::read_tile_value(cb_scalars_idx, 1, 0);
+    decay_factor = ckernel::read_tile_value(cb_scalars_idx, 2, 0);
+    cb_pop_front(cb_scalars_idx, 3U);
+#endif
 
     init_sfpu(cb_param_idx, cb_output_idx);
 #if STOCH_ROUND
