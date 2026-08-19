@@ -1306,6 +1306,8 @@ _CAUSAL_LIFT_B2_F16B_OPS = [
     MathOperation.Floor,
     MathOperation.Trunc,
     MathOperation.Frac,
+    # Storm lane S3 (fresh_cpp/ per-op headers).
+    MathOperation.Log1p,
 ]
 
 

@@ -384,6 +384,8 @@ def test_perf_unary_max_min_fresh_cpp(
         MathOperation.Floor,
         MathOperation.Trunc,
         MathOperation.Frac,
+        # Storm lane S3 (fresh_cpp/ per-op headers).
+        MathOperation.Log1p,
     ],
     fresh_cpp_impl=[0, 1],
 )

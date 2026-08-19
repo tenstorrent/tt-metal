@@ -109,6 +109,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu_operations.h"
+
+// Fresh semantic bodies: keep after sfpu_operations.h in their own include
+// block (their templates consume its transitive typed helpers at
+// definition-time lookup; clang-format sorts blocks independently).
+#include "fresh_cpp/log1p.h"
 #include "fresh_cpp_operations.h"
 // Storm-contract canonical per-op semantic bodies (new bodies never land in
 // the legacy aggregator above).
@@ -532,6 +537,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 VectorMode::None,
                                 ckernel::sfpu::FRESH_RELU_MAX_THRESHOLD);
                         }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::log1p)
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::log1p || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh log1p selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_log1p_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
                         else
                         {
                             test_utils::call_unary_sfpu_operation<
@@ -864,6 +876,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 block_tile,
                                 VectorMode::None,
                                 ckernel::sfpu::FRESH_RELU_MAX_THRESHOLD);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::log1p)
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::log1p || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh log1p selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_log1p_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
                         }
                         else
                         {

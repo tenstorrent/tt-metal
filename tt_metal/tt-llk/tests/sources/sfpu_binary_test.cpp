@@ -46,6 +46,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_binary_sfpu.h"
 #include "params.h"
 #include "sfpu_operations.h"
+
+// Fresh semantic bodies: keep after sfpu_operations.h in their own include
+// block (their templates consume its transitive typed helpers at
+// definition-time lookup; clang-format sorts blocks independently).
+#include "fresh_cpp/isclose.h"
+#include "fresh_cpp/lcm.h"
 #include "fresh_cpp_operations.h"
 // Storm-contract canonical per-op semantic bodies (new bodies never land in
 // the legacy aggregator above).
@@ -124,6 +130,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // LOGICAL selects zero fill vs the arithmetic sign fill).
                 constexpr bool is_logical = SFPU_BINARY_OPERATION == ckernel::BinaryOp::LOGICAL_RSHFT;
                 call_right_shift_fresh_cpp<DstSync::SyncHalf, is_fp32_dest_acc_en, is_logical, 8>(tile, tile + 1, tile, VectorMode::RC);
+            }
+            else if constexpr (
+                FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::LCM &&
+                static_cast<std::uint32_t>(formats.math) == static_cast<std::uint32_t>(DataFormat::Int32))
+            {
+                // Test-only fresh typed-C++ leg for the Int32 lcm production
+                // path (metal ckernel_sfpu_lcm.h raw-TTI + REPLAY kernel).
+                call_lcm_fresh_cpp<DstSync::SyncHalf, is_fp32_dest_acc_en, 8>(tile, tile + 1, tile, VectorMode::RC);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::ISCLOSE)
+            {
+                // Test-only fresh typed-C++ leg for isclose.  The tolerance
+                // scalars and EQUAL_NAN mirror the production dispatch
+                // (sfpu_operations.h ISCLOSE branch: torch defaults rtol=1e-5,
+                // atol=1e-8, EQUAL_NAN=false) so both legs compute the
+                // identical operation.
+                call_isclose_fresh_cpp<DstSync::SyncHalf, is_fp32_dest_acc_en, /*EQUAL_NAN=*/false, 8>(
+                    tile, tile + 1, tile, VectorMode::RC, /*rtol_bits=*/0x3727c5acu, /*atol_bits=*/0x322bcc77u);
             }
             else
             {

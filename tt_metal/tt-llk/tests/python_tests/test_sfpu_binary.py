@@ -1904,3 +1904,47 @@ def test_sfpu_binary_bcast_device_profile(perf_report, binary_bcast_impl, label)
     cycles = float(rows.iloc[-1]["mean(MATH_ISOLATE)"])
     assert cycles > 0
     print(f"BINARY_BCAST_DEVICE_PROFILE impl={label} body_cycles={cycles:.2f}")
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuLcm],
+    dest_acc=[DestAccumulation.Yes],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_lcm(formats, dest_acc, mathop, fresh_cpp_impl):
+    """Handwritten (metal ckernel_sfpu_lcm.h raw-TTI + REPLAY binary-GCD/reciprocal
+    kernel) vs fresh typed-C++ A/B over identical Int32 stimuli/golden; exact
+    integer contract via the suite's integer format gate. Stimuli mirror
+    test_sfpu_binary_int_uniform's SfpuLcm range (positive operands below 2^15,
+    the production kernel's own documented precondition)."""
+    low, high = _INT_BINARY_STIMULI[MathOperation.SfpuLcm]
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=low, high=high),
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.SfpuIsclose],
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_isclose(formats, dest_acc, mathop, fresh_cpp_impl):
+    """Hand-shaped production isclose (vConstIntPrgm0-parked sign mask, folded
+    special-case predicates) vs fresh typed-C++ A/B over identical stimuli/golden
+    (the test_sfpu_binary_isclose crafted 0/1-mix pair); torch default tolerances
+    fixed identically in both dispatch branches."""
+    spec_A, spec_B = _isclose_stimuli_specs()
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=spec_A,
+        spec_B=spec_B,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
