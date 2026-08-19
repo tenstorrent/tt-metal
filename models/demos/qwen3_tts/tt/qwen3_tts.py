@@ -88,10 +88,13 @@ class Qwen3TTS(LightweightModule):
             weight_cache_path=weight_cache_path,
         )
 
-        # Initialize Speaker Encoder
+        # Initialize Speaker Encoder (1.7B: 2048-d, 0.6B: 1024-d)
+        from models.demos.qwen3_tts.tt.speaker_encoder import SpeakerEncoderConfig
+
         self.speaker_encoder = SpeakerEncoder(
             device=device,
             state_dict=state_dict,
+            config=SpeakerEncoderConfig(output_dim=talker_config.hidden_size),
             weight_cache_path=weight_cache_path,
         )
 

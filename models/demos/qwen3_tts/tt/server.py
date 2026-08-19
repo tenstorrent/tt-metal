@@ -159,13 +159,13 @@ class TTSConfig:
             }
 
 
-def load_weights():
+def load_weights(hf_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"):
     """Load model weights."""
     from huggingface_hub import snapshot_download
     from safetensors.torch import load_file
 
-    print("Loading model weights...")
-    model_path = Path(snapshot_download("Qwen/Qwen3-TTS-12Hz-1.7B-Base", allow_patterns=["*.safetensors"])).resolve()
+    print(f"Loading model weights ({hf_id})...")
+    model_path = Path(snapshot_download(hf_id, allow_patterns=["*.safetensors"])).resolve()
 
     # Main model weights
     main_dict = {}
