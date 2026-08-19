@@ -3,6 +3,12 @@ name: "[internal] Produce GitHub Runner data"
 on:
   workflow_dispatch:
 
+  # TEMPORARY (remove before merge): workflow_dispatch and schedule only run from
+  # the default branch, so this push trigger lets us test on the feature branch.
+  push:
+    branches:
+      - arshah/github-runner-producer
+
   schedule:
     - cron: "*/10 * * * *"
 
@@ -73,7 +79,18 @@ jobs:
           mv generated/github_runner/github_runner_snapshot.json \
              generated/github_runner/${TS}_github_runner_snapshot.json
 
+      # Download this from the run's Summary page to inspect / push to STG.
+      - name: Upload snapshot as artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: github-runner-snapshot
+          path: generated/github_runner/*.json
+          if-no-files-found: error
+
+      # Only real scheduled prod runs push to the github-runner ingest bucket.
+      # workflow_dispatch / push (test) runs stop after the artifact above.
       - name: Upload runner data via SFTP
+        if: github.event_name == 'schedule'
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_GITHUB_RUNNER_WRITER_KEY }}
