@@ -169,9 +169,12 @@ GEMMA4_LONG_CONTEXT_POLICY = {
         # 12.9 tok/s) all PASS. The inferred cutovers held, so this is promoted
         # from "inferred" to "measured".
         "T3K": {
-            "unbounded_isl_max": 16384,
-            "bounded_isl_min": 32768,
-            "chunked_bounded_isl_min": 32768,
+            # Unbounded measured through 32768. bounded_isl_min sits above it so
+            # concurrent serving never enters the bounded sliding remap, which is
+            # broken for >1 request (see the 12B/T3K entry for the mechanism).
+            "unbounded_isl_max": 32768,
+            "bounded_isl_min": 65536,
+            "chunked_bounded_isl_min": 65536,
             "prefill_chunk": 2048,
             "prefill_chunk_by_isl": [],
             "source": "measured",
@@ -205,14 +208,24 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
-        # WH T3K (1x8, ~96 GB): measured on this branch — bounded + multi-chunk
-        # (2048) reaches the full HF 256k ISL (261944 prompt tokens, TTFT ~468 s,
-        # 14.3 tok/s). 4k unbounded / 32k / 128k / 256k all PASS and coherent.
-        # Unbounded headroom is far below BH, so bound from 16k.
+        # WH T3K (1x8, ~96 GB). Measured unbounded through 131072 (32k / 64k /
+        # 128k all PASS on this branch); bounded + multi-chunk 2048 additionally
+        # reaches the full 256k ISL at batch-1 (TTFT ~468 s, 14.3 tok/s).
+        #
+        # bounded_isl_min is deliberately set ABOVE the measured unbounded
+        # ceiling so normal serving never enters bounded mode. Bounded sliding
+        # remaps sliding page tables to dense per-row block IDs
+        # (``_pad_sliding_page_tables_for_bounded``) keyed on the row index of
+        # the current page-table tensor rather than the request's persistent KV
+        # slot, so with more than one concurrent request a request's sliding
+        # blocks move between steps and it reads another user's KV — measured as
+        # nondeterministic garbage from concurrency 2 upward. Unbounded at the
+        # same context is clean at concurrency 32 (32/32 correct). Lower this
+        # again once that remap is keyed on a stable slot.
         "T3K": {
-            "unbounded_isl_max": 8192,
-            "bounded_isl_min": 16384,
-            "chunked_bounded_isl_min": 16384,
+            "unbounded_isl_max": 131072,
+            "bounded_isl_min": 262144,
+            "chunked_bounded_isl_min": 262144,
             "prefill_chunk": 2048,
             "source": "measured",
         },
@@ -259,9 +272,11 @@ GEMMA4_LONG_CONTEXT_POLICY = {
         # ~1506 s @128k vs 31B's ~55 s @32k), so serve specs should stay at
         # 32k — this table only bounds what fits, not what is fast.
         "T3K": {
-            "unbounded_isl_max": 8192,
-            "bounded_isl_min": 16384,
-            "chunked_bounded_isl_min": 16384,
+            # Unbounded measured through 32768; bounded kept out of the serving
+            # range (multi-request sliding remap bug — see 12B/T3K).
+            "unbounded_isl_max": 32768,
+            "bounded_isl_min": 65536,
+            "chunked_bounded_isl_min": 65536,
             "prefill_chunk": 2048,
             "source": "measured",
         },
