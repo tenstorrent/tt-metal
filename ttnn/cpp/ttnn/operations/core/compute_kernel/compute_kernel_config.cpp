@@ -122,7 +122,6 @@ tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
             .enable_32_bit_dest = config.fp32_dest_acc_en,
             .double_buffer_dest = !config.dst_full_sync_en,
             // Per-DFB unpack_modes is left default for the program factory to set.
-            // 2x-packed src format is automatic for MxFp4 matmul/column-reduce (LLK op init).
         };
     }
     return tt::tt_metal::experimental::ComputeGen1Config{

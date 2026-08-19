@@ -70,8 +70,6 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 // The result's per-DFB unpack_modes table is left default for the program factory to set.
 // bfp_pack_precision_mode is likewise left default (rarely set non-default).
 //
-// The 2x-packed src-register format has no knob here: on Quasar it is automatic for MxFp4 fed to
-// matmul / column-reduce (decided in the LLK op init).
 tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
     tt::ARCH arch, const ComputeKernelConfig& config);
 

@@ -160,14 +160,6 @@ struct ComputeGen2Config {
     // Temporary configs (these will change!)
     ///////////////////////////////////////////
 
-    // NOTE: There is no 2x-source-register knob here (the former `enable_2x_src_register` bool was
-    // removed). On Quasar the 2x-packed source-register format is now automatic and has no external
-    // flag: an MxFp4 operand fed to matmul (MVMUL/MVMULDI) or a column reduce (GAPOOL) is ALWAYS
-    // unpacked as the 2x-packed MxFp4_2x_B format, so the math engine reads two elements per
-    // source-register slot (double throughput). This is decided kernel-side in the Quasar matmul /
-    // reduce LLK op init (op-scoped, since only those ops support 2x); plain MxFp4 consumed by any
-    // other op still unpack-expands to Float16_b. Nothing to configure.
-
     ///////////////////////////////////////////////////////////////////////////////////////////////
 };
 

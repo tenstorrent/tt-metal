@@ -1520,9 +1520,6 @@ std::string QuasarComputeKernel::config_hash() const {
         unpack_mode_descriptor = fmt::format("{}", fmt::join(unpack_modes, "."));
     }
 
-    // Note: the 2x-packed src-register format is not hashed here. It is decided kernel-side from the
-    // operand's MxFp4 L1 data format (Quasar matmul/column-reduce), so it is already implied by the
-    // CB data formats that are part of the kernel's build identity.
     return fmt::format(
         "{}_{}_{}_{}_{}_{}_{}",
         fmt::join(compute_processors_, "_"),
