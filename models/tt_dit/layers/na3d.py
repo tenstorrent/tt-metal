@@ -1026,7 +1026,11 @@ def neighborhood_attention_3d_op_sp_w_sharded(
                 if op_block is not None
                 else int(os.environ.get("DIFFVAE_SDPA_QCHUNK", 128))
             ),
-            k_chunk_size=int(os.environ.get("DIFFVAE_SDPA_KCHUNK", 32)),
+            # MEASURED (6s block path, 2026-08-19): a larger k_chunk amortizes the flash's per-chunk fixed
+            # cost over more of the box -> fused-sdpa 7.56s(kc32) -> 4.88s(kc256), exact (op parity 99.99%,
+            # the flash is chunk-size-invariant). Diminishing past 256 (512: 4.79s). Default 256 for the
+            # block path; DIFFVAE_SDPA_KCHUNK overrides. Strided path keeps 32 (its k-loop is already long).
+            k_chunk_size=int(os.environ.get("DIFFVAE_SDPA_KCHUNK", 256 if op_block is not None else 32)),
         )
 
     with _sp_w_prof(mesh, "fused-sdpa" if use_fused else "op-sdpa"):

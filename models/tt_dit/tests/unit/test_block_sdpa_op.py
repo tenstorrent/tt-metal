@@ -29,9 +29,12 @@ def _fused_sdpa(device, q, k, v, grid, kernel, *, block=None, tileskip=False):
         torch.zeros(1, dtype=torch.int32), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
     )
     q_chunk = block[0] * block[1] * block[2] if block else 64
+    import os as _os
+
+    k_chunk = int(_os.environ.get("DIFFVAE_TEST_KCHUNK", 32))  # overnight: probe k_chunk=128 correctness
     g = device.compute_with_storage_grid_size()
     pc = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(g.x, g.y), exp_approx_mode=False, q_chunk_size=q_chunk, k_chunk_size=32
+        compute_with_storage_grid_size=(g.x, g.y), exp_approx_mode=False, q_chunk_size=q_chunk, k_chunk_size=k_chunk
     )
     return ttnn.transformer.scaled_dot_product_attention(
         q,
