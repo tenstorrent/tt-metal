@@ -73,6 +73,24 @@ def compute_per_device_vocab(vocab_size: int, num_tp: int) -> int:
     return 1 << (per_device - 1).bit_length()
 
 
+def per_lane_params(temperature, top_k, top_p, *, size: int = BATCH_SIZE) -> SamplingParams:
+    """Full-length per-lane sampling params.
+
+    A **scalar** temperature makes format_sampling_params treat only lane 0 as active: every
+    other lane takes the temperature=0.0 default and comes back GREEDY, not sampled (see
+    TestFormatSamplingParamsLanes::test_all_scalar_input_is_lane_zero_plus_greedy_padding).
+    That is correct, documented behaviour -- but it means any assertion about more than one
+    lane sampling has to pass full-length lists, or 31 of the 32 lanes just return the argmax
+    and the assertion is either vacuous or wrong. Use this whenever the whole batch is
+    expected to sample; pass a scalar directly only when lane-0-only is the point. (#38316)
+    """
+    return SamplingParams(
+        temperature=[temperature] * size,
+        top_k=[top_k] * size,
+        top_p=[top_p] * size,
+    )
+
+
 def broadcast(value, *, size: int = BATCH_SIZE):
     if isinstance(value, list):
         assert len(value) == size, f"Expected list of length {size}, got {len(value)}"
@@ -672,8 +690,10 @@ class TestPrefillWithDifferentParams:
         )
         seeds = [31000 + i for i in range(BATCH_SIZE)]
 
-        params_low = SamplingParams(temperature=1.0, top_k=3, top_p=0.6)
-        params_full = SamplingParams(temperature=1.0, top_k=3, top_p=1.0)
+        # Per-lane lists so all 32 lanes sample. With a scalar temperature only lane 0 would,
+        # making "1902 in full_set" a 6-draw coin flip (~15% failure) instead of 192 draws.
+        params_low = per_lane_params(1.0, 3, 0.6)
+        params_full = per_lane_params(1.0, 3, 1.0)
 
         out_low = run_sampling_generator(
             mesh_device,
@@ -1009,7 +1029,7 @@ class TestSeededSamplingPerRequest:
         hot_tokens = [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007]
         hot_token_set = set(hot_tokens)
         logits = build_hot_logits(args, hot_tokens=hot_tokens)
-        params = SamplingParams(temperature=1.5, top_k=8, top_p=1.0)
+        params = per_lane_params(1.5, 8, 1.0)
 
         seeds_a = list(range(BATCH_SIZE))
         out_a1 = run_sampling_generator(
@@ -1029,27 +1049,23 @@ class TestSeededSamplingPerRequest:
             )
 
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-    @pytest.mark.xfail(
-        reason="Per-lane seed behaviour under investigation (#38316). ttnn.manual_seed maps "
-        "seed[i] onto the core whose grid index equals user_ids[i], and ttnn.sampling assigns "
-        "lanes to cores independently; the mapping is only pinned when both ops receive the "
-        "same carved core set. The harness now sets sub_core_grids so it is pinned (see "
-        "default_sub_core_grids), which is the suspected fix -- if this XPASSes, the mapping "
-        "was the cause, #50685 is exonerated and this marker must be deleted. If it still "
-        "fails, the per-lane seed defect is real and needs its own issue.",
-        strict=True,
-    )
     def test_different_seeds_produce_different_outputs(self, mesh_device):
         """Distinct per-lane seeds must produce a distinct draw per lane.
 
-        This is the only assertion in the seed family that is still open, so it is the only
-        one marked xfail -- everything else it used to cover now lives in
-        test_seeded_replay_is_deterministic and runs for real.
+        Previously xfailed as a suspected per-lane seeding defect (blamed on #50685). It was a
+        bug in this test: it passed SCALAR sampling params, so format_sampling_params treated
+        only lane 0 as active and lanes 1..31 came back greedy on the argmax. Run 32289587326
+        with the marker removed showed it exactly -- out_a1 = [1002, 1000, 1000, ... 1000] with
+        hot_tokens[0] == 1000 -- so the "distinct seeds" assertion was comparing 31 deterministic
+        argmax lanes plus one stochastic lane whose single draw happened to repeat. Fixed by
+        passing per-lane lists; there is no product defect and #50685 is not implicated.
         """
         args = make_sampling_args(mesh_device)
         hot_tokens = [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007]
         logits = build_hot_logits(args, hot_tokens=hot_tokens)
-        params = SamplingParams(temperature=1.5, top_k=8, top_p=1.0)
+        # Per-lane lists: a scalar temperature would leave lanes 1..31 greedy and this test
+        # would be asserting against 31 argmax lanes. See per_lane_params.
+        params = per_lane_params(1.5, 8, 1.0)
 
         seeds_a = list(range(BATCH_SIZE))
         out_a1 = run_sampling_generator(
@@ -1085,7 +1101,7 @@ class TestSeededSamplingPerRequest:
     def test_same_seeds_reproduce_across_batches(self, mesh_device, device_params):
         args = make_sampling_args(mesh_device)
         logits = build_hot_logits(args, hot_tokens=[1100, 1101, 1102, 1103, 1104, 1105, 1106, 1107])
-        params = SamplingParams(temperature=1.25, top_k=8, top_p=1.0)
+        params = per_lane_params(1.25, 8, 1.0)
         seeds = [500 + i for i in range(BATCH_SIZE)]
         out1 = run_sampling_generator(
             mesh_device, args, logits, params, num_steps=FAST_NUM_STEPS, advance_seeds=True, seed_values=seeds
@@ -1159,7 +1175,7 @@ class TestSeededSamplingPerRequest:
     def test_uniform_seed_deterministic(self, mesh_device, seed):
         args = make_sampling_args(mesh_device)
         logits = build_hot_logits(args, hot_tokens=[1500, 1501, 1502, 1503, 1504, 1505, 1506, 1507])
-        params = SamplingParams(temperature=1.0, top_k=8, top_p=1.0)
+        params = per_lane_params(1.0, 8, 1.0)
         seeds = [seed] * BATCH_SIZE
         out1 = run_sampling_generator(
             mesh_device, args, logits, params, num_steps=1, advance_seeds=True, seed_values=seeds
