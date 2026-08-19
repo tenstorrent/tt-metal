@@ -13,6 +13,9 @@
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_fused_op_indexer.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 void kernel_main() {
     constexpr uint32_t DHt = get_compile_time_arg_val(0);
@@ -20,8 +23,8 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(2);
     constexpr uint32_t local_padded_N = get_compile_time_arg_val(3);
     constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(4);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(5);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(6);
+    constexpr uint32_t logical_n_ct = get_compile_time_arg_val(5);
+    constexpr uint32_t logical_nt_ct = get_compile_time_arg_val(6);
     constexpr uint32_t Lt = get_compile_time_arg_val(7);
     constexpr uint32_t L = get_compile_time_arg_val(8);
     constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(9);
@@ -43,20 +46,29 @@ void kernel_main() {
     // Multi-pass programs keep per-pass accumulator state in the L1 FIFO; single-pass programs
     // use the original persist-in-scratch path (no FIFO entry/exit cost per ring iteration).
     constexpr bool use_state_fifo = get_compile_time_arg_val(21) == 1;
+    // When set, logical_n_ct/logical_nt_ct are worst-case placeholders; live values arrive via the
+    // reader's derived CB.
+    constexpr bool has_logical_n_tensor = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t cb_derived = tt::CBIndex::c_13;
 
     // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
     // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
     // Only needed when any K/joint dimension has padding that doesn't fill a chunk.
     constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
-    constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool global_n_has_padding =
+        has_logical_n_tensor || (logical_n_ct % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0);
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
 
+    // Tile presence must match the factory's CB sizing and the writer's generation order
+    // (partial_tile_present is the one definition of that rule).
+    constexpr bool has_global_n_partial_tile =
+        ring_joint::partial_tile_present(global_n_partial_col, has_logical_n_tensor);
     constexpr uint32_t neginf_tile_idx = 0;
-    constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? 1 : 0;
+    constexpr uint32_t global_n_partial_tile_idx = has_global_n_partial_tile ? 1 : 0;
     constexpr uint32_t joint_l_partial_tile_idx =
-        (joint_l_partial_col > 0) ? (1 + (global_n_partial_col > 0 ? 1 : 0)) : 0;
-    constexpr uint32_t total_mask_tiles = 1 + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
+        (joint_l_partial_col > 0) ? (1 + (has_global_n_partial_tile ? 1 : 0)) : 0;
+    constexpr uint32_t total_mask_tiles = 1 + (has_global_n_partial_tile ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
     uint32_t argidx = 0;
     // Head-serial passes: this core owns flat Q chunks q_base + p * q_stride for p in [0, q_count),
@@ -103,6 +115,28 @@ void kernel_main() {
     // num_q_chunks so flat-id decoding stays consistent across host and kernels.
     constexpr uint32_t num_q_chunks =
         (local_padded_Nt + Sq_chunk_t - 1) / Sq_chunk_t + (Lt + Sq_chunk_t - 1) / Sq_chunk_t;
+
+    // Live length from the reader's derived CB, read ONCE so this kernel and the reader derive their
+    // chunk-skip decisions from the same single DRAM read. Must precede compute_kernel_hw_startup:
+    // read_tile_value rendezvouses UNPACK -> MATH/PACK through the mailboxes, and reading it after
+    // hw startup / matmul_init returns garbage.
+    uint32_t logical_n = logical_n_ct;
+    uint32_t logical_nt = logical_nt_ct;
+    uint32_t global_n_partial_col_live = global_n_partial_col;
+    if constexpr (has_logical_n_tensor) {
+        CircularBuffer cb_derived_obj(cb_derived);
+        cb_derived_obj.wait_front(1);
+        constexpr uint32_t kDerivedTile = 0;
+        logical_nt = ckernel::read_tile_value(cb_derived, kDerivedTile, ring_joint::kDerivedLogicalNt);
+        global_n_partial_col_live =
+            ckernel::read_tile_value(cb_derived, kDerivedTile, ring_joint::kDerivedGlobalNPartialCol);
+        cb_derived_obj.pop_front(1);
+        // Recover the element count: exact inverse of the reader's (logical_nt, partial_col) derivation.
+        logical_n = (logical_nt == 0)
+                        ? 0u
+                        : ((logical_nt - 1) * ring_joint::kTileHeight +
+                           (global_n_partial_col_live == 0 ? ring_joint::kTileHeight : global_n_partial_col_live));
+    }
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);
@@ -173,7 +207,7 @@ void kernel_main() {
         lw_mask.neginf_tile_idx = neginf_tile_idx;
         lw_mask.local_n_padded_tiles = local_n_padded_tiles;
         lw_mask.joint_n_padded_tiles = joint_n_padded_tiles;
-        lw_mask.global_n_partial_col = global_n_partial_col;
+        lw_mask.global_n_partial_col = global_n_partial_col_live;
         lw_mask.joint_l_partial_col = joint_l_partial_col;
         lw_mask.global_n_partial_tile_idx = global_n_partial_tile_idx;
         lw_mask.joint_l_partial_tile_idx = joint_l_partial_tile_idx;

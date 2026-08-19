@@ -11,6 +11,11 @@
 #include "api/core_local_mem.h"
 #include "dataflow_common.hpp"
 #include "exp_fused_op_indexer.hpp"
+#include "metadata_scalar_read.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
+
 void kernel_main() {
     Noc noc;
     noc.async_write_barrier();
@@ -21,8 +26,8 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
     constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(5);
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(6);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(7);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(8);
+    constexpr uint32_t logical_n_ct = get_compile_time_arg_val(7);
+    constexpr uint32_t logical_nt_ct = get_compile_time_arg_val(8);
     constexpr uint32_t Lt = get_compile_time_arg_val(9);
     constexpr uint32_t L = get_compile_time_arg_val(10);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(11);
@@ -113,6 +118,36 @@ void kernel_main() {
     const uint32_t sender_semaphore_v_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 6);
     // Split-head forwarding dedup buddy gate (see the AG gate below).
     const uint32_t buddy_gate_semaphore_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 7);
+
+    // When set, logical_n_ct/logical_nt_ct are worst-case placeholders; the live value is read below.
+    constexpr bool has_logical_n_tensor =
+        get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 8) == 1;
+    constexpr auto logical_n_args = TensorAccessorArgs<joint_v_args.next_compile_time_args_offset() + 9>();
+
+    constexpr uint32_t cb_derived = tt::CBIndex::c_13;
+
+    // Read the live length ONCE, before the ring loop, into locals. Every logical_n-dependent quantity
+    // below derives from these — including the chunk-skip predicate that sets this kernel's credit caps
+    // and the injector's per-link gate demand. A mid-loop re-read could observe a host rewrite and
+    // desynchronize those counts from the writer's, which forwards on the same predicate.
+    uint32_t logical_n = logical_n_ct;
+    uint32_t logical_nt = logical_nt_ct;
+    [[maybe_unused]] uint32_t global_n_partial_col_live = 0;
+    if constexpr (has_logical_n_tensor) {
+        // Borrow cb_q_in's L1 as read scratch: this runs before any Q is fetched into it.
+        logical_n = trace_metadata::read_metadata_scalar_u32(
+            noc, logical_n_args, get_common_arg_val<uint32_t>(0), CircularBuffer(tt::CBIndex::c_0).get_write_ptr());
+        logical_nt = ring_joint::tiles_for(logical_n);
+        global_n_partial_col_live = ring_joint::tile_partial_col(logical_n);
+
+        // Hand compute the values it cannot read itself (compute RISCs cannot NoC-read DRAM).
+        CircularBuffer cb_derived_obj(cb_derived);
+        cb_derived_obj.reserve_back(1);
+        CoreLocalMem<volatile uint32_t> d(cb_derived_obj.get_write_ptr());
+        d[ring_joint::kDerivedLogicalNt] = logical_nt;
+        d[ring_joint::kDerivedGlobalNPartialCol] = global_n_partial_col_live;
+        cb_derived_obj.push_back(1);
+    }
 
     // Receiver flips this to INVALID before each wait; initialize so the first iteration sees it as VALID.
     Semaphore<>(valid_semaphore_id).set(VALID);
