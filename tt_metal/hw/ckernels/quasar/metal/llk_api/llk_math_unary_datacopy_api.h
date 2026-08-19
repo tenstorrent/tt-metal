@@ -34,6 +34,8 @@ template <
     [[maybe_unused]] bool is_int_fpu_en = false,
     [[maybe_unused]] bool tilize = false>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
+    _llk_dest_dvalid_configure_<dest_dvalid::client::FPU, dest_dvalid::client::PACK, !unpack_to_dest /*FIRST*/>();
+
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);

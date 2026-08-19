@@ -21,6 +21,8 @@
  * @note Run before @ref llk_unpack_AB_sub_bcast_col_custom on this thread.
  */
 inline void llk_unpack_AB_sub_bcast_col_init_custom(const std::uint32_t operandA) {
+    _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
+
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
     _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);

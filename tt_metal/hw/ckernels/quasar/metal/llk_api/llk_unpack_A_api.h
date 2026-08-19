@@ -42,6 +42,12 @@ inline void llk_unpack_A_init(
     const std::uint32_t transpose_of_faces = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
     const std::uint32_t operand = 0) {
+    if constexpr (unpack_to_dest) {
+        _llk_dest_dvalid_configure_<dest_dvalid::client::UNPACK, dest_dvalid::client::FPU, true /*FIRST*/>();
+    } else if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE) {
+        _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
+    }
+
     const std::uint32_t operand_id = get_operand_id(operand);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
@@ -99,8 +105,9 @@ inline void llk_unpack_A_init(
  *
  * @brief Unpacks a single operand for unary and unary-broadcast paths.
  *
- * For the non-broadcast path the UNPACK_MATH / MATH_PACK semaphore handshake lives inside the primitive; the
- * UNP_DEST routing decision is made solely from the `unpack_to_dest` template parameter (no format inspection).
+ * The UNP_DEST routing decision is made solely from the `unpack_to_dest` template parameter (no format inspection).
+ * The UNPACR_DEST instructions set no data valid of their own, so on that path the unpacker hands the DEST section
+ * to the next client in the chain here, once the tile has landed.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
@@ -134,6 +141,9 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     } else {
         constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
         _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx);
+    }
+    if constexpr (unpack_to_dest) {
+        _llk_dest_dvalid_signal_<dest_dvalid::client::UNPACK, DST_SYNC_MODE, DST_ACCUM_MODE>();
     }
     WAYPOINT("UPAD");
 }
@@ -176,6 +186,9 @@ inline void llk_unpack_A_block(
         } else {
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
             _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(rd_entry_idx + tile_index);
+        }
+        if constexpr (unpack_to_dest) {
+            _llk_dest_dvalid_signal_<dest_dvalid::client::UNPACK, DST_SYNC_MODE, DST_ACCUM_MODE>();
         }
         WAYPOINT("UPAD");
     }

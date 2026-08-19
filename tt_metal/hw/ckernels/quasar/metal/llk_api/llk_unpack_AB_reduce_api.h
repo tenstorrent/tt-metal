@@ -26,6 +26,8 @@
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
+    _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
+
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);

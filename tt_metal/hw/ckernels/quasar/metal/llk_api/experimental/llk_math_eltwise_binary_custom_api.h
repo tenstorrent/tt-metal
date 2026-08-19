@@ -30,6 +30,8 @@
 template <ckernel::MathFidelity math_fidelity>
 inline void llk_math_eltwise_binary_sub_bcast_cols_init_custom(
     const std::uint32_t operandA, const std::uint32_t operandB) {
+    _llk_dest_dvalid_configure_<dest_dvalid::client::FPU, dest_dvalid::client::PACK, true /*FIRST*/>();
+
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);

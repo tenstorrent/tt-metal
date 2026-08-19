@@ -27,6 +27,8 @@ template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
     const std::uint32_t operandA, const std::uint32_t operandB, [[maybe_unused]] const ckernel::Transpose transpose) {
     // TODO (tt-metal #42916): Once runtime asserts are added for Quasar, assert that transpose is unused
+    _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
+
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 

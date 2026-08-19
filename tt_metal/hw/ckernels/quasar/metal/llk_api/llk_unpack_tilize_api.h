@@ -26,6 +26,8 @@
  */
 inline void llk_unpack_tilize_init(
     const std::uint32_t operand, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim = 1) {
+    _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
+
     const std::uint32_t operand_id = get_operand_id(operand);
 
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
@@ -132,6 +134,8 @@ inline void llk_unpack_tilizeA_B_init(
         reload_srcB,
         "reload_srcB has to be true for tilizeA_B_block on Quasar, due to the compatibility with the math reduce "
         "kernel.");
+
+    _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);

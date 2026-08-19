@@ -12,6 +12,7 @@
 #include "llk_assert.h"
 #include "api/debug/waypoint.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 #include "llk_io.h"
 #include "llk_operands.h"
 #include "llk_unpack_common.h"

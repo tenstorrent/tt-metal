@@ -32,6 +32,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,
     const std::uint32_t kt_dim = 1) {
+    _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
+
     // In0 -> srcB
     // In1 -> srcA
     const std::uint32_t operandA_id = get_operand_id(operandA);

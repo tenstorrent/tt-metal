@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_matmul.h"
 
@@ -32,6 +33,8 @@ inline void llk_math_matmul_init(
     const std::uint32_t operandB,
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1) {
+    _llk_dest_dvalid_configure_<dest_dvalid::client::FPU, dest_dvalid::client::PACK, true /*FIRST*/>();
+
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operandA_id));
