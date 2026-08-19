@@ -83,6 +83,10 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
 
     if tp > 1:
         # TP: w1/w3 column-parallel (shard out dim), w2 row-parallel (shard in dim).
+        # down_proj (w2) stays bfloat8_b -- an explicit ACCURACY choice (see the non-TP loader's
+        # comment below). bfp4 down_proj is faster (decode matmuls are DRAM-bandwidth-bound, so a
+        # narrower dtype is a real -45% there) but costs measurable end-to-end quality
+        # (tests/perf/test_decode_weight_dtype_sweep.py has the numbers); not worth it.
         # DRAM-sharded memcfgs from args.
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
