@@ -22,7 +22,7 @@ on:
       timeout_minutes:
         description: "Timeout in minutes for each per-architecture job"
         required: false
-        default: 360
+        default: 180
         type: number
       workers:
         description: "Number of xdist workers per run"
