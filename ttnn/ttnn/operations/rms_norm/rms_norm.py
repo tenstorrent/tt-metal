@@ -134,7 +134,7 @@ def _build_axes(input_tensor, gamma, compute_kernel_config):
     return axes
 
 
-def validate(input_tensor, *, gamma=None, epsilon=1e-6, compute_kernel_config=None):
+def validate(input_tensor, *, gamma=None, epsilon=1e-6, compute_kernel_config=None, memory_config=None):
     """Runtime support gate. Called as the entry point's first statement."""
     shape = list(input_tensor.shape)
     if len(shape) < 2:
@@ -172,6 +172,7 @@ def rms_norm(
     gamma: Optional["ttnn.Tensor"] = None,
     epsilon: float = 1e-6,
     compute_kernel_config: "ttnn.ComputeConfigDescriptor" = None,
+    memory_config: "ttnn.MemoryConfig" = None,
 ) -> "ttnn.Tensor":
     """Root-mean-square normalization along the last dimension.
 
@@ -185,12 +186,17 @@ def rms_norm(
     reduce multiplies pad columns by zero, and inf * 0 = NaN. Call
     ttnn.fill_implicit_tile_padding(x, 0.0) first if the padding may hold
     inf/NaN garbage.
+
+    `memory_config` selects the OUTPUT placement (default: the input's).  Phase 0
+    supports only INTERLEAVED, so a sharded request is refused by validate()
+    through the `memory_layout` axis rather than silently ignored.
     """
     validate(
         input_tensor,
         gamma=gamma,
         epsilon=epsilon,
         compute_kernel_config=compute_kernel_config,
+        memory_config=memory_config,
     )
 
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
@@ -202,7 +208,7 @@ def rms_norm(
         input_tensor.dtype,
         input_tensor.layout,
         device,
-        input_tensor.memory_config(),
+        memory_config if memory_config is not None else input_tensor.memory_config(),
     )
 
     program_descriptor = create_program_descriptor(
