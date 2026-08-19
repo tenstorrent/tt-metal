@@ -29,7 +29,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
-#include <tt-metalium/experimental/internal/blitz_decode_pipeline.hpp>
+#include <internal/blitz_decode_pipeline.hpp>
 
 namespace {
 
@@ -239,6 +239,24 @@ TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
     EXPECT_EQ(
         mesh_graph_desc.get_coord_range(MeshId{0}, MeshHostRankId(0)),
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 3)));
+}
+
+TEST(MeshGraphValidation, TestT3kCollapsedTorusYRetainsMeshDirections) {
+    const std::filesystem::path t3k_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
+    auto mesh_graph = make_mesh_graph(t3k_mesh_graph_desc_path, tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y);
+    const auto& connectivity = mesh_graph.get_intra_mesh_connectivity().at(0);
+
+    // In a two-row mesh, the torus wrap neighbor is the same chip as the ordinary vertical neighbor. It must retain
+    // normal mesh directionality rather than collapsing both ends of the link onto NORTH.
+    EXPECT_EQ(connectivity.at(0).at(4).port_direction, RoutingDirection::S);
+    EXPECT_EQ(connectivity.at(4).at(0).port_direction, RoutingDirection::N);
+
+    // A collapsed torus axis has no wrap cable, so its boundary ports remain available for inter-mesh connections.
+    const auto& edge_ports = mesh_graph.get_mesh_edge_ports_to_chip_id().at(0);
+    EXPECT_EQ(edge_ports.at({RoutingDirection::N, 0}), 0);
+    EXPECT_EQ(edge_ports.at({RoutingDirection::S, 0}), 4);
 }
 
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {

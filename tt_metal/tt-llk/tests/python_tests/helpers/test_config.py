@@ -184,12 +184,20 @@ class TestConfig:
 
     WORKER_ID: ClassVar[str] = "master"
     TENSIX_LOCATION: ClassVar[str] = "0,0"
+    # xdist worker index waiting for Exalens. setup_mode cannot ask the card yet:
+    # silicon init_ttexalens and the RTL remote connect both happen after it.
+    _PENDING_WORKER_INDEX: ClassVar[int | None] = None
     STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
     SIMULATOR_TIMEOUT: ClassVar[int] = 600
 
     # When the infrastructure itself needs to be tested, some functionality like compiling the artefacts and writing them
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
     INFRA_TESTING: ClassVar[bool] = False
+
+    # Determinism check: number of times each variant is executed on device.
+    # When > 1, run() re-runs the kernel and asserts every run produces a
+    # bit-identical result buffer (see --bit-exact-runs).
+    BIT_EXACT_RUNS: ClassVar[int] = 1
 
     # CLI perf counter flags
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
@@ -447,7 +455,9 @@ class TestConfig:
         TestConfig.OPTIONS_ALL = (
             f"{debug_flag}-O3 "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
-            "-ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+            "-ffast-math "
+            "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
+            "-fno-exceptions -fno-rtti -fno-use-cxa-atexit "
         )
         TestConfig.WITH_COVERAGE = with_coverage
         StimuliConfig.WITH_COVERAGE = with_coverage
@@ -459,16 +469,23 @@ class TestConfig:
                 "-I../../hw/inc/internal/tt-1xx/wormhole",
                 "-I../../hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines",
                 "-I../../hw/ckernels/wormhole_b0/metal/llk_api",
+                "-I../../hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.BLACKHOLE:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-1xx/blackhole",
                 "-I../../hw/ckernels/blackhole/metal/llk_api",
+                # Some SFPU kernels include their neighbours unqualified
+                # ("ckernel_sfpu_exp.h") rather than as "llk_sfpu/<name>.h", which only
+                # resolves with this on the path. Listed last so the tt-llk copy still
+                # wins the basenames that exist in both trees.
+                "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-2xx/quasar",
                 "-I../../hw/ckernels/quasar/metal/llk_api",
+                "-I../../hw/ckernels/quasar/metal/llk_api/llk_sfpu",
             ]
 
         if detailed_artefacts:
@@ -506,17 +523,24 @@ class TestConfig:
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
-        TestConfig.INCLUDES = [
-            "-Isfpi/include",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
-            "-I../common",
-            "-I../../hw/inc",
-            "-Ifirmware/riscv/common",
-            "-Ihelpers/include",
-            "-I../../hostdevcommon/api",
-        ] + hw_specific_includes
+        TestConfig.INCLUDES = (
+            [
+                "-Isfpi/include",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
+                "-I../common",
+                "-I../../hw/inc",
+                "-Ifirmware/riscv/common",
+                "-Ihelpers/include",
+                "-I../../hostdevcommon/api",
+            ]
+            + hw_specific_includes
+            + [
+                # TODO: remove this after kernels get moved into Metal experimental (#52837)
+                "-I../../../ttnn/cpp/ttnn/operations/experimental",
+            ]
+        )
 
     @staticmethod
     def setup_build(
@@ -547,11 +571,19 @@ class TestConfig:
     ):
         TestConfig.WORKER_ID = worker_id
 
-        if worker_id != "master":
+        TestConfig._PENDING_WORKER_INDEX = None
+        if worker_id == "master":
+            TestConfig.TENSIX_LOCATION = "0,0"
+        elif compile_producer:
+            # Builds ELFs on the CPU and never reads the device, so it is not worth
+            # opening a context per worker to answer a question it does not ask.
             row, col = divmod(int(worker_id[2:]), 8)
             TestConfig.TENSIX_LOCATION = f"{row},{col}"
         else:
-            TestConfig.TENSIX_LOCATION = "0,0"
+            # Silicon and RTL do not have an Exalens context until later in
+            # pytest_configure / pytest_runtest_setup. Asking now would miss,
+            # and a cached miss used to pin the session to the 8-wide fallback.
+            TestConfig._PENDING_WORKER_INDEX = int(worker_id[2:])
 
         if compile_consumer and compile_producer:
             raise RuntimeError(
@@ -594,9 +626,23 @@ class TestConfig:
             )
             golden_generators_module.get_golden_generator = get_golden_proxied
 
-        # Always have a fresh build when compiling
-        if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
+        # Always have a fresh build when compiling. Under xdist, only the
+        # controller may remove the shared artifact tree; workers can already
+        # be compiling variants under it.
+        if (
+            TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]
+            and worker_id == "master"
+        ):
             shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
+
+    @staticmethod
+    def resolve_worker_tensix_location():
+        """Bind TENSIX_LOCATION from the card once Exalens has a context."""
+        index = TestConfig._PENDING_WORKER_INDEX
+        if index is None:
+            return
+        TestConfig.TENSIX_LOCATION = device_module.tensix_location_for_worker(index)
+        TestConfig._PENDING_WORKER_INDEX = None
 
     # === Instance fields and methods ===
     def __init__(
@@ -617,6 +663,7 @@ class TestConfig:
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         requires_device_print: bool = False,
+        expected_nondeterministic: bool = False,
     ):
         self.coverage_build = (
             CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
@@ -649,6 +696,7 @@ class TestConfig:
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
+        self.expected_nondeterministic = expected_nondeterministic
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
@@ -868,6 +916,8 @@ class TestConfig:
             "passed_runtimes",
             "current_run_type",
             "temp_elfs",
+            # Host-side determinism-check opt-out; does not affect the compiled kernel.
+            "expected_nondeterministic",
         ]
 
         if not TestConfig.SPEED_OF_LIGHT:
@@ -1630,6 +1680,15 @@ class TestConfig:
 
             self.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
 
+            # Run 0's share of the per-run clobber the bit-exactness check does
+            # (_assert_bit_exact_repeats clears before each re-run). Without it
+            # a kernel that writes fewer tiles than tile_count_res declares
+            # leaves run 0 reading whatever the previous test left in L1 while
+            # every re-run reads the sentinel there, and all of them get
+            # reported as diverging.
+            if self._bit_exact_check_applies():
+                self.variant_stimuli.clear_result_buffer(TestConfig.TENSIX_LOCATION)
+
         # When device print is enabled, build a parser,
         # collect into dprint_lines, and return in TestOutcome.
         dprint_parser = None
@@ -1662,6 +1721,19 @@ class TestConfig:
         if self.coverage_build == CoverageBuild.Yes:
             self.read_coverage_data_from_device()
 
+        # Repeat the on-device execution and assert every run is bit-identical.
+        # Done before collect_results so the returned result is still the value
+        # produced by the last (verified) run. Re-runs drain the device print
+        # buffer without recording it, so repeats can't stall on a full buffer
+        # nor duplicate run 0's output in the returned TestOutcome.
+        self._assert_bit_exact_repeats(
+            poll_callback=(
+                None
+                if dprint_parser is None
+                else lambda: dprint_parser.poll(TestConfig.TENSIX_LOCATION)
+            )
+        )
+
         return TestOutcome(
             result=(
                 self.variant_stimuli.collect_results(TestConfig.TENSIX_LOCATION)
@@ -1669,6 +1741,200 @@ class TestConfig:
                 else None
             ),
             device_print_lines=dprint_lines,
+        )
+
+    def _bit_exact_unsupported_reason(self) -> str | None:
+        """Why this variant cannot be checked for bit-exactness, or None if it can."""
+        if self.coverage_build == CoverageBuild.Yes:
+            return "not supported with coverage builds"
+        if self.l1_acc == L1Accumulation.Yes:
+            # The packer adds into the existing L1 destination, so each run
+            # accumulates onto the previous one. Re-runs are legitimately
+            # expected to differ and comparing them would be meaningless.
+            return "L1 accumulation makes every run add onto the previous result"
+        if self.expected_nondeterministic:
+            # Negative controls that deliberately run with a corrupt HW config
+            # (e.g. a zeroed addrmod) leave DEST addressing undefined, so the
+            # result is not bit-reproducible by contract. The functional check
+            # (expect_mismatch) still validates the single run; only the
+            # bit-exact re-run comparison is meaningless here.
+            return "variant intentionally exercises undefined hardware state"
+        return None
+
+    def _bit_exact_check_applies(self) -> bool:
+        """Whether run() will compare repeats of this variant.
+
+        Consulted before the first execution as well, so the result buffer can
+        be cleared up front; it must therefore agree exactly with the guards in
+        _assert_bit_exact_repeats.
+        """
+        return (
+            TestConfig.BIT_EXACT_RUNS > 1
+            and self.variant_stimuli is not None
+            and self._bit_exact_unsupported_reason() is None
+        )
+
+    def _assert_bit_exact_repeats(self, poll_callback=None):
+        """Re-run this variant and assert the result buffer is bit-identical.
+
+        Only active when ``--bit-exact-runs`` (TestConfig.BIT_EXACT_RUNS) is
+        greater than 1. Assumes the kernel has already been executed once (run()
+        does the first execution), then re-runs it another ``BIT_EXACT_RUNS - 1``
+        times, comparing the raw packed result bytes in L1 each time.
+
+        The stimuli and runtime args run() wrote are untouched by the kernel, so
+        they stay in L1 and are reused as-is. That keeps every run driven by
+        byte-for-byte identical input and avoids re-packing the tensors on each
+        iteration. The result region is clobbered with the same sentinel before
+        every run, run 0 included (that one happens in run()). Uniform clobbering
+        matters in both directions: it stops a run that writes fewer bytes than
+        the last one from inheriting bytes that compare equal, and it keeps every
+        run's untouched padding identical, so a kernel that writes less than its
+        declared tile_count_res is not reported as non-deterministic.
+
+        Every re-run is executed even if an earlier one already diverged, so the
+        failure reports the full picture (how many runs differed and where)
+        rather than stopping at the first mismatch.
+
+        ``poll_callback`` is invoked while waiting for each re-run to finish; run()
+        passes a device-print drain so a chatty kernel cannot fill the print
+        buffer and stall.
+
+        Skipped for coverage builds (re-runs would corrupt the coverage stream)
+        and for tests without a stimuli/result buffer to read back.
+        """
+        runs = TestConfig.BIT_EXACT_RUNS
+        if runs <= 1 or self.variant_stimuli is None:
+            return
+        unsupported = self._bit_exact_unsupported_reason()
+        if unsupported is not None:
+            logger.warning(
+                "Bit-exactness check skipped for {}: {}.",
+                self.variant_id[:12],
+                unsupported,
+            )
+            return
+
+        reference = self._read_output_regions()
+
+        # Per differing run: (run_idx, region, first_offset, ref_byte, run_byte, num_diff).
+        mismatches = []
+        # Byte offsets that differed in any run, to tell a single flaky byte
+        # apart from output that scatters differently every time.
+        unstable_offsets = {region: set() for region in reference}
+
+        for run_idx in range(1, runs):
+            # Every run starts from the sentinel, so a run that writes fewer
+            # bytes than the last one shows the sentinel in the tail instead of
+            # inheriting the previous run's bytes and comparing equal. A varying
+            # write extent is itself non-determinism, and this is the only thing
+            # that catches it: the mailbox handshake proves the kernel finished,
+            # not how much of the buffer it touched.
+            self.variant_stimuli.clear_result_buffer(TestConfig.TENSIX_LOCATION)
+            self.run_elf_files()
+            self.wait_for_tensix_operations_finished(poll_callback=poll_callback)
+
+            for region, current in self._read_output_regions().items():
+                diff_offsets = np.flatnonzero(reference[region] != current)
+                if diff_offsets.size == 0:
+                    continue
+
+                unstable_offsets[region].update(diff_offsets.tolist())
+                first = int(diff_offsets[0])
+                mismatches.append(
+                    (
+                        run_idx,
+                        region,
+                        first,
+                        int(reference[region][first]),
+                        int(current[first]),
+                        int(diff_offsets.size),
+                    )
+                )
+
+        if not mismatches:
+            logger.debug(
+                "Bit-exactness check passed for {}: {} runs bit-identical across {}.",
+                self.variant_id[:12],
+                runs,
+                ", ".join(reference),
+            )
+            return
+
+        affected = sorted({region for _, region, *_ in mismatches})
+        diverging_runs = len({run_idx for run_idx, *_ in mismatches})
+        lines = [
+            f"Non-deterministic hardware output for variant {self.variant_id[:12]}: "
+            f"{diverging_runs} of {runs - 1} re-runs differed from run 0 "
+            f"in {', '.join(affected)}."
+        ]
+        lines.extend(
+            f"  {region}: {len(unstable_offsets[region])} of {reference[region].size} "
+            "byte(s) ever differed."
+            for region in affected
+        )
+        lines.extend(
+            f"  run {run_idx} [{region}]: {num_diff} byte(s) differ; "
+            f"first at offset {first}: "
+            f"run 0 = 0x{ref_byte:02X} vs run {run_idx} = 0x{run_byte:02X}"
+            for run_idx, region, first, ref_byte, run_byte, num_diff in mismatches
+        )
+        lines.append(self._describe_input_integrity())
+        raise AssertionError("\n".join(lines))
+
+    def _read_output_regions(self) -> dict:
+        """Raw bytes of every L1 region the kernel writes, keyed by region name.
+
+        buffer_C is included because some tests use it as a second output (see
+        test_sfpu_exp_parallel_matmul_quasar). When it is only an input it never
+        changes between runs, so comparing it is harmless. It is deliberately not
+        cleared between runs, unlike the result buffer, precisely because it may
+        be an input.
+        """
+        stimuli = self.variant_stimuli
+        location = TestConfig.TENSIX_LOCATION
+        regions = {
+            "result buffer": np.frombuffer(
+                stimuli.collect_raw_result_bytes(location), dtype=np.uint8
+            )
+        }
+        if stimuli.buffer_C is not None:
+            regions["buffer_C"] = np.frombuffer(
+                stimuli.collect_raw_buffer_c_bytes(location), dtype=np.uint8
+            )
+        return regions
+
+    def _describe_input_integrity(self) -> str:
+        """Report whether the input operands in L1 still match the stimuli.
+
+        Re-runs reuse the input already in L1, so a kernel that writes to its own
+        input would make later runs compute on different data and look like
+        non-deterministic hardware. This distinguishes the two. Expected bytes
+        come from re-writing the stimuli and reading them back, which reuses the
+        real pack/write path instead of duplicating it.
+
+        Only call this on a failure path: it costs two L1 reads plus a re-pack,
+        and it restores the stimuli as a side effect.
+        """
+        stimuli = self.variant_stimuli
+        actual = np.frombuffer(
+            stimuli.read_input_region(TestConfig.TENSIX_LOCATION), dtype=np.uint8
+        )
+        stimuli.write(TestConfig.TENSIX_LOCATION)
+        expected = np.frombuffer(
+            stimuli.read_input_region(TestConfig.TENSIX_LOCATION), dtype=np.uint8
+        )
+
+        modified = int(np.count_nonzero(actual != expected))
+        if not modified:
+            return (
+                "  Input operands in L1 were unchanged, so every run saw identical "
+                "input: the divergence is in the hardware/kernel output itself."
+            )
+        return (
+            f"  WARNING: {modified} of {actual.size} input byte(s) in L1 no longer "
+            "match the stimuli, so the kernel writes to its own input and later runs "
+            "did not see the same input. Fix that before suspecting the hardware."
         )
 
 

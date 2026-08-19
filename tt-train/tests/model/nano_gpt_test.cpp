@@ -264,7 +264,9 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
     };
 
     std::vector<double> steps_time;
+    steps_time.reserve(config.max_steps);
     std::vector<float> losses;
+    losses.reserve(config.max_steps);
 
     for (auto [features, target, masks] : train_dataloader) {
         auto start_timer = std::chrono::high_resolution_clock::now();

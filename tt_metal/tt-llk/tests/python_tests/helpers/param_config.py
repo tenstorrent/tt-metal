@@ -10,6 +10,7 @@ import pytest
 from helpers.tile_shape import construct_tile_shape
 from typing_extensions import deprecated
 
+from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .data_format_inference import is_format_combination_outlier
 from .format_config import (
     DataFormat,
@@ -311,6 +312,28 @@ def _params_solve_dependencies(**kwargs: any) -> List[Tuple]:
     return list(_solve_recursive(resolved, 0))
 
 
+def build_param_id(parameters, value_tuple):
+    """Readable pytest ID for one parameter tuple, e.g.
+    `formats:Bfp4_b->Float16_b-mathop:Sin`.
+
+    Exposed so tests that call pytest.mark.parametrize directly (because they build
+    their own value tuples) can produce the same IDs as @parametrize, keeping -k
+    filters on format and mathop working across the whole suite.
+    """
+    parts = []
+    for param, value in zip(parameters, value_tuple):
+        if isinstance(value, InputOutputFormat):
+            param_value = f"{value.input_format.name}->{value.output_format.name}"
+        elif hasattr(value, "name"):
+            param_value = value.name
+        elif hasattr(value, "value"):
+            param_value = str(value.value)
+        else:
+            param_value = str(value)
+        parts.append(f"{param}:{param_value}")
+    return "-".join(parts)
+
+
 def parametrize(**kwargs: any):
     compile_key_fn = None
     _rt_names = set()
@@ -358,22 +381,7 @@ def parametrize(**kwargs: any):
     parameters_string = ",".join(parameters)
     parameter_values = _params_solve_dependencies(**unwrapped)
 
-    def generate_id(value_tuple):
-        """Generate readable test IDs from parameter values."""
-        parts = []
-        for param, value in zip(parameters, value_tuple):
-            if isinstance(value, InputOutputFormat):
-                param_value = f"{value.input_format.name}->{value.output_format.name}"
-            elif hasattr(value, "name"):
-                param_value = value.name
-            elif hasattr(value, "value"):
-                param_value = str(value.value)
-            else:
-                param_value = str(value)
-            parts.append(f"{param}:{param_value}")
-        return "-".join(parts)
-
-    ids = [generate_id(values) for values in parameter_values]
+    ids = [build_param_id(parameters, values) for values in parameter_values]
 
     def decorator(test_function):
         if compile_key_fn is not None:
@@ -614,6 +622,108 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shap
     ]
 
 
+PERF_INPUT_DIMENSIONS = (
+    [256, 32],
+    [32, 256],
+    [512, 32],
+    [32, 512],
+)
+
+# One representative per HW tile MOP class. Intersect with each test's functional
+# tile-size set via ``select_perf_tile_sizes`` instead of pinning a single shape.
+PERF_TILE_SIZES = (
+    (32, 32),  # 4-face standard
+    (16, 16),  # 1-face
+    (32, 16),  # 2-face narrow
+    (1, 32),  # tiny-tile MOP (shared with 2/4/8 x 32)
+)
+
+
+def select_perf_tile_sizes(functional_tile_sizes):
+    """Select MOP-class tile sizes that a functional sweep actually supports.
+
+    Keeps ``PERF_TILE_SIZES`` order. MX / unpack-to-dest filters still apply at
+    the call site; this only intersects with the functional tile-size list.
+    """
+    supported_tile_sizes = {tuple(tile_dims) for tile_dims in functional_tile_sizes}
+    return [
+        tile_dims for tile_dims in PERF_TILE_SIZES if tile_dims in supported_tile_sizes
+    ]
+
+
+def select_perf_input_dimensions(functional_dimensions, *, use_largest_fallback=True):
+    """Select perf matrices from the dimensions supported by a functional test.
+
+    Keep supported target matrices in ``PERF_INPUT_DIMENSIONS`` order. If the
+    functional test supports none of them, optionally keep only its largest
+    matrix. Prefer the taller matrix when multiple supported matrices have the
+    same area.
+    """
+    normalized_dimensions = [list(dimensions) for dimensions in functional_dimensions]
+    supported_dimensions = {tuple(dimensions) for dimensions in normalized_dimensions}
+    selected_dimensions = [
+        dimensions.copy()
+        for dimensions in PERF_INPUT_DIMENSIONS
+        if tuple(dimensions) in supported_dimensions
+    ]
+    if selected_dimensions:
+        return selected_dimensions
+    if not normalized_dimensions or not use_largest_fallback:
+        return []
+
+    return [
+        max(
+            normalized_dimensions,
+            key=lambda dimensions: (
+                dimensions[0] * dimensions[1],
+                dimensions[0],
+            ),
+        )
+    ]
+
+
+def generate_perf_input_dimensions(
+    dest_acc,
+    dest_sync=DestSync.Half,
+    tile_shape=None,
+    *,
+    use_largest_fallback=True,
+):
+    """Dest-full tall and wide matrices, scaled by ``tile_shape``.
+
+    Tile counts are ``(max_tiles, 1)`` and ``(1, max_tiles)`` for the dest
+    capacity of ``dest_sync`` / ``dest_acc``. ``use_largest_fallback`` is kept
+    for call-site compatibility; dest-fill matrices always fit dest.
+    """
+    if tile_shape is None:
+        tile_shape = construct_tile_shape()
+
+    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
+    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    tile_rows = tile_shape.total_row_dim()
+    tile_cols = tile_shape.total_col_dim()
+
+    dest_fill_tile_counts = ((max_tiles_in_dest, 1), (1, max_tiles_in_dest))
+    dimensions = []
+    seen = set()
+    for rt_dim, ct_dim in dest_fill_tile_counts:
+        matrix = [rt_dim * tile_rows, ct_dim * tile_cols]
+        key = tuple(matrix)
+        if key not in seen:
+            seen.add(key)
+            dimensions.append(matrix)
+
+    if dimensions or not use_largest_fallback:
+        return dimensions
+
+    return select_perf_input_dimensions(
+        generate_unary_input_dimensions(
+            dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+        ),
+        use_largest_fallback=True,
+    )
+
+
 def get_num_blocks_and_num_tiles_in_block(
     dest_sync: DestSync,
     dest_acc: DestAccumulation,
@@ -653,8 +763,11 @@ def get_num_blocks_and_num_tiles_in_block(
     num_rows_tensor, num_cols_tensor = input_dimensions
     num_rows_tile, num_cols_tile = tile_dimensions
 
-    is_outlier = is_format_combination_outlier(
-        formats.input_format, formats.output_format, dest_acc
+    is_outlier = (
+        is_format_combination_outlier(
+            formats.input_format, formats.output_format, dest_acc
+        )
+        and get_chip_architecture() != ChipArchitecture.QUASAR
     )
 
     capacity_divisor = (

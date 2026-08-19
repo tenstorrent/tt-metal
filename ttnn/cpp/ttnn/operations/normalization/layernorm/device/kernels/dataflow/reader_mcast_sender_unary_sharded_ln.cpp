@@ -54,6 +54,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(15);
     constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
     constexpr bool use_welford = get_compile_time_arg_val(18) == 1;
+    constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(19);
 
     // ---------------------------------------------------------------------------
     // Runtime arguments
@@ -90,7 +91,9 @@ void kernel_main() {
     UnicastEndpoint remote_ep;
     MulticastEndpoint mcast_ep;
 
-    const uint32_t single_tile_size_bytes = get_tile_size(rms_norm ? dfb_ex_partial2 : dfb_ex_partial);
+    // RMSNorm only allocates cb_ex_partial2; the host skips cb_ex_partial.
+    DataflowBuffer dfb_partial_size_ref(rms_norm ? dfb_ex_partial2 : dfb_ex_partial);
+    const uint32_t single_tile_size_bytes = dfb_partial_size_ref.get_tile_size();
 
     // Compute the NOC coordinates for remote cores that interact with this core
     df::RemoteNocCoords<num_blocks> remote_coords{};
@@ -131,7 +134,7 @@ void kernel_main() {
                 mcast_dest_noc_start_y,
                 mcast_dest_noc_end_x,
                 mcast_dest_noc_end_y,
-                num_blocks - 1);
+                num_mcast_dests);
         }
 
         // ============================================================================
@@ -265,7 +268,7 @@ void kernel_main() {
                     dfb_ex_global_obj,
                     mcast_ep,
                     num_tiles_scaler * num_tiles_bytes,
-                    num_blocks - 1,
+                    num_mcast_dests,
                     {.offset_bytes = mcast_src_offset},
                     {.noc_x_start = mcast_dest_noc_start_x,
                      .noc_y_start = mcast_dest_noc_start_y,
@@ -279,7 +282,7 @@ void kernel_main() {
                     mcast_dest_noc_start_y,
                     mcast_dest_noc_end_x,
                     mcast_dest_noc_end_y,
-                    num_blocks - 1);
+                    num_mcast_dests);
 
                 mcast_src_offset += num_tiles_scaler * num_tiles_bytes;
                 noc.async_write_barrier();

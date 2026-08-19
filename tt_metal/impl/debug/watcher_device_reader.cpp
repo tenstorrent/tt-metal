@@ -10,6 +10,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -301,8 +302,10 @@ private:
     void DumpLaunchMessage() const;
     void DumpWaypoints(bool to_stdout = false) const;
     void DumpSyncRegs() const;
-    void DumpTileCountersBypass() const;
-    void DumpTileCountersWithRemapper() const;
+    // Returns NEO TC keys (neo_id * NUM_TENSIX_TILE_COUNTERS_FOR_DM + tc_id) covered by
+    // programmed remapper pairs so the bypass dump can skip them.
+    std::unordered_set<uint32_t> DumpTileCountersWithRemapper() const;
+    void DumpTileCountersBypass(const std::unordered_set<uint32_t>& skip_tc_keys = {}) const;
     void DumpStackUsage() const;
     void LogRunningKernels() const;
     const std::string& GetKernelName(uint32_t processor_index) const;
@@ -788,6 +791,13 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             error_msg = get_noc_target_str(reader_.env.get_hal(), reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (NOC transaction overflows a circular buffer).";
             break;
+        case dev_msgs::DebugSanitizeNocInvalidTxnId:
+            error_msg = fmt::format(
+                "{} used invalid NoC transaction id {} (exceeds max {}).",
+                get_riscv_name(reader_.env.get_hal(), programmable_core_type_, san.which_risc()),
+                san.l1_addr(),
+                san.len());
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
@@ -1093,6 +1103,7 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
 void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
     auto debug_waypoint = mbox_data_.watcher().debug_waypoint();
     std::vector<std::string> risc_status;
+    risc_status.reserve(debug_waypoint.size());
 
     for (auto cpu : debug_waypoint) {
         auto& status = risc_status.emplace_back();
@@ -1145,25 +1156,24 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
         }
     }
 
-    // Reads posted/acked tile counters used in DFB synchronization
-    // Mismatch indicates a stalled producer/consumer relationship
+    // Reads posted/acked tile counters used in DFB synchronization.
+    // Mismatch indicates a stalled producer/consumer relationship.
+    // Remapper may be globally enabled while STRIDED DFBs still use default mirroring, and a core
+    // can mix remapped + plain TCs — dump both, skipping remapper-covered TCs in the bypass path.
     if (hal.has_tile_counter_registers()) {
-        bool remapper_enabled = false;
+        std::unordered_set<uint32_t> remapped_tc_keys;
         if (hal.has_remapper()) {
             auto data = reader_.env.get_cluster().read_core(
                 reader_.device_id, virtual_coord_, hal.get_remapper_global_control_addr(), sizeof(uint32_t));
-            remapper_enabled = (data[0] & 0x1) != 0;
+            if ((data[0] & 0x1) != 0) {
+                remapped_tc_keys = DumpTileCountersWithRemapper();
+            }
         }
-
-        if (remapper_enabled) {
-            DumpTileCountersWithRemapper();
-        } else {
-            DumpTileCountersBypass();
-        }
+        DumpTileCountersBypass(remapped_tc_keys);
     }
 }
 
-void WatcherDeviceReader::Core::DumpTileCountersBypass() const {
+void WatcherDeviceReader::Core::DumpTileCountersBypass(const std::unordered_set<uint32_t>& skip_tc_keys) const {
     const auto& hal = reader_.env.get_hal();
 
     // NEO side for reading tiles_available directly
@@ -1175,6 +1185,9 @@ void WatcherDeviceReader::Core::DumpTileCountersBypass() const {
     uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
 
     for (uint32_t i = 0; i < hal.get_num_tile_counters(); i++) {
+        if (skip_tc_keys.contains(i)) {
+            continue;
+        }
         uint32_t neo_id = i / dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
         uint32_t tc_id = i % dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
 
@@ -1197,19 +1210,31 @@ void WatcherDeviceReader::Core::DumpTileCountersBypass() const {
     }
 }
 
-// Dump tile counter mismatches when remapper is enabled.
+// Dump tile counter mismatches for programmed remapper pairs.
 // Remapper maps clientL (1 endpoint) <-> clientR (up to 4 endpoints):
 //   - clientL_is_producer=true:  1 producer (clientL) -> 1-4 consumers (clientR)
 //   - clientL_is_producer=false: 1-4 producers (clientR) -> 1 consumer (clientL)
 // tiles_to_consume = posted - acked; non-zero indicates stuck tiles.
-void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
+// Returns NEO TC keys covered by valid pairs so DumpTileCountersBypass can skip them.
+std::unordered_set<uint32_t> WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
     const auto& hal = reader_.env.get_hal();
+    std::unordered_set<uint32_t> remapped_tc_keys;
 
     uint32_t neo_tc_base_addr = hal.get_neo_tile_counters_base_addr();
     uint32_t neo_tc_stride = hal.get_neo_tile_counters_stride();
     uint32_t neo_tc_size = hal.get_neo_tile_counters_size();
     uint32_t neo_tc_tiles_available_offset = hal.get_neo_tile_counters_tiles_available_offset();
     uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
+
+    auto claim_neo_tc = [&](uint32_t client_id, uint32_t tc_id) {
+        // Bypass dump only scans NEO overlay TC banks (tc_id < 16 per Neo). Tensix-only TCs
+        // (>= 16) are not in that scan, so they need no skip entry.
+        if (client_id < overlay::NEO_0 || tc_id >= dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM) {
+            return;
+        }
+        uint32_t neo_id = client_id - overlay::NEO_0;
+        remapped_tc_keys.insert(neo_id * dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM + tc_id);
+    };
 
     auto read_tiles_to_consume = [&](uint32_t client_id, uint32_t tc_id) -> std::pair<uint32_t, uint32_t> {
         uint32_t neo_id = client_id % overlay::NEO_0;
@@ -1249,6 +1274,7 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
             // 1 producer (clientL) -> 1 to possibly many consumers (clientR)
             uint32_t prod_id = clientL.f.id_L;
             uint32_t prod_tc_id = clientL.f.cnt_sel_L;
+            claim_neo_tc(prod_id, prod_tc_id);
 
             for (uint32_t slot = 0; slot < 4; slot++) {
                 if (!(clientL.f.valid & (1 << slot))) {
@@ -1256,6 +1282,7 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
                 }
                 uint32_t cons_id = id_R[slot];
                 uint32_t cons_tc_id = cnt_sel_R[slot];
+                claim_neo_tc(cons_id, cons_tc_id);
 
                 auto [tiles_to_consume, buffer_capacity] = read_tiles_to_consume(cons_id, cons_tc_id);
                 if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
@@ -1270,6 +1297,14 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
             // 1 to possibly many producers (clientR) -> 1 consumer (clientL)
             uint32_t cons_id = clientL.f.id_L;
             uint32_t cons_tc_id = clientL.f.cnt_sel_L;
+            claim_neo_tc(cons_id, cons_tc_id);
+
+            for (uint32_t slot = 0; slot < 4; slot++) {
+                if (!(clientL.f.valid & (1 << slot))) {
+                    continue;
+                }
+                claim_neo_tc(id_R[slot], cnt_sel_R[slot]);
+            }
 
             auto [tiles_to_consume, buffer_capacity] = read_tiles_to_consume(cons_id, cons_tc_id);
             if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
@@ -1287,6 +1322,7 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
             }
         }
     }
+    return remapped_tc_keys;
 }
 
 void WatcherDeviceReader::Core::DumpStackUsage() const {

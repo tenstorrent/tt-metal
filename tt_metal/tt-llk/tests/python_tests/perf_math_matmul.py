@@ -14,7 +14,7 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import sweep_matmul, sweep_tiny_tiles_matmul
 from helpers.param_config import input_output_formats
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,

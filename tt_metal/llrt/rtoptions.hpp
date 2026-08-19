@@ -231,6 +231,9 @@ class RunTimeOptions {
     // should remain the same size as normal, unlike with null_kernels.
     bool kernels_early_return = false;
 
+    // Temporary: rdcycle DFB init timing in device firmware. Deprecate once profiler covers this.
+    bool measure_dfb_init_time_enabled = false;
+
     bool clear_l1 = false;
     bool clear_dram = false;
 
@@ -395,6 +398,13 @@ class RunTimeOptions {
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
 
+    // Process-start trace allocation tracker settings. These are static because
+    // environment variables are process-wide and the hot-path accessors do not
+    // belong to a particular MetalContext.
+    inline static bool trace_allocation_tracking_enabled_ = false;
+    inline static bool trace_allocation_diagnostics_enabled_ = false;
+    inline static bool trace_allocation_skip_program_cache_enabled_ = false;
+
     // Disable shared memory tracking for tt-smi
     bool shm_tracking_disabled = false;
     bool shm_verbose = false;
@@ -490,6 +500,12 @@ public:
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
+
+    static bool get_trace_allocation_tracking_enabled() { return trace_allocation_tracking_enabled_; }
+    static bool get_trace_allocation_diagnostics_enabled() { return trace_allocation_diagnostics_enabled_; }
+    static bool get_trace_allocation_skip_program_cache_enabled() {
+        return trace_allocation_skip_program_cache_enabled_;
+    }
 
     bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
     bool get_shm_verbose() const { return shm_verbose; }
@@ -603,10 +619,11 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
+            get_measure_dfb_init_time_enabled(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode());
@@ -655,6 +672,8 @@ public:
 
     void set_kernels_early_return(bool v) { kernels_early_return = v; }
     bool get_kernels_early_return() const { return kernels_early_return; }
+
+    bool get_measure_dfb_init_time_enabled() const { return measure_dfb_init_time_enabled; }
 
     bool get_clear_l1() const { return clear_l1; }
     void set_clear_l1(bool clear) { clear_l1 = clear; }

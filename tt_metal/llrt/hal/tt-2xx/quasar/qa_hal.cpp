@@ -99,15 +99,23 @@ public:
         // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
         flags += "-Wl,--no-relax ";
         if (params.processor_class == HalProcessorClassType::DM) {
+            const DeviceAddr dm_global_base = params.core_type == HalProgrammableCoreType::DISPATCH
+                                                  ? MEM_DISPATCH_DM_GLOBAL_BASE
+                                                  : MEM_DM_GLOBAL_BASE;
+            const DeviceAddr dm_local_base =
+                params.core_type == HalProgrammableCoreType::DISPATCH ? MEM_DISPATCH_DM_LOCAL_BASE : MEM_DM_LOCAL_BASE;
             if (params.is_fw) {
-                flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_DM_FIRMWARE_BASE);
+                const DeviceAddr dm_firmware_base = params.core_type == HalProgrammableCoreType::DISPATCH
+                                                        ? MEM_DISPATCH_DM_FIRMWARE_BASE
+                                                        : MEM_DM_FIRMWARE_BASE;
+                flags += fmt::format("-Wl,--defsym=__fw_text={} ", dm_firmware_base);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_FIRMWARE_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__fw_data={} ", dm_global_base);
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", dm_local_base);
                 flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
-                flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__local_base={} ", dm_local_base);
                 flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
             } else {
                 DeviceAddr kn_text = MEM_KERNEL_BASE;
@@ -130,13 +138,15 @@ public:
                 }
                 flags += fmt::format("-Wl,--defsym=__kn_text={} ", kn_text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__kn_data={} ", MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
+                flags += fmt::format("-Wl,--defsym=__fw_data={} ", dm_global_base);
+                flags += fmt::format(
+                    "-Wl,--defsym=__kn_data={} ",
+                    dm_global_base + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", dm_local_base);
                 flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
-                flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__local_base={} ", dm_local_base);
                 flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
             }
         } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
@@ -259,6 +269,8 @@ public:
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        // Upper bound: crt0-tls.o, crt0.o, noc.o and substitutes.o.
+        objs.reserve(4);
         std::string_view cpu = params.processor_class == HalProcessorClassType::DM ? "tt-qsr64" : "tt-qsr32";
         std::string_view dir = "runtime/hw/lib/quasar";
         objs.push_back(fmt::format("{}/{}-crt0-tls.o", dir, cpu));
@@ -278,6 +290,8 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
+        // Upper bound: 10 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(13);
 
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/quasar/metal/common");

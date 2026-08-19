@@ -40,6 +40,7 @@ struct SelectiveReduceCombineParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
+        attrs.reserve(13);
         attrs.emplace_back("hidden_size", hidden_size);
         attrs.emplace_back("batch_size", batch_size);
         attrs.emplace_back("seq_size", seq_size);

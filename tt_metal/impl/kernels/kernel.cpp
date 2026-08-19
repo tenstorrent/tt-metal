@@ -47,7 +47,7 @@ namespace {
 // 2. TT_METAL_KERNEL_PATH
 // 3. System Kernel Directory
 // 4. TT_METAL_HOME / SetRootDir (API)
-fs::path resolve_path(const fs::path& given_file_name) {
+fs::path resolve_path(const fs::path& given_file_name, ContextId context_id) {
     // Priority 0: Absolute path
     if (given_file_name.is_absolute()) {
         return given_file_name;
@@ -61,7 +61,7 @@ fs::path resolve_path(const fs::path& given_file_name) {
         }
     }
 
-    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = MetalContext::instance(context_id).rtoptions();
 
     // Priority 2: Kernel directory
     if (rtoptions.is_kernel_dir_specified()) {
@@ -112,14 +112,21 @@ fs::path resolve_compiler_include_dir(const fs::path& given) {
 }
 }  // namespace
 
-KernelSource::KernelSource(const std::string& source, const SourceType& source_type) :
-    source_(source), source_type_(source_type) {
-    if (source_type == FILE_PATH) {
-        path_ = resolve_path(source);
-    }
-};
+KernelSource::KernelSource(std::string source, SourceType source_type, fs::path path) :
+    source_(std::move(source)), source_type_(source_type), path_(std::move(path)) {}
+
+KernelSource KernelSource::from_path(ContextId context_id, const fs::path& path) {
+    auto resolved = resolve_path(path, context_id);
+    // Keep source_ as the caller-supplied path (metadata/watcher/hash); path_ is the resolved file.
+    return KernelSource(path.string(), FILE_PATH, std::move(resolved));
+}
+
+KernelSource KernelSource::from_source(const std::string& source_code) {
+    return KernelSource(source_code, SOURCE_CODE, fs::path{});
+}
 
 Kernel::Kernel(
+    ContextId context_id,
     HalProgrammableCoreType programmable_core_type,
     HalProcessorClassType processor_class,
     const KernelSource& kernel_src,
@@ -128,12 +135,13 @@ Kernel::Kernel(
     const std::map<std::string, std::string>& defines,
     const std::unordered_map<std::string, uint32_t>& named_compile_args,
     bool is_metal2_kernel,
-    const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles,
-    const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles,
+    const DataflowBufferBindingHandleMap& dataflow_buffer_binding_handles,
+    const SemaphoreBindingHandleMap& semaphore_binding_handles,
     const std::vector<std::string>& runtime_arg_names,
     const std::vector<std::string>& common_runtime_arg_names,
     const std::vector<TensorBindingHandle>& tensor_binding_handles,
     const KernelCrtaLayout& crta_layout) :
+    context_id_(context_id),
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
@@ -141,8 +149,8 @@ Kernel::Kernel(
     compile_time_args_(compile_args),
     named_compile_time_args_(named_compile_args),
     is_metal2_kernel_(is_metal2_kernel),
-    dataflow_buffer_local_accessor_handles_(dataflow_buffer_local_accessor_handles),
-    semaphore_local_accessor_handles_(semaphore_local_accessor_handles),
+    dataflow_buffer_binding_handles_(dataflow_buffer_binding_handles),
+    semaphore_binding_handles_(semaphore_binding_handles),
     runtime_arg_names_(runtime_arg_names),
     common_runtime_arg_names_(common_runtime_arg_names),
     tensor_binding_handles_(tensor_binding_handles),
@@ -151,8 +159,8 @@ Kernel::Kernel(
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),
     watcher_assert_enabled_(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() &&
-        !tt::tt_metal::MetalContext::instance().rtoptions().watcher_assert_disabled()),
+        tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_watcher_enabled() &&
+        !tt::tt_metal::MetalContext::instance(context_id).rtoptions().watcher_assert_disabled()),
     watcher_count_word_offset_(watcher_assert_enabled_ ? 1 : 0) {
     this->register_kernel_with_watcher();
 
@@ -180,11 +188,11 @@ Kernel::Kernel(
 }
 
 void Kernel::register_kernel_with_watcher() {
-    auto& watcher = MetalContext::instance().watcher_server();
+    auto& watcher = MetalContext::instance(context_id_).watcher_server();
     if (!watcher) {
         // Null for mock and emulated targets (no watcher created); nothing to register.
         TT_FATAL(
-            MetalContext::instance().get_cluster().is_mock_or_emulated(),
+            MetalContext::instance(context_id_).get_cluster().is_mock_or_emulated(),
             "Watcher server is unavailable, and the target is not a mock or emulated device");
         this->watcher_kernel_id_ = -1;
         return;
@@ -306,16 +314,16 @@ void Kernel::process_named_compile_time_args(
     callback(this->named_compile_time_args());
 }
 
-void Kernel::process_dataflow_buffer_local_accessor_handles(
+void Kernel::process_dataflow_buffer_binding_handles(
     const std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)> callback) const {
-    for (const auto& [accessor_name, logical_dfb_id] : this->dataflow_buffer_local_accessor_handles_) {
+    for (const auto& [accessor_name, logical_dfb_id] : this->dataflow_buffer_binding_handles_) {
         callback(accessor_name, logical_dfb_id);
     }
 }
 
-void Kernel::process_semaphore_local_accessor_handles(
+void Kernel::process_semaphore_binding_handles(
     const std::function<void(const std::string& accessor_name, uint16_t semaphore_id)> callback) const {
-    for (const auto& [accessor_name, semaphore_id] : this->semaphore_local_accessor_handles_) {
+    for (const auto& [accessor_name, semaphore_id] : this->semaphore_binding_handles_) {
         callback(accessor_name, semaphore_id);
     }
 }
@@ -546,11 +554,11 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
     }
-    for (const auto& it : sorted_iters(this->dataflow_buffer_local_accessor_handles_)) {
+    for (const auto& it : sorted_iters(this->dataflow_buffer_binding_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
     }
-    for (const auto& it : sorted_iters(this->semaphore_local_accessor_handles_)) {
+    for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
     }
@@ -620,6 +628,9 @@ uint64_t Kernel::compute_hash() const {
     ////////////////////////////////////////////////////////////
     hasher.update(this->kernel_src_.source_);
     hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
+    // Prefix length baked into kernel_args_generated.h (array size / accessor bounds).
+    // Independent of compile_time_args_ values: same words with a different split must not collide.
+    hasher.update(static_cast<uint64_t>(this->compile_time_vararg_count_));
     hasher.update(this->config_hash());
 
     // Include paths affect compilation: the gcc -I order is significant (left-to-right
@@ -1038,11 +1049,13 @@ void EthernetKernel::read_binaries(IDevice* device, const std::string& binary_ro
 
 void ComputeKernel::read_binaries(IDevice* device, const std::string& binary_root) {
     TT_ASSERT(this->binaries_exist_on_disk(device, binary_root));
+    constexpr int num_trisc_binaries = 3;
     std::vector<const ll_api::memory*> binaries;
+    binaries.reserve(num_trisc_binaries);
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
+    for (int trisc_id = 0; trisc_id < num_trisc_binaries; trisc_id++) {
         auto load_type = MetalContext::instance()
                              .hal()
                              .get_jit_build_config(tensix_core_type, compute_class_idx, trisc_id)
@@ -1307,6 +1320,7 @@ void QuasarDataMovementKernel::generate_binaries(IDevice* device, JitBuildOption
 void QuasarDataMovementKernel::read_binaries(IDevice* device, const std::string& binary_root) {
     TT_ASSERT(this->binaries_exist_on_disk(device, binary_root));
     std::vector<const ll_api::memory*> binaries;
+    binaries.reserve(this->dm_processors_.size());
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
@@ -1433,6 +1447,7 @@ void QuasarComputeKernel::generate_binaries(IDevice* device, JitBuildOptions&) c
 void QuasarComputeKernel::read_binaries(IDevice* device, const std::string& binary_root) {
     TT_ASSERT(this->binaries_exist_on_disk(device, binary_root));
     std::vector<const ll_api::memory*> binaries;
+    binaries.reserve(this->trisc_binary_groups_.size());
     const uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
@@ -1506,7 +1521,7 @@ std::string QuasarComputeKernel::config_hash() const {
     }
 
     return fmt::format(
-        "{}_{}_{}_{}_{}_{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}_{}_{}_{}",
         fmt::join(compute_processors_, "_"),
         enchantum::to_string(config_.math_fidelity),
         config_.fp32_dest_acc_en,
@@ -1514,7 +1529,6 @@ std::string QuasarComputeKernel::config_hash() const {
         config_.dst_full_sync_en,
         config_.bfp8_pack_precise,
         config_.enable_2x_src_format,
-        config_.unpack_to_dest_en,
         unpack_mode_descriptor);
 }
 
@@ -1530,7 +1544,6 @@ void QuasarComputeKernel::set_build_options(JitBuildOptions& build_options) cons
     build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
     build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
     build_options.enable_2x_src_format = this->config_.enable_2x_src_format;
-    build_options.unpack_to_dest_en = this->config_.unpack_to_dest_en;
 }
 
 }  // namespace experimental::quasar

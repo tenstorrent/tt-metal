@@ -318,7 +318,8 @@ void kernel_main() {
                 prev_nq = decoded.nq;
             }
             if constexpr (use_attention_sink) {
-                cb_attn_sink.reserve_back(Sq_chunk_t);
+                constexpr uint32_t sink_tiles = use_streaming_compute ? 1 : Sq_chunk_t;
+                cb_attn_sink.reserve_back(sink_tiles);
                 uint32_t attention_sink_write_ptr = cb_attn_sink.get_write_ptr();
                 const uint32_t sink_tile_id = attention_sink_tile_shape.id_of(0, decoded.nq, 0, 0);
                 noc.async_read(
@@ -328,9 +329,11 @@ void kernel_main() {
                     {.page_id = sink_tile_id},
                     {});
                 noc.async_read_barrier();
-                fill_attention_sink_tiles<attention_sink_tile_bytes>(
-                    cb_attention_sink, Sq_chunk_t, attention_sink_write_ptr);
-                cb_attn_sink.push_back(Sq_chunk_t);
+                if constexpr (!use_streaming_compute) {
+                    fill_attention_sink_tiles<attention_sink_tile_bytes>(
+                        cb_attention_sink, sink_tiles, attention_sink_write_ptr);
+                }
+                cb_attn_sink.push_back(sink_tiles);
             }
 
             const uint32_t nb = decoded.nb;

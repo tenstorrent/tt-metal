@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
+import math
+from typing import List, Tuple
 
 import pytest
 import torch
@@ -28,14 +29,17 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    DEST_SYNC_TILE_LIMITS,
+    generate_perf_input_dimensions,
     input_output_formats,
     parametrize,
     runtime,
+    select_perf_tile_sizes,
 )
-from helpers.perf import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
@@ -43,12 +47,54 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     MATH_OP,
     NUM_FACES,
-    PERF_RUN_TYPE,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     TEST_FACE_DIMS,
     TILE_COUNT,
     generate_input_dim,
 )
+from helpers.tile_constants import is_mx_unsupported_tile_dims
+from helpers.tile_shape import TileShape, construct_tile_shape
 from helpers.utils import passed_test
+
+# 32x32 uses the four face MOP; the Nx32 tiles (N <= 8) use the tiny tile MOP in
+# llk_unpack_reduce_col_tilizeA_strided.h, where one strided unpack covers a whole face.
+# Tile shapes with a full 16 row face and fewer than four faces (16x16, 16x32, 32x16) have
+# no MOP on this path yet.
+UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES = [
+    (32, 32),
+    (1, 32),
+    (2, 32),
+    (4, 32),
+    (8, 32),
+]
+
+
+def generate_corner_case_input_dimensions(
+    dest_sync: DestSync, dest_acc: DestAccumulation, tile_shape: TileShape
+) -> List[List[int]]:
+    """
+    Generate input dimensions covering the corner cases of the unpack loop nest.
+
+    The tile counts are 1 tile (minimum), max-wide (stresses block_ct), max-tall (stresses
+    block_rt) and max-square (both loops at capacity), where max is the number of tiles that
+    fit into dest for the given dest_sync / dest_acc pair.
+    """
+    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
+    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    square_side = math.isqrt(max_tiles_in_dest)
+
+    tile_counts = [
+        (1, 1),
+        (1, max_tiles_in_dest),
+        (max_tiles_in_dest, 1),
+        (square_side, max_tiles_in_dest // square_side),
+    ]
+
+    return [
+        [rt_dim * tile_shape.total_row_dim(), ct_dim * tile_shape.total_col_dim()]
+        for rt_dim, ct_dim in tile_counts
+    ]
 
 
 def generate_unpack_reduce_col_tilizeA_strided_combinations(
@@ -63,7 +109,7 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
         formats_list: List of input/output format pairs
 
     Returns:
-        List of (format, dest_acc, dest_sync, input_dimensions, pool_type) tuples
+        List of (format, dest_acc, dest_sync, input_dimensions, pool_type, tile_dimensions) tuples
     """
 
     def _requires_dest_acc_for_reduce(in_fmt, out_fmt):
@@ -72,41 +118,11 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
         """
         return in_fmt in (DataFormat.Int8, DataFormat.UInt8) and in_fmt == out_fmt
 
-    # Targeted dimensions per (dest_sync, dest_acc) that cover key corner cases:
-    # 1 tile (minimum), max-wide (stresses block_ct), max-tall (stresses block_rt),
-    # and max-square (both loops at capacity).
-    unpack_reduce_col_tilizeA_strided_dims = {
-        (DestSync.Half, DestAccumulation.No): [
-            [32, 32],
-            [32, 256],
-            [256, 32],
-            [64, 128],
-        ],
-        (DestSync.Half, DestAccumulation.Yes): [
-            [32, 32],
-            [32, 128],
-            [128, 32],
-            [64, 64],
-        ],
-        (DestSync.Full, DestAccumulation.No): [
-            [32, 32],
-            [32, 512],
-            [512, 32],
-            [128, 128],
-        ],
-        (DestSync.Full, DestAccumulation.Yes): [
-            [32, 32],
-            [32, 256],
-            [256, 32],
-            [64, 128],
-        ],
-    }
-
-    if is_perf:
-        unpack_reduce_col_tilizeA_strided_dims = {
-            (DestSync.Half, DestAccumulation.No): [[32, 32]],
-            (DestSync.Half, DestAccumulation.Yes): [[32, 32]],
-        }
+    tile_sizes = (
+        select_perf_tile_sizes(UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES)
+        if is_perf
+        else UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES
+    )
 
     combinations = []
 
@@ -125,19 +141,35 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
             for dest_sync in (
                 (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
             ):
-                for dimensions in unpack_reduce_col_tilizeA_strided_dims[
-                    (dest_sync, acc)
-                ]:
-                    for pool_type in (
-                        ReducePool.Max,
-                        ReducePool.Sum,
-                        ReducePool.Average,
-                    ):
-                        if pool_type == ReducePool.Average and in_fmt.is_integer():
-                            continue
-                        combinations.append(
-                            (fmt, acc, dest_sync, runtime(dimensions), pool_type)
+                for tile_dimensions in tile_sizes:
+                    if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dimensions):
+                        continue
+                    tile_shape = construct_tile_shape(tile_dimensions)
+                    dimensions_list = (
+                        generate_perf_input_dimensions(acc, dest_sync, tile_shape)
+                        if is_perf
+                        else generate_corner_case_input_dimensions(
+                            dest_sync, acc, tile_shape
                         )
+                    )
+                    for dimensions in dimensions_list:
+                        for pool_type in (
+                            ReducePool.Max,
+                            ReducePool.Sum,
+                            ReducePool.Average,
+                        ):
+                            if pool_type == ReducePool.Average and in_fmt.is_integer():
+                                continue
+                            combinations.append(
+                                (
+                                    fmt,
+                                    acc,
+                                    dest_sync,
+                                    dimensions,
+                                    pool_type,
+                                    runtime(tile_dimensions),
+                                )
+                            )
 
     return combinations
 
@@ -169,6 +201,14 @@ def unpack_reduce_col_tilizeA_strided_implied_math_formats():
     return [ImpliedMathFormat.No]
 
 
+def generate_reduce_scaler(
+    pool_type: ReducePool, tile_shape: TileShape, tile_dimensions: Tuple[int, int]
+) -> torch.Tensor:
+    """SrcB scaler tile: 1.0 per element, or 1/rows for Average so the column reduce gives the mean."""
+    scaler = 1 / tile_dimensions[0] if pool_type == ReducePool.Average else 1
+    return torch.full((tile_shape.total_tile_size(),), scaler)
+
+
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims=ALL_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
@@ -186,11 +226,17 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (formats, dest_acc, dest_sync_mode, input_dimensions, pool_type) = (
-        formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims
-    )
+    (
+        formats,
+        dest_acc,
+        dest_sync_mode,
+        input_dimensions,
+        pool_type,
+        tile_dimensions,
+    ) = formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims
 
-    num_faces = 4
+    tile_shape = construct_tile_shape(tile_dimensions)
+    num_faces = tile_shape.total_num_faces()
     reduce_dim = ReduceDimension.Column
     math_fidelity = MathFidelity.LoFi
 
@@ -199,12 +245,10 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
+        tile_dimensions=tile_dimensions,
     )
 
-    if pool_type == ReducePool.Average:
-        src_B = torch.full((1024,), 1.0 / 32)
-    else:
-        src_B = torch.full((1024,), 1)
+    src_B = generate_reduce_scaler(pool_type, tile_shape, tile_dimensions)
 
     tilize_gen = get_golden_generator(TilizeGolden)
 
@@ -216,7 +260,11 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
         input_fmt = DataFormat.Float16_b
 
     golden_A = tilize_gen(
-        golden_src_A, input_dimensions, formats.input_format, num_faces=num_faces
+        golden_src_A,
+        input_dimensions,
+        formats.input_format,
+        num_faces=num_faces,
+        tile_dimensions=tile_dimensions,
     )
 
     if not is_perf:
@@ -227,6 +275,7 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
             pool_type,
             formats.output_format,
             tile_cnt_A,
+            tile_shape=tile_shape,
             input_format=input_fmt,
         )
 
@@ -249,10 +298,14 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
-            generate_input_dim(input_dimensions, input_dimensions),
+            generate_input_dim(
+                input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
+            ),
             TILE_COUNT(tile_cnt_A),
-            TEST_FACE_DIMS(),
-            NUM_FACES(),
+            TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
+            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
+            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+            NUM_FACES(num_faces),
             LOOP_FACTOR(loop_factor),
         ],
         "variant_stimuli": StimuliConfig(
@@ -265,24 +318,24 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
             tile_count_B=1,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
+            face_r_dim=tile_shape.face_r_dim,
+            tile_dimensions=tile_dimensions,
+            use_dense_tile_dimensions=True,
         ),
         "unpack_to_dest": False,
         "dest_acc": dest_acc,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-            "boot_mode": boot_mode,
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
@@ -293,5 +346,5 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor, res_tensor, formats.output_format, tile_shape=tile_shape
     ), "Assert against golden failed"

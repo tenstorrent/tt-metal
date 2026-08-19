@@ -118,6 +118,7 @@ enum class EnvVarID {
     TT_METAL_DRAM_BACKED_CQ,                   // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,   // Simulator tensor preload bypasses FD CQ copies
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
+    TT_METAL_MEASURE_DFB_INIT_TIME,                     // Temporary DFB init rdcycle instrumentation (deprecate once device profiler covers this).
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -246,6 +247,9 @@ enum class EnvVarID {
     // ALLOCATOR CONFIGURATION
     // ========================================
     TT_METAL_ALLOCATOR_MODE_HYBRID,  // Enable hybrid lockstep + per-core L1 allocator mode
+    TT_METAL_TRACE_ALLOC_TRACKING,  // Enable per-trace unsafe allocation accounting
+    TT_METAL_TRACE_ALLOC_TRACEBACKS,  // Capture diagnostics for unsafe trace allocations
+    TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE,  // Exclude program-cache buffers from trace accounting
 
     // ========================================
     // SHM TRACKING
@@ -355,6 +359,9 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         this->root_dir = p.string();
     }
 
+    trace_allocation_tracking_enabled_ = false;
+    trace_allocation_diagnostics_enabled_ = false;
+    trace_allocation_skip_program_cache_enabled_ = false;
     InitializeFromEnvVars();
 
     // Mock devices mirror real silicon of the same architecture: leave the 2-erisc default (and any
@@ -832,6 +839,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=0
         case EnvVarID::TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES:
             this->blackhole_dram_programmable_cores_override = is_env_enabled(value);
+            break;
+
+        // TT_METAL_MEASURE_DFB_INIT_TIME
+        // Enables rdcycle-based DFB init timing slots in device firmware (Quasar only).
+        // Deprecate once the device profiler subsumes this instrumentation.
+        // Default: false (rdcycle timing disabled; device uses no-op counters)
+        // Usage: export TT_METAL_MEASURE_DFB_INIT_TIME=1
+        case EnvVarID::TT_METAL_MEASURE_DFB_INIT_TIME:
+            this->measure_dfb_init_time_enabled = is_env_enabled(value);
             break;
 
         // ========================================
@@ -1663,6 +1679,20 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_ALLOCATOR_MODE_HYBRID=1
         case EnvVarID::TT_METAL_ALLOCATOR_MODE_HYBRID: this->allocator_mode_hybrid = is_env_enabled(value); break;
 
+        // Trace-allocation tracker settings are process-start options. Keep their
+        // cached values in RunTimeOptions so runtime hot paths never call getenv.
+        case EnvVarID::TT_METAL_TRACE_ALLOC_TRACKING:
+            trace_allocation_tracking_enabled_ = std::strcmp(value, "1") == 0;
+            break;
+        case EnvVarID::TT_METAL_TRACE_ALLOC_TRACEBACKS:
+            trace_allocation_diagnostics_enabled_ =
+                trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
+            break;
+        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE:
+            trace_allocation_skip_program_cache_enabled_ =
+                trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
+            break;
+
         // TT_METAL_SHM_TRACKING_DISABLED
         // Disable shared memory tracking for tt-smi.
         // Default: 0 (SHM tracking enabled)
@@ -1979,7 +2009,7 @@ void RunTimeOptions::ParseFeatureCoreRange(
     }
 
     // Set the core range
-    feature_targets[feature].cores[core_type] = cores;
+    feature_targets[feature].cores[core_type] = std::move(cores);
 }
 
 bool RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var) {
@@ -2005,7 +2035,7 @@ bool RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
         }
     }
 
-    feature_targets[feature].chip_ids = chips;
+    feature_targets[feature].chip_ids = std::move(chips);
 
     return specified;
 }

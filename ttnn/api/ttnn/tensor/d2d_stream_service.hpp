@@ -65,12 +65,15 @@ struct D2DStreamConfig {
 
     tt::tt_metal::CoreRange receiver_worker_cores;
 
-    // Optional inline metadata. When > 0, each transfer carries one extra
-    // trailing socket page holding `metadata_size_bytes` of metadata (<= one
-    // socket page). On the sender mesh, one designated worker writes the blob
-    // into an L1 buffer on its sender service core before acking; the sender
-    // service ships it after the data drain. On the receiver mesh, the receiver
-    // service multicasts it into every receiver worker core's L1. 0 = disabled.
+    // Optional inline metadata. When > 0, each transfer carries `metadata_size_bytes`
+    // of metadata alongside the tensor payload. On the sender mesh, one designated
+    // worker writes the blob into an L1 buffer on its sender service core before
+    // acking; the sender service ships it (rounded up to the L1 alignment) after the
+    // data drain, landing it at the receiver's socket-FIFO base. On the receiver mesh,
+    // the receiver service multicasts exactly metadata_size_bytes into every receiver
+    // worker core's L1. 0 = disabled.
+    // Capacity: the L1-aligned size must fit in socket_mem_config.fifo_size — it is
+    // NOT tied to the (flow-control only, 64 B) socket page size.
     // Mirrors H2DStreamService::Config::metadata_size_bytes.
     uint32_t metadata_size_bytes = 0;
 

@@ -228,13 +228,13 @@ ALWI void reduce_block(
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim>
 ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = 4) {
-#ifndef ARCH_QUASAR
     ASSERT(num_faces > 0 && num_faces <= MAX_NUM_FACES);
     const ckernel::TensorShape tensor_shape = {
         MAX_FACE_R_DIM,
         MAX_FACE_C_DIM,
         (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<std::uint8_t>(1) : MAX_NUM_FACES_R_DIM,
         (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<std::uint8_t>(num_faces) : MAX_NUM_FACES_C_DIM};
+#ifndef ARCH_QUASAR
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, tensor_shape)));
 #else
     MATH((llk_math_reduce<reduce_type, reduce_dim>(idst, tensor_shape)));

@@ -14,7 +14,6 @@
 #include "paged_fill_cache_program_factory.hpp"
 
 #include "paged_fill_cache_device_operation_types.hpp"
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::experimental::prim {
@@ -36,19 +35,6 @@ struct PagedFillCacheDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    // batch_idx_fallback and noop are excluded from the program hash (so calls differing only in
-    // them cache-hit). Of these only batch_idx_fallback is genuinely dynamic: in the scalar-fallback
-    // path (no batch_idx_tensor) it is baked into a writer runtime arg, so it must be re-applied to
-    // the cached program on every dispatch. Returns empty in batch-idx-tensor mode (the writer pushes
-    // a Buffer* the framework already re-patches) and for coords excluded from a mesh dispatch. noop
-    // is derived from the hashed mesh_coords and is therefore stable across cache hits, so it is not
-    // re-patched.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim

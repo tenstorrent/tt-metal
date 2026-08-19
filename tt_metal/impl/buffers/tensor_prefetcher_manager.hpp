@@ -34,6 +34,7 @@ class Program;
 
 namespace distributed {
 
+class MeshCommandQueue;
 class MeshDevice;
 
 // Long-lived Tensor prefetcher (DRISC) for a single MeshDevice. Holds the
@@ -79,16 +80,14 @@ public:
 
     void start();
 
-    // When `cq_id`'s command queue is mid trace-capture, the serialized request pages are
-    // captured into trace_requests_ keyed by that trace's MeshTraceId instead of being sent
-    // immediately; they are (re)sent on every replay_trace() of that trace. Otherwise the
-    // pages are queued for immediate fan-out. `cq_id` == std::nullopt resolves to the
-    // current/default command queue (see MeshDevice::mesh_command_queue).
+    // Capture-vs-send contract, and the `trace_capture_cq` precondition: see
+    // QueueTensorPrefetcherRequest. Captured pages live in trace_requests_ keyed by the
+    // recording trace's MeshTraceId, and are re-queued by replay_trace().
     void queue(
         const experimental::GlobalCircularBuffer& gcb,
         const std::optional<MeshCoordinateRangeSet>& device_subset,
         const std::vector<experimental::TensorPrefetcherInput>& tensors,
-        std::optional<uint8_t> cq_id = std::nullopt);
+        MeshCommandQueue* trace_capture_cq);
 
     // Re-queue every request captured under `trace_id` for immediate fan-out. No-op if no
     // prefetcher requests were captured during that trace's capture. Called from the trace
@@ -99,13 +98,14 @@ public:
     void release_trace(const MeshTraceId& trace_id);
 
     // Make the prefetcher wait until all work currently enqueued on command queue
-    // `cq_id` has landed before it reads DRAM. Bumps a host-side per-CQ counter,
+    // `cq` has landed before it reads DRAM. Bumps a host-side per-CQ counter,
     // has the dispatcher write the new value into every DRAM core's signal slot
     // (ordered after prior CQ work), and queues a WAIT_CQ request so each kernel
     // blocks until that value is observed. Must be called synchronously on the
     // host thread that enqueues the data writes (after them, before the dependent
-    // prefetch request).
-    void enqueue_cq_signal_and_wait(uint8_t cq_id, const std::optional<MeshCoordinateRangeSet>& device_subset);
+    // prefetch request). `cq` must belong to this manager's mesh device, and its id
+    // must be within [0, kNumCqSignalSlots).
+    void enqueue_cq_signal_and_wait(MeshCommandQueue& cq, const std::optional<MeshCoordinateRangeSet>& device_subset);
 
     void stop();
 
@@ -168,14 +168,22 @@ private:
     // Base (local DRISC L1) of this prefetcher's per-CQ signal slots; uniform
     // across all sender cores. Carved at the front of the kernel working region.
     uint32_t cq_signal_l1_addr_ = 0;
+    // Distance between consecutive signal slots. The slots hold one uint32 each but are
+    // spaced a full L1 alignment apart: each is the destination of its own dispatcher
+    // write, and a dispatch write only lands on an L1-aligned address. Packed 4 bytes
+    // apart, every slot but the first would be misaligned and its write would go nowhere,
+    // leaving the kernel spinning on a WAIT_CQ that is never satisfied.
+    uint32_t cq_signal_slot_stride_ = 0;
     // Host-side monotonic signal counter per command queue. enqueue_cq_signal_and_wait
-    // pre-increments cq_signal_counter_[cq_id] and uses it for both the dispatcher
+    // pre-increments cq_signal_counter_[cq.id()] and uses it for both the dispatcher
     // write and the WAIT_CQ request value.
     std::array<uint32_t, kNumCqSignalSlots> cq_signal_counter_{};
 
-    // sender_logical_cores_[s] = logical DRAM core for sender s. Both available
-    // sender cores per bank are provisioned at start. Each queued GCB may map either
-    // the primary sender only or both senders; PREFETCH requests target that subset.
+    // sender_logical_cores_[s] is the logical DRAM core for sender slot s, a (bank,
+    // primary/secondary role) pair. Both sender cores per bank are provisioned at start; each
+    // queued GCB may map the primary only or both, and PREFETCH requests target that subset.
+    // One list covers the whole mesh (see metal_SocDescriptor::dram_bank_endpoint_coords);
+    // enumerate_dram_senders TT_FATALs if a device disagrees.
     std::vector<CoreCoord> sender_logical_cores_;
     uint32_t num_senders_ = 0;
     uint32_t num_banks_ = 0;

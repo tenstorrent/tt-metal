@@ -224,6 +224,7 @@ public:
 
     // Helper to infer FabricType from MGD dim_types
     static FabricType infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc);
+    static FabricType infer_fabric_type_from_dim_types(const proto::SwitchDescriptor* switch_desc);
 
     // Many-to-many pinning groups parsed from the MGD's top-level `pinnings` section. Each entry may
     // bind multiple logical fabric nodes to multiple physical ASIC positions (all-to-all).
@@ -251,7 +252,9 @@ private:
 
     // Connections
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_instance_id_;
-    std::unordered_map<std::string_view, std::vector<ConnectionId>> connections_by_type_;
+    // Must use owning std::string keys: keys were previously string_views into InstanceData::type, which broke
+    // move/copy (e.g. std::vector<MeshGraphDescriptor>::emplace_back / reallocation) by leaving dangling views.
+    std::unordered_map<std::string, std::vector<ConnectionId>> connections_by_type_;
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
     std::vector<AsicPinningGroup> pinnings_;

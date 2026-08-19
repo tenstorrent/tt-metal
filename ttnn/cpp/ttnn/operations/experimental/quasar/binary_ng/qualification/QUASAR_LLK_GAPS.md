@@ -45,10 +45,9 @@ itself lacks.
   every op `unary_op_utils.cpp::get_op_init_and_func` handles (nearly the whole enum).
 - **Broadcast rows** (Table 3) = the `unary_bcast<BroadcastType>` primitive `binary_ng`'s Quasar DFB
   factory uses to realize `SubtileBroadcastType != NONE` for a **single** operand
-  (`SCALAR`/`ROW`/`COL`). The mixed types need **no new primitive** — `ROW_B_COL_A` is op-wired and
-  sim-certified using the same ROW body plus a reader software-fill for the COL operand, so it adds no row
-  here. `ROW_A_COL_B` is carved out **op-side** (gate `return false`) over an intermittent craq-sim race,
-  **not** for a missing LLK primitive — do not read its absence from Table 3 as an LLK gap. Both tracked in
+  (`SCALAR`/`ROW`/`COL`). The mixed types need **no new primitive** — both `ROW_B_COL_A` and `ROW_A_COL_B`
+  are op-wired and sim-certified using the same ROW body plus a reader software-fill for the COL operand, so
+  they add no row here. Do not read their absence from Table 3 as an LLK gap. Tracked in
   `../QUASAR_PARITY_GAPS.md` §6.
 - **Which `tt_llk_quasar` tree is authoritative** — there are **two** and they disagree. The build uses
   **`tt_metal/tt-llk/tt_llk_quasar/`** (on the kernel `-I` path — `tt_metal/hw/CMakeLists.txt`). The other,
@@ -261,11 +260,10 @@ All three dimensions lower to the same Quasar LLK path — the MOVB2D srcB→des
 `add_tiles_bcast_rows`/`mul_tiles_bcast_cols`/etc. shorthand family further down `bcast.h` (`ELWADD`-style,
 `llk_unpack_AB<BroadcastType>`), which is WH/BH-only and not used by the Quasar DFB kernels.
 
-**Mixed broadcast types need no row of their own.** `ROW_B_COL_A` is op-wired and sim-certified on the DFB
-path using the ROW row above — its COL half is a reader software-fill, not a second `unary_bcast` pass (a
-deliberate reader/compute load-balance that keeps compute at 2 LLK passes). Its mirror `ROW_A_COL_B` is
-gate-rejected **op-side** for an intermittent craq-sim race in the `llk_post`-as-srcA path (#205), not for a
-missing primitive: the LLK side is `✓*` for both directions.
+**Mixed broadcast types need no row of their own.** `ROW_B_COL_A` and `ROW_A_COL_B` are both op-wired and
+sim-certified on the DFB path using the ROW row above — the COL half is a reader software-fill, not a second
+`unary_bcast` pass (a deliberate reader/compute load-balance that keeps compute at 2 LLK passes). The LLK
+side is `✓*` for both directions.
 
 - **32-bit formats are gated off:** the Quasar branch's `enable_unpack_to_dest` check omits
   `DataFormat::UInt32` — Quasar has no uint32 device format (its 32-bit formats are `Float32`/`Int32`; the
@@ -273,10 +271,11 @@ missing primitive: the LLK side is `✓*` for both directions.
   the A2D unpack-to-dest path, which isn't implemented on Quasar. bf16 only for now.
 - `reconfigure_unary_bcast` (mid-program bcast-type/format switch) is `#ifndef ARCH_QUASAR`-only; Quasar
   re-`init`s per broadcast type instead.
-- No sim/LLK bug surfaced while certifying SCALAR/ROW/COL through the op — all 112 broadcast cases in
-  `test_binary_ng_bcast.py` pass on the QSR sim alongside the 88-case no-bcast regression suite. The one
-  race that DID surface is in the mixed `ROW_A_COL_B` composition (`llk_post` as binary srcA), not in any
-  single-operand dimension above; see the mixed-type note under Table 3.
+- No sim/LLK bug surfaced while certifying SCALAR/ROW/COL through the op — all 130 broadcast cases in
+  `test_binary_ng_bcast.py` pass on the QSR sim (0 skipped) alongside the 88-case no-bcast regression suite.
+  The one race that DID surface was in the mixed `ROW_A_COL_B` composition and was a **simulator**
+  credit-attribution bug (fixed by craq-sim #218), never an LLK or op defect — no single-operand dimension
+  above was implicated; see the mixed-type note under Table 3.
 
 ## Priorities (by model impact)
 
@@ -290,7 +289,8 @@ missing primitive: the LLK side is `✓*` for both directions.
 — all sim-certified — plus the arithmetic/`where`/compare-to-zero core (bf16/fp32 add/sub/mul/div now
 sim-certified through both `binary_ng`'s tensor-tensor no-broadcast path AND its tensor-scalar path, the
 latter via a writer-filled RHS tile) and subtile broadcast `unary_bcast` SCALAR/ROW/COL — single-operand
-plus the mixed `ROW_B_COL_A` composition (Table 3) — sim-certified through `binary_ng` itself.
+plus BOTH mixed compositions, `ROW_B_COL_A` and `ROW_A_COL_B` (Table 3) — sim-certified through
+`binary_ng` itself.
 
 ## Closing a gap — the pattern
 

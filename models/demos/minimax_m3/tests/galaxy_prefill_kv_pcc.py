@@ -14,6 +14,12 @@ Env:
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode)                                  [default 5120]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement (less noise)      [default 1]
   PREFILL_SKIP_PCC    "1" -> perf only: skip the per-layer golden KV PCC (no kv_cache/ needed) [default 0]
+  PREFILL_EXPECTED_TPS  whole-sequence tok/s baseline; when set, assert measured median is
+                        within +/- PREFILL_PERF_MARGIN of this value                           [default: unset]
+  PREFILL_PERF_MARGIN fraction tolerance around PREFILL_EXPECTED_TPS (e.g. 0.05 = +/-5%)     [default 0.05]
+  PREFILL_REQUIRE_HIGH_POWER  "1" -> require is_high_power() (>=130W TDP via tt-smi); skip
+                        otherwise. Used by the Blaze perf job; leave unset for accuracy/KV PCC   [default 0]
+  PREFILL_STANDALONE_CHUNKED_PCC  min K/V/index_k PCC gate (fail below this)                 [default 0.88]
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs; also auto-sets
                       M3_LOAD_NLAYERS so only those layers' weight shards are read)          [default: all]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8" (cache holds both)      [default bf4]
@@ -29,7 +35,7 @@ Run (after weights are present on disk):
   export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
   # chunked over the 10240-token golden (two 5120 chunks, no pad tail), 5 timed iterations:
   PREFILL_CHUNKED=1 PREFILL_TPS_ITERS=5 \
-    PREFILL_TRACE_DIR=/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240 \
+    PREFILL_TRACE_DIR=$HF_MODEL/golden/longbook_10240 \
     python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
 """
 
@@ -89,11 +95,16 @@ def plan(n_tokens, chunk_size, chunked):
 def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config):
     """Per-layer K / V / index_k PCC: device cache (gather_layer) vs the golden trace. The device
     stores K / index_k Meta-RoPE swizzled over the rotary slice; the golden is HF half-split, so
-    permute the golden's rotary slice (identity tail) before comparing. V is raw (no swizzle)."""
+    permute the golden's rotary slice (identity tail) before comparing. V is raw (no swizzle).
+
+    Fails if overall min PCC is below PREFILL_STANDALONE_CHUNKED_PCC (default 0.88), matching
+    models/demos/minimax_m3/tt/runners/prefill_kv_validation.py.
+    """
     from safetensors import safe_open
 
     from models.common.utility_functions import comp_pcc
 
+    threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
     head_dim = hf_config.head_dim
     rotary_dim = getattr(hf_config, "rotary_dim", head_dim)
     half = rotary_dim // 2
@@ -124,10 +135,13 @@ def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
             line += f" index_k={pcc_ik:.5f}"
         logger.info(line)
 
+    min_pcc = min(mins.values())
     logger.info(
         f"[kv-pcc] min PCC across {num_layers} layers: "
-        f"K={mins['k']:.5f} V={mins['v']:.5f} index_k={mins['index_k']:.5f}"
+        f"K={mins['k']:.5f} V={mins['v']:.5f} index_k={mins['index_k']:.5f} "
+        f"(overall {min_pcc:.5f}, threshold {threshold})"
     )
+    assert min_pcc >= threshold, f"KV-cache PCC {min_pcc:.5f} < threshold {threshold}"
     return mins
 
 
@@ -138,6 +152,20 @@ def main():
     from models.demos.minimax_m3.tt.weight_cache import weight_cache_is_complete
 
     _raise_nproc_limit()  # tt-metal parallel kernel JIT needs a high process limit (see fn docstring)
+
+    # Perf CI only: same guard as Kimi/GLM no_pcc / ring-joint SDPA (pytest skipif is_high_power).
+    # Accuracy/KV-PCC leaves PREFILL_REQUIRE_HIGH_POWER unset so bh_sc1 hosts are fine.
+    if os.getenv("PREFILL_REQUIRE_HIGH_POWER", "0") == "1":
+        from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_tdp_limit_max, is_high_power
+
+        if not is_high_power():
+            tdp = get_tdp_limit_max()
+            print(
+                f"[prefill-pcc] SKIP: PREFILL_REQUIRE_HIGH_POWER=1 but host is not high-power "
+                f"(TDP_LIMIT_MAX={tdp}; need >=130W). Guards exabox.tenstorrent.com/power=14kw.",
+                flush=True,
+            )
+            return 0
 
     golden_dir = os.environ.get("PREFILL_TRACE_DIR")
     if not golden_dir:
@@ -216,10 +244,8 @@ def main():
             f"[prefill-pcc] expert_dtype={expert_dtype} (EXPERT_DTYPE={os.getenv('EXPERT_DTYPE', 'bf4')})", flush=True
         )
         force_load = os.getenv("M3_FORCE_LOAD_WEIGHTS") == "1"
-        cache_only = not force_load and (
-            os.getenv("M3_WEIGHTS_FROM_CACHE") == "1"
-            or weight_cache_is_complete(cache_path, hf_config, num_layers, expert_dtype)
-        )
+        cache_complete = weight_cache_is_complete(cache_path, hf_config, num_layers, expert_dtype)
+        cache_only = not force_load and (os.getenv("M3_WEIGHTS_FROM_CACHE") == "1" or cache_complete)
         if cache_only:
             print(
                 "[prefill-pcc] tilized weight cache complete -> loading from cache, "
@@ -228,6 +254,18 @@ def main():
             )
             state_dict = {}
         else:
+            bang = "!" * 80
+            print(
+                f"\n{bang}\n"
+                f"[prefill-pcc] WARNING: warm tilized weight cache NOT available at\n"
+                f"  {cache_path}\n"
+                f"  (complete={cache_complete}, M3_FORCE_LOAD_WEIGHTS={force_load}).\n"
+                f"  Falling back to the ~869GB bf16 source read + cache build — expect multi-hour\n"
+                f"  wall time; CI timeouts (even 2h) will usually fire. Prefill tensor_cache_bfp8_*\n"
+                f"  under HF_MODEL / TT_CACHE_PATH on this host before relying on this job.\n"
+                f"{bang}\n",
+                flush=True,
+            )
             print("[prefill-pcc] loading real bf16 weights + EP placement (slow: bf16 source read) ...", flush=True)
             state_dict = ModelArgs.load_state_dict(model_args.weights_path)
         cfg = TtPrefillRuntimeConfig(
@@ -293,9 +331,10 @@ def main():
             )
 
         w = statistics.median(whole_times)
+        whole_tps = n_tokens / w
         print(
             f"[prefill-pcc] WHOLE SEQUENCE over {tps_iters} iters: {n_tokens} tok @ 0 cache, "
-            f"median {n_tokens / w:.1f} tok/s (real prompt), {total / w:.1f} tok/s (processed); "
+            f"median {whole_tps:.1f} tok/s (real prompt), {total / w:.1f} tok/s (processed); "
             f"wall median {w * 1000:.1f} ms [min {min(whole_times) * 1000:.1f}, max {max(whole_times) * 1000:.1f}]",
             flush=True,
         )
@@ -306,6 +345,23 @@ def main():
             f"wall median {lc * 1000:.1f} ms [min {min(last_times) * 1000:.1f}, max {max(last_times) * 1000:.1f}]",
             flush=True,
         )
+
+        # --- perf gate: whole-sequence tok/s vs PREFILL_EXPECTED_TPS +/- PREFILL_PERF_MARGIN ---
+        expected_tps_env = os.environ.get("PREFILL_EXPECTED_TPS")
+        if expected_tps_env is not None:
+            expected_tps = float(expected_tps_env)
+            margin = float(os.environ.get("PREFILL_PERF_MARGIN", "0.05"))
+            low = expected_tps * (1.0 - margin)
+            high = expected_tps * (1.0 + margin)
+            print(
+                f"[prefill-pcc] PERF GATE: measured {whole_tps:.1f} tok/s vs baseline "
+                f"{expected_tps:.1f} +/- {margin * 100:.1f}% band [{low:.1f}, {high:.1f}]",
+                flush=True,
+            )
+            assert low <= whole_tps <= high, (
+                f"whole-sequence throughput {whole_tps:.1f} tok/s outside baseline "
+                f"{expected_tps:.1f} tok/s +/- {margin * 100:.1f}% band [{low:.1f}, {high:.1f}]"
+            )
 
         # --- accuracy: per-layer KV PCC vs golden (skipped in perf-only mode; synthetic
         # traces carry only metadata.json, so there is no golden KV cache to compare against) ---

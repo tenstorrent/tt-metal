@@ -34,6 +34,7 @@ thread_local uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
+thread_local uint32_t hw_thread_idx __attribute__((used));
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
@@ -56,6 +57,10 @@ thread_local uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS] __attribute__((used
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 #endif
 #endif
+// Defined for all TRISC types (including math) so kernels that include dataflow_buffer headers link cleanly.
+// For math TRISC, setup_local_dfb_interfaces is not called, so this stays 0; dfb_ensure_ready
+// returns immediately for any DFB math TRISC is not a participant in (expected_signal == 0).
+thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
 
 namespace ckernel {
 
@@ -106,13 +111,13 @@ inline void enable_cc_stack() {
 
 extern "C" uint32_t _start1() {
     configure_csr();
-    uint32_t hartid = internal_::get_hw_thread_idx();
+    // Raw read: hw_thread_idx has not been filled yet, and do_thread_crt1() below zeroes the .tbss
+    // it lives in, so caching it any earlier would just be discarded.
+    uint32_t hartid = internal_::read_hw_thread_idx();
     uint32_t neo_id = internal_::get_neo_id();
     uint32_t trisc_id = internal_::get_trisc_id();
-    DEVICE_PRINT("hartid: {}\n", hartid);
     volatile tt_l1_ptr uint8_t* const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))
                                                        ->subordinate_sync.map[hartid];  // first entry is for NCRISC
-    WAYPOINT("I");
 
     if (neo_id == 0) {
         extern uint32_t __ldm_data_start[];
@@ -122,6 +127,12 @@ extern "C" uint32_t _start1() {
     }
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
+    // .tbss has been zeroed: cache this thread's hw index.
+    internal_::init_hw_thread_idx();
+    // DEVICE_PRINT and WAYPOINT index their per-thread slots via get_hw_thread_idx(), so they have to
+    // come after the cache is filled.
+    DEVICE_PRINT("hartid: {}\n", hartid);
+    WAYPOINT("I");
 
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
            SHARED_GLOBALS_READY_GO) {
@@ -158,10 +169,14 @@ extern "C" uint32_t _start1() {
             uintptr_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-            uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+            uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base +
                                                                     launch_msg->kernel_config.local_cb_offset);
             uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
+#if defined(UCK_CHLKC_PACK)
+            const DfbPackerRemapperRange packer_rmp = setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+#else
             setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+#endif
 #endif
 
             // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when PR #38124 is merged
@@ -209,6 +224,11 @@ extern "C" uint32_t _start1() {
             record_stack_usage(stack_free);
             WAYPOINT("D");
             DEVICE_PRINT_KERNEL_FINISHED();
+
+#if defined(UCK_CHLKC_PACK)
+            // Tear down packer remapper pairs programmed this launch so they cannot leak into the next.
+            dfb_clear_packer_remapper_window(packer_rmp.lo, packer_rmp.hi);
+#endif
 
             // Signal completion
             DPRINT("SIGNALING COMPLETION {:x}\n", (uint32_t)*trisc_run);
