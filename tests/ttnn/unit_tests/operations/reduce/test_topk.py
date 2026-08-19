@@ -551,10 +551,13 @@ def test_topk_multicore_values_beyond_first_tile_row(num_rows, largest, device):
 # ---------------------------------------------------------------------------
 # Large-k Blackhole routing: ttnn.topk with bf16, dim=-1, largest=True,
 # stable=False and 64 < k <= 2048 is routed at the composite level through
-# ttnn.experimental.topk_large_indices (untilize -> clamp to lowest-finite
-# bf16 -> op -> gather of the ORIGINAL values by index -> tilize -> index
-# dtype match; a slice pair only when k is not a multiple of 16), bypassing
-# the single-core cliff (the device op's own multi-core path is gated at
+# ttnn.experimental.topk_large_indices (fused untilize+clamp to lowest-finite
+# bf16 — the private topk_route_prep device op, exercised by EVERY routed
+# call below -> op -> fused gather of the ORIGINAL values straight from the
+# TILE source + TILE assembly of both outputs + index dtype emit — the
+# private topk_route_finish device op, also exercised by EVERY routed call;
+# a slice pair only when k is not a multiple of 16), bypassing the
+# single-core cliff (the device op's own multi-core path is gated at
 # k <= 64 + pow2 width + width < 65536).
 #
 # Tie semantics on the routed path: the returned index SET is a correct top-k
@@ -629,11 +632,36 @@ def test_topk_large_k_routed_non_pow2_width(k, device):
 @pytest.mark.parametrize("W", [262144, 524288])
 @pytest.mark.parametrize("k", [1536, 2048])
 def test_topk_large_k_routed_wide(k, W, device):
-    # The routed envelope extends to 2^19 — the RM gather parks one full
-    # W * 2 B input row-stick in an L1 CB, so 2^20 would not fit Blackhole's
-    # 1.5 MB budget (see large_k_route_max_width in topk.cpp). Fewer rows
-    # keep host-side reference cost and transfer size sane at these widths.
+    # The routed envelope extends to 2^19 — kept from the gather-era L1
+    # constraint as the silicon-validated ceiling even though the fused
+    # topk_route_finish tail no longer stages full rows (see
+    # large_k_route_max_width in topk.cpp). Fewer rows keep host-side
+    # reference cost and transfer size sane at these widths.
     run_topk_large_k_routed_test(1, 1, 8, W, k, device)
+
+
+@pytest.mark.skipif(
+    not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
+)
+def test_topk_large_k_routed_ragged_shape(device):
+    # H=30 and W=4999, neither a multiple of 32: the fused topk_route_prep
+    # writer must emit ONLY the logical sticks/columns (tile padding dropped
+    # on both axes), and W=4999 -> 157 width-tiles (prime) forces its
+    # bw_last=5 remainder blocks on every tile-row. Every other routed cell
+    # is 32-aligned, so this is the lone cover for both clamps.
+    run_topk_large_k_routed_test(1, 1, 30, 4999, 96, device)
+
+
+@pytest.mark.skipif(
+    not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
+)
+def test_topk_large_k_routed_ragged_tall(device):
+    # TALL ragged: enough tile-rows that cores own MULTIPLE prep blocks
+    # crossing tile-row boundaries (nblocks = 7 * ceil(157/8) = 140 > grid),
+    # which desynchronizes the prep input-CB read pointer on the bw_last
+    # remainder blocks -- the wrap hazard the flat 30-row ragged cell is
+    # structurally blind to (1 block/core there).
+    run_topk_large_k_routed_test(1, 1, 224, 4999, 96, device)
 
 
 @pytest.mark.skipif(
@@ -718,9 +746,22 @@ def test_topk_large_k_routing_fallbacks(device):
 def test_topk_routed_k_not_multiple_of_16(device):
     # k=100 exercises the routed k % 16 != 0 tail: topk_large_indices
     # requires a multiple of 16, so the op runs at k_rounded=112 and
-    # post_topk_transform slices back down to 100.
+    # post_topk_transform slices back down to 100. k_rounded=112 is also the
+    # suite's only k_rounded % 32 == 16 cell: topk_route_finish's last output
+    # tile is half k-padding (its right face pair must stay zero-filled).
     run_topk_large_k_routed_test(1, 1, 32, 8192, 100, device)
 
+
+@pytest.mark.skipif(
+    not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
+)
+def test_topk_large_k_routed_multi_tile_rows(device):
+    # H=96 (3 row-tiles) x C=2 batches: topk_route_finish decomposes its work
+    # units over GLOBAL tile rows (batch * R_p/32 + rt) and pages the source
+    # gather at row_tile * width_tiles + idx/32 — every other routed cell has
+    # H <= 32 and a single batch (row_tile == 0, batch == 0 throughout), which
+    # would leave that decomposition entirely uncovered.
+    run_topk_large_k_routed_test(1, 2, 96, 8192, 96, device)
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="routing predicate is Blackhole-only")
@@ -748,4 +789,3 @@ def test_topk_large_k_routing_engages(device):
     ttnn.graph.begin_graph_capture()
     ttnn.topk(ttnn_input, 32, dim=-1, largest=True, sorted=True)
     assert not ran_large_indices(ttnn.graph.end_graph_capture())
-
