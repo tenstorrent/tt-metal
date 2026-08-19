@@ -232,14 +232,16 @@ int main(int argc, char** argv) {
         zone_cyc,
         knee_mode ? "uniform nop-spin: knee mode" : "graduated ~1..100us wall-clock");
     if (knee_mode) {
-        // No tick-derived rate here on purpose: --delay is nop LOOP ITERATIONS over a volatile counter
-        // (same unit as the standalone drain harness --proddelay), and one iteration is several cycles, so markers/s
-        // cannot be derived from it without measuring cycles-per-iteration. Printing a tick-derived rate is
-        // what previously made this knee look ~30x worse than the harness's.
+        // Measured (bh-18, 2026-08-19): the volatile nop loop costs exactly 10 cycles/iteration and a zone's
+        // fixed cost is ~87 ns -- from 2x2 x 2000-iter device zone windows at delay 15/500/2000
+        // (4.0/75.8/298.0 ms), slope 7.407 ns/unit = 10.00 cycles at 1.35 GHz, intercept 86.7 ns.
+        const double zone_ns = 86.7 + zone_cyc * 10.0 / 1.35;
         printf(
-            "[perf-debug zones]   --delay=%u nop-iterations/zone (same unit as the standalone drain harness "
-            "--proddelay; 0 = max rate)\n",
-            zone_cyc);
+            "[perf-debug zones]   --delay=%u nop-iterations/zone ~= %.0f ns/zone, ~%.2f Mmarkers/s/lane "
+            "unthrottled (10 cyc/iteration + ~87 ns/zone measured; same unit as --proddelay; 0 = max rate)\n",
+            zone_cyc,
+            zone_ns,
+            2000.0 / zone_ns);
     }
     if (slow_dispatch) {
         IDevice* device = mesh_device->get_devices().front();

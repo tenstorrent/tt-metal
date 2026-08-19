@@ -24,6 +24,9 @@
 #if defined(__x86_64__)
 #include <emmintrin.h>
 #endif
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
 
 namespace tt::tt_metal {
 
@@ -68,13 +71,21 @@ public:
      */
     explicit BroadcastRing(size_t capacity) :
         capacity_(capacity ? std::bit_ceil(capacity) : 1),
-        slots_(std::make_unique<Slot[]>(capacity_)),
+        storage_(allocate_slots(capacity_)),
         writer_(&shared_state_, view()) {}
 
     ~BroadcastRing() {
         TT_FATAL(
             active_readers_.load(std::memory_order_relaxed) == 0,
             "BroadcastRing readers must be destroyed before the ring");
+#if defined(__linux__)
+        if (storage_.map_base != nullptr) {
+            for (size_t i = 0; i < capacity_; i++) {
+                storage_.slots[i].~Slot();
+            }
+            ::munmap(storage_.map_base, storage_.map_bytes);
+        }
+#endif
     }
 
     [[nodiscard]] size_t capacity() const noexcept { return capacity_; }
@@ -440,6 +451,44 @@ private:
         Slot& slot_at(uint64_t position) const noexcept { return slots[position & (capacity - 1)]; }
     };
 
+    struct SlotStorage {
+        Slot* slots = nullptr;
+        std::unique_ptr<Slot[]> owned;
+        void* map_base = nullptr;
+        size_t map_bytes = 0;
+    };
+
+    // Large slot arrays are walked far beyond TLB reach, so back them with 2 MiB pages. THP is
+    // madvise-opt-in on typical deployments, hence the explicit mmap + MADV_HUGEPAGE (over-mapped by one
+    // huge page to guarantee an aligned start, which the huge-page fault path requires).
+    static SlotStorage allocate_slots(size_t n) {
+        SlotStorage storage;
+#if defined(__linux__)
+        static constexpr size_t kHugePageSize = size_t{2} << 20;
+        static constexpr size_t kHugePageMinBytes = size_t{64} << 20;
+        const size_t bytes = n * sizeof(Slot);
+        if (bytes >= kHugePageMinBytes) {
+            const size_t map_bytes = bytes + kHugePageSize;
+            void* base = ::mmap(nullptr, map_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            if (base != MAP_FAILED) {
+                storage.map_base = base;
+                storage.map_bytes = map_bytes;
+                const uintptr_t aligned =
+                    (reinterpret_cast<uintptr_t>(base) + kHugePageSize - 1) & ~(kHugePageSize - 1);
+                ::madvise(reinterpret_cast<void*>(aligned), bytes, MADV_HUGEPAGE);
+                storage.slots = reinterpret_cast<Slot*>(aligned);
+                for (size_t i = 0; i < n; i++) {
+                    new (storage.slots + i) Slot();
+                }
+                return storage;
+            }
+        }
+#endif
+        storage.owned = std::make_unique<Slot[]>(n);
+        storage.slots = storage.owned.get();
+        return storage;
+    }
+
     // head/claim are accessed together so they share a cache line; wake_token is on its own line so a
     // reader spin-waiting on it in wait() can't steal the head/claim line from the writer
     struct SharedState {
@@ -448,10 +497,10 @@ private:
         alignas(kFalseSharingSize) WakeTokenAtomic wake_token{0};
     };
 
-    SlotsView view() const noexcept { return {slots_.get(), capacity_}; }
+    SlotsView view() const noexcept { return {storage_.slots, capacity_}; }
 
     const size_t capacity_;
-    const std::unique_ptr<Slot[]> slots_;
+    SlotStorage storage_;
     SharedState shared_state_;
     mutable std::atomic<uint32_t> active_readers_{0};
     Writer writer_;

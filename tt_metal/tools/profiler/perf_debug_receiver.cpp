@@ -84,7 +84,9 @@ PerfDebugReceiver::PerfDebugReceiver(ReceiverConfig config, std::vector<Receiver
     stall_only_ = env_flag("TT_METAL_PERF_DEBUG_STALL_ONLY");
     die_after_ = env_u32("TT_METAL_PERF_DEBUG_WRITER_DIE_AFTER", 0);
     watchdog_ = std::chrono::seconds(env_u32("TT_METAL_PERF_DEBUG_WRITER_TIMEOUT_S", 120));
-    const uint64_t ring_recs = env_u64("TT_METAL_PERF_DEBUG_RING_RECS", 4ull << 20);
+    // 2 GiB per stream ring: big enough that a whole capture's records fit, so the consumer side only
+    // drops on truly pathological lag instead of on every heavy run.
+    const uint64_t ring_recs = env_u64("TT_METAL_PERF_DEBUG_RING_RECS", 128ull << 20);
     for (uint32_t d = 0; d < devices_.size(); d++) {
         auto& dev = devices_[d];
         const uint32_t nl = dev.num_cores * profiler::kSpscNRiscDecode;
