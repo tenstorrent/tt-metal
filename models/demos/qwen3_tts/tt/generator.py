@@ -25,6 +25,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.qwen3_tts.tt.kv_cache import create_kv_cache
+from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
 from models.demos.qwen3_tts.tt.model_config import Qwen3TTSCodePredictorConfig, Qwen3TTSTalkerConfig
 from models.demos.qwen3_tts.tt.qwen3_tts import Qwen3TTS
 from models.demos.qwen3_tts.tt.rope import get_rope_tensors, get_transformation_mat
@@ -495,13 +496,13 @@ class Qwen3TTSGenerator2CQ:
                 tokens_per_group = []
 
                 # Code 0 from codec_head
-                codec_logits_torch = ttnn.to_torch(codec_logits)
+                codec_logits_torch = _mesh_to_torch(codec_logits)
                 token_0 = torch.argmax(codec_logits_torch, dim=-1)
                 tokens_per_group.append(token_0)
 
                 # Codes 1-15 from CodePredictor
                 for logits in cp_logits_list:
-                    logits_torch = ttnn.to_torch(logits)
+                    logits_torch = _mesh_to_torch(logits)
                     token = torch.argmax(logits_torch, dim=-1)
                     tokens_per_group.append(token)
 

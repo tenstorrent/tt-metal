@@ -46,6 +46,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
 
 
 def _user_path_no_dotdot(path: str) -> Path:
@@ -66,33 +67,37 @@ def allocate_kv_cache(
     """
     Allocate KV cache tensors for all layers.
 
-    Args:
-        device: TTNN device
-        num_layers: Number of transformer layers
-        batch_size: Batch size (typically 1)
-        num_kv_heads: Number of KV heads
-        max_seq_len: Maximum sequence length to cache
-        head_dim: Dimension per head
-
-    Returns:
-        List of (k_cache, v_cache) tuples, one per layer
+    On TP>1 (multi-chip mesh), creates per-chip local_kv_heads = num_kv_heads // tp_size
+    tensors, matching the Attention module which also uses local head counts.
     """
+    import torch as _torch
+
+    from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size
+    from models.demos.qwen3_tts.tt.mesh_utils import is_mesh_device as _is_mesh
+
+    _mesh = _is_mesh(device)
+    tp = get_tp_size(device) if _mesh else 1
+    assert num_kv_heads % tp == 0
+    local_kv_heads = num_kv_heads // tp
+    _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if _mesh else None
+
     kv_caches = []
     for _ in range(num_layers):
-        # Shape: [batch, num_kv_heads, max_seq_len, head_dim]
-        k_cache = ttnn.zeros(
-            [batch_size, num_kv_heads, max_seq_len, head_dim],
+        k_cache = ttnn.from_torch(
+            _torch.zeros(batch_size, local_kv_heads, max_seq_len, head_dim, dtype=_torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=_mesh_mapper,
         )
-        v_cache = ttnn.zeros(
-            [batch_size, num_kv_heads, max_seq_len, head_dim],
+        v_cache = ttnn.from_torch(
+            _torch.zeros(batch_size, local_kv_heads, max_seq_len, head_dim, dtype=_torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=_mesh_mapper,
         )
         kv_caches.append((k_cache, v_cache))
     return kv_caches
@@ -304,7 +309,7 @@ def create_icl_embedding_ttnn(
     tts_tokens_tt = ttnn.from_torch(tts_tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
     tts_embeds_tt = model.get_text_embedding(tts_tokens_tt)
     tts_embeds_proj_tt = model.project_text(tts_embeds_tt)
-    tts_embeds_proj = ttnn.to_torch(tts_embeds_proj_tt).squeeze(1).float()  # [1, 3, 2048]
+    tts_embeds_proj = _mesh_to_torch(tts_embeds_proj_tt).squeeze(1).float()  # [1, 3, 2048]
 
     tts_bos_embed = tts_embeds_proj[:, 0:1, :]
     tts_eos_embed = tts_embeds_proj[:, 1:2, :]
@@ -314,7 +319,7 @@ def create_icl_embedding_ttnn(
     role_ids_tt = ttnn.from_torch(role_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
     role_embeds_tt = model.get_text_embedding(role_ids_tt)
     role_embeds_proj_tt = model.project_text(role_embeds_tt)
-    role_embeds_proj = ttnn.to_torch(role_embeds_proj_tt).squeeze(1).float()
+    role_embeds_proj = _mesh_to_torch(role_embeds_proj_tt).squeeze(1).float()
 
     # Combined text embeddings (ref_text + target_text)
     combined_text_ids = torch.cat([ref_text_ids, target_text_ids], dim=1)
@@ -323,7 +328,7 @@ def create_icl_embedding_ttnn(
     )
     combined_text_embeds_tt = model.get_text_embedding(combined_text_ids_tt)
     combined_text_proj_tt = model.project_text(combined_text_embeds_tt)
-    combined_text_proj = ttnn.to_torch(combined_text_proj_tt).squeeze(1).float()
+    combined_text_proj = _mesh_to_torch(combined_text_proj_tt).squeeze(1).float()
 
     # Full text embedding with EOS
     text_embed = torch.cat([combined_text_proj, tts_eos_embed], dim=1)
@@ -345,8 +350,8 @@ def create_icl_embedding_ttnn(
         codec_suffix_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
     )
 
-    codec_prefix_embeds = ttnn.to_torch(model.get_codec_embedding(codec_prefix_ids_tt)).float()
-    codec_suffix_embeds = ttnn.to_torch(model.get_codec_embedding(codec_suffix_ids_tt)).float()
+    codec_prefix_embeds = _mesh_to_torch(model.get_codec_embedding(codec_prefix_ids_tt)).float()
+    codec_suffix_embeds = _mesh_to_torch(model.get_codec_embedding(codec_suffix_ids_tt)).float()
 
     # Ensure 3D shape [batch, seq, hidden]
     if codec_prefix_embeds.dim() == 2:
@@ -387,7 +392,7 @@ def create_icl_embedding_ttnn(
     print(f"  Loaded {len(code_pred_embeds)} CodePredictor embeddings")
 
     # Get main codec embedding from TTNN tensor
-    codec_embed_torch = ttnn.to_torch(codec_embed_weight).squeeze(0).squeeze(0).float()
+    codec_embed_torch = _mesh_to_torch(codec_embed_weight).squeeze(0).squeeze(0).float()
 
     # Build reference code embeddings using proper codebook embeddings
     ref_len = ref_codes.shape[0]
@@ -412,7 +417,7 @@ def create_icl_embedding_ttnn(
     # Prepend codec_bos
     codec_bos_ids = torch.tensor([[config.codec_bos_id]])
     codec_bos_ids_tt = ttnn.from_torch(codec_bos_ids, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-    codec_bos_embed = ttnn.to_torch(model.get_codec_embedding(codec_bos_ids_tt)).float()  # [1, 1, 2048]
+    codec_bos_embed = _mesh_to_torch(model.get_codec_embedding(codec_bos_ids_tt)).float()  # [1, 1, 2048]
     if codec_bos_embed.dim() == 2:
         codec_bos_embed = codec_bos_embed.unsqueeze(1)  # [1, 1, 2048]
 
@@ -592,7 +597,7 @@ def _read_device_token(tok_tt: ttnn.Tensor, index: int = 0) -> int:
     we replicate batch=1 across 32 users), the output is shape [1,1,1,32] and we
     read user[0] (index=0).
     """
-    return int(ttnn.to_torch(tok_tt).flatten()[index].item())
+    return int(_mesh_to_torch(tok_tt).flatten()[index].item())
 
 
 # ttnn.sampling kernel hardcodes 32 users. We replicate our batch=1 logits across
@@ -769,7 +774,7 @@ def sample_from_tt_vocab_logits(
     """
     _pc = time.perf_counter
     t0 = _pc() if prof_acc is not None else 0.0
-    th = ttnn.to_torch(logits_tt, dtype=torch.bfloat16)
+    th = _mesh_to_torch(logits_tt, dtype=torch.bfloat16)
     if th.ndim >= 3 and th.shape[-2] > 1:
         th = th[:, :, -1, :]
     th1d = th.reshape(-1).contiguous()
@@ -832,8 +837,10 @@ def generate_codes_ttnn(
     tts_pad_embed: torch.Tensor,
     code_pred_embeds: list,
     config: TTSConfig,
+    use_kv_cache: bool = True,
+    use_trace: bool = True,
+    use_2cq: bool = False,
     streaming_decoder=None,
-    pre_measurement_warmup: bool = False,
 ) -> Union[Tuple[torch.Tensor, dict], Tuple[None, dict]]:
     """
     Generate codec tokens autoregressively using TTNN Talker and CodePredictor.
@@ -855,31 +862,45 @@ def generate_codes_ttnn(
         tts_pad_embed: Padding embedding
         code_pred_embeds: List of CodePredictor embedding weights (for codes 1-15)
         config: TTS configuration
+        use_kv_cache: Whether to use KV cache optimization (default True)
+        use_trace: Whether to use trace (default True)
+        use_2cq: If True, issue H2D copies on CQ1 and overlap with trace on CQ0 (requires
+            device opened with num_command_queues=2; see tech_reports/AdvancedPerformanceOptimizationsForModels).
+
     Returns:
         (codes, compile_timings): codes are [seq_len, 16] or None. compile_timings holds
         warmup, trace_capture, avg_decode_ms, steady_avg_decode_ms, steady_frames_per_sec,
-        and num_generated_frames.
+        num_generated_frames, and use_2cq.
     """
     from models.demos.qwen3_tts.tt.rope import compute_rope_frequencies, get_rope_tensors, get_transformation_mat
 
-    print(f"\nGenerating codes with TTNN (with KV cache)...")
-    print("2 CQ: H2D on CQ1, traces on CQ0 (AdvancedPerformanceOptimizationsForModels §2.3.2)")
+    mode_str = "with KV cache" if use_kv_cache else "without KV cache"
+    print(f"\nGenerating codes with TTNN ({mode_str})...")
+    if use_2cq and not use_trace:
+        print("  Note: 2 CQ mode requires trace; ignoring --use-2cq")
+        use_2cq = False
+    if use_2cq:
+        print("2 CQ: H2D on CQ1, traces on CQ0 (AdvancedPerformanceOptimizationsForModels §2.3.2)")
 
     # Get transformation matrices
     talker_trans_mat = get_transformation_mat(model.talker_config.head_dim, device)
     cp_trans_mat = get_transformation_mat(model.code_predictor_config.head_dim, device)
 
     # Get codec embedding for building next input (Talker embedding for code 0)
-    codec_embed_torch = ttnn.to_torch(model.talker.codec_embedding).squeeze(0).squeeze(0).float()
+    codec_embed_torch = _mesh_to_torch(model.talker.codec_embedding).squeeze(0).squeeze(0).float()
 
     all_codes = []
     real_seq_len = inputs_embeds_tt.shape[2]
     talker_h = model.talker_config.hidden_size
     head_dim = model.talker_config.head_dim
-    _talker_num_heads = model.talker_config.num_attention_heads
+    # Use per-chip (local) head counts when TP>1 — attn masks and program configs must match.
+    from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size
+
+    _tp = get_tp_size(model.device) if model.device.__class__.__name__ == "MeshDevice" else 1
+    _talker_num_heads = model.talker_config.num_attention_heads // _tp
     cp_head_dim = model.code_predictor_config.head_dim
     cp_rope_theta = model.code_predictor_config.rope_theta
-    _cp_num_heads = model.code_predictor_config.num_attention_heads
+    _cp_num_heads = model.code_predictor_config.num_attention_heads // _tp
     max_cp_seq_len = 32
 
     # === STEP 1: Pad input to bucket size ===
@@ -1086,19 +1107,25 @@ def generate_codes_ttnn(
     )
     print(f"  Allocated CP KV cache ({model.code_predictor_config.num_hidden_layers} layers, max_seq={max_cp_seq_len})")
 
-    # Pre-allocate zero host tensors for CP KV cache reset between frames
+    # Pre-allocate zero DEVICE tensors for CP KV cache reset between frames.
+    # Keeping them on device lets us use ttnn.assign (D2D) instead of
+    # copy_host_to_device_tensor (H2D) each frame — same zeros, no PCIe transfer.
     cp_kv_zero_hosts = []
     for layer_kv in cp_kv_caches_persistent:
         k_cache, v_cache = layer_kv
         k_zero = ttnn.from_torch(
             torch.zeros(k_cache.shape[0], k_cache.shape[1], k_cache.shape[2], k_cache.shape[3], dtype=torch.bfloat16),
+            device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         v_zero = ttnn.from_torch(
             torch.zeros(v_cache.shape[0], v_cache.shape[1], v_cache.shape[2], v_cache.shape[3], dtype=torch.bfloat16),
+            device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         cp_kv_zero_hosts.append((k_zero, v_zero))
 
@@ -1150,6 +1177,10 @@ def generate_codes_ttnn(
             _trace_logits = model.talker.get_codec_logits(_trace_h)
         finally:
             ttnn.end_trace_capture(device, _trace_id, cq_id=0)
+        # Execute once after capture to warm up trace dispatch. Without this,
+        # the timed prefill in STEP 4 runs the trace cold (dispatch-path miss)
+        # adding ~10-15 ms of variance to the prefill measurement.
+        ttnn.execute_trace(device, _trace_id, cq_id=0, blocking=True)
         ttnn.synchronize_device(device)
         talker_prefill_traces[_bucket] = {
             "trace_id": _trace_id,
@@ -1157,7 +1188,7 @@ def generate_codes_ttnn(
             "hidden_out": _trace_h,
             "logits_out": _trace_logits,
         }
-        print(f"    bucket={_bucket}: trace captured")
+        print(f"    bucket={_bucket}: trace captured + warmed")
 
     # === STEP 4: Run Talker prefill (non-traced, standard path) ===
     # Standard prefill: attention over seq_len (not full cache), much faster.
@@ -1170,15 +1201,6 @@ def generate_codes_ttnn(
         device, head_dim, padded_seq_len, prefill_pos, model.talker_config.rope_theta
     )
 
-    # Pre-measurement warmup: fire the prefill trace once (with existing zero embed
-    # buffer) to ensure device execution is hot before the timed measurement.
-    # The measured run copies real embeddings and overwrites the same KV positions,
-    # so correctness is preserved.
-    if pre_measurement_warmup and padded_seq_len in talker_prefill_traces:
-        _pf_wu = talker_prefill_traces[padded_seq_len]
-        ttnn.execute_trace(device, _pf_wu["trace_id"], cq_id=0, blocking=True)
-        ttnn.synchronize_device(device)
-
     ttnn.synchronize_device(device)
     t_prefill_start = time.time()
 
@@ -1186,7 +1208,7 @@ def generate_codes_ttnn(
 
     if padded_seq_len in talker_prefill_traces:
         _pf = talker_prefill_traces[padded_seq_len]
-        _embed_host_torch = ttnn.to_torch(inputs_embeds_tt)
+        _embed_host_torch = _mesh_to_torch(inputs_embeds_tt)
         _embed_host = ttnn.from_torch(
             _embed_host_torch.to(torch.bfloat16),
             dtype=ttnn.bfloat16,
@@ -1196,7 +1218,7 @@ def generate_codes_ttnn(
         ttnn.execute_trace(device, _pf["trace_id"], cq_id=0, blocking=True)
         prefill_logits_out = _pf["logits_out"]
         prefill_hidden_out = _pf["hidden_out"]
-        codec_logits_full = ttnn.to_torch(prefill_logits_out).squeeze(1).float()
+        codec_logits_full = _mesh_to_torch(prefill_logits_out).squeeze(1).float()
         codec_logits_torch = codec_logits_full[0, real_seq_len - 1, :]
         token_0 = sample_token(
             codec_logits_torch,
@@ -1225,7 +1247,7 @@ def generate_codes_ttnn(
         )
         prefill_logits_out = model.talker.get_codec_logits(prefill_hidden_out)
         ttnn.synchronize_device(device)
-        codec_logits_full = ttnn.to_torch(prefill_logits_out).squeeze(1).float()
+        codec_logits_full = _mesh_to_torch(prefill_logits_out).squeeze(1).float()
         codec_logits_torch = codec_logits_full[0, real_seq_len - 1, :]
         token_0 = sample_token(
             codec_logits_torch,
@@ -1251,6 +1273,7 @@ def generate_codes_ttnn(
             "steady_avg_decode_ms": 0.0,
             "steady_frames_per_sec": 0.0,
             "num_generated_frames": 0,
+            "use_2cq": use_2cq,
         }
 
     talker_pos = real_seq_len
@@ -1303,11 +1326,23 @@ def generate_codes_ttnn(
     cp_trace_prefill_cos_tt, cp_trace_prefill_sin_tt = get_rope_tensors(
         device, cp_head_dim, 2, cp_prefill_pos, cp_rope_theta
     )
+    # "host" tensors are used to restore constants that the Talker's
+    # paged_fused_update_cache corrupts each frame.  They hold constant values
+    # so we keep them ON DEVICE and restore via ttnn.assign (D2D) instead of
+    # copy_host_to_device_tensor (H2D), which is much faster.
     cp_trace_prefill_cos_host = ttnn.from_torch(
-        ttnn.to_torch(cp_trace_prefill_cos_tt).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        _mesh_to_torch(cp_trace_prefill_cos_tt).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     cp_trace_prefill_sin_host = ttnn.from_torch(
-        ttnn.to_torch(cp_trace_prefill_sin_tt).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        _mesh_to_torch(cp_trace_prefill_sin_tt).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     cp_prefill_mask_host_torch = torch.full((1, _cp_num_heads, 2, max_cp_seq_len), float("-inf"))
     cp_prefill_mask_host_torch[0, :, 0, 0] = 0.0
@@ -1320,7 +1355,11 @@ def generate_codes_ttnn(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     cp_trace_prefill_mask_host = ttnn.from_torch(
-        cp_prefill_mask_host_torch.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+        cp_prefill_mask_host_torch.float(),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     cp_trace_prefill_embed_tt = ttnn.from_torch(
         torch.zeros(1, 1, 2, talker_h, dtype=torch.bfloat16),
@@ -1407,8 +1446,8 @@ def generate_codes_ttnn(
     # --- 5b: CP prefill trace ---
     print("  Untraced warmup: CP prefill (same tensors as trace)...")
     for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts, cp_kv_caches_persistent):
-        ttnn.copy_host_to_device_tensor(k_zero, k_cache)
-        ttnn.copy_host_to_device_tensor(v_zero, v_cache)
+        ttnn.assign(k_zero, k_cache)
+        ttnn.assign(v_zero, v_cache)
     _wu_cp_pf_logits, cp_kv_caches_persistent = model.code_predictor.forward_single_step(
         cp_trace_prefill_embed_tt,
         cp_trace_prefill_cos_tt,
@@ -1512,13 +1551,16 @@ def generate_codes_ttnn(
     print(f"  Captured {len(cp_decode_trace_ids[0])} CP decode traces x2 buffers.")
     t_trace_end = time.time()
     print("  All traces captured. Starting measured inference...")
-    print(f"  Device CQ mode: 2 (H2D on CQ1, traces on CQ0)")
+    print(f"  Device CQ mode: {'2 (H2D on CQ1, traces on CQ0)' if use_2cq else '1 (H2D and traces share CQ0)'}")
 
     # === STEP 6: Measured inference (generation loop only; prefill already ran in STEP 4) ===
     decode_step_times = []
     talker_times_ms = []
     cp_times_ms = []
     t_first_decode_end = 0.0
+    trace_cq0_idle = ttnn.record_event(device, 0) if use_2cq else None
+    h2d_cq = 1 if use_2cq else 0
+    cp_decode_input_ready = [trace_cq0_idle, trace_cq0_idle]
 
     # Preallocated host buffers (generation hot loop): avoids per-step torch/tensor churn.
     token_id_buf = torch.zeros((1, 1), dtype=torch.long)
@@ -1601,6 +1643,7 @@ def generate_codes_ttnn(
         codes_tensor, frame_breakdown_avg_ms_helper, t_first_decode_end, _t_last = ar_decode_loop(
             loop_state,
             config,
+            use_2cq,
             streaming_decoder=streaming_decoder,
             sample_token_fn=sample_token,
             sample_from_tt_vocab_logits_fn=sample_from_tt_vocab_logits,
@@ -1647,6 +1690,7 @@ def generate_codes_ttnn(
             "steady_avg_decode_ms": 0.0,
             "steady_frames_per_sec": 0.0,
             "num_generated_frames": 0,
+            "use_2cq": use_2cq,
             "frame_breakdown_avg_ms": {},
         }
 
@@ -1717,6 +1761,7 @@ def generate_codes_ttnn(
         "steady_avg_decode_ms": steady_avg_decode_ms,
         "steady_frames_per_sec": tokens_per_sec,
         "num_generated_frames": len(all_codes),
+        "use_2cq": use_2cq,
         "frame_breakdown_avg_ms": frame_breakdown_avg_ms,
         "frame_breakdown_frames": frame_breakdown_frames,
     }
@@ -1737,10 +1782,13 @@ def warmup_bucket(device, model, config, padded_seq_len: int):
 
     talker_h = model.talker_config.hidden_size
     head_dim = model.talker_config.head_dim
-    _talker_num_heads = model.talker_config.num_attention_heads
+    from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size as _get_tp
+
+    _tp = _get_tp(device) if device.__class__.__name__ == "MeshDevice" else 1
+    _talker_num_heads = model.talker_config.num_attention_heads // _tp
     cp_head_dim = model.code_predictor_config.head_dim
     cp_rope_theta = model.code_predictor_config.rope_theta
-    _cp_num_heads = model.code_predictor_config.num_attention_heads
+    _cp_num_heads = model.code_predictor_config.num_attention_heads // _tp
     max_cp_seq_len = 32
 
     talker_trans_mat = get_transformation_mat(head_dim, device)
@@ -2001,10 +2049,13 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
     _TILE = 32
     talker_h = model.talker_config.hidden_size
     head_dim = model.talker_config.head_dim
-    _talker_num_heads = model.talker_config.num_attention_heads
+    from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size as _get_tp
+
+    _tp = _get_tp(device) if device.__class__.__name__ == "MeshDevice" else 1
+    _talker_num_heads = model.talker_config.num_attention_heads // _tp
     cp_head_dim = model.code_predictor_config.head_dim
     cp_rope_theta = model.code_predictor_config.rope_theta
-    _cp_num_heads = model.code_predictor_config.num_attention_heads
+    _cp_num_heads = model.code_predictor_config.num_attention_heads // _tp
     max_cp_seq_len = 32
 
     talker_trans_mat = get_transformation_mat(head_dim, device)
@@ -2020,7 +2071,7 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
     cp_cos_table, cp_sin_table = compute_rope_frequencies(cp_head_dim, max_cp_seq_len + 5, cp_rope_theta)
 
     # CodePredictor embedding weights (for building next-token embeds)
-    codec_embed_torch = ttnn.to_torch(model.talker.codec_embedding).squeeze(0).squeeze(0).float()
+    codec_embed_torch = _mesh_to_torch(model.talker.codec_embedding).squeeze(0).squeeze(0).float()
     code_pred_embeds = []
     for i in range(config.num_code_groups - 1):
         key = f"talker.code_predictor.model.codec_embedding.{i}.weight"
@@ -2042,10 +2093,18 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
     cp_kv_zero_hosts = []
     for k_cache, v_cache in cp_kv_caches_persistent:
         k_zero = ttnn.from_torch(
-            torch.zeros(*k_cache.shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            torch.zeros(*k_cache.shape, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         v_zero = ttnn.from_torch(
-            torch.zeros(*v_cache.shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            torch.zeros(*v_cache.shape, dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         cp_kv_zero_hosts.append((k_zero, v_zero))
 
@@ -2065,10 +2124,18 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
         device, cp_head_dim, 2, cp_prefill_pos, cp_rope_theta
     )
     cp_trace_prefill_cos_host = ttnn.from_torch(
-        ttnn.to_torch(cp_trace_prefill_cos_tt).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        _mesh_to_torch(cp_trace_prefill_cos_tt).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cp_trace_prefill_sin_host = ttnn.from_torch(
-        ttnn.to_torch(cp_trace_prefill_sin_tt).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        _mesh_to_torch(cp_trace_prefill_sin_tt).bfloat16(),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cp_prefill_mask_torch = torch.full((1, _cp_num_heads, 2, max_cp_seq_len), float("-inf"))
     cp_prefill_mask_torch[0, :, 0, 0] = 0.0
@@ -2081,7 +2148,11 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cp_trace_prefill_mask_host = ttnn.from_torch(
-        cp_prefill_mask_torch.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+        cp_prefill_mask_torch.float(),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     cp_trace_decode_embed_tts = [
@@ -2231,10 +2302,10 @@ def init_server_context(device, model, config, main_weights: dict) -> "TTSServer
             cp_decode_logits_tts[_buf_i].append(_logits_tt)
     print(f"  Captured {len(cp_decode_trace_ids[0])} CP decode traces x2 buffers.")
 
-    # Zero-reset CP KV caches for first real request
+    # Zero-reset CP KV caches for first real request (D2D assign — zeros are on device)
     for (k_zero, v_zero), (k_cache, v_cache) in zip(cp_kv_zero_hosts, cp_kv_caches_persistent):
-        ttnn.copy_host_to_device_tensor(k_zero, k_cache)
-        ttnn.copy_host_to_device_tensor(v_zero, v_cache)
+        ttnn.assign(k_zero, k_cache)
+        ttnn.assign(v_zero, v_cache)
 
     # ─── Persistent Talker decode state (one trace per prefill bucket) ──────
     # Hoists what used to be per-request alloc + capture inside run_inference.
@@ -2416,6 +2487,7 @@ def run_inference(
     trailing_text_hidden: torch.Tensor,
     tts_pad_embed: torch.Tensor,
     config: TTSConfig,
+    use_2cq: bool = False,
 ) -> tuple:
     """
     Run TTS inference using server context.
@@ -2425,6 +2497,9 @@ def run_inference(
     - Zero CP trace capture (pre-captured in ctx)
     - One Talker KV alloc + standard prefill + Talker trace capture per request
     - Fast decode loop (all traces executed)
+
+    use_2cq:
+        If True, device must be opened with num_command_queues=2; overlaps H2D (CQ1) with trace exec (CQ0).
 
     Returns:
         (codes, timings, perf_text)
@@ -2508,7 +2583,7 @@ def run_inference(
         ttnn.deallocate(prefill_sin_tt)
 
         generated_code0_tokens = []
-        codec_logits_full = ttnn.to_torch(prefill_logits_out).squeeze(1).float()
+        codec_logits_full = _mesh_to_torch(prefill_logits_out).squeeze(1).float()
         codec_logits_torch = codec_logits_full[0, real_seq_len - 1, :]
         token_0 = sample_token(
             codec_logits_torch,
@@ -2534,6 +2609,9 @@ def run_inference(
         decode_step_times = []
         talker_times_ms = []
         cp_times_ms = []
+        trace_cq0_idle = ttnn.record_event(device, 0) if use_2cq else None
+        h2d_cq = 1 if use_2cq else 0
+        cp_decode_input_ready = [trace_cq0_idle, trace_cq0_idle]
 
         _th = model.talker_config.hidden_size
         token_id_buf = torch.zeros((1, 1), dtype=torch.long)
@@ -2594,6 +2672,7 @@ def run_inference(
         codes_tensor, _frame_breakdown, _t_first, _t_last = ar_decode_loop(
             loop_state,
             config,
+            use_2cq,
             sample_token_fn=sample_token,
             sample_from_tt_vocab_logits_fn=sample_from_tt_vocab_logits,
         )
