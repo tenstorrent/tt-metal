@@ -44,6 +44,41 @@ def _round_up(value: int, mult: int) -> int:
     return ((value + mult - 1) // mult) * mult
 
 
+def _dram_slot_stride(page_size: int) -> int:
+    """Per-slot stride for a CB that is the LOCAL side of a DRAM transfer.
+
+    A CB's page size IS its per-slot address stride, and the NoC enforces
+    ``(l1_addr & mask) == (noc_addr & mask)`` where ``mask`` is
+    ``NOC_DRAM_{READ,WRITE}_ALIGNMENT_BYTES - 1``
+    (``tt_metal/hw/inc/internal/debug/sanitize.h:558``). On Blackhole the DRAM READ
+    alignment is **64** bytes (``blackhole/noc/noc_parameters.h:379``).
+
+    The interleaved DRAM side is always congruent to 0 mod 64: the buffer address
+    comes from the allocator at DRAM alignment and pages stride by
+    ``buffer.aligned_page_size() == round_up(page_size, 64)``. The L1 side is
+    congruent to 0 only if the CB base AND the slot stride are both 64-aligned. The
+    base already is — ``ProgramImpl`` does
+    ``computed_addr = align(computed_addr, get_alignment(BufferType::DRAM))``
+    (``tt_metal/impl/program/program.cpp:1352``) — so the stride is the one thing
+    the op must get right.
+
+    With a merely L1-aligned (16 B) stride, a 96 B row-major page (e.g.
+    ``(1,1,32,48)`` bfloat16) puts slot 1 at ``base + 96``, i.e. 32 mod 64, and the
+    DRAM read trips the NoC sanitizer:
+    "tried to unicast read 96 bytes to local L1[0x01b360] from DRAM ...
+    (invalid address alignment in NOC transaction)" — which halts the core and
+    wedges the device.
+
+    This is a CB-SIZING choice (advisory in op_design.md), deliberately decoupled
+    from the INTRA-PACKET page stride, which stays ``round_up(page_size,
+    l1_alignment)`` because ``ccl_packet_dims`` derives ``packet_size`` from it. The
+    kernels never conflate the two: they address CB slots via
+    ``get_read_ptr``/``get_write_ptr`` and compute the intra-packet offset from the
+    ``alignment`` (L1) compile-time arg.
+    """
+    return _round_up(page_size, max(ttnn.get_dram_alignment(), ttnn.get_l1_alignment()))
+
+
 def _append_fabric_rt_args(rt_args_ref, src_id, neighbor_id, program, core, is_forward):
     """Mirror ttnn::ccl::dataflow::append_ccl_fabric_rt_args (C++-only, unbound).
 
@@ -68,7 +103,13 @@ def _cb(index: int, num_pages: int, page_size: int, core_grid) -> ttnn.CBDescrip
     """One opaque-byte CB. Every CB in this op declares ``uint32``: no CB here is
     ever consumed by a compute thread, so the format is inert for pure byte
     movement, and a uint32 format keeps bfloat8_b payloads (whose CB format would
-    otherwise demand tile-shaped pages) on the same code path."""
+    otherwise demand tile-shaped pages) on the same code path.
+
+    NOTE on ``page_size``: for a CB that is the LOCAL side of a DRAM transfer the
+    page size doubles as the per-slot address stride, and the NoC requires
+    ``(l1_addr & mask) == (dram_addr & mask)``. See ``_dram_slot_stride`` — pass a
+    DRAM-aligned page size for those CBs.
+    """
     return ttnn.CBDescriptor(
         total_size=num_pages * page_size,
         core_ranges=core_grid,
@@ -96,7 +137,8 @@ def _build_send_program(
     core = _WORKER_CORE
     core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
 
-    cb_shard_pages = _cb(_CB_SHARD_PAGES, 2, geom["aligned_page_size"], core_grid)
+    # DRAM-read destination -> slot stride must be DRAM-aligned (see _dram_slot_stride).
+    cb_shard_pages = _cb(_CB_SHARD_PAGES, 2, geom["dram_slot_stride"], core_grid)
     cb_packet_staging = _cb(_CB_PACKET_STAGING, 1, geom["packet_size"], core_grid)
 
     # ----- reader (NCRISC): input DRAM -> cb_shard_pages -----
@@ -175,7 +217,8 @@ def _build_receive_program(
     core = _WORKER_CORE
     core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
 
-    cb_output_pages = _cb(_CB_OUTPUT_PAGES, 2, geom["aligned_page_size"], core_grid)
+    # DRAM-write source -> slot stride must be DRAM-aligned (see _dram_slot_stride).
+    cb_output_pages = _cb(_CB_OUTPUT_PAGES, 2, geom["dram_slot_stride"], core_grid)
     cb_packet_landing = _cb(_CB_PACKET_LANDING, 1, geom["packet_size"], core_grid)
 
     # Route back toward the SENDER — used for the receiver's one-shot "ready" ack.
@@ -260,7 +303,11 @@ def create_mesh_program_descriptor(
         "l1_alignment": l1_alignment,
         "page_size": page_size,
         "num_pages": num_pages,
+        # INTRA-PACKET page stride: L1-aligned, because ccl_packet_dims derives
+        # packet_size from round_up(page_size, l1_alignment).
         "aligned_page_size": _round_up(page_size, l1_alignment),
+        # CB SLOT stride for the two CBs that touch DRAM: DRAM-aligned.
+        "dram_slot_stride": _dram_slot_stride(page_size),
         "packet_size": dims.packet_size_bytes,
         "pages_per_packet": dims.pages_per_packet,
         "page_segments": dims.page_segments,
