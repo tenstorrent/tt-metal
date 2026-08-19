@@ -73,12 +73,19 @@ SUPPORTED = {
     "layout": [ttnn.TILE_LAYOUT],
     # Linear is the proven primary (and only verified) topology.
     "topology": [_Topology.Linear],
-    # Index axis, canonicalized to POSITIVE (rank 4) BEFORE the membership test:
-    # dim=-1 ≡ 3. A literal test on the raw value would reject the legal alias.
-    "dim": [3],
 }
 
 EXCLUSIONS: list = []
+
+# Op-level index-axis gate, deliberately NOT a SUPPORTED axis: the golden
+# feature_spec does not sweep `dim` (Phase-0 fixes it at 3), and the harness
+# xfails any cell missing a SUPPORTED axis from its values dict — so declaring
+# "dim" in SUPPORTED would xfail-strict EVERY golden cell. The gate still
+# refuses with the typed UnsupportedAxisValue, canonicalized to POSITIVE (rank
+# 4) BEFORE the membership test: dim=-1 ≡ 3 (a literal test on the raw value
+# would reject the legal alias). A refinement that adds dims should move this
+# into SUPPORTED once the golden TARGET sweeps the axis.
+_SUPPORTED_DIMS = (3,)
 
 
 # Module-level GlobalSemaphore cache: created ONCE per mesh_device (+ one
@@ -140,13 +147,14 @@ def validate(input_tensor, *, dim, topology, output_tensor):
     if not (0 <= canonical_dim < rank):
         raise ValueError(f"reduce_scatter: dim={dim} out of range for rank-{rank} input")
 
-    # Axis gate (registry model) — runs BEFORE the dim-specific shape gate, so an
-    # out-of-SUPPORTED dim refuses with UnsupportedAxisValue, not ValueError.
+    # Axis gates (registry model) — run BEFORE the dim-specific shape gate, so an
+    # out-of-support dim refuses with UnsupportedAxisValue, not ValueError.
+    if canonical_dim not in _SUPPORTED_DIMS:
+        raise UnsupportedAxisValue(f"reduce_scatter: dim={canonical_dim} not in supported dims {list(_SUPPORTED_DIMS)}")
     axes = {
         "dtype": input_tensor.dtype,
         "layout": input_tensor.layout,
         "topology": topology,
-        "dim": canonical_dim,
     }
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger((tuple(input_tensor.shape),), axes)
