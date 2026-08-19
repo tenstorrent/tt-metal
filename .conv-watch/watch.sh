@@ -255,12 +255,24 @@ for entry in "${PIPELINES[@]}"; do
   IFS='|' read -r workflow display test_hint job_pattern <<<"$entry"
   log "checking: $workflow ($display)"
 
+  # Optional per-workflow event filter (see PIPELINE_EVENT in config.sh):
+  # nightlies whose manual workflow_dispatch re-runs interleave with the
+  # schedule get pinned to event=schedule so a green manual run can never
+  # mask a still-failing scheduled nightly.
+  event_filter="${PIPELINE_EVENT[$workflow]:-}"
+  evq="${event_filter:+&event=$event_filter}"
+  [[ -n "$event_filter" ]] && log "  event filter: $event_filter"
+
   # Latest run on $BRANCH (any status). We deliberately do NOT pass
   # status=completed: a re-attempt flips the run back to in_progress, and
   # the filter would then hide it and surface an OLDER completed run.
   # Status is checked client-side below.
-  run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&per_page=1" \
-        --jq '.workflow_runs[0]' 2>/dev/null || echo "null")
+  # per_page=10 + newest created_at instead of trusting item [0] of a
+  # per_page=1 response: the list endpoint occasionally serves a stale page
+  # whose first item is an ancient run (2026-08-19 it returned May's #6154
+  # as L2's "latest", which then got cached as current state).
+  run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&per_page=10$evq" \
+        --jq '[.workflow_runs[]] | sort_by(.created_at) | last' 2>/dev/null || echo "null")
 
   if [[ -z "$run" || "$run" == "null" ]]; then
     blocks+=("▸ *$display* — _no runs on ${BRANCH}_")
@@ -278,6 +290,7 @@ for entry in "${PIPELINES[@]}"; do
   prev=$(jq --arg w "$workflow" '.[$w] // {}' "$STATE")
   prev_id=$(jq -r '.run_id // ""' <<<"$prev")
   prev_sha=$(jq -r '.sha    // ""' <<<"$prev")
+  prev_num=$(jq -r '.run_number // 0' <<<"$prev")
 
   # Cache hit: same run as last time (covers in-progress re-attempts of the
   # cached run too — run_id is stable across attempts).
@@ -297,8 +310,8 @@ for entry in "${PIPELINES[@]}"; do
   # otherwise the cache is still the freshest real result.
   if [[ "$status" != "completed" ]]; then
     log "  run #$run_number is $status — checking latest completed"
-    completed_run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&status=completed&per_page=1" \
-                    --jq '.workflow_runs[0]' 2>/dev/null || echo "null")
+    completed_run=$(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&status=completed&per_page=10$evq" \
+                    --jq '[.workflow_runs[]] | sort_by(.created_at) | last' 2>/dev/null || echo "null")
     completed_id=""
     if [[ -n "$completed_run" && "$completed_run" != "null" ]]; then
       completed_id=$(jq -r '.id // empty' <<<"$completed_run")
@@ -322,6 +335,18 @@ for entry in "${PIPELINES[@]}"; do
       fi
       blocks+=("▸ *$display* — _no completed runs on ${BRANCH}_")
       log "  no completed runs and no cache"
+      continue
+    fi
+  fi
+
+  # Stale-page guard: run_number is monotonic per workflow, so a chosen run
+  # OLDER than the cached one can only mean the API served a stale page (it
+  # cannot be a genuinely new run). Reuse the cache; next tick retries.
+  if (( prev_num > 0 && run_number < prev_num )); then
+    cached=$(jq -r --arg w "$workflow" '.[$w].summary // ""' "$STATE")
+    if [[ -n "$cached" ]]; then
+      blocks+=("$cached")
+      log "  stale API page (run #$run_number < cached #$prev_num) — reusing cached summary"
       continue
     fi
   fi
@@ -363,8 +388,8 @@ for entry in "${PIPELINES[@]}"; do
       fi
       log "  #$crnum also classified ⚠️ — continuing"
       (( fb_checked >= fb_max )) && { log "  giving up after $fb_max candidates"; break; }
-    done < <(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&status=completed&per_page=15" \
-             --jq '.workflow_runs[] | "\(.id)\t\(.conclusion)\t\(.head_sha)\t\(.html_url)\t\(.run_number)"' 2>/dev/null)
+    done < <(gh api "repos/$REPO/actions/workflows/$workflow/runs?branch=$BRANCH&status=completed&per_page=15$evq" \
+             --jq '[.workflow_runs[]] | sort_by(.created_at) | reverse | .[] | "\(.id)\t\(.conclusion)\t\(.head_sha)\t\(.html_url)\t\(.run_number)"' 2>/dev/null)
 
     if [[ -n "$fb_summary" ]]; then
       # Strip the "▸ *Name*  " prefix from the fallback so the combined
@@ -387,9 +412,11 @@ for entry in "${PIPELINES[@]}"; do
     continue
   fi
 
-  # Persist new state, keyed on the primary (latest) run id.
+  # Persist new state, keyed on the primary (latest) run id. run_number
+  # feeds the stale-page guard above.
   jq --arg w "$workflow" --arg id "$run_id" --arg sha "$sha" --arg sm "$summary" \
-     '.[$w] = {run_id: $id, sha: $sha, summary: $sm, updated: now}' \
+     --argjson num "$run_number" \
+     '.[$w] = {run_id: $id, run_number: $num, sha: $sha, summary: $sm, updated: now}' \
      "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 done
 

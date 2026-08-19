@@ -92,3 +92,15 @@ PIPELINES=(
   "blaze-models-prefill-tests.yaml|Blaze Prefill|In-scope = ring-joint SDPA, sparse-MLA (DSA), and MLA attention. Jobs: 'Blaze - Ring Joint SDPA perf checks' (tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check and ::test_ring_mla_chunked_perf_check); the 'Blaze - DSA MLA' jobs (V3.2 and GLM-5.1/5.2 = indexer + sparse SDPA, sparse_mla/test_sparse_mla.py); and the MLA attention module tests 'Blaze - MLA', 'Blaze - MLA Chunked', 'Blaze - Kimi MLA' (test_mla.py — drive ring/sparse SDPA via tt/mla/mla.py). Other Blaze jobs (MoE gate, KV cache, prefill block, transformer, GLM MoE, Kimi MoE/prefill, determinism, kimi chunked) are out of scope. NOTE: renamed from galaxy-deepseek-prefill-tests.yaml in PR #49462.|Ring Joint SDPA|DSA MLA|Blaze - MLA|Kimi MLA"
   "blackhole-e2e-tests.yaml|Blackhole E2E MLA|In-scope = sparse-MLA / ring-joint-MLA (SDPA family). The bh_lb_DeepSeek_DSA job runs models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py (indexer + sparse SDPA); the DeepSeek_PREFILL_OP_TESTS jobs run test_ring_joint_mla. Everything else in those jobs (rope, kv cache, moe, non-mla ops) is out of scope.|DeepSeek_DSA|DeepSeek_PREFILL_OP_TESTS"
 )
+
+# Per-workflow trigger-event filter (optional). When a workflow is listed
+# here, watch.sh only considers runs with this trigger event when picking
+# the run to analyze (the API's `event=` filter). Use for nightlies where
+# manual workflow_dispatch re-runs interleave with the schedule: a green
+# manual run (often a job subset, or a fix-attempt branch of the same sha)
+# would otherwise flip the digest ✅ while the scheduled nightly still fails
+# — seen on L2 2026-08-15: dispatch #9053 success on the SAME sha as
+# scheduled #9056 failure. Workflows not listed here consider every event.
+declare -A PIPELINE_EVENT=(
+  ["tt-metal-l2-nightly.yaml"]="schedule"
+)
