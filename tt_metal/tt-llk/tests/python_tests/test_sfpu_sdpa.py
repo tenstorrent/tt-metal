@@ -9,9 +9,11 @@ sources/sfpu_sdpa_test.cpp declares the same one ttnn's SDPA uses and this file 
 """
 
 import struct
+from dataclasses import dataclass
 from enum import Enum
 from typing import NamedTuple
 
+import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -39,6 +41,7 @@ from helpers.test_variant_parameters import (
     SDPA_EXP_SCALE,
     SDPA_OP,
     SDPA_SOFTPLUS_PARAMS,
+    TemplateParameter,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
@@ -207,7 +210,19 @@ def _stimulus(variant: Variant) -> torch.Tensor:
     return _ramp(-bound, bound)
 
 
-def _templates(variant: Variant):
+@dataclass
+class SdpaImplTemplate(TemplateParameter):
+    """ExpPoly impl selector (the sdpa_exp_unclamped precedent): 0 = handwritten
+    production calculate_exponential_polynomial (raw TTI over pinned LREG0..7),
+    1 = fresh typed semantic body (fresh_cpp/sdpametal.h)."""
+
+    value: int
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SDPA_IMPL = {self.value}u;"
+
+
+def _templates(variant: Variant, sdpa_impl: int = 0):
     """Return all the C++ template parameters."""
     return [
         SDPA_OP(variant.op),
@@ -219,6 +234,7 @@ def _templates(variant: Variant):
             softplus_beta_reciprocal_bits=_f32_bits(1.0 / variant.softplus.beta),
             softplus_threshold_bits=_f32_bits(variant.softplus.threshold),
         ),
+        SdpaImplTemplate(sdpa_impl),
     ]
 
 
@@ -252,6 +268,23 @@ def _variants():
     precision=list(Precision),
 )
 def test_sfpu_sdpa(variant, precision):
+    _run_sfpu_sdpa(variant, precision)
+
+
+@pytest.mark.parametrize(
+    "sdpa_impl", [0, 1], ids=["handwritten_production", "fresh_cpp"]
+)
+def test_sfpu_sdpa_fresh_cpp(sdpa_impl):
+    """A/B the fresh typed semantic ExpPoly body (fresh_cpp/sdpametal.h: the same
+    2**n * e**r golden math with the production's own minimax coefficients, RNE
+    int8/uint8 rounds through the typed converts) against the handwritten raw-TTI
+    pinned-LREG calculate_exponential_polynomial, at the device-profile row's
+    pinned point (ExpPoly, scale +1.0, Fp32E2E) with identical stimuli, golden,
+    tolerance, and footprint gate."""
+    _run_sfpu_sdpa(Variant(SdpaOp.ExpPoly), Precision.Fp32E2E, sdpa_impl=sdpa_impl)
+
+
+def _run_sfpu_sdpa(variant, precision, sdpa_impl=0):
     op = variant.op
 
     formats = InputOutputFormat(precision.data_format, precision.data_format)
@@ -275,7 +308,7 @@ def test_sfpu_sdpa(variant, precision):
     configuration = TestConfig(
         "sources/sfpu_sdpa_test.cpp",
         formats,
-        templates=_templates(variant),
+        templates=_templates(variant, sdpa_impl=sdpa_impl),
         variant_stimuli=StimuliConfig(
             src_A_tilized,
             formats.input_format,
@@ -445,13 +478,19 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16):
         )
 
 
-def test_sfpu_sdpa_device_profile(perf_report):
+@pytest.mark.parametrize(
+    "sdpa_impl,label",
+    [(0, "handwritten_production"), (1, "fresh_cpp")],
+)
+def test_sfpu_sdpa_device_profile(perf_report, sdpa_impl, label):
     """One on-device MATH-zone sample of the SDPA composite body (Lane BK perf vehicle).
 
     Welford device-profile recipe around SDPA_BODY. Pinned to the corr-mapped
     representative point (ExpPoly, scale +1.0, Fp32E2E precision) so the perf
     kernel is exactly the correctness-gated one; one PerfConfig node keeps the
-    module single-schema. Correctness stays owned by test_sfpu_sdpa.
+    module single-schema. The sdpa_impl axis A/Bs the handwritten raw-TTI body
+    against the fresh typed semantic body (fresh_cpp/sdpametal.h); correctness
+    stays owned by test_sfpu_sdpa / test_sfpu_sdpa_fresh_cpp.
     """
     variant = Variant(SdpaOp.ExpPoly)
     precision = Precision.Fp32E2E
@@ -468,7 +507,7 @@ def test_sfpu_sdpa_device_profile(perf_report):
         "sources/sfpu_sdpa_test.cpp",
         formats,
         run_types=[PerfRunType.MATH_ISOLATE],
-        templates=_templates(variant),
+        templates=_templates(variant, sdpa_impl=sdpa_impl),
         runtimes=[],
         variant_stimuli=StimuliConfig(
             src_A_tilized,
@@ -492,5 +531,5 @@ def test_sfpu_sdpa_device_profile(perf_report):
     cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
     assert cycles > 0
     print(
-        f"SDPA_DEVICE_PROFILE variant=ExpPoly_scale1_fp32_e2e math_cycles={int(cycles)}"
+        f"SDPA_DEVICE_PROFILE variant=ExpPoly_scale1_fp32_e2e impl={label} math_cycles={int(cycles)}"
     )

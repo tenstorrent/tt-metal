@@ -107,6 +107,18 @@ static constexpr bool APPROX         = APPROX_MODE;
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
+// Storm-contract canonical semantic body for the ExpPoly vehicle (never in
+// the legacy aggregator).
+#include "fresh_cpp/sdpametal.h"
+
+// Impl selector for the ExpPoly vehicle (the sdpa_exp_unclamped precedent):
+// 0 = handwritten production calculate_exponential_polynomial (raw TTI over
+// pinned LREG0..7), 1 = fresh typed semantic body (fresh_cpp/sdpametal.h).
+#ifndef SDPA_IMPL
+#define SDPA_IMPL 0
+#endif
+static_assert(SDPA_IMPL == 0 || SDPA_IMPL == 1, "unhandled SDPA_IMPL");
+static_assert(SDPA_IMPL == 0 || SDPA_OP == OP_EXP_POLY, "SDPA_IMPL=1 only forks the ExpPoly vehicle");
 
 using namespace ckernel;
 
@@ -141,6 +153,10 @@ inline void sdpa_op(const std::uint32_t dst_index)
     {
         _llk_math_eltwise_unary_sfpu_params_(
             sfpu::calculate_exponential_first_column<true /* SDPA_EXP_APPROX_MODE */, EXP_SCALE_BF16>, dst_index, VectorMode::C);
+    }
+    else if constexpr (SDPA_OP == OP_EXP_POLY && SDPA_IMPL == 1)
+    {
+        _llk_math_eltwise_unary_sfpu_params_(sfpu::calculate_sdpa_exp_poly_fresh_cpp<is_fp32_dest_acc_en, EXP_SCALE_BF16>, dst_index, VectorMode::C);
     }
     else if constexpr (SDPA_OP == OP_EXP_POLY)
     {
