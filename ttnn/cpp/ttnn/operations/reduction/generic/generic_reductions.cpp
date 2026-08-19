@@ -181,13 +181,6 @@ static Tensor reduce_impl(
     bool single_reduce_op = (dim.empty()) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
                             (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
-        // Multi-axis reduces run one axis at a time. Max of maxes is exact, so Max keeps the
-        // caller's fast_and_approximate_mode; Mean scales each axis by 1/N, so it stays on FPU.
-        const bool sub_step_fast_mode =
-            (reduce_type == reduction_common::ReduceType::Sum || reduce_type == reduction_common::ReduceType::Max ||
-             reduce_type == reduction_common::ReduceType::Min)
-                ? fast_and_approximate_mode
-                : true;
         auto reduce_nd_loop = [&](const bool use_reduce_type, float scalar) -> Tensor {
             Tensor output_tensor = input_tensor_arg;
             bool first = true;
@@ -227,7 +220,7 @@ static Tensor reduce_impl(
                             sub_core_grids,
                             chain_active,
                             sub_is_last,
-                            /*fast_and_approximate_mode=*/sub_step_fast_mode);
+                            /*fast_and_approximate_mode=*/fast_and_approximate_mode);
                     } else {
                         output_tensor = reduce_impl<reduction_common::ReduceType::Sum>(
                             output_tensor,
@@ -239,7 +232,8 @@ static Tensor reduce_impl(
                             non_height_width_dims,
                             sub_core_grids,
                             chain_active,
-                            sub_is_last);
+                            sub_is_last,
+                            /*fast_and_approximate_mode=*/fast_and_approximate_mode);
                     }
                     if (transpose) {
                         output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
