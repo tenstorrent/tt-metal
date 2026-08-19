@@ -26,15 +26,17 @@ using namespace ckernel::unpacker;
 // fidelity: LoFi only
 // throttle: not supported
 
-inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1) {
-    if (post1) {
+inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
+{
+    if (post1)
+    {
         // This nop is not actually used, it just ensures both tunings are of the same length when recording
         // When playing back the replay it is omitted
         TTI_NOP;
     }
 
     // Unpack SrcA (in1, full tile, uses CFGSHIFTMASK to manipulate L1 addr and keeps SrcA addr fixed at 0)
-    TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);  // Also set dvalid
+    TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
 
     // Unpack SrcB (in0, one instruction per face, uses counters to manipulate addresses for both L1 and SrcB)
     // Counters of interest are CH0 Y and Z (both with a stride of a single face in L1
@@ -50,42 +52,52 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1) {
     // (which is conveniently the max we can increment in a single instruction)
 
     TTI_UNPACR_COMMON(SrcB, 0b00010001, 0);
-    if (!post1) {
+    if (!post1)
+    {
         // Unpack second face of SrcB before CFGSHIFTMASK in post0 tuning
-        TTI_UNPACR_COMMON(SrcB, 0b00110100, 1);  // Also set dvalid
+        TTI_UNPACR_COMMON(SrcB, 0b00110100, 1); // Also set dvalid
     }
 
     // Increment UnpA L1 address
     TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
-    if (post1) {
+    if (post1)
+    {
         // Unpack second face of SrcB after CFGSHIFTMASK in post1 tuning
-        TTI_UNPACR_COMMON(SrcB, 0b00110100, 1);  // Also set dvalid;
-    } else {
+        TTI_UNPACR_COMMON(SrcB, 0b00110100, 1); // Also set dvalid;
+    }
+    else
+    {
         // This nop is required in post0 as CFGSHIFTMASK is a 2 cycle instruction
         // And first instruction in next iteration is unpack into SrcA which uses this value
         TTI_NOP;
     }
 }
 
-inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, const bool post1) {
-    load_replay_buf(0, 32, [post1] {
-        // Full unpack (both SrcA and SrcB)
-        _llk_unpack_AB_custom_mm_iter_insns(post1);
+inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, const bool post1)
+{
+    load_replay_buf(
+        0,
+        32,
+        [post1]
+        {
+            // Full unpack (both SrcA and SrcB)
+            _llk_unpack_AB_custom_mm_iter_insns(post1);
 
-        // Loop 8 times to fill up the replay buffer
-        for (std::uint32_t i = 0; i < 8; i++) {
+            // Loop 8 times to fill up the replay buffer
+            for (std::uint32_t i = 0; i < 8; i++)
+            {
+                // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
+                TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
+                TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
+                TTI_NOP;
+            }
+
             // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
-            TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);  // Also set dvalid
-            TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32);
+            TTI_UNPACR_COMMON(SrcA, 0b00000000, 1); // Also set dvalid
+            // This last iteration uses inner_increment instead of block_increment
+            TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
             TTI_NOP;
-        }
-
-        // Reuse unpack (unpacks only SrcA, SrcB is reused across width dim)
-        TTI_UNPACR_COMMON(SrcA, 0b00000000, 1);  // Also set dvalid
-        // This last iteration uses inner_increment instead of block_increment
-        TTI_CFGSHIFTMASK(1, 3, 32 - 1, 0, 1, THCON_SEC0_REG3_Base_address_ADDR32);
-        TTI_NOP;
-    });
+        });
 
     // Mop is configured to always cover two iterations of the inner (kt) dim loop, allowing us to
     // cover up to 256 kt_dim (max supported by this API) with max mop iterations (128)
@@ -146,8 +158,8 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     //   Sequence: A0, A1, A2, A3 → first_half, second_half, first_half, second_half
     //   Where A0+A1 covers first kt_dim iteration (ct_dim tiles), A2+A3 covers second kt_dim iteration
 
-    const std::uint32_t first_half_iterations = (ct_dim + 1) >> 1;  // Round up for odd ct_dim
-    const std::uint32_t second_half_iterations = ct_dim >> 1;     // Round down for odd ct_dim
+    const std::uint32_t first_half_iterations  = (ct_dim + 1) >> 1; // Round up for odd ct_dim
+    const std::uint32_t second_half_iterations = ct_dim >> 1;       // Round down for odd ct_dim
     // Both halves can take up to 9 iterations, meaning max of 18 tiles in width with full odd dim support
     // Although 16 is still the practical limit due to size of dst
     const std::uint32_t first_half = lltt::replay_insn(post1 ? 1 : 0, (post1 ? 1 : 2) + (first_half_iterations) * 3);
@@ -155,15 +167,15 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     const std::uint32_t second_half = lltt::replay_insn(32 - second_half_iterations * 3, second_half_iterations * 3);
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
-        ct_dim == 1,  // Use UNPACR_B and SKIP_B instructions?
-        ct_dim != 1,  // Use UNPACR_A1/2/3 instructions?
-        first_half,   // A0
-        second_half,  // A1
-        first_half,   // A2
-        second_half,  // A3
-        0,            // Skip A
-        first_half,   // B
-        0             // Skip B
+        ct_dim == 1, // Use UNPACR_B and SKIP_B instructions?
+        ct_dim != 1, // Use UNPACR_A1/2/3 instructions?
+        first_half,  // A0
+        second_half, // A1
+        first_half,  // A2
+        second_half, // A3
+        0,           // Skip A
+        first_half,  // B
+        0            // Skip B
     );
 
     tmp.program();
@@ -171,8 +183,8 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
 }
 
 template <bool transpose = false>
-inline void _llk_unpack_AB_custom_mm_init_(
-    const std::uint32_t unpB_face_r_dim, const std::uint32_t unpA_dst_format, const std::uint32_t ct_dim = 1) {
+inline void _llk_unpack_AB_custom_mm_init_(const std::uint32_t unpB_face_r_dim, const std::uint32_t unpA_dst_format, const std::uint32_t ct_dim = 1)
+{
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose ? 1 : 0);
 
     // UnpA unpacks full tiles
@@ -195,12 +207,13 @@ inline void _llk_unpack_AB_custom_mm_init_(
 }
 
 inline void _llk_unpack_AB_custom_mm_run_(
-    volatile uint* cfg,
+    volatile std::uint32_t* cfg,
     std::uint32_t address_a,
     const std::uint32_t address_b,
     const std::uint32_t block_increment,
     const std::uint32_t inner_increment,
-    const std::uint32_t kt_dim) {
+    const std::uint32_t kt_dim)
+{
     // Program SrcB address once, its updated using counters for up to 256 kt_dim
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
     // Program SrcA address once, its updated using CFGSHIFTMASK
@@ -238,8 +251,9 @@ inline void _llk_unpack_AB_custom_mm_(
     const std::uint32_t tile_size_a,
     const std::uint32_t tile_size_b,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
-    volatile uint* cfg = get_cfg_pointer();
+    const std::uint32_t ct_dim = 1)
+{
+    volatile std::uint32_t* cfg = get_cfg_pointer();
 
     const std::uint32_t block_increment = read_transposed ? kt_dim * tile_size_a : tile_size_a;
     const std::uint32_t inner_increment = read_transposed ? -(((ct_dim - 1) * kt_dim) - 1) * tile_size_a : tile_size_a;
@@ -251,7 +265,8 @@ inline void _llk_unpack_AB_custom_mm_(
     wait_for_next_context(1);
     reset_config_context();
 
-    if constexpr (clear_src) {
+    if constexpr (clear_src)
+    {
         // Clear SrcB as we only unpack into 1/8 FPU rows so zeroing them gives power savings
         // This particular instruction clears both banks after waiting for both of them to be free
         TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);

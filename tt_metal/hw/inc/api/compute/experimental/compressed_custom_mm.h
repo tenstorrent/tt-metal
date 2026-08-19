@@ -4,14 +4,18 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
-#ifdef TRISC_MATH
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_compressed_custom_mm_api.h"
+// Blackhole-only: the compressed_custom_mm LLKs live only in the Blackhole llk_api / llk_lib trees.
+#if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
+#include "experimental/llk_math_compressed_custom_mm_api.h"
 #endif
-#ifdef TRISC_UNPACK
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_compressed_custom_mm_api.h"
+#if defined(TRISC_UNPACK) && defined(ARCH_BLACKHOLE)
+#include "experimental/llk_unpack_AB_compressed_custom_mm_api.h"
 #endif
 namespace ckernel {
+
+#if defined(ARCH_BLACKHOLE)
 
 // clang-format off
 /**
@@ -53,7 +57,10 @@ ALWI void compressed_custom_mm_block_init(
 
     MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
     MATH((llk_math_hw_configure<fp32_dest_acc_en>(in0_cb_id, in1_cb_id)));
-    MATH((llk_math_compressed_custom_mm_init<transpose, false, dense_packing>(in0_cb_id, in1_cb_id)));
+    // NOTE: split_acc is accepted for call-site compatibility but NOT forwarded — the LLK always
+    // runs with split_acc=false. Carried verbatim from both parent trees (deepseek_v3_b1 demo and
+    // tt-blaze); all existing consumers were validated against this behavior.
+    MATH((llk_math_compressed_custom_mm_init<transpose, false /*split_acc*/, dense_packing>(in0_cb_id, in1_cb_id)));
 
     PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>()));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
@@ -97,7 +104,8 @@ ALWI void compressed_custom_mm_block_init_short(
     const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id, const std::uint32_t out_cb_id) {
     UNPACK((llk_unpack_AB_compressed_custom_mm_init<transpose>(in0_cb_id, in1_cb_id)));
 
-    MATH((llk_math_compressed_custom_mm_init<transpose, false, dense_packing>(in0_cb_id, in1_cb_id)));
+    // NOTE: split_acc is accepted but NOT forwarded (see compressed_custom_mm_block_init).
+    MATH((llk_math_compressed_custom_mm_init<transpose, false /*split_acc*/, dense_packing>(in0_cb_id, in1_cb_id)));
 
     if constexpr (dense_packing) {
         // Reduce packing stride from tile to tile to 32 rows instead of 64
@@ -147,7 +155,11 @@ ALWI void compressed_custom_mm_block(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
     UNPACK((llk_unpack_AB_compressed_custom_mm<clear_src>(in0_cb_id, in1_cb_id, base_address_meta, kt_dim, ct_dim)));
-    MATH((llk_math_compressed_custom_mm<false>(in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
+    // NOTE: finalize is accepted for call-site compatibility but NOT forwarded — the LLK always
+    // runs with finalize=false. Carried verbatim from both parent trees; all existing consumers
+    // were validated against this behavior.
+    MATH((llk_math_compressed_custom_mm<false /*finalize*/>(
+        in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
 }
 
 // clang-format off
@@ -226,7 +238,9 @@ ALWI void compressed_custom_mm_block_math(
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
-    MATH((llk_math_compressed_custom_mm<false>(in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
+    // NOTE: finalize is accepted but NOT forwarded (see compressed_custom_mm_block).
+    MATH((llk_math_compressed_custom_mm<false /*finalize*/>(
+        in0_cb_id, in1_cb_id, base_address_meta, dst_index, kt_dim, ct_dim)));
 }
 
 // clang-format off
@@ -236,9 +250,9 @@ ALWI void compressed_custom_mm_block_math(
  *
  * Return value: None
  *
- * | Argument       | Description                                                                            | Type     | Valid Range                  | Required              |
- * |----------------|----------------------------------------------------------------------------------------|----------|------------------------------|-----------------------|
- * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                   | False (default false) |
+ * | Argument              | Description                                                                            | Type     | Valid Range                  | Required              |
+ * |-----------------------|----------------------------------------------------------------------------------------|----------|------------------------------|-----------------------|
+ * | dense_packing         | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                   | False (default false) |
  */
 // clang-format on
 template <bool dense_packing = false>
@@ -248,5 +262,7 @@ ALWI void compressed_custom_mm_block_uninit() {
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2)));
     }
 }
+
+#endif  // ARCH_BLACKHOLE
 
 }  // namespace ckernel
