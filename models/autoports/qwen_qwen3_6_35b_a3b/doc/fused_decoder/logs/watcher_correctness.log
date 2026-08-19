@@ -1,0 +1,235 @@
+2026-08-18 23:45:56.632 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /localdev/vkovacevic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/vkovacevic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, cov-7.0.0, benchmark-5.2.3, anyio-4.14.2, split-0.11.0, dash-2.15.0, github-actions-annotate-failures-0.3.0
+timeout: 900.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 18 items / 14 deselected / 4 selected
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_prefill_decode_against_hf[linear_seq5-device_params0] 2026-08-18 23:45:58.641 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-18 23:45:58.641 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-18 23:45:58.641 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-18 23:45:58.641 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-18 23:45:58.643 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-18 23:45:58.643 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-18 23:45:58.647 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-18 23:45:58.871 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-18 23:45:58.871 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-18 23:45:58.871 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-18 23:45:58.871 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-18 23:45:58.872 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-18 23:45:59.027 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-18 23:45:59.144 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-18 23:45:59.144 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-18 23:45:59.144 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-18 23:45:59.144 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-18 23:45:59.144 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:45:59.144 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:45:59.144 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:45:59.144 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:45:59.144 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:45:59.144 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:45:59.144 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:45:59.144 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-18 23:45:59.144 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-18 23:45:59.144 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-18 23:45:59.714 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/fused_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-18 23:45:59.714 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-18 23:45:59.714 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-18 23:45:59.714 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-18 23:45:59.714 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-18 23:45:59.714 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-08-18 23:45:59.714 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-18 23:45:59.714 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-18 23:45:59.718 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-18 23:45:59.723 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-18 23:45:59.727 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:00.993 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931937_memory' (shm_resource_tracker.cpp:282)
+2026-08-18 23:46:01.969 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=26126908226921 cycles (realtime_profiler_manager.cpp:1127)
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+2026-08-18 23:46:09.736 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:09.741 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:09.745 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:09.749 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+Building brisc, compile step:
+cd /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_permute_interleaved_tiled_row_invariant/7443238448981122235/brisc/ && /localdev/vkovacevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/vkovacevic/tt-metal/ -I/localdev/vkovacevic/tt-metal/ttnn -I/localdev/vkovacevic/tt-metal/ttnn/cpp -I/localdev/vkovacevic/tt-metal/tt_metal -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/common -I/localdev/vkovacevic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/vkovacevic/tt-metal/tt_metal/api/ -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow -c -o /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_permute_interleaved_tiled_row_invariant/7443238448981122235/brisc/brisck.11902058790238260152.o /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_permute_interleaved_tiled_row_invariant/7443238448981122235/brisc/brisck.11902058790238260152.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DWATCHER_ENABLED -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"writer_permute_interleaved_tiled_row_invariant/7443238448981122235/\"" -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=2,2048 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"h_in_dest\",0}, {\"rank\",4}, {\"tile_width\",32}, {\"needs_padding\",1}, {\"face_width\",16}, {\"tile_height\",32}, {\"face_height\",16}, {\"W\",1}, {\"H\",64}, {\"output_H\",1}, {\"output_cb_index\",0}, {\"element_size\",2}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/writer_permute_interleaved_tiled_row_invariant.cpp: In function 'void kernel_main()':
+/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/writer_permute_interleaved_tiled_row_invariant.cpp:138:14: warning: variable 'input_padded_shape' set but not used [-Wunused-but-set-variable]
+  138 |     uint32_t input_padded_shape[RANK];
+      |              ^~~~~~~~~~~~~~~~~~
+2026-08-18 23:46:19.759 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:19.764 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:19.768 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:19.772 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+Building brisc, compile step:
+cd /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_permute_interleaved_tiled_row_invariant/13236077604222575890/brisc/ && /localdev/vkovacevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/vkovacevic/tt-metal/ -I/localdev/vkovacevic/tt-metal/ttnn -I/localdev/vkovacevic/tt-metal/ttnn/cpp -I/localdev/vkovacevic/tt-metal/tt_metal -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/common -I/localdev/vkovacevic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/vkovacevic/tt-metal/tt_metal/api/ -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow -c -o /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_permute_interleaved_tiled_row_invariant/13236077604222575890/brisc/brisck.11902058790238260152.o /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_permute_interleaved_tiled_row_invariant/13236077604222575890/brisc/brisck.11902058790238260152.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DWATCHER_ENABLED -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"writer_permute_interleaved_tiled_row_invariant/13236077604222575890/\"" -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=2,2048 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"h_in_dest\",0}, {\"rank\",4}, {\"tile_width\",32}, {\"needs_padding\",0}, {\"face_width\",16}, {\"tile_height\",32}, {\"face_height\",16}, {\"W\",1}, {\"H\",1}, {\"output_H\",64}, {\"output_cb_index\",0}, {\"element_size\",2}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/writer_permute_interleaved_tiled_row_invariant.cpp: In function 'void kernel_main()':
+/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/writer_permute_interleaved_tiled_row_invariant.cpp:138:14: warning: variable 'input_padded_shape' set but not used [-Wunused-but-set-variable]
+  138 |     uint32_t input_padded_shape[RANK];
+      |              ^~~~~~~~~~~~~~~~~~
+2026-08-18 23:46:29.782 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:29.787 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:29.791 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:29.795 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+Building ncrisc, compile step:
+cd /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_permute_interleaved_tiled_generic/2838612464455958109/ncrisc/ && /localdev/vkovacevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/vkovacevic/tt-metal/ -I/localdev/vkovacevic/tt-metal/ttnn -I/localdev/vkovacevic/tt-metal/ttnn/cpp -I/localdev/vkovacevic/tt-metal/tt_metal -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/common -I/localdev/vkovacevic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/vkovacevic/tt-metal/tt_metal/api/ -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow -c -o /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_permute_interleaved_tiled_generic/2838612464455958109/ncrisc/ncrisck.11902058790238260152.o /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_permute_interleaved_tiled_generic/2838612464455958109/ncrisc/ncrisck.11902058790238260152.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DWATCHER_ENABLED -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_permute_interleaved_tiled_generic/2838612464455958109/\"" -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=2,2048 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"misalignment\",32}, {\"needs_x_padding\",1}, {\"padding_val_packed\",0}, {\"x_blocks\",1}, {\"read_alignment\",64}, {\"w_blocks\",8}, {\"xw_blocks\",256}, {\"H_t\",1}, {\"rank\",4}, {\"rows_per_x\",32}, {\"needs_y_padding\",0}, {\"page_size\",2080}, {\"tile_width\",32}, {\"element_size\",2}, {\"face_width\",16}, {\"tile_height\",32}, {\"face_height\",16}, {\"W\",256}, {\"H_p\",32}, {\"X\",1}, {\"num_writes\",8}, {\"final_tile_real_faces_w\",2}, {\"final_tile_real_w\",0}, {\"x_dim_index_in_input\",1}, {\"H\",32}, {\"X_p\",32}, {\"W_t\",8}, {\"W_p\",256}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/reader_permute_interleaved_tiled_generic.cpp: In function 'void kernel_main()':
+/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/reader_permute_interleaved_tiled_generic.cpp:91:33: warning: variable 'dims' set but not used [-Wunused-but-set-variable]
+   91 |     uint32_t input_shape[RANK], dims[RANK];
+      |                                 ^~~~
+2026-08-18 23:46:39.805 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:39.809 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:39.814 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:39.818 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+fused prefill 0.9995374726645452
+fused traced decode 0.999636443075036
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_prefill_decode_against_hf[full_seq33-device_params0] 2026-08-18 23:46:42.068 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-18 23:46:42.069 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-18 23:46:42.069 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-18 23:46:42.069 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-18 23:46:42.069 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-18 23:46:42.069 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-18 23:46:42.069 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-18 23:46:42.131 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/fused_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-18 23:46:42.131 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-18 23:46:42.131 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-18 23:46:42.131 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-18 23:46:42.131 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-18 23:46:42.131 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-08-18 23:46:42.131 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:42.131 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-18 23:46:42.135 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:42.139 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:42.144 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:52.153 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:52.158 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:52.162 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:52.166 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+fused prefill 0.9996627571644442
+fused traced decode 0.9994431969325123
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_repeated_input_determinism[linear_repeat-device_params0] 2026-08-18 23:46:55.368 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-18 23:46:55.368 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-18 23:46:55.368 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-18 23:46:55.368 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-18 23:46:55.368 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-18 23:46:55.368 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-18 23:46:55.368 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-18 23:46:55.431 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/fused_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-18 23:46:55.431 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-18 23:46:55.431 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-18 23:46:55.431 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-18 23:46:55.431 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-18 23:46:55.431 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-08-18 23:46:55.431 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:55.431 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-18 23:46:55.435 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:55.439 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:55.443 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+fused repeated decode 1.0
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_repeated_input_determinism[full_repeat-device_params0] 2026-08-18 23:46:57.833 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-18 23:46:57.833 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-18 23:46:57.833 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-18 23:46:57.833 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-18 23:46:57.833 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-18 23:46:57.833 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-18 23:46:57.833 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-18 23:46:57.896 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/fused_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-18 23:46:57.896 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-18 23:46:57.896 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-18 23:46:57.896 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-18 23:46:57.896 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-18 23:46:57.896 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-08-18 23:46:57.896 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-18 23:46:57.896 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:57.900 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:57.904 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-18 23:46:57.908 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+fused repeated decode 1.0
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+39.95s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_prefill_decode_against_hf[linear_seq5-device_params0]
+13.05s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_prefill_decode_against_hf[full_seq33-device_params0]
+3.34s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_prefill_decode_against_hf[linear_seq5-device_params0]
+2.20s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_repeated_input_determinism[linear_repeat-device_params0]
+2.18s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_repeated_input_determinism[full_repeat-device_params0]
+0.13s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_repeated_input_determinism[linear_repeat-device_params0]
+0.13s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_repeated_input_determinism[full_repeat-device_params0]
+0.13s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_prefill_decode_against_hf[linear_seq5-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_prefill_decode_against_hf[full_seq33-device_params0]
+0.12s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_repeated_input_determinism[full_repeat-device_params0]
+0.12s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_prefill_decode_against_hf[full_seq33-device_params0]
+0.12s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_repeated_input_determinism[linear_repeat-device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_prefill_decode_against_hf[linear_seq5-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_prefill_decode_against_hf[full_seq33-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_repeated_input_determinism[linear_repeat-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_synthetic_fused_decoder_repeated_input_determinism[full_repeat-device_params0]
+=========== 4 passed, 14 deselected, 2 warnings in 62.97s (0:01:02) ============
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x7565f6bcdae8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x7565f6ab9bd8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 34 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 303 functions!
+ - leaked function "to_json"
+ - leaked function "__repr__"
+ - leaked function "sfpu_nan"
+ - leaked function "reshape"
+ - leaked function "GetNumPCIeDevices"
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "__eq__"
+ - leaked function "__init__"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-18 23:47:02.145 | info     |    BuildKernels | JIT cache stats: 0/570 hits (0.0%) [0 cached, 1451 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-18 23:47:02.145 | info     |    BuildKernels | JIT telemetry: 2 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-18 23:47:02.146 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-18 23:47:02.146 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-18 23:47:02.146 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-18 23:47:02.146 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-18 23:47:02.146 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-18 23:47:02.158 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-18 23:47:02.158 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-18 23:47:02.695 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-18 23:47:02.695 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-18 23:47:02.695 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

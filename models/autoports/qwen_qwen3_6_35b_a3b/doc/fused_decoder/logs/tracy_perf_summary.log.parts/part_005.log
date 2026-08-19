@@ -1,0 +1,123 @@
+Building ncrisc, compile step:
+cd /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_scatter/2188891825932800479/ncrisc/ && /localdev/vkovacevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/vkovacevic/tt-metal/ -I/localdev/vkovacevic/tt-metal/ttnn -I/localdev/vkovacevic/tt-metal/ttnn/cpp -I/localdev/vkovacevic/tt-metal/tt_metal -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/common -I/localdev/vkovacevic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/vkovacevic/tt-metal/tt_metal/api/ -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow -c -o /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_scatter/2188891825932800479/ncrisc/ncrisck.9407303660415077321.o /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_scatter/2188891825932800479/ncrisc/ncrisck.9407303660415077321.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_scatter/2188891825932800479/\"" -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=25178752,25051520,25051584,25179264,0,2,1,3,256,8,8,256,512,16,16,512,4,2,512,2,64,2,64,2,512
+In file included from /localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-08-18 23:38:58.758 | INFO     | tracy:signpost:49 - FUSED_FULL_DECODE
+2026-08-18 23:38:58.760 | INFO     | tracy:signpost:49 - FUSED_FULL_DECODE_END
+FUSED_FULL_DECODE traced_wall_ms=2.121 output_shape=(1, 1, 1, 2048)
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+5.36s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_linear_prefill[device_params0]
+3.95s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_full_prefill[device_params0]
+2.11s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_full_decode[device_params0]
+1.82s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_linear_decode[device_params0]
+1.72s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_linear_prefill[device_params0]
+1.26s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_linear_prefill[device_params0]
+1.26s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_linear_decode[device_params0]
+0.58s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_full_decode[device_params0]
+0.53s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_full_prefill[device_params0]
+0.14s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_full_decode[device_params0]
+0.12s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_full_prefill[device_params0]
+0.12s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_linear_decode[device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_linear_prefill[device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_full_prefill[device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_linear_decode[device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_fused_decoder.py::test_perf_qwen36_fused_full_decode[device_params0]
+================ 4 passed, 14 deselected, 2 warnings in 20.32s =================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x73346c20de78 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x73346c325a88 of type "ttnn._ttnn.device.DispatchCoreConfig"
+nanobind: leaked 34 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 303 functions!
+ - leaked function "enable_program_cache"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "RegisterProgramRealtimeProfilerCallback"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "device"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "to_list"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-18 23:39:01.070 | info     |    BuildKernels | JIT cache stats: 466/566 hits (82.3%) [466 cached, 1211 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-18 23:39:01.070 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-18 23:39:01.084 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-18 23:39:01.084 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-18 23:39:01.640 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-18 23:39:01.640 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-18 23:39:01.640 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 5:18:37
+Zones: 3,143,061
+Elapsed time: 24.01 s
+Saving trace... done!
+Trace size 27.19 MB (17.78% ratio)
+2026-08-18 23:39:02.036 | INFO     | __main__:main:452 - Copying /localdev/vkovacevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/vkovacevic/tt-metal/build/profiler/build_wasm/traces/python_2026_08_18_23_39_02.tracy
+2026-08-18 23:39:02.043 | INFO     | __main__:main:455 - Copied /localdev/vkovacevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/vkovacevic/tt-metal/build/profiler/build_wasm/traces/python_2026_08_18_23_39_02.tracy
+2026-08-18 23:39:02.044 | INFO     | __main__:main:464 - embed.tracy -> traces/python_2026_08_18_23_39_02.tracy
+2026-08-18 23:39:02.044 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-18 23:39:02.044 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-18 23:39:02.044 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-18 23:39:03.071 | INFO     | tracy:generate_report:162 - Host side ops time report generated at models/autoports/qwen_qwen3_6_35b_a3b/doc/fused_decoder/tracy/raw/.logs/tracy_ops_times.csv
+2026-08-18 23:39:03.117 | INFO     | tracy:generate_report:173 - Host side ops data report generated at models/autoports/qwen_qwen3_6_35b_a3b/doc/fused_decoder/tracy/raw/.logs/tracy_ops_data.csv
+2026-08-18 23:39:03.117 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:345 - Importing ops logs
+/localdev/vkovacevic/tt-metal/tools/tracy/process_ops_logs.py:450: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-18 23:39:06.167 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-18 23:39:06.168 | INFO     | tracy.process_ops_logs:append_device_data:1009 - Appending device data
+2026-08-18 23:39:06.168 | WARNING  | tracy.process_ops_logs:append_device_data:1027 - Device perf report cpp_device_perf_report.csv not found in models/autoports/qwen_qwen3_6_35b_a3b/doc/fused_decoder/tracy/raw/.logs. Falling back to legacy device-log parsing via import_log_run_stats(); this will take longer.
+2026-08-18 23:39:15.751 | INFO     | tracy.process_device_log:core_to_device_timeseries:416 - Importing Data For Device Number : 0
+2026-08-18 23:40:09.716 | INFO     | tracy.process_ops_logs:generate_reports:1342 - OPs' perf analysis is finished! Generating reports ...
+2026-08-18 23:40:09.716 | INFO     | tracy.process_ops_logs:generate_reports:1360 - Copying runtime artifacts
+2026-08-18 23:40:09.794 | INFO     | tracy.process_ops_logs:generate_reports:1369 - Generating OPs CSV
+2026-08-18 23:40:10.524 | INFO     | tracy.process_ops_logs:generate_reports:1765 - OPs csv generated at: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/fused_decoder/tracy/raw/reports/2026_08_18_23_40_09/ops_perf_results_2026_08_18_23_40_09.csv

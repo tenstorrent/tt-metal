@@ -1,0 +1,932 @@
+2026-08-19 00:19:39.771 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-19 00:19:41.190 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-19 00:19:41.190 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-19 00:19:41.190 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-19 00:19:41.190 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-19 00:19:41.191 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-19 00:19:41.191 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-19 00:19:41.195 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-19 00:19:41.416 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-19 00:19:41.416 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-19 00:19:41.416 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-19 00:19:41.416 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-19 00:19:41.418 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-19 00:19:41.562 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-19 00:19:41.678 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 00:19:41.679 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 00:19:41.679 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 00:19:41.679 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 00:19:41.679 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:19:41.679 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:19:41.679 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:19:41.679 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:19:41.679 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:19:41.679 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:19:41.679 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:19:41.679 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:19:41.679 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 00:19:41.679 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 00:19:41.684 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:19:41.684 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:19:41.684 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:19:41.684 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:19:41.713 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 00:19:41.752 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931937_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 00:19:42.330 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349982 GHz, device_time_at_sync=27801071034299 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 00:19:42.354 | critical |          Always | TT_FATAL: Invalid head size: 460. The head size must be a multiple of the tile width (32). Please adjust the dimensions accordingly. (assert.hpp:104)
+2026-08-19 00:19:42.388 | critical |          Always | TT_FATAL: Input shape 9216 must be divisible by num_heads + 2*num_kv_heads = 20 (assert.hpp:104)
+Qwen fused-decoder graph-fusion candidate probe
+heads=16 kv_heads=2 head_dim=256
+q_width=4096 q_gate_width=8192 kv_width=512
+qwen_qkgv_width=9216 standard_qkv_width=5120
+
+## split_query_key_value_and_split_heads direct Qwen q+gate/k/v prefill
+RESULT: REJECT RuntimeError: TT_FATAL @ /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.cpp:182: head_size % tt::constants::TILE_WIDTH == 0
+info:
+Invalid head size: 460. The head size must be a multiple of the tile width (32). Please adjust the dimensions accordingly.
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d1551) [0x7a0ac9dd1551]
+ --- ttnn::transformer::split_query_key_value_and_split_heads(tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, unsigned int, std::optional<unsigned int>, bool, std::optional<tt::tt_metal::MemoryConfig> const&, bool)
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x459c48) [0x7a0ac9e59c48]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x7a0ac9d155d5]
+ --- ./python_env/bin/python() [0x1876122]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- ./python_env/bin/python() [0x1876122]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- ./python_env/bin/python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- ./python_env/bin/python() [0x16a4982]
+ --- ./python_env/bin/python() [0x17aebff]
+ --- ./python_env/bin/python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- ./python_env/bin/python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- ./python_env/bin/python() [0x17af1c4]
+ --- ./python_env/bin/python() [0x17af0d8]
+ --- ./python_env/bin/python(Py_RunMain+0x2e5) [0x171f33b]
+ --- ./python_env/bin/python() [0x17406fa]
+ --- ./python_env/bin/python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7a0b0e02a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7a0b0e02a28b]
+ --- ./python_env/bin/python(_start+0x29) [0x1795ced]
+
+TRACEBACK_HEAD:
+RuntimeError: TT_FATAL @ /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.cpp:182: head_size % tt::constants::TILE_WIDTH == 0
+info:
+Invalid head size: 460. The head size must be a multiple of the tile width (32). Please adjust the dimensions accordingly.
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d1551) [0x7a0ac9dd1551]
+ --- ttnn::transformer::split_query_key_value_and_split_heads(tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, unsigned int, std::optional<unsigned int>, bool, std::optional<tt::tt_metal::MemoryConfig> const&, bool)
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x459c48) [0x7a0ac9e59c48]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x7a0ac9d155d5]
+ --- ./python_env/bin/python() [0x1876122]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- ./python_env/bin/python() [0x1876122]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- ./python_env/bin/python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- ./python_env/bin/python() [0x16a4982]
+ --- ./python_env/bin/python() [0x17aebff]
+ --- ./python_env/bin/python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- ./python_env/bin/python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- ./python_env/bin/python() [0x17af1c4]
+ --- ./python_env/bin/python() [0x17af0d8]
+ --- ./python_env/bin/python(Py_RunMain+0x2e5) [0x171f33b]
+ --- ./python_env/bin/python() [0x17406fa]
+ --- ./python_env/bin/python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7a0b0e02a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7a0b0e02a28b]
+ --- ./python_env/bin/python(_start+0x29) [0x1795ced]
+
+## split_query_key_value_and_split_heads after stripping Q gate
+RESULT: PASS ((1, 16, 33, 256), (1, 2, 33, 256), (1, 2, 33, 256))
+TIMING current prefill q/k/v head path representative output: 0.1680 ms/iter over 20 iterations; shape=(1, 16, 33, 256)
+TIMING stripped prefill split_query_key_value candidate: 0.2152 ms/iter over 20 iterations; shape=(1, 16, 33, 256)
+
+## nlp_create_qkv_heads_decode direct Qwen q+gate/k/v decode
+RESULT: REJECT RuntimeError: TT_FATAL @ /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode.cpp:52: input_tensor.padded_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0
+info:
+Input shape 9216 must be divisible by num_heads + 2*num_kv_heads = 20
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d1551) [0x7a0ac9dd1551]
+ --- ttnn::experimental::nlp_create_qkv_heads_decode(tt::tt_metal::Tensor const&, unsigned int, std::optional<unsigned int const>, std::optional<std::array<tt::tt_metal::Tensor, 3ul> >&, std::optional<bool const>, std::optional<tt::tt_metal::Tensor const> const&, std::optional<unsigned int const>, std::optional<tt::tt_metal::MemoryConfig> const&)
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x50844d) [0x7a0ac9f0844d]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x7a0ac9d155d5]
+ --- ./python_env/bin/python() [0x1876122]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- ./python_env/bin/python() [0x1876122]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- ./python_env/bin/python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- ./python_env/bin/python() [0x16a4982]
+ --- ./python_env/bin/python() [0x17aebff]
+ --- ./python_env/bin/python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- ./python_env/bin/python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- ./python_env/bin/python() [0x17af1c4]
+ --- ./python_env/bin/python() [0x17af0d8]
+ --- ./python_env/bin/python(Py_RunMain+0x2e5) [0x171f33b]
+ --- ./python_env/bin/python() [0x17406fa]
+ --- ./python_env/bin/python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7a0b0e02a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7a0b0e02a28b]
+ --- ./python_env/bin/python(_start+0x29) [0x1795ced]
+
+TRACEBACK_HEAD:
+RuntimeError: TT_FATAL @ /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode.cpp:52: input_tensor.padded_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0
+info:
+Input shape 9216 must be divisible by num_heads + 2*num_kv_heads = 20
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d1551) [0x7a0ac9dd1551]
+ --- ttnn::experimental::nlp_create_qkv_heads_decode(tt::tt_metal::Tensor const&, unsigned int, std::optional<unsigned int const>, std::optional<std::array<tt::tt_metal::Tensor, 3ul> >&, std::optional<bool const>, std::optional<tt::tt_metal::Tensor const> const&, std::optional<unsigned int const>, std::optional<tt::tt_metal::MemoryConfig> const&)
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x50844d) [0x7a0ac9f0844d]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x7a0ac9d155d5]
+ --- ./python_env/bin/python() [0x1876122]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- ./python_env/bin/python() [0x1876122]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- ./python_env/bin/python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- ./python_env/bin/python() [0x16a4982]
+ --- ./python_env/bin/python() [0x17aebff]
+ --- ./python_env/bin/python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- ./python_env/bin/python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- ./python_env/bin/python() [0x17af1c4]
+ --- ./python_env/bin/python() [0x17af0d8]
+ --- ./python_env/bin/python(Py_RunMain+0x2e5) [0x171f33b]
+ --- ./python_env/bin/python() [0x17406fa]
+ --- ./python_env/bin/python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7a0b0e02a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7a0b0e02a28b]
+ --- ./python_env/bin/python(_start+0x29) [0x1795ced]2026-08-19 00:19:42.405 | critical |          Always | TT_FATAL: Physical shard shape (16, 256) must be tile {32, 32} sized! (assert.hpp:104)
+2026-08-19 00:19:42.410 | critical |          Always | TT_FATAL: input_tensor must be sharded (assert.hpp:104)
+
+
+## nlp_create_qkv_heads_decode after stripping Q gate
+RESULT: PASS ((1, 1, 16, 256), (1, 1, 2, 256), (1, 1, 2, 256))
+TIMING current decode q head path representative output: 0.0463 ms/iter over 20 iterations; shape=(1, 1, 16, 256)
+TIMING stripped decode nlp_create_qkv_heads_decode candidate: 0.1292 ms/iter over 20 iterations; shape=(1, 1, 16, 256)
+
+## concatenate_heads prefill output shape
+RESULT: PASS (1, 1, 33, 4096)
+TIMING current prefill concat reshape: 0.0599 ms/iter over 20 iterations; shape=(1, 1, 33, 4096)
+TIMING dedicated concatenate_heads prefill candidate: 0.1673 ms/iter over 20 iterations; shape=(1, 1, 33, 4096)
+
+## nlp_concat_heads_decode with required layouts output shape
+RESULT: REJECT RuntimeError: TT_FATAL @ /localdev/vkovacevic/tt-metal/tt_metal/impl/tensor/spec/layout/tensor_layout.cpp:162: !shard_align_error.has_value()
+info:
+Physical shard shape (16, 256) must be tile {32, 32} sized!
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x6c6d00) [0x7a0ac6ec6d00]
+ --- tt::tt_metal::TensorLayout::TensorLayout(tt::tt_metal::DataType, tt::tt_metal::PageConfig const&, tt::tt_metal::MemoryConfig const&, tt::tt_metal::Alignment const&)
+ --- ttnn::prim::InterleavedToShardedDeviceOperation::compute_output_specs(ttnn::prim::InterleavedToShardedParams const&, ttnn::prim::InterleavedToShardedInputs const&)
+ --- ttnn::prim::InterleavedToShardedDeviceOperation::create_output_tensors(ttnn::prim::InterleavedToShardedParams const&, ttnn::prim::InterleavedToShardedInputs const&)
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim35InterleavedToShardedDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0xdc) [0x7a0ac881f80c]
+ --- ttnn::prim::interleaved_to_sharded(tt::tt_metal::Tensor const&, tt::tt_metal::MemoryConfig const&, tt::tt_metal::DataType const&, bool, std::optional<tt::tt_metal::Tensor> const&)
+ --- ttnn::interleaved_to_sharded(tt::tt_metal::Tensor const&, tt::tt_metal::MemoryConfig const&, std::optional<tt::tt_metal::DataType> const&, std::optional<bool> const&, std::optional<tt::tt_metal::Tensor> const&)
+ --- ttnn::to_memory_config(tt::tt_metal::Tensor const&, tt::tt_metal::MemoryConfig const&, std::optional<tt::tt_metal::DataType>, std::optional<tt::tt_metal::Tensor> const&)
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3e0c47) [0x7a0ac9de0c47]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x7a0ac9d155d5]
+ --- ./python_env/bin/python(_PyObject_Call_Prepend+0x9a) [0x1686f1a]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- ./python_env/bin/python(_PyObject_Call_Prepend+0x9a) [0x1686f1a]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- ./python_env/bin/python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- ./python_env/bin/python() [0x16a4982]
+ --- ./python_env/bin/python() [0x17aebff]
+ --- ./python_env/bin/python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- ./python_env/bin/python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- ./python_env/bin/python() [0x17af1c4]
+ --- ./python_env/bin/python() [0x17af0d8]
+ --- ./python_env/bin/python(Py_RunMain+0x2e5) [0x171f33b]
+ --- ./python_env/bin/python() [0x17406fa]
+ --- ./python_env/bin/python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7a0b0e02a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7a0b0e02a28b]
+ --- ./python_env/bin/python(_start+0x29) [0x1795ced]
+
+TRACEBACK_HEAD:
+RuntimeError: TT_FATAL @ /localdev/vkovacevic/tt-metal/tt_metal/impl/tensor/spec/layout/tensor_layout.cpp:162: !shard_align_error.has_value()
+info:
+Physical shard shape (16, 256) must be tile {32, 32} sized!
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x6c6d00) [0x7a0ac6ec6d00]
+ --- tt::tt_metal::TensorLayout::TensorLayout(tt::tt_metal::DataType, tt::tt_metal::PageConfig const&, tt::tt_metal::MemoryConfig const&, tt::tt_metal::Alignment const&)
+ --- ttnn::prim::InterleavedToShardedDeviceOperation::compute_output_specs(ttnn::prim::InterleavedToShardedParams const&, ttnn::prim::InterleavedToShardedInputs const&)
+ --- ttnn::prim::InterleavedToShardedDeviceOperation::create_output_tensors(ttnn::prim::InterleavedToShardedParams const&, ttnn::prim::InterleavedToShardedInputs const&)
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim35InterleavedToShardedDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0xdc) [0x7a0ac881f80c]
+ --- ttnn::prim::interleaved_to_sharded(tt::tt_metal::Tensor const&, tt::tt_metal::MemoryConfig const&, tt::tt_metal::DataType const&, bool, std::optional<tt::tt_metal::Tensor> const&)
+ --- ttnn::interleaved_to_sharded(tt::tt_metal::Tensor const&, tt::tt_metal::MemoryConfig const&, std::optional<tt::tt_metal::DataType> const&, std::optional<bool> const&, std::optional<tt::tt_metal::Tensor> const&)
+ --- ttnn::to_memory_config(tt::tt_metal::Tensor const&, tt::tt_metal::MemoryConfig const&, std::optional<tt::tt_metal::DataType>, std::optional<tt::tt_metal::Tensor> const&)
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3e0c47) [0x7a0ac9de0c47]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x7a0ac9d155d5]
+ --- ./python_env/bin/python(_PyObject_Call_Prepend+0x9a) [0x1686f1a]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- ./python_env/bin/python(_PyObject_Call_Prepend+0x9a) [0x1686f1a]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- ./python_env/bin/python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- ./python_env/bin/python() [0x16a4982]
+ --- ./python_env/bin/python() [0x17aebff]
+ --- ./python_env/bin/python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- ./python_env/bin/python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- ./python_env/bin/python() [0x17af1c4]
+ --- ./python_env/bin/python() [0x17af0d8]
+ --- ./python_env/bin/python(Py_RunMain+0x2e5) [0x171f33b]
+ --- ./python_env/bin/python() [0x17406fa]
+ --- ./python_env/bin/python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7a0b0e02a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7a0b0e02a28b]
+ --- ./python_env/bin/python(_start+0x29) [0x1795ced]
+TIMING current decode concat reshape: 0.0119 ms/iter over 20 iterations; shape=(1, 1, 1, 4096)
+
+## nlp_concat_heads_decode with padded 32-head input
+RESULT: PASS (1, 1, 32, 4096)
+TIMING nlp_concat_heads_decode padded-head layout roundtrip candidate: 0.0243 ms/iter over 20 iterations; shape=(1, 1, 32, 4096)
+TIMING nlp_concat_heads_decode padded-head layout roundtrip plus logical slice candidate: 0.0476 ms/iter over 20 iterations; shape=(1, 1, 1, 4096)
+
+## generalized_moe_gate direct fused-router layout
+RESULT: REJECT RuntimeError: TT_FATAL @ /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/generalized_moe_gate_device_operation.cpp:73: input_tensor.is_sharded()
+info:
+input_tensor must be sharded
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3c4f52) [0x7a0ac9dc4f52]
+ --- ttnn::operations::experimental::deepseek::moe::generalized_moe_gate::GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(ttnn::operations::experimental::deepseek::moe::generalized_moe_gate::operation_attributes_t const&, ttnn::operations::experimental::deepseek::moe::generalized_moe_gate::tensor_args_t const&)
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations12experimental8deepseek3moe20generalized_moe_gate33GeneralizedMoeGateDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNSB_13tensor_args_tERNSB_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b9) [0x7a0ac8ddd1d9]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations12experimental8deepseek3moe20generalized_moe_gate33GeneralizedMoeGateDeviceOperationEEENT_21tensor_return_value_tERKNS9_22operation_attributes_tERKNS9_13tensor_args_tE+0x3c8) [0x7a0ac8ddcb38]
+ --- ttnn::experimental::deepseek::moe::generalized_moe_gate(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, float, float, bool, unsigned int, bool, bool)
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x60b895) [0x7a0aca00b895]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x7a0ac9d155d5]
+ --- ./python_env/bin/python() [0x1876122]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- ./python_env/bin/python() [0x1876122]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- ./python_env/bin/python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- ./python_env/bin/python() [0x16a4982]
+ --- ./python_env/bin/python() [0x17aebff]
+ --- ./python_env/bin/python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- ./python_env/bin/python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- ./python_env/bin/python() [0x17af1c4]
+ --- ./python_env/bin/python() [0x17af0d8]
+ --- ./python_env/bin/python(Py_RunMain+0x2e5) [0x171f33b]
+ --- ./python_env/bin/python() [0x17406fa]
+ --- ./python_env/bin/python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7a0b0e02a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7a0b0e02a28b]
+ --- ./python_env/bin/python(_start+0x29) [0x1795ced]
+2026-08-19 00:19:42.469 | error    |    BuildKernels | trisc1 compile failure -- cmd: cd /localdev/vkovacevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/generalized_moe_gate_kernel/16089091971787002285/trisc1/ && /localdev/vkovacevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/localdev/vkovacevic/tt-metal/ -I/localdev/vkovacevic/tt-metal/ttnn -I/localdev/vkovacevic/tt-metal/ttnn/cpp -I/localdev/vkovacevic/tt-metal/tt_metal -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/common -I/localdev/vkovacevic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/vkovacevic/tt-metal/tt_metal/api/ -I/localdev/vkovacevic/tt-metal/runtime/sfpi/include -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels -c -o /localdev/vkovacevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/generalized_moe_gate_kernel/16089091971787002285/trisc1/trisck.3561624885413814231.o /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/vkovacevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/generalized_moe_gate_kernel/16089091971787002285/trisc1/trisck.3561624885413814231.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"generalized_moe_gate_kernel/16089091971787002285/\"" -DKERNEL_COMPILE_TIME_ARG_MAP="{\"moe_gate_is_active_core\",1}, {\"moe_gate_cb_tilize_idx\",9}, {\"moe_gate_cb_tilize\",8}, {\"moe_gate_run_bias_cb\",7}, {\"moe_gate_input_cb\",0}, {\"moe_gate_bias_cb\",1}, {\"moe_gate_input_indices_cb\",3}, {\"moe_gate_output_indices_cb\",4}, {\"moe_gate_scaling_factor\",1065353216}, {\"moe_gate_output_cb\",2}, {\"moe_gate_num_blocks\",1}, {\"moe_gate_topk\",8}, {\"moe_gate_eps\",507307272}, {\"moe_gate_softmax\",1}, {\"moe_gate_run_idx_cb\",6}, {\"moe_gate_enable_sigmoid\",0}, {\"moe_gate_run_scores_cb\",5}, "  (build.cpp:60)
+2026-08-19 00:19:42.469 | critical |          Always | TT_THROW: trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+ (assert.hpp:104)
+2026-08-19 00:19:42.470 | critical |          Always | TT_THROW: Failed to generate binaries for generalized_moe_gate_kernel TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/jit_build/build.cpp:67: tt::exception
+info:
+trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1822888) [0x7a0ac9422888]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xaca55f) [0x7a0ac72ca55f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+ (assert.hpp:104)
+
+TRACEBACK_HEAD:
+RuntimeError: TT_FATAL @ /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/generalized_moe_gate_device_operation.cpp:73: input_tensor.is_sharded()
+info:
+input_tensor must be sharded
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3c4f52) [0x7a0ac9dc4f52]
+ --- ttnn::operations::experimental::deepseek::moe::generalized_moe_gate::GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(ttnn::operations::experimental::deepseek::moe::generalized_moe_gate::operation_attributes_t const&, ttnn::operations::experimental::deepseek::moe::generalized_moe_gate::tensor_args_t const&)
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations12experimental8deepseek3moe20generalized_moe_gate33GeneralizedMoeGateDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNSB_13tensor_args_tERNSB_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x1b9) [0x7a0ac8ddd1d9]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations12experimental8deepseek3moe20generalized_moe_gate33GeneralizedMoeGateDeviceOperationEEENT_21tensor_return_value_tERKNS9_22operation_attributes_tERKNS9_13tensor_args_tE+0x3c8) [0x7a0ac8ddcb38]
+ --- ttnn::experimental::deepseek::moe::generalized_moe_gate(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, float, float, bool, unsigned int, bool, bool)
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x60b895) [0x7a0aca00b895]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x7a0ac9d155d5]
+ --- ./python_env/bin/python() [0x1876122]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- ./python_env/bin/python() [0x1876122]
+ --- ./python_env/bin/python() [0x1686e59]
+ --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- ./python_env/bin/python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- ./python_env/bin/python() [0x16a4982]
+ --- ./python_env/bin/python() [0x17aebff]
+ --- ./python_env/bin/python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- ./python_env/bin/python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- ./python_env/bin/python() [0x17af1c4]
+ --- ./python_env/bin/python() [0x17af0d8]
+ --- ./python_env/bin/python(Py_RunMain+0x2e5) [0x171f33b]
+ --- ./python_env/bin/python() [0x17406fa]
+ --- ./python_env/bin/python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7a0b0e02a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7a0b0e02a28b]
+ --- ./python_env/bin/python(_start+0x29) [0x1795ced]
+
+## generalized_moe_gate adapted Qwen router dense rebuild tokens=33
+RESULT: REJECT RuntimeError: TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/impl/program/program.cpp:259: tt::exception
+info:
+Failed to generate binaries for generalized_moe_gate_kernel TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/jit_build/build.cpp:67: tt::exception
+info:
+trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1822888) [0x7a0ac9422888]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xaca55f) [0x7a0ac72ca55f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9159c8) [0x7a0ac71159c8]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e8b6b) [0x7a0ac70e8b6b]
+ --- tt::tt_metal::JitBuildCache::build_once(unsigned long, std::function<void ()> const&)
+ --- tt::tt_metal::jit_build_once(unsigned long, std::function<void ()> const&)
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e86c2) [0x7a0ac70e86c2]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+
+TRACEBACK_HEAD:
+RuntimeError: TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/impl/program/program.cpp:259: tt::exception
+info:
+Failed to generate binaries for generalized_moe_gate_kernel TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/jit_build/build.cpp:67: tt::exception
+info:
+trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1822888) [0x7a0ac9422888]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xaca55f) [0x7a0ac72ca55f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9159c8) [0x7a0ac71159c8]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e8b6b) [0x7a0ac70e8b6b]
+ --- tt::tt_metal::JitBuildCache::build_once(unsigned long, std::function<void ()> const&)
+ --- tt::tt_metal::jit_build_once(unsigned long, std::function<void ()> const&)
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e86c2) [0x7a0ac70e86c2]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]2026-08-19 00:19:42.522 | error    |    BuildKernels | trisc1 compile failure -- cmd: cd /localdev/vkovacevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/generalized_moe_gate_kernel/16089091971787002285/trisc1/ && /localdev/vkovacevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/localdev/vkovacevic/tt-metal/ -I/localdev/vkovacevic/tt-metal/ttnn -I/localdev/vkovacevic/tt-metal/ttnn/cpp -I/localdev/vkovacevic/tt-metal/tt_metal -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/common -I/localdev/vkovacevic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/vkovacevic/tt-metal/tt_metal/api/ -I/localdev/vkovacevic/tt-metal/runtime/sfpi/include -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels -c -o /localdev/vkovacevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/generalized_moe_gate_kernel/16089091971787002285/trisc1/trisck.3561624885413814231.o /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/vkovacevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/generalized_moe_gate_kernel/16089091971787002285/trisc1/trisck.3561624885413814231.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"generalized_moe_gate_kernel/16089091971787002285/\"" -DKERNEL_COMPILE_TIME_ARG_MAP="{\"moe_gate_is_active_core\",1}, {\"moe_gate_cb_tilize_idx\",9}, {\"moe_gate_cb_tilize\",8}, {\"moe_gate_run_bias_cb\",7}, {\"moe_gate_input_cb\",0}, {\"moe_gate_bias_cb\",1}, {\"moe_gate_input_indices_cb\",3}, {\"moe_gate_output_indices_cb\",4}, {\"moe_gate_scaling_factor\",1065353216}, {\"moe_gate_output_cb\",2}, {\"moe_gate_num_blocks\",1}, {\"moe_gate_topk\",8}, {\"moe_gate_eps\",507307272}, {\"moe_gate_softmax\",1}, {\"moe_gate_run_idx_cb\",6}, {\"moe_gate_enable_sigmoid\",0}, {\"moe_gate_run_scores_cb\",5}, "  (build.cpp:60)
+2026-08-19 00:19:42.522 | critical |          Always | TT_THROW: trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+ (assert.hpp:104)
+2026-08-19 00:19:42.523 | critical |          Always | TT_THROW: Failed to generate binaries for generalized_moe_gate_kernel TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/jit_build/build.cpp:67: tt::exception
+info:
+trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1822888) [0x7a0ac9422888]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xaca55f) [0x7a0ac72ca55f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+ (assert.hpp:104)
+
+
+## generalized_moe_gate adapted Qwen router dense rebuild tokens=1
+RESULT: REJECT RuntimeError: TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/impl/program/program.cpp:259: tt::exception
+info:
+Failed to generate binaries for generalized_moe_gate_kernel TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/jit_build/build.cpp:67: tt::exception
+info:
+trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1822888) [0x7a0ac9422888]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xaca55f) [0x7a0ac72ca55f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9159c8) [0x7a0ac71159c8]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e8b6b) [0x7a0ac70e8b6b]
+ --- tt::tt_metal::JitBuildCache::build_once(unsigned long, std::function<void ()> const&)
+ --- tt::tt_metal::jit_build_once(unsigned long, std::function<void ()> const&)
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e86c2) [0x7a0ac70e86c2]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+
+TRACEBACK_HEAD:
+RuntimeError: TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/impl/program/program.cpp:259: tt::exception
+info:
+Failed to generate binaries for generalized_moe_gate_kernel TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/jit_build/build.cpp:67: tt::exception
+info:
+trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1822888) [0x7a0ac9422888]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xaca55f) [0x7a0ac72ca55f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9159c8) [0x7a0ac71159c8]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e8b6b) [0x7a0ac70e8b6b]
+ --- tt::tt_metal::JitBuildCache::build_once(unsigned long, std::function<void ()> const&)
+ --- tt::tt_metal::jit_build_once(unsigned long, std::function<void ()> const&)
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e86c2) [0x7a0ac70e86c2]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]2026-08-19 00:19:42.573 | error    |    BuildKernels | trisc1 compile failure -- cmd: cd /localdev/vkovacevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/generalized_moe_gate_kernel/16089091971787002285/trisc1/ && /localdev/vkovacevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/localdev/vkovacevic/tt-metal/ -I/localdev/vkovacevic/tt-metal/ttnn -I/localdev/vkovacevic/tt-metal/ttnn/cpp -I/localdev/vkovacevic/tt-metal/tt_metal -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/common -I/localdev/vkovacevic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/vkovacevic/tt-metal/tt_metal/api/ -I/localdev/vkovacevic/tt-metal/runtime/sfpi/include -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels -c -o /localdev/vkovacevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/generalized_moe_gate_kernel/16089091971787002285/trisc1/trisck.3561624885413814231.o /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/vkovacevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/generalized_moe_gate_kernel/16089091971787002285/trisc1/trisck.3561624885413814231.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"generalized_moe_gate_kernel/16089091971787002285/\"" -DKERNEL_COMPILE_TIME_ARG_MAP="{\"moe_gate_is_active_core\",1}, {\"moe_gate_cb_tilize_idx\",9}, {\"moe_gate_cb_tilize\",8}, {\"moe_gate_run_bias_cb\",7}, {\"moe_gate_input_cb\",0}, {\"moe_gate_bias_cb\",1}, {\"moe_gate_input_indices_cb\",3}, {\"moe_gate_output_indices_cb\",4}, {\"moe_gate_scaling_factor\",1065353216}, {\"moe_gate_output_cb\",2}, {\"moe_gate_num_blocks\",1}, {\"moe_gate_topk\",8}, {\"moe_gate_eps\",507307272}, {\"moe_gate_softmax\",1}, {\"moe_gate_run_idx_cb\",6}, {\"moe_gate_enable_sigmoid\",0}, {\"moe_gate_run_scores_cb\",5}, "  (build.cpp:60)
+2026-08-19 00:19:42.573 | critical |          Always | TT_THROW: trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+ (assert.hpp:104)
+2026-08-19 00:19:42.574 | critical |          Always | TT_THROW: Failed to generate binaries for generalized_moe_gate_kernel TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/jit_build/build.cpp:67: tt::exception
+info:
+trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1822888) [0x7a0ac9422888]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xaca55f) [0x7a0ac72ca55f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+ (assert.hpp:104)
+
+TIMING current dense router path tokens=33: 0.2263 ms/iter over 20 iterations; shape=(1, 1, 33, 256)
+
+## generalized_moe_gate dense rebuild timing tokens=33
+RESULT: REJECT RuntimeError: TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/impl/program/program.cpp:259: tt::exception
+info:
+Failed to generate binaries for generalized_moe_gate_kernel TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/jit_build/build.cpp:67: tt::exception
+info:
+trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1822888) [0x7a0ac9422888]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xaca55f) [0x7a0ac72ca55f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9159c8) [0x7a0ac71159c8]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e8b6b) [0x7a0ac70e8b6b]
+ --- tt::tt_metal::JitBuildCache::build_once(unsigned long, std::function<void ()> const&)
+ --- tt::tt_metal::jit_build_once(unsigned long, std::function<void ()> const&)
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e86c2) [0x7a0ac70e86c2]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+
+TRACEBACK_HEAD:
+RuntimeError: TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/impl/program/program.cpp:259: tt::exception
+info:
+Failed to generate binaries for generalized_moe_gate_kernel TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/jit_build/build.cpp:67: tt::exception
+info:
+trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1822888) [0x7a0ac9422888]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xaca55f) [0x7a0ac72ca55f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9159c8) [0x7a0ac71159c8]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e8b6b) [0x7a0ac70e8b6b]
+ --- tt::tt_metal::JitBuildCache::build_once(unsigned long, std::function<void ()> const&)
+ --- tt::tt_metal::jit_build_once(unsigned long, std::function<void ()> const&)
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e86c2) [0x7a0ac70e86c2]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]2026-08-19 00:19:42.622 | error    |    BuildKernels | trisc1 compile failure -- cmd: cd /localdev/vkovacevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/generalized_moe_gate_kernel/16089091971787002285/trisc1/ && /localdev/vkovacevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/localdev/vkovacevic/tt-metal/ -I/localdev/vkovacevic/tt-metal/ttnn -I/localdev/vkovacevic/tt-metal/ttnn/cpp -I/localdev/vkovacevic/tt-metal/tt_metal -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/common -I/localdev/vkovacevic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/vkovacevic/tt-metal/tt_metal/api/ -I/localdev/vkovacevic/tt-metal/runtime/sfpi/include -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels -c -o /localdev/vkovacevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/generalized_moe_gate_kernel/16089091971787002285/trisc1/trisck.3561624885413814231.o /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/vkovacevic/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/generalized_moe_gate_kernel/16089091971787002285/trisc1/trisck.3561624885413814231.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"generalized_moe_gate_kernel/16089091971787002285/\"" -DKERNEL_COMPILE_TIME_ARG_MAP="{\"moe_gate_is_active_core\",1}, {\"moe_gate_cb_tilize_idx\",9}, {\"moe_gate_cb_tilize\",8}, {\"moe_gate_run_bias_cb\",7}, {\"moe_gate_input_cb\",0}, {\"moe_gate_bias_cb\",1}, {\"moe_gate_input_indices_cb\",3}, {\"moe_gate_output_indices_cb\",4}, {\"moe_gate_scaling_factor\",1065353216}, {\"moe_gate_output_cb\",2}, {\"moe_gate_num_blocks\",1}, {\"moe_gate_topk\",8}, {\"moe_gate_eps\",507307272}, {\"moe_gate_softmax\",1}, {\"moe_gate_run_idx_cb\",6}, {\"moe_gate_enable_sigmoid\",0}, {\"moe_gate_run_scores_cb\",5}, "  (build.cpp:60)
+2026-08-19 00:19:42.622 | critical |          Always | TT_THROW: trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+ (assert.hpp:104)
+2026-08-19 00:19:42.623 | critical |          Always | TT_THROW: Failed to generate binaries for generalized_moe_gate_kernel TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/jit_build/build.cpp:67: tt::exception
+info:
+trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1822888) [0x7a0ac9422888]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xaca55f) [0x7a0ac72ca55f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+ (assert.hpp:104)
+
+TIMING current dense router path tokens=1: 0.2187 ms/iter over 20 iterations; shape=(1, 1, 1, 256)
+
+## generalized_moe_gate dense rebuild timing tokens=1
+RESULT: REJECT RuntimeError: TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/impl/program/program.cpp:259: tt::exception
+info:
+Failed to generate binaries for generalized_moe_gate_kernel TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/jit_build/build.cpp:67: tt::exception
+info:
+trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1822888) [0x7a0ac9422888]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xaca55f) [0x7a0ac72ca55f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9159c8) [0x7a0ac71159c8]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e8b6b) [0x7a0ac70e8b6b]
+ --- tt::tt_metal::JitBuildCache::build_once(unsigned long, std::function<void ()> const&)
+ --- tt::tt_metal::jit_build_once(unsigned long, std::function<void ()> const&)
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e86c2) [0x7a0ac70e86c2]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+
+TRACEBACK_HEAD:
+RuntimeError: TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/impl/program/program.cpp:259: tt::exception
+info:
+Failed to generate binaries for generalized_moe_gate_kernel TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/jit_build/build.cpp:67: tt::exception
+info:
+trisc1 build failed. Log: In file included from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/../unified_kernels/generalized_moe_gate.hpp:29,
+                 from /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/kernels/generalized_moe_gate_kernel.cpp:22,
+                 from ../chlkc_math.cpp:3,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/compute/experimental/generalized_moe_gate.h:11:10: fatal error: experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h: No such file or directory
+   11 | #include "experimental/llk_sfpu/llk_math_generalized_moe_gate_topk_single_face.h"
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+compilation terminated.
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1822888) [0x7a0ac9422888]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xaca55f) [0x7a0ac72ca55f]
+ --- tt::tt_metal::JitBuildState::compile_one(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, tt::tt_metal::JitBuildSettings const*, unsigned long) const
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9159c8) [0x7a0ac71159c8]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e8b6b) [0x7a0ac70e8b6b]
+ --- tt::tt_metal::JitBuildCache::build_once(unsigned long, std::function<void ()> const&)
+ --- tt::tt_metal::jit_build_once(unsigned long, std::function<void ()> const&)
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8e86c2) [0x7a0ac70e86c2]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5d08) [0x7a0ac72e5d08]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5c8e) [0x7a0ac72e5c8e]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764c1f) [0x7a0ac6f64c1f]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0xa1fb3) [0x7a0b0e0a1fb3]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x764a79) [0x7a0ac6f64a79]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xae5ade) [0x7a0ac72e5ade]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9019d5) [0x7a0ac71019d5]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x9004e0) [0x7a0ac71004e0]
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ff9c8) [0x7a0ac70ff9c8]
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7a0af64f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x7a0b0e09cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x7a0b0e129d6c]
+TIMING current fused decoder linear prefill path: 27.2866 ms/iter over 5 iterations; shape=(1, 1, 5, 2048)
+TIMING_TRACE current fused decoder linear traced decode path: 2.3982 ms/iter over 5 iterations; shape=(1, 1, 1, 2048)
+TIMING current fused decoder full prefill path: 21.8168 ms/iter over 5 iterations; shape=(1, 1, 33, 2048)
+TIMING_TRACE current fused decoder full traced decode path: 2.0636 ms/iter over 5 iterations; shape=(1, 1, 1, 2048)
+SKIP generalized_moe_gate candidate full-decoder timings: adapted sharded op is unavailable on this Blackhole checkout because its kernel JIT fails before timing.
+
+SUMMARY
+Direct Qwen q+gate/k/v projection width is incompatible with dedicated QKV split/create ops.
+Using those ops requires first slicing away Q gate and concatenating a standard QKV tensor.
+Dedicated concat-head ops either add an extra op or require L1 sharding/layout roundtrips.
+Adapted generalized_moe_gate routing reaches the required sharded layout,
+but this Blackhole checkout cannot JIT its kernel because a required LLK header is missing.
+nanobind: leaked 2 instances!
+ - leaked instance 0x7a0a76bb4ca8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x7a0a76aa8af8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 34 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 303 functions!
+ - leaked function ""
+ - leaked function "mesh_size"
+ - leaked function ""
+ - leaked function "to_json"
+ - leaked function "__init__"
+ - leaked function "from_json"
+ - leaked function "dram_grid_size"
+ - leaked function "GetDefaultDevice"
+ - leaked function "deallocate_buffers"
+ - leaked function "load_sub_device_manager"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-19 00:19:46.075 | info     |    BuildKernels | JIT cache stats: 572/574 hits (99.7%) [572 cached, 408 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-19 00:19:46.075 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-19 00:19:46.090 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-19 00:19:46.090 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-19 00:19:46.620 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-19 00:19:46.620 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-19 00:19:46.620 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

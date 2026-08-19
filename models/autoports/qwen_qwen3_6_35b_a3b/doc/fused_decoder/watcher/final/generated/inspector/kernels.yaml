@@ -1,0 +1,2220 @@
+- kernel:
+    watcher_kernel_id: 2
+    name: cq_dispatch
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/cq_dispatch/581480944475675022/
+    source: tt_metal/impl/dispatch/kernels/cq_dispatch.cpp
+    program_id: 976
+- kernel:
+    watcher_kernel_id: 1
+    name: cq_prefetch
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/cq_prefetch/2966195476235857027/
+    source: tt_metal/impl/dispatch/kernels/cq_prefetch.cpp
+    program_id: 976
+- kernel:
+    watcher_kernel_id: 3
+    name: cq_dispatch_subordinate
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/cq_dispatch_subordinate/17245122056255251242/
+    source: tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp
+    program_id: 976
+- kernel:
+    watcher_kernel_id: 4
+    name: cq_dispatch_subordinate_compute
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/cq_dispatch_subordinate_compute/597574384389922083/
+    source: tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp
+    program_id: 976
+- kernel:
+    watcher_kernel_id: 6
+    name: cq_realtime_profiler_push
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/cq_realtime_profiler_push/10021216421622248863/
+    source: tt_metal/impl/dispatch/kernels/cq_realtime_profiler_push.cpp
+    program_id: 977
+- kernel:
+    watcher_kernel_id: 5
+    name: cq_realtime_profiler
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/cq_realtime_profiler/5484038940728671608/
+    source: tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp
+    program_id: 977
+- kernel:
+    watcher_kernel_id: 7
+    name: reader_unary_pad_multicore_both_dims
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_pad_multicore_both_dims/13716015569571408290/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
+    program_id: 978
+- kernel:
+    watcher_kernel_id: 8
+    name: writer_unary_interleaved_start_id_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id_wh/6392063585001012986/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_wh.cpp
+    program_id: 978
+- kernel:
+    watcher_kernel_id: 9
+    name: tilize_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize_wh/15653137607606064544/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp
+    program_id: 978
+- kernel:
+    watcher_kernel_id: 13
+    name: tilize_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize_wh/14562789048620121225/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp
+    program_id: 980
+- kernel:
+    watcher_kernel_id: 15
+    name: tilize_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize_wh/15158602411743353788/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp
+    program_id: 980
+- kernel:
+    watcher_kernel_id: 14
+    name: tilize_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize_wh/11337355191902633115/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp
+    program_id: 980
+- kernel:
+    watcher_kernel_id: 12
+    name: tilize_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize_wh/10409033672101672134/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp
+    program_id: 980
+- kernel:
+    watcher_kernel_id: 11
+    name: writer_unary_interleaved_start_id_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id_wh/4403117805455365238/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_wh.cpp
+    program_id: 980
+- kernel:
+    watcher_kernel_id: 10
+    name: reader_unary_pad_multicore_both_dims
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_pad_multicore_both_dims/11023091045676464773/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
+    program_id: 980
+- kernel:
+    watcher_kernel_id: 20
+    name: tilize_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize_wh/327655495897254583/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp
+    program_id: 982
+- kernel:
+    watcher_kernel_id: 19
+    name: tilize_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize_wh/14998571266698880947/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp
+    program_id: 982
+- kernel:
+    watcher_kernel_id: 21
+    name: tilize_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize_wh/10133174032455965243/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp
+    program_id: 982
+- kernel:
+    watcher_kernel_id: 16
+    name: reader_unary_pad_multicore_both_dims
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_pad_multicore_both_dims/14931719085035921042/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
+    program_id: 982
+- kernel:
+    watcher_kernel_id: 18
+    name: tilize_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize_wh/2513536838528115063/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp
+    program_id: 982
+- kernel:
+    watcher_kernel_id: 17
+    name: writer_unary_interleaved_start_id_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id_wh/6660301867523633946/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_wh.cpp
+    program_id: 982
+- kernel:
+    watcher_kernel_id: 22
+    name: reader_unary_pad_dims_split_rows_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_pad_dims_split_rows_multicore/18352009512705076477/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp
+    program_id: 984
+- kernel:
+    watcher_kernel_id: 24
+    name: tilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize/2377447058065580830/
+    source: ttnn/cpp/ttnn/kernel/compute/tilize.cpp
+    program_id: 984
+- kernel:
+    watcher_kernel_id: 23
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/15246575542360303496/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 984
+- kernel:
+    watcher_kernel_id: 27
+    name: tilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize/2377447058065580830/
+    source: ttnn/cpp/ttnn/kernel/compute/tilize.cpp
+    program_id: 986
+- kernel:
+    watcher_kernel_id: 25
+    name: reader_unary_stick_layout_split_rows_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_stick_layout_split_rows_multicore/8435385006711609947/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_multicore.cpp
+    program_id: 986
+- kernel:
+    watcher_kernel_id: 26
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/15246575542360303496/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 986
+- kernel:
+    watcher_kernel_id: 30
+    name: tilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize/2419739326815673524/
+    source: ttnn/cpp/ttnn/kernel/compute/tilize.cpp
+    program_id: 988
+- kernel:
+    watcher_kernel_id: 29
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/15246575542360303496/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 988
+- kernel:
+    watcher_kernel_id: 28
+    name: reader_unary_stick_layout_split_rows_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_stick_layout_split_rows_multicore/11656673597420141376/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_multicore.cpp
+    program_id: 988
+- kernel:
+    watcher_kernel_id: 32
+    name: writer_unary_interleaved_start_id_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id_wh/480519743643563356/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_wh.cpp
+    program_id: 990
+- kernel:
+    watcher_kernel_id: 33
+    name: tilize_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize_wh/415468156809157342/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp
+    program_id: 990
+- kernel:
+    watcher_kernel_id: 31
+    name: reader_unary_pad_multicore_both_dims
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_pad_multicore_both_dims/1313482251918727020/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
+    program_id: 990
+- kernel:
+    watcher_kernel_id: 35
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/15246575542360303496/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 992
+- kernel:
+    watcher_kernel_id: 34
+    name: reader_unary_pad_dims_split_rows_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_pad_dims_split_rows_multicore/11457512526831879636/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp
+    program_id: 992
+- kernel:
+    watcher_kernel_id: 36
+    name: tilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize/14403871770212398472/
+    source: ttnn/cpp/ttnn/kernel/compute/tilize.cpp
+    program_id: 992
+- kernel:
+    watcher_kernel_id: 40
+    name: tilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize/16515792051450607568/
+    source: ttnn/cpp/ttnn/kernel/compute/tilize.cpp
+    program_id: 994
+- kernel:
+    watcher_kernel_id: 39
+    name: tilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize/11111161439605503024/
+    source: ttnn/cpp/ttnn/kernel/compute/tilize.cpp
+    program_id: 994
+- kernel:
+    watcher_kernel_id: 37
+    name: reader_unary_stick_layout_split_rows_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_stick_layout_split_rows_multicore/11656673597420141376/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_multicore.cpp
+    program_id: 994
+- kernel:
+    watcher_kernel_id: 38
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/15246575542360303496/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 994
+- kernel:
+    watcher_kernel_id: 44
+    name: tilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize/18128119823739111115/
+    source: ttnn/cpp/ttnn/kernel/compute/tilize.cpp
+    program_id: 996
+- kernel:
+    watcher_kernel_id: 41
+    name: reader_unary_stick_layout_split_rows_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_stick_layout_split_rows_multicore/8068263877798212234/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_multicore.cpp
+    program_id: 996
+- kernel:
+    watcher_kernel_id: 42
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/15246575542360303496/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 996
+- kernel:
+    watcher_kernel_id: 43
+    name: tilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize/15958436622440462039/
+    source: ttnn/cpp/ttnn/kernel/compute/tilize.cpp
+    program_id: 996
+- kernel:
+    watcher_kernel_id: 46
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/15246575542360303496/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 998
+- kernel:
+    watcher_kernel_id: 47
+    name: tilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize/2377447058065580830/
+    source: ttnn/cpp/ttnn/kernel/compute/tilize.cpp
+    program_id: 998
+- kernel:
+    watcher_kernel_id: 45
+    name: reader_unary_stick_layout_split_rows_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_stick_layout_split_rows_multicore/8435385006711609947/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_multicore.cpp
+    program_id: 998
+- kernel:
+    watcher_kernel_id: 49
+    name: writer_unary_interleaved_start_id_blocked
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id_blocked/14872553405400629480/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp
+    program_id: 1000
+- kernel:
+    watcher_kernel_id: 50
+    name: layernorm
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/layernorm/7306076348154728864/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp
+    program_id: 1000
+- kernel:
+    watcher_kernel_id: 48
+    name: reader_unary_interleaved_ln
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_ln/9202396048845099249/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln.cpp
+    program_id: 1000
+- kernel:
+    watcher_kernel_id: 53
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/16840858615036653519/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1002
+- kernel:
+    watcher_kernel_id: 52
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/16660606162005789530/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1002
+- kernel:
+    watcher_kernel_id: 54
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/881162862373579636/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1002
+- kernel:
+    watcher_kernel_id: 51
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/14493055580923976844/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1002
+- kernel:
+    watcher_kernel_id: 56
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1004
+- kernel:
+    watcher_kernel_id: 55
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1004
+- kernel:
+    watcher_kernel_id: 57
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1006
+- kernel:
+    watcher_kernel_id: 58
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1006
+- kernel:
+    watcher_kernel_id: 59
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1008
+- kernel:
+    watcher_kernel_id: 60
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1008
+- kernel:
+    watcher_kernel_id: 61
+    name: reader_reshape_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_reshape_tiled/7417636401347049102/
+    source: ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
+    program_id: 1010
+- kernel:
+    watcher_kernel_id: 62
+    name: writer_reshape_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_reshape_tiled/12999864772539752673/
+    source: ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
+    program_id: 1010
+- kernel:
+    watcher_kernel_id: 64
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1012
+- kernel:
+    watcher_kernel_id: 63
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1012
+- kernel:
+    watcher_kernel_id: 66
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1014
+- kernel:
+    watcher_kernel_id: 65
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1014
+- kernel:
+    watcher_kernel_id: 68
+    name: writer_reshape_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_reshape_tiled/3387073602797334785/
+    source: ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
+    program_id: 1016
+- kernel:
+    watcher_kernel_id: 67
+    name: reader_reshape_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_reshape_tiled/11806146547900120396/
+    source: ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
+    program_id: 1016
+- kernel:
+    watcher_kernel_id: 69
+    name: reader_unary_transpose_hc_interleaved_tiled_padding_aware
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_transpose_hc_interleaved_tiled_padding_aware/17005731697205094834/
+    source: ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp
+    program_id: 1018
+- kernel:
+    watcher_kernel_id: 70
+    name: writer_unary_transpose_hc_interleaved_tiled_padding_aware
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_transpose_hc_interleaved_tiled_padding_aware/7522270605945505243/
+    source: ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/writer_unary_transpose_hc_interleaved_tiled_padding_aware.cpp
+    program_id: 1018
+- kernel:
+    watcher_kernel_id: 71
+    name: reader_reshape_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_reshape_tiled/18146163604367247756/
+    source: ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
+    program_id: 1020
+- kernel:
+    watcher_kernel_id: 72
+    name: writer_reshape_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_reshape_tiled/5696956943192212628/
+    source: ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
+    program_id: 1020
+- kernel:
+    watcher_kernel_id: 74
+    name: writer_unary_transpose_hc_interleaved_tiled_padding_aware
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_transpose_hc_interleaved_tiled_padding_aware/11365305401773086916/
+    source: ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/writer_unary_transpose_hc_interleaved_tiled_padding_aware.cpp
+    program_id: 1022
+- kernel:
+    watcher_kernel_id: 73
+    name: reader_unary_transpose_hc_interleaved_tiled_padding_aware
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_transpose_hc_interleaved_tiled_padding_aware/17005731697205094834/
+    source: ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp
+    program_id: 1022
+- kernel:
+    watcher_kernel_id: 76
+    name: writer_unary_interleaved_start_id_blocked
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id_blocked/14872553405400629480/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp
+    program_id: 1024
+- kernel:
+    watcher_kernel_id: 75
+    name: reader_unary_interleaved_ln
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_ln/9710409518452277595/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln.cpp
+    program_id: 1024
+- kernel:
+    watcher_kernel_id: 77
+    name: layernorm
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/layernorm/8500152233226231018/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp
+    program_id: 1024
+- kernel:
+    watcher_kernel_id: 79
+    name: writer_unary_interleaved_start_id_blocked
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id_blocked/14872553405400629480/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp
+    program_id: 1026
+- kernel:
+    watcher_kernel_id: 80
+    name: layernorm
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/layernorm/8500152233226231018/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp
+    program_id: 1026
+- kernel:
+    watcher_kernel_id: 78
+    name: reader_unary_interleaved_ln
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_ln/9710409518452277595/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln.cpp
+    program_id: 1026
+- kernel:
+    watcher_kernel_id: 82
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1028
+- kernel:
+    watcher_kernel_id: 81
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1028
+- kernel:
+    watcher_kernel_id: 84
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1030
+- kernel:
+    watcher_kernel_id: 83
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1030
+- kernel:
+    watcher_kernel_id: 86
+    name: writer_rotary_embedding_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_rotary_embedding_interleaved_start_id/1973248545092326167/
+    source: ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/writer_rotary_embedding_interleaved_start_id.cpp
+    program_id: 1032
+- kernel:
+    watcher_kernel_id: 87
+    name: rotary_embedding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/rotary_embedding/7801247793101309497/
+    source: ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp
+    program_id: 1032
+- kernel:
+    watcher_kernel_id: 85
+    name: reader_rotary_embedding_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_rotary_embedding_interleaved_start_id/14285843146198405944/
+    source: ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/reader_rotary_embedding_interleaved_start_id.cpp
+    program_id: 1032
+- kernel:
+    watcher_kernel_id: 89
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1034
+- kernel:
+    watcher_kernel_id: 88
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1034
+- kernel:
+    watcher_kernel_id: 91
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/11047731052025805068/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1036
+- kernel:
+    watcher_kernel_id: 90
+    name: reader_concat_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_concat_interleaved_start_id/13610561711733857459/
+    source: ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_concat_interleaved_start_id.cpp
+    program_id: 1036
+- kernel:
+    watcher_kernel_id: 93
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1038
+- kernel:
+    watcher_kernel_id: 92
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1038
+- kernel:
+    watcher_kernel_id: 95
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1040
+- kernel:
+    watcher_kernel_id: 94
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1040
+- kernel:
+    watcher_kernel_id: 96
+    name: reader_rotary_embedding_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_rotary_embedding_interleaved_start_id/14285843146198405944/
+    source: ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/reader_rotary_embedding_interleaved_start_id.cpp
+    program_id: 1042
+- kernel:
+    watcher_kernel_id: 98
+    name: rotary_embedding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/rotary_embedding/7801247793101309497/
+    source: ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp
+    program_id: 1042
+- kernel:
+    watcher_kernel_id: 97
+    name: writer_rotary_embedding_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_rotary_embedding_interleaved_start_id/1973248545092326167/
+    source: ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/writer_rotary_embedding_interleaved_start_id.cpp
+    program_id: 1042
+- kernel:
+    watcher_kernel_id: 99
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1044
+- kernel:
+    watcher_kernel_id: 100
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1044
+- kernel:
+    watcher_kernel_id: 102
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/11047731052025805068/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1046
+- kernel:
+    watcher_kernel_id: 101
+    name: reader_concat_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_concat_interleaved_start_id/13610561711733857459/
+    source: ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_concat_interleaved_start_id.cpp
+    program_id: 1046
+- kernel:
+    watcher_kernel_id: 104
+    name: writer_fill_cache_interleaved
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_fill_cache_interleaved/17641869997047456980/
+    source: ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/writer_fill_cache_interleaved.cpp
+    program_id: 1048
+- kernel:
+    watcher_kernel_id: 103
+    name: reader_fill_cache_interleaved
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_fill_cache_interleaved/1552508321430158424/
+    source: ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/reader_fill_cache_interleaved.cpp
+    program_id: 1048
+- kernel:
+    watcher_kernel_id: 106
+    name: writer_interleaved
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_interleaved/10832569919482301621/
+    source: ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp
+    program_id: 1050
+- kernel:
+    watcher_kernel_id: 107
+    name: sdpa
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/sdpa/14611225391112076729/
+    source: ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp
+    program_id: 1050
+- kernel:
+    watcher_kernel_id: 105
+    name: reader_interleaved
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_interleaved/5002602599592755664/
+    source: ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp
+    program_id: 1050
+- kernel:
+    watcher_kernel_id: 109
+    name: writer_unary_transpose_hc_interleaved_tiled_padding_aware
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_transpose_hc_interleaved_tiled_padding_aware/15716575478962030354/
+    source: ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/writer_unary_transpose_hc_interleaved_tiled_padding_aware.cpp
+    program_id: 1052
+- kernel:
+    watcher_kernel_id: 108
+    name: reader_unary_transpose_hc_interleaved_tiled_padding_aware
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_transpose_hc_interleaved_tiled_padding_aware/17005731697205094834/
+    source: ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp
+    program_id: 1052
+- kernel:
+    watcher_kernel_id: 110
+    name: reader_interleaved_no_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_interleaved_no_bcast/9894729504696030396/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp
+    program_id: 1054
+- kernel:
+    watcher_kernel_id: 111
+    name: writer_interleaved_no_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_interleaved_no_bcast/4359060561159550977/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp
+    program_id: 1054
+- kernel:
+    watcher_kernel_id: 112
+    name: eltwise_binary_sfpu_no_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/eltwise_binary_sfpu_no_bcast/17650655102697343545/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_no_bcast.cpp
+    program_id: 1054
+- kernel:
+    watcher_kernel_id: 113
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/310779057394373163/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1056
+- kernel:
+    watcher_kernel_id: 115
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/13509132649042163443/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1056
+- kernel:
+    watcher_kernel_id: 114
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/1901097577053394207/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1056
+- kernel:
+    watcher_kernel_id: 116
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/12389842386293172046/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1056
+- kernel:
+    watcher_kernel_id: 117
+    name: reader_interleaved_no_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_interleaved_no_bcast/5783856288729354983/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp
+    program_id: 1058
+- kernel:
+    watcher_kernel_id: 119
+    name: eltwise_binary_no_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/eltwise_binary_no_bcast/4438376376716974942/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_no_bcast.cpp
+    program_id: 1058
+- kernel:
+    watcher_kernel_id: 118
+    name: writer_interleaved_no_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_interleaved_no_bcast/3106172651555214900/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp
+    program_id: 1058
+- kernel:
+    watcher_kernel_id: 125
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/14440351947745163136/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1060
+- kernel:
+    watcher_kernel_id: 124
+    name: reader_bmm_tile_layout_in1_receiver_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_receiver_writer_padding/3806526435539752657/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp
+    program_id: 1060
+- kernel:
+    watcher_kernel_id: 121
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/12586666840346032898/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1060
+- kernel:
+    watcher_kernel_id: 120
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/3709496005362344599/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1060
+- kernel:
+    watcher_kernel_id: 126
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/17431415419619895437/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1060
+- kernel:
+    watcher_kernel_id: 123
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/2800958648387338673/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1060
+- kernel:
+    watcher_kernel_id: 122
+    name: reader_bmm_tile_layout_in1_receiver_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_receiver_writer_padding/4637912220161416513/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp
+    program_id: 1060
+- kernel:
+    watcher_kernel_id: 128
+    name: writer_unary_interleaved_start_id_blocked_sm
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id_blocked_sm/2024148833430369884/
+    source: ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/dataflow/writer_unary_interleaved_start_id_blocked_sm.cpp
+    program_id: 1062
+- kernel:
+    watcher_kernel_id: 127
+    name: reader_unary_interleaved_sm
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_sm/16500202049882134702/
+    source: ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/dataflow/reader_unary_interleaved_sm.cpp
+    program_id: 1062
+- kernel:
+    watcher_kernel_id: 129
+    name: softmax
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/softmax/4422989522248150792/
+    source: ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax.cpp
+    program_id: 1062
+- kernel:
+    watcher_kernel_id: 131
+    name: fill_pad_writer
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_writer/772567546685593846/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp
+    program_id: 1064
+- kernel:
+    watcher_kernel_id: 132
+    name: fill_pad_compute
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_compute/9491166625388236342/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp
+    program_id: 1064
+- kernel:
+    watcher_kernel_id: 130
+    name: fill_pad_reader
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_reader/16897316829234465383/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_reader.cpp
+    program_id: 1064
+- kernel:
+    watcher_kernel_id: 134
+    name: writer_binary_interleaved
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_binary_interleaved/13742748569605429192/
+    source: ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_binary_interleaved.cpp
+    program_id: 1066
+- kernel:
+    watcher_kernel_id: 135
+    name: topk
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/topk/3934069652950609601/
+    source: ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp
+    program_id: 1066
+- kernel:
+    watcher_kernel_id: 133
+    name: reader_create_index_tensor
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_create_index_tensor/4495904439090567135/
+    source: ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp
+    program_id: 1066
+- kernel:
+    watcher_kernel_id: 137
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1068
+- kernel:
+    watcher_kernel_id: 136
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1068
+- kernel:
+    watcher_kernel_id: 139
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/11118359791864490142/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1070
+- kernel:
+    watcher_kernel_id: 138
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/8446655015518579921/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1070
+- kernel:
+    watcher_kernel_id: 141
+    name: fill_pad_writer
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_writer/5236616280721753518/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp
+    program_id: 1072
+- kernel:
+    watcher_kernel_id: 140
+    name: fill_pad_reader
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_reader/8091660101061041644/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_reader.cpp
+    program_id: 1072
+- kernel:
+    watcher_kernel_id: 142
+    name: fill_pad_compute
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_compute/12126506705546304047/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp
+    program_id: 1072
+- kernel:
+    watcher_kernel_id: 144
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/13334610486797926391/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1074
+- kernel:
+    watcher_kernel_id: 143
+    name: reader_unary_reduce_universal_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_reduce_universal_start_id/5515815169970808423/
+    source: ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reader_unary_reduce_universal_start_id.cpp
+    program_id: 1074
+- kernel:
+    watcher_kernel_id: 145
+    name: reduce
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reduce/5018915478284961870/
+    source: ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce.cpp
+    program_id: 1074
+- kernel:
+    watcher_kernel_id: 146
+    name: reader_interleaved_col_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_interleaved_col_bcast/3349014163975176125/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_col_bcast.cpp
+    program_id: 1076
+- kernel:
+    watcher_kernel_id: 147
+    name: writer_interleaved_no_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_interleaved_no_bcast/2859184945684300143/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp
+    program_id: 1076
+- kernel:
+    watcher_kernel_id: 148
+    name: eltwise_binary_sfpu_col_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/eltwise_binary_sfpu_col_bcast/12237506105923511002/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_col_bcast.cpp
+    program_id: 1076
+- kernel:
+    watcher_kernel_id: 150
+    name: writer_unary
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary/1219815922092958553/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary.cpp
+    program_id: 1078
+- kernel:
+    watcher_kernel_id: 149
+    name: reader_unary
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary/1857531184934156154/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary.cpp
+    program_id: 1078
+- kernel:
+    watcher_kernel_id: 151
+    name: eltwise_sfpu
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/eltwise_sfpu/4562492074820411372/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp
+    program_id: 1078
+- kernel:
+    watcher_kernel_id: 152
+    name: reader_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_start_id/8788272868363673331/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp
+    program_id: 1080
+- kernel:
+    watcher_kernel_id: 153
+    name: writer_unary_stick_layout_split_rows_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_stick_layout_split_rows_multicore/17542486994768755363/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
+    program_id: 1080
+- kernel:
+    watcher_kernel_id: 154
+    name: untilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/untilize/12998887337072878870/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp
+    program_id: 1080
+- kernel:
+    watcher_kernel_id: 156
+    name: writer_unary_stick_layout_split_rows_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_stick_layout_split_rows_multicore/8800810474065958559/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
+    program_id: 1082
+- kernel:
+    watcher_kernel_id: 155
+    name: reader_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_start_id/4061028770525768066/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp
+    program_id: 1082
+- kernel:
+    watcher_kernel_id: 157
+    name: untilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/untilize/5558132308550745488/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp
+    program_id: 1082
+- kernel:
+    watcher_kernel_id: 159
+    name: writer_unary_stick_layout_split_rows_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_stick_layout_split_rows_multicore/8654979595361601730/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
+    program_id: 1084
+- kernel:
+    watcher_kernel_id: 158
+    name: reader_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_start_id/8788272868363673331/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp
+    program_id: 1084
+- kernel:
+    watcher_kernel_id: 160
+    name: untilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/untilize/14583621900259600597/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp
+    program_id: 1084
+- kernel:
+    watcher_kernel_id: 162
+    name: writer_scatter
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_scatter/1594790763015855936/
+    source: ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/writer_scatter.cpp
+    program_id: 1086
+- kernel:
+    watcher_kernel_id: 161
+    name: reader_scatter
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_scatter/2965178164332738704/
+    source: ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/reader_scatter.cpp
+    program_id: 1086
+- kernel:
+    watcher_kernel_id: 164
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/15246575542360303496/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1088
+- kernel:
+    watcher_kernel_id: 165
+    name: tilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize/2377447058065580830/
+    source: ttnn/cpp/ttnn/kernel/compute/tilize.cpp
+    program_id: 1088
+- kernel:
+    watcher_kernel_id: 163
+    name: reader_unary_pad_dims_split_rows_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_pad_dims_split_rows_multicore/18352009512705076477/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp
+    program_id: 1088
+- kernel:
+    watcher_kernel_id: 167
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1090
+- kernel:
+    watcher_kernel_id: 166
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1090
+- kernel:
+    watcher_kernel_id: 169
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1092
+- kernel:
+    watcher_kernel_id: 168
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1092
+- kernel:
+    watcher_kernel_id: 173
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/13760275005233390864/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1094
+- kernel:
+    watcher_kernel_id: 172
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/10867289114787244345/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1094
+- kernel:
+    watcher_kernel_id: 170
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/16489193107802605119/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1094
+- kernel:
+    watcher_kernel_id: 171
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/492256830493077059/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1094
+- kernel:
+    watcher_kernel_id: 175
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/11047731052025805068/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1096
+- kernel:
+    watcher_kernel_id: 174
+    name: reader_permute_interleaved_tiled_invariant
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_permute_interleaved_tiled_invariant/5982022992877925416/
+    source: ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/reader_permute_interleaved_tiled_invariant.cpp
+    program_id: 1096
+- kernel:
+    watcher_kernel_id: 177
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1098
+- kernel:
+    watcher_kernel_id: 176
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1098
+- kernel:
+    watcher_kernel_id: 179
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1100
+- kernel:
+    watcher_kernel_id: 178
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1100
+- kernel:
+    watcher_kernel_id: 181
+    name: writer_interleaved_no_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_interleaved_no_bcast/15813148399262626706/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp
+    program_id: 1102
+- kernel:
+    watcher_kernel_id: 180
+    name: reader_interleaved_no_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_interleaved_no_bcast/2196038584459877606/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp
+    program_id: 1102
+- kernel:
+    watcher_kernel_id: 182
+    name: eltwise_binary_sfpu_no_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/eltwise_binary_sfpu_no_bcast/4053392005857210252/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_no_bcast.cpp
+    program_id: 1102
+- kernel:
+    watcher_kernel_id: 183
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/13782643062681429610/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1104
+- kernel:
+    watcher_kernel_id: 185
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/9648224865425342843/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1104
+- kernel:
+    watcher_kernel_id: 186
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/15214396728579928186/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1104
+- kernel:
+    watcher_kernel_id: 184
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/9355150889359222643/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1104
+- kernel:
+    watcher_kernel_id: 187
+    name: reader_permute_interleaved_tiled_generic
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_permute_interleaved_tiled_generic/2838612464455958109/
+    source: ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/reader_permute_interleaved_tiled_generic.cpp
+    program_id: 1106
+- kernel:
+    watcher_kernel_id: 188
+    name: writer_permute_interleaved_tiled_generic
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_permute_interleaved_tiled_generic/18437360029596659075/
+    source: ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/writer_permute_interleaved_tiled_generic.cpp
+    program_id: 1106
+- kernel:
+    watcher_kernel_id: 189
+    name: transpose_xw_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/transpose_xw_tiled/1369396274202155902/
+    source: ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_tiled.cpp
+    program_id: 1106
+- kernel:
+    watcher_kernel_id: 190
+    name: reader_interleaved_col_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_interleaved_col_bcast/3349014163975176125/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_col_bcast.cpp
+    program_id: 1108
+- kernel:
+    watcher_kernel_id: 192
+    name: eltwise_binary_sfpu_col_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/eltwise_binary_sfpu_col_bcast/8095529279216499577/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_col_bcast.cpp
+    program_id: 1108
+- kernel:
+    watcher_kernel_id: 191
+    name: writer_interleaved_no_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_interleaved_no_bcast/2859184945684300143/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp
+    program_id: 1108
+- kernel:
+    watcher_kernel_id: 194
+    name: writer_reduce_nc
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_reduce_nc/1283140335072759122/
+    source: ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/writer_reduce_nc.cpp
+    program_id: 1110
+- kernel:
+    watcher_kernel_id: 193
+    name: reader_reduce_nc
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_reduce_nc/16788612545078929503/
+    source: ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp
+    program_id: 1110
+- kernel:
+    watcher_kernel_id: 195
+    name: reduce_nc
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reduce_nc/3966363183553818138/
+    source: ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp
+    program_id: 1110
+- kernel:
+    watcher_kernel_id: 196
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/12971735991307399795/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1112
+- kernel:
+    watcher_kernel_id: 198
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/16858942083271870799/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1112
+- kernel:
+    watcher_kernel_id: 197
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/3086733498624452049/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1112
+- kernel:
+    watcher_kernel_id: 199
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/5868308851064531381/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1112
+- kernel:
+    watcher_kernel_id: 201
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1114
+- kernel:
+    watcher_kernel_id: 200
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1114
+- kernel:
+    watcher_kernel_id: 203
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1116
+- kernel:
+    watcher_kernel_id: 202
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1116
+- kernel:
+    watcher_kernel_id: 205
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/12824010223141557851/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1118
+- kernel:
+    watcher_kernel_id: 204
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/7595946324261344570/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1118
+- kernel:
+    watcher_kernel_id: 206
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/17399012833184919890/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1118
+- kernel:
+    watcher_kernel_id: 207
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/11957010913580737308/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1118
+- kernel:
+    watcher_kernel_id: 210
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/5868308851064531381/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1120
+- kernel:
+    watcher_kernel_id: 209
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/8942440317146716707/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1120
+- kernel:
+    watcher_kernel_id: 208
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/2503330693624877477/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1120
+- kernel:
+    watcher_kernel_id: 212
+    name: writer_interleaved_no_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_interleaved_no_bcast/14717052874880388544/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp
+    program_id: 1122
+- kernel:
+    watcher_kernel_id: 211
+    name: reader_interleaved_col_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_interleaved_col_bcast/5374566486601653757/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_col_bcast.cpp
+    program_id: 1122
+- kernel:
+    watcher_kernel_id: 213
+    name: eltwise_binary_sfpu_col_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/eltwise_binary_sfpu_col_bcast/15428624584820720498/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_col_bcast.cpp
+    program_id: 1122
+- kernel:
+    watcher_kernel_id: 215
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1124
+- kernel:
+    watcher_kernel_id: 214
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1124
+- kernel:
+    watcher_kernel_id: 217
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1126
+- kernel:
+    watcher_kernel_id: 216
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1126
+- kernel:
+    watcher_kernel_id: 218
+    name: reader_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_start_id/8788272868363673331/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp
+    program_id: 1128
+- kernel:
+    watcher_kernel_id: 219
+    name: writer_unary_stick_layout_split_rows_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_stick_layout_split_rows_multicore/17542486994768755363/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
+    program_id: 1128
+- kernel:
+    watcher_kernel_id: 220
+    name: untilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/untilize/12998887337072878870/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp
+    program_id: 1128
+- kernel:
+    watcher_kernel_id: 223
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/10867289114787244345/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1130
+- kernel:
+    watcher_kernel_id: 221
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/2480121393450649187/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1130
+- kernel:
+    watcher_kernel_id: 222
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/7181593987949173122/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1130
+- kernel:
+    watcher_kernel_id: 224
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/3447037471360779996/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1130
+- kernel:
+    watcher_kernel_id: 226
+    name: writer_unary_transpose_hc_interleaved_tiled_padding_aware
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_transpose_hc_interleaved_tiled_padding_aware/8959405821256377363/
+    source: ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/writer_unary_transpose_hc_interleaved_tiled_padding_aware.cpp
+    program_id: 1132
+- kernel:
+    watcher_kernel_id: 225
+    name: reader_unary_transpose_hc_interleaved_tiled_padding_aware
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_transpose_hc_interleaved_tiled_padding_aware/7776333777514975210/
+    source: ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp
+    program_id: 1132
+- kernel:
+    watcher_kernel_id: 228
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1134
+- kernel:
+    watcher_kernel_id: 227
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1134
+- kernel:
+    watcher_kernel_id: 230
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1136
+- kernel:
+    watcher_kernel_id: 229
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1136
+- kernel:
+    watcher_kernel_id: 231
+    name: reader_unary_transpose_hc_interleaved_tiled_padding_aware
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_transpose_hc_interleaved_tiled_padding_aware/17005731697205094834/
+    source: ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp
+    program_id: 1138
+- kernel:
+    watcher_kernel_id: 232
+    name: writer_unary_transpose_hc_interleaved_tiled_padding_aware
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_transpose_hc_interleaved_tiled_padding_aware/18242691821954139042/
+    source: ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/writer_unary_transpose_hc_interleaved_tiled_padding_aware.cpp
+    program_id: 1138
+- kernel:
+    watcher_kernel_id: 234
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/11964087418477468937/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1140
+- kernel:
+    watcher_kernel_id: 235
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/9648224865425342843/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1140
+- kernel:
+    watcher_kernel_id: 233
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/17210517430496508459/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1140
+- kernel:
+    watcher_kernel_id: 236
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/7299301877787717187/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1140
+- kernel:
+    watcher_kernel_id: 237
+    name: reader_unary_transpose_hc_interleaved_tiled_padding_aware
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_transpose_hc_interleaved_tiled_padding_aware/7776333777514975210/
+    source: ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp
+    program_id: 1142
+- kernel:
+    watcher_kernel_id: 238
+    name: writer_unary_transpose_hc_interleaved_tiled_padding_aware
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_transpose_hc_interleaved_tiled_padding_aware/15482458113742716418/
+    source: ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/writer_unary_transpose_hc_interleaved_tiled_padding_aware.cpp
+    program_id: 1142
+- kernel:
+    watcher_kernel_id: 239
+    name: reader_reshape_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_reshape_tiled/7417636401347049102/
+    source: ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
+    program_id: 1144
+- kernel:
+    watcher_kernel_id: 240
+    name: writer_reshape_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_reshape_tiled/12999864772539752673/
+    source: ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
+    program_id: 1144
+- kernel:
+    watcher_kernel_id: 242
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/13210678872649638086/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1146
+- kernel:
+    watcher_kernel_id: 241
+    name: reader_unary_transpose_wh_universal_input_cols_partitioned
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_transpose_wh_universal_input_cols_partitioned/9208124859384006141/
+    source: ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reader_unary_transpose_wh_universal_input_cols_partitioned.cpp
+    program_id: 1146
+- kernel:
+    watcher_kernel_id: 243
+    name: reduce
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reduce/8310145717844821769/
+    source: ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce.cpp
+    program_id: 1146
+- kernel:
+    watcher_kernel_id: 246
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/16858942083271870799/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1148
+- kernel:
+    watcher_kernel_id: 244
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/12971735991307399795/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1148
+- kernel:
+    watcher_kernel_id: 245
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/3086733498624452049/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1148
+- kernel:
+    watcher_kernel_id: 247
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/5868308851064531381/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1148
+- kernel:
+    watcher_kernel_id: 249
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1150
+- kernel:
+    watcher_kernel_id: 248
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1150
+- kernel:
+    watcher_kernel_id: 251
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1152
+- kernel:
+    watcher_kernel_id: 250
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1152
+- kernel:
+    watcher_kernel_id: 253
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/12824010223141557851/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1154
+- kernel:
+    watcher_kernel_id: 254
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/17399012833184919890/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1154
+- kernel:
+    watcher_kernel_id: 252
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/7595946324261344570/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1154
+- kernel:
+    watcher_kernel_id: 255
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/11957010913580737308/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1154
+- kernel:
+    watcher_kernel_id: 257
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/8942440317146716707/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1156
+- kernel:
+    watcher_kernel_id: 256
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/2503330693624877477/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1156
+- kernel:
+    watcher_kernel_id: 258
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/5868308851064531381/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1156
+- kernel:
+    watcher_kernel_id: 260
+    name: writer_interleaved_no_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_interleaved_no_bcast/14717052874880388544/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp
+    program_id: 1158
+- kernel:
+    watcher_kernel_id: 259
+    name: reader_interleaved_scalar_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_interleaved_scalar_bcast/5051823259716559488/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_scalar_bcast.cpp
+    program_id: 1158
+- kernel:
+    watcher_kernel_id: 261
+    name: eltwise_binary_sfpu_scalar_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/eltwise_binary_sfpu_scalar_bcast/5958920524796747905/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_scalar_bcast.cpp
+    program_id: 1158
+- kernel:
+    watcher_kernel_id: 263
+    name: writer_unary_stick_layout_wh_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_stick_layout_wh_multicore/16435485081259275210/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp
+    program_id: 1160
+- kernel:
+    watcher_kernel_id: 262
+    name: reader_unary_interleaved_wh_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_wh_multicore/3444903418938904710/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore.cpp
+    program_id: 1160
+- kernel:
+    watcher_kernel_id: 264
+    name: untilize_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/untilize_wh/9753772866811631862/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp
+    program_id: 1160
+- kernel:
+    watcher_kernel_id: 266
+    name: writer_unary_stick_layout_wh_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_stick_layout_wh_multicore/16843102670451001070/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp
+    program_id: 1162
+- kernel:
+    watcher_kernel_id: 267
+    name: untilize_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/untilize_wh/9753772866811631862/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp
+    program_id: 1162
+- kernel:
+    watcher_kernel_id: 265
+    name: reader_unary_interleaved_wh_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_wh_multicore/3444903418938904710/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore.cpp
+    program_id: 1162
+- kernel:
+    watcher_kernel_id: 269
+    name: writer_unary_stick_layout_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_stick_layout_interleaved_start_id/1317761157964863423/
+    source: ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
+    program_id: 1164
+- kernel:
+    watcher_kernel_id: 268
+    name: reader_concat_stick_layout_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_concat_stick_layout_interleaved_start_id/10521193463931160007/
+    source: ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_concat_stick_layout_interleaved_start_id.cpp
+    program_id: 1164
+- kernel:
+    watcher_kernel_id: 270
+    name: reader_unary_pad_multicore_both_dims
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_pad_multicore_both_dims/5245310665545066770/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
+    program_id: 1166
+- kernel:
+    watcher_kernel_id: 272
+    name: tilize_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/tilize_wh/17424193729762343078/
+    source: ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp
+    program_id: 1166
+- kernel:
+    watcher_kernel_id: 271
+    name: writer_unary_interleaved_start_id_wh
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id_wh/17045969875550028216/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_wh.cpp
+    program_id: 1166
+- kernel:
+    watcher_kernel_id: 274
+    name: writer_unary_interleaved_start_id_blocked
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id_blocked/14872553405400629480/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp
+    program_id: 1168
+- kernel:
+    watcher_kernel_id: 273
+    name: reader_unary_interleaved_ln
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_ln/9202396048845099249/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln.cpp
+    program_id: 1168
+- kernel:
+    watcher_kernel_id: 275
+    name: layernorm
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/layernorm/7306076348154728864/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp
+    program_id: 1168
+- kernel:
+    watcher_kernel_id: 277
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/3086733498624452049/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1170
+- kernel:
+    watcher_kernel_id: 278
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/16670560067854405044/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1170
+- kernel:
+    watcher_kernel_id: 276
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/8679247242855828216/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1170
+- kernel:
+    watcher_kernel_id: 279
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/4350409014490016512/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1170
+- kernel:
+    watcher_kernel_id: 281
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1172
+- kernel:
+    watcher_kernel_id: 280
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1172
+- kernel:
+    watcher_kernel_id: 283
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1174
+- kernel:
+    watcher_kernel_id: 282
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1174
+- kernel:
+    watcher_kernel_id: 285
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1176
+- kernel:
+    watcher_kernel_id: 284
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1176
+- kernel:
+    watcher_kernel_id: 287
+    name: writer_reshape_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_reshape_tiled/12999864772539752673/
+    source: ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
+    program_id: 1178
+- kernel:
+    watcher_kernel_id: 286
+    name: reader_reshape_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_reshape_tiled/7417636401347049102/
+    source: ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
+    program_id: 1178
+- kernel:
+    watcher_kernel_id: 289
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1180
+- kernel:
+    watcher_kernel_id: 288
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1180
+- kernel:
+    watcher_kernel_id: 291
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1182
+- kernel:
+    watcher_kernel_id: 290
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1182
+- kernel:
+    watcher_kernel_id: 293
+    name: writer_reshape_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_reshape_tiled/8787691949412378546/
+    source: ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
+    program_id: 1184
+- kernel:
+    watcher_kernel_id: 292
+    name: reader_reshape_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_reshape_tiled/13411721916019032647/
+    source: ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
+    program_id: 1184
+- kernel:
+    watcher_kernel_id: 295
+    name: writer_reshape_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_reshape_tiled/5696956943192212628/
+    source: ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
+    program_id: 1186
+- kernel:
+    watcher_kernel_id: 294
+    name: reader_reshape_tiled
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_reshape_tiled/18146163604367247756/
+    source: ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
+    program_id: 1186
+- kernel:
+    watcher_kernel_id: 297
+    name: writer_unary_interleaved_start_id_blocked
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id_blocked/14872553405400629480/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp
+    program_id: 1188
+- kernel:
+    watcher_kernel_id: 296
+    name: reader_unary_interleaved_ln
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_ln/9710409518452277595/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln.cpp
+    program_id: 1188
+- kernel:
+    watcher_kernel_id: 298
+    name: layernorm
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/layernorm/8500152233226231018/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp
+    program_id: 1188
+- kernel:
+    watcher_kernel_id: 299
+    name: reader_unary_interleaved_ln
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_ln/9710409518452277595/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln.cpp
+    program_id: 1190
+- kernel:
+    watcher_kernel_id: 300
+    name: writer_unary_interleaved_start_id_blocked
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id_blocked/14872553405400629480/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/writer_unary_interleaved_start_id_blocked.cpp
+    program_id: 1190
+- kernel:
+    watcher_kernel_id: 301
+    name: layernorm
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/layernorm/8500152233226231018/
+    source: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp
+    program_id: 1190
+- kernel:
+    watcher_kernel_id: 303
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1192
+- kernel:
+    watcher_kernel_id: 302
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1192
+- kernel:
+    watcher_kernel_id: 305
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1194
+- kernel:
+    watcher_kernel_id: 304
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1194
+- kernel:
+    watcher_kernel_id: 307
+    name: writer_rotary_embedding_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_rotary_embedding_interleaved_start_id/7931228963774102934/
+    source: ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/writer_rotary_embedding_interleaved_start_id.cpp
+    program_id: 1196
+- kernel:
+    watcher_kernel_id: 308
+    name: rotary_embedding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/rotary_embedding/9633533292322643943/
+    source: ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp
+    program_id: 1196
+- kernel:
+    watcher_kernel_id: 306
+    name: reader_rotary_embedding_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_rotary_embedding_interleaved_start_id/16649902209542291594/
+    source: ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/reader_rotary_embedding_interleaved_start_id.cpp
+    program_id: 1196
+- kernel:
+    watcher_kernel_id: 310
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1198
+- kernel:
+    watcher_kernel_id: 309
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1198
+- kernel:
+    watcher_kernel_id: 312
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/11047731052025805068/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1200
+- kernel:
+    watcher_kernel_id: 311
+    name: reader_concat_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_concat_interleaved_start_id/13610561711733857459/
+    source: ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_concat_interleaved_start_id.cpp
+    program_id: 1200
+- kernel:
+    watcher_kernel_id: 314
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1202
+- kernel:
+    watcher_kernel_id: 313
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1202
+- kernel:
+    watcher_kernel_id: 316
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1204
+- kernel:
+    watcher_kernel_id: 315
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1204
+- kernel:
+    watcher_kernel_id: 318
+    name: writer_rotary_embedding_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_rotary_embedding_interleaved_start_id/7931228963774102934/
+    source: ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/writer_rotary_embedding_interleaved_start_id.cpp
+    program_id: 1206
+- kernel:
+    watcher_kernel_id: 319
+    name: rotary_embedding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/rotary_embedding/9633533292322643943/
+    source: ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp
+    program_id: 1206
+- kernel:
+    watcher_kernel_id: 317
+    name: reader_rotary_embedding_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_rotary_embedding_interleaved_start_id/16649902209542291594/
+    source: ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/reader_rotary_embedding_interleaved_start_id.cpp
+    program_id: 1206
+- kernel:
+    watcher_kernel_id: 321
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/11047731052025805068/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1208
+- kernel:
+    watcher_kernel_id: 320
+    name: reader_concat_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_concat_interleaved_start_id/13610561711733857459/
+    source: ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_concat_interleaved_start_id.cpp
+    program_id: 1208
+- kernel:
+    watcher_kernel_id: 323
+    name: fill_pad_writer
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_writer/12519620597032232556/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp
+    program_id: 1210
+- kernel:
+    watcher_kernel_id: 322
+    name: fill_pad_reader
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_reader/4671868923459982759/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_reader.cpp
+    program_id: 1210
+- kernel:
+    watcher_kernel_id: 324
+    name: fill_pad_compute
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_compute/11595476364748322685/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp
+    program_id: 1210
+- kernel:
+    watcher_kernel_id: 325
+    name: reader_unary_sharded_blocks_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_sharded_blocks_interleaved_start_id/12762911672551240731/
+    source: ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp
+    program_id: 1212
+- kernel:
+    watcher_kernel_id: 326
+    name: writer_unary_sharded
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_sharded/16350092782471262813/
+    source: ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp
+    program_id: 1212
+- kernel:
+    watcher_kernel_id: 328
+    name: writer_update_cache_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_update_cache_interleaved_start_id/5690614951394298120/
+    source: ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp
+    program_id: 1214
+- kernel:
+    watcher_kernel_id: 327
+    name: reader_update_cache_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_update_cache_interleaved_start_id/10547389139375951699/
+    source: ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp
+    program_id: 1214
+- kernel:
+    watcher_kernel_id: 329
+    name: update_cache
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/update_cache/4339836417532205405/
+    source: ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/compute/update_cache.cpp
+    program_id: 1214
+- kernel:
+    watcher_kernel_id: 330
+    name: reader_decode_all
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_decode_all/16960595584497963202/
+    source: ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/reader_decode_all.cpp
+    program_id: 1216
+- kernel:
+    watcher_kernel_id: 331
+    name: writer_decode_all
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_decode_all/13846994800099964854/
+    source: ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/writer_decode_all.cpp
+    program_id: 1216
+- kernel:
+    watcher_kernel_id: 332
+    name: sdpa_flash_decode
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/sdpa_flash_decode/11002133097564053237/
+    source: ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp
+    program_id: 1216
+- kernel:
+    watcher_kernel_id: 334
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/8715874775553645352/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1218
+- kernel:
+    watcher_kernel_id: 335
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/14397111529387483408/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1218
+- kernel:
+    watcher_kernel_id: 336
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/2982444444567177737/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1218
+- kernel:
+    watcher_kernel_id: 333
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/13351979886051918450/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1218
+- kernel:
+    watcher_kernel_id: 338
+    name: reader_bmm_tile_layout_in0_receiver
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_receiver/3086733498624452049/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp
+    program_id: 1220
+- kernel:
+    watcher_kernel_id: 339
+    name: reader_bmm_tile_layout_in1_sender_writer_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/18078014013849309350/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp
+    program_id: 1220
+- kernel:
+    watcher_kernel_id: 337
+    name: reader_bmm_tile_layout_in0_sender_padding
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_bmm_tile_layout_in0_sender_padding/6198036409908745721/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp
+    program_id: 1220
+- kernel:
+    watcher_kernel_id: 340
+    name: bmm_large_block_zm_fused_bias_activation
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/bmm_large_block_zm_fused_bias_activation/5868308851064531381/
+    source: ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp
+    program_id: 1220
+- kernel:
+    watcher_kernel_id: 342
+    name: writer_unary_interleaved_start_id_blocked_sm
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id_blocked_sm/2024148833430369884/
+    source: ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/dataflow/writer_unary_interleaved_start_id_blocked_sm.cpp
+    program_id: 1222
+- kernel:
+    watcher_kernel_id: 341
+    name: reader_unary_interleaved_sm
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_sm/16500202049882134702/
+    source: ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/dataflow/reader_unary_interleaved_sm.cpp
+    program_id: 1222
+- kernel:
+    watcher_kernel_id: 343
+    name: softmax
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/softmax/4422989522248150792/
+    source: ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax.cpp
+    program_id: 1222
+- kernel:
+    watcher_kernel_id: 344
+    name: fill_pad_reader
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_reader/18022552661234719685/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_reader.cpp
+    program_id: 1224
+- kernel:
+    watcher_kernel_id: 346
+    name: fill_pad_compute
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_compute/16736079427596341327/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp
+    program_id: 1224
+- kernel:
+    watcher_kernel_id: 345
+    name: fill_pad_writer
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_writer/2571959613654503466/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp
+    program_id: 1224
+- kernel:
+    watcher_kernel_id: 348
+    name: writer_binary_interleaved
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_binary_interleaved/6001722021941137426/
+    source: ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_binary_interleaved.cpp
+    program_id: 1226
+- kernel:
+    watcher_kernel_id: 349
+    name: topk
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/topk/10086137258229176797/
+    source: ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp
+    program_id: 1226
+- kernel:
+    watcher_kernel_id: 347
+    name: reader_create_index_tensor
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_create_index_tensor/16168086437299990971/
+    source: ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_create_index_tensor.cpp
+    program_id: 1226
+- kernel:
+    watcher_kernel_id: 351
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/945637434949602448/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1228
+- kernel:
+    watcher_kernel_id: 350
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/15167387778327749899/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1228
+- kernel:
+    watcher_kernel_id: 353
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/11118359791864490142/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1230
+- kernel:
+    watcher_kernel_id: 352
+    name: reader_unary_unpad_dims_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_unpad_dims_interleaved_start_id/8446655015518579921/
+    source: ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/reader_unary_unpad_dims_interleaved_start_id.cpp
+    program_id: 1230
+- kernel:
+    watcher_kernel_id: 355
+    name: fill_pad_writer
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_writer/3176057482345330168/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp
+    program_id: 1232
+- kernel:
+    watcher_kernel_id: 354
+    name: fill_pad_reader
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_reader/1836638089982686438/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_reader.cpp
+    program_id: 1232
+- kernel:
+    watcher_kernel_id: 356
+    name: fill_pad_compute
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/fill_pad_compute/11185764049826143177/
+    source: ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp
+    program_id: 1232
+- kernel:
+    watcher_kernel_id: 358
+    name: writer_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_interleaved_start_id/13334610486797926391/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp
+    program_id: 1234
+- kernel:
+    watcher_kernel_id: 357
+    name: reader_unary_reduce_universal_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_reduce_universal_start_id/5515815169970808423/
+    source: ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reader_unary_reduce_universal_start_id.cpp
+    program_id: 1234
+- kernel:
+    watcher_kernel_id: 359
+    name: reduce
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reduce/5018915478284961870/
+    source: ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce.cpp
+    program_id: 1234
+- kernel:
+    watcher_kernel_id: 361
+    name: writer_interleaved_no_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_interleaved_no_bcast/2859184945684300143/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp
+    program_id: 1236
+- kernel:
+    watcher_kernel_id: 360
+    name: reader_interleaved_scalar_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_interleaved_scalar_bcast/2907368326846943009/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_scalar_bcast.cpp
+    program_id: 1236
+- kernel:
+    watcher_kernel_id: 362
+    name: eltwise_binary_sfpu_scalar_bcast
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/eltwise_binary_sfpu_scalar_bcast/4022299867842175831/
+    source: ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_sfpu_scalar_bcast.cpp
+    program_id: 1236
+- kernel:
+    watcher_kernel_id: 364
+    name: writer_unary_stick_layout_split_rows_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_stick_layout_split_rows_multicore/8800810474065958559/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
+    program_id: 1238
+- kernel:
+    watcher_kernel_id: 363
+    name: reader_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_start_id/4061028770525768066/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp
+    program_id: 1238
+- kernel:
+    watcher_kernel_id: 365
+    name: untilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/untilize/5558132308550745488/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp
+    program_id: 1238
+- kernel:
+    watcher_kernel_id: 366
+    name: reader_unary_interleaved_start_id
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_unary_interleaved_start_id/8788272868363673331/
+    source: ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp
+    program_id: 1240
+- kernel:
+    watcher_kernel_id: 367
+    name: writer_unary_stick_layout_split_rows_multicore
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_unary_stick_layout_split_rows_multicore/8654979595361601730/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
+    program_id: 1240
+- kernel:
+    watcher_kernel_id: 368
+    name: untilize
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/untilize/14583621900259600597/
+    source: ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp
+    program_id: 1240
+- kernel:
+    watcher_kernel_id: 370
+    name: writer_scatter
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/writer_scatter/14764809993332479411/
+    source: ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/writer_scatter.cpp
+    program_id: 1242
+- kernel:
+    watcher_kernel_id: 369
+    name: reader_scatter
+    path: /localdev/vkovacevic/tt-metal-cache/tt-metal-cache16427638834892311340/kernels/reader_scatter/17662101772194422922/
+    source: ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/reader_scatter.cpp
+    program_id: 1242
