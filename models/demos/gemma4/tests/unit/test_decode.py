@@ -10,7 +10,7 @@ step. This is what ``test_layer_forward_decode`` does not cover — that test fi
 the cache with ``torch.randn`` and takes a single step, so a KV write landing at
 the wrong position, in the wrong block, or not at all would pass it.
 
-Two variants:
+Three variants:
 
 * ``test_decode_multistep_kv_update`` — steps start at position 0 (cold cache).
 * ``test_decode_multistep_kv_update_after_prefill`` — a prefill fills the cache
@@ -20,6 +20,10 @@ Two variants:
   below position 1024 a sliding layer masks nothing, so at 0 and 128 the
   ``sliding`` parametrization differs from ``global`` only in the RoPE base. At
   1536 the mask drops 522 keys and TT's ``sliding_window_size`` has to agree.
+* ``test_decode_multistep_bounded_sliding_kv`` — the same run against the
+  **bounded sliding** ring cache (``cache_position_modulo``), the layout the demo
+  auto-enables above its long-context cutover. The two tests above always build the
+  unbounded cache, so the ring's wrap arithmetic would otherwise be untested here.
 
 Each step also verifies the K/V the device wrote at that position against HF's
 cache, so a wrong-position write is reported as such instead of surfacing as a
@@ -64,12 +68,12 @@ pytestmark = pytest.mark.skipif(
 KV_PCC_REQUIRED = 0.99
 
 
-def _run_multistep_decode(mesh_device, request, *, layer_type: str, prefill_len: int) -> None:
+def _run_multistep_decode(mesh_device, request, *, layer_type: str, prefill_len: int, bounded: bool = False) -> None:
     """``DECODE_STEPS`` decode steps from ``prefill_len``, comparing output and KV each step."""
     threshold = get_pcc_threshold(request)
     # Cover every position the run touches, rounded up to a whole page.
     max_seq_len = max(128, ((prefill_len + DECODE_STEPS + 63) // 64) * 64)
-    ctx = build_decoder_pcc_context(mesh_device, layer_type, max_seq_len=max_seq_len)
+    ctx = build_decoder_pcc_context(mesh_device, layer_type, max_seq_len=max_seq_len, bounded=bounded)
     hf_cache = DynamicCache()
 
     if prefill_len:
@@ -83,9 +87,10 @@ def _run_multistep_decode(mesh_device, request, *, layer_type: str, prefill_len:
         assert prefill_pass, "Seed prefill already disagrees; the decode comparison below would be meaningless"
 
     logger.info(
-        "Multi-step decode: layer={} ({}), steps={}, positions {}..{}, batch={}, pcc>={}",
+        "Multi-step decode: layer={} ({}), kv={}, steps={}, positions {}..{}, batch={}, pcc>={}",
         ctx.layer_idx,
         layer_type,
+        "bounded" if bounded else "unbounded",
         DECODE_STEPS,
         prefill_len,
         prefill_len + DECODE_STEPS - 1,
@@ -110,7 +115,7 @@ def _run_multistep_decode(mesh_device, request, *, layer_type: str, prefill_len:
 
         # The write this step just made must be readable at exactly `position`,
         # on every device, under that device's own KV heads.
-        (tt_k, hf_k), (tt_v, hf_v) = compare_kv_cache(ctx, hf_cache, [position])
+        (tt_k, hf_k), (tt_v, hf_v) = compare_kv_cache(ctx, hf_cache, [position], written_through=position + 1)
         k_pass, k_pcc = check_pcc(f"  kv K step={step} pos={position}", hf_k, tt_k, KV_PCC_REQUIRED)
         v_pass, v_pcc = check_pcc(f"  kv V step={step} pos={position}", hf_v, tt_v, KV_PCC_REQUIRED)
         if not k_pass:
@@ -121,7 +126,9 @@ def _run_multistep_decode(mesh_device, request, *, layer_type: str, prefill_len:
     # Re-read every position the decode loop wrote: a later step must not have
     # clobbered an earlier one (same block, wrong row).
     written = [prefill_len + s for s in range(DECODE_STEPS)]
-    (tt_k_all, hf_k_all), (tt_v_all, hf_v_all) = compare_kv_cache(ctx, hf_cache, written)
+    (tt_k_all, hf_k_all), (tt_v_all, hf_v_all) = compare_kv_cache(
+        ctx, hf_cache, written, written_through=prefill_len + DECODE_STEPS
+    )
     hist_k_pass, hist_k_pcc = check_pcc("kv K all decode positions (final)", hf_k_all, tt_k_all, KV_PCC_REQUIRED)
     hist_v_pass, hist_v_pcc = check_pcc("kv V all decode positions (final)", hf_v_all, tt_v_all, KV_PCC_REQUIRED)
     if not hist_k_pass:
@@ -132,7 +139,7 @@ def _run_multistep_decode(mesh_device, request, *, layer_type: str, prefill_len:
     logger.info("Multi-step decode min output PCC over {} steps: {:.6f}", DECODE_STEPS, min_pcc)
     assert not failures, (
         f"Multi-step decode failed for layer {ctx.layer_idx} ({layer_type}), "
-        f"prefill_len={prefill_len}, tp={ctx.tp}: " + "; ".join(failures)
+        f"prefill_len={prefill_len}, bounded={bounded}, tp={ctx.tp}: " + "; ".join(failures)
     )
 
 
@@ -149,3 +156,35 @@ def test_decode_multistep_kv_update(layer_type, mesh_device, reset_seeds, reques
 def test_decode_multistep_kv_update_after_prefill(layer_type, prefill_len, mesh_device, reset_seeds, request):
     """Prefill, then decode on: the demo's transition, over prefill-written pages."""
     _run_multistep_decode(mesh_device, request, layer_type=layer_type, prefill_len=prefill_len)
+
+
+@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize("prefill_len", [1536], ids=["prefill1536"])
+def test_decode_multistep_bounded_sliding_kv(prefill_len, mesh_device, reset_seeds, request):
+    """The same multi-step decode against the **bounded sliding** KV ring.
+
+    A sliding layer only ever reads the last ``sliding_window`` (1024) tokens, so
+    above its long-context cutover the demo stops allocating one cache slot per
+    position and switches to a 1024-token ring, wrapping every absolute position by
+    ``cache_position_modulo`` before the page-table lookup. That wrap arithmetic is
+    a different code path in all three paged ops, and the layout the demo actually
+    runs at 128K+ — the tests above never touch it.
+
+    ``prefill_len=1536`` is the point: it exceeds the 1024 window, so the seed
+    prefill itself wraps (positions 1024–1535 land back on slots 0–511) and the ten
+    decode steps then wrap on top of that. At any ``prefill_len`` below the window
+    the ring never turns over and this would be the unbounded test with extra
+    indirection.
+
+    Sliding layers only — ``Gemma4Attention`` leaves the modulo unset on
+    full-attention layers, so there is no bounded variant of one to test.
+
+    Expected to agree with ``test_decode_multistep_kv_update_after_prefill``'s
+    ``prefill1536-sliding`` case **digit for digit**, since ``reset_seeds`` gives
+    both the same inputs and the ring is a storage change, not an arithmetic one.
+    Measured on WH 1x8: all ten steps' PCCs match exactly on 31B and on 12B. If a
+    future change makes them diverge, the wrap is doing something to the values.
+    ``test_bounded_sliding_kv_cache_model.py`` asserts that parity directly at the
+    attention level; this test's own gate is bounded-vs-HF.
+    """
+    _run_multistep_decode(mesh_device, request, layer_type="sliding_attention", prefill_len=prefill_len, bounded=True)
