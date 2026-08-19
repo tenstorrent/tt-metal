@@ -31,7 +31,6 @@ from other dispatch groups contain uninitialized values. The per-device output s
 TtDispatchModule produces the dispatched_buffer and metadata consumed here.
 """
 
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
