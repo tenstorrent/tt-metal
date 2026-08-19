@@ -1058,6 +1058,53 @@ BFP8) is one file and one flag away, and this run is the control it would be gra
 **Do not retry attention dtype for acceptance.** The remaining levers on DFlash are
 structural, not numeric.
 
+### F27 — The anchor K/V cache removes both costs it targeted, and does not scale yet
+
+The drafter's padded path re-uploads `[1, 1, bucket, 33280]` bf16 **replicated to every
+device** each iteration -- 34 MB/device at bucket 512 -- to deliver one to sixteen genuinely
+new rows, then re-runs `encoder.fc` and every layer's `k_proj`/`v_proj` over the whole bucket.
+That is 0.773 s of context upload plus 0.775 s of drafter forward in a 4.94 s OSL-256 run.
+
+`DFlashAnchorCache` replaces it with a fixed-capacity per-layer K/V cache written by
+`ttnn.fill_cache`. Two design points are worth keeping:
+
+* **The window lives in a reserved tail**, rows `[capacity, capacity + 32)`, not in the anchor
+  region. The reference implementation writes its window into the anchor region and argues
+  rejected rows are always overwritten before being read; reserving a tile makes the write
+  index a compile-time constant and keeps the anchor region holding only committed anchors, so
+  that argument is unnecessary.
+* **The accepted count never becomes a shape.** The anchor write always covers the whole 32-row
+  verify window at its tile-aligned start; the count only advances a host-side `valid_len`,
+  which changes the *contents* of the mask. This is what makes F6 impossible to reproduce here,
+  and it is measured rather than argued: `tests/dflash_fill_cache_probe.py` shows program cache
+  entries `[1, 3, 3, 3, 3, 3, 3, 3]` across seven distinct destination rows, because
+  `UpdateKVCacheOperation::compute_program_hash` excludes `update_idx`.
+
+**What works.** Graded against the exact-length `forward` after accumulating in 32-row tiles
+with real commit counts, **PCC 0.999886, argmax 16/16**. Drafter-only timing at capacity 512 is
+**17.9 ms/iteration, flat over ten iterations** with the program cache stable. End to end at
+OSL 32:
+
+| | padded | anchor cache |
+|---|---|---|
+| context upload | 0.773 s | **0.000** |
+| taps -> host | 2.6 ms/iter | **0.85 ms/iter** |
+| drafter forward | 23.1 ms/iter | **14.0 ms/iter** |
+
+Both targeted costs are gone, and `build_context_hidden_states` -- written, never called since
+-- finally does the job it was written for.
+
+**What does not work, and the bisect that is left.** At OSL 256, capacity 512, `generate()`
+goes CPU-bound for minutes where the padded path finishes in ~5 s. Three facts localise it:
+the drafter alone at capacity 512 is 17.9 ms/iteration; OSL 32 at capacity 128 completes in
+0.728 s; and the drafter probe does not touch verify, candidates, taps or accept. So the cost
+is O(capacity) inside the *runner*, not in the cache or the drafter. The next step is to time
+those runner stages directly at capacity 512 rather than guess -- two hypotheses were already
+eliminated by measurement and a third (JIT recompilation) is ruled out by the stable program
+cache.
+
+It ships **off** behind `anchor_cache=False` / `--anchor-cache`. Nothing shipped is affected.
+
 ## Artifacts
 
 | file | what |
