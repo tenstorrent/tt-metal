@@ -431,8 +431,25 @@ def format_sampling_params(sampling_params, max_batch_size):
     """
     Format sampling parameters for on-device use.
 
-    Converts scalar fields to lists, pads all lists to ``max_batch_size``,
-    inverts temperature, clamps top-p/top-k, and normalises penalties.
+    Converts scalar fields to lists, pads all lists to ``max_batch_size``, inverts
+    temperature, clamps top-p/top-k, and normalises penalties.
+
+    ``temperature`` defines the ACTIVE lane count: ``active_len = len(temperature)`` after
+    the scalar->list normalisation below. Three field groups, each with its own rule:
+
+    * **Per-user fields** — ``temperature``, ``top_p``, ``top_k``, and the three penalties.
+      A scalar broadcasts across the active lanes; a list is used as given. Inactive lanes
+      (``active_len..max_batch_size``) are padded with the field default. A list that is
+      neither length 1 nor long enough to cover the active lanes is rejected: silently
+      padding it with defaults would turn real lanes greedy (``top_k`` -> 1) or drop their
+      penalties, which is invisible at the call site.
+    * **Log-probs fields** — ``enable_log_probs`` / ``num_logprobs``. A scalar or a
+      single-element list broadcasts to ``max_batch_size``, not to ``active_len``: these
+      select an output format rather than shaping a lane's distribution, so an inactive
+      lane carrying the flag is harmless.
+    * **``seed``** — lane-scoped, deliberately NOT broadcast. A scalar seed lands on lane 0
+      and every other lane stays unseeded, because broadcasting one seed to every lane
+      means "all lanes draw the same token", which a caller must ask for explicitly.
 
     Returns a **new** SamplingParams — the input is never mutated.
     """
@@ -462,23 +479,35 @@ def format_sampling_params(sampling_params, max_batch_size):
             return list(lst)
         return list(lst) + [defaults[name]] * (target_len - len(lst))
 
-    # Pad core sampling fields. When temperature is supplied per-user (a list)
-    # but a companion field is a *scalar*, broadcast that scalar across the
-    # active (temperature-length) lanes so it applies uniformly, then pad the
-    # remaining inactive lanes with the field default. (A scalar top_k
-    # alongside a per-user temperature must not leave lanes 1..N-1 on the k=1
-    # default, which would silently force them greedy.) Explicit lists —
-    # including single-element lists — keep the historical lane-scoped
-    # semantics (padded with defaults), matching penalties/seeds below.
+    # Number of lanes the caller is actually describing. temperature is the reference
+    # because it is the field that decides whether a lane samples at all.
     active_len = len(sampling_params.temperature)
 
-    def _pad_core(value, name):
-        lst = [value] * active_len if not isinstance(value, List) else list(value)
+    def _pad_per_user(value, name):
+        """Normalise one per-user field to a target_len list. See the docstring."""
+        if value is None:
+            # Only reachable for the penalties, whose defaults are no-ops.
+            return _pad([defaults[name]], name)
+        if not isinstance(value, List):
+            # Scalar: the caller means "this value, for every lane I am describing".
+            return _pad([value] * active_len, name)
+        lst = list(value)
+        # A single-element list stays lane-scoped: callers that pass [x] for a one-user
+        # batch have always meant lane 0, and reinterpreting it as a broadcast would
+        # silently change sampling for their other lanes. (#45400 / Copilot review)
+        if len(lst) != 1 and len(lst) < active_len:
+            raise ValueError(
+                f"sampling_params.{name} has {len(lst)} entries but temperature describes "
+                f"{active_len} active lanes. Pass one value per active lane, a single scalar to "
+                f"apply one value to all of them, or a 1-element list to target lane 0 only. "
+                f"Padding the gap with the {name} default ({defaults[name]!r}) would silently "
+                f"change how lanes {len(lst)}..{active_len - 1} sample."
+            )
         return _pad(lst, name)
 
-    temperature = _pad_core(sampling_params.temperature, "temperature")
-    top_p = _pad_core(sampling_params.top_p, "top_p")
-    top_k = _pad_core(sampling_params.top_k, "top_k")
+    temperature = _pad_per_user(sampling_params.temperature, "temperature")
+    top_p = _pad_per_user(sampling_params.top_p, "top_p")
+    top_k = _pad_per_user(sampling_params.top_k, "top_k")
 
     # enable_log_probs / num_logprobs: scalar → broadcast to all users.
     # Multi-element list → pad with default (False/0) for inactive slots.
@@ -496,21 +525,24 @@ def format_sampling_params(sampling_params, max_batch_size):
     else:
         num_logprobs = None
 
-    # Normalise and pad penalty / seed fields (may still be None/scalar)
-    def _normalise_and_pad(name):
-        value = getattr(sampling_params, name, None)
-        if value is None:
-            lst = [defaults[name]]
-        elif isinstance(value, List):
-            lst = list(value)
-        else:
-            lst = [value]
-        return _pad(lst, name)
+    # Penalties follow the same per-user rule as temperature/top_p/top_k. They used to be
+    # lane-scoped, so a scalar penalty alongside a per-user temperature landed on lane 0 and
+    # left every other lane on the no-op default (0.0 / 0.0 / 1.0) with no diagnostic -- the
+    # same silent-wrong-lane bug that scalar top_k had. Note the SamplingParams defaults for
+    # these three ARE the padding defaults, so a caller who never sets them is unaffected.
+    presence_penalty = _pad_per_user(getattr(sampling_params, "presence_penalty", None), "presence_penalty")
+    frequency_penalty = _pad_per_user(getattr(sampling_params, "frequency_penalty", None), "frequency_penalty")
+    repetition_penalty = _pad_per_user(getattr(sampling_params, "repetition_penalty", None), "repetition_penalty")
 
-    presence_penalty = _normalise_and_pad("presence_penalty")
-    frequency_penalty = _normalise_and_pad("frequency_penalty")
-    repetition_penalty = _normalise_and_pad("repetition_penalty")
-    seed = _normalise_and_pad("seed")
+    # seed stays lane-scoped on purpose: broadcasting one seed across the batch means every
+    # lane draws the same token, which is a different request than "seed this request".
+    seed_value = getattr(sampling_params, "seed", None)
+    if seed_value is None:
+        seed = _pad([defaults["seed"]], "seed")
+    elif isinstance(seed_value, List):
+        seed = _pad(list(seed_value), "seed")
+    else:
+        seed = _pad([seed_value], "seed")
 
     # Clamp / transform values in the new lists (no mutation of the input)
     TOP_P_MIN = 0.0

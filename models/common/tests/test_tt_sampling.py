@@ -1954,3 +1954,102 @@ class TestTracedSampling:
             if sg is not None:
                 del sg
             safe_sync(mesh_device)
+
+
+# --- Test: format_sampling_params lane semantics (host-only, no device) ---
+
+
+# These need no device and no mesh_device fixture. They belong beside the other host-only
+# sampling tests in models/common/tests/test_sampling.py, but that file is not wired into
+# any pipeline today, so they live here to actually run. Move them when it is. (#38316)
+class TestFormatSamplingParamsLanes:
+    """Pin the per-lane contract of format_sampling_params.
+
+    A scalar companion field alongside a per-user temperature must reach every active lane.
+    Getting this wrong is invisible: the padding defaults are top_k=1 (greedy), top_p=1.0
+    and penalty no-ops, so an under-broadcast field silently changes how real lanes sample
+    while every assertion about token ranges still passes.
+    """
+
+    @staticmethod
+    def _fmt(**kwargs):
+        return format_sampling_params(SamplingParams(**kwargs), BATCH_SIZE)
+
+    def test_all_scalar_input_is_lane_zero_plus_greedy_padding(self):
+        """The historical all-scalar shape must be untouched by the broadcast rule."""
+        out = self._fmt(temperature=0.5, top_k=8, top_p=0.9)
+        assert out.temperature[0] == pytest.approx(1 / 0.5)  # inverted for the device
+        assert out.top_k[0] == 8
+        assert out.top_p[0] == pytest.approx(0.9)
+        # Inactive lanes are padded to the greedy representation (temp 1.0 / k 1 / p 0.0).
+        for lane in range(1, BATCH_SIZE):
+            assert out.top_k[lane] == 1, f"lane {lane}"
+            assert out.temperature[lane] == pytest.approx(1.0), f"lane {lane}"
+
+    def test_scalar_companion_broadcasts_across_active_lanes(self):
+        """A scalar top_k/top_p must not leave active lanes on the greedy default."""
+        active = 8
+        out = self._fmt(temperature=[0.8] * active, top_k=8, top_p=0.9)
+        for lane in range(active):
+            assert out.top_k[lane] == 8, f"active lane {lane} fell back to the k=1 default"
+            assert out.top_p[lane] == pytest.approx(0.9), f"active lane {lane}"
+            assert out.temperature[lane] == pytest.approx(1 / 0.8), f"active lane {lane}"
+        for lane in range(active, BATCH_SIZE):
+            assert out.top_k[lane] == 1, f"inactive lane {lane} should be greedy"
+
+    def test_single_element_companion_stays_lane_scoped(self):
+        """[x] keeps targeting lane 0; reinterpreting it as a broadcast would change
+        sampling for existing callers' other lanes."""
+        out = self._fmt(temperature=[1.0, 1.0], top_k=[8], top_p=1.0)
+        assert out.top_k[0] == 8
+        assert out.top_k[1] == 1, "a 1-element list must not broadcast onto lane 1"
+
+    def test_mismatched_companion_length_is_rejected(self):
+        """Silently padding the gap would turn real lanes greedy."""
+        try:
+            self._fmt(temperature=[1.0] * 8, top_k=[3, 3, 3], top_p=1.0)
+        except ValueError as exc:
+            assert "top_k" in str(exc) and "8 active lanes" in str(exc)
+        else:
+            raise AssertionError("a top_k list shorter than the active lanes must be rejected")
+
+    def test_scalar_penalty_reaches_every_active_lane(self):
+        """Regression: a scalar penalty used to land on lane 0 only, leaving the rest on the
+        no-op default with no diagnostic."""
+        active = 8
+        out = self._fmt(
+            temperature=[1.0] * active,
+            top_k=8,
+            top_p=1.0,
+            repetition_penalty=1.2,
+            presence_penalty=0.5,
+            frequency_penalty=0.25,
+        )
+        for lane in range(active):
+            assert out.repetition_penalty[lane] == pytest.approx(1.2), f"active lane {lane}"
+            assert out.presence_penalty[lane] == pytest.approx(0.5), f"active lane {lane}"
+            assert out.frequency_penalty[lane] == pytest.approx(0.25), f"active lane {lane}"
+        for lane in range(active, BATCH_SIZE):
+            assert out.repetition_penalty[lane] == pytest.approx(1.0), f"inactive lane {lane}"
+            assert out.presence_penalty[lane] == pytest.approx(0.0), f"inactive lane {lane}"
+
+    def test_unset_penalties_are_all_no_ops(self):
+        """The SamplingParams penalty defaults are scalars equal to the padding defaults, so
+        a caller who never sets them must be unaffected by the broadcast rule."""
+        out = self._fmt(temperature=[1.0] * 8, top_k=8, top_p=1.0)
+        assert all(v == pytest.approx(1.0) for v in out.repetition_penalty)
+        assert all(v == pytest.approx(0.0) for v in out.presence_penalty)
+        assert all(v == pytest.approx(0.0) for v in out.frequency_penalty)
+
+    def test_scalar_seed_stays_on_lane_zero(self):
+        """seed is deliberately NOT broadcast: one seed on every lane means every lane draws
+        the same token, which a caller has to ask for explicitly."""
+        out = self._fmt(temperature=[1.0] * 8, top_k=8, top_p=1.0, seed=1234)
+        assert out.seed[0] == 1234
+        assert all(s is None for s in out.seed[1:]), f"a scalar seed must not broadcast: {out.seed[:4]}"
+
+    def test_log_probs_scalar_broadcasts_to_all_lanes(self):
+        """enable_log_probs selects an output format rather than shaping a distribution, so
+        it broadcasts to max_batch_size, not to the active lane count."""
+        out = self._fmt(temperature=[1.0, 1.0], top_k=8, top_p=1.0, enable_log_probs=True)
+        assert all(out.enable_log_probs), "enable_log_probs should cover every lane"
