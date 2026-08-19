@@ -282,7 +282,9 @@ void kernel_main() {
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(36) == 1;
     constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
-    constexpr bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
+    // Latent-V (shared K buffer) never streams V through the head chain, so the factory skips
+    // building it there (frees its semaphores/args). Must mirror the factory's definition.
+    constexpr bool use_head_chain = enable_kv_chains && !gqa_grouped_kv && !v_shares_k_buffer;
     // In-place latent-V (single-tile Q): the compute kernel reads V straight from K^T, so the
     // reader never materializes V. Shared with the program factory and compute kernel.
     constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
