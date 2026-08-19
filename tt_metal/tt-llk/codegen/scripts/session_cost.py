@@ -300,6 +300,56 @@ def _authoritative_cost(log_dir: Path) -> float | None:
     return None
 
 
+def _otel_cost(
+    sink_path: str | None,
+    session_id: str | None,
+    since_dt: datetime | None,
+    until_dt: datetime | None,
+) -> float | None:
+    """Sum claude_code.cost.usage for one session from the OTEL receiver's sink.
+
+    otel_cost_receiver.py appends {session_id, ts (unix nanos), cost_usd} per cost
+    datapoint. Cost temporality is delta, so a session's total is the sum. This is
+    the CLI's own cost — it includes the subagent + auxiliary (background) spend the
+    transcripts omit — so it supersedes the token estimate. Returns None when there
+    is no sink, no session, or no matching datapoint (keep the estimate). Datapoints
+    are bounded to [since, until] like the token path when those are given.
+    """
+    if not sink_path or not session_id:
+        return None
+    p = Path(sink_path)
+    if not p.exists():
+        return None
+    lo = since_dt.timestamp() * 1e9 if since_dt else None
+    hi = until_dt.timestamp() * 1e9 if until_dt else None
+    total = 0.0
+    hit = False
+    with p.open(errors="ignore") as fh:
+        for line in fh:
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            if r.get("session_id") != session_id:
+                continue
+            ts = r.get("ts")
+            if ts is not None and (lo is not None or hi is not None):
+                try:
+                    tsn = float(ts)
+                except (TypeError, ValueError):
+                    tsn = None
+                if tsn is not None:
+                    if lo is not None and tsn < lo:
+                        continue
+                    if hi is not None and tsn > hi:
+                        continue
+            c = r.get("cost_usd")
+            if isinstance(c, (int, float)):
+                total += float(c)
+                hit = True
+    return total if hit else None
+
+
 def _patch_run_json(log_dir: Path, totals: dict) -> None:
     run_json = log_dir / "run.json"
     if not run_json.exists():
@@ -367,6 +417,13 @@ def main(argv: list[str] | None = None) -> int:
         "--log-dir",
         default=None,
         help="If set, patch run.json atomically with the aggregated tokens + cost_usd.",
+    )
+    ap.add_argument(
+        "--otel-sink",
+        default=os.environ.get("CODEGEN_OTEL_SINK"),
+        help="JSONL of claude_code.cost.usage datapoints from otel_cost_receiver.py "
+        "(or $CODEGEN_OTEL_SINK). When it has cost for this session, that authoritative "
+        "figure replaces the token estimate.",
     )
     ap.add_argument(
         "--print-session",
@@ -480,9 +537,13 @@ def main(argv: list[str] | None = None) -> int:
         cost_usd=round(cost, 6),
     )
 
-    # Prefer the CLI's authoritative cost (batch runs' cli_output.json) over the
-    # token-math estimate; token counts stay as summed (informational).
-    if args.log_dir:
+    # Prefer an authoritative cost over the token-math estimate; token counts stay
+    # as summed (informational). Priority: live OTEL cost telemetry (works for
+    # interactive runs too), then a headless run's cli_output.json.
+    otel = _otel_cost(args.otel_sink, discovered_sid, since_dt, until_dt)
+    if otel is not None:
+        totals["cost_usd"] = round(otel, 6)
+    elif args.log_dir:
         auth = _authoritative_cost(Path(args.log_dir))
         if auth is not None:
             totals["cost_usd"] = round(auth, 6)
