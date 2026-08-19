@@ -77,9 +77,12 @@ SUPPORTED = {
     "layout": [ttnn.TILE_LAYOUT],
     # Linear is the proven primary topology (Ring is a refinement candidate).
     "topology": [_Topology.Linear],
-    # Phase-0 scatter dim: 3 (the last dim), POSITIVE convention. Negative
-    # aliases are canonicalized BEFORE the membership test (-1 ≡ 3).
-    "dim": [3],
+    # Scatter dims, POSITIVE convention. Negative aliases are canonicalized
+    # BEFORE the membership test (-1 ≡ 3, -2 ≡ 2). dim=2 was promoted by the
+    # verifier: the host slice rows (_slice_quantities), the kernel's
+    # is_supported_scatter_dim static_assert, and the SliceRowWalker math all
+    # generalize over the scatter dim; hardware-verified on the (1, 4) line.
+    "dim": [3, 2],
 }
 
 EXCLUSIONS: list = []
@@ -113,6 +116,14 @@ def validate(input_tensor, *, dim, topology, output_tensor):
     """Runtime gate. Structural input errors raise ValueError; axis refusals raise
     the registry-model UnsupportedAxisValue / ExcludedCell.
 
+    Ordering: universal structural checks (needed to even form the axes dict)
+    raise ValueError first; then the AXIS GATE (typed refusals); then the
+    axis-value-DEPENDENT structural checks (tile alignment, slice divisibility,
+    output spec). The gate runs before the dependent checks so an
+    out-of-SUPPORTED axis value (e.g. an unimplemented scatter dim or layout)
+    always yields the typed UnsupportedAxisValue the registry contract
+    requires, never a shape-derived ValueError computed under the wrong axis.
+
     Returns ``(num_devices, canonical_dim)``.
     """
     device = input_tensor.device()
@@ -138,6 +149,23 @@ def validate(input_tensor, *, dim, topology, output_tensor):
     if input_tensor.is_sharded():
         raise ValueError("reduce_scatter: sharded input not yet supported (interleaved only)")
 
+    # Axis gate (registry model). dim uses the canonical POSITIVE convention.
+    axes = {
+        "dtype": input_tensor.dtype,
+        "layout": input_tensor.layout,
+        "topology": topology,
+        "dim": canonical_dim,
+    }
+    for axis_name, tagger in INPUT_TAGGERS.items():
+        axes[axis_name] = tagger((tuple(input_tensor.shape),), axes)
+    for axis, allowed in SUPPORTED.items():
+        if axes[axis] not in allowed:
+            raise UnsupportedAxisValue(f"reduce_scatter: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
+    for exc in EXCLUSIONS:
+        if all(axes.get(k) == v for k, v in exc.items()):
+            raise ExcludedCell(f"reduce_scatter: unsupported combination (refinement candidate): {exc}")
+
+    # --- Axis-value-dependent structural checks (all axes are in SUPPORTED here) ---
     if shape[2] % _TILE != 0 or shape[3] % _TILE != 0:
         raise ValueError(
             f"reduce_scatter: shard H and W must be tile-aligned (multiples of {_TILE}); got H={shape[2]}, W={shape[3]}"
@@ -174,22 +202,6 @@ def validate(input_tensor, *, dim, topology, output_tensor):
                 f"(shape {expected_shape}, input dtype/layout/buffer_type)"
             )
 
-    # Axis gate (registry model). dim uses the canonical POSITIVE convention.
-    axes = {
-        "dtype": input_tensor.dtype,
-        "layout": input_tensor.layout,
-        "topology": topology,
-        "dim": canonical_dim,
-    }
-    for axis_name, tagger in INPUT_TAGGERS.items():
-        axes[axis_name] = tagger((tuple(input_tensor.shape),), axes)
-    for axis, allowed in SUPPORTED.items():
-        if axes[axis] not in allowed:
-            raise UnsupportedAxisValue(f"reduce_scatter: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
-    for exc in EXCLUSIONS:
-        if all(axes.get(k) == v for k, v in exc.items()):
-            raise ExcludedCell(f"reduce_scatter: unsupported combination (refinement candidate): {exc}")
-
     return num_devices, canonical_dim
 
 
@@ -197,7 +209,7 @@ def reduce_scatter(
     input_tensor: ttnn.Tensor,
     dim: int = 3,
     topology: ttnn.Topology = _Topology.Linear,
-    output_tensor: ttnn.Tensor = None,
+    output_tensor: ttnn.Tensor | None = None,
 ) -> ttnn.Tensor:
     """Sum every device's shard element-wise across the line, then scatter: device
     i's output is slice i (of N equal slices along ``dim``) of the sum.
@@ -205,7 +217,7 @@ def reduce_scatter(
     Args:
         input_tensor: sharded across a MeshDevice line; each device holds one
             SAME-shape shard (distinct values). TILE_LAYOUT, interleaved.
-        dim: scatter dimension (Phase-0: 3, the last dim; -1 alias accepted).
+        dim: scatter dimension (3 or 2; negative aliases -1/-2 accepted).
         topology: line topology (Phase-0: Linear).
         output_tensor: optional pre-allocated output (shape = shard with
             ``[dim] / N``); written into and returned when supplied.
