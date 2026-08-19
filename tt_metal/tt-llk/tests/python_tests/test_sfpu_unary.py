@@ -1295,6 +1295,14 @@ _CAUSAL_LIFT_B2_F32_OPS = [
     # corr leg).
     MathOperation.Add1,
     MathOperation.CastFp32ToFp16a,
+    # Storm S2 (agent/storm-s2, fresh_cpp/<op>.h canonical bodies; F32 corr rows).
+    MathOperation.Erf,
+    MathOperation.Erfc,
+    MathOperation.Erfinv,
+    MathOperation.Digamma,
+    MathOperation.Hardmish,
+    MathOperation.Hardshrink,
+    MathOperation.Heaviside,
 ]
 _CAUSAL_LIFT_B2_F16B_OPS = [
     MathOperation.Log,
@@ -1315,6 +1323,10 @@ _CAUSAL_LIFT_B2_F16B_OPS = [
     # Storm lane S1.
     MathOperation.Abs,
     MathOperation.Celu,
+    # Storm S2 (agent/storm-s2; F16b corr rows, mirroring each op's sweep row).
+    MathOperation.Elu,
+    MathOperation.Exp2,
+    MathOperation.Fill,
 ]
 
 

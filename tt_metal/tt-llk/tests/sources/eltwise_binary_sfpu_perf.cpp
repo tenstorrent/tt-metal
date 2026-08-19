@@ -217,6 +217,23 @@ inline void run_selected_binary_sfpu(
     {
         call_binary_bitwise_and_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
     }
+    // Storm S2 (agent/storm-s2): canonical fresh_cpp/<op>.h semantic bodies.
+    else if constexpr (
+        FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::GCD &&
+        static_cast<std::uint32_t>(formats.math) == static_cast<std::uint32_t>(DataFormat::Int32))
+    {
+        // Test-only fresh typed-C++ leg for the Int32 gcd production path
+        // (metal ckernel_sfpu_gcd.h hand-issued REPLAY-loop kernel).
+        call_gcd_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
+    }
+    else if constexpr (
+        FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::DIV_INT32_FLOOR &&
+        static_cast<std::uint32_t>(formats.math) == static_cast<std::uint32_t>(DataFormat::Int32))
+    {
+        // Test-only fresh typed-C++ leg for the Int32 floor-division production
+        // path (metal ckernel_sfpu_div_int32_floor.h).
+        call_div_int32_floor_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
+    }
     else
     {
         test_utils::call_binary_sfpu_operation<

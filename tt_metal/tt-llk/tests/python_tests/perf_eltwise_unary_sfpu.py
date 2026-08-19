@@ -391,6 +391,17 @@ def test_perf_unary_max_min_fresh_cpp(
         MathOperation.Add1,
         MathOperation.CastFp32ToFp16a,
         MathOperation.Celu,
+        # Storm S2 (agent/storm-s2, fresh_cpp/<op>.h canonical bodies).
+        MathOperation.Erf,
+        MathOperation.Erfc,
+        MathOperation.Erfinv,
+        MathOperation.Digamma,
+        MathOperation.Hardmish,
+        MathOperation.Hardshrink,
+        MathOperation.Heaviside,
+        MathOperation.Elu,
+        MathOperation.Exp2,
+        MathOperation.Fill,
     ],
     fresh_cpp_impl=[0, 1],
 )

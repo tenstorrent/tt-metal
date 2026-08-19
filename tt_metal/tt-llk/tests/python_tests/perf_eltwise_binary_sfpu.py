@@ -469,6 +469,56 @@ def test_perf_fresh_cpp_mul_int(perf_report, formats, mathop, fresh_cpp_impl):
     configuration.run(perf_report)
 
 
+# Storm S2 (agent/storm-s2): canonical fresh_cpp/<op>.h semantic bodies.
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuGcd, MathOperation.SfpuDivInt32Floor],
+    fresh_cpp_impl=[0, 1],
+)
+def test_perf_fresh_cpp_binary_int_storm(perf_report, formats, mathop, fresh_cpp_impl):
+    # Handwritten (metal ckernel_sfpu_gcd.h / ckernel_sfpu_div_int32_floor.h) vs
+    # fresh typed-C++ Int32 A/B, MATH_ISOLATE only (mirrors
+    # test_perf_fresh_cpp_mul_int).
+    tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
+        [128, 64], [128, 64], face_r_dim=16, num_faces=4
+    )
+    configuration = PerfConfig(
+        "sources/eltwise_binary_sfpu_perf.cpp",
+        formats,
+        run_types=[PerfRunType.MATH_ISOLATE],
+        templates=[
+            MATH_OP(mathop=mathop),
+            APPROX_MODE(ApproximationMode.No),
+            ITERATIONS(32),
+            FRESH_CPP_IMPL(fresh_cpp_impl),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_count),
+            LOOP_FACTOR(16),
+            NUM_FACES(num_faces=faces_to_generate),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+        ],
+        variant_stimuli=StimuliConfig(
+            None,
+            formats.input_format,
+            None,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+        ),
+        # Int32 is 32-bit integer: dest_acc No + unpack_to_dest, matching
+        # test_perf_eltwise_binary_sfpu_int's derivation for these formats.
+        unpack_to_dest=True,
+        dest_acc=DestAccumulation.No,
+        compile_time_formats=True,
+    )
+    configuration.run(perf_report)
+
+
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
