@@ -182,6 +182,102 @@ def test_strided_all_gather_minimal_matmul_async(
         shard_weights=shard_weights,
         ag_core_grid_offset=ag_offset,
         read_local_slice_from_input=read_local_slice_from_input,
+        # Blackhole has the cores for the aggregators; require them so a config change cannot silently
+        # drop back to reader-signaled matmul and lose the overlap.
+        mm_signal_aggregator_mode=ttnn.MMSignalAggregatorMode.On,
+    )
+
+
+# Fused SwiGLU on the strided AGMM. N is the OUTPUT width; the device weight is the 2N-wide packed
+# [up|gate]. On a 12-wide core grid the factory splits gate/up PAIRS, so out_N_tiles = N/32 sets the
+# per-core width: "aligned" divides 12 exactly, "ragged" does not and exercises the pair-aware padding.
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "M, K, N, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w",
+    [
+        (9728, 4096, 1536, 512, 256, 128, 2, 2),
+        (9728, 4096, 1024, 512, 256, 128, 2, 2),
+        # Same shape as "aligned" but the N block spans a core's whole weight range (1 block/core).
+        # M block is halved to keep the block CBs inside L1; the N block itself is not a swiglu limit.
+        (9728, 4096, 1536, 256, 256, 256, 2, 2),
+    ],
+    ids=["aligned", "ragged", "full_block"],
+)
+@pytest.mark.parametrize("use_bias", [False, True], ids=["no_bias", "bias"])
+# num_iters > 1 also covers the cached-program override path, not just create().
+@pytest.mark.parametrize("enable_trace,num_iters", [(False, 2)], ids=["check"])
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(8192),
+                "trace_region_size": 1171456,
+            },
+            ttnn.Topology.Ring,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+def test_strided_all_gather_minimal_matmul_swiglu(
+    mesh_device,
+    M,
+    K,
+    N,
+    mm_block_m,
+    mm_block_k,
+    mm_block_n,
+    subblock_h,
+    subblock_w,
+    use_bias,
+    enable_trace,
+    num_iters,
+    all_gather_topology,
+):
+    mm_core_grid = ttnn.CoreCoord(12, 8)
+    ag_offset = (0, 8)
+    grid = mesh_device.compute_with_storage_grid_size()
+    if grid.x < mm_core_grid.x or grid.y < ag_offset[1] + 1:
+        pytest.skip(f"Requires worker grid >= {mm_core_grid.x}x{ag_offset[1] + 1}, got {grid.x}x{grid.y}")
+
+    assert (mm_block_n // 32) % 2 == 0, "fuse_swiglu requires an even mm_block_n in tiles"
+
+    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    run_strided_all_gather_minimal_matmul_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        M,
+        K,
+        N,
+        3,  # dim (AG/K shard axis)
+        2,  # other_dim (M/sequence shard axis)
+        2,  # num_links
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        dram,
+        dram,
+        dram,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        num_workers_per_link=3,
+        num_buffers_per_channel=8,
+        mm_block_m=mm_block_m,
+        mm_block_k=mm_block_k,
+        mm_block_n=mm_block_n,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        mm_core_grid=mm_core_grid,
+        use_non_fused=False,
+        use_bias=use_bias,
+        shard_weights=False,
+        ag_core_grid_offset=ag_offset,
+        read_local_slice_from_input=True,
+        fuse_swiglu=True,
     )
 
 
@@ -309,4 +405,5 @@ def test_strided_all_gather_minimal_matmul_ltx_configs(
         shard_weights=False,
         ag_core_grid_offset=ag_offset,
         read_local_slice_from_input=True,
+        mm_signal_aggregator_mode=ttnn.MMSignalAggregatorMode.On,
     )

@@ -77,6 +77,9 @@ class MathOperation(Enum):
     Acosh = OpSpec("acosh", MathOpType.SFPU_UNARY)
     Celu = OpSpec("celu", MathOpType.SFPU_UNARY)
     Cos = OpSpec("cosine", MathOpType.SFPU_UNARY)
+    # Whole-tile column-wise cumulative sum; not element-wise, so its golden works on the
+    # tilized tensor rather than per datum.
+    Cumsum = OpSpec("cumsum", MathOpType.SFPU_UNARY)
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
     Exp = OpSpec("exponential", MathOpType.SFPU_UNARY)
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
@@ -464,6 +467,18 @@ class ApproximationMode(Enum):
     @property
     def cpp_enum_value(self):
         return str(self.value).lower()
+
+
+class DstRoundingMode(Enum):
+    """Mirrors ckernel::DstRoundingMode — how a float32 SFPU result is narrowed
+    on store into a bf16 DEST."""
+
+    Default = "Default"
+    NearestEven = "NearestEven"
+
+    @property
+    def cpp_enum_value(self):
+        return f"ckernel::DstRoundingMode::{self.value}"
 
 
 class Transpose(Enum):

@@ -13,6 +13,14 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
+// in0's K is read from TWO source buffers via the in3 path: either the AG local pre-gather slice
+// (READ_FROM_LOCAL_INPUT) or a plain fused concatenation of two operands (IN0_VIRTUAL_CONCAT).
+// IN0_HAS_SECOND_SOURCE gates the shared read plumbing; the two cases differ only in how the
+// local K-range / widths are derived (see dm_in0_sender.cpp).
+#if defined(READ_FROM_LOCAL_INPUT) || defined(IN0_VIRTUAL_CONCAT)
+#define IN0_HAS_SECOND_SOURCE 1
+#endif
+
 namespace detail {
 template <typename... Args, uint32_t... Indexes>
 auto make_tensor_accessor_tuple_impl(
@@ -65,7 +73,7 @@ template <
     uint32_t M_block_tiles,
     uint32_t K_block_tiles,
     typename TensorAccessorType
-#ifdef READ_FROM_LOCAL_INPUT
+#ifdef IN0_HAS_SECOND_SOURCE
     ,
     typename LocalTensorAccessorType
 #endif
@@ -75,11 +83,15 @@ void read_in0_block_sync(
     const TensorShape2D& shape,
     uint32_t cb_id,
     uint32_t tile_size_bytes,
-#ifdef READ_FROM_LOCAL_INPUT
+#ifdef IN0_HAS_SECOND_SOURCE
     const LocalTensorAccessorType& in3_accessor,
     uint32_t local_k_start,
     uint32_t local_k_end,
     uint32_t input_tensor_Wt,
+    // Row width (in tiles) of the MAIN (tensor_accessor) buffer. AG path: full logical K (in0 is the
+    // full gathered tensor). Two-input K-split: the main tensor's own (narrow) width so its tile_id
+    // indexes the narrow buffer correctly.
+    uint32_t main_Wt,
 #endif
     uint32_t d0_start,
     uint32_t d0_end,
@@ -98,18 +110,26 @@ void read_in0_block_sync(
         }
         for (uint32_t j = d1_start; j < d1_end; j++) {
             if (j < shape.logical_d1) {
-#ifdef READ_FROM_LOCAL_INPUT
+#ifdef IN0_HAS_SECOND_SOURCE
                 if (local_k_start <= j && j <= local_k_end) {
                     // read from self_tensor_accessor
                     uint32_t tile_id = i * input_tensor_Wt + (j - local_k_start);
                     noc.async_read(
                         in3_accessor, CoreLocalMem<uint32_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
                 } else {
-#endif
+                    // Non-local K-tile: read from the main buffer. main_Wt generalizes the row
+                    // stride so the main tensor can be either the full gathered K (AG) or a narrow
+                    // K-split half (two-input). j is the logical K index; main covers a prefix so no
+                    // offset is needed (local range is the suffix for the two-input case).
+                    uint32_t tile_id = i * main_Wt + j;
+                    noc.async_read(
+                        tensor_accessor, CoreLocalMem<uint32_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
+                }
+#else
+                {
                     uint32_t tile_id = i * shape.logical_d1 + j;
                     noc.async_read(
                         tensor_accessor, CoreLocalMem<uint32_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
-#ifdef READ_FROM_LOCAL_INPUT
                 }
 #endif
             } else {

@@ -1,8 +1,9 @@
 # MiniMax-M3 — Gate 2 (loopback migration) rank binding: 1 rank / 1 BH galaxy, REQUEST mode.
 #
-# The runner publishes the KV chunk table to the migration worker, blocks on WORKER_READY, serves the
-# producer's H2D pushes, then waits for migration_driver's DONE sentinel and PCCs each migrated pair.
-# PREFILL_ENABLE_MIGRATION is single-rank only (the runner rejects it for num_ranks > 1).
+# The runner publishes the KV chunk table to the migration worker, blocks on WORKER_READY, then serves the
+# producer's H2D pushes for as long as the stream stays open. It validates nothing: migration_driver owns
+# both read-backs, so run it with PREFILL_SEND_SHUTDOWN=1 or the runner never leaves its request loop.
+# Only THIS binding is single-rank; PREFILL_ENABLE_MIGRATION publishes a merged table at any rank count.
 #
 # Launch (endpoint must already be up — see PREFILL_MIGRATION_TESTING.md Gate 2):
 #   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
@@ -40,14 +41,5 @@ global_env:
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
   PREFILL_MIGRATION_CLIENT_DIR: "${PREFILL_MIGRATION_CLIENT_DIR}"
-
-  PREFILL_VALIDATE_MIGRATION: "1"
-  # dst == src fidelity (golden-free). Comment out for the burst variant (src and dst both vs golden).
-  PREFILL_MIGRATE_PAIRWISE: "1"
-  # The driver sends no shutdown push, so this is how the runner knows prefill is done before it polls
-  # the sentinel: 2 src slots x 2 chunks = 4.
-  PREFILL_STANDALONE_CHUNKED_NCHUNKS: "4"
-  MIGRATION_DONE_FILE: "/tmp/m3_migration_done.sentinel"
-  PREFILL_MIGRATE_WAIT_S: "1200"
 
   LOGURU_LEVEL: "INFO"

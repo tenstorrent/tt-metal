@@ -6,7 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
-#include <tt-metalium/vector_aligned.hpp>
+#include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include <utility>
 #include <vector>
 

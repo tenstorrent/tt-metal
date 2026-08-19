@@ -9,8 +9,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "tt-metalium/experimental/tensor/host_tensor.hpp"
-#include "tt-metalium/experimental/tensor/tensor_apis.hpp"
+#include "tt-metalium/tensor/host_tensor.hpp"
+#include "tt-metalium/tensor/tensor_apis.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
