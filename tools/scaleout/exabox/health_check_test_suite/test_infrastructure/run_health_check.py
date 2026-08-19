@@ -51,6 +51,7 @@ from utils.jira_client import (
 from utils.report import has_actionable_failure, normalize_health_report
 from utils.secrets_loader import load_jira_secrets, load_sftp_secrets
 from utils.sftp_upload import upload_csv_sftp
+from utils.slurm_reboot import reboot_and_requeue, should_reboot
 from utils.system_info import collect_version_info
 from utils.telemetry import (
     aggregate_telemetry_for_csv,
@@ -148,6 +149,12 @@ def parse_args() -> argparse.Namespace:
         default="true",
         help="Delete the log and results directory after the run",
     )
+    p.add_argument(
+        "--reboot-on-failure",
+        choices=("true", "false"),
+        default="true",
+        help="Reboot the node once and let Slurm rerun the suite on failure",
+    )
 
     args = p.parse_args()
     # node is used to build filesystem paths (log/results dirs); constrain it to a
@@ -157,6 +164,7 @@ def parse_args() -> argparse.Namespace:
     args.create_jira = args.create_jira == "true"
     args.upload_sftp = args.upload_sftp == "true"
     args.cleanup = args.cleanup == "true"
+    args.reboot_on_failure = args.reboot_on_failure == "true"
     return args
 
 
@@ -336,6 +344,29 @@ def main() -> int:
             )
             effective_code = 0
 
+    # Self-heal on failure, Slurm only. Gate on effective_code so non-actionable
+    # (pre-reset/excluded) failures don't reboot. SLURM_RESTART_COUNT counts any
+    # Slurm restart, so cap=1 self-heals at most once.
+    reboot_cap = 1
+    restart_count = int(os.environ.get("SLURM_RESTART_COUNT", "0") or "0")
+    if launch_mode == "slurm" and should_reboot(
+        exit_code=effective_code,
+        enabled=args.reboot_on_failure,
+        slurm_job_id=slurm_job_id,
+        restart_count=restart_count,
+        cap=reboot_cap,
+    ):
+        log.info(
+            "Test failed (exit %d); rebooting and requeuing for a clean rerun " "(restart_count=%d, cap=%d)",
+            effective_code,
+            restart_count,
+            reboot_cap,
+        )
+        if reboot_and_requeue(node, slurm_job_id):
+            log.info("Reboot armed and job requeued; exiting so the node reboots and reruns")
+            return effective_code
+        log.warning("Reboot/requeue could not be issued; proceeding to JIRA ticketing")
+
     # JIRA ticket creation (failure only)
     ticket_key = None
     if effective_code != 0:
@@ -378,6 +409,7 @@ def main() -> int:
                         telemetry_summary=prom_output,
                         test_output=full_output,
                         attachment_names=attachment_names,
+                        restart_count=restart_count,
                     )
                 )
                 add_comment_to_jira(
@@ -408,6 +440,7 @@ def main() -> int:
                     versions=versions,
                     telemetry_summary=prom_output,
                     attachment_names=attachment_names,
+                    restart_count=restart_count,
                 )
                 if ticket_key:
                     transition_jira_ticket(
