@@ -131,13 +131,23 @@ inline void init_sfpu(uint32_t icb, uint32_t ocb) { T("  init_sfpu(cb" + n(icb) 
 // A stand-in for L1. Almost every stub only hands an address to another stub, so a
 // fake value would do -- but fill_reduce_scaler DEREFERENCES the write pointer to lay
 // the scaler pattern down, and the model's addresses are uint32_t, so the memory has
-// to live below 4GB. MAP_32BIT guarantees that. Linux/x86-64, which is what this
-// harness targets.
+// to live below 4GB.
+//
+// The address is FIXED, not merely sub-4GB, and that is the load-bearing part. L1
+// addresses reach the trace: noc_core_write folds one into a NOC address, which the
+// noc_async_write stub prints. A kernel-chosen address would make the trace differ
+// run to run under ASLR, and comparing traces is how every refactor here is checked.
+// Verified by running one binary twice and diffing.
+//
+// MAP_FIXED_NOREPLACE fails rather than clobbering an existing mapping, so a clash
+// is a loud abort instead of silent corruption.
 inline uint32_t* l1_base() {
     static uint32_t* base = [] {
-        void* m = mmap(nullptr, kFakeL1Bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
-        if (m == MAP_FAILED) {
-            fprintf(stderr, "selftest: could not map a sub-4GB L1 stand-in\n");
+        void* want = reinterpret_cast<void*>(uintptr_t{0x30000000});
+        void* m =
+            mmap(want, kFakeL1Bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+        if (m != want) {
+            fprintf(stderr, "selftest: could not map the L1 stand-in at a fixed sub-4GB address\n");
             abort();
         }
         return static_cast<uint32_t*>(m);
