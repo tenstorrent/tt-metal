@@ -16,6 +16,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <cmath>
@@ -2602,7 +2603,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // store-and-forward chain, whose per-core forwarding counts are built from the flat split and
     // would desync under rotated per-iteration ownership. Latent/shared-buffer V never touches the
     // V chain (V is materialized from, or read in place of, the mcast K^T).
+    // Debug kill-switch for A/B measurements: RING_MLA_DISABLE_ROTATED_Q_SPLIT=1 forces the
+    // static flat split on an otherwise identical build.
+    static const bool rotated_q_split_disabled = std::getenv("RING_MLA_DISABLE_ROTATED_Q_SPLIT") != nullptr;
     const bool use_rotated_q_split =
+        !rotated_q_split_disabled &&  //
         kernel_chunked && !has_sliding_window && use_streaming_compute && enable_kv_chains && k_uses_batch_chain &&
         build_kv_chains && k_mcast_enabled && v_shares_k_buffer && !enable_zigzag_balancing && !args.is_balanced &&
         B == 1 && L == 0 && !kv_pad_rotation_enabled && !kv_pad_from_metadata && !use_attention_sink &&
