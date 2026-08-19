@@ -164,9 +164,13 @@ inline void _llk_math_compressed_custom_mm_(
 
     const std::uint32_t iterations = finalize ? kt_dim - 1 : kt_dim;
     const std::uint32_t* meta_ptr  = reinterpret_cast<const std::uint32_t*>(base_address_meta);
-    std::uint32_t index            = 0;
-    std::uint32_t meta_index       = 0;
-    std::uint32_t meta             = meta_ptr[meta_index] >> 3;
+    // The metadata buffer holds one word per 10 tiles, i.e. ceil(kt_dim * ct_dim / 10) words.
+    // Each reload below advances meta_index *after* consuming an item, so on the last item of
+    // an exact-multiple-of-10 block it would step one word past the end. Bound it.
+    const std::uint32_t num_meta_words = (kt_dim * ct_dim + 9) / 10;
+    std::uint32_t index                = 0;
+    std::uint32_t meta_index           = 0;
+    std::uint32_t meta                 = meta_ptr[meta_index] >> 3;
 
     for (std::uint32_t i = 0; i < iterations; i++)
     {
@@ -189,7 +193,10 @@ inline void _llk_math_compressed_custom_mm_(
             {
                 index = 0;
                 meta_index++;
-                meta = meta_ptr[meta_index] >> 3;
+                if (meta_index < num_meta_words)
+                {
+                    meta = meta_ptr[meta_index] >> 3;
+                }
             }
             else
             {
@@ -212,7 +219,10 @@ inline void _llk_math_compressed_custom_mm_(
         {
             index = 0;
             meta_index++;
-            meta = meta_ptr[meta_index] >> 3;
+            if (meta_index < num_meta_words)
+            {
+                meta = meta_ptr[meta_index] >> 3;
+            }
         }
         else
         {
@@ -239,7 +249,10 @@ inline void _llk_math_compressed_custom_mm_(
             {
                 index = 0;
                 meta_index++;
-                meta = meta_ptr[meta_index] >> 3;
+                if (meta_index < num_meta_words)
+                {
+                    meta = meta_ptr[meta_index] >> 3;
+                }
             }
             else
             {
