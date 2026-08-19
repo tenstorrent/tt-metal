@@ -1,0 +1,143 @@
+{
+  "generated_by": "eval.verify_supported (trimmed by the verifier: the full 25 MB report stays in the results dir)",
+  "results_dir": "/tmp/rms_verify2",
+  "op_module": "ttnn.operations.rms_norm",
+  "summary": {
+    "total": 40828,
+    "supported_pass": 737,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 6172,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 33900,
+    "invalid_unexpected": 2,
+    "infeasible_skipped": 2,
+    "no_axes_found": 15
+  },
+  "loud_categories": {
+    "supported_fail": [],
+    "xpass_drift": [],
+    "xfail_wrong_mode": [],
+    "supported_marked_xfail": [],
+    "invalid_unexpected": [
+      {
+        "nodeid": "eval/golden_tests/rms_norm/test_translated.py::test_rms_norm_sharded_uneven_multicore_logical_width[w72_c2_nonaligned-bfloat8_b]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "gamma_mode": "gamma",
+          "gamma_dtype": "BFLOAT16",
+          "gamma_layout": "TILE",
+          "memory_layout": "WIDTH_SHARDED",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/rms_norm/test_translated.py::test_rms_norm_sharded_uneven_multicore_logical_width[w200_c3_nonaligned-bfloat8_b]",
+        "axes": {
+          "dtype": "BFLOAT8_B",
+          "layout": "TILE",
+          "fp32_dest_acc_en": true,
+          "gamma_mode": "gamma",
+          "gamma_dtype": "BFLOAT16",
+          "gamma_layout": "TILE",
+          "memory_layout": "WIDTH_SHARDED",
+          "alignment": "w_non_aligned",
+          "rank": 4
+        },
+        "status": "xfail"
+      }
+    ]
+  },
+  "xfail_expected_by_missing_axis_value": {
+    "fp32_dest_acc_en=False": 818,
+    "fp32_dest_acc_en=False + memory_layout=WIDTH_SHARDED": 654,
+    "fp32_dest_acc_en=False + memory_layout=BLOCK_SHARDED": 653,
+    "fp32_dest_acc_en=False + memory_layout=HEIGHT_SHARDED": 652,
+    "memory_layout=WIDTH_SHARDED": 586,
+    "memory_layout=BLOCK_SHARDED": 586,
+    "memory_layout=HEIGHT_SHARDED": 561,
+    "gamma_dtype=BFLOAT8_B": 140,
+    "fp32_dest_acc_en=False + gamma_dtype=BFLOAT8_B": 140,
+    "dtype=BFLOAT8_B + memory_layout=WIDTH_SHARDED": 102,
+    "dtype=BFLOAT8_B": 100,
+    "dtype=BFLOAT8_B + memory_layout=HEIGHT_SHARDED": 100,
+    "dtype=BFLOAT8_B + memory_layout=BLOCK_SHARDED": 100,
+    "dtype=BFLOAT8_B + fp32_dest_acc_en=False": 100,
+    "dtype=BFLOAT8_B + fp32_dest_acc_en=False + memory_layout=HEIGHT_SHARDED": 100,
+    "dtype=BFLOAT8_B + fp32_dest_acc_en=False + memory_layout=WIDTH_SHARDED": 100,
+    "dtype=BFLOAT8_B + fp32_dest_acc_en=False + memory_layout=BLOCK_SHARDED": 100,
+    "gamma_dtype=BFLOAT8_B + memory_layout=HEIGHT_SHARDED": 70,
+    "gamma_dtype=BFLOAT8_B + memory_layout=WIDTH_SHARDED": 70,
+    "gamma_dtype=BFLOAT8_B + memory_layout=BLOCK_SHARDED": 70,
+    "fp32_dest_acc_en=False + gamma_dtype=BFLOAT8_B + memory_layout=HEIGHT_SHARDED": 70,
+    "fp32_dest_acc_en=False + gamma_dtype=BFLOAT8_B + memory_layout=WIDTH_SHARDED": 70,
+    "fp32_dest_acc_en=False + gamma_dtype=BFLOAT8_B + memory_layout=BLOCK_SHARDED": 70,
+    "dtype=BFLOAT8_B + gamma_dtype=BFLOAT8_B": 20,
+    "dtype=BFLOAT8_B + gamma_dtype=BFLOAT8_B + memory_layout=HEIGHT_SHARDED": 20,
+    "dtype=BFLOAT8_B + gamma_dtype=BFLOAT8_B + memory_layout=WIDTH_SHARDED": 20,
+    "dtype=BFLOAT8_B + gamma_dtype=BFLOAT8_B + memory_layout=BLOCK_SHARDED": 20,
+    "dtype=BFLOAT8_B + fp32_dest_acc_en=False + gamma_dtype=BFLOAT8_B": 20,
+    "dtype=BFLOAT8_B + fp32_dest_acc_en=False + gamma_dtype=BFLOAT8_B + memory_layout=HEIGHT_SHARDED": 20,
+    "dtype=BFLOAT8_B + fp32_dest_acc_en=False + gamma_dtype=BFLOAT8_B + memory_layout=WIDTH_SHARDED": 20,
+    "dtype=BFLOAT8_B + fp32_dest_acc_en=False + gamma_dtype=BFLOAT8_B + memory_layout=BLOCK_SHARDED": 20
+  },
+  "infeasible_skipped": [
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_golden.py::test_op_loose[99991x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-rank=2]",
+      "axes": {
+        "dtype": "BFLOAT16",
+        "fp32_dest_acc_en": false,
+        "gamma_mode": "gamma",
+        "gamma_dtype": "BFLOAT16",
+        "layout": "TILE",
+        "gamma_layout": "TILE",
+        "memory_layout": "WIDTH_SHARDED",
+        "alignment": "h_non_aligned",
+        "rank": 2
+      },
+      "status": "skipped",
+      "failure_category": "infeasible"
+    },
+    {
+      "nodeid": "eval/golden_tests/rms_norm/test_golden.py::test_op_loose[99991x64-alignment=h_non_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=ROW_MAJOR-gamma_mode=gamma-layout=ROW_MAJOR-memory_layout=WIDTH_SHARDED-rank=2]",
+      "axes": {
+        "dtype": "BFLOAT16",
+        "fp32_dest_acc_en": false,
+        "gamma_mode": "gamma",
+        "gamma_dtype": "BFLOAT16",
+        "layout": "ROW_MAJOR",
+        "gamma_layout": "ROW_MAJOR",
+        "memory_layout": "WIDTH_SHARDED",
+        "alignment": "h_non_aligned",
+        "rank": 2
+      },
+      "status": "skipped",
+      "failure_category": "infeasible"
+    }
+  ],
+  "no_axes_found": [
+    "eval/golden_tests/rms_norm/test_regression.py::test_small_magnitude_input[32x64]",
+    "eval/golden_tests/rms_norm/test_regression.py::test_small_magnitude_input[64x128]",
+    "eval/golden_tests/rms_norm/test_regression.py::test_small_magnitude_input[128x256]",
+    "eval/golden_tests/rms_norm/test_regression.py::test_large_magnitude_input[32x64]",
+    "eval/golden_tests/rms_norm/test_regression.py::test_large_magnitude_input[64x128]",
+    "eval/golden_tests/rms_norm/test_regression.py::test_large_magnitude_input[128x256]",
+    "eval/golden_tests/rms_norm/test_regression.py::test_uniform_input[32x64]",
+    "eval/golden_tests/rms_norm/test_regression.py::test_uniform_input[64x128]",
+    "eval/golden_tests/rms_norm/test_regression.py::test_uniform_input[128x256]",
+    "eval/golden_tests/rms_norm/test_regression.py::test_positive_only_input[32x64]",
+    "eval/golden_tests/rms_norm/test_regression.py::test_positive_only_input[64x128]",
+    "eval/golden_tests/rms_norm/test_regression.py::test_positive_only_input[128x256]",
+    "eval/golden_tests/rms_norm/test_regression.py::test_negative_only_input[32x64]",
+    "eval/golden_tests/rms_norm/test_regression.py::test_negative_only_input[64x128]",
+    "eval/golden_tests/rms_norm/test_regression.py::test_negative_only_input[128x256]"
+  ]
+}

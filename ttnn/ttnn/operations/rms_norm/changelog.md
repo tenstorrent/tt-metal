@@ -153,3 +153,93 @@ Kept-but-flat (correct levers, held at their working defaults, not reverted):
 * **Blackhole DRAM NoC alignment is 64 B.** Placing gamma's tile row 0 with two per-face reads is
   illegal (the second face starts at stick offset +32 B); the staged `cb_gamma_rm` + `tilize` path,
   chunked at `GAMMA_INGEST_BLOCK`, is both legal and L1-bounded.
+
+---
+
+## Phase 0 — Verification pass
+
+- **Date**: 2026-08-19
+- **Device**: blackhole p150b, 13×10 compute grid.
+- **What was done**: independent verification of the Phase 0 implementation (registry conformance,
+  design/blocking-model conformance, helper usage, correctness mechanics), the golden suite +
+  `eval.verify_supported`, a precision baseline, and the refinement queue.
+
+### SUPPORTED at Phase 0 (unchanged by this pass — no drift found)
+
+`dtype=[float32, bfloat16]`, `fp32_dest_acc_en=[True]`, `layout=[TILE, ROW_MAJOR]`,
+`alignment=[tile_aligned, w_non_aligned, h_non_aligned]`, `rank=[2,3,4]`,
+`gamma_mode=[gamma, no_gamma]`, `gamma_dtype=[float32, bfloat16, "none"]`,
+`gamma_layout=[TILE, ROW_MAJOR, "none"]`, `memory_layout=[INTERLEAVED]`.
+`EXCLUSIONS=[{dtype: float32, fp32_dest_acc_en: False}]`.
+
+### Golden suite at Phase 0
+
+752 / 40 828 passed, **0 failed, 0 errors, 0 hangs**. Per `verifier_report.json`:
+**supported_pass 737**, xfail_expected 6 172, invalid_skipped 33 900, infeasible_skipped 2,
+no_axes_found 15 (all `test_regression.py`, all passed), and **supported_fail 0 / xpass_drift 0 /
+xfail_wrong_mode 0 / supported_marked_xfail 0**.
+`invalid_unexpected 2` — two `test_translated.py` bf8b cells that match an *author-scoped* INVALID
+entry but are not skipped by that file; the op refused them correctly. Feature-spec authoring issue,
+not an op defect.
+
+### Accuracy achieved (`test_rms_norm_precision_baseline.py`, 4 shapes × 2 dtypes)
+
+| dtype | PCC gate | max_abs_err | mean_abs_err | rel_rms_err | got/true ratio (median, p5..p95) |
+|---|---|---|---|---|---|
+| bfloat16 | ≥0.995, all pass | 0.043–0.100 | ~1.7e-3 | 3.3e-3 – 3.5e-3 | 1.00000, 0.9944..1.0056 |
+| float32 | ≥0.999, all pass | 0.013–0.029 | ~8e-4 | 1.2e-3 – 1.5e-3 | 0.99878, 0.9975..1.0000 |
+
+Flat in shape and in `W` — no accumulation drift as the reduced axis widens. bf16 sits below one bf16
+quantization step (0.39 %). fp32's tight 0.12 % low bias is the FPU tf32 truncation of the three
+multiplied operands, **not** a scale bug: the `w_non_aligned` shape's ratio is identical to the
+aligned shapes' (a padding-fold bug would be +15.5 % there), which is direct evidence risk R1 is
+handled. The baseline test asserts `|ratio_median − 1| < 0.02` so a regression trips loudly.
+
+### Issues found and fixed
+
+1. **DRY violation** — the CB set was described twice (L1 budget solver vs descriptor creation).
+   Unified into one `_cb_layout()`; the solver now *sums* it and `create_program_descriptor()`
+   *instantiates* it. A knob turn can no longer drift the budget away from the allocation.
+2. **`cb_sumsq` over-allocated in Regime A** (`2 × BLOCK_HT` pages where the second generation only
+   exists for Regime B's cross-chunk `Accumulate`). Now exact per regime; marginally widens Regime A's
+   L1 reach.
+3. **Output-placement hole in `validate()`** — an interleaved input with an explicit sharded
+   `memory_config=` request passed validation and would have been written through an interleaved
+   `TensorAccessor`. Now gated against `SUPPORTED["memory_layout"]`.
+4. **Attempted and reverted**: amortizing `tilize` init across the RM-gamma ingest loop
+   (`InitOnly`/`Neither`/`UninitOnly`) is numerically wrong here — the chunks are separate CB
+   reserve/push groups, and it corrupts every chunk after the first (PCC 0.24 / −0.018 / 0.0035).
+   Reason recorded in the kernel.
+
+No SUPPORTED value was added or removed (`xpass_drift = 0`), and no EXCLUSION was used to silence a
+failure.
+
+### Perf after the verification edits (non-regression baseline for Phase 1+)
+
+| name | shape | layout | Phase 0 ns | after this pass | delta |
+|---|---|---|---|---|---|
+| `grid_filling` | (1,1,8192,1024) | TILE | 93 415 | **93 656** | +0.3 % |
+| `wide_prefill` | (1,1,8192,7168) | TILE | 1 019 487 | **1 019 959** | +0.05 % |
+| `grid_starved` | (1,1,32,7168) | TILE | 76 149 | **76 161** | +0.02 % |
+| `smallest` | (32,17) | TILE | 3 267 | **3 221** | −1.4 % |
+| `row_major` | (1,1,8192,1024) | ROW_MAJOR | 95 053 | **95 881** | +0.9 % |
+
+All within measurement noise — the verification edits are perf-neutral.
+
+### Tests added
+
+`tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_precision_baseline.py` (PCC + abs/RMS error +
+the got/true ratio-spread scale-bug detector, 4 shapes × 2 dtypes).
+Existing: `test_rms_norm.py` (73 pass), `test_rms_norm_bench.py`. Whole op directory: **82 pass**.
+
+### Refinement queue
+
+`op_requirements.md` now carries 5 refinements at the 2:1 generality/perf cadence:
+1. numeric configurability (`bfloat8_b`, `fp32_dest_acc_en=False`) — **the gate on every perf phase**,
+   because every perf loose case runs at `fp32_dest_acc_en=False`;
+2. sharding-native `memory_layout` (HEIGHT local zero-copy CB = knob-turn; WIDTH/BLOCK cross-core
+   combine = scheme-change);
+3. perf — the flagged `(1,1,32,7168)` interleaved decode case and its 7× gate, via a gated
+   `Rt`→`Wt` split diversion;
+4. perf — wide-`W` prefill, fuse the pass-B multiplies to fit Regime A (single-read) at `Wt = 224`;
+5. perf completeness audit (`/perf-ceiling-dm` Mode D) over the full lever ledger.

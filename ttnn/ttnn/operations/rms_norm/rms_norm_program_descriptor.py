@@ -179,9 +179,28 @@ class BlockingPlan:
     regime: str
     num_row_blocks: int
     l1_cb_budget: int
+    # The frozen CB set this plan implies: ((cb_index, num_pages, page_bytes,
+    # kind), ...) straight out of _cb_layout().  create_program_descriptor
+    # instantiates exactly this — it never re-derives a page count.
+    cb_layout: tuple
+
+    def working_set_bytes(self) -> int:
+        return sum(pages * page_bytes for _, pages, page_bytes, _ in self.cb_layout)
 
 
-def _working_set_bytes(
+# --- The ONE description of the CB set ---------------------------------------
+# `_cb_layout` is the single source of truth for every circular buffer this op
+# creates: its page count, its page size and which tensor's data format it
+# carries.  The L1 budget solver SUMS this list, and create_program_descriptor
+# INSTANTIATES the same list — so the plan can never disagree with the
+# descriptors it produced (a drift that would silently mis-size the budget and
+# either OOM or under-use L1 the moment a block knob is turned).
+#
+# `kind` names the data format: "in" (input dtype), "out" (output dtype),
+# "gamma" (gamma dtype), "f32", "bf16".
+
+
+def _cb_layout(
     *,
     regime: str,
     block_ht: int,
@@ -201,45 +220,53 @@ def _working_set_bytes(
     T_g: int,
     T_f32: int,
     T_bf16: int,
-) -> int:
-    """Total L1 bytes the CB set costs for this knob assignment.
-
-    All CBs are statically allocated for the whole program, so this is a SUM
-    over every CB the configuration creates (not a per-phase max).
-    """
+):
+    """Return [(cb_index, num_pages, page_bytes, kind)] for this knob assignment."""
     wmax = max(wr, ws)
     if regime == "A":
+        # Regime A is single-chunk by construction: one block spans the whole
+        # per-core width.
         wr = ws = wmax = Wt_core
 
-    total = 0
-    # cb_input_tiles
-    total += in_depth * block_ht * wmax * T_in
-    # cb_sumsq (also the cross-chunk accumulator in Regime B -> 2x headroom)
-    total += 2 * block_ht * T_f32
-    # cb_rms_recip
-    total += block_ht * T_f32
-    # cb_reduce_scaler (bfloat16, mandatory format) — both regimes need the
-    # within-tile REDUCE_ROW finalize.
-    total += (2 if (regime == "B" and W_partial) else 1) * T_bf16
+    layout = [
+        (CB_INPUT_TILES, in_depth * block_ht * wmax, T_in, "in"),
+        # Regime B accumulates across W-chunks through this CB, so it needs the
+        # extra generation live; Regime A writes it once per row-block.
+        (CB_SUMSQ, (2 if regime == "B" else 1) * block_ht, T_f32, "f32"),
+        (CB_RMS_RECIP, block_ht, T_f32, "f32"),
+        # bfloat16 is mandatory for the reduce scaler.  Both regimes need the
+        # within-tile REDUCE_ROW finalize; only Regime B also needs the PARTIAL
+        # tile that zeroes the pad columns of the last W-tile.
+        (CB_REDUCE_SCALER, 2 if (regime == "B" and W_partial) else 1, T_bf16, "bf16"),
+    ]
     if regime == "A":
-        # cb_sumsq_acc — sum_of_squares' element-wise tile accumulator, which the
-        # finalize reduce collapses along W.
-        total += block_ht * T_f32
+        # sum_of_squares' element-wise tile accumulator, collapsed along W by the
+        # finalize reduce.
+        layout.append((CB_SUMSQ_ACC, block_ht, T_f32, "f32"))
     else:
-        # cb_squared — sequential-helper intermediate: full block per call
-        total += block_ht * wr * T_in
+        # Sequential-helper intermediate: must hold the FULL block per call.
+        layout.append((CB_SQUARED, block_ht * wr, T_in, "in"))
     if has_gamma:
-        total += ws * T_g  # cb_gamma_tiles
-        total += block_ht * ws * T_in  # cb_normed
+        layout.append((CB_GAMMA_TILES, ws, T_g, "gamma"))
         if gamma_is_row_major:
-            total += gamma_ingest_block * T_g  # cb_gamma_rm (stick staging)
-    # cb_output_tiles — streamed to the writer on the TILE path, but feeds the
-    # sequential untilize helper on the RM path (must hold the full block).
-    total += (out_depth if tile_out else 1) * block_ht * ws * T_in
+            layout.append((CB_GAMMA_RM, gamma_ingest_block, T_g, "gamma"))
+        layout.append((CB_NORMED, block_ht * ws, T_in, "in"))
+    # Streamed to the writer on the TILE path, but feeds the sequential untilize
+    # helper on the RM path (must then hold the full block).
+    layout.append((CB_OUTPUT_TILES, (out_depth if tile_out else 1) * block_ht * ws, T_in, "out"))
     if is_row_major:
-        total += rm_depth * wmax * T_in  # cb_rm_in  (one tile-row of sticks)
-        total += rm_depth * ws * T_in  # cb_rm_out (one tile-row of tiles)
-    return total
+        layout.append((CB_RM_IN, rm_depth * wmax, T_in, "in"))
+        layout.append((CB_RM_OUT, rm_depth * ws, T_in, "out"))
+    return layout
+
+
+def _working_set_bytes(**kwargs) -> int:
+    """Total L1 bytes the CB set costs for this knob assignment.
+
+    All CBs are statically allocated for the whole program, so this is a SUM over
+    every CB the configuration creates (not a per-phase max).
+    """
+    return sum(pages * page_bytes for _, pages, page_bytes, _ in _cb_layout(**kwargs))
 
 
 def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_config, levers=None) -> BlockingPlan:
@@ -413,6 +440,19 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         regime=regime,
         num_row_blocks=_div_up(Rt, block_ht),
         l1_cb_budget=l1_cb_budget,
+        cb_layout=tuple(
+            _cb_layout(
+                regime=regime,
+                block_ht=block_ht,
+                in_depth=in_depth,
+                out_depth=out_depth,
+                rm_depth=rm_depth,
+                wr=wr,
+                ws=wsc,
+                gamma_ingest_block=gamma_ingest_block,
+                **common,
+            )
+        ),
     )
 
 
@@ -457,70 +497,19 @@ def create_program_descriptor(
     cores = ttnn.grid_to_cores(num_cores, grid.x, grid.y, row_wise)
 
     # ---------------- circular buffers ---------------------------------------
-    wmax = max(plan.WT_REDUCE_BLOCK, plan.WT_SCALE_BLOCK)
+    # Instantiated straight off plan.cb_layout — the SAME list the L1 budget
+    # solver summed.  No page count is re-derived here.
+    fmt_of_kind = {
+        "in": input_tensor.dtype,
+        "out": output_tensor.dtype,
+        "gamma": gamma.dtype if plan.has_gamma else input_tensor.dtype,
+        "f32": ttnn.float32,
+        "bf16": ttnn.bfloat16,
+    }
     cbs = [
-        _cb(
-            CB_INPUT_TILES,
-            plan.IN_BUF_DEPTH * plan.BLOCK_HT * wmax,
-            plan.in_tile_bytes,
-            input_tensor.dtype,
-            all_cores,
-        ),
-        _cb(CB_SUMSQ, 2 * plan.BLOCK_HT, plan.f32_tile_bytes, ttnn.float32, all_cores),
-        _cb(CB_RMS_RECIP, plan.BLOCK_HT, plan.f32_tile_bytes, ttnn.float32, all_cores),
-        _cb(
-            CB_OUTPUT_TILES,
-            (plan.OUT_BUF_DEPTH if plan.tile_out else 1) * plan.BLOCK_HT * plan.WT_SCALE_BLOCK,
-            plan.in_tile_bytes,
-            output_tensor.dtype,
-            all_cores,
-        ),
+        _cb(index, num_pages, page_bytes, fmt_of_kind[kind], all_cores)
+        for index, num_pages, page_bytes, kind in plan.cb_layout
     ]
-    cbs.append(
-        _cb(
-            CB_REDUCE_SCALER,
-            2 if (plan.regime == "B" and plan.W_partial) else 1,
-            plan.bf16_tile_bytes,
-            ttnn.bfloat16,
-            all_cores,
-        )
-    )
-    if plan.regime == "A":
-        cbs.append(_cb(CB_SUMSQ_ACC, plan.BLOCK_HT, plan.f32_tile_bytes, ttnn.float32, all_cores))
-    else:
-        cbs.append(
-            _cb(
-                CB_SQUARED,
-                plan.BLOCK_HT * plan.WT_REDUCE_BLOCK,
-                plan.in_tile_bytes,
-                input_tensor.dtype,
-                all_cores,
-            )
-        )
-    if plan.has_gamma:
-        cbs.append(_cb(CB_GAMMA_TILES, plan.WT_SCALE_BLOCK, plan.gamma_tile_bytes, gamma.dtype, all_cores))
-        if plan.gamma_is_row_major:
-            cbs.append(_cb(CB_GAMMA_RM, plan.GAMMA_INGEST_BLOCK, plan.gamma_tile_bytes, gamma.dtype, all_cores))
-        cbs.append(
-            _cb(
-                CB_NORMED,
-                plan.BLOCK_HT * plan.WT_SCALE_BLOCK,
-                plan.in_tile_bytes,
-                input_tensor.dtype,
-                all_cores,
-            )
-        )
-    if plan.is_row_major:
-        cbs.append(_cb(CB_RM_IN, plan.RM_BUF_DEPTH * wmax, plan.in_tile_bytes, input_tensor.dtype, all_cores))
-        cbs.append(
-            _cb(
-                CB_RM_OUT,
-                plan.RM_BUF_DEPTH * plan.WT_SCALE_BLOCK,
-                plan.in_tile_bytes,
-                output_tensor.dtype,
-                all_cores,
-            )
-        )
 
     # ---------------- compile-time args --------------------------------------
     # One shared geometry prefix so reader / writer / compute cannot drift.

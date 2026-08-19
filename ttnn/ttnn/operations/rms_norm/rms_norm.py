@@ -25,7 +25,6 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .rms_norm_program_descriptor import create_program_descriptor
 
-
 # ---------------------------------------------------------------------------
 # Precision — one exported factory, per references/precision_convention.md.
 # The golden axis tagger (eval/golden_tests/rms_norm/axes.py) reads this same
@@ -154,6 +153,18 @@ def validate(input_tensor, *, gamma=None, epsilon=1e-6, compute_kernel_config=No
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
             raise UnsupportedAxisValue(f"rms_norm: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
+
+    # 1b. The OUTPUT placement is a separate surface: `memory_config` selects
+    #     where the result lands, and the writer only knows how to address an
+    #     interleaved buffer.  Without this gate an interleaved-in /
+    #     sharded-out request would allocate a sharded output and then write it
+    #     through an interleaved TensorAccessor — silent corruption instead of
+    #     an honest refusal.
+    if memory_config is not None and memory_config.memory_layout not in SUPPORTED["memory_layout"]:
+        raise UnsupportedAxisValue(
+            f"rms_norm: memory_config.memory_layout={memory_config.memory_layout!r} "
+            f"not in SUPPORTED {SUPPORTED['memory_layout']}"
+        )
 
     # 2. EXCLUSIONS — cell-level inside SUPPORTED
     for exc in EXCLUSIONS:

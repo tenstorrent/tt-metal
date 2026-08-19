@@ -83,13 +83,22 @@ constexpr uint32_t DEST_BLOCK = (DEST_BLOCK_CT < ckl::DEST_AUTO_LIMIT) ? DEST_BL
 // pays zero extra copies.
 constexpr uint32_t cb_scale_out = HAS_GAMMA ? cb_normed : cb_output_tiles;
 
-// ROW_MAJOR gamma: tilize `n` staged stick-tiles into cb_gamma_tiles.  `n` is
-// always a multiple of GAMMA_INGEST_BLOCK by construction of the host plan, so
-// this never over-produces gamma tiles.  Only tile row 0 of each staged block
-// carries data; BroadcastDim::Row reads nothing else.
-ALWI void ingest_gamma(uint32_t n) {
+// ROW_MAJOR gamma: tilize N staged stick-tiles into cb_gamma_tiles.  N is a
+// compile-time multiple of GAMMA_INGEST_BLOCK by construction of the host plan
+// (Wt_core in Regime A, WT_SCALE_BLOCK in Regime B), so this never
+// over-produces gamma tiles.  Only tile row 0 of each staged block carries
+// data; BroadcastDim::Row reads nothing else.
+//
+// NOTE: each chunk gets a FULL tilize init/uninit.  The helper's back-to-back
+// InitOnly/Neither/UninitOnly form was tried here and is NOT correct for this
+// loop: the chunks are separate cb_reserve/push groups on cb_gamma_tiles, and
+// skipping the per-call init silently corrupts every chunk after the first
+// (measured: PCC 0.0035-0.24 on (1,1,32,4096) and (1,1,32,16384)).  Keep
+// InitAndUninit.
+template <uint32_t N>
+ALWI void ingest_gamma() {
     if constexpr (HAS_GAMMA && GAMMA_IS_ROW_MAJOR) {
-        for (uint32_t o = 0; o < n; o += GAMMA_INGEST_BLOCK) {
+        for (uint32_t o = 0; o < N; o += GAMMA_INGEST_BLOCK) {
             ckl::tilize<GAMMA_INGEST_BLOCK, cb_gamma_rm, cb_gamma_tiles>(1);
         }
     }
@@ -135,7 +144,7 @@ void kernel_main() {
     // Regime A holds the whole per-core gamma width resident for the whole
     // kernel: ingested exactly once, never popped.
     if constexpr (REGIME_A) {
-        ingest_gamma(Wt_core);
+        ingest_gamma<Wt_core>();
     }
 
     constexpr auto partial_scaler =
@@ -211,7 +220,7 @@ void kernel_main() {
             for (uint32_t c = 0; c < NUM_SCALE_CHUNKS; ++c) {
                 // Ordered to match the reader's push order (gamma, then input);
                 // reversing it deadlocks on the depth-1 staging CB.
-                ingest_gamma(WT_SCALE_BLOCK);
+                ingest_gamma<WT_SCALE_BLOCK>();
                 if constexpr (IS_ROW_MAJOR) {
                     ckl::tilize<WT_SCALE_BLOCK, cb_rm_in, cb_input_tiles>(BLOCK_HT);
                 }
