@@ -18,7 +18,6 @@
 #include <tt_stl/assert.hpp>
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
-#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -34,22 +33,6 @@ using namespace tt::tt_metal::distributed;
 namespace tt::tt_fabric {
 
 namespace {
-
-// When DistributedContext is initialized (MPI / tt-run split layout), prefix instance names with mgd{id}_ using
-// subcontext_id() so split-job ranks load disjoint logical names.
-std::optional<int> subcontext_id_for_instance_name_uniquify() {
-    using tt::tt_metal::distributed::multihost::DistributedContext;
-    if (DistributedContext::is_initialized()) {
-        const auto& world = DistributedContext::get_current_world();
-        if (world != nullptr) {
-            const auto sc = world->subcontext_id();
-            if (sc.has_value()) {
-                return *sc.value();
-            }
-        }
-    }
-    return std::nullopt;
-}
 
 std::string read_file_to_string(const std::filesystem::path& file_path) {
     std::ifstream input(file_path);
@@ -163,7 +146,8 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
 
 }  // namespace
 
-MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
+MeshGraphDescriptor::MeshGraphDescriptor(
+    const std::string& text_proto, const bool backwards_compatible, std::optional<int> name_uniquify_id) :
     top_level_id_(static_cast<GlobalNodeId>(-1)) {
     proto::MeshGraphDescriptor temp_proto;
     google::protobuf::TextFormat::Parser parser;
@@ -185,9 +169,10 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
 
     populate();
 
-    // Prefix mgd{id}_ when DistributedContext reports a split-job sub-context id (MPI / tt-run).
-    if (const auto sid = subcontext_id_for_instance_name_uniquify(); sid.has_value()) {
-        const std::string prefix = "mgd" + std::to_string(*sid) + "_";
+    // Prefix mgd{id}_ when the caller supplies a split-job sub-context id (MPI / tt-run). The id is passed in
+    // rather than queried from DistributedContext here, keeping this descriptor runtime-free.
+    if (name_uniquify_id.has_value()) {
+        const std::string prefix = "mgd" + std::to_string(*name_uniquify_id) + "_";
         instances_by_name_.clear();
         for (auto& [_, inst] : instances_) {
             inst.name = prefix + inst.name;
@@ -199,8 +184,10 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
 }
 
 MeshGraphDescriptor::MeshGraphDescriptor(
-    const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
-    MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {}
+    const std::filesystem::path& text_proto_file_path,
+    const bool backwards_compatible,
+    std::optional<int> name_uniquify_id) :
+    MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible, name_uniquify_id) {}
 
 MeshGraphDescriptor::~MeshGraphDescriptor() = default;
 

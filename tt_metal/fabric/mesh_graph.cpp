@@ -27,6 +27,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include "protobuf/mesh_graph_descriptor.pb.h"
 #include <numeric>
 #include <set>
@@ -38,6 +39,25 @@ std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric:
 }
 
 namespace tt::tt_fabric {
+
+namespace {
+
+// Live-path sub-context id for MeshGraphDescriptor instance-name uniquification. Queried here (in the
+// runtime-linked fabric module) rather than inside MeshGraphDescriptor so the descriptor stays runtime-free.
+// Returns the split-job sub-context id when DistributedContext is initialized (MPI / tt-run), else nullopt.
+std::optional<int> runtime_subcontext_id() {
+    using tt::tt_metal::distributed::multihost::DistributedContext;
+    if (DistributedContext::is_initialized()) {
+        if (const auto& world = DistributedContext::get_current_world(); world != nullptr) {
+            if (const auto sc = world->subcontext_id(); sc.has_value()) {
+                return *sc.value();
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+}  // namespace
 
 constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
 
@@ -112,7 +132,7 @@ MeshGraph::MeshGraph(
     if (mesh_graph_desc_file_path.ends_with(".textproto")) {
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
         mesh_graph_desc_file_path_ = filepath;
-        mesh_graph_descriptor_.emplace(filepath, true);
+        mesh_graph_descriptor_.emplace(filepath, true, runtime_subcontext_id());
         this->initialize_from_mgd(
             mesh_graph_descriptor_.value(), fabric_config, tt::Cluster::is_ubb_galaxy(cluster_type));
     } else {

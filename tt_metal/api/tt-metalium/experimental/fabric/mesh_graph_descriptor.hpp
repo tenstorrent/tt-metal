@@ -109,8 +109,19 @@ struct AsicPinningGroup {
 class MeshGraphDescriptor {
 public:
     // backwards_compatible will enable all checks related to MGD 1.0. This will limit the functionality of MGD 2.0
-    explicit MeshGraphDescriptor(const std::string& text_proto, bool backwards_compatible = false);
-    explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, bool backwards_compatible = false);
+    //
+    // name_uniquify_id: when set, every instance name is prefixed with "mgd{id}_" so split-job partitions load
+    // disjoint logical names. This keeps the descriptor runtime-free: the id (a DistributedContext sub-context id
+    // in the live path) is supplied by the caller rather than queried from the runtime here. Offline consumers
+    // leave it unset.
+    explicit MeshGraphDescriptor(
+        const std::string& text_proto,
+        bool backwards_compatible = false,
+        std::optional<int> name_uniquify_id = std::nullopt);
+    explicit MeshGraphDescriptor(
+        const std::filesystem::path& text_proto_file_path,
+        bool backwards_compatible = false,
+        std::optional<int> name_uniquify_id = std::nullopt);
 
     ~MeshGraphDescriptor();
 
