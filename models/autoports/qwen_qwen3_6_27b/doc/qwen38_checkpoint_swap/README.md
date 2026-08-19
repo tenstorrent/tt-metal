@@ -213,8 +213,8 @@ longer true.
 | Eval — GPQA, 10-doc subset | **done** — 0.70, but inflated; see the text-quality section |
 | Eval — GPQA, full 198 docs at concurrency 32 | **run, invalid** — 0.0253, because 193/198 responses came back empty |
 | Eval — GPQA, full 198 docs at concurrency 1 | in progress (~7.3 min/doc measured, so ~24 h) |
-| Graded benchmark point (isl 128 / osl 128 / c1, 8 prompts) | in progress |
-| Benchmark sweep, long isl → 65,535 | in progress (same run) |
+| Graded benchmark point (isl 128 / osl 128 / c1, 8 prompts) | **done** — ttft 3,643 ms vs 62 target, tput_user 16.3 vs 41 |
+| Benchmark sweep, long isl → 65,536 | **done** — 9 points; the 10th (isl 131,072) hit the harness timeout |
 | Benchmark at concurrency 32 | to do — expected to fail, see below |
 | Spec tests / API conformance | to do |
 | Full release workflow end to end | not yet green; five branch blockers above |
@@ -243,6 +243,34 @@ that target is self-flagged ASSUMED and extrapolated from Qwen3-32B on an 8-devi
 error — it surfaces as a plausible low score. A CI run of this configuration would have reported
 "Qwen3.8-27B scores 2.5% on GPQA" instead of "serving failed at concurrency 32". Any release gate on
 this model should assert non-empty response rate before trusting an accuracy number.
+
+## Benchmarks (concurrency 1) — and performance parity with 3.6
+
+Graded point, isl 128 / osl 128 / c1 / 8 prompts, 8 completed 0 failed:
+
+| metric | Qwen3.8-27B (this port) | Qwen3.6-27B (its own release sweep) | target |
+|---|---|---|---|
+| ttft, p50 | **3,642 ms** | 3,928 ms | 62 ms |
+| tput_user | **16.3 tok/s** | 16.34 tok/s | 41 tok/s |
+
+The two checkpoints land on the same numbers — 3.8 marginally faster on TTFT. Together with the
+layer PCC and teacher-forcing agreement, that closes the performance half of the question: this
+implementation runs 3.8 weights at 3.6's speed as well as 3.6's accuracy.
+
+Both miss the targets, but those targets are self-flagged ASSUMED, NOT VALIDATED and extrapolated
+from Qwen3-32B on an **8-device t3k** while this runs on 4.
+
+**Prefill is the weak axis**, and it is what makes the graded TTFT miss by 59x. Time to first token
+scales close to linearly at roughly **28 ms per input token**:
+
+| isl | 128 | 1,024 | 4,096 | 16,384 | 65,536 | 131,072 |
+|---|---|---|---|---|---|---|
+| ttft | 3.6 s | 28.6 s | 114 s | 457 s | **1,837 s** | timeout (rc 124) |
+
+That matches the blocker recorded against Qwen3.6-27B in agentic-research's
+`bh-model-evals.md` ("prefill"), so it is a property of the shared implementation rather than of
+this checkpoint. Sweep coverage here (9 points, to isl 65,536) is wider than the 7 points recorded
+for 3.6.
 
 ## Open decisions (not measurements)
 
