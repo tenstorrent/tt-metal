@@ -82,6 +82,7 @@ def test_perf_debug_ops_csv():
 
     for row in rows:
         prog = int(row["GLOBAL CALL COUNT"])
+        assert int(row["EXECUTION"]) == 0, f"untraced ops must have one execution: {row}"
         cores = int(row["CORE COUNT"])
         start_cyc = int(row["DEVICE KERNEL START CYCLE"])
         end_cyc = int(row["DEVICE KERNEL END CYCLE"])
