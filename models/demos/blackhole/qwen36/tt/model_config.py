@@ -497,6 +497,36 @@ class Qwen36ModelArgs(ModelArgs):
                 use_height_and_width_as_shard_shape=True,
             )
 
+        # Permuted-head_dim full-width RoPE. ON for Wormhole 9B N300 (tpc.rope_permuted_enabled);
+        # see that helper for the measurements and attention/rope_tp.py's rope_channel_perm for the
+        # derivation.
+        self.rope_permuted_enabled = tpc.rope_permuted_enabled(self)
+        # The ONE grid the decode-mode rotary runs on, for Q and K both: the NATURAL
+        # one-user-per-core height shard. Sharing it between Q and K is what lets a single cos/sin
+        # pair serve both (the sharded rotary lays its kernels on the input's grid, so cos/sin must
+        # live on the same cores as the tensor being rotated).
+        #
+        # TRIED AND REJECTED: pointing this at kv_cache_write_k_shard_cfg (the SHIFTED half) so K's
+        # rotary output would land in the fused KV write's layout directly and save K's reshard --
+        # the rotary copies its output shard spec from its input, so it structurally works, and
+        # test_attention_tp.py passes on it at PCC 1.00000. It is still WRONG: on
+        # test_model_tp.py::test_model_tp_decode_batched (B=8, the batched-vs-B1-oracle contract)
+        # the worst per-user step-1 PCC went 0.9436 (baseline) -> 0.870 with the shifted grid, while
+        # this natural grid measures 0.9456, i.e. baseline to within noise. Step 0 is clean and only
+        # step 1 degrades, which points at what got WRITTEN to the KV cache on step 0 rather than at
+        # the rotation itself -- the same family as the documented NaN footgun above, where
+        # nlp_create_qkv_heads_decode silently mis-writes a non-(0,0)-origin grid. Do not re-apply
+        # this without a per-user KV-cache-contents check on a non-(0,0)-origin grid; the +1 reshard
+        # it saves is not worth re-opening that.
+        self.rope_k_shard_cfg = self.kv_update_shard_cfg
+
+        # Attention projection weights (QKV in-proj + wo out-proj) stay bfloat8_b. bfp4 is faster
+        # there -- these decode matmuls are DRAM-bandwidth-bound, so a narrower weight dtype is a real
+        # -41% to -43% -- but the end-to-end quality cost is disproportionate: it moves the model's
+        # teacher-forced perplexity by 1.6-2.8%, an order of magnitude past every accuracy trade this
+        # codebase has otherwise accepted. Not worth it (tests/perf/test_decode_weight_dtype_sweep.py
+        # has the full measurement, both speed and quality).
+
     def _set_hf_params(self, checkpoint_dir):
         # trust_remote_code before base AutoConfig load.
         self.trust_remote_code_hf = True
