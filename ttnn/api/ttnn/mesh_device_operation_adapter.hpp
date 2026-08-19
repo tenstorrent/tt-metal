@@ -662,15 +662,8 @@ public:
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
                     }
                     // Cache hit never rebuilds; re-apply hash-excluded args via the override hook.
-                    if constexpr (factory_has_override_runtime_arguments()) {
+                    if constexpr (has_override_runtime_arguments()) {
                         DescriptorFactory::override_runtime_arguments(
-                            program,
-                            attrs,
-                            tensor_args,
-                            tensor_return_value,
-                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
-                    } else if constexpr (device_op_has_override_runtime_arguments()) {
-                        DeviceOperation::override_runtime_arguments(
                             program,
                             attrs,
                             tensor_args,
