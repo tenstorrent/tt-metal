@@ -173,6 +173,7 @@ def rms_norm(
     epsilon: float = 1e-6,
     compute_kernel_config: "ttnn.ComputeConfigDescriptor" = None,
     memory_config: "ttnn.MemoryConfig" = None,
+    _levers: dict = None,
 ) -> "ttnn.Tensor":
     """Root-mean-square normalization along the last dimension.
 
@@ -190,6 +191,11 @@ def rms_norm(
     `memory_config` selects the OUTPUT placement (default: the input's).  Phase 0
     supports only INTERLEAVED, so a sharded request is refused by validate()
     through the `memory_layout` axis rather than silently ignored.
+
+    `_levers` is an INTERNAL perf-bench hook (see
+    rms_norm_program_descriptor.LEVER_DEFAULTS): a dict overriding individual
+    perf knobs so `_bench_rms_norm.py` can measure a lever's counterfactual
+    without editing a kernel.  Omitted = every lever at its applied default.
     """
     validate(
         input_tensor,
@@ -217,6 +223,7 @@ def rms_norm(
         output_tensor,
         epsilon=epsilon,
         compute_kernel_config=cfg,
+        levers=_levers,
     )
 
     tensors = [input_tensor] if gamma is None else [input_tensor, gamma]

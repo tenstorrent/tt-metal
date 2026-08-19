@@ -41,6 +41,31 @@ L1_RESERVED_BYTES = 256 * 1024
 # Core-count knob.  None == the full compute grid (Phase 0 default, lever A0).
 ACTIVE_CORE_CAP: Optional[int] = None
 
+# --- perf levers -------------------------------------------------------------
+# Every entry is a live knob whose DEFAULT is the applied (fast) setting; the
+# value shown in the comment is the counterfactual "off" arm that
+# `_bench_rms_norm.py` measures against.  Threaded in as `levers=dict(...)`, so a
+# lever can be re-measured on a new shape without editing a kernel.
+LEVER_DEFAULTS = {
+    "double_buffer": 1,  # C16 - 0: force every streaming CB to depth 1
+    "barrier_per_block": 1,  # B7  - 0: one noc barrier per transaction
+    "noc_split": 1,  # B9  - 0: reader and writer both on NOC_0
+    "row_wise": 1,  # A1  - 0: split_work_to_cores column-wise
+    "active_cores": 0,  # A0  - 0: full grid; N: cap the active core count
+    "block_ht": 0,  # compute_block_size - 0: solver; N: force BLOCK_HT
+    "dest_block": 0,  # compute_block_size - 0: solver; N: force DEST_BLOCK
+    "coarse_chunk": 1,  # block-size fidelity - 0: force the W-chunk to 1 tile
+    "coalesce": 1,  # B5/B6 - 0: split each tile transfer into two half-tile ones
+    # --- /perf-measure ablation arms (payload stubbed, sync scaffolding kept) ---
+    "stub_dm": 0,  # 1: reader/writer keep every CB op + barrier, issue no NoC transfer
+    "stub_compute": 0,  # 1: eltwise chains keep their CB lifecycle, do no math
+}
+
+
+def _lever(levers, name):
+    return LEVER_DEFAULTS[name] if levers is None else levers.get(name, LEVER_DEFAULTS[name])
+
+
 # Upper bound on the ROW_MAJOR-gamma staging CB (cb_gamma_rm).  The staging CB
 # is pure boot/ingest scaffolding, so it gets a small slice of L1; the ingest is
 # chunked at GAMMA_INGEST_BLOCK to stay inside it.
@@ -217,7 +242,7 @@ def _working_set_bytes(
     return total
 
 
-def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_config) -> BlockingPlan:
+def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_config, levers=None) -> BlockingPlan:
     """The ONLY place block factors, buffer depths and the regime are decided."""
     shape = list(input_tensor.shape)
     is_row_major = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -239,6 +264,9 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
     l1_cb_budget = ttnn.get_max_worker_l1_unreserved_size() - L1_RESERVED_BYTES
 
     dest_limit = _dest_limit(compute_kernel_config)
+    forced_dest = _lever(levers, "dest_block")
+    if forced_dest:
+        dest_limit = min(dest_limit, forced_dest)
 
     common = dict(
         Wt_core=Wt_core,
@@ -282,8 +310,9 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
     # --- Grid / core count (needed to cap BLOCK_HT so cores are not starved) -
     grid = device.compute_with_storage_grid_size()
     grid_cores = grid.x * grid.y
-    if ACTIVE_CORE_CAP is not None:
-        grid_cores = min(grid_cores, ACTIVE_CORE_CAP)
+    core_cap = _lever(levers, "active_cores") or ACTIVE_CORE_CAP
+    if core_cap:
+        grid_cores = min(grid_cores, core_cap)
     # Coarsest useful row-block: any coarser and some cores get no work at all.
     max_block_ht = max(1, _div_up(Rt, max(1, grid_cores)))
     max_block_ht = min(max_block_ht, dest_limit)
@@ -311,23 +340,29 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         # the same value: they share cb_input_tiles / cb_rm_in, whose page count
         # must be a multiple of BOTH access granularities.
         wr = wsc = 1
-        for cand in range(Wt_core, 0, -1):
-            if Wt_core % cand != 0:
-                continue
-            if ws_bytes("B", 1, 1, 1, 1, cand, cand) <= l1_cb_budget:
-                wr = wsc = cand
-                break
+        if _lever(levers, "coarse_chunk"):
+            for cand in range(Wt_core, 0, -1):
+                if Wt_core % cand != 0:
+                    continue
+                if ws_bytes("B", 1, 1, 1, 1, cand, cand) <= l1_cb_budget:
+                    wr = wsc = cand
+                    break
 
     # Allocation priority (movement-dominated op: overlap beats amortization):
     #   1. double-buffer the streaming CBs (lever C16, measured 2.78x)
     #   2. grow BLOCK_HT (per-block-overhead amortization)
     #   3. grow IN_BUF_DEPTH further
-    if ws_bytes(regime, block_ht, 2, 2, 2, wr, wsc) <= l1_cb_budget:
-        in_depth = out_depth = rm_depth = 2
-    elif ws_bytes(regime, block_ht, 2, 1, 2, wr, wsc) <= l1_cb_budget:
-        in_depth = rm_depth = 2
-    elif ws_bytes(regime, block_ht, 1, 1, 2, wr, wsc) <= l1_cb_budget:
-        rm_depth = 2
+    if _lever(levers, "double_buffer"):
+        if ws_bytes(regime, block_ht, 2, 2, 2, wr, wsc) <= l1_cb_budget:
+            in_depth = out_depth = rm_depth = 2
+        elif ws_bytes(regime, block_ht, 2, 1, 2, wr, wsc) <= l1_cb_budget:
+            in_depth = rm_depth = 2
+        elif ws_bytes(regime, block_ht, 1, 1, 2, wr, wsc) <= l1_cb_budget:
+            rm_depth = 2
+
+    forced_block_ht = _lever(levers, "block_ht")
+    if forced_block_ht:
+        max_block_ht = min(max_block_ht, forced_block_ht)
 
     while (
         block_ht < max_block_ht
@@ -335,8 +370,9 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
     ):
         block_ht += 1
 
-    while in_depth < 4 and ws_bytes(regime, block_ht, in_depth + 1, out_depth, rm_depth, wr, wsc) <= l1_cb_budget:
-        in_depth += 1
+    if _lever(levers, "double_buffer"):
+        while in_depth < 4 and ws_bytes(regime, block_ht, in_depth + 1, out_depth, rm_depth, wr, wsc) <= l1_cb_budget:
+            in_depth += 1
 
     assert Wt_core % wr == 0 and Wt_core % wsc == 0, "W-chunk must divide Wt_core (CB-wrap constraint)"
 
@@ -395,17 +431,20 @@ def create_program_descriptor(
     *,
     epsilon: float,
     compute_kernel_config,
+    levers=None,
 ) -> "ttnn.ProgramDescriptor":
     device = input_tensor.device()
-    plan = blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_config)
+    plan = blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_config, levers)
 
     # ---------------- work distribution over the INDEPENDENT axis ------------
     grid = device.compute_with_storage_grid_size()
-    if ACTIVE_CORE_CAP is not None:
+    core_cap = _lever(levers, "active_cores") or ACTIVE_CORE_CAP
+    if core_cap:
         # Truncate the grid row-wise so the cap keeps the DRAM-facing spread.
-        rows = max(1, _div_up(ACTIVE_CORE_CAP, grid.x))
+        rows = max(1, _div_up(core_cap, grid.x))
         grid = ttnn.CoreCoord(grid.x, min(grid.y, rows))
 
+    row_wise = bool(_lever(levers, "row_wise"))  # lever A1: spread along the DRAM-facing axis
     (
         num_cores,
         all_cores,
@@ -413,9 +452,9 @@ def create_program_descriptor(
         core_group_2,
         blocks_per_core_g1,
         blocks_per_core_g2,
-    ) = ttnn.split_work_to_cores(grid, plan.num_row_blocks, True)
+    ) = ttnn.split_work_to_cores(grid, plan.num_row_blocks, row_wise)
 
-    cores = ttnn.grid_to_cores(num_cores, grid.x, grid.y, True)
+    cores = ttnn.grid_to_cores(num_cores, grid.x, grid.y, row_wise)
 
     # ---------------- circular buffers ---------------------------------------
     wmax = max(plan.WT_REDUCE_BLOCK, plan.WT_SCALE_BLOCK)
@@ -505,6 +544,9 @@ def create_program_descriptor(
         plan.gamma_tile_bytes,  # 16
         plan.in_tile_bytes,  # 17
         plan.GAMMA_INGEST_BLOCK,  # 18
+        _lever(levers, "barrier_per_block"),  # 19 (lever B7 off-arm)
+        _lever(levers, "stub_dm"),  # 20 (ablation arm)
+        _lever(levers, "coalesce"),  # 21 (lever B5/B6 off-arm)
     ]
 
     # ---------------- reader --------------------------------------------------
@@ -550,19 +592,28 @@ def create_program_descriptor(
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),
+        config=(
+            ttnn.ReaderConfigDescriptor()
+            if _lever(levers, "noc_split")
+            else ttnn.DataMovementConfigDescriptor(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0)
+        ),
     )
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt,
-        config=ttnn.WriterConfigDescriptor(),
+        config=(
+            ttnn.WriterConfigDescriptor()
+            if _lever(levers, "noc_split")
+            else ttnn.DataMovementConfigDescriptor(ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_0)
+        ),
     )
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct_args,
+        defines=([("CKL_ELTWISE_CHAIN_SKIP_COMPUTE", "1")] if _lever(levers, "stub_compute") else []),
         runtime_args=compute_rt,
         # Pass-through: the caller's descriptor is handed over verbatim.
         config=compute_kernel_config,

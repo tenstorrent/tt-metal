@@ -82,13 +82,19 @@ constexpr uint32_t DEST_BLOCK_CT = get_compile_time_arg_val(15);
 constexpr uint32_t GAMMA_TILE_BYTES = get_compile_time_arg_val(16);
 constexpr uint32_t IN_TILE_BYTES = get_compile_time_arg_val(17);
 constexpr uint32_t GAMMA_INGEST_BLOCK = get_compile_time_arg_val(18);
+// Lever B7: 1 = one noc barrier per block (applied), 0 = one per transaction.
+constexpr uint32_t BARRIER_PER_BLOCK = get_compile_time_arg_val(19);
+// /perf-measure ablation: keep every CB op and barrier, issue no NoC transfer.
+constexpr uint32_t SKIP_DM_PAYLOAD = get_compile_time_arg_val(20);
+// Lever B5/B6: 1 = one whole-page transaction per tile (applied), 0 = two half-page ones.
+constexpr uint32_t COALESCE = get_compile_time_arg_val(21);
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t NUM_REDUCE_CHUNKS = Wt_core / WT_REDUCE_BLOCK;
 constexpr uint32_t NUM_SCALE_CHUNKS = Wt_core / WT_SCALE_BLOCK;
 constexpr uint32_t LAST_RT = Rt - 1;
 
-constexpr auto input_args = TensorAccessorArgs<19>();
+constexpr auto input_args = TensorAccessorArgs<22>();
 [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
 FORCE_INLINE uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
@@ -172,7 +178,18 @@ void kernel_main() {
         for (uint32_t r = 0; r < BLOCK_HT; ++r) {
             const uint32_t row_base = umin(rt0 + r, LAST_RT) * Wt_core + w0;
             for (uint32_t w = 0; w < nw; ++w) {
-                noc_async_read_tile(row_base + w, in_acc, addr);
+                if constexpr (!SKIP_DM_PAYLOAD) {
+                    if constexpr (COALESCE) {
+                        noc_async_read_tile(row_base + w, in_acc, addr);
+                    } else {  // lever B5/B6 off-arm: two half-page transactions
+                        constexpr uint32_t half = IN_TILE_BYTES / 2;
+                        noc_async_read(in_acc.get_noc_addr(row_base + w), addr, half);
+                        noc_async_read(in_acc.get_noc_addr(row_base + w, half), addr + half, half);
+                    }
+                }
+                if constexpr (!BARRIER_PER_BLOCK) {
+                    noc_async_read_barrier();  // lever B7 off-arm
+                }
                 addr += IN_TILE_BYTES;
             }
         }
@@ -192,7 +209,12 @@ void kernel_main() {
         const uint32_t base = get_write_ptr(cb_rm_in);
         uint32_t dst = base;
         for (uint32_t r = 0; r < nrows; ++r) {
-            noc_async_read(in_acc.get_noc_addr(row0 + r, byte_off), dst, chunk_bytes);
+            if constexpr (!SKIP_DM_PAYLOAD) {
+                noc_async_read(in_acc.get_noc_addr(row0 + r, byte_off), dst, chunk_bytes);
+            }
+            if constexpr (!BARRIER_PER_BLOCK) {
+                noc_async_read_barrier();  // lever B7 off-arm
+            }
             dst += padded;
         }
         noc_async_read_barrier();

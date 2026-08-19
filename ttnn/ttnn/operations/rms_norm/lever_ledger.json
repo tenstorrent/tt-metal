@@ -1,0 +1,477 @@
+{
+  "op": "rms_norm",
+  "topology": {
+    "phase": "phase-0",
+    "blocks_per_core": {
+      "grid_filling": 1,
+      "wide_prefill": 2,
+      "grid_starved": 1,
+      "smallest": 1,
+      "row_major": 1
+    },
+    "plan_paths": [
+      "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+      "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+      "layout-TILE: reader/writer move whole tile pages",
+      "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle"
+    ],
+    "dtypes": [
+      "bfloat16",
+      "float32"
+    ]
+  },
+  "levers": {
+    "A0": {
+      "status": "applied",
+      "knob": "active_cores",
+      "reason": "Core-count sweep on (1,1,8192,1024): full grid 93535 ns, 96 cores 95983, 64 cores 94470, 32 cores 110136, 16 cores 105999. No bandwidth knee below the full grid -> use every core; capping is a 1.17x regression. Re-checked on the smallest regime (32,17): -1.1% (noise).",
+      "measured": {
+        "on_ns": 93535,
+        "off_ns": 109520,
+        "shape": [
+          1,
+          1,
+          8192,
+          1024
+        ],
+        "topology": {
+          "phase": "phase-0",
+          "blocks_per_core": {
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32"
+          ]
+        },
+        "smallest_on_ns": 3257,
+        "smallest_off_ns": 3221,
+        "core_sweep_ns": {
+          "16": 105999,
+          "32": 110136,
+          "64": 94470,
+          "96": 95983,
+          "full": 93720
+        }
+      },
+      "phase": "phase-0"
+    },
+    "A1": {
+      "status": "measured-no-payoff",
+      "knob": "row_wise",
+      "reason": "split_work_to_cores(row_wise=True) is applied, but on a 130-core grid the op uses 128 cores, so row-wise and column-wise select almost the same set and the DRAM-facing spread is identical. Delta is inside noise on every bench shape (grid_filling -0.6%, row_major -0.9%, smallest -1.4%). Kept on: it costs nothing and it is the right default the moment the op runs on a partial grid.",
+      "measured": {
+        "on_ns": 93535,
+        "off_ns": 92968,
+        "shape": [
+          1,
+          1,
+          8192,
+          1024
+        ],
+        "topology": {
+          "phase": "phase-0",
+          "blocks_per_core": {
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32"
+          ]
+        },
+        "smallest_on_ns": 3257,
+        "smallest_off_ns": 3211
+      },
+      "phase": "phase-0"
+    },
+    "A2": {
+      "status": "deferred",
+      "reason": "Launch only on cores that hold data requires a sharded input; Phase 0 SUPPORTED[memory_layout] is INTERLEAVED only, so there are no shard-owning cores to launch on.",
+      "followup": "Lamp L3: add HEIGHT_SHARDED, back cb_input_tiles with ttnn.cb_descriptor_from_sharded_tensor and set CORE_GRID from the shard grid.",
+      "predicted_delta_pct": 15,
+      "phase": "phase-0"
+    },
+    "A3": {
+      "status": "deferred",
+      "reason": "Interleaved pages are spread over every DRAM bank by the TensorAccessor, so a core cannot be made adjacent to 'its' bank; only the A1 axis spread is expressible. A3 becomes real once the input is sharded (each core then owns one bank's worth of rows).",
+      "followup": "With Lamp L3 sharding, map each shard to its NoC-optimal worker (get_optimal_worker_cores_for_sharded_tensor).",
+      "predicted_delta_pct": 10,
+      "phase": "phase-0"
+    },
+    "A4": {
+      "status": "deferred",
+      "reason": "The remainder is handled by split_work_to_cores' two core groups and by padding the final row-block to a full BLOCK_HT (phantom tile-rows clamped to the last valid one), so no core is idle - but there is no specialised cliff kernel, and the cliff core still pays for BLOCK_HT tile-rows of work when it owns fewer.",
+      "followup": "Emit a second kernel variant for the cliff core with its own BLOCK_HT; measure on a shape whose Rt is coprime with the grid (e.g. (1,1,3232,96), Rt=101).",
+      "predicted_delta_pct": 2,
+      "phase": "phase-0"
+    },
+    "B0": {
+      "status": "applied",
+      "knob": "barrier_per_block",
+      "reason": "Every per-core-overhead lever's counterfactual was measured on the smallest regime the op accepts, (32,17) = 1 tile of real work: A0 -1.1%, A1 -1.4%, B5 -1.7%, B7 +0.3%, B9 -0.2%, C16 -1.2%, compute_block_size -1.6%. Nothing regresses that regime beyond +-1.7% (noise), so no lever needs a work-per-core gate in Phase 0.",
+      "measured": {
+        "on_ns": 3257,
+        "off_ns": 3267,
+        "shape": [
+          32,
+          17
+        ],
+        "topology": {
+          "phase": "phase-0",
+          "blocks_per_core": {
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32"
+          ]
+        }
+      },
+      "phase": "phase-0"
+    },
+    "B5": {
+      "status": "applied",
+      "knob": "coalesce",
+      "reason": "Every transfer is a whole tile page (noc_async_read_tile / noc_async_write_tile); the RM path moves whole padded sticks. Splitting each 2048 B tile into two 1024 B halves costs +9.1% on (1,1,8192,1024) and +10.1% on (1,1,32,7168); no regression on (32,17) (-1.7%, noise).",
+      "measured": {
+        "on_ns": 3257,
+        "off_ns": 3201,
+        "shape": [
+          32,
+          17
+        ],
+        "topology": {
+          "phase": "phase-0",
+          "blocks_per_core": {
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32"
+          ]
+        },
+        "grid_filling_on_ns": 93535,
+        "grid_filling_off_ns": 102044,
+        "grid_starved_on_ns": 76127,
+        "grid_starved_off_ns": 83807
+      },
+      "phase": "phase-0"
+    },
+    "B6": {
+      "status": "measured-no-payoff",
+      "knob": "coalesce",
+      "reason": "The one-packet fast path needs transfers <= 512 B; a bf16 tile page is 2048 B (fp32 4096 B). Reaching it means giving up B5's coalescing, and the same `coalesce` knob measures exactly that direction: halving to 1024 B - still above 512 B - already costs +9.1%. Shrinking further to 512 B goes further the wrong way, so the fast path is not reachable at a profit for this op's page size.",
+      "measured": {
+        "on_ns": 3257,
+        "off_ns": 3201,
+        "shape": [
+          32,
+          17
+        ],
+        "topology": {
+          "phase": "phase-0",
+          "blocks_per_core": {
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32"
+          ]
+        },
+        "grid_filling_on_ns": 93535,
+        "grid_filling_off_ns": 102044,
+        "grid_starved_on_ns": 76127,
+        "grid_starved_off_ns": 83807
+      },
+      "phase": "phase-0"
+    },
+    "B7": {
+      "status": "applied",
+      "knob": "barrier_per_block",
+      "reason": "One noc_async_read_barrier / noc_async_write_barrier per BLOCK (BLOCK_HT x chunk_wt tiles, or one tile-row of sticks on the RM path) instead of per transaction. Largest single dataflow lever on this op: 1.33x on (1,1,8192,1024), 1.32x on the RM path, and 3.56x on the single-core wide-decode shape (1,1,32,7168) where there is nothing else to hide latency behind.",
+      "measured": {
+        "on_ns": 3257,
+        "off_ns": 3267,
+        "shape": [
+          32,
+          17
+        ],
+        "topology": {
+          "phase": "phase-0",
+          "blocks_per_core": {
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32"
+          ]
+        },
+        "grid_filling_on_ns": 93535,
+        "grid_filling_off_ns": 124082,
+        "grid_starved_on_ns": 76127,
+        "grid_starved_off_ns": 270958
+      },
+      "phase": "phase-0"
+    },
+    "B8": {
+      "status": "deferred",
+      "reason": "Reads are already issued as a whole block before one barrier (B7), so within a block requests are in flight; trid double-issue would additionally overlap ACROSS blocks. The grid-filling shape runs 1 row-block per core, so there is no next block to overlap against - the bench cannot show it there. wide_prefill (2 blocks/core) and (99991,64) (28 blocks/core) could.",
+      "followup": "Add a trid arm (noc_async_read_tile_with_trid + barrier on the previous id) and measure on wide_prefill and (99991,64), where blocks-per-core > 1.",
+      "predicted_delta_pct": 8,
+      "phase": "phase-0"
+    },
+    "B9": {
+      "status": "applied",
+      "knob": "noc_split",
+      "reason": "Reader on NoC0 (ReaderConfigDescriptor) and writer on NoC1 (WriterConfigDescriptor). This op reads and writes a full tensor, so the two streams are the same size; forcing both onto NOC_0 costs 1.47x on (1,1,8192,1024) and 1.47x on the RM path. Flat on the 1-core wide-decode shape (the streams are serialised by the 2-pass structure there) and on (32,17).",
+      "measured": {
+        "on_ns": 93535,
+        "off_ns": 137506,
+        "shape": [
+          1,
+          1,
+          8192,
+          1024
+        ],
+        "topology": {
+          "phase": "phase-0",
+          "blocks_per_core": {
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32"
+          ]
+        },
+        "row_major_on_ns": 95339,
+        "row_major_off_ns": 140099,
+        "smallest_on_ns": 3257,
+        "smallest_off_ns": 3251
+      },
+      "phase": "phase-0"
+    },
+    "B10": {
+      "status": "deferred",
+      "reason": "Per-reader virtual-channel assignment is only meaningful once several readers share a route; with 128 cores each reading interleaved pages from all banks the routes are already spread, and B9 already removed the read/write contention that dominates.",
+      "followup": "Add a `vc` arm on the reader's noc_async_read and measure on (1,1,8192,1024) after Lamp L2 removes the gamma re-reads (which currently hide small routing effects).",
+      "predicted_delta_pct": 3,
+      "phase": "phase-0"
+    },
+    "B11": {
+      "status": "structurally-impossible",
+      "assert_test": "tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py",
+      "reason": "Every DRAM address this op forms is alignment-legal by construction: tile transfers go through TensorAccessor's aligned page stride, and the two byte-offset paths (RM stick W-chunk, RM gamma slice) use offsets that are multiples of 32*element_size (>= 64 B). There is no misaligned variant to measure - one is a hardware fault, not a slower arm. The acceptance suite run under --dev (NoC sanitizer on) is the mechanical pin: it caught exactly this class of bug when an earlier gamma path issued a read at stick offset +32 B on a 64 B-aligned device.",
+      "phase": "phase-0"
+    },
+    "B12": {
+      "status": "missed",
+      "regime": "Prefill on a full grid, where rows-per-core is small: (1,1,8192,1024) puts Rt=256 row-blocks on 128 cores, so all 128 cores re-read the same Wt=32 gamma tiles from DRAM. Measured upper bound on the headroom: with gamma 93981 ns vs no gamma at all 89030 ns = 5.3%, and that difference also contains the second `mul`, so the pure re-read cost is below 5.3%. The design's byte model predicted 21% - the measurement says the replication is largely absorbed, which is why this is recorded as small-but-real rather than scheduled ahead of Lamp L1.",
+      "reason": "Lamp L2: read gamma once on an injector core and mcast it (mcast_pipe SenderPipe/ReceiverPipe) instead of num_cores DRAM re-reads. cb_gamma_tiles is already a resident, never-popped CB filled exactly once per core, so switching its fill from TensorAccessor to ReceiverPipe is a reader-local change.",
+      "phase": "phase-0"
+    },
+    "B13": {
+      "status": "deferred",
+      "reason": "set_state/with_state amortises command-buffer setup over many same-shape transfers to varying addresses - which is exactly this op's inner loop (nw same-size tile reads per block).",
+      "followup": "Add a `stateful` arm using noc_async_read_tile_with_state and measure on (1,1,8192,1024) and on (32,17) (B0: it adds fixed per-core setup).",
+      "predicted_delta_pct": 5,
+      "phase": "phase-0"
+    },
+    "C14": {
+      "status": "deferred",
+      "reason": "Zero-copy aliasing of a CB onto a shard buffer requires a sharded input; Phase 0 is interleaved-only.",
+      "followup": "Lamp L3: ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT_TILES, input_tensor) once HEIGHT_SHARDED is in SUPPORTED - no NoC read at all for the resident rows.",
+      "predicted_delta_pct": 25,
+      "phase": "phase-0"
+    },
+    "C15": {
+      "status": "deferred",
+      "reason": "Same gate as C14/A2: the op is DRAM-interleaved in Phase 0, so it cannot take the L1-resident path. The measured ablation says this is where the money is on the prefill shapes - stubbing the NoC payload on (1,1,8192,1024) drops the op to 26% of its full time.",
+      "followup": "Lamp L3 (HEIGHT_SHARDED) then Lamp L1 (WIDTH/BLOCK_SHARDED with the cross-core combine).",
+      "predicted_delta_pct": 30,
+      "phase": "phase-0"
+    },
+    "C16": {
+      "status": "measured-no-payoff",
+      "knob": "double_buffer",
+      "reason": "Applied and live: the budget solver reaches IN_BUF_DEPTH=4, OUT/RM depth 2 on the grid-filling shape (forcing 1/1/1 is a genuinely different plan, verified). It measures flat anyway (+0.1% on grid_filling, -0.7% on the RM path, 0.0% on grid_starved) because those shapes are already DRAM-saturated at ~358 GB/s of useful traffic - deepening the CB cannot create bandwidth. KEPT at its working default: it costs nothing here and it is the lever that pays once the op stops being DM-bound (Lamp L1/L3 move the wall).",
+      "measured": {
+        "on_ns": 93535,
+        "off_ns": 93646,
+        "shape": [
+          1,
+          1,
+          8192,
+          1024
+        ],
+        "topology": {
+          "phase": "phase-0",
+          "blocks_per_core": {
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32"
+          ]
+        },
+        "row_major_on_ns": 95339,
+        "row_major_off_ns": 94642,
+        "smallest_on_ns": 3257,
+        "smallest_off_ns": 3217
+      },
+      "phase": "phase-0"
+    },
+    "C17": {
+      "status": "deferred",
+      "reason": "rms_norm is not an in-place op on its public contract - it allocates a fresh output tensor. Writing into the input buffer would need a caller opt-in, and the input is still being read in pass B of Regime B.",
+      "followup": "Add an `output_tensor=` parameter so a caller can alias, and gate it on Regime A (single-read) where the input is fully consumed before the scale pass writes.",
+      "predicted_delta_pct": 2,
+      "phase": "phase-0"
+    },
+    "D18": {
+      "status": "deferred",
+      "reason": "Already in the applied FORM - every TensorAccessorArgs is emitted through get_compile_time_args() and read back with TensorAccessorArgs<N>() in the kernels, so address generation is unrolled per buffer type. What is missing is the counterfactual arm that would close it with a number.",
+      "followup": "Add a `runtime_accessor_args` arm that passes the accessor args as runtime args and measure on (1,1,8192,1024) and (32,17).",
+      "predicted_delta_pct": 3,
+      "phase": "phase-0"
+    },
+    "D19": {
+      "status": "deferred",
+      "reason": "Already in the applied FORM - the only runtime args are buffer base addresses plus the per-core (start_row_block, num_row_blocks) pair and the two fp32 scalar bit patterns; every geometry constant is a compile-time arg. No counterfactual arm yet.",
+      "followup": "Add an arm that demotes the geometry prefix to runtime args and measure the program-cache re-dispatch cost.",
+      "predicted_delta_pct": 2,
+      "phase": "phase-0"
+    },
+    "D20": {
+      "status": "deferred",
+      "reason": "The op already selects between two structurally different plans by a pinned host predicate (Regime A resident vs Regime B streaming) and between the TILE and ROW_MAJOR data paths at compile time - which is layout/special-case factory selection. Not closed with a number because forcing the wrong regime is a correctness change, not just a slower arm.",
+      "followup": "Add a `force_regime` arm that runs Regime B on a shape that fits Regime A, so the single-read fast path can be priced. Predicted from the byte model: Regime B moves 1.5x the DRAM bytes.",
+      "predicted_delta_pct": 50,
+      "phase": "phase-0"
+    },
+    "D21": {
+      "status": "deferred",
+      "reason": "Per-core indexing IS precomputed host-side (start_row_block / num_row_blocks per core); the kernels only add. The InterleavedAddrGenFast half does not apply - TensorAccessor is mandatory and already specialises its address generation at compile time.",
+      "followup": "Add an arm that computes the per-core row range in-kernel from a core index, to price the host-side precompute.",
+      "predicted_delta_pct": 1,
+      "phase": "phase-0"
+    },
+    "E22": {
+      "status": "deferred",
+      "reason": "Metal Trace + multiple command queues is a whole-model lever; this is a single-op deliverable and the measurement here is on-device kernel duration, which host-dispatch overlap does not change.",
+      "followup": "Out of single-op scope; revisit when rms_norm is benched inside a model.",
+      "predicted_delta_pct": 0,
+      "phase": "phase-0"
+    },
+    "F23": {
+      "status": "structurally-impossible",
+      "assert_test": "tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py::test_rms_norm_maxed_out_compute_config",
+      "reason": "The op cannot downgrade a caller-supplied precision knob: after validate(), the caller's ComputeConfigDescriptor is handed to the compute KernelDescriptor verbatim (config=cfg) and is never rebuilt or mutated. The only value the op chooses is its own default, and that lives in the single exported default_compute_kernel_config() factory. The named test passes an explicit descriptor and asserts the result; test_rms_norm_default_compute_kernel_config_is_a_factory pins the factory itself.",
+      "phase": "phase-0"
+    },
+    "F24": {
+      "status": "structurally-impossible",
+      "assert_test": "eval/golden_tests/rms_norm/test_golden.py",
+      "reason": "bfp8_pack_precise selects how the packer writes a bfloat8_b tile. This op never emits one: SUPPORTED[dtype] is {float32, bfloat16} and the output dtype is always the input dtype, so there is no bfloat8_b pack for the knob to govern. The golden suite is the mechanical pin - every bfloat8_b cell is xfail-strict there and the suite passes.",
+      "phase": "phase-0"
+    },
+    "F25": {
+      "status": "deferred",
+      "reason": "fp32_dest_acc_en is a GATED axis pinned to True for Phase 0 by the prompt and by references/precision_convention.md, and every measured cell supplies it explicitly - so F23's boundary applies and the op must not downgrade it. The cost is real and already visible indirectly: DEST_AUTO_LIMIT is 4 instead of 8, which halves the DEST_BLOCK the compute_block_size lever runs at (that lever is worth 1.035x-1.06x today at DEST_BLOCK=4).",
+      "followup": "The refinement that adds {bfloat16, fp32_dest_acc_en=False} to SUPPORTED: DEST doubles 4->8, so DEST_BLOCK doubles and B5/B7/C16/compute_block_size must all be re-swept at the new block factor. Measure with the existing `dest_block` bench knob once the axis is supported.",
+      "predicted_delta_pct": 6,
+      "phase": "phase-0"
+    },
+    "F26": {
+      "status": "structurally-impossible",
+      "assert_test": "tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py::test_rms_norm_maxed_out_compute_config",
+      "reason": "master.md's own structural closure: a lossless unpack path buys nothing downstream of any FPU phase. Every path in this op hits at least one - sum_of_squares and the scale multiplies are FPU binaries, reduce<SUM, REDUCE_ROW> is FPU/GMPOOL, and the RM path's tilize uses the fast (fp32->tf32) route by design. So the fp32->TF32 drop happens regardless and Fp32Mode::Lossless / UnpackToDestFp32 would only buy the slower unpack. The named float32 test passes at PCC 0.999 on the default (fast) path, so the precision the lever would protect is not needed.",
+      "phase": "phase-0"
+    },
+    "F27": {
+      "status": "missed",
+      "regime": "Compute-bound shapes where the CALLER leaves math_fidelity unset, so the op's own default applies. Measured ladder on (1,1,32,7168) (the ablation says that shape is compute-dominated: stubbing compute drops it to 41% of full): HiFi4 76114 ns, HiFi2 52430 ns (1.45x), LoFi 50293 ns (1.51x). On the DM-bound prefill shape (1,1,8192,1024) the same ladder is worth only 1.027x (93236 -> 90799), exactly as the bound classification predicts.",
+      "reason": "NOT changed in Phase 0. references/precision_convention.md and the op prompt pin the exported default_compute_kernel_config() to HiFi4, and F23 forbids downgrading a caller-supplied value - every golden cell and every perf loose case supplies math_fidelity explicitly (the perf cases already pin HiFi2). Recorded with the measured number so the refinement that revisits the op's own default starts from evidence rather than from a guess.",
+      "phase": "phase-0"
+    }
+  }
+}

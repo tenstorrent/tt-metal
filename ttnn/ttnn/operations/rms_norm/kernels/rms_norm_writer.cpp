@@ -51,11 +51,17 @@ constexpr uint32_t DEST_BLOCK_CT = get_compile_time_arg_val(15);
 constexpr uint32_t GAMMA_TILE_BYTES = get_compile_time_arg_val(16);
 constexpr uint32_t IN_TILE_BYTES = get_compile_time_arg_val(17);
 constexpr uint32_t GAMMA_INGEST_BLOCK = get_compile_time_arg_val(18);
+// Lever B7: 1 = one noc barrier per block (applied), 0 = one per transaction.
+constexpr uint32_t BARRIER_PER_BLOCK = get_compile_time_arg_val(19);
+// /perf-measure ablation: keep every CB op and barrier, issue no NoC transfer.
+constexpr uint32_t SKIP_DM_PAYLOAD = get_compile_time_arg_val(20);
+// Lever B5/B6: 1 = one whole-page transaction per tile (applied), 0 = two half-page ones.
+constexpr uint32_t COALESCE = get_compile_time_arg_val(21);
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t NUM_SCALE_CHUNKS = Wt_core / WT_SCALE_BLOCK;
 
-constexpr auto output_args = TensorAccessorArgs<19>();
+constexpr auto output_args = TensorAccessorArgs<22>();
 
 FORCE_INLINE uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
 
@@ -77,7 +83,19 @@ void kernel_main() {
         for (uint32_t r = 0; r < valid_ht; ++r) {
             const uint32_t row_base = (rt0 + r) * Wt_core + w0;
             for (uint32_t w = 0; w < nw; ++w) {
-                noc_async_write_tile(row_base + w, out_acc, addr + w * IN_TILE_BYTES);
+                if constexpr (!SKIP_DM_PAYLOAD) {
+                    if constexpr (COALESCE) {
+                        noc_async_write_tile(row_base + w, out_acc, addr + w * IN_TILE_BYTES);
+                    } else {  // lever B5/B6 off-arm: two half-page transactions
+                        constexpr uint32_t half = IN_TILE_BYTES / 2;
+                        const uint32_t src_t = addr + w * IN_TILE_BYTES;
+                        noc_async_write(src_t, out_acc.get_noc_addr(row_base + w), half);
+                        noc_async_write(src_t + half, out_acc.get_noc_addr(row_base + w, half), half);
+                    }
+                }
+                if constexpr (!BARRIER_PER_BLOCK) {
+                    noc_async_write_barrier();  // lever B7 off-arm
+                }
             }
             addr += nw * IN_TILE_BYTES;
         }
@@ -96,7 +114,12 @@ void kernel_main() {
 
             uint32_t src = get_read_ptr(cb_rm_out);
             for (uint32_t r = 0; r < nrows; ++r) {
-                noc_async_write(src, out_acc.get_noc_addr(row0 + r, byte_off), chunk_bytes);
+                if constexpr (!SKIP_DM_PAYLOAD) {
+                    noc_async_write(src, out_acc.get_noc_addr(row0 + r, byte_off), chunk_bytes);
+                }
+                if constexpr (!BARRIER_PER_BLOCK) {
+                    noc_async_write_barrier();  // lever B7 off-arm
+                }
                 src += padded;
             }
             noc_async_write_barrier();
