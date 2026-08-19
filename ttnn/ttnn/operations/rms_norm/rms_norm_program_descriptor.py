@@ -41,6 +41,11 @@ L1_RESERVED_BYTES = 256 * 1024
 # Core-count knob.  None == the full compute grid (Phase 0 default, lever A0).
 ACTIVE_CORE_CAP: Optional[int] = None
 
+# Upper bound on the ROW_MAJOR-gamma staging CB (cb_gamma_rm).  The staging CB
+# is pure boot/ingest scaffolding, so it gets a small slice of L1; the ingest is
+# chunked at GAMMA_INGEST_BLOCK to stay inside it.
+GAMMA_STAGE_MAX_BYTES = 64 * 1024
+
 # --- Circular buffer slots (semantic names; the number is just the slot) ------
 CB_INPUT_TILES = 0
 CB_GAMMA_TILES = 1
@@ -53,11 +58,20 @@ CB_OUTPUT_TILES = 7
 CB_RM_IN = 8
 CB_RM_OUT = 9
 CB_SUMSQ_ACC = 10
+CB_GAMMA_RM = 11
 
 
 def _div_up(a: int, b: int) -> int:
     """Ceiling division (ttnn exposes no div_up binding in this tree)."""
     return (a + b - 1) // b
+
+
+def _largest_divisor_at_most(value: int, cap: int) -> int:
+    """Largest divisor of `value` that is <= `cap` (>= 1)."""
+    for cand in range(min(value, max(1, cap)), 0, -1):
+        if value % cand == 0:
+            return cand
+    return 1
 
 
 def _f32_bits(x: float) -> int:
@@ -130,10 +144,9 @@ class BlockingPlan:
     # --- knobs (every one of these is a tunable, never an inlined literal) ---
     BLOCK_HT: int
     WT_REDUCE_BLOCK: int
-    WT_REDUCE_TAIL: int
     WT_SCALE_BLOCK: int
-    WT_SCALE_TAIL: int
     DEST_BLOCK: int
+    GAMMA_INGEST_BLOCK: int
     IN_BUF_DEPTH: int
     OUT_BUF_DEPTH: int
     RM_BUF_DEPTH: int
@@ -158,6 +171,7 @@ def _working_set_bytes(
     is_row_major: bool,
     tile_out: bool,
     W_partial: int,
+    gamma_ingest_block: int,
     T_in: int,
     T_g: int,
     T_f32: int,
@@ -192,6 +206,8 @@ def _working_set_bytes(
     if has_gamma:
         total += ws * T_g  # cb_gamma_tiles
         total += block_ht * ws * T_in  # cb_normed
+        if gamma_is_row_major:
+            total += gamma_ingest_block * T_g  # cb_gamma_rm (stick staging)
     # cb_output_tiles — streamed to the writer on the TILE path, but feeds the
     # sequential untilize helper on the RM path (must hold the full block).
     total += (out_depth if tile_out else 1) * block_ht * ws * T_in
@@ -237,7 +253,11 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         T_bf16=T_bf16,
     )
 
+    gamma_cap_tiles = max(1, GAMMA_STAGE_MAX_BYTES // T_g)
+
     def ws_bytes(regime, block_ht, in_depth, out_depth, rm_depth, wr, wsc):
+        # The gamma staging chunk must divide every ingest count the kernel uses,
+        # so tilize<GAMMA_INGEST_BLOCK> never over-produces gamma tiles.
         return _working_set_bytes(
             regime=regime,
             block_ht=block_ht,
@@ -246,6 +266,7 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
             rm_depth=rm_depth,
             wr=wr,
             ws=wsc,
+            gamma_ingest_block=_largest_divisor_at_most(wsc, gamma_cap_tiles),
             **common,
         )
 
@@ -275,8 +296,24 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
     else:
         # Coarsest chunk of the dependent axis that still fits L1.  Never 1 by
         # default — 1 is only ever the *output* of this search.
+        #
+        # CB-WRAP CONSTRAINT (load-bearing): a multi-page cb_reserve_back /
+        # cb_wait_front followed by a contiguous N-page access is only legal when
+        # the CB's page count is a multiple of N and the fifo pointer is
+        # N-aligned.  A short trailing chunk would leave the pointer off-grid and
+        # the NEXT full chunk would run past the end of the CB into the
+        # neighbouring one (silent, deterministic corruption).  So the chunk must
+        # DIVIDE Wt_core exactly — the search is over divisors, not over every
+        # width.
+        #
+        # WT_REDUCE_BLOCK and WT_SCALE_BLOCK stay separate knobs (separate CT
+        # args, separate loops in every kernel), but the solver has to give them
+        # the same value: they share cb_input_tiles / cb_rm_in, whose page count
+        # must be a multiple of BOTH access granularities.
         wr = wsc = 1
         for cand in range(Wt_core, 0, -1):
+            if Wt_core % cand != 0:
+                continue
             if ws_bytes("B", 1, 1, 1, 1, cand, cand) <= l1_cb_budget:
                 wr = wsc = cand
                 break
@@ -301,11 +338,9 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
     while in_depth < 4 and ws_bytes(regime, block_ht, in_depth + 1, out_depth, rm_depth, wr, wsc) <= l1_cb_budget:
         in_depth += 1
 
-    # Chunk tails (the last chunk of the dependent axis may be narrower).
-    num_reduce_chunks = _div_up(Wt_core, wr)
-    wr_tail = Wt_core - (num_reduce_chunks - 1) * wr
-    num_scale_chunks = _div_up(Wt_core, wsc)
-    ws_tail = Wt_core - (num_scale_chunks - 1) * wsc
+    assert Wt_core % wr == 0 and Wt_core % wsc == 0, "W-chunk must divide Wt_core (CB-wrap constraint)"
+
+    gamma_ingest_block = _largest_divisor_at_most(wsc, gamma_cap_tiles)
 
     # R5: cb_gamma_tiles is never popped in Regime A, so one pass-B call must
     # span every gamma column from the CB front.
@@ -333,10 +368,9 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         gamma_row_bytes=W_true * gamma_elem_size,
         BLOCK_HT=block_ht,
         WT_REDUCE_BLOCK=wr,
-        WT_REDUCE_TAIL=wr_tail,
         WT_SCALE_BLOCK=wsc,
-        WT_SCALE_TAIL=ws_tail,
         DEST_BLOCK=dest_limit,
+        GAMMA_INGEST_BLOCK=gamma_ingest_block,
         IN_BUF_DEPTH=in_depth,
         OUT_BUF_DEPTH=out_depth,
         RM_BUF_DEPTH=rm_depth,
@@ -426,6 +460,8 @@ def create_program_descriptor(
         )
     if plan.has_gamma:
         cbs.append(_cb(CB_GAMMA_TILES, plan.WT_SCALE_BLOCK, plan.gamma_tile_bytes, gamma.dtype, all_cores))
+        if plan.gamma_is_row_major:
+            cbs.append(_cb(CB_GAMMA_RM, plan.GAMMA_INGEST_BLOCK, plan.gamma_tile_bytes, gamma.dtype, all_cores))
         cbs.append(
             _cb(
                 CB_NORMED,
@@ -458,18 +494,17 @@ def create_program_descriptor(
         plan.W_partial,  # 5
         plan.BLOCK_HT,  # 6
         plan.WT_REDUCE_BLOCK,  # 7
-        plan.WT_REDUCE_TAIL,  # 8
-        plan.WT_SCALE_BLOCK,  # 9
-        plan.WT_SCALE_TAIL,  # 10
-        plan.Rt,  # 11
-        plan.num_rows,  # 12
-        plan.row_bytes,  # 13
-        plan.elem_size,  # 14
-        plan.gamma_elem_size,  # 15
-        plan.gamma_row_bytes,  # 16
-        plan.DEST_BLOCK,  # 17
-        plan.gamma_tile_bytes,  # 18
-        plan.in_tile_bytes,  # 19
+        plan.WT_SCALE_BLOCK,  # 8
+        plan.Rt,  # 9
+        plan.num_rows,  # 10
+        plan.row_bytes,  # 11
+        plan.elem_size,  # 12
+        plan.gamma_elem_size,  # 13
+        plan.gamma_row_bytes,  # 14
+        plan.DEST_BLOCK,  # 15
+        plan.gamma_tile_bytes,  # 16
+        plan.in_tile_bytes,  # 17
+        plan.GAMMA_INGEST_BLOCK,  # 18
     ]
 
     # ---------------- reader --------------------------------------------------
