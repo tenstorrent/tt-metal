@@ -16,6 +16,7 @@ on:
           - llama3.1-8b
           - qwen3-32b-galaxy
           - qwen3.6-27b
+          - qwen3.6-35b-a3b
           - gpt-oss-120b
           - minimax-m3
           - whisper
