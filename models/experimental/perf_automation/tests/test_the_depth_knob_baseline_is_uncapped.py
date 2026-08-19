@@ -23,10 +23,15 @@ Both halves of that are fixed here: run.py's call sites pass the signal they alr
 _cov_facts, and the baseline probe -- reached only when no hint exists at all -- asks for ALL layers
 rather than for the cap.
 
-WHY IT SURVIVED: it only bites a model whose depth knob IS this tool's own env convention. A model
-exposing a custom knob ignores TT_PERF_LAYERS, so writing it leaves that baseline genuinely uncapped
-and the comparison works -- which is every model the bridge was developed against. An
-emit-e2e-shaped pipeline reads exactly the variable under test.
+WHY IT SURVIVED: the OTHER caller works, so the bridge visibly succeeds in the same logs. Both
+outcomes appear in one run, same model, same variables:
+
+    enforcing {'TT_PERF_LAYERS': '2', 'TT_PERF_DECODE_LAYERS': '2', ...} (op-count 25034->3612)
+    ... {'TT_PERF_LAYERS': '2', 'TT_PERF_STACK0_LAYERS': '2', ...} did not reduce work (3612->3612)
+
+3612 is the CAPPED count from the first line arriving as the second's "full" baseline. The
+discriminator is which caller asked, not which knob the model reads -- an earlier reading of this
+blamed the model, and the first line disproves it.
 """
 
 import sys

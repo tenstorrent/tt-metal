@@ -1366,10 +1366,17 @@ def _bridge_depth_env(
         # with "did not reduce work ... ignoring" in the log. Run 10, 2026-08-19: op-count
         # 3572 -> 3572, on a pipeline that implements the cap correctly for BOTH towers.
         #
-        # It survived because it only bites models whose depth knob IS this tool's own env
-        # convention. A model exposing a custom knob ignores TT_PERF_LAYERS, so writing it left that
-        # baseline genuinely uncapped and the comparison worked -- which is every model the bridge
-        # was developed against. An emit-e2e-shaped pipeline reads exactly the variable under test.
+        # IT SURVIVED BECAUSE THE OTHER CALLER WORKS. before_loop passes full_hint, so its bridge
+        # gets a real baseline and enforces the cap; only this path improvises one. Both outcomes
+        # appear in the SAME run's log, on the same model and the same variables:
+        #
+        #   enforcing {'TT_PERF_LAYERS': '2', ...}  (op-count 25034->3612)     <- before_loop
+        #   ... did not reduce work (op-count 3612->3612); ignoring            <- here
+        #
+        # 3612 is the CAPPED count from the line above, arriving as this path's "full" baseline. An
+        # earlier note here blamed the model -- claiming this only bites pipelines whose knob is the
+        # tool's own env convention -- and that is disproved by the first line: those are exactly
+        # those variables, and they were enforced. The discriminator is which caller asked.
         #
         # set_depth(env, 0) is the established "no cap" form: it clears the depth variable and arms
         # PERF_MCP_FORCE_ALL_LAYERS, rather than writing a literal 0 that a builder reads as "build
