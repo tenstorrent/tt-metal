@@ -380,11 +380,12 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
 {
     if constexpr (OP == BinaryOp::MUL)
     {
-        sfpu_binary_init<false /*APPROX*/, BinaryOp::MUL>(); // no-op for MUL; harmless on the int path
+        sfpu_binary_init<APPROXIMATION_MODE, BinaryOp::MUL>(); // no-op for MUL; harmless on the int path
     }
     else if constexpr (OP == BinaryOp::DIV)
     {
-        sfpu_binary_init<false /*APPROX*/, BinaryOp::DIV>();
+        // Forwards APPROXIMATION_MODE to _init_reciprocal_ (LUT-only vs Newton).
+        sfpu_binary_init<APPROXIMATION_MODE, BinaryOp::DIV>();
     }
     else if constexpr (quasar_binary_op_is_max_min(OP))
     {
@@ -446,7 +447,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
                 DST_SYNC,
                 is_fp32_dest_acc_en,
                 calculate_sfpu_binary,
-                (false /*APPROX*/, BinaryOp::ADD, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
+                (APPROXIMATION_MODE, BinaryOp::ADD, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
                 src0_tile,
                 src1_tile,
                 dst_tile,
@@ -460,7 +461,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             DST_SYNC,
             is_fp32_dest_acc_en,
             calculate_sfpu_binary,
-            (false /*APPROX*/, BinaryOp::SUB, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
+            (APPROXIMATION_MODE, BinaryOp::SUB, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
             src0_tile,
             src1_tile,
             dst_tile,
@@ -498,7 +499,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
                 DST_SYNC,
                 is_fp32_dest_acc_en,
                 calculate_sfpu_binary,
-                (false /*APPROX*/, BinaryOp::MUL, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
+                (APPROXIMATION_MODE, BinaryOp::MUL, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
                 src0_tile,
                 src1_tile,
                 dst_tile,
@@ -511,7 +512,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             DST_SYNC,
             is_fp32_dest_acc_en,
             calculate_sfpu_binary,
-            (false /*APPROX*/, BinaryOp::DIV, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
+            (APPROXIMATION_MODE, BinaryOp::DIV, is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS),
             src0_tile,
             src1_tile,
             dst_tile,
