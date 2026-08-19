@@ -63,13 +63,16 @@ def _generate_perf_cases():
             )
         )
 
-    for binary_op, mathop in _FLOAT_OPS:
+    for binary_op, mathop, approx_mode in _FLOAT_OPS:
         for formats, dest_acc in _get_valid_float_formats_dest_acc():
             cases.append(
                 pytest.param(
-                    (PerfCaseFamily.FLOAT, ((formats, dest_acc), binary_op, mathop)),
+                    (
+                        PerfCaseFamily.FLOAT,
+                        ((formats, dest_acc), binary_op, mathop, approx_mode),
+                    ),
                     id=(
-                        f"float-{binary_op.lower()}-"
+                        f"float-{binary_op.lower()}-{approx_mode.name}-"
                         f"{formats.input_format.name}-{formats.output_format.name}-"
                         f"{dest_acc.name}"
                     ),
@@ -137,13 +140,14 @@ def test_perf_eltwise_binary_sfpu_quasar(perf_report, family_and_args):
             **perf_kwargs,
         )
     elif family == PerfCaseFamily.FLOAT:
-        formats_dest_acc, binary_op, mathop = args
+        formats_dest_acc, binary_op, mathop, approx_mode = args
         run_eltwise_binary_sfpu_float_quasar(
             formats_dest_acc,
             ImpliedMathFormat.Yes,
             DEFAULT_SFPU_BINARY_TILE_INDICES,
             binary_op,
             mathop,
+            approx_mode,
             **perf_kwargs,
         )
     elif family == PerfCaseFamily.MAX_MIN_FLOAT:
