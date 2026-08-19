@@ -656,11 +656,14 @@ def test_int32_reduce_extreme(request, mathop, reduce_pool, injected_value, base
 # =============================================================================
 # Cat B — IEEE specials in a reduction
 #
-# ReduceColumn/ReduceRow/ReduceScalar each carry a plain uniform(-1, 1) domain with no
-# singularity and no knee, so edge_spec() returns None and no edge sweep can reach them. What
-# they have instead is cat B, and it behaves unlike cat B anywhere else here: a reduction
-# *propagates* its special to the single output element, so one poisoned lane is the whole
-# answer rather than one probe among 4096.
+# ReduceColumn and ReduceRow each carry a plain uniform(-1, 1) domain with no singularity and no
+# knee, so edge_spec() returns None and no edge sweep can reach them. What they have instead is
+# cat B, and it behaves unlike cat B anywhere else here: a reduction *propagates* its special to
+# the single output element, so one poisoned lane is the whole answer rather than one probe among
+# 4096.
+#
+# ReduceScalar is not covered by this sweep and is not driven below: sfpu_reduce_test.cpp branches
+# on REDUCE_COL and REDUCE_ROW only, so there is no scalar path to reach through this source.
 #
 # The classes below are therefore about the interaction between a special and the fold, which no
 # element-wise sweep can express:
@@ -675,10 +678,20 @@ def test_int32_reduce_extreme(request, mathop, reduce_pool, injected_value, base
 #                         golden modelling IEEE instead of the kernel.
 #   all_inf               every lane +inf: the degenerate fold, where the pool identity is the
 #                         only other operand involved.
-#   signed_zero           every lane -0.0. IEEE keeps -0 under addition; Wormhole's SFPMAD flushes
-#                         a negative-zero result to +0 and Blackhole is documented to preserve it,
-#                         so this is the arch-split class -- and the comparator cannot see a zero's
-#                         sign anyway, which is why it is asserted rather than gated (see below).
+#   signed_zero           every lane -0.0. Read this one narrowly: it asserts that the fold
+#                         returns *a* zero -- ruling out a NaN, an infinity or a nonzero -- and
+#                         nothing about which zero. passed_test() judges by torch.isclose plus
+#                         PCC, under which -0.0 == +0.0, so the sign cannot make this variant
+#                         fail.
+#
+#                         The sign is the interesting part and is deliberately NOT asserted yet.
+#                         Doing so needs a bitwise check plus a per-pool, per-arch expectation
+#                         that has not been measured: Sum and Average build their result through
+#                         SFPMAD, which flushes a negative-zero result to +0 on Wormhole and is
+#                         documented to preserve it on Blackhole, while Max and Min *select* an
+#                         operand through SFPSWAP and so would not flush at all. That is 2 arches
+#                         x 2 pool behaviours, and asserting it from the SFPMAD note alone would
+#                         record a guess about six of the eight cells.
 #
 # Cat C is already covered for this family by test_int32_reduce_extreme above and is deliberately
 # not repeated here.

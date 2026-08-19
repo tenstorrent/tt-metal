@@ -491,6 +491,77 @@ def test_every_float_binary_op_is_classified_for_cat_b():
         assert len(reason) > 20, f"{op.name}'s cat-B reason is too short to be a claim"
 
 
+def test_total_order_key_matches_the_isa_remap():
+    """Both order keys must reproduce `SignMagIsSmaller()`'s remap, signed zeros included.
+
+    The ISA spells the remap as an xor with the sign bit smeared down over the magnitude -- an
+    arithmetic shift right by 30, then a logical shift right by 1 -- which is a mask of 0x7FFFFFFF
+    where the sign bit is set and 0 where it is not. So a negative with magnitude m ranks at
+    -1 - m, putting -0.0 at -1 and strictly below +0.0 at 0: the `-0 < +0` the documented chain
+    shows.
+
+    Ranking a negative at -m instead is order-isomorphic *everywhere except the two zeros*, where
+    it ties them -- which is why this is worth pinning rather than leaving to the NaN probes
+    above. A tie makes sfpu_min/sfpu_max return whichever operand came first, and no device test
+    can catch it: passed_test() cannot see a zero's sign.
+    """
+    import torch
+    from helpers.golden_generators import (
+        sfpu_max,
+        sfpu_min,
+        sfpu_order_key_elementwise,
+        sfpu_total_order_key,
+    )
+
+    def isa_remap(value: float) -> int:
+        bits = struct.unpack("<I", struct.pack("<f", value))[0]
+        mask = ((bits >> 31) & 1) * 0x7FFFFFFF
+        return struct.unpack("<i", struct.pack("<I", bits ^ mask))[0]
+
+    probes = [
+        -float("nan"),
+        -float("inf"),
+        -3.5,
+        -1.0,
+        -1.4e-45,
+        -0.0,
+        0.0,
+        1.4e-45,
+        1.0,
+        3.5,
+        float("inf"),
+        float("nan"),
+    ]
+
+    for value in probes:
+        assert sfpu_total_order_key(value) == isa_remap(value), (
+            f"sfpu_total_order_key({value!r}) disagrees with SignMagIsSmaller()'s remap. The "
+            "mask is 0x7FFFFFFF when the sign bit is set, so a negative ranks at -1 - magnitude."
+        )
+
+    vectorised = sfpu_order_key_elementwise(torch.tensor(probes, dtype=torch.float32))
+    assert vectorised.tolist() == [isa_remap(v) for v in probes], (
+        "sfpu_order_key_elementwise disagrees with the scalar key. The binary and reduce goldens "
+        "use the vectorised one, so a drift here splits the two families' semantics."
+    )
+
+    assert sfpu_total_order_key(-0.0) < sfpu_total_order_key(0.0), (
+        "-0.0 must rank strictly below +0.0. Tying them makes min/max operand-order-dependent, "
+        "and passed_test() cannot see a zero's sign, so no device variant would fail."
+    )
+
+    # Order-independent in both directions, which the tie is what would break.
+    for a, b in ((-0.0, 0.0), (0.0, -0.0)):
+        assert math.copysign(1.0, sfpu_min(a, b)) < 0.0, (
+            f"sfpu_min({a!r}, {b!r}) must be -0.0 under the total order, whatever the operand "
+            "order"
+        )
+        assert math.copysign(1.0, sfpu_max(a, b)) > 0.0, (
+            f"sfpu_max({a!r}, {b!r}) must be +0.0 under the total order, whatever the operand "
+            "order"
+        )
+
+
 def test_reduce_extremum_follows_the_total_order_on_floats_only():
     """Reduce MAX/MIN fold under the SFPU total order; Sum/Average stay IEEE; ints stay torch.
 

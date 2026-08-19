@@ -237,13 +237,15 @@ def sfpu_total_order_key(value: float) -> int:
     on both arches (tt-isa-documentation, {BlackholeA0,WormholeB0}/TensixTile/
     TensixCoprocessor/SFPSWAP.md), so +NaN outranks every finite value.
 
-    Limits of this model: both zeros rank equal, because `SignMagIsSmaller()` is false either
-    way and a key built from |bits| cannot see a zero's sign. Wormhole is measured rather
-    than read off the ISA -- sfpi expands the compare in the backend.
+    Limits of this model: Wormhole is measured rather than read off the ISA, since sfpi expands
+    the compare in the backend.
     """
     bits = struct.unpack("<i", struct.pack("<f", value))[0]
-    # Sign bit set -> negative side of the order, ranked by magnitude descending.
-    return -(bits & 0x7FFFFFFF) if bits < 0 else bits
+    # The remap `SignMagIsSmaller()` performs: xor with the sign bit smeared down over the
+    # magnitude, which is a mask of 0x7FFFFFFF where the sign bit is set and 0 where it is not.
+    # So a negative with magnitude m ranks at -1 - m, putting -0.0 at -1 and strictly below +0.0
+    # at 0. Ranking it at -m instead ties the two zeros and makes min/max operand-order-dependent.
+    return bits ^ 0x7FFFFFFF if bits < 0 else bits
 
 
 _order = sfpu_total_order_key
@@ -266,9 +268,9 @@ def sfpu_order_key_elementwise(tensor: torch.Tensor) -> torch.Tensor:
     whole tensors, where a Python loop per element is measurable across a sweep this size.
     """
     bits = tensor.to(torch.float32).contiguous().view(torch.int32)
-    # -(bits & 0x7FFFFFFF) cannot overflow int32: the mask caps the magnitude at 0x7FFFFFFF,
-    # whose negation is INT32_MIN + 1.
-    return torch.where(bits < 0, -(bits & 0x7FFFFFFF), bits)
+    # Same remap as the scalar version, and it cannot overflow int32: the largest magnitude is
+    # 0x7FFFFFFF, which XORs to INT32_MIN.
+    return torch.where(bits < 0, bits ^ 0x7FFFFFFF, bits)
 
 
 def sfpu_min_elementwise(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -294,6 +296,10 @@ def sfpu_relu_max(value: float, threshold: float) -> float:
     The first compare is against a vector and so uses the total order, which puts a NaN above
     the threshold and replaces it; the relu clamp then sees a finite value. The order is not
     interchangeable -- relu first would leave the NaN in place.
+
+    The relu clamp reads the order key's sign, so it fires for -0.0 as well and this returns +0.0
+    there. Unspecified on hardware either way: that branch is SFPSETCC, whose contract holds only
+    "provided that VC is neither negative zero nor any kind of NaN".
     """
     clamped = sfpu_min(value, threshold)
     return 0.0 if sfpu_total_order_key(clamped) < 0 else clamped
