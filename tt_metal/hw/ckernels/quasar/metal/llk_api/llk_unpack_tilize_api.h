@@ -148,6 +148,18 @@ inline void llk_unpack_tilizeA_B_init(
         unpack_dst_format[operandA_id]);
     ckernel::trisc::_configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
 
+    const ckernel::TensorShape tensor_shape_B = get_operand_tensor_shape(operandB_id);
+    buffer_descriptor_u bd_val_b = {0};
+    bd_val_b.f.l1_addr_16B = get_local_dfb_interface(operandB_id).tc_slots[0].base_addr;
+    bd_val_b.f.format = static_cast<std::uint8_t>(unpack_src_format[operandB_id]);
+    bd_val_b.f.x_dim = ckernel::trisc::FACE_C_DIM;
+    bd_val_b.f.y_dim = ckernel::trisc::FACE_R_DIM;
+    bd_val_b.f.z_dim =
+        (tensor_shape_B.num_faces_r_dim == tensor_shape_B.num_faces_c_dim)
+            ? tensor_shape_B.total_num_faces()
+            : ckernel::trisc::compute_square_of_min(tensor_shape_B.num_faces_r_dim, tensor_shape_B.num_faces_c_dim);
+    ckernel::trisc::_configure_buf_desc_table_(operandB_id, bd_val_b);
+
 #if defined(REDUCE_OP)
     _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(operandA_id, operandB_id, ct_dim, tensor_shape_A);
 #endif
