@@ -47,8 +47,12 @@ try:
     print(str(ti.get("file_path") or ""))
     if tool == "Bash":
         print(ti.get("command", "") or "")
-    else:
+    elif tool in ("Write", "Edit", "NotebookEdit"):
         print(ti.get("content") or ti.get("new_string") or "")
+    else:
+        # Read/Grep/Glob: the target path is what matters, not any content.
+        keys = ("file_path", "notebook_path", "path", "pattern")
+        print(" ".join(str(ti.get(k)) for k in keys if ti.get(k)))
 except Exception:
     print("nosession"); print(""); print(""); print("")' 2>/dev/null)
 sid=$(printf '%s' "$meta" | sed -n 1p)
@@ -76,11 +80,11 @@ SUBCMD='(^|[^[:alnum:]_-])git([[:space:]]+(-[^[:space:]]+|-C[[:space:]]+[^[:spac
 # bare-SHA pattern is what stops `git worktree add <dir> <old-sha>` and
 # `git checkout <old-sha> -- <path>`; `worktree` itself stays allowed because the
 # pipeline creates its own worktrees.
-REVREF='HEAD~|HEAD\^|@\{|\.git(/|$)|(^|[^[:alnum:]])[0-9a-f]{7,40}([^[:alnum:]]|$)'
+REVREF='HEAD~|HEAD\^|@\{|\.git($|[^[:alnum:]_-])|(^|[^[:alnum:]])[0-9a-f]{7,40}([^[:alnum:]]|$)'
 
 # Same, minus the bare-SHA clause, for scanning file content: a 7+ hex-digit token is
 # common in source (constants, masks) and would false-block legitimate writes.
-REVREF_CONTENT='HEAD~|HEAD\^|@\{|\.git(/|$)'
+REVREF_CONTENT='HEAD~|HEAD\^|@\{|\.git($|[^[:alnum:]_-])'
 
 # In script content the subcommand is often not space-separated —
 # `subprocess.run(["git", "reflog"])` puts quotes and a comma between the two tokens. Any
@@ -89,7 +93,7 @@ REVREF_CONTENT='HEAD~|HEAD\^|@\{|\.git(/|$)'
 SUBCMD_LOOSE='(^|[^[:alnum:]_-])git[^[:alnum:]_]+(log|reflog|rev-list|cat-file|blame|stash|fsck|archive|show)([^[:alnum:]_-]|$)'
 
 # Cheap gate: only inspect text that mentions git or a .git path at all.
-GITISH='(^|[^[:alnum:]_-])git([^[:alnum:]_-]|$)|\.git(/|$)'
+GITISH='(^|[^[:alnum:]_-])git([^[:alnum:]_-]|$)|\.git($|[^[:alnum:]_-])'
 
 # Writing a script and then running it defeats a command-text check: the Bash hook only
 # sees `bash x.sh`. Authoring the script *through bash* is already caught (the git text is
@@ -112,6 +116,11 @@ case "$tool" in
         # A shebang makes it a script whatever the extension.
         printf '%s' "$cmd" | sed -n 1p | grep -q '^#!' && scan_text=1
         ;;
+    # Read/Grep/Glob are deliberately NOT matched. `permissions.deny` short-circuits before
+    # PreToolUse — measured: a denied Read never reaches this hook — so matching them would add
+    # no log entry and no protection, while spending ~38 ms on every file read (~76 s over a
+    # 2000-read run). Reads of .git are refused by the deny rules in ../settings.json instead;
+    # the cost is that those refusals do not appear in this log.
 esac
 
 verdict=OK
