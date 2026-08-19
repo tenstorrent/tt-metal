@@ -221,6 +221,9 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
             s.bad_frames++;
             continue;
         }
+        for (uint32_t line = 0; line < 6; line++) {
+            profiler::spsc_prefetch(frame + profiler::kSpscFrameWords + 16 * line);
+        }
         if (sink) {
             w.emit_reserve(pos + profiler::kSpscFrameWords);
         }

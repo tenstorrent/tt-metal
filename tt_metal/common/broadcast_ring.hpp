@@ -21,6 +21,10 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/tt_pause.hpp>
 
+#if defined(__x86_64__)
+#include <emmintrin.h>
+#endif
+
 namespace tt::tt_metal {
 
 /**
@@ -121,13 +125,31 @@ public:
         }
 
         /** @brief Direct emit, step 2: store one item at @p pos, which must be below the reserved bound. */
-        void emit_store(uint64_t pos, const T& item) noexcept { view_.slot_at(pos).store(item); }
+        void emit_store(uint64_t pos, const T& item) noexcept {
+#if defined(__x86_64__)
+            // Non-temporal store for 16 B slots: the ring is written far beyond cache capacity and the
+            // writer never re-reads it, so the read-for-ownership a normal store pays is pure waste.
+            // Bypassing the slot's atomic words is outside the C++ abstract machine but sound here: x86
+            // stores are not observed torn across the 16 B in practice worse than the claim-recheck
+            // already tolerates, and emit_commit's sfence orders every NT store before the head release.
+            if constexpr (kTriviallyCopyable && sizeof(T) == 16 && sizeof(Slot) == 16) {
+                _mm_stream_si128(
+                    reinterpret_cast<__m128i*>(&view_.slot_at(pos)),
+                    _mm_loadu_si128(reinterpret_cast<const __m128i*>(&item)));
+                return;
+            }
+#endif
+            view_.slot_at(pos).store(item);
+        }
 
         /**
          * @brief Direct emit, step 3: publish items [position(), pos) and settle the claim to the
          *        committed position. Does not wake readers; see wake_readers().
          */
         void emit_commit(uint64_t pos) noexcept {
+#if defined(__x86_64__)
+            _mm_sfence();
+#endif
             shared_state_->head.store(pos, std::memory_order_release);
             shared_state_->claim.store(pos, std::memory_order_relaxed);
             head_cache_ = pos;
@@ -359,7 +381,10 @@ private:
         kTriviallyCopyable || (std::is_nothrow_move_constructible_v<T> && std::is_nothrow_move_assignable_v<T>);
     static constexpr bool kLoadNoexcept = kTriviallyCopyable || std::is_nothrow_copy_assignable_v<T>;
 
-    struct AtomicSlot {
+    // 16 B slots are 16-aligned so Writer::emit_store's non-temporal store path is usable on them.
+    static constexpr size_t kSlotAlign = (kTriviallyCopyable && sizeof(T) == 16) ? 16 : alignof(std::atomic<uint64_t>);
+
+    struct alignas(kSlotAlign) AtomicSlot {
         static constexpr size_t kWordCount = (sizeof(T) + sizeof(uint64_t) - 1) / sizeof(uint64_t);
 
         std::array<std::atomic<uint64_t>, kWordCount> words;
