@@ -84,8 +84,8 @@ def run_model(
     topology,
     gate_fallback_mode,
     request,
-    routed_expert_implementation=ttnn.RoutedExpertImplementation.Unified,
-    routed_expert_weight_memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+    routed_expert_implementation=None,
+    routed_expert_weight_memory_layout=None,
     is_balanced=False,
     padded_percent=0,
 ):
@@ -750,16 +750,15 @@ def test_ds_moe(
     ),
     [
         # fmt: off
-        # Keep matched 5K performance and PCC rows for the established unified implementation
-        # and fused SwiGLU with both supported weight placements.
-        pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, ttnn.RoutedExpertImplementation.Unified,       ttnn.TensorMemoryLayout.INTERLEAVED, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k-perf-unified"),
+        # Keep matched 5K performance and PCC rows for fused SwiGLU with both
+        # supported weight placements. Unified remains an explicit implementation
+        # option, but is no longer part of model test coverage.
         pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, ttnn.RoutedExpertImplementation.MoeFusedSwiGlu, ttnn.TensorMemoryLayout.INTERLEAVED, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k-perf-fused-interleaved"),
         pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, ttnn.RoutedExpertImplementation.MoeFusedSwiGlu, ttnn.TensorMemoryLayout.ND_SHARDED, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k-perf-fused-nd"),
-        pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True,  ttnn.RoutedExpertImplementation.Unified,       ttnn.TensorMemoryLayout.INTERLEAVED, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k-pcc-unified"),
         pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True,  ttnn.RoutedExpertImplementation.MoeFusedSwiGlu, ttnn.TensorMemoryLayout.INTERLEAVED, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k-pcc-fused-interleaved"),
         pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True,  ttnn.RoutedExpertImplementation.MoeFusedSwiGlu, ttnn.TensorMemoryLayout.ND_SHARDED, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k-pcc-fused-nd"),
-        pytest.param(3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, ttnn.RoutedExpertImplementation.Unified,       ttnn.TensorMemoryLayout.INTERLEAVED, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k-perf"),
-        pytest.param(3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True,  ttnn.RoutedExpertImplementation.Unified,       ttnn.TensorMemoryLayout.INTERLEAVED, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k-pcc"),
+        pytest.param(3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, ttnn.RoutedExpertImplementation.MoeFusedSwiGlu, ttnn.TensorMemoryLayout.ND_SHARDED, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k-perf-fused-nd"),
+        pytest.param(3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True,  ttnn.RoutedExpertImplementation.MoeFusedSwiGlu, ttnn.TensorMemoryLayout.ND_SHARDED, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k-pcc-fused-nd"),
         # fmt: on
     ],
 )
