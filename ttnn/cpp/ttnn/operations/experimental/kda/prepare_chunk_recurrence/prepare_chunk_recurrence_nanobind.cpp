@@ -30,8 +30,6 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
             tril (ttnn.Tensor): Lower-triangular constant ``[1, 1, 32, 32]`` in
                 FLOAT32.
             ones (ttnn.Tensor): Ones constant ``[1, 1, 32, 32]`` in FLOAT32.
-            masks (ttnn.Tensor): Packed mask constants ``[1, 1, 32, 96]`` in
-                FLOAT32.
             num_heads (int): Number of heads ``H``. Flat Q/K/G and V widths must be
                 divisible by ``H``.
 
@@ -70,7 +68,6 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         nb::arg("eye").noconvert(),
         nb::arg("tril").noconvert(),
         nb::arg("ones").noconvert(),
-        nb::arg("masks").noconvert(),
         nb::arg("num_heads"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),

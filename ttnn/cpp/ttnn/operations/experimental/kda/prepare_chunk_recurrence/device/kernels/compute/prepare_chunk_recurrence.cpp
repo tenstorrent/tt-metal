@@ -368,7 +368,6 @@ TT_KERNEL void compute(uint32_t work_count) {
     DataflowBuffer t_inv(dfb::t_inv);
     DataflowBuffer v_beta(dfb::v_beta);
     DataflowBuffer k_beta(dfb::k_beta);
-    DataflowBuffer u(dfb::u);
     DataflowBuffer w(dfb::w);
     DataflowBuffer q_decay(dfb::q_decay);
     DataflowBuffer intra(dfb::intra);
@@ -384,11 +383,10 @@ TT_KERNEL void compute(uint32_t work_count) {
     DataflowBuffer scratch_three(dfb::scratch_three);
     DataflowBuffer state_three(dfb::state_three);
 
-    compute_kernel_hw_startup(dfb::q, dfb::k, dfb::u);
+    compute_kernel_hw_startup(dfb::q, dfb::k, dfb::scratch_one);
     WAIT(eye, cc);
     WAIT(tril, cc);
     WAIT(ones, cc);
-    WAIT(u, 3);
 
     for (uint32_t c = 0; c < work_count; c++) {
         WAIT(q, ck);

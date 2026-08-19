@@ -38,13 +38,11 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     check_device_tensor(in.eye, "eye", DataType::FLOAT32);
     check_device_tensor(in.tril, "tril", DataType::FLOAT32);
     check_device_tensor(in.ones, "ones", DataType::FLOAT32);
-    check_device_tensor(in.masks, "masks", DataType::FLOAT32);
 
     TT_FATAL(
         in.q.device() == in.k.device() && in.q.device() == in.v.device() && in.q.device() == in.g.device() &&
             in.q.device() == in.beta.device() && in.q.device() == in.eye.device() &&
-            in.q.device() == in.tril.device() && in.q.device() == in.ones.device() &&
-            in.q.device() == in.masks.device(),
+            in.q.device() == in.tril.device() && in.q.device() == in.ones.device(),
         "prepare_chunk_recurrence: all inputs must be on the same device");
     TT_FATAL(!attrs.output_mem_config.is_sharded(), "prepare_chunk_recurrence: output memory must be interleaved");
     TT_FATAL(
@@ -95,9 +93,6 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     TT_FATAL(in.eye.logical_shape() == constant_shape, "prepare_chunk_recurrence: eye shape must be [1, 1, 32, 32]");
     TT_FATAL(in.tril.logical_shape() == constant_shape, "prepare_chunk_recurrence: tril shape must be [1, 1, 32, 32]");
     TT_FATAL(in.ones.logical_shape() == constant_shape, "prepare_chunk_recurrence: ones shape must be [1, 1, 32, 32]");
-    TT_FATAL(
-        in.masks.logical_shape() == Shape({1, 1, tt::constants::TILE_HEIGHT, 3 * tt::constants::TILE_WIDTH}),
-        "prepare_chunk_recurrence: masks shape must be [1, 1, 32, 96]");
     constexpr uint32_t allowed_bf16_mask = 0x37;
     TT_FATAL(
         (attrs.output_bf16_mask & ~allowed_bf16_mask) == 0,
@@ -144,7 +139,6 @@ std::vector<Tensor> prepare_chunk_recurrence(
     const Tensor& eye,
     const Tensor& tril,
     const Tensor& ones,
-    const Tensor& masks,
     uint32_t num_heads,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
@@ -174,7 +168,7 @@ std::vector<Tensor> prepare_chunk_recurrence(
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         PrepareChunkRecurrenceInputs{
-            .q = q, .k = k, .v = v, .g = g, .beta = beta, .eye = eye, .tril = tril, .ones = ones, .masks = masks});
+            .q = q, .k = k, .v = v, .g = g, .beta = beta, .eye = eye, .tril = tril, .ones = ones});
 }
 
 }  // namespace ttnn::experimental::prim

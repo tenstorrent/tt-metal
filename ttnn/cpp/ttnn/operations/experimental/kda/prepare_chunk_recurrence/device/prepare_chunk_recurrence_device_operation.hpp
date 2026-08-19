@@ -32,7 +32,6 @@ std::vector<Tensor> prepare_chunk_recurrence(
     const Tensor& eye,
     const Tensor& tril,
     const Tensor& ones,
-    const Tensor& masks,
     uint32_t num_heads,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
