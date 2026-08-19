@@ -35,7 +35,14 @@
 #       its corpus_id — a measured op that silently drops out of the sweep
 #       surface is the omission class that hid welford/recip/bcast/mul_int
 #       for two pin cycles; machine-readable kind=skip rows satisfy the rule
-#       (visible in every scoreboard), silence does not.
+#       (visible in every scoreboard), silence does not;
+#   R9  (laneBU, the pin-11 lesson) the _REVIEWED_FIRE_WITNESSES table is
+#       present, well-formed (flag|pytest-node|dump-flag|required-line), and
+#       names only flags in sweep_2x2.py's reviewed ON set — the STRUCTURAL
+#       half of the union fire-witness rule; the compile half (each witness
+#       node built at the pinned toolchain with the full ON set + dump flag,
+#       missing line = RED 'fire witness stale on the union') is
+#       witness_preflight.py, run by the nightly wrapper's preflight.
 #
 # Usage: conf_lint.sh [<sweep_2x2.conf> <baseline.tsv> [<manifest.tsv> <ops.tsv>]]
 #   Defaults: the checked-in conf beside this script, the baseline for
@@ -246,8 +253,60 @@ else
   fi
 fi
 
+# ---- R9: union fire-witness table (laneBU, the pin-11 lesson) ----
+# Structural half: the _REVIEWED_FIRE_WITNESSES table must exist, parse
+# (flag|pytest-node|dump-flag|required-line, 4 non-empty fields), name only
+# -mtt-tensix-* flags that are IN sweep_2x2.py's reviewed ON set, use only
+# -fdump-{rtl,tree}-rvtt_* dump flags, and carry no exact-duplicate rows.
+# The COMPILE half (each witness node compiled at the pinned toolchain with
+# the full ON set + dump flag; missing required line = RED "fire witness
+# stale on the union") lives in witness_preflight.py — the nightly wrapper
+# runs it in preflight (--skip-witness is the loudly-logged escape).
+SWEEP_PY="$HERE/sweep_2x2.py"
+R9_ASSIGN=$(grep -c '^_REVIEWED_FIRE_WITNESSES="' "$CONF")
+if [ "$R9_ASSIGN" -ne 1 ]; then
+  fail R9 "conf must assign _REVIEWED_FIRE_WITNESSES exactly once (found $R9_ASSIGN) — the union fire-witness rule is unenforceable without the table (an EMPTY table is legal, a missing one is not)"
+else
+  R9_TABLE=$(awk '/^_REVIEWED_FIRE_WITNESSES="/{f=1;next} f&&/^"[[:space:]]*$/{f=0;done=1;next} f' "$CONF")
+  R9_CLOSED=$(awk '/^_REVIEWED_FIRE_WITNESSES="/{f=1;next} f&&/^"[[:space:]]*$/{f=0;done=1} END{print done?1:0}' "$CONF")
+  if [ "$R9_CLOSED" != 1 ]; then
+    fail R9 "_REVIEWED_FIRE_WITNESSES table is not terminated by a lone closing quote line"
+  fi
+  ON_BLOCK=$(awk '/^ON_FLAGS = \(/{f=1;next} f&&/^\)/{f=0} f' "$SWEEP_PY")
+  [ -n "$ON_BLOCK" ] || fail R9 "cannot extract the ON_FLAGS block from $SWEEP_PY (layout changed?)"
+  R9_SEEN=""
+  while IFS= read -r wline; do
+    wtrim=$(printf '%s' "$wline" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    [ -z "$wtrim" ] && continue
+    case "$wtrim" in \#*) continue;; esac
+    wf1=$(printf '%s' "$wtrim" | awk -F'|' '{print $1}')
+    wf2=$(printf '%s' "$wtrim" | awk -F'|' '{print $2}')
+    wf3=$(printf '%s' "$wtrim" | awk -F'|' '{print $3}')
+    wf4=$(printf '%s' "$wtrim" | awk -F'|' '{print $4}')
+    wnf=$(printf '%s' "$wtrim" | awk -F'|' '{print NF}')
+    if [ "$wnf" -ne 4 ] || [ -z "$wf1" ] || [ -z "$wf2" ] || [ -z "$wf3" ] || [ -z "$wf4" ]; then
+      fail R9 "witness table row needs exactly 4 non-empty '|' fields (flag|pytest-node|dump-flag|required-line): $wtrim"
+      continue
+    fi
+    if ! printf '%s' "$wf1" | grep -qE '^-mtt-tensix-[a-z0-9-]+$'; then
+      fail R9 "witness table row names a non -mtt-tensix- flag: $wf1"
+    elif ! printf '%s\n' "$ON_BLOCK" | grep -qE -- "\"${wf1}[\" ]"; then
+      fail R9 "witnessed flag $wf1 is NOT in sweep_2x2.py's reviewed ON set — a witness for a flag outside the union is a stale table row"
+    fi
+    if ! printf '%s' "$wf3" | grep -qE '^-fdump-(rtl|tree)-rvtt_[a-z_]+$'; then
+      fail R9 "witness table row's dump flag is not -fdump-{rtl,tree}-rvtt_*: $wf3"
+    fi
+    if printf '%s\n' "$R9_SEEN" | grep -qxF -- "$wtrim"; then
+      fail R9 "exact duplicate witness table row: $wtrim"
+    fi
+    R9_SEEN=$(printf '%s\n%s' "$R9_SEEN" "$wtrim")
+  done <<EOF_R9
+$R9_TABLE
+EOF_R9
+fi
+
 if [ "$RED" -eq 0 ]; then
-  echo "conf-lint: GREEN — pin values ↔ conf prose ↔ PIN HISTORY (CURRENT) ↔ baseline header all agree (cc1plus ${CC1:0:12}…, driver ${DRV:0:12}…, sim bh ${SBH:0:12}…, sim wh ${SWH:0:12}…); LLK trees pristine vs the reviewed upstream base (R7); every measured corpus row is wired into the sweep (R8)"
+  echo "conf-lint: GREEN — pin values ↔ conf prose ↔ PIN HISTORY (CURRENT) ↔ baseline header all agree (cc1plus ${CC1:0:12}…, driver ${DRV:0:12}…, sim bh ${SBH:0:12}…, sim wh ${SWH:0:12}…); LLK trees pristine vs the reviewed upstream base (R7); every measured corpus row is wired into the sweep (R8); fire-witness table well-formed and ON-set-coherent (R9 — compile half in witness_preflight.py)"
   exit 0
 fi
 echo "conf-lint: FAILED — the pin audit trail disagrees with itself; fix the prose/header IN THE SAME COMMIT as any pin change (see rules in this script's header)"

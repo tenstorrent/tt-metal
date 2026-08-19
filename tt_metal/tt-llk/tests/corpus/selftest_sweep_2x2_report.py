@@ -368,6 +368,9 @@ def main():
         "flags": flags,
         "extra_env": {"K": "V"},
         "tag": "silicon",
+        # execution-context key (laneBU batched silicon): serial and batched
+        # cells never mix inside one row's samples
+        "mode": "serial",
     }
 
     def cache_case(name, texts, jobkey, expected_texts, want_reuse, row_over=None):
@@ -413,6 +416,13 @@ def main():
         ["aaa"],
         want_reuse=False,
         row_over={"extra_env": {"K": "OTHER"}},
+    )
+    cache_case(
+        "cache: execution-mode mismatch never reuses (batched cell, serial run)",
+        ["aaa"],
+        dict(goodkey, mode="batched"),
+        ["aaa"],
+        want_reuse=False,
     )
     cache_case(
         "cache: .text mismatch never reuses",

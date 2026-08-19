@@ -338,6 +338,145 @@ gate can never bless a sweep:
    (the omission class that kept welford/recip/binary-bcast/mul_int measured
    but un-swept for two pin cycles); machine-readable `kind=skip` rows
    satisfy it, silence does not.
+7. **Union fire-witness check (R9, laneBU — the pin-11 lesson)** — pin 9
+   shipped two ON-set flags that never engaged; pin 11 shipped prgm-const
+   whose fire holds on its lane's build but NOT on the shipped nine-lane
+   union.  The `_REVIEWED_FIRE_WITNESSES` table in `sweep_2x2.conf` declares,
+   per ON-set flag, `flag|pytest-node|dump-flag|required-dump-line-regex`.
+   `conf_lint.sh` R9 lints the table's STRUCTURE (4 fields, flag present in
+   `sweep_2x2.py`'s reviewed ON set, `-fdump-{rtl,tree}-rvtt_*` dump flag,
+   no duplicate rows); `witness_preflight.py` runs the COMPILE half: each
+   entry's node is compiled once (entries sharing a node share the compile —
+   the seeded table is 3 compiles) at the **pinned** toolchain with the
+   **full reviewed ON set** plus the dump flag, and the required line must
+   appear in that pass's dump files.  A missing line is RED naming the flag
+   (`fire witness stale on the union: <flag>`).  The nightly wrapper runs it
+   in preflight; `--skip-witness` is the loudly-logged emergency escape.
+   Self-tests: `selftest_witness_preflight.py` (synthetic witnesses;
+   present/missing/scoped-stale) + the R9 cases in `selftest_conf_lint.sh`.
+   KNOWN RED at pin 11: the prgm-const exp-node witness does not fire on the
+   union (lane BT owns the compiler fix) — that RED is deliberate and is the
+   system working; clear it by landing the fix or re-reviewing the row,
+   never by deleting the row to make the nightly green.
+
+### Batched silicon execution (laneBU increment 4)
+
+Weekly-20260820 forensics: 684 silicon legs took 517 min (~45 s wall/leg)
+while each pytest test completes in ~1.4 s -- >95% was per-leg session
+overhead (fresh interpreter + conftest + device open/close + one compile
+invocation per leg, all x3 by `PERF_RUNS`).  `sweep_2x2.py` now batches by
+default (`--serial-legacy` is the loudly-logged escape), preserving the S1
+protocol exactly:
+
+* silicon legs group by **(flag-set, extra_env)** (arch is constant BH);
+  ONE `--compile-producer` pass per group into a shared `RUNNER_TEMP`
+  (seeded from a verified `corpus_leg_store` build -- `ensure --keep-build`
+  -- when the exact cc1plus/flags/tree/farm matches; reuse is an
+  optimization, never a trust decision);
+* ONE consumer pytest session (`--compile-consumer`, fresh process) per
+  (group, repetition r1/r2/r3, CSV partition) runs its legs' nodes inside a
+  single dual-flock acquisition and device session; **3 fresh processes per
+  rep are preserved**, OFF/ON alternate at session granularity per rep;
+* **correctness before perf**: each group's corr nodes run in their own
+  session before any perf session; a row with a failed corr leg has every
+  perf leg withheld (the legacy STOP semantics, reproduced by the shared
+  assembly code);
+* **per-leg evidence layout unchanged**: the consumer session's outputs are
+  split back per leg (per-node outcomes via the checked-in corpus pytest
+  reporter; per-leg `TEXT_HASHES.txt` is the group-build subset at the
+  leg's classify relpaths, so the classify-vs-device hash-match gate keeps
+  its exact strength; per-leg CSVs are the module CSV filtered by the
+  `mathop` column).  Because the harness's perf report is per test MODULE,
+  two legs share a session only when their CSV rows are separable --
+  same-module legs need distinct `mathop:` tokens; a token-less leg is its
+  module's only leg in that session (`partition_perf_legs`, selftested;
+  sem-vs-hand impl legs of one module never share);
+* batched and serial cells are jobkey-separated (`mode`): a mode switch
+  re-measures instead of blending two measurement contexts.
+
+PRE-REGISTERED speedup (weekly-20260820 shape, 759 main-phase legs):
+legacy = 759 x 45 s = ~570 min; batched = ~90-120 device sessions = ~85-110
+min (session spin-up amortized; per-leg marginal cost = its ~1.4 s test), a
+>=5x reduction of the silicon phase with identical evidence.  Weekly knob
+legs (200) stay on the serial path this increment.  First device validation
+happens on the first post-merge sweep -- the report's class/magnitude drift
+gates own the verdict, and `--serial-legacy` restores the old path
+one-for-one.  Self-test: `selftest_batched_silicon.py` (partitioning,
+3-op dry-run layout parity batched==legacy, session splitting, cache
+keying), run by the nightly wrapper with the other gate self-tests.
+
+### Pin-cycle infrastructure (laneBU)
+
+#### Shared BASE-leg store (`corpus_leg_store.py`)
+
+During a pin cycle every lane needs the identical BASE corpus compile leg
+(pinned toolchain × reviewed flag set) only to compare its own EDIT leg
+against it.  The store publishes ONE such leg per key under
+`~/sfpi-uplift/corpus-legs/<cc1plus-sha12>/<flagset-sha12>/` — `leg.json`
+(full cc1plus sha256, exact flag string, arch, tt-metal head, farm realpath,
+producer command), `text_hashes.tsv` (the sweep-format `.text`/ELF sha256
+manifest), and `results.tsv`/`results.json` from the leg.
+
+Lane protocol:
+
+* **BASE legs are consumed READ-ONLY from the shared store.**  `ensure`
+  compiles only when the key is absent, holds an exclusive flock while
+  compiling (a concurrent lane WAITS and then consumes — never a duplicate
+  compile), publishes by atomic rename, and re-verifies the resolved cc1plus
+  sha AFTER the compile (a mid-leg `tests/sfpi` repoint discards the leg;
+  the leg also pins its cc1plus via `GCC_EXEC_PREFIX` for the duration).
+* **Consumers verify before trust**: every `ensure` hit and `manifest` call
+  re-derives the cc1plus sha, flag string, arch, and tt-metal head from the
+  CALLER's toolchain/checkout and refuses on any disagreement or on a
+  tampered manifest/results file.  A sha mismatch is a refusal, never a
+  recompile-over.
+* **EDIT legs stay per-lane**: pass the lane's `--compiler` plus a
+  lane-private `--store-root`, or `--no-store --run-root DIR` for
+  isolation-critical runs (nothing shared is read or written).
+* `.text` hashes are FARM-PATH-DEPENDENT (LLK_PROFILER path-hash
+  immediates): hash-equality against a store manifest is only valid from
+  the same farm path (`leg.json` records it; a cross-farm consumer gets a
+  loud warning).  Byte-compare from the shared farm with the gatefix `-B`
+  method, per the lane-workflow notes.
+
+```bash
+# BASE ON leg at the pinned toolchain (one lane compiles, the rest consume):
+python3 tt_metal/tt-llk/tests/corpus/corpus_leg_store.py ensure --arch bh \
+  --flags "$(python3 -c 'import sys; sys.path.insert(0,"tt_metal/tt-llk/tests/corpus"); import sweep_2x2; print(sweep_2x2.ON_FLAGS)')"
+```
+
+Self-test: `selftest_corpus_leg_store.py` (real CLI + flock; fake toolchain/
+producer) proves two concurrent `ensure` calls produce exactly one compile
+and that sha/tamper/head mismatches refuse.
+
+#### Waiting on another leg (`corpus_watch.py`) — REQUIRED
+
+The 2026-08-18 session lost ~3h to dead completion waiters (8 failures):
+ad-hoc sleep loops waiting forever on producers that had already died.
+`corpus_watch.py` is the REQUIRED wait mechanism for lane legs — never a
+bare `sleep`/`tail` loop:
+
+```bash
+python3 tt_metal/tt-llk/tests/corpus/corpus_watch.py \
+  --exists ~/sfpi-uplift/corpus-legs/<cc1>/<flags>/leg.json \
+  --producer-log ~/sfpi-uplift/laneXX/base-leg.log --max-age-min 20 \
+  --interval 30 --timeout-min 120
+case $? in
+  0) : consume ;;               # condition met
+  2) : still alive, over budget ;;  # timeout — decide, don't hang
+  3) : relaunch the producer ;; # producer DEAD (log stopped advancing)
+esac
+```
+
+Exit 3 ("producer dead") fires when the producer's log stops advancing for
+`--max-age-min` minutes while the condition is unmet — the lane relaunches
+deterministically instead of waiting forever.  Conditions: `--exists PATH`
+(repeatable) and/or `--grep REGEX --grep-file FILE`.  `--producer-log` may
+name a DIRECTORY — liveness is then the newest mtime found by a recursive
+walk (with an early-exit once liveness is proven); watch a producer's
+build/run dir when its output lands in nested per-row files rather than
+one streaming log (a corpus leg's build dir is exactly that shape).
+Self-test: `selftest_corpus_watch.py`.
 
 ### Corpus-wide sweep surface (Lane AZ expansion)
 
