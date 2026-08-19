@@ -110,6 +110,15 @@ uint32_t _start() {
 
     EARLY_RETURN_FOR_DEBUG
 
+#ifdef ARCH_QUASAR
+    // Raise the compute MOP timeout so a slow-reader MOP (e.g. the avg-pool / reduce datacopy that
+    // stalls on a lagging reader) does not trip a 0x19/0x119 (MOP timeout) on the emulator.
+#ifndef CSR_TIMEOUT_COUNT
+#define CSR_TIMEOUT_COUNT 0xBD0
+#endif
+    asm volatile("csrw %0, %1" : : "i"(CSR_TIMEOUT_COUNT), "r"(0x100000));
+#endif
+
     WAYPOINT("K");
     run_kernel();
     WAYPOINT("KD");
