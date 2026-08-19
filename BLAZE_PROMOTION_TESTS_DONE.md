@@ -35,10 +35,10 @@
 | | |
 |---|---|
 | Verification tier (V1-V4) | 4 of 4, all green |
-| New test items landed | **9** — the original 5 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard, rmsnorm bcast-scalar dest-reuse) plus 3 from 2026-08-18 (`set_dst_write_addr_offset` behaviour, compressed metadata-word boundary, `mul_reduce_scalar` re-entry) |
+| New test items landed | **10** — the original 5 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard, rmsnorm bcast-scalar dest-reuse) plus 3 from 2026-08-18 (`set_dst_write_addr_offset` behaviour, compressed metadata-word boundary, `mul_reduce_scalar` re-entry) |
 | Test results | **235 new variants passing / 13 xfailed** (42 + 15 + 2 + 12 + 114 + 14 + 6 + 36; xfails are 1 W-stride + 12 re-entry) |
 | Files | 12 added (6 `tests/sources/*.cpp`, 6 `tests/python_tests/test_*.py`) + 3 extended (`sfpu_sampling_test.cpp`, `test_sfpu_sampling.py`, `test_matmul_custom_compressed.py`) + 2 LLK headers fixed to compile + 3 template params added |
-| Product findings | **3 defects** (all need an owner) + 1 pre-existing reconfig escape + 8 behavioural constraints |
+| Product findings | **4 defects** (all need an owner) + 1 pre-existing reconfig escape + 10 behavioural constraints |
 
 ### Landed tests
 
@@ -53,6 +53,7 @@
 | **Compressed metadata-word boundary (#52727)** — 2026-08-18 | `tests/python_tests/test_matmul_custom_compressed.py` (extended) | **6 passed** (suite 582 -> 588) |
 | **`mul_reduce_scalar` re-entry (#52709)** — 2026-08-18 | `tests/sources/mul_reduce_scalar_reenter_test.cpp`, `tests/python_tests/test_mul_reduce_scalar_reenter.py` | **36 passed, 12 xfailed** (Finding 9) |
 | **custom_mm uninit parity guard (#52727)** — 2026-08-18 | `tests/python_tests/test_custom_mm_uninit_parity.py` | **2 passed** — static, device-free; B1's interim guard |
+| **plain `custom_mm` matmul (#52727)** — 2026-08-19 | `tests/sources/matmul_custom_mm_test.cpp`, `tests/python_tests/test_matmul_custom_mm.py` | **32 passed**, PCC >= 0.99999 — closes A1's "no coverage at all" |
 
 ### Verification tier — all green on the merged branch
 
@@ -673,6 +674,52 @@ detect the out-of-bounds read at all — at `rem_iters == 0` the word read past 
 never used, so no golden comparison can see it — and the `set_dst_write_addr_offset` mutation
 showed its `tile=0` variants prove nothing about the helper, since offset 0 is a no-op even when
 broken. Both limitations are now written into the tests rather than left implied.
+
+### Finding 14 — DEFECT (needs an owner): #52727 merged without the out-of-bounds guard
+
+The out-of-bounds remainder metadata read Copilot found on #53130 (Finding 12's neighbour, fixed
+on this branch) **did not make it into the merge**. Verified 2026-08-19: `rem_iters != 0` does
+not appear in main's `llk_unpack_AB_compressed_custom_mm.h`, so the unguarded
+`meta_ptr[full_iters]` is live on main.
+
+Reachable inside the documented ranges whenever `kt_dim * ct_dim` is a multiple of 10
+(`kt_dim=10, ct_dim=1` is the smallest). Precisely what it costs: at `rem_iters == 0` the
+remainder loop never runs, so the word read past the buffer is never used and no golden can see
+it — an L1 memory-safety defect, not a wrong-answer one. Fix is a three-line guard; cherry-pick
+`54e218ebbce`. Tracked as C5.
+
+### Finding 15 — the merged uninit is not what #52727's promote branch had
+
+Main's `*_block_uninit` restores **only** the `dense_packing` W-stride. Two earlier revisions on
+the promote branch went further — one made the tile-pack MOP restore unconditional, the next put
+it behind a `restore_tile_pack_mop` flag — and **neither survived review**. Main has no MOP
+restore and no flag, and `pack_block_uninit.h` / `pack_block_contiguous_uninit()` are gone from
+the compute API entirely, so the area was reshaped rather than just trimmed.
+
+Two consequences worth carrying:
+
+- **D3 is resolved by deletion**, not by the decision it was waiting on. The #53130 reviewer's
+  suggestion — pair the fused caller with `pack_block_contiguous_uninit` rather than add a flag
+  to the op uninit — effectively won upstream.
+- **A replicating test can keep passing after its subject is deleted.**
+  `test_custom_mm_uninit_restore.py` replicates the uninit body rather than calling the API, so
+  post-merge it went on asserting a MOP restore nothing performs — green, measuring nothing.
+  Narrowed in `1d06517c59f`. Note that `test_custom_mm_uninit_parity.py`, written for exactly
+  this staleness class, did **not** catch it: it compares the two bodies to each other and the
+  W-stride expressions to the headers, and neither changes when a knob the test drives
+  disappears upstream. A guard's reach is worth stating as precisely as its claim.
+
+### Finding 16 — the plain custom_mm doc tables overstate ct_dim
+
+From building A1's test (`ed43f6f7b8f`). The tables say `ct_dim` is "any integer from 1 to 16".
+The ct output tiles are all live in DEST at once and half-sync holds 8 bf16 tiles, so **ct_dim > 8
+is unreachable from a single call** in that configuration; the upper half of the documented range
+needs `DstSync::SyncFull` or a caller that splits the block. Swept 1, 3, 7, 8 — 3 and 7 being the
+odd middle values the tables never pinned, which was A1's stated open question.
+
+The companion constraint is real and now sourced: `kt_dim` must be **even**, because
+`_llk_unpack_AB_custom_mm_run_` issues `TT_MOP(0, (kt_dim / 2) - 1, 0)`. That is where the
+tables' "even number from 2 to 256" comes from.
 
 ---
 

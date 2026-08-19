@@ -1,6 +1,8 @@
 # tt-llk blaze promotions — everything still to do
 
-Single actionable index of what is left, with a plan per item. **Updated 2026-08-18** after a
+Single actionable index of what is left, with a plan per item. **Updated 2026-08-19** after
+#52727 merged and the branch was rebased onto it — see
+[§ Closed on 2026-08-19](#closed-on-2026-08-19). Previously updated **2026-08-18** after a
 working session that closed A3, A6 and D2, added coverage for a boundary nothing reached, and
 **located the `mul_reduce_scalar_chunked_tile` defect** (A4). See
 [§ Closed on 2026-08-18](#closed-on-2026-08-18) for what changed and
@@ -22,8 +24,8 @@ that means no driver under `tt_metal/tt-llk/tests/sources/` references the symbo
 
 | # | Item | Type | Size | Blocked on |
 |---|------|------|------|-----------|
-| **A1** | `custom_mm` (plain) — entire family untested | test | ~2 d | #52727 merging |
-| **A2** | `top32_rm` — entire family untested | test | ~3–4 d | #52713 merging |
+| **A1** | `custom_mm` (plain) — **now under test**; transpose + split_acc/finalize left | test | ~0.5 d left | — |
+| **A2** | `top32_rm` — entire family untested | test | ~3–4 d | #52713 merging (**still open**) |
 | ~~A3~~ | ~~`set_dst_write_addr_offset` behaviour~~ | — | — | **DONE 2026-08-18** |
 | ~~A4~~ | ~~`mul_reduce_scalar_chunked_tile` untested~~ | — | — | **Defect located → C4** |
 | **A5** | `eltwise_mul_scalar` HiFi init — untested, rationale disproved | test | unknown | C2 |
@@ -32,22 +34,88 @@ that means no driver under `tt_metal/tt-llk/tests/sources/` references the symbo
 | **C1** | `dense_packing` W-stride not format-aware | **defect** | ~0.5 d once decided | owner decision |
 | **C2** | `eltwise_mul_scalar` HiFi workaround rationale does not hold | **question** | — | #52709 author |
 | **C3** | `topk_xl` → `eltwise_binary` reconfig escape | **defect**, pre-existing | unknown | needs an owner |
-| **C4** | `mul_reduce_scalar` re-entry needs a DEST-section boundary | **defect**, NEW | unknown | needs an owner |
+| **C4** | `mul_reduce_scalar` re-entry needs a DEST-section boundary | **defect** | unknown | needs an owner |
+| **C5** | OOB metadata read shipped to main with #52727 | **defect**, NEW | minutes | needs the fix cherry-picked |
 | **D1** | `mul_reduce_scalar_chunked_tile` ships with no caller | cleanup | — | C4 decides it |
 | ~~D2~~ | ~~bare `false, false` in `rmsnorm.h:27`~~ | — | — | **DONE 2026-08-18** |
-| **D3** | `restore_tile_pack_mop` has no consumer | cleanup | — | `custom_mm.h` owner |
+| ~~D3~~ | ~~`restore_tile_pack_mop` has no consumer~~ | — | — | **Resolved upstream: flag deleted** |
 | **E** | PR mechanics | chore | minutes | — |
 | **F** | `test_matmul_custom_compressed` hangs — host/BRISC desync | **defect**, nightly-only | unknown | needs an owner |
 
-A1 and A2 remain the real holes: both promoted, both shipping, neither has a line of coverage.
-Both are still blocked — #52727 and #52713 were re-checked on 2026-08-18 and are **still open**.
+**A1 is no longer a hole.** #52727 merged on 2026-08-18 at 23:37 UTC, and the plain family now
+has coverage (see below). **A2 still is** — #52713 was re-checked on 2026-08-19 and is still
+open, so `top32_rm` remains promoted-on-this-branch and untested.
+
+---
+
+## Closed on 2026-08-19
+
+#52727 **merged** (squash, `a85c79a9829`, 2026-08-18 23:37 UTC). #52713 re-checked and still
+open. Branch rebased onto main and now sits at 44 commits.
+
+### The rebase, and what it revealed
+
+Five commits were **dropped**: the branch's own copy of #52727's promotion payload
+(`a63a9fd2563` and the four that followed it — promote-branch SHAs, so they resolve on
+`pmilenkovic/promote-custom-mm`, not here). Main has that content, but as a *squash* merge,
+so git could not see them as duplicates and replaying them conflicted three times over.
+Dropping them explicitly let the other 40 commits replay with a single conflict.
+
+That one conflict is the important part. **Main's merged `*_block_uninit` has no
+`restore_tile_pack_mop` and no MOP restore at all** — its body is the `dense_packing` W-stride
+write and nothing else. The branch had gone one revision further than what shipped: an earlier
+promote commit made the MOP restore unconditional, the next made it an opt-in flag, and
+neither survived review. So the commit documenting that flag was dropped too, and D3 is
+resolved upstream by deletion rather than by a decision anyone still owes.
+
+- **`test_custom_mm_uninit_restore.py` was silently testing a ghost.** It replicates the uninit
+  body rather than calling the API, so after the merge it kept passing while asserting a MOP
+  restore no compute-API function performs. Narrowed to what shipped in `1d06517c59f`:
+  `restores_dense_wstride` (the whole of the uninit, keeping the C1 fp32 xfail, which still
+  reproduces), `is_load_bearing`, and a new `leaves_the_caller_mop_installed` that pins the
+  **absence** of a restore via a 2-face block MOP. 7 passed / 8 skipped / 1 xfailed, from
+  15/16/1 covering a flag that no longer exists.
+- Note this is exactly the staleness class `test_custom_mm_uninit_parity.py` exists for, and it
+  **did not catch it**: that guard compares the two bodies to each other and the W-stride
+  expressions to the headers, neither of which changes when a knob the test drives disappears
+  upstream. Worth knowing about the guard's reach.
+
+### A1 — plain `custom_mm` now under test, `ed43f6f7b8f`
+
+`tests/sources/matmul_custom_mm_test.cpp` + `tests/python_tests/test_matmul_custom_mm.py`.
+**32 passed on BH p100a, PCC >= 0.99999.**
+
+The shape is why this needed real work rather than a copy of `matmul_test.cpp`: operand a is a
+full 32x32 4-face tile, operand b a narrow `[{1,2,4,8}, 32]` tile using only its top two faces,
+one face per unpack instruction. So it computes `(M x K) @ (K x N)` for M in {1,2,4,8} from ONE
+call per thread, with the operands **swapped** (full tiles in `buffer_B`, passed as
+`base_address_a`). Stimuli therefore need a raw-bytes config like the compressed sibling's,
+because the harness's tensor path assumes one tile layout for both operands; golden, result
+reorder and the kt-scaled atol are reused from `helpers/compressed_utils.py`.
+
+Two things the sweep pins that the doc tables only assert:
+
+| Constraint | Where it comes from |
+|---|---|
+| `kt_dim` even | `_llk_unpack_AB_custom_mm_run_` issues `TT_MOP(0, (kt_dim / 2) - 1, 0)`, so an odd value runs the wrong iteration count. This is the origin of the tables' "even number from 2 to 256". |
+| `ct_dim <= 8` | the ct output tiles are all live in DEST and half-sync holds 8 bf16 tiles, so **ct_dim > 8 is unreachable from a single call** in this configuration. The tables claim any integer 1..16; the upper half needs `DstSync::SyncFull` or a caller that splits the block. |
+
+That second row **answers A1's open documentation question** (`ct ∈ {7, 9, 11}`): 7 works and is
+swept along with 3, the other odd middle value; 9 and 11 are not reachable at all here, which is
+a stronger statement than "unverified".
+
+Verified to discriminate: offsetting operand a by one tile drops PCC from 0.999993 to **-0.092**.
+
+**Left for the next increment** (~0.5 d, no longer blocked): `transpose`, and `split_acc` /
+`finalize` — both of which ARE forwarded on this family, unlike the compressed one. Recorded in
+the test files as well, not just here.
 
 ---
 
 ## Closed on 2026-08-18
 
 All on `ldjurovic/llk-tests-blaze-promotions`, all verified on BH p100a. **Thirteen commits,
-`f6b27ef87b7..495adc689c9`.**
+`54e218ebbce..096ff04e219`.**
 
 > **SHAs were rewritten on 2026-08-18** when the branch was rebased onto `main`
 > (`b62ff4a6af1`). Every SHA in this document is post-rebase and reachable from the branch
@@ -61,20 +129,20 @@ The eleven open threads were triaged against the tree. Fixed:
 
 | Commit | Comment |
 |---|---|
-| `f6b27ef87b7` | Copilot 🔴 — out-of-bounds remainder metadata read in `llk_unpack_AB_compressed_custom_mm.h`, reachable at `kt_dim=10, ct_dim=1` |
-| `7fa1d84d59c` | dead `unpack_{src,dst}_format` deleted end to end — **3** files, not the 2 the bot predicted (the new tt-llk driver also passed them) |
-| `d0287a5ca08` | imperative `pytest.xfail()` → marker (see Correction 1) |
-| `643a488cad2` | `add_rsqrt` asserted the sign of a value the implementation leaves undefined |
-| `5164448a50b` | `restore_tile_pack_mop` documented as an *install*, not a restore |
-| `6b4f9ae2901` | bare `0` → `0 /*addr*/` |
+| `54e218ebbce` | Copilot 🔴 — out-of-bounds remainder metadata read in `llk_unpack_AB_compressed_custom_mm.h`, reachable at `kt_dim=10, ct_dim=1` |
+| `0f07f6b3bd8` | dead `unpack_{src,dst}_format` deleted end to end — **3** files, not the 2 the bot predicted (the new tt-llk driver also passed them) |
+| `e94b5dd0fbe` | imperative `pytest.xfail()` → marker (see Correction 1) |
+| `1ebef7cd72c` | `add_rsqrt` asserted the sign of a value the implementation leaves undefined |
+| ~~dropped~~ | ~~`restore_tile_pack_mop` documented as an *install*, not a restore~~ — **dropped in the 2026-08-19 rebase**, because main's merged #52727 has no such flag |
+| `ec1fef679a0` | bare `0` → `0 /*addr*/` |
 
 Already fixed by earlier commits, reply-and-resolve only: the sampling import order
-(`42e32a4f12c`), the `split_acc`/`finalize` doc tables (`3a8344de46e`), and the sort-header
-coverage claims (`73102b8d911`). Two need a written answer rather than a change: Copilot's
+(`f628a3de0be`), the `split_acc`/`finalize` doc tables (`795ff816b1f`), and the sort-header
+coverage claims (`c6c52b16063`). Two need a written answer rather than a change: Copilot's
 "exercise the real uninit API" (that is B1, and the limitation is already documented in the
 test) and "PR metadata is still the template" (that is E).
 
-### A3 — `set_dst_write_addr_offset` behaviour, `85eec3d9750`
+### A3 — `set_dst_write_addr_offset` behaviour, `ecb5f96f8ab`
 
 `tests/sources/set_dst_write_addr_offset_test.cpp` +
 `tests/python_tests/test_set_dst_write_addr_offset.py` + a `DST_WRITE_ADDR_OFFSET` template
@@ -106,7 +174,7 @@ the old plan listed as step 4. Nothing in the suite expects an LLK assert — co
 `LLKAssertException` as a failure — and tripping one mid-kernel risks wedging the device for
 whatever runs next. If that is wanted, the harness needs an expected-assert mechanism first.
 
-### A6 — thin spots, `743eb198b66`
+### A6 — thin spots, `18f07722c90`
 
 `test_rmsnorm_bcast_scalar_dest_reuse.py`: **114 passed, up from 66.** Three of the five rows
 in the old A6 table; the other two were "leave it" and "fine as-is" and still are.
@@ -127,13 +195,13 @@ in the old A6 table; the other two were "leave it" and "fine as-is" and still ar
   fails every `num_tiles=2` variant and **no** `num_tiles=1` variant, so that term was
   previously unpinned.
 
-### Boundary coverage nothing reached, `e6152740873`
+### Boundary coverage nothing reached, `ae095985110`
 
 `test_matmul_custom_compressed_metadata_word_boundary`, 3 shapes with `kt*ct` divisible by 10
 (`kt=10/ct=1`, `kt=2/ct=5`, `kt=10/ct=2`). **588 passed**, was 582.
 
 The 16 shapes in `SHAPES` have products 2, 4, 8, 16, 28, 32, 56, 64, 112, 128, 192, 224, 448,
-512 — **none divisible by 10**, so nothing exercised the path `f6b27ef87b7` fixed.
+512 — **none divisible by 10**, so nothing exercised the path `54e218ebbce` fixed.
 
 **Scope, stated in the test:** this does **not** detect the out-of-bounds read, and cannot. At
 `rem_iters == 0` the remainder loop never runs, so the word read past the buffer is never used
@@ -142,7 +210,7 @@ kernel, where they also pass. Catching that read needs an L1 memory-safety check
 test buys is the exact-multiple shape class, so a later change that mishandles it (stale word,
 or dropping the final group of 10 tiles) fails on the golden.
 
-### D2 — `89343664332`
+### D2 — `729f712aaf8`
 
 `false, false, icb0` → `false /*transpose_of_faces*/, false /*within_face_16x16_transpose*/,
 icb0` in `rmsnorm_bcast_scalar_reuse_tiles_init`, matching the `_fidelity` variant below it.
@@ -158,7 +226,7 @@ moment either lands, so the test tells you when it is fixed." That was **not tru
 written**: `test_custom_mm_uninit_restore.py` used imperative `pytest.xfail()`, which raises
 immediately and aborts the body, so the variant never built, never ran, and could never report
 XPASS. C1's owner decision was resting on a detector that was not armed. Fixed in
-`d0287a5ca08`; the sentence is true now, and the fix is visible in the run as a real
+`e94b5dd0fbe`; the sentence is true now, and the fix is visible in the run as a real
 golden-vs-device comparison under XFAIL rather than a bare skip.
 
 **Correction 2 — A4's hypothesis was too coarse.** The old A4 said the prime suspect was "that
@@ -169,10 +237,14 @@ re-entry *without an intervening DEST-section boundary*. See C4.
 
 ## A. Functional test gaps
 
-### A1. `custom_mm` (plain) — the entire family is untested
+### A1. `custom_mm` (plain) — **under test since 2026-08-19**, two axes left
 
-**Unchanged from 2026-08-17, still blocked on #52727.** Every top-level entry point is
-uncalled: `_llk_math_custom_mm_init_`, `_llk_math_custom_mm_`,
+**Unblocked and largely done** — see [§ Closed on 2026-08-19](#closed-on-2026-08-19) for what
+landed and what it found. What remains is `transpose` and `split_acc` / `finalize`, roughly half
+a day, and nothing blocks it.
+
+Historical note, since the framing below was written when this was a hole. Every top-level entry
+point *was* uncalled: `_llk_math_custom_mm_init_`, `_llk_math_custom_mm_`,
 `_llk_unpack_AB_custom_mm_init_`, `_llk_unpack_AB_custom_mm_`.
 
 Note the asymmetry that makes this easy to miss: **`compressed_custom_mm` is covered** by
@@ -196,7 +268,7 @@ is `block_uninit`, and only via a replicated body (see B1).
 5. Reuse the existing matmul golden and `helpers/matmul_sweep.py`. Do **not** write a new
    golden generator.
 6. **New:** include shapes with `kt*ct` divisible by 10 if the plain family has an equivalent
-   metadata walk. On the compressed side nothing reached that boundary until `e6152740873`.
+   metadata walk. On the compressed side nothing reached that boundary until `ae095985110`.
 
 **Watch for.** The `-Werror` prerequisite (Finding 5) — budget for a build fix before any test
 compiles.
@@ -254,7 +326,7 @@ diverge, every existing test keeps passing. Copilot raised the same point indepe
 but it needs an owner who works in that tree.
 
 **Cheaper interim option — DONE 2026-08-18.** `tests/python_tests/test_custom_mm_uninit_parity.py`
-(commit `495adc689c9`), a device-free static gate rather than a pre-commit hook, so it runs in
+(commit `096ff04e219`), a device-free static gate rather than a pre-commit hook, so it runs in
 the smoke job that already collects the whole `python_tests` directory. It asserts two things:
 
 - the two compute-API uninit bodies are still byte-identical modulo comments (divergence); and
@@ -271,8 +343,8 @@ say the same thing. The metal-side test calling the real entry points is still w
 still the item that needs an owner. What the guard buys is that divergence now fails loudly
 instead of silently, which was the specific risk.
 
-**Note.** `5164448a50b` reduced the blast radius a little — the flag's documentation now says
-what it actually does.
+**Note.** The commit that documented `restore_tile_pack_mop` was dropped in the 2026-08-19
+rebase — main's merged #52727 has no such flag at all, so there was nothing left to document.
 
 ---
 
@@ -297,7 +369,7 @@ restores 2048 where 4096 is correct. Measured at 0.25 match.
   `matmul_custom_compressed_kernel.cpp` all call.
 
 The `xfail` in `test_custom_mm_uninit_restore.py` flips to XPASS when either lands — **and as of
-`d0287a5ca08` that is actually true**; see Correction 1.
+`e94b5dd0fbe` that is actually true**; see Correction 1.
 
 ### C2. The `eltwise_mul_scalar` HiFi workaround's mechanism does not survive review
 
@@ -328,7 +400,7 @@ owner. See also F, which may or may not be the same thing.
 
 ### C4. `mul_reduce_scalar` re-entry needs a DEST-section boundary — **defect, NEW**
 
-This is what A4 turned into. `03cf8b4b3d8` adds a ~40-line driver
+This is what A4 turned into. `b59c5df50aa` adds a ~40-line driver
 (`tests/sources/mul_reduce_scalar_reenter_test.cpp` +
 `tests/python_tests/test_mul_reduce_scalar_reenter.py`) that runs the known-good non-chunked
 sequence twice over the same input. On BH p100a:
@@ -366,6 +438,26 @@ state. Do **not** re-investigate the accumulator fill or a missing UNPACK/MATH b
 §3 records both as tried on silicon and disproved, and this result explains why neither moved
 the number.
 
+### C5. The out-of-bounds metadata read shipped to main — **defect, NEW**
+
+`#52727` merged **without** the fix for the out-of-bounds remainder read Copilot found on
+#53130. Verified on 2026-08-19: `grep 'rem_iters != 0'` on main's
+`llk_unpack_AB_compressed_custom_mm.h` returns nothing, so the unguarded
+`meta_ptr[full_iters]` is live on main.
+
+The guard exists only on this branch (`54e218ebbce`). Reachable inside the documented ranges
+whenever `kt_dim * ct_dim` is a multiple of 10 — `kt_dim=10, ct_dim=1` is the smallest case.
+
+**What it costs, stated precisely so nobody over- or under-reacts.** At `rem_iters == 0` the
+remainder loop never runs, so the word read past the buffer is *never used* and no golden can
+see it — confirmed by running the boundary test against the unguarded kernel, where it passes.
+It is a memory-safety defect, not a wrong-answer defect: an L1 read of whatever follows the
+metadata buffer.
+
+**Fix:** cherry-pick `54e218ebbce` onto main, or re-apply the three-line guard. Minutes of work.
+It will otherwise ride in on this branch whenever #53130 merges, which is fine but leaves main
+carrying it in the meantime.
+
 ---
 
 ## D. Review comments resolved but not fixed
@@ -373,14 +465,20 @@ the number.
 - **D1 — `mul_reduce_scalar_chunked_tile` ships with no caller and no test.** C4 now says the
   op is broken as written, not merely untested. Removal is a legitimate outcome, and is now the
   cheaper one unless someone wants the chunked form to work.
-- ~~**D2**~~ — done, `89343664332`.
-- **D3 — `restore_tile_pack_mop` is end-of-call-cleanup with no consumer.** Still kept: it
-  defaults to `false` and nothing in the tree opts in. `5164448a50b` corrected its
+- ~~**D2**~~ — done, `729f712aaf8`.
+- ~~**D3 — `restore_tile_pack_mop` is end-of-call-cleanup with no consumer.**~~ **Resolved
+  upstream on 2026-08-18: the flag was deleted.** Main's merged `*_block_uninit` has no MOP
+  restore at all — an earlier revision of #52727 made it unconditional, the next made it this
+  opt-in flag, and neither survived review. The reviewer's suggestion on #53130 (pair the fused
+  caller with `pack_block_contiguous_uninit` instead of adding a flag to the op uninit)
+  effectively won. Nothing left to decide, and no `custom_mm.h` owner needed. Historical
+  reasoning, no longer actionable: the branch had corrected its
   documentation — it *installs* fixed 32x32/4-face geometry rather than restoring anything, it
   restores nothing at all on the `_init_short` path, it leaves `set_packer_strides`/`SETADCXX`
   untouched, and its body is byte-identical to the pre-existing
-  `pack_block_contiguous_uninit()`. Moving the family to a clean-state-on-entry contract is an
-  API change that still wants the `custom_mm.h` owner.
+  `pack_block_contiguous_uninit()` — which, note, is **also gone from main**: neither
+  `pack_block_uninit.h` nor that function exists in the compute API any more, so that whole area
+  was reshaped by the merge, not just the flag.
 
 ---
 
@@ -393,7 +491,7 @@ the number.
   `test_perf_header_gate.py::test_parameter_field_names_are_globally_unique` — `RMSNORM_DEST_REUSE`
   declared bare `num_tiles` / `num_faces`, names already owned by `PACK_NUM_TILES` and
   `NUM_FACES`. The identical failure was present on the pre-session tip, so it arrived with the
-  commit that added that class, not with any later work. Fixed in `30840ceb386` by renaming to
+  commit that added that class, not with any later work. Fixed in `55b57d28045` by renaming to
   `rmsnorm_num_tiles` / `rmsnorm_num_faces`, which also matches the constants they emit.
   **Note that job runs `pytest -x`**, so it aborted at the gate: anything after it in the split
   was never reached, and may surface now that it passes. That would be newly *visible*, not
@@ -403,14 +501,18 @@ the number.
   [`pr-53130-replies.md`](pr-53130-replies.md), together with a reply for each of the eleven
   review threads. Copy-paste ready; nothing in it has been posted, because the session that
   wrote it had no GitHub write access.
+- **Rebased again on 2026-08-19**, onto main with #52727 merged. Five commits dropped (the
+  branch's copy of that promotion, which main has as a squash) and one skipped (the
+  `restore_tile_pack_mop` documentation, whose subject no longer exists). 44 commits now.
 - **Rebased onto `main` (`b62ff4a6af1`) on 2026-08-18** — 49 commits replayed with **zero
   conflicts**. Two predictions in the earlier version of this document were wrong and are worth
   correcting for next time: the expected `tt_metal/hw/sources.cmake` conflict did **not**
   happen (main has not touched that file since the merge-base), and the only file both sides
   touched was `helpers/test_variant_parameters.py`, where main's four new parameter classes and
   this branch's seven merged without conflict (91 base + 7 + 4 = 102, verified by count).
-- **Rebase again once #52713 and #52727 merge** — both re-checked 2026-08-18 and **still
-  open**, so the branch still carries their promotion payload and it did not drop out.
+- **#52727 is in; #52713 is not.** Re-checked 2026-08-19. The branch no longer carries the
+  custom_mm payload (dropped in the rebase) but still carries `top32_rm`'s, so rebase again when
+  #52713 lands and expect those five commits to drop the same way.
 - `backup/llk-tests-pre-rebase` is a local-only safety ref from the first rebase; delete it
   once you are satisfied.
 
@@ -526,11 +628,13 @@ pairing, which reports real pairs as unmatched.
 ## Suggested order
 
 1. **E** — retitle the PR. Minutes, and nothing else gets reviewed until it is done.
-2. **C4** — route to an owner. It is a located defect in a shipping op with a minimal
+2. **C5** — cherry-pick the OOB guard onto main. Minutes, and main is carrying the defect until
+   someone does.
+3. **C4** — route to an owner. It is a located defect in a shipping op with a minimal
    reproducer, which makes it the cheapest real fix on the list, and it decides D1.
-3. **C1 / C2 / C3** — route to owners too; they are decisions, and C2 gates A5.
-4. **A1** when #52727 merges, **A2** when #52713 merges. A2 is the bigger job and also restores
-   the dropped wrappers.
-5. **B1** once an owner in the metal tree exists.
-6. **F** — now diagnosed (host/BRISC command desync, nightly-only). Route to an owner with the
+4. **C1 / C2 / C3** — route to owners too; they are decisions, and C2 gates A5.
+5. **A1's remainder** — `transpose` and `split_acc` / `finalize`, ~0.5 d, unblocked. **A2** when
+   #52713 merges; it is the bigger job and also restores the dropped wrappers.
+6. **B1** once an owner in the metal tree exists.
+7. **F** — now diagnosed (host/BRISC command desync, nightly-only). Route to an owner with the
    triage output; no further reproduction needed, and repeating it costs a device reset.

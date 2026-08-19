@@ -132,19 +132,19 @@ W-stride coverage stands on its own either way).
 
 ### r3783240232 — `test_sfpu_sampling.py:62` — reviewdog import order
 
-Already applied in `42e32a4f12c` ("Apply isort/black formatting to test_sfpu_sampling.py") — the
+Already applied in `f628a3de0be` ("Apply isort/black formatting to test_sfpu_sampling.py") — the
 import block reads `SAMPLING_PRGM0_HAZARD, SFPU_UNARY_SCALAR` as suggested. Resolving.
 
 ### r3783813739 — `compressed_custom_mm.h:62` — `split_acc`/`finalize` doc tables
 
-Already applied in `3a8344de46e` — every affected table row on this family now carries
+Already applied in `795ff816b1f` — every affected table row on this family now carries
 "NOT FORWARDED on this family: accepted for call-site compatibility, but the LLK is always
 instantiated with `<flag>=false` (see the NOTE in the body). Sibling custom_mm.h does forward it."
 Resolving.
 
 ### r3783809559 — `sort_headers_coexist_test.cpp:125` — runtime half has no signal
 
-Addressed in `73102b8d911`, taking the first of your two options but keeping the run:
+Addressed in `c6c52b16063`, taking the first of your two options but keeping the run:
 
 - the Dst-row offset sweep is gone; the test now sweeps `dest_acc`, which is the one axis that
   changes what the combined TU actually builds;
@@ -182,7 +182,7 @@ tt_metal compute-kernel test suite, not in this tt-llk PR, and the value this te
 (pinning the two packer-state restores against LLK-level regressions, and catching the
 `dense_packing` FP32 W-stride defect) does not depend on it.
 
-Since then, `495adc689c9` adds `test_custom_mm_uninit_parity.py`, a device-free static gate
+Since then, `096ff04e219` adds `test_custom_mm_uninit_parity.py`, a device-free static gate
 that closes the specific risk you are pointing at without the metal-side test: it fails if the
 two compute-API uninit bodies stop being identical, and if the driver's replicated W-stride
 expressions stop matching the headers'. Both mutation-checked. It does not make the test
