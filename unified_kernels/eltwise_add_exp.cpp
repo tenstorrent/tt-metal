@@ -52,9 +52,10 @@ void kernel_main() {
 
     u::compute_init(kCbIn0, kCbOut);
 
-    u::Storage in0_storage(kCbIn0, tiles_per_block);
-    u::Storage in1_storage(kCbIn1, tiles_per_block);
-    u::Storage out_storage(kCbOut, tiles_per_block);
+    using Block1D = u::Shape<1, tiles_per_block>;
+    u::Storage<Block1D> in0_storage(kCbIn0);
+    u::Storage<Block1D> in1_storage(kCbIn1);
+    u::Storage<Block1D> out_storage(kCbOut);
 
     const auto in0 = TensorAccessor(in0_args, in0_addr);
     const auto in1 = TensorAccessor(in1_args, in1_addr);
