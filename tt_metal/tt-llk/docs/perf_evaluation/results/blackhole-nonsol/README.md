@@ -61,6 +61,39 @@ Per-configuration tables in `move_l1_to_l1.md` and `move_isolates.md`. Full
 reports, including the least stable points, in `noise_l1_to_l1.md` and
 `noise_isolates.md`.
 
+### Isolates, split per run type
+
+Each run type is a separate ELF and a separate device run, so the three isolate
+modes were already measured independently. Full table in
+`move_isolates_by_run_type.md`.
+
+| run type | marker | measured | >0.5% | >1% | >2% | worst move | worst cycles |
+|---|---|--:|--:|--:|--:|--:|--:|
+| MATH_ISOLATE | TILE_LOOP | 33,177 | 14 | 3 | **0** | 1.47% | 12 |
+| MATH_ISOLATE | KERNEL | 33,177 | 7 | 0 | **0** | 0.93% | 17 |
+| MATH_ISOLATE | INIT | 33,177 | 1,656 | 979 | 555 | 5.15% | 11 |
+| MATH_ISOLATE | UNINIT | 1,649 | 114 | 114 | 114 | 14.29% | 6 |
+| PACK_ISOLATE | TILE_LOOP | 35,573 | 2 | 1 | 1 | 19.75% | 353 |
+| PACK_ISOLATE | KERNEL | 35,573 | 12 | 3 | 1 | 14.12% | 349 |
+| PACK_ISOLATE | INIT | 35,573 | 1,873 | 1,216 | 287 | 4.73% | 21 |
+| PACK_ISOLATE | UNINIT | 29 | 0 | 0 | **0** | 0.00% | 0 |
+| UNPACK_ISOLATE | TILE_LOOP | 33,925 | 5 | 0 | **0** | 0.88% | 98 |
+| UNPACK_ISOLATE | KERNEL | 33,925 | 7 | 2 | **0** | 1.21% | 98 |
+| UNPACK_ISOLATE | INIT | 33,925 | 509 | 169 | 19 | 2.61% | 8 |
+| UNPACK_ISOLATE | UNINIT | 1,649 | 108 | 108 | 108 | 3.85% | 1 |
+
+Two things this shows that the merged table hides.
+
+**PACK_ISOLATE is not a noisy thread. It has one bad configuration.** Only 2 of
+its 35,573 TILE_LOOP measurements moved more than 0.5% — the fewest of the three
+threads. One of those two is the outlier documented below. Remove it and pack is
+the cleanest of the three.
+
+**The cycle clause is essential for UNINIT.** For MATH and UNPACK the counts at
+>0.5%, >1% and >2% are identical (114 and 108). Those points move by 6 cycles and
+1 cycle. A 1-cycle move exceeding 2% means the value is under 50 cycles. Without
+the absolute clause the gate would fail on single-cycle changes.
+
 ### What the tables say
 
 TILE_LOOP is the steady-state per-tile cost — the number anyone optimizing LLK
@@ -82,7 +115,12 @@ does not.
 | configuration | numbers measured | points the rule fires on, with no code change |
 |---|--:|--:|
 | L1_TO_L1 | 108,377 | **0** |
-| isolates | 311,352 | **2** (one test config, see below) |
+| MATH_ISOLATE | 101,180 | **0** |
+| UNPACK_ISOLATE | 103,424 | **0** |
+| PACK_ISOLATE | 106,748 | **2** (one test config, see below) |
+| isolates, all three | 311,352 | **2** |
+
+Four of the five measured configurations produce no false positives at all.
 
 Each clause handles one failure mode:
 
