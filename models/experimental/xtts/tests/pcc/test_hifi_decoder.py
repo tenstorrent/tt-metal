@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.xtts.config import DEMO
+from models.experimental.xtts.config import DEFAULT_LANGUAGE
 from models.experimental.xtts.reference.xtts_conditioning import MEL_SR, load_reference_audio, wav_to_mel
 from models.experimental.xtts.reference.xtts_gpt_generate import START_AUDIO_TOKEN, greedy_generate, wrap_text_ids
 from models.experimental.xtts.reference.xtts_inference import XttsReference
@@ -18,6 +18,10 @@ from models.experimental.xtts.reference.xtts_text_embedding import preprocess_te
 from models.experimental.xtts.tt.xtts_hifi_decoder import TtHifiDecoder
 
 SEED_CODES = 32
+HIFI_TEXT = (
+    "Voice synthesis has come a long way, and modern systems can already generate "
+    "natural sounding speech with remarkable accuracy. Hey how are you doing?"
+)
 
 
 @pytest.fixture(scope="module")
@@ -35,7 +39,7 @@ def hifi_real_inputs(xtts_state_dict):
     ).unsqueeze(0)
 
     ref = XttsReference(sd)
-    text_ids = wrap_text_ids(preprocess_text(DEMO.text.rstrip("."), lang=DEMO.language))
+    text_ids = wrap_text_ids(preprocess_text(HIFI_TEXT, lang=DEFAULT_LANGUAGE))
     cond_latents = ref._cond_latents(cond_mel)
     g = ref.decoder_full.speaker_embedding(spk_wav)
     codes, _ = greedy_generate(ref.gpt, text_ids, cond_latents, max_new_tokens=SEED_CODES, wrap_text=False)
