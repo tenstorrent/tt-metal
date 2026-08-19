@@ -75,8 +75,8 @@ ALWI void BlockAccumulate::run_seeded(uint32_t cb_seed, uint32_t num_tiles) {
     cb_wait_front(cb_b_, granularity_);
 
     tile_regs_acquire();
-    // Seed DST from cb_seed FIRST, then accumulate onto it. Note this does not rely on DST being
-    // zero at acquire — tile_regs_acquire() does not zero it (see the header's warning).
+    // Seed DST from cb_seed FIRST, then accumulate onto it — the seed is data plumbing (the third
+    // addend lives in a CB), not zero-safety; see the header's DST-zero-invariant note.
     copy_tile_init(cb_seed);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         copy_tile(cb_seed, i, i);
@@ -103,7 +103,7 @@ ALWI void BlockAccumulate::run_seeded(uint32_t cb_seed, uint32_t num_tiles) {
     cb_push_back(cb_out_, granularity_);
 }
 
-ALWI void sum_blocks(uint32_t cb_in, uint32_t cb_out, uint32_t num_blocks, uint32_t block_num_tiles) {
+ALWI void sum_blocks(uint32_t cb_in, uint32_t cb_out, uint32_t num_blocks, uint32_t block_num_tiles, bool pop_input) {
     cb_wait_front(cb_in, num_blocks * block_num_tiles);
     cb_reserve_back(cb_out, block_num_tiles);
 
@@ -149,6 +149,9 @@ ALWI void sum_blocks(uint32_t cb_in, uint32_t cb_out, uint32_t num_blocks, uint3
         }
         tile_regs_release();
         tiles_done += n;
+    }
+    if (pop_input) {
+        cb_pop_front(cb_in, num_blocks * block_num_tiles);
     }
     cb_push_back(cb_out, block_num_tiles);
 }

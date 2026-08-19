@@ -98,6 +98,13 @@ void kernel_main() {
     CircularBuffer cb_output_tensor(output_tensor_cb_id);
 
     if (sender_core) {
+        // NOTE: this egress is the CCL dataflow helper's deferred C.3 shape — ONE kernel unicasts
+        // to EVERY other device, choosing a per-target hop count AND per-target direction, where
+        // the helper binds one direction and one route per stream at open(). Migrating it means
+        // either per-arm route overrides (rejected: it un-does the route-bound-at-open safety) or
+        // N pre-armed channels over both directions of one connection — a design pass of its own,
+        // owed together with the raw EDM send + CB-hosted packet headers below (which predate
+        // PacketHeaderPool). Only the compute kernel adopts the helpers here.
         auto fabric_connection =
             FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
                 rt_arg_idx);
