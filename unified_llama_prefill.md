@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0
 Ordered least to most code impact. Each phase is independently testable, and the
 first five are library work that phases 6+ only consume.
 
-**Target for the first milestone** (phases 1-6): single-head scaled dot-product
+**Target for the first milestone** (phases 1-7): single-head scaled dot-product
 attention, one core, non-flash, post-RoPE inputs, host-supplied additive causal
 mask.
 
@@ -87,7 +87,7 @@ the existing `operator+`.
 - [x] **`div` decided: kept.** It is ~12 lines, it completes `+ - * /`, and for a
       genuine elementwise divide it is ONE SFPU pass where `a * recip(b)` is two.
       Softmax still normalises with `recip` + a broadcast multiply, which is a
-      different shape entirely (phase 5) -- `div` does not serve that.
+      different shape entirely (phase 6) -- `div` does not serve that.
 
 **DONE.** Single ops land at 0.0038-0.0058 max relative error across four seeds,
 which is bfloat16's own 2^-8 floor; the mixed chain at 0.025-0.028.
@@ -142,7 +142,7 @@ reload restores at `:565` and `:678`.
 
 ## Phase 4 -- Data-format reconfig between SFPU tree leaves
 
-Latent, not blocking phase 6. `TileSource::emit` issues a bare `copy_tile` with no
+Latent, not blocking phase 7. `TileSource::emit` issues a bare `copy_tile` with no
 `reconfig_data_format`. Two-CB `a + b` is correct today only because every operand
 in every current test is bf16. The moment a mask or scaler arrives in a different
 format it is silently wrong.
@@ -153,7 +153,149 @@ format it is silently wrong.
 **Done when:** a deliberately mixed-format tree either works or fails to compile --
 never silently produces garbage.
 
-## Phase 5 -- `BcastFusion` (the one structural gap)
+## Phase 5 -- Static block shapes (makes both geometries moot)
+
+`Storage`, `Block` and `ComputeBlock` carry a dynamic 1-D `num_pages`. Every kernel
+then hand-derives it from a geometry it also states separately, and nothing ties the
+two together. `reduction_tree.cpp` is the worst case:
+
+```cpp
+using PerCore = u::ReduceGeometry<in_ht, in_wt>;
+constexpr uint32_t reduced_tiles_per_block = PerCore::out_tiles(kAxis);
+u::Storage tmp1_storage(kCbTmp1, reduced_tiles_per_block * num_cores_y);  // hand arithmetic
+u::Block per_core_sum = tmp0_storage.store(RT_REDUCE(PerCore, a));        // geometry restated
+```
+
+That `* num_cores_y` is where the out-block-index collision lived.
+
+### Why static, and why rank 2
+
+An audit of all 1294 kernel sources under `ttnn/cpp/ttnn/operations/` settles both
+questions empirically:
+
+| | compile-time | runtime | % CT |
+|---|---|---|---|
+| Block shape (`in0_block_w`, `out_subblock_h/w`, `Sq_chunk_t`, `DHt`, `num_tiles_per_cycle`, `per_core_M/N`) | **311** | 38 | **89%** |
+| Iteration count (`num_tiles`, `num_rows`, `tile_start/freq`, `num_tiles_per_core`) | 80 | **335** | 19% |
+| `Ht`/`Wt` (serve both roles) | 129 | 156 | 45% |
+
+**Shape is static, count is dynamic** -- a deliberate convention, stated outright in
+`ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp`:
+
+```cpp
+template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb, ...>
+ALWI void tilize(uint32_t num_blocks, ...);   // shape in the template, count in the argument
+```
+
+The same split holds even in eltwise, the most runtime-dominated family: `num_tiles`
+is `get_arg_val`, `num_tiles_per_cycle` is `constexpr get_compile_time_arg_val`.
+
+**Rank 2 is enough.** Of 1294 kernels, 916 carry no shape quantity, 172 carry one, 142
+carry two, and only 64 carry three or more -- all matmul-like, where the operands' own
+shapes supply them. Nothing in the op set motivates general rank.
+
+**What carrying it buys**, stated by ttnn's own most-optimised kernel.
+`bmm_large_block_zm_fused_bias_activation.cpp` takes 19 compile-time args, five of
+which are products it could derive, each with the formula in a comment beside it:
+
+```cpp
+constexpr uint32_t in0_block_num_tiles    = get_compile_time_arg_val(2);   // out_subblock_h*in0_block_w*in0_num_subblocks;
+constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(12);  // out_subblock_h * out_subblock_w;
+```
+
+There is not one `static_assert` in that file: five unchecked host-maintained
+invariants with their derivations written down in prose.
+
+### The type
+
+`Shape` is taken by the multicast rectangle, so:
+
+```cpp
+template <uint32_t H, uint32_t W>
+struct Tiles {
+    static constexpr uint32_t h = H;
+    static constexpr uint32_t w = W;
+    static constexpr uint32_t num_pages = H * W;  // one tile per page in v1
+};
+```
+
+`num_pages` stays the derived name, so the CB-facing vocabulary does not change.
+
+### Both geometries become moot
+
+`MatmulGeometry<RtDim, CtDim, KtDim, NumBlocks, In1RowStride, Transpose>`:
+
+| parameter | fate |
+|---|---|
+| `RtDim`, `CtDim`, `KtDim` | inferred from operand shapes; a `Kt` disagreement becomes a compile error, which **nothing checks today** |
+| `NumBlocks` | **deleted.** Used nowhere in the library -- only as a kernel loop bound, and the audit puts counts at 81% runtime |
+| `In1RowStride` | **deleted.** Never passed non-default, and subsumed: the stride is `b`'s shape width |
+| `Transpose` | the only residue |
+
+`ReduceGeometry<Ht, Wt>` disappears outright: `out_tiles`, `elements`, `group` and
+`contributor` are all pure functions of `(Ht, Wt, axis)`, so the operand's shape *is*
+the geometry. `reduce_sum<RG, Axis>(a, sc)` becomes `reduce_sum<Axis>(a, sc)`.
+
+### Shape of an expression
+
+`tt/unified/expr.hpp` stays shape-agnostic -- it does not name ops and must not name
+shapes either. Instead a metafunction in `math.hpp`, where both operand types are
+already in hand:
+
+```
+node_shape<TileSource>      -> its own
+node_shape<Un<Op, C>>       -> child's
+node_shape<Bin<Op, L, R>>   -> lhs, with a static_assert that lhs == rhs
+node_shape<MatmulNode>      -> Tiles<lhs.h, rhs.w>, static_assert lhs.w == rhs.h
+node_shape<ReduceNode>      -> collapsed per axis
+```
+
+Today `Tiles<2,2> + Tiles<1,4>` is silently fine, because only the page count is
+compared.
+
+### Staging
+
+The lever: **no stage changes a single emitted instruction**, so the selftest trace
+must stay byte-identical throughout. That is a stronger net than any refactor here has
+had, including bias -> bcast.
+
+- [ ] **Stage 1 -- mechanical.** Add `Tiles<H,W>`; template `Storage<S>`, `Block<S>`,
+      `ComputeBlock<S>`, `Accumulator<Mode,S>`, the four `NocAsync*Tx<thread,S>` types.
+      Keep both geometries and every existing template argument. Add no checks. ~35
+      signatures across `api.h` and `impl_v1.hpp`. Trace byte-identical.
+- [ ] **Stage 2 -- the checks.** `node_shape<>`; `store` conformance; operator shape
+      equality; `noc_core_read/write` src/dst agreement; bias is `Tiles<1,Ct>`; scaler
+      is `Tiles<1,1>`. Every check proven by a deliberate violation that must fail to
+      compile, the way the four FPU-fusion guards were. Trace byte-identical.
+- [ ] **Stage 3 -- infer matmul.** Delete `RtDim`/`CtDim`/`KtDim`/`NumBlocks`/
+      `In1RowStride`; `MatmulGeometry` shrinks to a transpose tag or disappears. The
+      DST-budget `static_assert` re-keys on the inferred output shape. Update 4 kernels
+      + selftest. Trace byte-identical.
+- [ ] **Stage 4 -- infer reduce.** Delete `ReduceGeometry`; `reduce_*<Axis>(a, sc)`.
+      Update `reduction_tree` + selftest. Trace byte-identical.
+
+### Risks
+
+- `is_operand<ComputeBlock>` becomes a partial specialisation and `as_node` a template.
+  These are the ADL hooks that produced the `Fluent` ordering trap once already, so
+  expect that class of error.
+- `Block`'s moved-from poison sets both `cb_id` and `num_pages` to `kMovedFrom`. Only
+  `cb_id` can be poisoned now. The contract survives; one line goes.
+- Error quality is the deliverable, not a side effect. Every mismatch must be a
+  `static_assert` with a written message, not an overload-resolution failure. The
+  existing DST-budget assert is the model to match.
+- A dynamic extent is a foreseeable need -- 45% of `Ht`/`Wt` in ttnn are runtime. Not
+  building it, but leave room for a `Dynamic` sentinel rather than precluding one.
+
+### Open question
+
+Spelling for the transpose residue once geometry is gone: `matmul<TransposeB>(a, b)`,
+or a named `matmul_nt(a, b)` on the BLAS convention. Note an in0 transpose is NOT
+symmetric with it -- ttnn does that with a separate materialised pass into an extra CB
+(`transpose_init` into `cb_in0_transposed`), so B-transpose is a free flag while
+A-transpose costs an op plus a buffer.
+
+## Phase 6 -- `BcastFusion` (the one structural gap)
 
 Softmax's `x - rowmax` and `x * recip` are `sub_tiles_bcast_cols` /
 `mul_tiles_bcast_cols`. These read **two CBs**, so they do not fit the SFPU
@@ -192,7 +334,7 @@ duck-typed on `get_cb_id()` / `get_num_pages()`, so a loop-scoped `ComputeBlock`
 passes the size assert and is then popped early. Only a distinct resident type
 would catch it -- deliberately rejected before, worth revisiting if it bites.
 
-## Phase 6 -- Attention kernel + test
+## Phase 7 -- Attention kernel + test
 
 No library change if 1-5 land.
 
@@ -215,14 +357,14 @@ No library change if 1-5 land.
 **Done when:** matches torch within a stated tolerance, and every guard has been
 shown to fail when it should.
 
-## Phase 7 -- RMSNorm
+## Phase 8 -- RMSNorm
 
 Falls out of phases 1, 2 and 5 with no new library work:
 `reduce_mean<Cols>` -> `rsqrt` -> `mul_bcast_cols` -> `mul` by the weight.
 
 - [ ] `unified_kernels/rmsnorm.cpp` + test
 
-## Phase 8 -- RoPE
+## Phase 9 -- RoPE
 
 Also no new library work once phase 2 lands. ttnn's
 `rotary_embedding_llama.cpp` is 167 lines and uses only `mul_tiles`, `add_tiles`
@@ -230,7 +372,7 @@ and a matmul against a 32x32 `trans_mat` for the rotate-half.
 
 - [ ] `unified_kernels/rope.cpp` + test, including the `trans_mat` construction
 
-## Phase 9 -- Flash chunking / online softmax
+## Phase 10 -- Flash chunking / online softmax
 
 The first genuinely new model concept. S=2048 scores are 8MB, far past L1, so real
 prefill must stream K/V in chunks and rescale a running max and running sum across
@@ -242,7 +384,7 @@ retroactively rescales what came before.
 - [ ] Chunked K/V streaming in the kernel
 - [ ] Test at S large enough that the non-flash path cannot fit
 
-## Phase 10 -- Full block orchestration
+## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.
 
@@ -253,10 +395,13 @@ Host-side and kernel-loop work, not model gaps.
 
 ---
 
-## Open questions to settle before phase 5
+## Open questions to settle before phase 6
 
-- Does `BcastGeometry` reuse `ReduceGeometry`, or does the pairing deserve its own
-  type so a mismatched reduce/bcast pair fails to compile?
+- ~~Does `BcastGeometry` reuse `ReduceGeometry`, or does the pairing deserve its own
+  type so a mismatched reduce/bcast pair fails to compile?~~ **Answered by phase 5.**
+  `ReduceGeometry` is deleted; `reduce<Cols>` on `Tiles<Ht,Wt>` yields `Tiles<Ht,1>`
+  and `bcast_cols` demands exactly that, so the pairing checks itself. This is the
+  reason phase 5 comes before phase 6 rather than after.
 - Should the scale fold into the softmax scaler the way ttnn's SDPA does
   (`compute_common.hpp:1713` notes it gets scaling "for free" inside `exp`), rather
   than costing a separate bcast-scalar pass?
