@@ -42,7 +42,6 @@ followed by padding, so the result is reordered to row-major before comparing, a
 absolute floor is scaled by kt because the K-deep sum accumulates in a bf16 dest.
 """
 
-import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
