@@ -2,26 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Concurrency proof for the scoped Semaphore class: up()/down() must be atomic under real
-// multi-DM contention. The scope is host-picked (invisible table), so the same source runs
-// under any scope. Quasar-only (roles gated by mhartid).
-//
-// Modes (via -D):
-//   MODE_CONCURRENT_UP     : all user DMs up(1)*iters a shared sem; the lowest DM waits on a
-//                            'done' sem, reports value(). Expect num_threads*iters (a
-//                            non-atomic up() loses updates).
-//   MODE_PRODUCER_CONSUMER : (num_threads-1) producers up(1)*iters; the lowest DM drains them
-//                            all with down(1), reports value(). Expect 0 (a non-atomic down()
-//                            loses units and the consumer blocks).
-//   MODE_MULTI_CONSUMER    : the lowest DM up(1)s (num_threads-2)*iters credits; hart 3 is a
-//                            WATCHDOG; every other DM concurrently drains its share as single
-//                            down(1)s, then bumps 'done'. Expect 0 -- but the count alone is
-//                            conservation-blind (each consumer issues a fixed number of
-//                            decrements, so a double-spend wraps the word only TRANSIENTLY and
-//                            the modular sum still lands on 0). The watchdog latches the max
-//                            value it ever observes into report[16] (own 64B line): under a
-//                            correct lock it can never exceed the credits issued, while a
-//                            double-spend leaves a ~2^32 wrap it latches.
+// Proves up()/down() stay atomic under real multi-DM contention. Three shapes, one per
+// -D mode: every thread up()s a shared count, one consumer drains many producers, and
+// many concurrent consumers run under a watchdog. The host picks the scope, so the same
+// source runs under any mechanism. Quasar-only.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -35,9 +19,7 @@ static inline void report_value(uint32_t report_addr, uint32_t v) {
 #endif
 }
 
-// Report the final count AND which mechanism the host actually baked for each semaphore, so a
-// census change can't silently demote these shapes to a different (still-exact) mechanism while
-// the tests stay green. Layout: [0]=count, [1]=scope(counter), [2]=scope(done).
+// Reports the final count plus the mechanism the host actually baked for each semaphore.
 static inline void report(uint32_t report_addr, uint32_t count) {
     report_value(report_addr, count);
     report_value(report_addr + sizeof(uint32_t), static_cast<uint32_t>(sem_scope_of(sem::counter)));
@@ -49,18 +31,17 @@ void kernel_main() {
     const uint32_t increment_times = get_arg(args::increment_times);
     const uint32_t num_threads = get_arg(args::num_threads);
 
-    // Quasar user DM harts are 2..(2+num_threads-1); the lowest (2) is reporter/consumer.
     uint64_t hart;
     asm volatile("csrr %0, mhartid" : "=r"(hart));
     const bool is_lowest = (hart == 2);
 
-    // A DM_LOCAL_CACHED semaphore's pool slot is seeded by the auto-injected sem::init_dm_cached().
-    Semaphore work(sem::counter);  // mechanism comes from the host's scope table
+    // The mechanism comes from the host's scope table
+    Semaphore work(sem::counter);
 
 #if defined(MODE_PRODUCER_CONSUMER)
     if (is_lowest) {
-        // Single consumer: drain every producer increment. Terminates at 0 iff the
-        // decrement is atomic vs the concurrent producer increments (else it blocks).
+        // One consumer drains every producer increment; the drain only finishes
+        // if decrements stay atomic against the concurrent increments.
         const uint32_t total = (num_threads - 1) * increment_times;
         for (uint32_t i = 0; i < total; i++) {
             work.down(1);
@@ -72,17 +53,20 @@ void kernel_main() {
         }
     }
 #elif defined(MODE_MULTI_CONSUMER)
-    // ONE producer (hart 2), ONE watchdog (hart 3), (num_threads-2) CONCURRENT consumers taking
-    // their credits as single down(1)s for maximal lock contention (failure modes: see header).
-    Semaphore done(sem::done);  // mechanism comes from the host's scope table
+    // One producer (hart 2), one watchdog (hart 3), and (num_threads-2) consumers taking
+    // their credits as single down(1)s for maximum lock contention. The final count alone
+    // cannot catch a broken lock: every consumer decrements a fixed number of times, so a
+    // double-spend wraps the word only briefly and the sum still ends at 0. The watchdog
+    // instead latches the highest value it ever sees: a working lock keeps that at or
+    // below the credits issued, while a double-spend wraps it near 2^32.
+    Semaphore done(sem::done);
     const uint32_t num_consumers = num_threads - 2;
     if (is_lowest) {
-        // Producer + reporter: single-credit ups for maximal interleave with the racing consumers.
         const uint32_t total = num_consumers * increment_times;
         for (uint32_t i = 0; i < total; i++) {
             work.up(1);
         }
-        done.wait_min(num_consumers);       // every consumer drained its share
+        done.wait_min(num_consumers);
         report(report_addr, work.value());  // expect exactly 0
     } else if (hart == 3) {
         // Watchdog: sample until every consumer has finished, latch the max observed value.
@@ -93,7 +77,7 @@ void kernel_main() {
                 max_seen = v;
             }
         }
-        report_value(report_addr + 64u, max_seen);  // own 64B line: no clobber vs the reporter's
+        report_value(report_addr + 64u, max_seen);
     } else {
         for (uint32_t i = 0; i < increment_times; i++) {
             work.down(1);
@@ -101,7 +85,7 @@ void kernel_main() {
         done.up(1);
     }
 #else  // MODE_CONCURRENT_UP
-    Semaphore done(sem::done);  // mechanism comes from the host's scope table
+    Semaphore done(sem::done);
     for (uint32_t i = 0; i < increment_times; i++) {
         work.up(1);
     }

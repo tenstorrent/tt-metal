@@ -26,21 +26,17 @@
 
 namespace tt::tt_metal {
 
-// ============================================================================
-// KEYSTONE TESTS for the auto-path-selecting Quasar semaphore design.
-// ============================================================================
-// On an externally-touched semaphore, even a DM core's own increment/decrement
-// goes through a NoC atomic (NOC_AT_INS_INCR_GET) so local and remote writers
-// serialize at one NIU atomicity point. RISC-V AMOs hang on the uncached alias
-// (dev_mem_map.h), so the self-targeted NoC atomic has NO software fallback.
-// The DM-local fast path relies on a 32-bit RISC-V AMO on the cached alias.
-// Tests (1)-(6) below each pin one of these hardware assumptions.
-// ============================================================================
+// Keystone tests for the auto-path-selecting Quasar semaphore design. On an
+// externally-touched semaphore even a DM core's own increment goes through a
+// self-targeted NoC atomic so local and remote writers serialize at one NIU --
+// and that path has no software fallback: RISC-V AMOs hang on the uncached alias
+// (dev_mem_map.h). The DM-local fast path is a 32-bit RISC-V AMO on the cached
+// alias. Each test below pins one of these hardware assumptions.
 class NocSelfAtomicFixture : public MeshDispatchFixture {
 protected:
     static constexpr experimental::NodeCoord core = {0, 0};
-    // Keystone is a correctness/deadlock check, not a stress test. NoC atomic
-    // round-trips are slow on emu RTL sim; bump this for silicon stress runs.
+    // A correctness/deadlock check, not a stress test: NoC atomic round-trips are
+    // slow on the emu RTL sim. Bump for silicon stress runs.
     static constexpr uint32_t iterations{100};
     const std::string kernel_path_noc = "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_self_atomic.cpp";
     const std::string kernel_path_amo32 = "tests/tt_metal/tt_metal/test_kernels/dataflow/dm_amo32.cpp";
@@ -56,8 +52,8 @@ protected:
 
     void SetUp() override {
         MeshDispatchFixture::SetUp();
-        // No fixture-wide Wormhole skip: the two pure-NoC keystones use no RISC-V AMOs
-        // and must run there too. The AMO/cacheline/CAS tests carry per-test skips.
+        // No fixture-wide Wormhole skip: the pure-NoC tests use no RISC-V AMOs and
+        // must run there too; the AMO/cacheline/CAS tests carry per-test skips.
         mesh_device_ = devices_[0];
         device_ = mesh_device_->get_devices()[0];
         num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
@@ -69,9 +65,8 @@ protected:
         }
     }
 
-    // Launch the given kernel on every user DM core, all targeting the word at `sem_addr`
-    // on `core`. Quasar: a single multi-threaded DM kernel spans the user DMs
-    // (DM2..DM7). Gen1 (BH): one single-threaded KernelSpec per DM processor.
+    // Launch the given kernel on every user DM core, all targeting the word at
+    // `sem_addr` on `core`.
     void run_single_node(const std::string& kernel_src, uint32_t sem_addr) {
         distributed::MeshWorkload workload;
         Program program;
@@ -149,10 +144,9 @@ protected:
 
     void zero_counter(const experimental::NodeCoord& node, uint32_t addr) { set_counter(node, addr, 0); }
 
-    // Launch the single-thread cache-line-width probe on `core`. base_addr is the
-    // (line-aligned) region the probe sweeps; report_addr is a disjoint scratch the
-    // probe writes 2 + 3*NUM_SEPS words to (control pair, then wc/wn_pre/wn_post per
-    // separation).
+    // Launch the single-thread cache-line-width probe on `core`. The probe sweeps from
+    // the line-aligned `base_addr` and writes 2 + 3*NUM_SEPS words at `report_addr`:
+    // the residency control pair, then wc/wn_pre/wn_post per separation.
     void run_cacheline_probe(uint32_t base_addr, uint32_t report_addr, uint32_t residency_addr) {
         distributed::MeshWorkload workload;
         Program program;
@@ -187,15 +181,15 @@ protected:
         RunProgram(mesh_device_, workload);
     }
 
-    // Launch the CAS-lock probe on all user DM threads (Quasar-only: raw CAS emit).
-    // Scratch layout from l1_unreserved_base: +0 sem word (preloaded to sem_init),
-    // +16 lock word (own 16B atom), +32 per-hart pre-op return slots (8 x 4B); the
-    // lock and every ret slot are zeroed. Returns the final sem word.
+    // Launch the CAS-lock probe on all user DM threads (Quasar-only: raw CAS emit) and
+    // return the final sem word. Scratch from l1_unreserved_base: sem word at +0
+    // (preloaded to sem_init), lock word at +16 (its own 16B atom), 8 per-hart pre-op
+    // return slots at +32; the lock and every ret slot are zeroed.
     uint32_t run_cas_lock(uint32_t mode, uint32_t pairs, uint32_t sem_init, uint32_t lock_offset = 16) {
         const uint32_t sem_addr = l1_unreserved_base;
-        // lock_offset picks the CAS LANE: the 4-bit CAS acts on the 32-bit lane (addr>>2)&3 of a
-        // 16B row. Production lock words are 16B-SPACED (always lane 0); offsets 20/24/28 exist
-        // to characterize the other lanes of the primitive.
+        // lock_offset picks the CAS lane: the 4-bit CAS acts on the 32-bit lane
+        // (addr>>2)&3 of a 16B row. Production lock words are 16B-spaced (always
+        // lane 0); offsets 20/24/28 characterize the other lanes.
         const uint32_t lock_addr = l1_unreserved_base + lock_offset;
         const uint32_t ret_base = l1_unreserved_base + 32;
         std::vector<uint32_t> init(16, 0);  // sem word + lock word + 8 ret slots
@@ -245,10 +239,9 @@ protected:
     }
 };
 
-// (1) All user DM cores loopback-increment ONE shared word via self-targeted NoC
-// atomic. Exact final count == num_dms * iterations proves the self-targeted
-// INCR_GET does not deadlock and same-node NoC atomics from independent DM cores
-// serialize atomically at the destination NIU (no lost updates).
+// (1) All user DM cores loopback-increment one shared word via a self-targeted NoC
+// atomic. The exact final count proves the loopback INCR_GET neither deadlocks nor
+// loses updates across same-node DM cores.
 TEST_F(NocSelfAtomicFixture, TestSelfTargetedNocAtomicIncrement) {
     zero_counter(core, l1_unreserved_base);
 
@@ -269,10 +262,9 @@ TEST_F(NocSelfAtomicFixture, TestSelfTargetedNocAtomicIncrement) {
            "fallback if this fails (KEYSTONE FAILS).";
 }
 
-// (2) A self-targeted (loopback) atomic on node_0 and a genuinely-remote atomic
-// from node_1 both increment the SAME word on node_0. Exact 2 * iterations proves
-// the loopback and remote paths serialize at one NIU atomicity point, which the
-// EXTERNAL mode requires.
+// (2) A loopback atomic on node_0 and a genuinely-remote atomic from node_1 both
+// increment the same word on node_0. Exact 2 * iterations proves the two paths
+// serialize at one NIU atomicity point, which EXTERNAL mode requires.
 TEST_F(NocSelfAtomicFixture, TestSelfVsRemoteNodeNocAtomic) {
     const auto grid = mesh_device_->compute_with_storage_grid_size();
     log_info(LogTest, "compute-with-storage grid: {} x {}", grid.x, grid.y);
@@ -280,14 +272,12 @@ TEST_F(NocSelfAtomicFixture, TestSelfVsRemoteNodeNocAtomic) {
         GTEST_SKIP() << "Requires >= 2 worker nodes for a genuinely-remote source (this device/emu exposes a 1x1 grid)";
     }
     const experimental::NodeCoord node_0{0, 0};
-    // Pick the second node along whichever axis has room.
     const experimental::NodeCoord node_1 =
         (grid.x >= 2) ? experimental::NodeCoord{1, 0} : experimental::NodeCoord{0, 1};
 
-    // Shared counter word lives on node_0.
     zero_counter(node_0, l1_unreserved_base);
 
-    // node_1's kernel needs node_0's virtual NoC coords to target the word remotely.
+    // The remote kernel targets the word via node_0's virtual NoC coords.
     const CoreCoord node_0_virtual = mesh_device_->worker_core_from_logical_core(node_0);
 
     distributed::MeshWorkload workload;
@@ -313,8 +303,8 @@ TEST_F(NocSelfAtomicFixture, TestSelfVsRemoteNodeNocAtomic) {
         .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times", "remote_noc_x", "remote_noc_y"}},
         .hw_config = experimental::DataMovementGen2Config{},
     };
-    // Gen1 (Blackhole): a Gen2 config would FATAL in MakeProgramFromSpec. One kernel per node, so
-    // RISCV_0 works for both.
+    // Gen1 (Blackhole): a Gen2 config would FATAL in MakeProgramFromSpec; one kernel
+    // per node, so RISCV_0 serves both.
     if (!is_quasar) {
         self_spec.hw_config = experimental::DataMovementGen1Config{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
@@ -362,10 +352,9 @@ TEST_F(NocSelfAtomicFixture, TestSelfVsRemoteNodeNocAtomic) {
            "NOT mutually atomic at the destination NIU.";
 }
 
-// (3) All user DM cores increment ONE shared cached word via a 32-bit RISC-V AMO
-// (amoadd.w). Exact final count == num_dms * iterations proves 32-bit AMOs on L1
-// are reliable -- the DM_LOCAL_CACHED fast-path keystone. (The only AMO width
-// proven on Quasar today is 64-bit; semaphore words are 32-bit.)
+// (3) All user DM cores increment one shared cached word via a 32-bit RISC-V AMO --
+// the DM_LOCAL_CACHED fast-path keystone. Only the 64-bit AMO width was proven on
+// Quasar before this; semaphore words are 32-bit.
 TEST_F(NocSelfAtomicFixture, TestDmCachedAmo32) {
     if (arch_ == tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Wormhole lacks RISC-V AMOs (amoadd.w)";
@@ -383,10 +372,9 @@ TEST_F(NocSelfAtomicFixture, TestDmCachedAmo32) {
            "path needs a 32-bit CAS loop or a 64-bit word instead.";
 }
 
-// (4) All user DM cores conditionally DECREMENT one shared cached word using the
-// production down() shape (relaxed >=1 spin + lr.w/sc.w CAS; noc_semaphore.h,
-// DM_LOCAL_CACHED). Exact 0 proves no decrement was lost and no credit was
-// consumed twice -- the multi-consumer DM_LOCAL_CACHED down() keystone.
+// (4) All user DM cores conditionally decrement one shared cached word using the
+// production down() shape (noc_semaphore.h, DM_LOCAL_CACHED). Draining exactly to 0
+// proves no decrement was lost and no credit was consumed twice.
 TEST_F(NocSelfAtomicFixture, TestDmCachedCas32) {
     if (arch_ == tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Wormhole lacks RISC-V AMOs (lr.w/sc.w)";
@@ -413,15 +401,10 @@ TEST_F(NocSelfAtomicFixture, TestDmCachedCas32) {
                                "a HANG with surplus threads spinning.)";
 }
 
-// (5) DM write-back cache line width: the minimum separation at which a cached-AMO
-// word's dirty-line write-back stops clobbering a NoC-atomic word -- the separation
-// the DM_LOCAL_CACHED pool segregation must enforce.
-// Controls make a platform that does not model the hazard FAIL instead of yielding
-// a bogus small width: A) a cached write must be invisible via the uncached alias
-// until flushed; B) each NoC atomic must be observed at TL1 pre-flush; positive
-// control: sep=4B (same line) MUST clobber, else the width is INVALID -> silicon.
-// Ceiling: FLUSH64 triggers the write-back, so a width > 64B is not detectable here;
-// 64B matches the documented L1 D$/L2 line.
+// (5) Measures the DM write-back cache line width: the smallest separation at which a
+// cached-AMO word's dirty write-back stops clobbering a NoC-atomic word -- the
+// separation the DM_LOCAL_CACHED pool segregation must enforce. The controls make a
+// platform that does not model the hazard fail rather than yield a bogus small width.
 TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
     if (!is_quasar) {
         GTEST_SKIP() << "cached/uncached alias + write-back cache is Quasar-only";
@@ -436,8 +419,8 @@ TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
     constexpr uint32_t RES_NEW = 0x2222u;
     constexpr int EXPECTED_WIDTH = 64;  // documented L1 D$ / L2 line (risc_common.h)
 
-    // Line-aligned base (so base+sep shares a line with base iff sep < width); report and
-    // residency scratch placed well past the swept region and each other.
+    // Line-aligned base (base+sep shares a line with base iff sep < width); report and
+    // residency scratch sit well past the swept region.
     const uint32_t base = (l1_unreserved_base + 511u) & ~511u;
     const uint32_t report = base + NUM_SEPS * STRIDE + 1024u;
     const uint32_t residency = report + 1024u;
@@ -448,8 +431,8 @@ TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
     tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report, total * sizeof(uint32_t), result);
     ASSERT_EQ(result.size(), total);
 
-    // ---- Control A: write-back residency proof. Failure => the platform is not modeling a
-    // write-back cache, so the clobber hazard cannot be measured here at all. ----
+    // Control A: prove the platform actually models a write-back cache; otherwise the
+    // clobber hazard cannot be measured here at all.
     const uint32_t res_noflush = result[0];
     const uint32_t res_flushed = result[1];
     ASSERT_EQ(res_flushed, RES_NEW)
@@ -461,7 +444,7 @@ TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
         << ") -> this platform is NOT modeling a write-back cache (flat/coherent/write-through). The "
            "write-back-clobber hazard cannot be measured here; verify the DM cache line width on silicon.";
 
-    // ---- Per-separation sweep ----
+    // Per-separation sweep.
     int width = -1;
     bool seen_clobber = false;
     bool seen_safe = false;
@@ -502,8 +485,8 @@ TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
         }
     }
 
-    // ---- Positive control: the smallest separation shares wc's line and MUST clobber.
-    // If it does not, the clobber mechanism is not live (coherent NIU / unfaithful emu). ----
+    // Positive control: the smallest separation shares wc's line and must clobber, else
+    // the clobber mechanism is not live here and the width is invalid.
     ASSERT_TRUE(seen_clobber)
         << "POSITIVE CONTROL FAILED: no separation was clobbered across the sweep -> the DM write-back-clobber "
            "hazard is not live on this platform (coherent NIU, or the emu is not modeling write-back + "
@@ -525,9 +508,9 @@ TEST_F(NocSelfAtomicFixture, TestDmCacheLineWidth) {
            "real (not an artifact), the pool segregation must use the measured value -- investigate.";
 }
 
-// (6a) All user DM threads drain one word through the NoC-CAS-lock-protected
+// (6a) All user DM threads drain one word through the CAS-lock-protected
 // check-then-decrement (the production multi-consumer EXTERNAL down() body).
-// Exact 0 proves the 4-bit CAS lock grants exclusively under full contention.
+// Exact 0 proves the lock grants exclusively under full contention.
 TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrain) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";
@@ -543,8 +526,9 @@ TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrain) {
            "down() cannot be enabled.";
 }
 
-// (6b) Same drain, lock word at CAS lanes 1 and 3 (see run_cas_lock). Not production paths
-// (locks are 16B-spaced, lane 0 -- see MEM_NOC_SEM_LOCK_SIZE); pins the lane encoding.
+// (6b) Same drain with the lock word at CAS lanes 1 and 3 (see run_cas_lock). Not a
+// production path (locks are 16B-spaced, lane 0 -- MEM_NOC_SEM_LOCK_SIZE); pins the
+// lane encoding.
 TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrainLanes13) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";
@@ -558,11 +542,11 @@ TEST_F(NocSelfAtomicFixture, TestSelfCasLockDrainLanes13) {
     }
 }
 
-// (6c) LANE 2 ANOMALY, characterization only (DISABLED_): with the lock at CAS lane 2 the
-// drain makes no progress and the target word reads 0x80000000 | initial_count on emu RTL
-// (lanes 0/1/3 are clean). THIS IS WHY production lock words are 16B-spaced (always lane 0).
-// Run manually (--gtest_also_run_disabled_tests) to re-characterize on silicon; if all lanes
-// prove clean there, the lock region can shrink back to 4B packing.
+// (6c) Lane-2 anomaly, characterization only: with the lock at CAS lane 2 the drain
+// makes no progress and the word reads 0x80000000 | initial_count on emu RTL (lanes
+// 0/1/3 are clean) -- the reason production lock words are 16B-spaced. Run manually
+// (--gtest_also_run_disabled_tests) to re-characterize on silicon; if all lanes prove
+// clean there, the lock region can shrink back to 4B packing.
 TEST_F(NocSelfAtomicFixture, DISABLED_TestSelfCasLockLane2Anomaly) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";
@@ -573,10 +557,9 @@ TEST_F(NocSelfAtomicFixture, DISABLED_TestSelfCasLockLane2Anomaly) {
     EXPECT_EQ(observed, 0u) << "lane-2 CAS anomaly reproduced (observed " << observed << ")";
 }
 
-// (6d) Producer/consumer hart pairs on one word: even harts do PLAIN INCR_GET(+1)
-// up()s (no lock); odd harts do lock-protected decrements. Exact 0 proves CAS-lock
-// traffic and plain INCR_GET traffic serialize mutually at the NIU -- the real
-// up()/down() mix, since producers never take the lock.
+// (6d) Producer/consumer hart pairs on one word: even harts do plain INCR_GET up()s
+// (no lock), odd harts do lock-protected decrements. Exact 0 proves CAS and INCR_GET
+// serialize at the NIU -- the real up()/down() mix, since producers never take the lock.
 TEST_F(NocSelfAtomicFixture, TestSelfCasLockVsIncr) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";

@@ -2,24 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// DM write-back cache line width probe: the minimum separation at which a cached-AMO
-// word (wc) and a NoC-atomic word (wn) stop sharing a cache line -- i.e. the DM's
+// DM write-back cache line width check: the minimum separation at which a cached-AMO
+// word (wc) and a NoC-atomic word (wn) stop sharing a cache line, i.e. the DM's
 // dirty-line write-back stops clobbering the NoC word. Single-thread and sequenced to
-// FORCE the worst-case ordering, so a "safe" result means the hazard is impossible at
-// that separation, not that a race was won.
+// force the worst-case ordering, so a "safe" result means the hazard is impossible at
+// that separation.
 //
-// Controls (a platform that does not model the write-back cache would read "safe"
-// everywhere and yield a bogus small width; the host rejects such runs):
-//   CONTROL A (residency): a cached write must stay invisible via the uncached alias until flushed.
-//   CONTROL B (landed): wn is read via the uncached alias BEFORE the flush and must
-//     equal NOC_ADD, so a post-flush 0 is a genuine clobber, not "never landed".
-//   POSITIVE CONTROL (host): sep=4 (guaranteed same line) must read CLOBBERED, else the width is INVALID.
+// A platform that does not model the write-back cache never clobbers anything, so every
+// separation would read "safe" and the width would come out wrong. Three controls prove
+// the hazard is real, and the host rejects the run if any fails:
+//  - Control A: a cached write stays invisible at TL1 until the flush writes it back.
+//  - Control B: wn is read uncached before the flush, so a post-flush 0 is a real
+//    clobber and not a NoC write that never landed.
+//  - sep=4 shares a line by construction, so it must read clobbered.
 //
-// Per sub-test i:  wc = base + i*STRIDE  (cached-AMO word),  wn = wc + sep[i]  (NoC word);
-// steps 1-6 are commented inline in the loop body.
-//
-// Ceiling: flush_l2_cache_line = FLUSH64 (fixed 64B window), so a width > 64B is not
-// detectable here; 64B matches the documented L1 D$ / L2 line. Quasar-only.
+// flush_l2_cache_line only covers a fixed 64B window, so a line wider than 64B is not
+// detectable here. Quasar-only.
 
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
@@ -47,11 +45,11 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* r_unc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             static_cast<uintptr_t>(residency_addr) + MEM_L1_UNCACHED_BASE);
         volatile uint32_t* r_cached = reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(residency_addr));
-        *r_unc = RES_OLD;     // TL1 = OLD (uncached alias bypasses the cache)
-        *r_cached = RES_NEW;  // cached write: dirty, NOT flushed
-        report[0] = *r_unc;   // expect OLD (NEW is stuck in the write-back cache)
+        *r_unc = RES_OLD;
+        *r_cached = RES_NEW;
+        report[0] = *r_unc;
         flush_l2_cache_line(static_cast<uintptr_t>(residency_addr));
-        report[1] = *r_unc;  // expect NEW (flush wrote it back)
+        report[1] = *r_unc;
     }
 
     // ---- Per-separation clobber sweep ----
@@ -84,10 +82,10 @@ void kernel_main() {
         // 5. Flush wc's dirty line: clobbers TL1 wn to the stale cached 0 iff same line.
         flush_l2_cache_line(static_cast<uintptr_t>(wc));
 
-        // 6. Read TL1 truth via the uncached alias.
-        report[2 + 3 * i + 0] = *wc_unc;  // liveness: expect CACHED_ADD
-        report[2 + 3 * i + 1] = wn_pre;   // Control B: expect NOC_ADD
-        report[2 + 3 * i + 2] = *wn_unc;  // NOC_ADD => safe (different line); 0 => clobbered
+        // 6. Read TL1 via the uncached alias.
+        report[2 + 3 * i + 0] = *wc_unc;
+        report[2 + 3 * i + 1] = wn_pre;
+        report[2 + 3 * i + 2] = *wn_unc;
     }
 
     // Publish the whole report region to TL1 for the host readback.

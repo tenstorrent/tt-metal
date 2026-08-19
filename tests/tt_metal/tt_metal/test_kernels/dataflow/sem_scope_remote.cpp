@@ -2,15 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Remote-up probe for the scoped Semaphore class: exact-count coverage of
-// Semaphore::up(noc, x, y, v). One source, two roles via -D (mirrors the REMOTE_TARGET
-// pattern in noc_self_atomic.cpp):
-//   REMOTE_SENDER (off-node): every thread bumps sem::counter on the semaphore's node,
-//                             increment_times times, through the class's remote up().
-//   receiver (default, on the semaphore's node): waits for the exact expected total, then
-//                             reports the scope-table entry and value(). Read-only user, so the
-//                             accessor is read-only -- it only waits and reads.
-// The scope is host-picked (invisible table), so the same source runs under any scope.
+// Exercises the remote Semaphore::up(noc, x, y, v) with exact counts. One source, two
+// roles per -D: REMOTE_SENDER bumps sem::counter on the semaphore's node, and the
+// default receiver waits for the exact total, then reports the baked scope and value.
+// The host picks the scope, so the same source runs under any mechanism.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -22,26 +17,23 @@ void kernel_main() {
     const uint32_t remote_noc_x = get_arg(args::remote_noc_x);
     const uint32_t remote_noc_y = get_arg(args::remote_noc_y);
 
-    Semaphore counter(sem::counter);  // mechanism comes from the host's scope table
+    Semaphore counter(sem::counter);
     Noc noc;
     for (uint32_t i = 0; i < increment_times; i++) {
         counter.up(noc, remote_noc_x, remote_noc_y, 1);
     }
-    // Remote up() issues a non-posted NoC atomic without draining it (unlike local EXTERNAL
-    // up(), which fences internally); drain this hart's atomics before exit.
     noc.async_atomic_barrier();
 #else
     const uint32_t report_addr = get_arg(args::report_addr);
     const uint32_t expected = get_arg(args::expected);
 
-    Semaphore counter(sem::counter);  // mechanism comes from the host's scope table
+    Semaphore counter(sem::counter);
     counter.wait_min(expected);
 
     volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
     report[0] = static_cast<uint32_t>(sem_scope_of(sem::counter));
     report[1] = counter.value();
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
-    // Make the report visible to the host readback of TL1.
     flush_l2_cache_line(report_addr);
     flush_l2_cache_line(report_addr + sizeof(uint32_t));
 #endif

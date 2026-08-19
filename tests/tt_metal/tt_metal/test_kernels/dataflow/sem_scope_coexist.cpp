@@ -3,10 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Coexistence proof for the cached-only semaphore pool: every DM concurrently hammers a
-// DM_LOCAL_CACHED semaphore (pool, cached RISC-V AMO) and an EXTERNAL semaphore
-// (kernel_config ring, NoC atomic). The pool is physically disjoint from the ring, so the
-// cached sem's dirty-line write-back can't clobber the NoC-written ring word (or vice
-// versa); both final counts must be exact. Scopes are host-picked (invisible table). Quasar-only.
+// DM_LOCAL_CACHED semaphore and an EXTERNAL one, and both final
+// counts must be exact. Scopes are host-picked. Quasar-only.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -25,12 +23,11 @@ void kernel_main() {
     const uint32_t increment_times = get_arg(args::increment_times);
     const uint32_t num_threads = get_arg(args::num_threads);
 
-    // sem::cached's pool slot is seeded by the auto-injected sem::init_dm_cached().
-    Semaphore cached(sem::cached);      // host-picked DM_LOCAL_CACHED (pool, cached AMO)
-    Semaphore external(sem::external);  // host-picked EXTERNAL (ring, NoC atomic)
+    Semaphore cached(sem::cached);      // host-picked DM_LOCAL_CACHED
+    Semaphore external(sem::external);  // host-picked EXTERNAL
     Semaphore done(sem::done);          // EXTERNAL: cross-thread completion barrier
 
-    // Interleave both semaphores so the pool AMOs and ring NoC atomics are maximally concurrent.
+    // Interleave the two so both are maximally concurrent.
     for (uint32_t i = 0; i < increment_times; i++) {
         cached.up(1);
         external.up(1);
@@ -39,12 +36,10 @@ void kernel_main() {
 
     uint64_t hart;
     asm volatile("csrr %0, mhartid" : "=r"(hart));
-    if (hart == 2) {  // lowest user DM: wait for all, then report both final counts
+    if (hart == 2) {
         done.wait_min(num_threads);
         report_value(report_addr, cached.value());                       // expect num_threads * increment_times
         report_value(report_addr + sizeof(uint32_t), external.value());  // expect num_threads * increment_times
-        // Baked mechanisms, so the census can't silently demote the pool/ring split while
-        // the counts (exact under any atomic tier) keep the test green.
         report_value(report_addr + 2 * sizeof(uint32_t), static_cast<uint32_t>(sem_scope_of(sem::cached)));
         report_value(report_addr + 3 * sizeof(uint32_t), static_cast<uint32_t>(sem_scope_of(sem::external)));
     }

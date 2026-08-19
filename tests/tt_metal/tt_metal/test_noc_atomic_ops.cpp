@@ -25,13 +25,9 @@
 
 namespace tt::tt_metal {
 
-// ============================================================================
-// PROBE: NoC atomic operations beyond plain increment.
-// ============================================================================
-// Pins the hardware semantics of cross-domain atomic DECREMENT and the 4-bit
-// compare-and-swap (noc_fast_atomic_cas4, the EXTERNAL down() lock) on
-// Blackhole/Quasar.
-// ============================================================================
+// Probes NoC atomic operations beyond plain increment: pins the hardware
+// semantics of cross-domain atomic decrement and of the 4-bit compare-and-swap
+// (noc_fast_atomic_cas4) that the EXTERNAL down() lock builds on.
 class NocAtomicOpsFixture : public MeshDispatchFixture {
 protected:
     static constexpr experimental::NodeCoord core = {0, 0};
@@ -59,8 +55,8 @@ protected:
         }
     }
 
-    // Write init_value to the shared word, run the probe kernel (mode via -D define)
-    // on all user DM cores, return the final 32-bit word.
+    // Writes init_value to the shared word, runs the probe kernel (mode selected
+    // by the define) on all user DM cores, and returns the final 32-bit word.
     uint32_t run(const std::string& mode_define, uint32_t init_value) {
         std::vector<uint32_t> init{init_value};
         tt::tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base, init);
@@ -126,9 +122,9 @@ protected:
     }
 };
 
-// Atomic cross-domain DECREMENT via the existing INCR_GET path (incr=-1, wrap=31).
-// All user DMs decrement a word pre-set to num_dms*iterations -> exact 0 proves
-// atomic decrement is already reachable through today's noc_semaphore_inc.
+// All user DMs atomically decrement a word pre-set to num_dms*iterations; an
+// exact zero proves cross-domain atomic decrement is already reachable through
+// today's noc_semaphore_inc (INCR_GET) path.
 TEST_F(NocAtomicOpsFixture, TestAtomicDecrementIncrGet) {
     const uint32_t start = num_dms_ * iterations;
     const uint32_t observed = run("PROBE_DECR_INCRGET", start);
@@ -136,9 +132,9 @@ TEST_F(NocAtomicOpsFixture, TestAtomicDecrementIncrGet) {
     EXPECT_EQ(observed, 0u) << "Cross-domain atomic decrement via INCR_GET(-1) lost/added updates.";
 }
 
-// Atomic decrement via a raw NOC_AT_INS_RISCV_AMO (AMOADD, operand -1).
-// The raw emit uses Quasar-only RoCC builtins / NOC_AT_* symbols, so it is Quasar-only
-// (Blackhole has a different NoC emit path). TestAtomicDecrementIncrGet stays portable.
+// Same decrement shape, but through a raw RISCV_AMO emit. The raw emit uses
+// Quasar-only RoCC builtins, so this skips elsewhere; TestAtomicDecrementIncrGet
+// stays portable.
 TEST_F(NocAtomicOpsFixture, TestAtomicDecrementAmo) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC RISCV_AMO emit is Quasar-only";
@@ -149,8 +145,8 @@ TEST_F(NocAtomicOpsFixture, TestAtomicDecrementAmo) {
     EXPECT_EQ(observed, 0u) << "Raw NOC_AT_INS_RISCV_AMO AMOADD decrement did not produce exact 0.";
 }
 
-// 4-bit compare-and-swap via a raw NOC_AT_INS_CAS. Word starts at 5:
-// CAS(cmp=5,swap=9) succeeds -> 9; CAS(cmp=5,swap=2) fails (word is 9) -> unchanged.
+// 4-bit compare-and-swap: a matching CAS moves the word 5 -> 9, then a
+// deliberately mismatched CAS must leave it at 9.
 TEST_F(NocAtomicOpsFixture, TestAtomicCas) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";
@@ -160,16 +156,16 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCas) {
     EXPECT_EQ(observed, 9u) << "Raw NOC_AT_INS_CAS did not compare-and-swap as expected.";
 }
 
-// CAS return-value keystone: noc_fast_atomic_cas4 must deliver the
-// PRE-OP word to the caller-supplied slot on success AND on failure -- what lets a CAS loser
-// learn the current value (the EXTERNAL down() lock builds on this). word2 (upper-28 bits set)
-// checks the word[31:4]==0 success condition. The kernel also records the slot value read right
-// after noc_async_atomic_barrier (no poll) to show whether the barrier orders the return write.
+// Keystone for the EXTERNAL down() lock: noc_fast_atomic_cas4 must return the
+// pre-op word on success and on failure -- that is how a CAS loser learns the
+// current value. word2 (upper bits set) checks the word[31:4]==0 success
+// condition; the kernel also samples the return slot right after the atomic
+// barrier, with no poll, to show whether the barrier orders the return write.
 TEST_F(NocAtomicOpsFixture, TestAtomicCasReturnsPreOpValue) {
     if (!is_quasar) {
         GTEST_SKIP() << "noc_fast_atomic_cas4 (RoCC builtin emit) is Quasar-only";
     }
-    // Scratch layout -- must match noc_atomic_ops_probe.cpp PROBE_CAS_RET exactly.
+    // Scratch layout must match the PROBE_CAS_RET side of noc_atomic_ops_probe.cpp.
     constexpr uint32_t WORD2_OFF = 16u;
     constexpr uint32_t REPORT_OFF = 128u;
     constexpr uint32_t REPORT_WORDS = 7u;
@@ -197,7 +193,7 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCasReturnsPreOpValue) {
         result[5],
         result[6]);
 
-    // HARD asserts: CAS return-value semantics.
+    // Return-value semantics.
     EXPECT_EQ(result[1], 5u)
         << "successful CAS did not return the pre-op word (expected 5): a CAS winner cannot confirm "
            "what it swapped out, so cas4's return path is unusable for a lock/down() upgrade.";
@@ -212,9 +208,9 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCasReturnsPreOpValue) {
         << "CAS(cmp=5) on 0x15 changed the word: HW ignored the word[31:4]==0 success condition, so "
            "the 4-bit CAS is NOT safe next to words that can exceed 15.";
 
-    // ORDERING gate: production down() does not RELY on this (sentinel pre-write + poll),
+    // Ordering gate: production down() does not rely on this (it sentinel-polls),
     // but the perf note in noc_semaphore.h ("polls exit on their first check") does --
-    // a red here means that claim went stale, not that down() is broken.
+    // a red here means that note went stale, not that down() is broken.
     EXPECT_EQ(result[0], result[1])
         << "noc_async_atomic_barrier does NOT order the CAS return-value write; the sentinel-poll in "
            "any consumer of cas4 returns is REQUIRED, not optional.";
