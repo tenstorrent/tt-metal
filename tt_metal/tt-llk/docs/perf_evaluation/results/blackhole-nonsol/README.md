@@ -5,7 +5,8 @@ Test selection `perf and not accuracy`, compile `-n 10`, measure `-n 15`.
 Speed of light is off throughout. CI's perf job uses it; this gate is being
 designed without it.
 
-Two questions were asked.
+Two questions were asked: how long does a gate run take, and how much do the
+numbers move on their own.
 
 ## 1. How long does a gate run take?
 
@@ -17,7 +18,7 @@ Cold build tree each time, because a gate on a fresh runner pays the compile.
 | isolates | UNPACK_ISOLATE, MATH_ISOLATE, PACK_ISOLATE | 9:55 | 2:45 | **12:40** |
 | l1 | L1_TO_L1 | 4:21 | 1:56 | **6:17** |
 
-Raw seconds in `timings/`.
+Raw seconds in `timings/`. Detail in `cost_summary.md`.
 
 Three things follow:
 
@@ -25,16 +26,18 @@ Three things follow:
 - Compile is 74-79% of every configuration. Build caching on the gate runner
   would save more than any run-type choice.
 - Cost tracks the number of (module x run-type) pairs almost linearly. Isolates
-  cover 61% of the 70 pairs and cost 64% of the time. L1_TO_L1 covers 26% and
+  cover 61% of the 70 pairs and cost 64% of the time; L1_TO_L1 covers 26% and
   costs 32%. The gap is fixed per-variant overhead, which run-type selection
   cannot remove — that is the case for reducing test variants.
 
 ## 2. How much do results move on their own?
 
-We ran the same code five times on the same card. Nothing changed between runs,
-so every difference is measurement noise. 108,377 numbers were measured.
+The same code was run five times on the same card. Nothing changed between runs,
+so every difference is measurement noise.
 
 `move` = (largest of the 5 runs - smallest) / median.
+
+### L1_TO_L1 — 108,377 numbers measured
 
 | marker | numbers measured | moved >0.5% | >1% | >2% | >5% | worst move | worst move in cycles |
 |---|--:|--:|--:|--:|--:|--:|--:|
@@ -44,33 +47,49 @@ so every difference is measurement noise. 108,377 numbers were measured.
 | UNINIT | 1,649 | 91 | 35 | 10 | 0 | 3.57% | **9** |
 | all | 108,377 | 2,329 | 1,439 | 474 | 14 | 7.91% | 5110 |
 
-Full detail, including the per-point data, is in `noise_l1_to_l1.md` and
-`how_much_results_move.md`.
+### Isolates — 311,352 numbers measured
 
-### What this says
+| marker | numbers measured | moved >0.5% | >1% | >2% | >5% | worst move | worst move in cycles |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| TILE_LOOP | 102,675 | 21 | 4 | 1 | 1 | 19.75% | 353 |
+| KERNEL | 102,675 | 26 | 5 | 1 | 1 | 14.12% | 349 |
+| INIT | 102,675 | 4,038 | 2,364 | 861 | 1 | 5.15% | **21** |
+| UNINIT | 3,327 | 222 | 222 | 222 | 2 | 14.29% | **6** |
+| all | 311,352 | 4,307 | 2,595 | 1,085 | 5 | 19.75% | 353 |
+
+Per-configuration tables in `move_l1_to_l1.md` and `move_isolates.md`. Full
+reports, including the least stable points, in `noise_l1_to_l1.md` and
+`noise_isolates.md`.
+
+### What the tables say
 
 TILE_LOOP is the steady-state per-tile cost — the number anyone optimizing LLK
-cares about. **Not one of its 35,576 measurements moved by more than 2%.** KERNEL
+cares about. Across both configurations, 138,251 TILE_LOOP measurements produced
+exactly **one** that moved more than 2%, and that one is explained below. KERNEL
 behaves the same. Most measurements did not move at all: identical code returns
 identical cycle counts.
 
-All the noise is in INIT and UNINIT. Those are small numbers, around 350 cycles,
-and they wobble by up to 25 cycles. That is a large percentage of a small number,
-which is why they look noisy and TILE_LOOP does not.
+The noise concentrates in INIT and UNINIT. Those are small numbers, a few
+hundred cycles, that wobble by up to 25 cycles. A fixed 20-cycle wobble is a
+large percentage of a small number, which is why they look noisy and TILE_LOOP
+does not.
 
 ## The threshold
 
 > **Flag a regression when a number is more than 2% slower AND more than 30
 > cycles slower.**
 
-On five runs of unchanged code, this rule fires **zero times** out of 108,377
-measurements.
+| configuration | numbers measured | points the rule fires on, with no code change |
+|---|--:|--:|
+| L1_TO_L1 | 108,377 | **0** |
+| isolates | 311,352 | **2** (one test config, see below) |
 
 Each clause handles one failure mode:
 
-- The percentage catches large numbers drifting. On TILE_LOOP nothing reached 2%.
-- The cycle count removes the small INIT numbers. Their worst move was 25 cycles,
-  below the 30-cycle floor, so none of the 464 that exceeded 2% survive the rule.
+- The percentage catches large numbers drifting.
+- The cycle count removes the small INIT and UNINIT numbers. Their worst moves
+  were 25 and 9 cycles, below the 30-cycle floor, so all 1,557 of them that
+  exceeded 2% are correctly ignored.
 
 The absolute clause never binds on TILE_LOOP: 2% of a large number is thousands
 of cycles, far above 30.
@@ -84,15 +103,51 @@ real detection.
 gives a quieter gate. It does not improve the typical case at all; only the
 extreme tail. Use one run per side and do not pay for a second.
 
+## The one exception, documented
+
+Two of the 311,352 isolates measurements break the rule. They are the same
+measurement point seen through two markers:
+
+`perf_pack_dest_bank`, PACK_ISOLATE, Float16_b in and out, `L1Accumulation.Yes`,
+`DestAccumulation.No`, loop_factor 8, tile_cnt 8, 2 blocks of 4 tiles,
+`Tilize.No`.
+
+| marker | run 1 | run 2 | run 3 | run 4 | run 5 |
+|---|--:|--:|--:|--:|--:|
+| TILE_LOOP | **1434** | 1787 | 1787 | 1787 | 1787 |
+| KERNEL | **2123** | 2472 | 2472 | 2472 | 2472 |
+
+This is not random jitter. Runs 2 to 5 are bit-identical, and run 1 is faster by
+exactly 353 and 349 cycles. The behaviour is bimodal: one value on the first run,
+another on every run after.
+
+In this method, run 1 is the run that compiles the ELFs cold; runs 2 to 5 reuse
+them. So the likely cause is a first-run state effect, not measurement noise.
+
+**Open question for the team.** Two readings, with different consequences:
+
+1. If the cold-build first run is what a real gate always does, the gate would
+   consistently see the run-1 value and this would never fire.
+2. If the difference comes from device or L1 state left by preceding tests, then
+   this configuration is genuinely order-dependent and should be stabilised or
+   excluded from the gate.
+
+Either way it is one configuration out of 311,352 measurements, and it should
+not set the threshold. Raising the rule to 20% to accommodate it would make the
+gate useless everywhere else.
+
+It also flags a limitation of the method itself: **run 1 is not interchangeable
+with runs 2 to 5.** Every other point was insensitive to this, but that is a
+property of the data, not a guarantee.
+
 ## What this does not cover
 
 - **Blackhole only.** Wormhole needs its own five runs. Thresholds do not
   transfer between architectures.
-- **L1_TO_L1 only.** The isolates baseline is pending. L1_CONGESTION has not been
-  measured and, being a contention metric, is likely the noisiest.
-- **One card, one session.** The build tree was cached after run 1. A real gate
-  compares runs from different runners on different days, so this is a lower
-  bound on the noise a gate will see.
+- **L1_CONGESTION not measured.** Deliberately excluded: the gate is not expected
+  to use it. It is a contention metric and would likely need a looser rule.
+- **One card, one session.** A real gate compares runs from different runners on
+  different days. This is a lower bound on the noise a gate will see.
 - **How big real regressions are.** Everything here constrains the threshold from
   below: it must exceed the noise. Nothing yet constrains it from above: it must
   be small enough to catch a real regression. That answer is in the commit
@@ -103,5 +158,13 @@ extreme tail. Use one run per side and do not pay for a second.
     .claude/scripts/perf_gate_budget.sh --arch blackhole --configs full,isolates,l1 \
       --build-root $HOME/llk-build --out $HOME/perf_gate_budget
 
-    SKIP_MAIN_CHECK=1 PERF_RUN_TYPES=L1_TO_L1 OUT_DIR=$HOME/perf_noise_baseline \
+    SKIP_MAIN_CHECK=1 PERF_RUN_TYPES=L1_TO_L1 OUT_DIR=$HOME/perf_noise_l1 \
       .claude/scripts/run_perf_noise_baseline.sh blackhole 5
+
+    SKIP_MAIN_CHECK=1 PERF_RUN_TYPES=UNPACK_ISOLATE,MATH_ISOLATE,PACK_ISOLATE \
+      OUT_DIR=$HOME/perf_noise_isolates \
+      .claude/scripts/run_perf_noise_baseline.sh blackhole 5
+
+Then, per configuration:
+
+    python3 ~/move_table.py <out>/noise_report.points.csv "<title>" move_<name>.md
