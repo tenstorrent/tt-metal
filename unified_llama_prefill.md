@@ -478,10 +478,46 @@ single-shot head at 64x64 with a 2x2 tile score block. Larger S needs the output
 
 ## Phase 8 -- RMSNorm
 
-Falls out of phases 1, 2 and 5 with no new library work:
-`reduce_mean<Cols>` -> `rsqrt` -> `mul_bcast_cols` -> `mul` by the weight.
+**DONE, with zero library changes** -- which was the prediction, and it held on the first
+run. `unified_kernels/rmsnorm.cpp` is the phases 1-6 ops rearranged:
 
-- [ ] `unified_kernels/rmsnorm.cpp` + test
+```cpp
+u::ComputeBlock sq      = sq_storage.store(x * x);
+u::ComputeBlock mean    = mean_storage.store(u::reduce_mean<kAxis>(sq, inv_n));
+u::ComputeBlock inv_rms = rsqrt_storage.store((mean + u::bcast<u::Axis::Both>(eps)).rsqrt());
+u::ComputeBlock normed  = normed_storage.store(x * u::bcast<u::Axis::Cols>(inv_rms));
+out_storage.store(normed * u::bcast<u::Axis::Rows>(w));
+```
+
+Ten configurations against torch, max absolute error 0.023-0.033.
+
+### What it adds over attention
+
+**Both broadcast axes in one kernel.** Cols for the per-row reciprocal RMS, Rows for the
+per-feature weight. Attention only ever broadcast along Cols.
+
+**The case that needs the axis declared.** The epsilon is a scalar broadcast onto the
+`Shape<Ht,1>` mean vector -- and against an `Ht x 1` block, both `Axis::Both` and
+`Axis::Rows` require a `Shape<1,1>` vector, so no shape could tell them apart. This is the
+collision from the design discussion, appearing in the first real kernel that needed it.
+
+**`x * x` as an ordinary tree** whose two leaves are the same buffer.
+
+### The check that carries the information
+
+With `weight == 1`, every output row must have RMS 1. That is the op's definition rather
+than a tolerance, and it is precisely what a scale error survives. Feeding `reduce_mean` a
+scaler of 1 -- the classic mistake, turning a mean into a sum -- makes the row RMS collapse
+to exactly `1/sqrt(N)`: measured 0.1765 at W=32 (1/sqrt(32) = 0.1768), 0.1245 at W=64,
+0.0880 at W=128. The absolute-error check also fails, but only the RMS check names the bug.
+
+### Settled along the way
+
+`fill_reduce_scaler` IS a valid filler for a `bcast_scalar` vector. It writes the constant
+into row 0 of all four faces where `_bcast_scalar` is documented to read only `[0,0]`, and
+the outline flagged the difference as a blocking unknown. Two kernels now depend on it --
+attention's `1/sqrt(d)` and this kernel's epsilon -- and both match torch, so no separate
+`fill_scalar` is needed.
 
 ## Phase 9 -- RoPE
 
