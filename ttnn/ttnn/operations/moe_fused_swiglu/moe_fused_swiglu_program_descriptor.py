@@ -728,7 +728,11 @@ def create_program_descriptor(
 
             compute_rt[physical_x][physical_y] = [mailbox_addr, kr, hn, ec, ec_group, hgroup, kgroup]
 
-    dm_defines = [("H_MCAST_POSTED", "1" if geo.H_MCAST_POSTED else "0")]
+    stage_profile_defines = [("MOE_FUSED_SWIGLU_STAGE_PROFILE", "1")] if geo.STAGE_PROFILE else []
+    dm_defines = [("H_MCAST_POSTED", "1" if geo.H_MCAST_POSTED else "0"), *stage_profile_defines]
+    compute_defines = list(stage_profile_defines)
+    if situ_glu:
+        compute_defines.append(("SITU_GLU", "1"))
 
     kernels = [
         ttnn.KernelDescriptor(
@@ -753,7 +757,7 @@ def create_program_descriptor(
             compile_time_args=compute_ct,
             runtime_args=compute_rt,
             config=compute_kernel_config,
-            defines=[("SITU_GLU", "1")] if situ_glu else [],
+            defines=compute_defines,
         ),
     ]
 
