@@ -414,14 +414,14 @@ def test_copy_rm_interleaved_to_nd_sharded(device, tensor_shape, shard_shape, gr
             [1, 1, 32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ),
-        # 4-D tensor → 6 shards on disjoint DRAM banks (banks 0-1 and 4-7)
+        # 4-D tensor → 6 shards on disjoint DRAM banks (banks 0-2 and 4-6)
         (
             [4, 3, 16, 32],
             [2, 1, 16, 32],
             ttnn.CoreRangeSet(
                 {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(6, 0)),
                 }
             ),
         ),
