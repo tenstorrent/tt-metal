@@ -110,6 +110,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu_operations.h"
 #include "fresh_cpp_operations.h"
+// Canonical per-op semantic bodies (storm contract: fresh_cpp/README.md).
+#include "fresh_cpp/softplus.h"
+#include "fresh_cpp/sqrt.h"
+#include "fresh_cpp/tanh.h"
+#include "fresh_cpp/tanhderivative-lut.h"
+#include "fresh_cpp/unarypower.h"
+#include "fresh_cpp/xielu.h"
 
 #ifndef FRESH_CPP_IMPL
 #define FRESH_CPP_IMPL 0
