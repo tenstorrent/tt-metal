@@ -147,7 +147,16 @@ def test_wormhole_never_inherits_blackhole_policy(mesh, model, monkeypatch):
     missing from the table used to fall back to the QB2 entry, handing a 24 GB
     N300 / 96 GB T3K Blackhole's 128 GB headroom ("unbounded KV through 128k")
     and OOMing on KV allocation. Wormhole must bound early and keep chunk 2048.
+
+    Force the WH host view: ``_canonical_device_name`` only treats ``N150`` as a
+    real WH board when the host is Wormhole (on Blackhole, ``N150`` is a
+    historical P150 alias). Without this patch the N150 cases pass only on WH
+    runners and falsely fail on BH.
     """
+    monkeypatch.setattr(
+        "models.demos.gemma4.tt.generator_trace._host_is_wormhole",
+        lambda: True,
+    )
     monkeypatch.delenv("GEMMA4_BOUNDED_SLIDING", raising=False)
     monkeypatch.delenv("GEMMA4_GEN_PREFILL_CHUNK", raising=False)
     monkeypatch.delenv("GEMMA4_DEMO_SINGLE_CHUNK", raising=False)
