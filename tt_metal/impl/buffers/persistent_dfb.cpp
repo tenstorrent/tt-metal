@@ -47,6 +47,7 @@ void initialize_persistent_dfb(
 
     for (const auto& [sender_core, receiver_set] : sender_receiver_mapping) {
         const uint32_t n = receiver_set.num_cores();
+        TT_FATAL(n > 0, "Sender core {} must have a non-empty receiver set", sender_core.str());
         num_receiver_cores += n;
         max_receivers = std::max(max_receivers, n);
         sender_ranges.emplace_back(sender_core);
