@@ -107,9 +107,9 @@ void kernel_main() {
     const u::LogicalMcast col{u::LogicalCoord{0, me.x}, u::Extent{MM_GRID_H, 1}};
 
 #if defined(MM_ACC_L1)
-    u::Accumulator<u::AccumulatorMode::L1, Out> acc(acc_storage, out_storage);
+    u::Accumulator<Out, u::AccumulatorMode::L1> acc(acc_storage, out_storage);
 #else
-    u::Accumulator<u::AccumulatorMode::Dst, Out> acc(acc_storage, out_storage);
+    u::Accumulator<Out, u::AccumulatorMode::Dst> acc(acc_storage, out_storage);
 #endif
     acc.clear();
 
