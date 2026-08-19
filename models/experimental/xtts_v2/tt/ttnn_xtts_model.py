@@ -40,9 +40,10 @@ Trace lifecycle — WHY the decode trace is captured once (option (a)):
   trace replay reads or writes anything. `warmup()` captures ONE decode trace at the
   model-cap max_seq (32 cond + 404 text + 1 START + 605 audio = 1042, rounded up internally
   per BUG-1), and each request then just does reset_caches + prefill + traced steps. The
-  vocoder traces (one per VOC_BUCKETS shape) obey the same rule plus one of their own: every
-  trace's persistent state must exist before ANY capture, or one trace's replay lands on
-  another's buffers — see `_capture_vocoder`.
+  vocoder traces (one per VOC_BUCKETS shape) obey the same rule plus one of their own: their
+  persistent state — stable slots AND ttnn's cached conv weights — must exist before ANY capture,
+  or a replay lands on another trace's buffers. Hence the _alloc_vocoder / _capture_vocoder split
+  around the decode capture.
   Verified empirically during bringup: two consecutive
   generates produce sane audio, and a teacher-forced golden replay through the SAME
   captured trace AFTER those generates still matches `golden/gpt/latents.pt` at
@@ -221,6 +222,7 @@ class XttsV2:
         # clearing happens per-XttsV2 instance, after that instance's own build.
         load_full_state.cache_clear()
         self._warm = False
+        self._voc_slots = {}  # bucket length -> (z_in, g_in), allocated before any capture
         self._voc_traces = {}  # bucket length -> (trace_id, z_in, g_in, out), captured at warmup
         self.last_timings = {}
         logger.info(f"[XttsV2] built (ckpt={self.ckpt_path}) in {time.time() - t0:.1f}s")
@@ -231,11 +233,11 @@ class XttsV2:
 
         Order matters (same discipline as z_image_turbo): programs compiled after capture
         risk landing where the trace keeps intermediates, so compile Blocks 1/2 (a full 6 s
-        conditioning chunk — the shape every long reference hits), the vocoder at every
-        VOC_BUCKETS shape (also captured), one prefill, and the decode step BEFORE `capture()`.
-        Vocoder trace state is allocated here, i.e. before the decode capture. (Per-request
-        prefill at a NEW prompt length still compiles a few programs post-capture — covered
-        by the teacher-forced trace check in the bringup validation.)"""
+        conditioning chunk — the shape every long reference hits), the vocoder's slots and
+        programs, one prefill, and the decode step BEFORE `capture()`. The vocoder TRACES are
+        captured after it — see _alloc_vocoder / _capture_vocoder, which own that split.
+        (Per-request prefill at a NEW prompt length still compiles a few programs post-capture
+        — covered by the teacher-forced trace check in the bringup validation.)"""
         t0 = time.time()
         # 1) Blocks 1+2 on a dummy full-length (6 s) reference clip.
         g = torch.Generator().manual_seed(0)
@@ -243,7 +245,12 @@ class XttsV2:
         voice = self.compute_voice(dummy, 22050)
         logger.info(f"[XttsV2] warmup: Blocks 1+2 compiled in {time.time() - t0:.1f}s")
 
-        # 2) One eager prefill (compiles fill_cache/SDPA/etc.), then capture the step trace.
+        # 2) Vocoder slots + programs at every bucket shape (see _alloc_vocoder: before capture).
+        t1 = time.time()
+        self._alloc_vocoder(voice.speaker_embedding)
+        logger.info(f"[XttsV2] warmup: vocoder compiled at {len(VOC_BUCKETS)} buckets in {time.time() - t1:.1f}s")
+
+        # 3) One eager prefill (compiles fill_cache/SDPA/etc.), then capture the step trace.
         t1 = time.time()
         prefix = assemble_prompt(
             self.tokenizer.encode("Warm up the decoder.", "en"), voice.gpt_cond_latent, self.tables
@@ -256,12 +263,12 @@ class XttsV2:
             f"[XttsV2] warmup: GPT prefill + trace captured in {time.time() - t1:.1f}s (max_seq={self.decoder.max_seq})"
         )
 
-        # 3) Vocoder at every bucket shape, each captured for replay.
+        # 4) Vocoder traces, from the slots step 2 allocated (see _capture_vocoder: after capture).
         t1 = time.time()
-        self._capture_vocoder(voice.speaker_embedding)
+        self._capture_vocoder()
         logger.info(f"[XttsV2] warmup: vocoder traced at {len(VOC_BUCKETS)} buckets in {time.time() - t1:.1f}s")
 
-        # 4) Tiny end-to-end generate: replays the fresh trace over the whole request path.
+        # 5) Tiny end-to-end generate: replays the fresh trace over the whole request path.
         t1 = time.time()
         self.generate("Warm up the pipeline.", voice, seed=0, max_new_tokens=24)
         logger.info(f"[XttsV2] warmup: tiny generate in {time.time() - t1:.1f}s")
@@ -307,18 +314,13 @@ class XttsV2:
         return Voice(gpt_cond_latent=cond, speaker_embedding=spk)
 
     # --------------------------------------------------------------- generation
-    def _capture_vocoder(self, speaker_embedding):
-        """Trace the vocoder at every VOC_BUCKETS shape — replay costs no host op dispatch, and
-        the block is ~78 DRAM-sliced convs' worth of it.
+    def _alloc_vocoder(self, speaker_embedding):
+        """Allocate the vocoder's stable in-slots and compile every VOC_BUCKETS shape.
 
-        Both loops are needed. A capture cannot compile, so every shape runs eagerly first; that
-        pass also allocates the stable slots and ttnn's prepared conv weights. All of it must
-        exist BEFORE any capture: a capture frees its intermediates on exit, the next shape's
-        persistent buffers land on those addresses, and replaying the earlier trace then writes
-        over them. Weights are never rewritten per request, so the damage sticks — measured as
-        one bucket silently changing another bucket's audio after a few interleaved requests."""
+        Runs BEFORE the decode capture: this eager pass also prepares the conv weights, which the
+        generator caches and keeps. Persistent buffers allocated after a capture can land on that
+        trace's baked addresses, and its replays then overwrite them."""
         dev = self.mesh_device
-        slots = {}
         for Lb in VOC_BUCKETS:
             z_in = ttnn.from_torch(
                 torch.zeros(1, 1, Lb, 1024), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev
@@ -326,10 +328,18 @@ class XttsV2:
             g_in = ttnn.from_torch(
                 speaker_embedding.reshape(1, 512), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev
             )
-            self.vocoder(z_in, g_in)
-            slots[Lb] = (z_in, g_in)
+            self.vocoder(z_in, g_in)  # a capture cannot compile, so every shape runs eagerly first
+            self._voc_slots[Lb] = (z_in, g_in)
         ttnn.synchronize_device(dev)
-        for Lb, (z_in, g_in) in slots.items():
+
+    def _capture_vocoder(self):
+        """Capture one replayable trace per bucket from the slots _alloc_vocoder made.
+
+        Runs AFTER the decode capture — capturing first leaves it emitting NaN logits. Only each
+        trace's own output is allocated here, and its replay rewrites that before anything reads
+        it."""
+        dev = self.mesh_device
+        for Lb, (z_in, g_in) in self._voc_slots.items():
             trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
             out = self.vocoder(z_in, g_in)
             ttnn.end_trace_capture(dev, trace_id, cq_id=0)
@@ -478,6 +488,7 @@ class XttsV2:
             except Exception:
                 pass  # older ttnn builds release traces on device close
         self._voc_traces.clear()
+        self._voc_slots.clear()  # frees the stable in-slots those traces replayed from
         if getattr(self.decoder, "trace_id", None) is not None:
             try:
                 ttnn.release_trace(self.mesh_device, self.decoder.trace_id)

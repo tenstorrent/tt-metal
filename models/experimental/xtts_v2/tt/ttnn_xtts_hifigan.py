@@ -143,7 +143,7 @@ class TTNNHifiganGenerator:
 
     def _dedup_prepared(self, key, wb):
         """Cache the prepared (weight, bias), sharing one tensor per distinct content: layouts are
-        length-specific but rarely differ, so per-length copies hold 277 MB against 70."""
+        length-specific but rarely differ, so per-length copies would mostly be duplicates."""
         if key in self._prepared_weights:
             return
         w, b = wb

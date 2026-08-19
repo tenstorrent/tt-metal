@@ -5,11 +5,12 @@
 """Tests for the request path's vocoder length bucketing (tt/ttnn_xtts_model.py).
 
 The vocoder is compiled and traced at a fixed set of frame counts (VOC_BUCKETS); each request
-pads z up to its bucket and trims the waveform back. Three properties: the bucket a length maps
+pads z up to its bucket and trims the waveform back. What is pinned here: the bucket a length maps
 to, that the padding is inert (the trimmed waveform must not depend on how much zero padding
 followed it, which is what lets a short utterance skip the 2634-frame cap), that replaying one
-bucket's trace leaves the other buckets' output unchanged, and that the prepared conv weights the
-buckets share are deduplicated rather than held per length.
+bucket's trace leaves the other buckets' output unchanged, that the prepared conv weights the
+buckets share are deduplicated rather than held per length, and that every bucket's trace matches
+the CPU reference waveform.
 """
 import types
 
@@ -19,6 +20,7 @@ import torch.nn.functional as F
 import ttnn
 
 from models.common.utility_functions import comp_pcc
+from models.experimental.xtts_v2.reference.xtts_hifigan_ref import HifiganReference
 from models.experimental.xtts_v2.tests.reference_helpers import hifigan_reference
 from models.experimental.xtts_v2.tt.ttnn_xtts_hifigan import (
     TTNNHifiganGenerator,
@@ -27,9 +29,10 @@ from models.experimental.xtts_v2.tt.ttnn_xtts_hifigan import (
 from models.experimental.xtts_v2.tt.ttnn_xtts_model import HOP, VOC_BUCKETS, VOC_L, XttsV2, _voc_bucket
 
 TARGET_PCC = 0.999
+TARGET_PCC_WAV = 0.99  # traced waveform vs the CPU reference, same gate as test_hifigan_pcc
 NUM_CONVS = 78  # conv_pre + conv_post + 4 upsamples + 12 resblocks x 6
-MAX_LAYOUTS = 84  # measured: only 6 convs prepare a second layout, at one length boundary each
-MAX_LAYOUT_MB = 100  # 70.4 MB measured; without deduplication it is 276.8 MB
+MAX_LAYOUTS = 84  # a few convs prepare a second layout, at one length boundary each
+MAX_LAYOUT_MB = 100  # ceiling on the shared prepared weights
 
 
 def run_voc_bucket_invariance(device):
@@ -60,9 +63,11 @@ def run_voc_trace_replay(device):
     model = types.SimpleNamespace(
         mesh_device=device,
         vocoder=TTNNHifiganGenerator(device, preprocess_hifigan_parameters(device)),
+        _voc_slots={},
         _voc_traces={},
     )
-    XttsV2._capture_vocoder(model, g)
+    XttsV2._alloc_vocoder(model, g)
+    XttsV2._capture_vocoder(model)
     assert sorted(model._voc_traces) == sorted(VOC_BUCKETS), "every bucket should be traced"
 
     gen = torch.Generator().manual_seed(1)
@@ -75,6 +80,37 @@ def run_voc_trace_replay(device):
     maxabs = (first - again).abs().max().item()
     print(f"largest bucket re-replayed after {len(VOC_BUCKETS) - 1} others, maxabs diff {maxabs:.3e}")
     return maxabs == 0.0, f"maxabs {maxabs:.3e}"
+
+
+def run_voc_traced_reference(device):
+    """Every bucket's trace against a CPU reference — the other checks here compare the model to
+    itself, which a consistently wrong trace passes.
+
+    The reference pads to the same bucket _vocode does: conv_pre has a bias, so zero frames past L
+    are not silence and they perturb the trailing waveform."""
+    refs = hifigan_reference()
+    z_ref, g = refs["z"], refs["g"]
+    model = types.SimpleNamespace(
+        mesh_device=device,
+        vocoder=TTNNHifiganGenerator(device, preprocess_hifigan_parameters(device)),
+        _voc_slots={},
+        _voc_traces={},
+    )
+    XttsV2._alloc_vocoder(model, g)
+    XttsV2._capture_vocoder(model)
+    assert sorted(model._voc_traces) == sorted(VOC_BUCKETS), "every bucket should be traced"
+
+    reference, results = HifiganReference(), []
+    for Lb in VOC_BUCKETS:
+        L = Lb - 7  # inside the bucket, so each replay pads as a real request does
+        z = z_ref.repeat(1, 1, L // z_ref.shape[-1] + 1)[:, :, :L]  # only the length matters here
+        gold = reference(F.pad(z, (0, Lb - L)), g)[:, :, : L * HOP]
+        passed, pcc = comp_pcc(gold, XttsV2._vocode(model, z, g), pcc=TARGET_PCC_WAV)
+        print(f"bucket {Lb:5d} (L={L}) vs CPU reference  pcc: {pcc}")
+        results.append((Lb, passed, pcc))
+
+    Lb, _, pcc = min(results, key=lambda r: r[2])
+    return all(r[1] for r in results), f"worst bucket {Lb} pcc {pcc}"
 
 
 def run_voc_prepared_weight_dedup(device):
@@ -122,6 +158,12 @@ def test_voc_trace_replay(device):
     assert passed, f"replaying other buckets changed the largest bucket's output: {msg}"
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 262144, "trace_region_size": 120_000_000}], indirect=True)
+def test_voc_traced_reference(device):
+    passed, msg = run_voc_traced_reference(device)
+    assert passed, f"traced vocoder waveform below {TARGET_PCC_WAV} vs the CPU reference: {msg}"
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 262144}], indirect=True)
 def test_voc_prepared_weight_dedup(device):
     passed, msg = run_voc_prepared_weight_dedup(device)
@@ -138,8 +180,9 @@ if __name__ == "__main__":
         ok, msg = run_voc_bucket_invariance(dev)
         ok2, msg2 = run_voc_trace_replay(dev)
         ok3, msg3 = run_voc_prepared_weight_dedup(dev)
+        ok4, msg4 = run_voc_traced_reference(dev)
     finally:
         ttnn.close_device(dev)
-    all_ok = ok and ok2 and ok3
-    print(("PASSED " if all_ok else "FAILED ") + f"{msg}; {msg2}; {msg3}")
+    all_ok = ok and ok2 and ok3 and ok4
+    print(("PASSED " if all_ok else "FAILED ") + f"{msg}; {msg2}; {msg3}; {msg4}")
     sys.exit(0 if all_ok else 1)
