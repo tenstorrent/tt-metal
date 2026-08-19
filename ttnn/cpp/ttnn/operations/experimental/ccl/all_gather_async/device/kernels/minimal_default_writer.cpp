@@ -121,17 +121,15 @@ void kernel_main() {
     const auto chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
 #ifdef USE_WORKER_MUX
     // Build the worker-mux egress: reads the mux runtime-arg block (advancing the cursor) and
-    // waits for the mux endpoint to be ready. The helper takes a size_t& cursor, so bridge the
-    // writer's uint32_t arg_idx through conn_arg_idx and sync it back. Wrapped into the
+    // waits for the mux endpoint to be ready. arg_cursor bridges the writer's uint32_t arg_idx to
+    // the size_t& the ctor advances and syncs it back automatically. Wrapped into the
     // FabricStreamSender below so the arm/send/teardown path is identical to the Direct case.
-    size_t conn_arg_idx = arg_idx;
     MuxConn<fabric_mux_num_buffers_per_channel> mux_conn(
-        conn_arg_idx,
+        arg_cursor(arg_idx),
         fabric_mux_channel_buffer_size_bytes,
         fabric_mux_status_address,
         fabric_mux_termination_signal_address,
         num_mux_clients);
-    arg_idx = conn_arg_idx;
 #endif
     const auto& unicast_route_info = (direction == 0) ? forward_unicast_route_info : backward_unicast_route_info;
     const auto& barrier_multicast_route_info =
@@ -162,12 +160,10 @@ void kernel_main() {
     // Wrap the worker-mux egress built above; arm/send/teardown match the Direct case below.
     FabricStreamSender<MuxConn<fabric_mux_num_buffers_per_channel>> sender(mux_conn, /*alignment=*/1);
 #else
-    // Direct egress: build through the helper from the fabric runtime-arg block. The helper
-    // takes a size_t& cursor, so bridge the writer's uint32_t arg_idx and sync it back; the
-    // open is deferred to sender.open() below.
-    size_t conn_arg_idx = arg_idx;
-    FabricStreamSender<> sender(conn_arg_idx, /*is_forward=*/direction == 0, /*alignment=*/1);
-    arg_idx = conn_arg_idx;
+    // Direct egress: build through the helper from the fabric runtime-arg block. arg_cursor bridges
+    // the writer's uint32_t arg_idx to the size_t& the ctor advances and syncs it back; the open is
+    // deferred to sender.open() below.
+    FabricStreamSender<> sender(arg_cursor(arg_idx), /*is_forward=*/direction == 0, /*alignment=*/1);
 #endif
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;
@@ -191,9 +187,9 @@ void kernel_main() {
         if (detail::valid_targets(direction)) {
             // only initialize if we're actually going to send something over fabric
 
-            // The multicast-inc channel has its own pooled header (independent of the unicast
+            // The multicast-armed inc channel has its own pooled header (independent of the unicast
             // counting channel), so this is just the barrier-phase scope, not a sharing constraint.
-            auto barrier = stream.arm_multicast_inc(barrier_multicast_route_info, 1);
+            auto barrier = stream.arm_inc(barrier_multicast_route_info, 1);
 
             if constexpr (topology == Topology::Linear) {
                 // multicast to both the forward and backward worker on all devices that you write to.
@@ -203,18 +199,18 @@ void kernel_main() {
                 // device going in the same direction
                 uint64_t same_direction_barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-                barrier.multicast_inc(same_direction_barrier_sem_noc_addr_in_pkt);
+                barrier.inc(same_direction_barrier_sem_noc_addr_in_pkt);
 
                 // device going in the opposite direction
                 uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
-                barrier.multicast_inc(opposite_direction_barrier_sem_noc_addr_in_pkt);
+                barrier.inc(opposite_direction_barrier_sem_noc_addr_in_pkt);
 
             } else if constexpr (topology == Topology::Ring) {
                 // multicast to entire ring of workers going in the same direction
                 uint64_t barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-                barrier.multicast_inc(barrier_sem_noc_addr_in_pkt);
+                barrier.inc(barrier_sem_noc_addr_in_pkt);
             } else {
                 ASSERT(false);
             }

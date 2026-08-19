@@ -7,10 +7,12 @@
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp"
 #include <cstdint>
 #include <utility>
 
 using address_t = uint32_t;
+namespace sched = ttnn::ccl::schedule;  // the line schedule shared with the writer + compute kernel
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -28,15 +30,6 @@ constexpr uint32_t output_num_pages = get_compile_time_arg_val(8);
 constexpr uint32_t batch_num_pages = get_compile_time_arg_val(9);
 constexpr uint32_t slice_B = get_compile_time_arg_val(10);
 constexpr bool sync_with_other_direction = get_compile_time_arg_val(11);
-
-namespace detail {
-inline bool do_accumulate_output(const bool is_forward) {
-    if constexpr (sync_with_other_direction) {
-        return !is_forward;
-    }
-    return false;
-}
-}  // namespace detail
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -141,11 +134,17 @@ void kernel_main() {
      */
     const uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
 
-    uint32_t chunk_count = 0;
+    // The line schedule — the no-wrap slice sequence, the chunk boundaries (slice_B plays the
+    // channel role in the dim-zero family), and the chunks-per-sync wait cadence — comes from the
+    // shared header. Tile ids are dense here, so the walkers are SequentialTileWalkers.
+    sched::LineSliceCursor slice_cursor(is_forward, ring_size);
+    sched::LineChannelWalk walk(slice_B, tile_granularity, start_tiles_read, start_tiles_to_read);
+    sched::SyncCadence cadence(chunks_per_sync);
+    sched::SequentialTileWalker input_walker;
+    sched::SequentialTileWalker interm_walker;
+
     uint32_t fwd_sync_cnt = 0;
     uint32_t sem_target = 0;
-
-    int slice_idx = is_forward ? ring_size - 1 : 0;
 
     // Iterate over the slices in the direction we are going.
     // In forwards direction, count down from slice (ring_size -1) down to (my_chip_id+1), inclusive
@@ -155,156 +154,128 @@ void kernel_main() {
     // If this device has both FWD and BWD neighbors, the FWD reader will do final reduction first
     // and then signal the BWD reader to do its final reduction.
     for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
-        chunk_count = 0;
+        cadence.reset();
+        input_walker.set_base(slice_cursor.slice() * output_num_pages);
+        interm_walker.set_base(slice_cursor.slice() * output_num_pages + intermediate_full_offset);
 
-        uint32_t input_tile_id_start = slice_idx * output_num_pages;
-        uint32_t intermediate_tile_id_start = input_tile_id_start + intermediate_full_offset;
+        // First device in the direction has no incoming slices, so it forwards its input directly
+        // to the writer; every other device feeds the compute kernel and reads the intermediate.
+        const uint32_t cb_in0 = is_first_device_in_direction ? cb_reader_output_id : cb_input_id;
 
-        if (is_first_device_in_direction) {
-            // We have no incoming slices, so forward directly to writer
-            uint32_t cb_in0 = cb_reader_output_id;
+        walk.reset();
+        while (walk.next_channel()) {
+            input_walker.reset_offsets(start_tiles_read);
+            interm_walker.reset_offsets(start_tiles_read);
 
-            for (uint32_t b = 0; b < slice_B; ++b) {
-                uint32_t tiles_read = start_tiles_read;
-                uint32_t tiles_to_read = start_tiles_to_read;
+            while (walk.next_chunk()) {
+                const uint32_t num_pages_to_read = walk.tiles_this_chunk();
 
-                while (tiles_read < tiles_to_read) {
-                    uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                    uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
-
-                    cb_reserve_back(cb_in0, tile_granularity);
-                    uint32_t l1_write_addr = get_write_ptr(cb_in0);
-                    for (uint32_t j = 0; j < num_pages_to_read; ++j) {
-                        uint32_t tile_id = input_tile_id_start + tiles_read + j;
-                        uint64_t noc_read_addr = input_tensor_addrgen.get_noc_addr(tile_id);
-                        noc_async_read(noc_read_addr, l1_write_addr, page_size);
-                        l1_write_addr += page_size;
-                    }
-                    tiles_read += num_pages_to_read;
-
-                    noc_async_read_barrier();
-                    cb_push_back(cb_in0, tile_granularity);
-                }
-                input_tile_id_start += batch_num_pages;
-            }
-        } else {
-            // I have incoming slices, so write my output to compute kernel and read intermediate input
-            uint32_t cb_in0 = cb_input_id;
-
-            for (uint32_t b = 0; b < slice_B; ++b) {
-                uint32_t tiles_read = start_tiles_read;
-                uint32_t tiles_to_read = start_tiles_to_read;
-
-                while (tiles_read < tiles_to_read) {
-                    uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                    uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
-
-                    cb_reserve_back(cb_in0, tile_granularity);
-                    uint32_t l1_write_addr = get_write_ptr(cb_in0);
-                    for (uint32_t j = 0; j < num_pages_to_read; ++j) {
-                        uint32_t tile_id = input_tile_id_start + tiles_read + j;
-                        uint64_t noc_read_addr = input_tensor_addrgen.get_noc_addr(tile_id);
-                        noc_async_read(noc_read_addr, l1_write_addr, page_size);
-                        l1_write_addr += page_size;
-                    }
-
-                    if (chunk_count % chunks_per_sync == 0) {
+                if (!is_first_device_in_direction) {
+                    // Wait for intermediate_tensor data to be available (once per chunks_per_sync
+                    // chunks — pairs with the neighbouring writer's incs).
+                    if (cadence.wait_due()) {
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), ++sem_target);
                     }
-                    chunk_count++;
-
-                    // read the next intermediate slice out of intermediate buffer, and put it in intermediate CB
-                    cb_reserve_back(cb_intermediate_id, tile_granularity);
-                    l1_write_addr = get_write_ptr(cb_intermediate_id);
-                    for (uint32_t j = 0; j < num_pages_to_read; ++j) {
-                        uint32_t tile_id = intermediate_tile_id_start + tiles_read + j;
-                        uint64_t noc_read_addr = intermediate_tensor_addrgen.get_noc_addr(tile_id);
-                        noc_async_read(noc_read_addr, l1_write_addr, page_size);
-                        l1_write_addr += page_size;
-                    }
-
-                    tiles_read += num_pages_to_read;
-                    noc_async_read_barrier();
-                    cb_push_back(cb_in0, tile_granularity);
-                    cb_push_back(cb_intermediate_id, tile_granularity);
+                    cadence.advance();
                 }
-                input_tile_id_start += batch_num_pages;
-                intermediate_tile_id_start += batch_num_pages;
-            }
-        }
-
-        // Next slice idx
-        if (is_forward) {
-            slice_idx--;
-        } else {
-            slice_idx++;
-        }
-    }
-
-    // Do the final reduction. Synchronize with other direction.
-    if (do_final_reduction) {
-        chunk_count = 0;
-
-        uint32_t input_tile_id_start = my_chip_id * output_num_pages;
-        uint32_t intermediate_tile_id_start = input_tile_id_start + intermediate_full_offset;
-        uint32_t output_tile_id_start = 0;
-
-        /**
-         * If two cores are doing final reduction, BWD core will accumulate output with
-         * incoming BWD intermediate. Use output address generator.
-         * If true, output += intermediate. Otherwise, output = input + intermediate
-         */
-        uint32_t tile_id_start = detail::do_accumulate_output(is_forward) ? output_tile_id_start : input_tile_id_start;
-
-        uint32_t cb_in0 = cb_input_id;
-        for (uint32_t b = 0; b < slice_B; ++b) {
-            uint32_t tiles_read = start_tiles_read;
-            uint32_t tiles_to_read = start_tiles_to_read;
-
-            while (tiles_read < tiles_to_read) {
-                // Wait for FWD writer to signal that it has done its final reduction
-                if (detail::do_accumulate_output(is_forward)) {
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), ++fwd_sync_cnt);
-                }
-
-                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
 
                 cb_reserve_back(cb_in0, tile_granularity);
                 uint32_t l1_write_addr = get_write_ptr(cb_in0);
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
-                    uint32_t tile_id = tile_id_start + tiles_read + j;
-                    uint64_t noc_read_addr = detail::do_accumulate_output(is_forward)
-                                                 ? output_tensor_addrgen.get_noc_addr(tile_id)
-                                                 : input_tensor_addrgen.get_noc_addr(tile_id);
+                    uint64_t noc_read_addr = input_tensor_addrgen.get_noc_addr(input_walker.next());
                     noc_async_read(noc_read_addr, l1_write_addr, page_size);
                     l1_write_addr += page_size;
                 }
 
-                if (chunk_count % chunks_per_sync == 0) {
+                if (!is_first_device_in_direction) {
+                    // read the next intermediate slice out of intermediate buffer, and put it in
+                    // the intermediate CB
+                    cb_reserve_back(cb_intermediate_id, tile_granularity);
+                    l1_write_addr = get_write_ptr(cb_intermediate_id);
+                    for (uint32_t j = 0; j < num_pages_to_read; ++j) {
+                        uint64_t noc_read_addr = intermediate_tensor_addrgen.get_noc_addr(interm_walker.next());
+                        noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                        l1_write_addr += page_size;
+                    }
+                } else {
+                    interm_walker.advance(num_pages_to_read);
+                }
+
+                noc_async_read_barrier();
+                cb_push_back(cb_in0, tile_granularity);
+                if (!is_first_device_in_direction) {
+                    cb_push_back(cb_intermediate_id, tile_granularity);
+                }
+            }
+            input_walker.bump_base(batch_num_pages);
+            interm_walker.bump_base(batch_num_pages);
+        }
+
+        slice_cursor.advance();
+    }
+
+    // Do the final reduction. Synchronize with other direction.
+    if (do_final_reduction) {
+        cadence.reset();
+
+        /**
+         * If two cores are doing final reduction, BWD core will accumulate output with
+         * incoming BWD intermediate, using the output address generator:
+         * output += intermediate. Otherwise, output = input + intermediate.
+         * One shared definition of the mode split (the writer holds the other half).
+         */
+        const bool accumulate_output = sched::line_rs_accumulate_output(sync_with_other_direction, is_forward);
+
+        sched::SequentialTileWalker main_walker;
+        main_walker.set_base(accumulate_output ? 0 : my_chip_id * output_num_pages);
+        interm_walker.set_base(my_chip_id * output_num_pages + intermediate_full_offset);
+
+        walk.reset();
+        while (walk.next_channel()) {
+            main_walker.reset_offsets(start_tiles_read);
+            interm_walker.reset_offsets(start_tiles_read);
+
+            while (walk.next_chunk()) {
+                // Wait for FWD writer to signal that it has done its final reduction
+                if (accumulate_output) {
+                    noc_semaphore_wait_min(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), ++fwd_sync_cnt);
+                }
+
+                const uint32_t num_pages_to_read = walk.tiles_this_chunk();
+
+                cb_reserve_back(cb_input_id, tile_granularity);
+                uint32_t l1_write_addr = get_write_ptr(cb_input_id);
+                for (uint32_t j = 0; j < num_pages_to_read; ++j) {
+                    const uint32_t tile_id = main_walker.next();
+                    uint64_t noc_read_addr = accumulate_output ? output_tensor_addrgen.get_noc_addr(tile_id)
+                                                               : input_tensor_addrgen.get_noc_addr(tile_id);
+                    noc_async_read(noc_read_addr, l1_write_addr, page_size);
+                    l1_write_addr += page_size;
+                }
+
+                if (cadence.wait_due()) {
                     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), ++sem_target);
                 }
-                chunk_count++;
+                cadence.advance();
 
-                // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
+                // read the next intermediate slice out of the intermediate buffer, and put it in
+                // the intermediate CB
                 cb_reserve_back(cb_intermediate_id, tile_granularity);
                 l1_write_addr = get_write_ptr(cb_intermediate_id);
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
-                    uint32_t intermediate_tile_id = intermediate_tile_id_start + tiles_read + j;
-                    uint64_t noc_read_addr = intermediate_tensor_addrgen.get_noc_addr(intermediate_tile_id);
+                    uint64_t noc_read_addr = intermediate_tensor_addrgen.get_noc_addr(interm_walker.next());
                     noc_async_read(noc_read_addr, l1_write_addr, page_size);
                     l1_write_addr += page_size;
                 }
 
-                tiles_read += num_pages_to_read;
                 noc_async_read_barrier();
-                cb_push_back(cb_in0, tile_granularity);
+                cb_push_back(cb_input_id, tile_granularity);
                 cb_push_back(cb_intermediate_id, tile_granularity);
             }
-            tile_id_start += batch_num_pages;
-            intermediate_tile_id_start += batch_num_pages;
+            main_walker.bump_base(batch_num_pages);
+            interm_walker.bump_base(batch_num_pages);
         }
     }
 
