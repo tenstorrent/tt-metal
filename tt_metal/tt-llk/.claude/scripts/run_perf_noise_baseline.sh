@@ -124,15 +124,30 @@ for i in $(seq 1 "$ITERATIONS"); do
     # failed to report this time, hiding the gap instead of showing it.
     rm -rf "$PERF_DATA"
 
+    # A handful of tests can time out or fail on any given iteration, and pytest
+    # then exits 1. That must NOT abort the baseline: the surviving tests still
+    # reported, the snapshot is still usable, and a point missing from one run is
+    # something the analysis already reports rather than something to crash on.
+    # Aborting here costs every remaining iteration, which is the expensive thing.
+    set +e
     CHIP_ARCH="$ARCH" pytest -q --override-ini=log_cli=false \
         --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
         "${EXTRA_ARGS[@]}" .
+    rc_produce=$?
     CHIP_ARCH="$ARCH" pytest -q --override-ini=log_cli=false \
         --compile-consumer -n 15 -m "perf and not accuracy" --timeout=60 \
         "${EXTRA_ARGS[@]}" .
+    rc_measure=$?
+    set -e
 
-    if [ ! -d "$PERF_DATA" ]; then
-        echo "error: iteration $i produced no $PERF_DATA" >&2
+    if [ "$rc_produce" -ne 0 ] || [ "$rc_measure" -ne 0 ]; then
+        echo "   note: iteration $i pytest rc=${rc_produce}/${rc_measure} (some tests failed)"
+        echo "run_$i: pytest rc=${rc_produce}/${rc_measure}" >>"$OUT_DIR/run_failures.txt"
+    fi
+
+    # An empty perf_data is the real failure: nothing reported, nothing to compare.
+    if [ ! -d "$PERF_DATA" ] || [ -z "$(find "$PERF_DATA" -name '*.csv' -print -quit)" ]; then
+        echo "error: iteration $i produced no reports in $PERF_DATA" >&2
         exit 1
     fi
     cp -R "$PERF_DATA" "$snapshot"
