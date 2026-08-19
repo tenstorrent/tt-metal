@@ -61,19 +61,19 @@ def test_mac(device):
 
 
 def test_where(device):
-    # Create condition tensor and two value tensors
-    tensor1 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+    # Create predicate tensor of 0's and 1's and two value tensors
+    predicate = ttnn.from_torch(
+        torch.tensor([[1, 0], [0, 1]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )
-    tensor2 = ttnn.from_torch(
+    true_value = ttnn.from_torch(
         torch.tensor([[5, 6], [7, 8]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )
-    tensor3 = ttnn.from_torch(
+    false_value = ttnn.from_torch(
         torch.tensor([[9, 10], [11, 12]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )
 
-    # Perform the where operation
-    output = ttnn.where(tensor1, tensor2, tensor3)
+    # Perform the where operation, giving [[5, 10], [11, 8]]
+    output = ttnn.where(predicate, true_value, false_value)
     logger.info(f"Where result: {output}")
 
 
@@ -137,22 +137,25 @@ def test_addcdiv_bw(device):
 
 
 def test_where_bw(device):
-    # Create three tensors and a gradient tensor for the operation
+    # Create the forward inputs, with a predicate of 0's and 1's, and a gradient tensor
     grad_tensor = ttnn.from_torch(
         torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )
-    tensor1 = ttnn.from_torch(
-        torch.tensor([[1, 0], [1, 0]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device
+    predicate = ttnn.from_torch(
+        torch.tensor([[1, 0], [1, 0]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
     )
-    tensor2 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device
+    true_value = ttnn.from_torch(
+        torch.tensor([[5, 6], [7, 8]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device
     )
-    tensor3 = ttnn.from_torch(
-        torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device
+    false_value = ttnn.from_torch(
+        torch.tensor([[9, 10], [11, 12]], dtype=torch.bfloat16, requires_grad=True),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
     )
 
-    # Perform the where backward operation
-    output = ttnn.where_bw(grad_tensor, tensor1, tensor2, tensor3)
+    # Perform the where backward operation. Each gradient depends only on grad_tensor and the predicate,
+    # giving [[1, 0], [3, 0]] for true_value and [[0, 2], [0, 4]] for false_value
+    output = ttnn.where_bw(grad_tensor, predicate, true_value, false_value)
     logger.info(f"Where Backward result: {output}")
 
 
