@@ -59,10 +59,19 @@ class GateComputeMode(Enum):
 # drive. Every tuned matmul entry is keyed to it; other depths fall back to TTNN's default tiling.
 GATE_PRODUCTION_SP_DIM = 640
 
-# GPT-OSS's per-device gate width is the one that is not tile-aligned: 2880 over TP 4 is 720, i.e.
-# 22.5 tiles, which the tests' adjust_shapes_for_testing rounds to 736. A production run at the raw
-# 2880 looks up 720, misses, and takes TTNN's default tiling -- that needs a fix on the gate path.
-GPT_OSS_TEST_PER_DEVICE_EMB_DIM = 736
+
+def gate_mm_config_key(sp_dim: int, per_device_emb_dim: int, n_routed_experts: int) -> tuple[int, int, int]:
+    """Key one gate matmul shape into mm_configs / mm_configs_interleaved.
+
+    The width is rounded up to a whole tile because that is the K the matmul contracts: a TILE_LAYOUT
+    tensor's K comes from its padded shape, so a per-device width that is not tile-aligned runs the
+    same matmul -- same K tiles, same L1 footprint -- as the next multiple of 32. GPT-OSS is the only
+    model where that bites: 2880 over TP 4 is 720, i.e. 22.5 tiles. Rounding here is what keeps that
+    production width and the 736 a height-sharded test's adjust_shapes_for_testing rounds it to (an
+    L1 shard width must be whole tiles) on one tuned entry, instead of the production key missing.
+    """
+    k_tiles = (per_device_emb_dim + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    return (sp_dim, k_tiles * ttnn.TILE_SIZE, n_routed_experts)
 
 
 @dataclass
@@ -81,7 +90,8 @@ class TtMoEGateConfig:
     )
     mm_configs: dict = field(
         default_factory=lambda: {
-            # Keyed by (sp_dim, per_device_emb_dim, n_routed_experts); forward() looks up the tuple.
+            # Keyed by gate_mm_config_key(sp_dim, per_device_emb_dim, n_routed_experts): __post_init__
+            # re-keys every entry through it and _device_matmul looks the tuple up through it too.
             # An entry applies only at the depth it is keyed to; a missing key → TTNN auto-picks.
             # per_core_N = n_routed_experts / 32 (tile width).
             #
@@ -184,9 +194,9 @@ class TtMoEGateConfig:
                     mcast_in0=False,
                 )
             ),
-            # Keyed at the tile-aligned test width, not EMB_SIZE // 4 -- see
-            # GPT_OSS_TEST_PER_DEVICE_EMB_DIM.
-            (GATE_PRODUCTION_SP_DIM, GPT_OSS_TEST_PER_DEVICE_EMB_DIM, GptOss120BConfig.NUM_ROUTED_EXPERTS): (
+            # 2880 // 4 is 720, i.e. 22.5 tiles, which gate_mm_config_key keys at 736: in0_block_w=23
+            # is the full K, and out_block_w=4 the whole 128-expert N.
+            (GATE_PRODUCTION_SP_DIM, GptOss120BConfig.EMB_SIZE // 4, GptOss120BConfig.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=23,
@@ -308,7 +318,7 @@ class TtMoEGateConfig:
                     fuse_batch=True,
                 )
             ),
-            (GATE_PRODUCTION_SP_DIM, GPT_OSS_TEST_PER_DEVICE_EMB_DIM, GptOss120BConfig.NUM_ROUTED_EXPERTS): (
+            (GATE_PRODUCTION_SP_DIM, GptOss120BConfig.EMB_SIZE // 4, GptOss120BConfig.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(4, 10),
                     in0_block_w=23,
@@ -356,17 +366,18 @@ class TtMoEGateConfig:
                 f"the op-side CB work that makes it true."
             )
 
-        # Drop the tuned entries authored at other depths, so _device_matmul's lookup
-        # (sp_dim, per_device_emb_dim, n_routed_experts) either hits an entry tuned at the depth in
-        # use or misses and falls back to TTNN's default tiling. per_core_M encodes the depth, so a
-        # foreign-depth entry is not merely mistuned -- the matmul rejects it against a sharded in0.
+        # Drop the tuned entries authored at other depths, so _device_matmul's lookup either hits an
+        # entry tuned at the depth in use or misses and falls back to TTNN's default tiling. per_core_M
+        # encodes the depth, so a foreign-depth entry is not merely mistuned -- the matmul rejects it
+        # against a sharded in0. The surviving keys are normalized through gate_mm_config_key, the same
+        # call _device_matmul forms its lookup with.
         def resolve(configs):
             resolved = {}
             for key, value in configs.items():
                 if not isinstance(key, tuple):
                     resolved[key] = value
                 elif key[0] == self.sp_dim:
-                    resolved[key] = value
+                    resolved[gate_mm_config_key(*key)] = value
             return resolved
 
         self.mm_configs = resolve(self.mm_configs)
@@ -783,7 +794,7 @@ class TtMoEGatePrefill(LightweightModule):
         assert (
             per_device_dim * n_tp_devices == self.config.dim
         ), f"Expected per-device dim {self.config.dim // n_tp_devices}, got {per_device_dim}"
-        config_key = (self.config.sp_dim, per_device_dim, self.config.n_routed_experts)
+        config_key = gate_mm_config_key(self.config.sp_dim, per_device_dim, self.config.n_routed_experts)
         program_config = None
         if x.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
             program_config = self.config.mm_configs_interleaved.get(config_key)

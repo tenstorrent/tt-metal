@@ -33,7 +33,12 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_sp_mesh_composer,
     load_gate_weights_from_hf,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import (
+    GateComputeMode,
+    TtMoEGateConfig,
+    TtMoEGatePrefill,
+    gate_mm_config_key,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     ValidationResult,
     compare_pcc,
@@ -682,25 +687,26 @@ def test_forward_pass_tp1_interleaved(mesh_device, num_links, topology, gate_mod
 
     At TP=1 adjust_shapes_for_testing divides the model dim by 4, so each model's per-device gate
     width lands on EMB_SIZE / 4 -- the width its TP=4 deployment resolves. The mm_configs lookup is
-    therefore the same (640, EMB_SIZE / 4, n_routed_experts) key production hits, but reached with the
-    interleaved input TtMoe actually passes rather than the height-sharded one every other case here
-    builds. That distinction is the point: a height-sharded input pins the matmul program config
-    (per_core_M must equal the shard height in tiles, and a 2D config additionally demands
-    K == in0_block_w and a single-column shard grid), so the sharded cases cannot cover the config the
-    deployment runs.
+    therefore the same key production hits, but reached with the interleaved input TtMoe actually
+    passes rather than the height-sharded one every other case here builds. That distinction is the
+    point: a height-sharded input pins the matmul program config (per_core_M must equal the shard
+    height in tiles, and a 2D config additionally demands K == in0_block_w and a single-column shard
+    grid), so the sharded cases cannot cover the config the deployment runs.
 
-    GPT-OSS is the one model whose width is not tile-aligned here: 2880 / 4 = 720 is 22.5 tiles, which
-    adjust_shapes_for_testing rounds to 736, and its mm_configs entry is keyed to that.
+    The width is also held un-rounded (tile_align_width=False), which only GPT-OSS notices: its
+    2880 / 4 = 720 is 22.5 tiles, and the other cases here round it to 736 so an L1 shard width stays
+    whole tiles. An interleaved input has no such constraint, so this case runs the raw deployed 720
+    and gate_mm_config_key resolves it to the tuned 23-K-tile entry the same way production does.
     """
     random.seed(42)
     torch.manual_seed(42)
 
     config = _gate_config(gate_model)
     config.ccl_config["NUM_LINKS"] = num_links
-    adjust_shapes_for_testing(config, mesh_device)
+    adjust_shapes_for_testing(config, mesh_device, tile_align_width=False)
 
     n_sp_devices, n_tp_devices = mesh_device.shape
-    config_key = (config.sp_dim, config.dim // n_tp_devices, config.n_routed_experts)
+    config_key = gate_mm_config_key(config.sp_dim, config.dim // n_tp_devices, config.n_routed_experts)
     assert config_key in config.mm_configs_interleaved, (
         f"no tuned interleaved matmul program config for {config_key}. This sweep exists to hold every model's "
         "deployed gate shape on a tuned config, so a miss is the regression it is here to catch."
