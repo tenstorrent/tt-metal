@@ -22,6 +22,10 @@ class ChipArchitecture(Enum):
                 "blackhole": cls.BLACKHOLE,
                 "quasar": cls.QUASAR,
                 "wormhole": cls.WORMHOLE,
+                # Metal / UMD name for the same part. ttexalens reports
+                # devices[0]._arch as this, and ARCH_NAME/CHIP_ARCH are often
+                # exported this way from a tt-metal tree.
+                "wormhole_b0": cls.WORMHOLE,
             }
         return cls._cached_string_map
 
@@ -48,9 +52,10 @@ def get_chip_architecture():
     if not chip_architecture:
         context = check_context()
         chip_architecture = str(context.devices[0]._arch)
-        if chip_architecture == "wormhole_b0":
-            chip_architecture = "wormhole"
-        os.environ["CHIP_ARCH"] = chip_architecture
 
     _cached_chip_architecture = ChipArchitecture.from_string(chip_architecture)
+    # Always write the LLK name back. Several CLIs take --arch $CHIP_ARCH and
+    # only accept wormhole|blackhole|quasar; leaving wormhole_b0 in the
+    # environment is what produces "invalid choice: 'wormhole_b0'".
+    os.environ["CHIP_ARCH"] = _cached_chip_architecture.value
     return _cached_chip_architecture
