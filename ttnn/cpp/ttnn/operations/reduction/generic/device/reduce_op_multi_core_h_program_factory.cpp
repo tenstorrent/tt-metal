@@ -59,8 +59,11 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
 
     tt_metal::IDevice* device = &a.mutable_device();
 
+    // This path runs on the input's shard grid and aliases the input and output CBs onto the
+    // tensors' own buffers; CBs live in L1, so both sides must be width-sharded there.
     bool use_width_sharding = a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
-                              output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+                              output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+                              a.memory_config().is_l1() && output.memory_config().is_l1();
 
     // Populate the RM-only locals (chunk sizes, page bytes, padding identity, datum sizes) into
     // a single struct so the per-site formulas don't drift between this factory and the W one.

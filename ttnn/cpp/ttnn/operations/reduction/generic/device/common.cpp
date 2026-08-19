@@ -191,16 +191,25 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
             if (legacy) {
                 return {legacy->grid, legacy->orientation};
             }
-            if (input_nd) {
-                return {input_nd->grid, input_nd->orientation};
-            }
-            if (input_legacy) {
-                return {input_legacy->grid, input_legacy->orientation};
-            }
-            TT_THROW(
+            TT_FATAL(
+                input_nd.has_value() || input_legacy.has_value(),
                 "Sharded memory layout {} requires either nd_shard_spec or shard_spec to be set "
                 "on the output memory config or the input tensor",
                 mem_layout);
+            // DRAM shard grids are bank ids (1D, row y=0) and L1 shard grids are worker-core
+            // (x,y) coordinates, so borrowing the input's grid across buffer types would pair a
+            // buffer type with a grid from the wrong coordinate space.
+            TT_FATAL(
+                output_mem_config.buffer_type() == input_mem_config.buffer_type(),
+                "Sharded memory layout {} on an output with buffer type {} requires an explicit "
+                "shard_spec (cannot fall back to the input tensor's {} shard grid)",
+                mem_layout,
+                output_mem_config.buffer_type(),
+                input_mem_config.buffer_type());
+            if (input_nd) {
+                return {input_nd->grid, input_nd->orientation};
+            }
+            return {input_legacy->grid, input_legacy->orientation};
         };
         const auto& [grid, orientation] = get_grid_and_orientation();
 
@@ -229,6 +238,16 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
             nd_shard_spec.has_value() || input_nd_shard_spec.has_value(),
             "ND_SHARDED memory layout requires nd_shard_spec to be set "
             "on the output memory config or the input tensor");
+        if (!nd_shard_spec.has_value()) {
+            // Same cross-buffer-type hazard as the legacy-sharding fallback above: an ND shard
+            // grid borrowed from the input is only valid for an output of the same buffer type.
+            TT_FATAL(
+                output_mem_config.buffer_type() == input_mem_config.buffer_type(),
+                "ND_SHARDED memory layout on an output with buffer type {} requires an explicit "
+                "nd_shard_spec (cannot fall back to the input tensor's {} shard grid)",
+                output_mem_config.buffer_type(),
+                input_mem_config.buffer_type());
+        }
         auto nd_shard_spec_copy = nd_shard_spec.has_value() ? *nd_shard_spec : *input_nd_shard_spec;
         if (reduce_dim == ReduceOpDim::W || reduce_dim == ReduceOpDim::HW) {
             nd_shard_spec_copy.shard_shape[-1] = 1;
@@ -252,21 +271,23 @@ void validate_reduce_sharded_buffer_types(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::string_view op_name) {
     TT_FATAL(
-        !output_mem_config.is_sharded() || output_mem_config.is_l1(),
-        "{}: sharded output memory layout {} is only supported with L1 buffers, got buffer type {}",
+        !output_mem_config.is_sharded() || output_mem_config.is_l1() || output_mem_config.is_dram(),
+        "{}: sharded output memory layout {} is only supported with L1 or DRAM buffers, got buffer type {}",
         op_name,
         output_mem_config.memory_layout(),
         output_mem_config.buffer_type());
     TT_FATAL(
-        !input_mem_config.is_sharded() || input_mem_config.is_l1(),
-        "{}: sharded input memory layout {} is only supported with L1 buffers, got buffer type {}",
+        !input_mem_config.is_sharded() || input_mem_config.is_l1() || input_mem_config.is_dram(),
+        "{}: sharded input memory layout {} is only supported with L1 or DRAM buffers, got buffer type {}",
         op_name,
         input_mem_config.memory_layout(),
         input_mem_config.buffer_type());
 }
 
 bool h_reduce_negate_fits_in_l1(
-    const ttnn::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const ttnn::Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     using namespace tt::tt_metal;
 
     const auto& shape = input_tensor.padded_shape();
@@ -283,7 +304,12 @@ bool h_reduce_negate_fits_in_l1(
     const uint32_t Ht = H / tile_height;
 
     auto* device = input_tensor.device();
-    const bool use_width_sharding = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    // Must mirror the H factory's gate exactly: the shard-based CB sizing below only describes
+    // the program it actually builds when the width-sharded fast path is selected, which needs
+    // WIDTH_SHARDED L1 on both sides.
+    const bool use_width_sharding = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+                                    output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+                                    input_tensor.memory_config().is_l1() && output_mem_config.is_l1();
 
     uint32_t num_cols_per_core_group_1 = 0;
     uint32_t num_cols_per_core_group_2 = 0;

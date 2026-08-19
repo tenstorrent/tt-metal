@@ -217,10 +217,8 @@ Tensor reduce(
     // reduce kernel.
     auto h_reduce_with_external_negate =
         [&](const Tensor& h_input, float h_scaler, float h_post_mul, tt::tt_metal::DataType h_out_dtype) {
-            // Keep neg_input in h_input's memory config (pass std::nullopt) so the
-            // pre-reduce negation stays in place; forcing output_mem_config here
-            // could trigger a reshard (DRAM↔L1, interleaved↔sharded) before the
-            // H-reduce.  Only the final neg enforces output_mem_config.
+            // Each neg inherits its input's memory config.  The final one must inherit h_out rather
+            // than output_mem_config: only h_out's shard shape is recomputed for the reduced height.
             Tensor neg_input = ttnn::neg(h_input, std::nullopt, std::nullopt, sub_core_grids);
             Tensor h_out = ttnn::prim::reduce(
                 neg_input,
@@ -233,7 +231,7 @@ Tensor reduce(
                 sub_core_grids,
                 /*negate=*/false,
                 /*post_mul_scaler=*/h_post_mul);
-            return ttnn::neg(h_out, output_mem_config, std::nullopt, sub_core_grids);
+            return ttnn::neg(h_out, std::nullopt, std::nullopt, sub_core_grids);
         };
 
     // The single-core HW path uses REDUCE_SCALAR mode, which applies the
@@ -287,7 +285,7 @@ Tensor reduce(
             /*row_major_h_dense_path=*/false,
             /*use_sfpu_reduce=*/use_sfpu_fp32_reduce);
 
-        if (negate && !ttnn::prim::h_reduce_negate_fits_in_l1(output_tensor, sub_core_grids)) {
+        if (negate && !ttnn::prim::h_reduce_negate_fits_in_l1(output_tensor, output_mem_config, sub_core_grids)) {
             return h_reduce_with_external_negate(output_tensor, reduce_scaler, post_mul, out_final_dtype);
         }
 
@@ -308,7 +306,7 @@ Tensor reduce(
     }
 
     if (negate && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
-        !ttnn::prim::h_reduce_negate_fits_in_l1(prepared_input, sub_core_grids)) {
+        !ttnn::prim::h_reduce_negate_fits_in_l1(prepared_input, output_mem_config, sub_core_grids)) {
         return h_reduce_with_external_negate(
             prepared_input, reduce_scaler, post_mul, output_dtype.value_or(input_tensor.dtype()));
     }
