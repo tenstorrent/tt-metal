@@ -121,13 +121,19 @@ program::ColumnSplitConfig column_split_config_for(
     const uint32_t n = shape[shape.rank() - 1];
     const uint32_t num_rows = attrs.row_count.value_or(flattened_rows_excluding_last_dim(shape));
     const auto grid = input.device()->compute_with_storage_grid_size();
-    // The device op NEVER auto-selects the multi-row rectangle form: the
-    // non-stable op breaks bf16 ties differently across engines, so bare
-    // multi-row calls must keep a single engine. Multi-row rects run only
-    // with an explicit (internal) num_slices — set by the hybrid wrapper's
-    // remainder window.
+    // The cost model may auto-select the multi-row rectangle engine when it
+    // models a win: 2*ceil(chunks/P) + ceil(log2 P) beating the row-parallel
+    // 2*chunks by the extra multi-row margin (measured routed 477 -> 330 us
+    // at 32x65536 k=2048). Engine selection changes only WHICH of the tied
+    // bf16 values win — tie identity is the documented non-stable contract;
+    // the selected value multiset is engine-invariant. The program hash
+    // carries the derived split-config fields, so an engine change
+    // recompiles — bounded, because the model quantizes P to a handful of
+    // choices per (k, width, rows, grid) and fixed-shape callers compile
+    // once. Explicit (internal) num_slices still bypasses the model and pins
+    // P directly (the hybrid wrapper's remainder window).
     return program::compute_column_split_config(
-        attrs.k, n, num_rows, grid, attrs.num_slices, /*allow_multi_row=*/false);
+        attrs.k, n, num_rows, grid, attrs.num_slices, /*allow_multi_row=*/true);
 }
 
 }  // namespace
@@ -293,8 +299,10 @@ std::optional<HybridSplit> hybrid_row_split(
     if (!cfg.enabled || cfg.num_rects < 2) {
         return std::nullopt;
     }
-    // The remainder launch passes cfg.num_slices explicitly: the device op's
-    // own auto model never picks multi-row rects (see column_split_config_for).
+    // The remainder launch passes cfg.num_slices explicitly to pin the P
+    // modeled on the SEARCHED width above: the device op's own auto model
+    // (column_split_config_for) runs on the physical width and could pick a
+    // different split (or none) for the remainder window.
     return HybridSplit{r1, r2, cfg.num_slices};
 }
 

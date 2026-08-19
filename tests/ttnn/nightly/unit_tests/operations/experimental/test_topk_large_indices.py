@@ -89,9 +89,10 @@ def test_topk_large_indices_row_major_bfloat16_uint32_indices(device, k, num_row
 
 
 def test_topk_large_indices_random_k2048_multichunk_multirow(device):
-    # Minimal repro shape for a class of silicon failures seen during bring-up:
-    # row-parallel factory, llk_k=2048, num_chunks=4, multiple rows, RANDOM
-    # input. If this passes while the routed
+    # Minimal repro shape for a class of silicon failures seen during bring-up
+    # (then the row-parallel factory; since the auto-rects flip this shape
+    # auto-selects the multi-row rectangle engine — llk_k=2048, num_chunks=4,
+    # P=4, one rect per row). If this passes while the routed
     # composite fails, the composite's post-op chain (gather at index width
     # 2048 -> gather's untested RM multi-core variant) is the culprit, not
     # this op. Tie-safe value-multiset assertions (random bf16 has duplicates).
@@ -263,28 +264,60 @@ def test_topk_large_indices_production_perf_check(
     )
 
 
-def test_topk_large_indices_program_cache_ignores_row_count_and_array_size(device):
-    # (2, 131072) crosses the old 32-chunk fused boundary: at k >= 1024 the
-    # compute-body mode is width-independent (one segmented codepath), so a
-    # growing-prefill caller must NOT recompile crossing 65536 positions.
+def test_topk_large_indices_program_cache_per_engine_regime(device):
+    # Engine selection is automatic: the cost model picks the multi-row
+    # rectangle engine when 2*ceil(chunks/P) + ceil(log2 P) beats the
+    # row-parallel 2*chunks by the multi-row margin, and the program hash
+    # carries the derived split-config fields. The caching invariant is
+    # therefore PER ENGINE REGIME (P150 13x10 worker grid assumed, as in the
+    # merge-tree tests below):
+    #   - shapes that stay row-parallel share ONE shape-free cached program
+    #     across any row count and width: (2, 3000) declines rects on the
+    #     margin (best rect cost 3 vs row cost 4, short of the required
+    #     margin), while (128, 51200) and (640, 51200) exceed every
+    #     rectangle's row capacity (25 chunks, max capacity 65 rows at P=2).
+    #     At k >= 1024 the compute-body mode is width-independent, so no
+    #     width term enters the hash within the regime;
+    #   - valid_length is runtime-only and the split is modeled on the
+    #     PHYSICAL width, so growing prefixes on one shape NEVER recompile;
+    #   - an engine-crossing shape compiles exactly ONE extra program:
+    #     (2, 131072) is 64 chunks, so the model auto-selects rects
+    #     (P=32: 2*2 + 5 = 9, far under the row-parallel 2*64 = 128) and the
+    #     changed split-config fields hash to a new entry. Repeats of it hit
+    #     the cache; regime growth is bounded because the model quantizes P
+    #     to a handful of choices and fixed-shape callers compile once.
     k = 1536
-    cases = [(2, 3000), (640, 51200), (5, 4097), (2, 131072)]
-    tt_inputs = []
-    for num_rows, n in cases:
-        torch_input = _make_large_index_input(num_rows=num_rows, n=n, k=k)
-        tt_inputs.append(_to_device(torch_input, device))
+    row_parallel_cases = [(2, 3000), (128, 51200), (640, 51200)]
+    tt_inputs = [
+        _to_device(_make_large_index_input(num_rows=num_rows, n=n, k=k), device) for num_rows, n in row_parallel_cases
+    ]
+    tt_crossing = _to_device(_make_large_index_input(num_rows=2, n=131072, k=k), device)
 
     device.enable_program_cache()
     device.clear_program_cache()
     try:
         cache_entries = []
-        for tt_input, (num_rows, _) in zip(tt_inputs, cases):
+        for tt_input, (num_rows, _) in zip(tt_inputs, row_parallel_cases):
             tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k)
             cache_entries.append(device.num_program_cache_entries())
             _assert_index_metadata(tt_indices, [num_rows, k])
+        for valid_length in (4097, 26000):  # runtime-only: same (128, 51200) program
+            tt_indices = ttnn.experimental.topk_large_indices(tt_inputs[1], k=k, valid_length=valid_length)
+            cache_entries.append(device.num_program_cache_entries())
+            _assert_index_metadata(tt_indices, [128, k])
 
         assert cache_entries[0] > 0
-        assert max(cache_entries) == min(cache_entries)
+        assert max(cache_entries) == min(cache_entries)  # one program serves the whole regime
+        row_parallel_entries = cache_entries[-1]
+
+        tt_indices = ttnn.experimental.topk_large_indices(tt_crossing, k=k)
+        _assert_index_metadata(tt_indices, [2, k])
+        # Crossing into the rect engine compiles exactly one new program ...
+        assert device.num_program_cache_entries() == row_parallel_entries + 1
+        tt_indices = ttnn.experimental.topk_large_indices(tt_crossing, k=k)
+        _assert_index_metadata(tt_indices, [2, k])
+        # ... and repeat calls of the same shape stay cached.
+        assert device.num_program_cache_entries() == row_parallel_entries + 1
     finally:
         device.disable_and_clear_program_cache()
 
@@ -384,6 +417,8 @@ def test_topk_large_indices_row_major_mixed_negative_infinity_indices_are_sentin
         (2048, 1, 1048576),  # 512 chunks: 16 segments, index magnitudes to 2^20
         (1024, 2, 66560),  # K=1024 window: 65 chunks, seg1 = 33... spans capacity at a different K
         (2048, 2, 100000),  # non-chunk-multiple width: -inf padded tail inside the last segment
+        (2048, 66, 131072),  # rows above rect capacity: the ROW-PARALLEL segmented body (>32 chunks)
+        #                      stays covered by a bare call now that 2-row shapes auto-select rects
     ],
 )
 def test_topk_large_indices_segmented_widths(device, k, num_rows, n):
@@ -393,9 +428,13 @@ def test_topk_large_indices_segmented_widths(device, k, num_rows, n):
 
 
 def test_topk_large_indices_segmented_valid_length_collapses_to_one_segment(device):
-    # A wide (segmented) program whose runtime valid_length shrinks the row to
-    # <= 32 chunks must run the single-segment path inside the SAME cached
-    # segmented binary -- and again at a segment-boundary-crossing length.
+    # A wide program whose runtime valid_length shrinks the row to <= 32
+    # chunks must keep running inside the SAME cached binary -- and again at
+    # a segment-boundary-crossing length. Since the auto-rects flip this
+    # (2, 524288) shape (256 chunks) runs the multi-row rectangle engine, so
+    # the collapse is exercised through the rect slices' runtime prefix
+    # rebalancing rather than the row-parallel segmented body; either way
+    # valid_length stays runtime-only and no recompile is allowed.
     k, n = 2048, 524288
     # Distinct top-k block INSIDE the smallest tested valid_length so every
     # tested prefix has a tie-free torch reference (zeros elsewhere).
@@ -769,10 +808,14 @@ def test_topk_large_indices_column_parallel_valid_length_cache_reuse(device):
 def test_topk_large_indices_column_and_row_parallel_programs_coexist_in_cache(device):
     # A single-row wide input takes the column-parallel factory while a
     # multi-row input of the same width keeps the row-parallel one; the two
-    # must hash to distinct cache entries and both must stay correct.
+    # must hash to distinct cache entries and both must stay correct. 128
+    # rows exceed every rectangle's row capacity at 32 chunks (max 65 at
+    # P=2 on the 13x10 grid), so the auto-rects cost model declines and the
+    # multi-row call genuinely stays row-parallel; a low row count (e.g. 2)
+    # would itself auto-select the rect engine since the flip.
     n, k = 65536, 2048
     single_row = _make_large_index_input(num_rows=1, n=n, k=k)
-    multi_row = _make_large_index_input(num_rows=2, n=n, k=k)
+    multi_row = _make_large_index_input(num_rows=128, n=n, k=k)
 
     device.enable_program_cache()
     device.clear_program_cache()
