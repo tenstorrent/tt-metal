@@ -269,10 +269,13 @@ had, including bias -> bcast.
       must fail to compile, plus a control for the legal gather. See *What Stage 2
       found* in unified_shape_outline.md -- the core-copy invariant turned out not to
       be equality.
-- [ ] **Stage 3 -- infer matmul.** Delete `RtDim`/`CtDim`/`KtDim`/`NumBlocks`/
-      `In1RowStride`; `MatmulGeometry` shrinks to a transpose tag or disappears. The
-      DST-budget `static_assert` re-keys on the inferred output shape. Update 4 kernels
-      + selftest. Trace byte-identical.
+- [x] **Stage 3 -- infer matmul.** Done. `MatmulGeometry` went from five `uint32_t`
+      parameters to two SHAPES and is now derived, not declared -- no kernel writes it.
+      `matmul<Geom>(a, b)` is `matmul(a, b)`; `matmul_init<Geom>` is
+      `matmul_init<In0, In1>`; `NumBlocks` and `In1RowStride` are gone. Found a real
+      hole doing it: `Accumulator` bypasses `store`, so its shape agreement was
+      unchecked -- a `Shape<2,1>` accumulator on a `Shape<1,2>` matmul ran *correctly on
+      device* because the page counts matched. Now a `static_assert`.
 - [ ] **Stage 4 -- infer reduce.** Delete `ReduceGeometry`; `reduce_*<Axis>(a, sc)`.
       Update `reduction_tree` + selftest. Trace byte-identical.
 

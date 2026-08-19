@@ -387,7 +387,6 @@ void example_syntax_free() {
     Storage<Sq2> mm_a(5), mm_b(6), mm_out(7);
     Storage<Col2> red_in(8);
     Storage<One> scaler(3), red_out(4);
-    using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2>;
     using RG = ReduceGeometry</*ht=*/2, /*wt=*/1>;
 
     {  // Bin -- EVERY binary. Left-associated and non-commutative on purpose:
@@ -407,7 +406,7 @@ void example_syntax_free() {
     {  // MatmulNode -- appends to the epilogue chain
         ComputeBlock a = noc_load<1>(mm_a, t0, 0).wait();
         ComputeBlock b = noc_load<1>(mm_b, t0, 0).wait();
-        noc_store<0>(mm_out.store(rsqrt(sqrt_(recip(exp_(relu(matmul<Geom>(a, b))))))), t2, 0);
+        noc_store<0>(mm_out.store(rsqrt(sqrt_(recip(exp_(relu(matmul(a, b))))))), t2, 0);
     }
     {  // ReduceNode -- likewise
         ComputeBlock sc = noc_load<1>(scaler, t0, 0).wait();  // resident operand
@@ -431,7 +430,6 @@ void example_syntax_method() {
     Storage<Sq2> mm_a(5), mm_b(6), mm_out(7);
     Storage<Col2> red_in(8);
     Storage<One> scaler(3), red_out(4);
-    using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2>;
     using RG = ReduceGeometry</*ht=*/2, /*wt=*/1>;
 
     {  // Bin -- EVERY binary. Left-associated and non-commutative on purpose:
@@ -451,7 +449,7 @@ void example_syntax_method() {
     {  // MatmulNode -- appends to the epilogue chain
         ComputeBlock a = noc_load<1>(mm_a, t0, 0).wait();
         ComputeBlock b = noc_load<1>(mm_b, t0, 0).wait();
-        noc_store<0>(mm_out.store(matmul<Geom>(a, b).relu().exp().recip().sqrt().rsqrt()), t2, 0);
+        noc_store<0>(mm_out.store(matmul(a, b).relu().exp().recip().sqrt().rsqrt()), t2, 0);
     }
     {  // ReduceNode -- likewise
         ComputeBlock sc = noc_load<1>(scaler, t0, 0).wait();  // resident operand
@@ -466,7 +464,6 @@ void example_matmul_single() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t1 = TensorAccessor(FakeArgs{1}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
-    using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2>;
 
     using Sq2 = Shape<2, 2>;
     Storage<Sq2> a_storage(0);
@@ -475,7 +472,7 @@ void example_matmul_single() {
 
     ComputeBlock a = noc_load<1>(a_storage, t0, 0).wait();
     ComputeBlock b = noc_load<1>(b_storage, t1, 0).wait();
-    noc_store<0>(out_storage.store(matmul<Geom>(a, b)), t2, 0);
+    noc_store<0>(out_storage.store(matmul(a, b)), t2, 0);
 }
 
 // The FPU path: a two-k-block matmul accumulated through a separate buffer,
@@ -485,7 +482,7 @@ void example_matmul_acc() {
     auto t1 = TensorAccessor(FakeArgs{1}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
 
-    using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2, /*num_blocks=*/2>;
+    constexpr uint32_t kBlocks = 2;  // a kernel loop bound, not a geometry
 
     using Sq2 = Shape<2, 2>;
     Storage<Sq2> a_storage(0);
@@ -496,11 +493,11 @@ void example_matmul_acc() {
     Accumulator<Sq2, AccumulatorMode::Dst> acc(acc_storage, out_storage);
     acc.clear();
 
-    for (uint32_t k = 0; k < Geom::num_blocks; ++k) {
-        const bool finish = (k == Geom::num_blocks - 1);
+    for (uint32_t k = 0; k < kBlocks; ++k) {
+        const bool finish = (k == kBlocks - 1);
         ComputeBlock a = noc_load<1>(a_storage, t0, k).wait();
         ComputeBlock b = noc_load<1>(b_storage, t1, k).wait();
-        Block result = acc.accumulate(matmul<Geom>(a, b), finish, [](auto mm) { return relu(mm); });
+        Block result = acc.accumulate(matmul(a, b), finish, [](auto mm) { return relu(mm); });
         if (finish) {
             noc_store<0>(std::move(result), t2, 0);
         }
