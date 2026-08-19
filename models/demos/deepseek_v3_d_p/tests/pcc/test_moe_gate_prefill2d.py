@@ -701,8 +701,8 @@ def test_forward_pass_tp1_interleaved(mesh_device, num_links, topology, gate_mod
 
     n_sp_devices, n_tp_devices = mesh_device.shape
     config_key = (config.sp_dim, config.dim // n_tp_devices, config.n_routed_experts)
-    assert config_key in config.mm_configs, (
-        f"no tuned matmul program config for {config_key}. This sweep exists to hold every model's "
+    assert config_key in config.mm_configs_interleaved, (
+        f"no tuned interleaved matmul program config for {config_key}. This sweep exists to hold every model's "
         "deployed gate shape on a tuned config, so a miss is the regression it is here to catch."
     )
 
