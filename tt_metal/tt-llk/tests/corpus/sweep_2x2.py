@@ -1831,6 +1831,17 @@ exit $RC
                 cycles.setdefault(
                     (rec["id"], rec["scope"], rec["selector"]), []
                 ).append(cyc)
+                # Legacy selector aliases (pin-12 retype): rows measured under
+                # generated/handwritten_replay history keep their flip/drift
+                # tripwires when re-keyed to the uniform sem_/hand_ cells.
+                alias = {
+                    "generated": "sem_on",
+                    "handwritten_replay": "hand_on",
+                    "handwritten_direct": "hand_off",
+                }.get(rec["selector"])
+                if alias:
+                    op = rec["selector"]  # placeholder to keep black quiet
+                    cycles.setdefault((rec["id"], rec["scope"], alias), []).append(cyc)
         return cycles, classes
 
     @staticmethod
