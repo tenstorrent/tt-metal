@@ -51,6 +51,9 @@ void py_module(nb::module_& mod) {
                 new (t) UnaryWithParam{arg.first, static_cast<float>(arg.second)};
             })
         .def_ro("op_type", &UnaryWithParam::op_type)
+        // Expose fused-activation parameters so Python golden functions can reproduce
+        // parameterized device operations, including POWER, during comparison mode.
+        .def_ro("params", &UnaryWithParam::params)
         .def(nb::init_implicit<UnaryOpType>())
         .def("__repr__", [](const UnaryWithParam& param) {
             if (param.params.empty()) {

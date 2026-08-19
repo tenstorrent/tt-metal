@@ -26,12 +26,19 @@ def apply_activations(tensor, activations):
         ttnn.UnaryOpType.GELU: torch.nn.functional.gelu,
         ttnn.UnaryOpType.GELU_TANH: lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
         ttnn.UnaryOpType.SQRT: torch.sqrt,
+        ttnn.UnaryOpType.EQZ: lambda x: x == 0,
+        ttnn.UnaryOpType.NEZ: lambda x: x != 0,
+        ttnn.UnaryOpType.GTZ: lambda x: x > 0,
+        ttnn.UnaryOpType.LTZ: lambda x: x < 0,
+        ttnn.UnaryOpType.GEZ: lambda x: x >= 0,
+        ttnn.UnaryOpType.LEZ: lambda x: x <= 0,
     }
 
     if activations is not None:
         for activation in activations:
             if activation.op_type == ttnn.UnaryOpType.POWER:
-                # POWER carries its exponent in UnaryWithParam instead of the function map.
+                # Fused binary activations use the same descriptor as the device path.
+                # Predicate operations compare against zero, while POWER reads its descriptor parameter.
                 tensor = torch.pow(tensor, activation.params[0])
             else:
                 activation_function = act_func_map[activation.op_type]

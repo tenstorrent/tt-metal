@@ -40,7 +40,11 @@ def _to_unsigned_scalar(value, dtype):
 def _to_unsigned_operand(value, dtype):
     import torch
 
-    return _to_wide(value) if torch.is_tensor(value) else _to_unsigned_scalar(value, dtype)
+    if torch.is_tensor(value):
+        return _to_wide(value)
+    # Torch's maximum/minimum kernels require tensor operands, while TTNN accepts scalars.
+    # Materialize scalar operands in the widened dtype so all unsigned golden operations share one path.
+    return torch.tensor(_to_unsigned_scalar(value, dtype), dtype=torch.int64)
 
 
 def restore_unsigned(result, dtype):

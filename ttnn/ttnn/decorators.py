@@ -29,11 +29,17 @@ def compare_tensors_using_pcc(
     from models.common.utility_functions import comp_pcc
 
     if isinstance(outputs, ttnn.Tensor):
+        # Backward goldens commonly return a one-element list even when the runtime returns one tensor.
+        # Unwrap only this unambiguous singleton shape; preserve list handling for true multi-output operations.
+        if isinstance(golden_outputs, (list, tuple)) and len(golden_outputs) == 1:
+            golden_outputs = golden_outputs[0]
         if not isinstance(golden_outputs, torch.Tensor):
             raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
         outputs = [outputs]
         golden_outputs = [golden_outputs]
     elif isinstance(outputs, torch.Tensor):
+        if isinstance(golden_outputs, (list, tuple)) and len(golden_outputs) == 1:
+            golden_outputs = golden_outputs[0]
         if not isinstance(golden_outputs, torch.Tensor):
             raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
         outputs = [outputs]
