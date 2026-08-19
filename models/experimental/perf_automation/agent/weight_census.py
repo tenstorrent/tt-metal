@@ -559,18 +559,50 @@ def sections_marker(c: dict) -> str:
     return "TRACE_WEIGHT_SECTIONS=%s" % ",".join("%s:%d" % (k, int(v)) for k, v in safe)
 
 
+def census_depth() -> str:
+    """The layer cap this process is building at: a positive int as a string, or "all".
+
+    A CENSUS OF A CAPPED BUILD IS NOT THE MODEL'S RESIDENT BYTES, and it looks exactly like one.
+    Voxtral, run 10: the census reported 1.299 B parameters against the checkpoint's 4.676 B -- 28%
+    -- because it ran inside a profiling run built at the coverage window of 2 layers. Its own
+    section figures say so: lm_layers at 227.3 M is two layers of a stack whose config puts each at
+    100.7 M, and a 2-layer build works out at 1.235 B against the 1.299 B measured.
+
+    Nothing downstream could tell. device_weight_bytes is pinned by the FIRST complete census, the
+    capped profiling run reaches it before the uncapped full-pipeline gate, and every ceiling in the
+    report then divides a number missing three quarters of the model.
+
+    read_depth() already owns this question -- a cap is the presence of the depth variable, "all
+    layers" its absence -- so the census reports that answer rather than deriving a second one.
+    "unknown" is not a claim of full depth: the reader treats it as untrustworthy, like a cap.
+    """
+    try:
+        from .layer_depth import read_depth
+
+        d = read_depth()
+    except Exception:  # noqa: BLE001
+        return "unknown"
+    return "all" if d is None else str(int(d))
+
+
 def marker(c: dict) -> str:
     """The line the harness parses back, in the same shape as every other TRACE_* marker.
 
     One line, not the tensor list: the list is thousands of entries and the harness only needs the
     total plus enough to judge whether to trust it."""
-    return "TRACE_WEIGHT_BYTES=%d scope=%s tensors=%d unknown_dtype=%d complete=%s bytes_per_param=%.4f dtypes=%s" % (
+    return (
+        "TRACE_WEIGHT_BYTES=%d scope=%s tensors=%d unknown_dtype=%d complete=%s bytes_per_param=%.4f "
+        "depth=%s dtypes=%s"
+    ) % (
         int(c.get("weight_bytes") or 0),
         c.get("scope") or "model",
         len(c.get("weight_tensors") or []),
         int(c.get("unknown_dtype_tensors") or 0),
         "1" if c.get("complete") else "0",
         float(c.get("bytes_per_param") or 0.0),
+        # THE DEPTH IT WAS TAKEN AT. A census of a capped build is not the model's resident bytes and
+        # looks exactly like one; see census_depth().
+        census_depth(),
         # The mix itself, so a reader can see WHY the average is what it is rather than trust it.
         ",".join(
             "%s:%d" % (d, n)

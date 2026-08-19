@@ -2764,7 +2764,30 @@ def _run_full_pipeline_ms():
                     _bpp = 0.0
                     if "bytes_per_param=" in line:
                         _bpp = float(line.split("bytes_per_param=", 1)[1].split()[0])
-                    if _wb > 0:
+                    # A CAPPED CENSUS IS NOT THE MODEL. The census runs inside measure_adapter,
+                    # which executes both in the capped profiling runs and in the uncapped
+                    # full-pipeline gate -- and device_weight_bytes is pinned by the FIRST complete
+                    # census to arrive. The capped one arrives first.
+                    #
+                    # Voxtral run 10: 1.299 B parameters recorded against the checkpoint's 4.676 B,
+                    # 27.8%, because the build had 2 of 30 language layers. Every ceiling in that
+                    # report divided a number missing three quarters of the model, and nothing could
+                    # tell, because a capped census is shaped exactly like a whole one.
+                    #
+                    # The marker now states the depth it was taken at. Anything but "all" is refused
+                    # here -- including "unknown", which is not a claim of full depth -- so the pin
+                    # waits for the full-depth gate rather than being taken by whoever ran first.
+                    _depth = ""
+                    if "depth=" in line:
+                        _depth = line.split("depth=", 1)[1].split()[0].strip()
+                    if _wb > 0 and _depth and _depth != "all":
+                        print(
+                            "  [perf-mcp] census ignored: taken at depth=%s, not the whole model "
+                            "(%.3g GB). Waiting for the full-depth measurement." % (_depth, _wb / 1e9),
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    elif _wb > 0:
                         _persist_device_weight_bytes(_wb, _ok, _bpp, _census_sections)
                 except Exception:  # noqa: BLE001
                     pass
