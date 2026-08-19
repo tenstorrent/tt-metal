@@ -23,7 +23,6 @@ constexpr uint32_t stream_count(uint32_t num_links) { return num_links * 2; }
 struct StreamPlacement {
     CoreCoord worker_logical;                     // where this stream's kernels go
     CoreCoord worker_virtual;                     // what a sender on another chip addresses
-    CoreCoord eth_logical;                        // the fabric router this stream's sender connects to
     ttnn::MeshCoordinate downstream_coord{0, 0};  // chip across the cable
     tt::tt_fabric::FabricNodeId downstream_node{tt::tt_fabric::MeshId{0}, 0};
 };

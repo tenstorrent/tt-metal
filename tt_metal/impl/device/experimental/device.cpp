@@ -52,16 +52,4 @@ uint32_t get_worker_noc_hop_distance(
     return get_worker_noc_hop_distance(mesh_device->get_devices().at(linear_index), logical_src, logical_dst, noc);
 }
 
-CoreCoord get_physical_core_from_logical_core(
-    IDevice* device, const CoreCoord& logical_core, const tt::CoreType& core_type) {
-    TT_FATAL(device != nullptr, "Device pointer cannot be null");
-
-    auto* dev = dynamic_cast<tt::tt_metal::Device*>(device);
-    TT_FATAL(
-        dev != nullptr,
-        "get_physical_core_from_logical_core() takes a single-chip device; physical coordinates are per-chip because "
-        "harvesting differs, so a MeshDevice has no answer to give.");
-    return dev->physical_core_from_logical_core(logical_core, core_type);
-}
-
 }  // namespace tt::tt_metal::experimental::Device
