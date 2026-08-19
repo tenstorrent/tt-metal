@@ -375,10 +375,18 @@ void example_peer_hop() {
 void example_syntax_free() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
-    using Row2 = Shape<1, 2>;
-    using One = Shape<1, 1>;
+    // One buffer set per SHAPE the probe needs, now that Storage::store checks that
+    // the destination is exactly what the expression produces. The old single set was
+    // silently inconsistent -- a MatmulGeometry<2,2,2> result stored into a
+    // Storage<Shape<1,2>> -- which is what the new assert caught.
+    using Row2 = Shape<1, 2>;  // eltwise operands and result
+    using Sq2 = Shape<2, 2>;   // matmul operands and output block
+    using Col2 = Shape<2, 1>;  // reduce input
+    using One = Shape<1, 1>;   // scaler, and a rows-collapse result
     Storage<Row2> in0(0), in1(1), out(2);
-    Storage<One> scaler(3), red(4);
+    Storage<Sq2> mm_a(5), mm_b(6), mm_out(7);
+    Storage<Col2> red_in(8);
+    Storage<One> scaler(3), red_out(4);
     using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2>;
     using RG = ReduceGeometry</*ht=*/2, /*wt=*/1>;
 
@@ -397,24 +405,32 @@ void example_syntax_free() {
         noc_store<0>(out.store(rsqrt(sqrt_(recip(exp_(relu(a)))))), t2, 0);
     }
     {  // MatmulNode -- appends to the epilogue chain
-        ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
-        ComputeBlock b = noc_load<1>(in1, t0, 0).wait();
-        noc_store<0>(out.store(rsqrt(sqrt_(recip(exp_(relu(matmul<Geom>(a, b))))))), t2, 0);
+        ComputeBlock a = noc_load<1>(mm_a, t0, 0).wait();
+        ComputeBlock b = noc_load<1>(mm_b, t0, 0).wait();
+        noc_store<0>(mm_out.store(rsqrt(sqrt_(recip(exp_(relu(matmul<Geom>(a, b))))))), t2, 0);
     }
     {  // ReduceNode -- likewise
         ComputeBlock sc = noc_load<1>(scaler, t0, 0).wait();  // resident operand
-        ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
-        noc_store<0>(red.store(rsqrt(sqrt_(recip(exp_(relu(reduce_sum<RG, ReduceAxis::Rows>(a, sc))))))), t2, 0);
+        ComputeBlock a = noc_load<1>(red_in, t0, 0).wait();
+        noc_store<0>(red_out.store(rsqrt(sqrt_(recip(exp_(relu(reduce_sum<RG, ReduceAxis::Rows>(a, sc))))))), t2, 0);
     }
 }
 
 void example_syntax_method() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
-    using Row2 = Shape<1, 2>;
-    using One = Shape<1, 1>;
+    // One buffer set per SHAPE the probe needs, now that Storage::store checks that
+    // the destination is exactly what the expression produces. The old single set was
+    // silently inconsistent -- a MatmulGeometry<2,2,2> result stored into a
+    // Storage<Shape<1,2>> -- which is what the new assert caught.
+    using Row2 = Shape<1, 2>;  // eltwise operands and result
+    using Sq2 = Shape<2, 2>;   // matmul operands and output block
+    using Col2 = Shape<2, 1>;  // reduce input
+    using One = Shape<1, 1>;   // scaler, and a rows-collapse result
     Storage<Row2> in0(0), in1(1), out(2);
-    Storage<One> scaler(3), red(4);
+    Storage<Sq2> mm_a(5), mm_b(6), mm_out(7);
+    Storage<Col2> red_in(8);
+    Storage<One> scaler(3), red_out(4);
     using Geom = MatmulGeometry</*rt=*/2, /*ct=*/2, /*kt=*/2>;
     using RG = ReduceGeometry</*ht=*/2, /*wt=*/1>;
 
@@ -433,14 +449,14 @@ void example_syntax_method() {
         noc_store<0>(out.store(a.relu().exp().recip().sqrt().rsqrt()), t2, 0);
     }
     {  // MatmulNode -- appends to the epilogue chain
-        ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
-        ComputeBlock b = noc_load<1>(in1, t0, 0).wait();
-        noc_store<0>(out.store(matmul<Geom>(a, b).relu().exp().recip().sqrt().rsqrt()), t2, 0);
+        ComputeBlock a = noc_load<1>(mm_a, t0, 0).wait();
+        ComputeBlock b = noc_load<1>(mm_b, t0, 0).wait();
+        noc_store<0>(mm_out.store(matmul<Geom>(a, b).relu().exp().recip().sqrt().rsqrt()), t2, 0);
     }
     {  // ReduceNode -- likewise
         ComputeBlock sc = noc_load<1>(scaler, t0, 0).wait();  // resident operand
-        ComputeBlock a = noc_load<1>(in0, t0, 0).wait();
-        noc_store<0>(red.store(reduce_sum<RG, ReduceAxis::Rows>(a, sc).relu().exp().recip().sqrt().rsqrt()), t2, 0);
+        ComputeBlock a = noc_load<1>(red_in, t0, 0).wait();
+        noc_store<0>(red_out.store(reduce_sum<RG, ReduceAxis::Rows>(a, sc).relu().exp().recip().sqrt().rsqrt()), t2, 0);
     }
 }
 

@@ -69,8 +69,10 @@ inline constexpr uint32_t kMaxDstTiles = 8;
 // One tile out of a circular buffer, copied into a DST slot. The allocator picks
 // the slot, not the caller -- that is what keeps operands from clobbering
 // intermediates.
-struct TileSource : expr::Fluent<TileSource> {
+template <typename S>
+struct TileSource : expr::Fluent<TileSource<S>> {
     using is_expr_node = std::true_type;
+    using shape = S;
     static constexpr uint32_t need = 1;
 
     uint32_t cb_id;
@@ -279,14 +281,17 @@ struct MatmulNode : expr::Fluent<MatmulNode<Geometry, Chain>> {
     // block and must not be popped until the kernel ends. See unified_kernels.
     template <typename Operand>
     auto bias(const Operand& operand) const {
+        // A bias is one row broadcast down the output block, so its shape is fixed by
+        // the geometry. This was a runtime ASSERT on the page count, which could only
+        // fire in an asserts-enabled build and only once the kernel ran.
+        static_assert(
+            same_shape_v<typename Operand::shape, Shape<1, Geometry::ct_dim>>,
+            "a fused bias must be Shape<1, ct_dim> -- one row of the output block's width");
         // The bias is ct_dim tiles, one per output column. Fewer and the finishing
         // pass reads past what was pushed -- whatever is next in that buffer, with
         // nothing to notice; more and the kernel and the geometry disagree about
         // the shape. Checked here rather than in the strategy because this is where
         // the operand's page count is still in hand.
-#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
-        ASSERT(operand.get_num_pages() == Geometry::ct_dim);
-#endif
         MatmulNode<Geometry, Chain> out{{}, in0_cb, in1_cb, operand.get_cb_id()};
         return out;
     }
@@ -407,6 +412,51 @@ template <typename G, ReduceAxis A, ReducePool P, typename Chain>
 auto rsqrt(const ReduceNode<G, A, P, Chain>& r) {
     return ReduceNode<G, A, P, expr::chain_append_t<Chain, RsqrtOp>>{{}, r.in_cb, r.scaler_cb};
 }
+
+// --- Node shapes ---
+//
+// The shape an expression produces. Lives here rather than in tt/unified/shape.hpp
+// because it walks the op tree, and not in tt/unified/expr.hpp because that layer is
+// deliberately ignorant of shapes as well as of ops -- so the tree shapes themselves
+// carry no shape, and this reads it back out of them.
+//
+// The Bin case is where strictness bites: two operands must have the SAME shape, not
+// merely the same page count. Shape<1, 4> and Shape<4> hold four pages each and are
+// different shapes, and before this the difference was invisible.
+
+template <typename Node>
+struct node_shape {
+    using type = typename Node::shape;
+};
+
+template <typename Node>
+using node_shape_t = typename node_shape<Node>::type;
+
+template <typename Op, typename C>
+struct node_shape<expr::Un<Op, C>> {
+    using type = node_shape_t<C>;
+};
+
+template <typename Op, typename L, typename R>
+struct node_shape<expr::Bin<Op, L, R>> {
+    static_assert(
+        same_shape_v<node_shape_t<L>, node_shape_t<R>>,
+        "the two sides of a binary op must have the SAME shape -- equal page counts are not enough, "
+        "since e.g. Shape<1, 4> and Shape<4> both hold four pages");
+    using type = node_shape_t<L>;
+};
+
+// An FPU fusion's shape is its output block: rows from A, columns from B.
+template <typename Geometry, typename Chain>
+struct node_shape<MatmulNode<Geometry, Chain>> {
+    using type = Shape<Geometry::rt_dim, Geometry::ct_dim>;
+};
+
+// A reduction collapses one axis of its input grid.
+template <typename Geometry, ReduceAxis Axis, ReducePool Pool, typename Chain>
+struct node_shape<ReduceNode<Geometry, Axis, Pool, Chain>> {
+    using type = reduce_shape<Shape<Geometry::ht, Geometry::wt>, Axis>;
+};
 
 // --- Operand plumbing ---
 //
@@ -533,8 +583,18 @@ auto fluent_rsqrt(const N& n) {
 }
 }  // namespace expr
 
-template <typename Geometry>
-auto matmul(TileSource a, TileSource b) {
+// Until the geometry is inferred outright, the operands and the geometry are two
+// statements of the same fact and nothing tied them together: a wrong KtDim produced
+// silent garbage. A is rt x kt, B is kt x ct.
+template <typename Geometry, typename SA, typename SB>
+auto matmul(TileSource<SA> a, TileSource<SB> b) {
+    static_assert(
+        SA::rows == Geometry::rt_dim && SA::cols == Geometry::kt_dim,
+        "matmul operand A does not match the geometry -- A must be rt_dim x kt_dim tiles");
+    static_assert(
+        SB::rows == Geometry::kt_dim && SB::cols == Geometry::ct_dim,
+        "matmul operand B does not match the geometry -- B must be kt_dim x ct_dim tiles");
+    static_assert(SA::leading == SB::leading, "matmul operands disagree on their leading (batch) extent");
     return MatmulNode<Geometry, expr::UnaryChain<>>{{}, a.cb_id, b.cb_id, kNoBias};
 }
 
@@ -901,7 +961,7 @@ struct Strategy<FPUFusion> {
 template <>
 struct Strategy<ReduceFusion> {
     template <typename Node>
-    static void run(const Node& node, uint32_t cb_id, uint32_t num_tiles) {
+    static void run(const Node& node, uint32_t cb_id, uint32_t /*num_tiles*/) {
         using G = typename Node::geometry;
         constexpr ReduceAxis kAxis = Node::axis;
         constexpr uint32_t kOut = G::out_tiles(kAxis);
@@ -911,13 +971,10 @@ struct Strategy<ReduceFusion> {
         constexpr ckernel::PoolType kPool = metal_pool(Node::pool);
         constexpr ckernel::ReduceDim kDim = metal_dim(kAxis);
 
-        // The destination has to be exactly the shape the axis leaves behind.
-        // Guarded, as everywhere else: this layer is binding-agnostic, so it must
-        // not require a binding to supply ASSERT.
-#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
-        ASSERT(num_tiles == kOut);
-#endif
-        (void)num_tiles;  // the assert above is its only reader
+        // No check that the destination is the shape the axis leaves behind: that was a
+        // runtime ASSERT on the page count here, and Storage::store now static_asserts
+        // full shape identity -- unconditionally, rather than only in an
+        // asserts-enabled build, and on the shape rather than just its page count.
 
         // No cb_wait_front on the scaler: it is a ComputeBlock at kernel scope, so
         // its constructor waited once and nothing pops it until the kernel ends.
@@ -952,7 +1009,6 @@ struct Strategy<ReduceFusion> {
 #else
         (void)node;
         (void)cb_id;
-        (void)num_tiles;
         (void)kOut;
         (void)kGroup;
 #endif
