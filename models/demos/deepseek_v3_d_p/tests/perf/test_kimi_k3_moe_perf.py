@@ -24,6 +24,25 @@ their max -- so this baseline was measured with the real-time profiler and must 
 back-ported to the tracy path. For reference the tracy number was 12_924_852 ns, split Matmul
 2_196 us / CCL 1_042 us / Other 9_687 us (dispatch/combine/top-k dominates).
 
+What the number excludes, verified on an 8x4 galaxy (warm caches, 58 programs x 32 chips =
+1856 records, 0 dropped, no program dispatched more than once per chip):
+
+  * **Op-to-op dispatch gaps: 7.29 ms, excluded.** A record runs from the dispatch_s loop-top that
+    picks up the program's GO command to the last worker's completion semaphore
+    (``cq_dispatch_subordinate.cpp``, ``record_realtime_timestamp`` at both ends), so the time from
+    one program's workers-done to the next program's loop-top falls *between* records. The forward's
+    first_start->last_end span was 19.39 ms against a 12.53 ms sum of program durations.
+  * **Host stalls: excluded, but only because the measured pass is warm.** The start stamp is taken
+    before ``cb_acquire_pages_dispatch_s`` blocks on host-fed pages, so when the host lags the gaps
+    get pulled *inside* the records: the same forward measured cold (JIT compiling ~1080 kernels)
+    reported 19.01 ms, i.e. the E2E span rather than the sum. Hence the warm-up pass in the test.
+
+Still inside each record: the dispatcher prologue (loop-top -> go-signal mcast -> worker launch) and
+the completion-semaphore tail. Measured at <=1.5% against tracy's kernel-only sum -- roughly the
+observed run-to-run noise (12.944 / 13.080 ms on two warm runs). Isolating kernel spans exactly
+needs the kernel-zone instrumentation (``PROFILE_KERNEL``), which only a Tracy build compiles in --
+use tracy on a dev box for op-level tuning.
+
 Report-only until calibrated: ``_EXPECTED_NS`` starts as ``None``, so the first galaxy runs
 measure and log without gating. See the constant for what to do with the logged number.
 
@@ -62,6 +81,9 @@ _DISPATCH_BUFFER_CAPACITY_FACTOR = 5
 # "realtime perf" ns this test logs on its first green run and set it here (TODO #53269) -- that
 # alone turns the gate on. The measurement itself still fails loudly if it produced no records.
 _EXPECTED_NS = None
+# 10 warm measurements on one 8x4 galaxy spanned 12.915-13.159 ms (median 12.991, stdev 0.64%),
+# i.e. +/-1.3% around the median holds every sample. 3% covers that, and sub-nominal DDR doubles it
+# to 6% via adjust_margin_for_ddr_speed.
 _MARGIN = 0.03
 
 # The profiler's default 1s collection deadline is sized for a single block's programs. The MoE
@@ -109,6 +131,15 @@ def test_kimi_k3_moe_perf_galaxy(variant, config_only, mesh_device, device_param
     per_program = {}
 
     def measure(forward):
+        # Warm-up pass, discarded. An RT record starts when the dispatcher picks up the command --
+        # before cb_acquire_pages_dispatch_s blocks on host-fed pages -- so host stalls land inside
+        # the measured window. On a cold run that means JIT compilation of ~1080 kernels. Dispatch
+        # overhead itself is device work and stays in the number; host compile time is not device
+        # time and must not be.
+        warm = forward()
+        ttnn.synchronize_device(mesh_device)
+        del warm  # 896 experts: free the discarded outputs before allocating the measured pass
+
         result, records = profile_realtime_program_merged(
             mesh_device, forward, record_timeout_seconds=_RECORD_TIMEOUT_S
         )
