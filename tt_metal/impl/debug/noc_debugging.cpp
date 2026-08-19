@@ -749,16 +749,16 @@ void NOCDebugState::process_accumulated_events_up_to(uint64_t margin_ticks) {
     std::vector<PendingEvent> to_process;
     std::vector<PendingEvent> retained;
     to_process.reserve(batch.size());
-    for (auto& e : batch) {
+    for (const auto& e : batch) {
         // May underflow past zero; that is fine, ts_wrap_ge only looks at the low PROFILER_MARKER_TS_BITS of the
         // difference, so the value stays correct modulo the timestamp width without masking it back down.
         const uint64_t watermark = chip_latest.at(e.chip_id) - margin_ticks;
         // Process if the event is at/before the watermark; the retained tail (newer than watermark, i.e. within
         // margin_ticks of the latest) waits for the next call.
         if (detail::ts_wrap_ge(watermark, e.timestamp)) {
-            to_process.push_back(std::move(e));
+            to_process.push_back(e);
         } else {
-            retained.push_back(std::move(e));
+            retained.push_back(e);
         }
     }
 
@@ -766,8 +766,7 @@ void NOCDebugState::process_accumulated_events_up_to(uint64_t margin_ticks) {
 
     if (!retained.empty()) {
         std::lock_guard<std::mutex> lock{pending_events_mutex_};
-        pending_events_.insert(
-            pending_events_.end(), std::make_move_iterator(retained.begin()), std::make_move_iterator(retained.end()));
+        pending_events_.insert(pending_events_.end(), retained.begin(), retained.end());
     }
 }
 

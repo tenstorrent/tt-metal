@@ -951,7 +951,7 @@ TEST_F(NOCDebuggingFixture, PostedWritesWithFlush) {
 
 // Sums the sizes of the profiler's per-core/per-risc Tracy marker set for a device (this is the map that
 // device_markers.emplace() at profiler.cpp:2068 grows, and that the NOC-debug dedup relies on).
-static size_t total_device_marker_count(ChipId device_id) {
+size_t total_device_marker_count(ChipId device_id) {
     auto& psm = tt::tt_metal::MetalContext::instance().profiler_state_manager();
     std::lock_guard<std::recursive_mutex> lock{psm->device_profiler_map_mutex};
     auto it = psm->device_profiler_map.find(device_id);
@@ -972,7 +972,7 @@ static size_t total_device_marker_count(ChipId device_id) {
 // read_after=false to leave the results undrained so a test can observe what the background periodic poll accumulated
 // while the kernel ran, before any host force-read. wait_iters>0 adds an on-device idle after every burst_size writes
 // (models a long-running kernel that spends time not emitting events).
-static void run_stress_write_program(
+void run_stress_write_program(
     NOCDebuggingFixture* fixture,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t num_iterations,
@@ -1024,7 +1024,7 @@ static void run_stress_write_program(
 
 // Iteration count for the stress test below, env-configurable via NOC_DEBUG_STRESS_ITERATIONS (default 20, kept
 // small for CI). Set it high (e.g. 100000) to stress the profiler event/marker path.
-static uint32_t marker_test_iterations() {
+uint32_t marker_test_iterations() {
     if (const char* env = std::getenv("NOC_DEBUG_STRESS_ITERATIONS"); env != nullptr) {
         if (const uint32_t parsed = static_cast<uint32_t>(std::strtoul(env, nullptr, 10)); parsed > 0) {
             return parsed;
