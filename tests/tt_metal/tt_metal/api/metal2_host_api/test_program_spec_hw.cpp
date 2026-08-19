@@ -14,10 +14,15 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <algorithm>
+#include <array>
+#include <bit>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -183,6 +188,249 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
 
     ASSERT_EQ(output_data.size(), input_data.size());
     EXPECT_EQ(output_data, input_data);
+}
+
+// ============================================================================
+// Same-ID depth-two compute DFB ring
+// ============================================================================
+//
+// Proves the Blackhole primitive needed by affine exclusive scan: compute can
+// unpack the current front and pack the next back through one depth-two DFB ID.
+// Four updates reuse both physical entries more than once. Separate matmul and
+// add cases emit every intermediate tile, and each case is launched twice to
+// establish deterministic behavior.
+
+TEST_F(ProgramSpecHWTest, SameIdDepthTwoComputeDFBRing) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+    if (device->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Same-ID depth-two compute DFB proof is Blackhole-specific";
+    }
+
+    constexpr uint32_t tile_elements = 32 * 32;
+    constexpr uint32_t tile_bytes = tile_elements * sizeof(float);
+    constexpr uint32_t num_wraps = 4;
+    const NodeCoord node{0, 0};
+
+    auto float_bits = [](float value) { return std::bit_cast<uint32_t>(value); };
+
+    auto run_case = [&](bool use_matmul) {
+        constexpr uint32_t input_tiles = 2;
+        InterleavedBufferConfig input_config{
+            .device = device,
+            .size = input_tiles * tile_bytes,
+            .page_size = input_tiles * tile_bytes,
+            .buffer_type = BufferType::DRAM};
+        InterleavedBufferConfig output_config{
+            .device = device,
+            .size = num_wraps * tile_bytes,
+            .page_size = num_wraps * tile_bytes,
+            .buffer_type = BufferType::DRAM};
+        auto input_buffer = CreateBuffer(input_config);
+        auto output_buffer = CreateBuffer(output_config);
+
+        ProgramSpec spec;
+        spec.name = use_matmul ? "same_id_depth_two_matmul_ring" : "same_id_depth_two_add_ring";
+
+        auto reader = MakeMinimalGen1DMKernel("reader", DataMovementProcessor::RISCV_0);
+        reader.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_same_id_ring_reader.cpp";
+        reader.advanced_options.num_runtime_varargs = 2;
+
+        auto compute = MakeMinimalGen1ComputeKernel("compute");
+        compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_same_id_ring.cpp";
+        compute.compile_time_args = {{"use_matmul", use_matmul ? 1u : 0u}, {"num_wraps", num_wraps}};
+        auto& compute_config = std::get<ComputeHardwareConfig>(compute.hw_config);
+        std::get<ComputeGen1Config>(compute_config).enable_32_bit_dest = true;
+        auto& modes = unpack_modes(compute_config);
+        modes[DFBSpecName{"initial"}] = UnpackMode::UnpackToSrc;
+        modes[DFBSpecName{"rhs"}] = UnpackMode::UnpackToSrc;
+        modes[DFBSpecName{"stage"}] = UnpackMode::UnpackToSrc;
+
+        auto writer = MakeMinimalGen1DMKernel("writer", DataMovementProcessor::RISCV_1);
+        writer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_same_id_ring_writer.cpp";
+        writer.advanced_options.num_runtime_varargs = 3;
+
+        auto initial = MakeMinimalDFB("initial", tile_bytes, 1);
+        auto rhs = MakeMinimalDFB("rhs", tile_bytes, 1);
+        auto stage = MakeMinimalDFB("stage", tile_bytes, 2);
+        auto outbound = MakeMinimalDFB("outbound", tile_bytes, num_wraps);
+        initial.data_format_metadata = tt::DataFormat::Float32;
+        rhs.data_format_metadata = tt::DataFormat::Float32;
+        stage.data_format_metadata = tt::DataFormat::Float32;
+        outbound.data_format_metadata = tt::DataFormat::Float32;
+
+        reader.dfb_bindings.push_back(ProducerOf(initial.unique_id, "initial"));
+        reader.dfb_bindings.push_back(ProducerOf(rhs.unique_id, "rhs"));
+        compute.dfb_bindings.push_back(ConsumerOf(initial.unique_id, "initial"));
+        compute.dfb_bindings.push_back(ConsumerOf(rhs.unique_id, "rhs"));
+        compute.dfb_bindings.push_back(ProducerOf(stage.unique_id, "stage"));
+        compute.dfb_bindings.push_back(ConsumerOf(stage.unique_id, "stage"));
+        compute.dfb_bindings.push_back(ProducerOf(outbound.unique_id, "outbound"));
+        writer.dfb_bindings.push_back(ConsumerOf(outbound.unique_id, "outbound"));
+
+        spec.kernels = {reader, compute, writer};
+        spec.dataflow_buffers = {initial, rhs, stage, outbound};
+        spec.work_units =
+            std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"reader", "compute", "writer"})};
+
+        Program program = MakeProgramFromSpec(*mesh_device, spec);
+        ProgramRunArgs params;
+        params.kernel_run_args = {
+            ProgramRunArgs::KernelRunArgs{
+                .kernel = KernelSpecName{"reader"},
+                .advanced_options =
+                    AdvancedKernelRunArgs{
+                        .runtime_varargs = {{node, {input_buffer->address(), 0u}}},
+                    },
+            },
+            ProgramRunArgs::KernelRunArgs{
+                .kernel = KernelSpecName{"writer"},
+                .advanced_options =
+                    AdvancedKernelRunArgs{
+                        .runtime_varargs = {{node, {output_buffer->address(), 0u, num_wraps}}},
+                    },
+            },
+        };
+        SetProgramRunArgs(program, params);
+
+        std::vector<float> initial_tile(tile_elements, 1.0F);
+        std::vector<float> rhs_row_major(tile_elements, use_matmul ? 0.0F : 1.0F);
+        if (use_matmul) {
+            for (uint32_t i = 0; i < 32; ++i) {
+                rhs_row_major[i * 32 + i] = 2.0F;
+            }
+        }
+        const auto rhs_tile = tilize_nfaces(rhs_row_major, 32, 32);
+        std::vector<uint32_t> input_data;
+        input_data.reserve(input_tiles * tile_elements);
+        for (float value : initial_tile) {
+            input_data.push_back(float_bits(value));
+        }
+        for (float value : rhs_tile) {
+            input_data.push_back(float_bits(value));
+        }
+        detail::WriteToBuffer(input_buffer, input_data);
+
+        detail::LaunchProgram(device, program);
+
+        std::vector<uint32_t> output_data;
+        detail::ReadFromBuffer(output_buffer, output_data);
+        EXPECT_EQ(output_data.size(), num_wraps * tile_elements);
+        for (uint32_t wrap = 0; wrap < num_wraps; ++wrap) {
+            const float expected = use_matmul ? static_cast<float>(1u << (wrap + 1)) : static_cast<float>(wrap + 2);
+            const uint32_t expected_bits = float_bits(expected);
+            for (uint32_t element = 0; element < tile_elements; ++element) {
+                EXPECT_EQ(output_data[wrap * tile_elements + element], expected_bits)
+                    << (use_matmul ? "matmul" : "add") << " wrap=" << wrap << " element=" << element;
+            }
+        }
+        return output_data;
+    };
+
+    for (bool use_matmul : {true, false}) {
+        const auto first = run_case(use_matmul);
+        const auto second = run_case(use_matmul);
+        EXPECT_EQ(second, first) << (use_matmul ? "matmul" : "add") << " ring output was not deterministic";
+    }
+}
+
+TEST_F(ProgramSpecHWTest, NoAliasAffineScanDFBBudget) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+    if (device->arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Affine-scan no-alias DFB budget proof is Blackhole-specific";
+    }
+
+    constexpr uint32_t fp32_tile_bytes = 4096;
+    constexpr NodeCoord node{0, 0};
+
+    struct Geometry {
+        uint32_t kk;
+        uint32_t kv;
+        uint32_t summary_tile_bytes;
+        uint32_t expected_total_bytes;
+    };
+    constexpr std::array geometries = {
+        Geometry{1, 1, 4096, 57344},
+        Geometry{1, 1, 2048, 53248},
+        Geometry{1, 2, 4096, 90112},
+        Geometry{1, 2, 2048, 83968},
+    };
+
+    for (const auto& geometry : geometries) {
+        auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+        auto consumer = MakeMinimalGen1ComputeKernel("consumer");
+
+        auto bind = [&](DataflowBufferSpec& dfb) {
+            const std::string name = dfb.unique_id.get();
+            producer.dfb_bindings.push_back(ProducerOf(dfb.unique_id, name));
+            consumer.dfb_bindings.push_back(ConsumerOf(dfb.unique_id, name));
+        };
+        auto make_fp32 = [&](const char* name, uint32_t tiles) {
+            auto dfb = MakeMinimalDFB(name, fp32_tile_bytes, tiles);
+            dfb.data_format_metadata = tt::DataFormat::Float32;
+            return dfb;
+        };
+
+        auto initial_a = MakeMinimalDFB("initial_a", geometry.summary_tile_bytes, geometry.kk);
+        auto initial_b = MakeMinimalDFB("initial_b", geometry.summary_tile_bytes, geometry.kv);
+        const auto summary_format =
+            geometry.summary_tile_bytes == fp32_tile_bytes ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        initial_a.data_format_metadata = summary_format;
+        initial_b.data_format_metadata = summary_format;
+        auto local_a = make_fp32("local_a", 2 * geometry.kk);
+        auto local_b = make_fp32("local_b", 2 * geometry.kv);
+        auto outbound_a = make_fp32("outbound_a", geometry.kk);
+        auto outbound_b = make_fp32("outbound_b", geometry.kv);
+        auto inbound_a = make_fp32("inbound_a", geometry.kk);
+        auto inbound_b = make_fp32("inbound_b", geometry.kv);
+        auto initial_state = make_fp32("initial_state", geometry.kv);
+        auto final = make_fp32("final", geometry.kv);
+        auto scratch = make_fp32("scratch", geometry.kv);
+        auto stage_token = make_fp32("stage_token", 1);
+
+        ProgramSpec spec;
+        spec.name = "no_alias_affine_scan_dfb_budget";
+        spec.dataflow_buffers = {
+            initial_a,
+            initial_b,
+            local_a,
+            local_b,
+            outbound_a,
+            outbound_b,
+            inbound_a,
+            inbound_b,
+            initial_state,
+            final,
+            scratch,
+            stage_token};
+        for (auto& dfb : spec.dataflow_buffers) {
+            bind(dfb);
+        }
+        spec.kernels = {producer, consumer};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
+
+        Program program = MakeProgramFromSpec(*mesh_device, spec);
+        uint32_t total_bytes = 0;
+        std::vector<std::pair<uint32_t, uint32_t>> regions;
+        for (const auto& dfb_spec : spec.dataflow_buffers) {
+            auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(dfb_spec.unique_id.get()));
+            const uint32_t begin = dfb->uniform_alloc_addr();
+            const uint32_t end = begin + dfb->total_size();
+            total_bytes += dfb->total_size();
+            regions.emplace_back(begin, end);
+            EXPECT_LE(end, device->l1_size_per_core());
+        }
+        EXPECT_EQ(total_bytes, geometry.expected_total_bytes);
+        std::sort(regions.begin(), regions.end());
+        for (size_t i = 1; i < regions.size(); ++i) {
+            EXPECT_LE(regions[i - 1].second, regions[i].first) << "No-alias DFB regions overlap";
+        }
+        std::cout << "AFFINE_SCAN_NO_ALIAS_DFB_BUDGET kk=" << geometry.kk << " kv=" << geometry.kv
+                  << " summary_tile_bytes=" << geometry.summary_tile_bytes << " dfb_bytes=" << total_bytes
+                  << " l1_base=" << regions.front().first << " l1_end=" << regions.back().second
+                  << " l1_size=" << device->l1_size_per_core() << std::endl;
+    }
 }
 
 // ============================================================================
