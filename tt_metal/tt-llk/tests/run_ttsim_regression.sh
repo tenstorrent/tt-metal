@@ -151,8 +151,10 @@ provision_ttsim() {
             hash_var=ttsim_wh_so_hash
             ;;
         quasar)
-            echo "ERROR: Quasar auto-provisioning is not available yet; set TT_METAL_SIMULATOR" >&2
-            exit 1
+            architecture=quasar
+            so_name=libttsim_qsr.so
+            soc_src="${REPO_ROOT}/tt_metal/soc_descriptors/quasar_32_arch.yaml"
+            hash_var=ttsim_qsr_so_hash
             ;;
         *)
             echo "ERROR: unknown --architecture '$architecture' (expected 'blackhole', 'wormhole', or 'quasar')" >&2
@@ -285,7 +287,7 @@ PYTEST_BASE_ARGS=(
 if [[ "$WORKERS" -gt 0 ]]; then
     PYTEST_BASE_ARGS+=(
         -n "$WORKERS"
-        --dist=loadfile
+        --dist=worksteal
         --max-worker-restart=10000
     )
 fi
