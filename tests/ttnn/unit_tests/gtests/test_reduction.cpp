@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Branch-keyed smoke tests for the ttnn reduction op family.
+// Smoke tests for the ttnn reduction op family: one test per program factory,
+// for every op under ttnn/cpp/ttnn/operations/reduction/, plus a few tests for
+// the front-end code paths that pick between factories. Each test uses small
+// deterministic inputs with exact (or op-tolerance) expected outputs, so a
+// kernel that runs but produces garbage fails.
 //
-// One test per program-factory / dispatch branch, for every op under
-// ttnn/cpp/ttnn/operations/reduction/. Each test uses small deterministic
-// inputs with exact (or op-tolerance) expected outputs, so a branch that runs
-// but produces garbage fails.
-//
-// Branch → test map (front-end dispatch in generic_reductions.cpp unless noted):
+// Program factory / code path -> test map (front-end dispatch in
+// generic_reductions.cpp unless noted):
 //   ReduceMultiCoreW/H (SUM), tall shapes SumReduceW / SumReduceH
 //   HW single-core (1 tile) + two-step    SumReduceBothDims
 //   ReduceMultiCoreW/H (MAX, MIN-negate)  MinMaxReduceW / MinMaxReduceH
@@ -66,7 +66,7 @@
 
 namespace ttnn::operations::reduction::test {
 
-class ReductionBranches : public TTNNFixtureWithSuiteDevice<ReductionBranches> {};
+class ReductionSmoke : public TTNNFixtureWithSuiteDevice<ReductionSmoke> {};
 
 namespace detail {
 
@@ -98,7 +98,7 @@ Tensor make_device_tensor(
 // W-then-H path (64x64).
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, SumReduceW) {
+TEST_F(ReductionSmoke, SumReduceW) {
     auto& device = *device_;
     for (const auto [h, w] : std::array<std::array<uint32_t, 2>, 2>{{{3100, 63}, {3200, 64}}}) {
         const auto input = ttnn::ones(ttnn::Shape{h, w}, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
@@ -111,7 +111,7 @@ TEST_F(ReductionBranches, SumReduceW) {
     }
 }
 
-TEST_F(ReductionBranches, SumReduceH) {
+TEST_F(ReductionSmoke, SumReduceH) {
     auto& device = *device_;
     for (const auto [h, w] : std::array<std::array<uint32_t, 2>, 2>{{{63, 3100}, {64, 3200}}}) {
         const auto input = ttnn::ones(ttnn::Shape{h, w}, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
@@ -124,7 +124,7 @@ TEST_F(ReductionBranches, SumReduceH) {
     }
 }
 
-TEST_F(ReductionBranches, SumReduceBothDims) {
+TEST_F(ReductionSmoke, SumReduceBothDims) {
     auto& device = *device_;
     // 30x30 = one padded tile -> HW single-core factory; 64x64 = two-step W-then-H.
     for (const auto [h, w] : std::array<std::array<uint32_t, 2>, 2>{{{30, 30}, {64, 64}}}) {
@@ -147,7 +147,7 @@ struct MinMaxCase {
 
 }  // namespace detail
 
-TEST_F(ReductionBranches, MinMaxReduceW) {
+TEST_F(ReductionSmoke, MinMaxReduceW) {
     auto& device = *device_;
     for (const auto& c :
          std::array<detail::MinMaxCase, 4>{{{3100, 63, 4}, {3200, 64, 4}, {3100, 63, -128}, {3200, 64, -128}}}) {
@@ -174,7 +174,7 @@ TEST_F(ReductionBranches, MinMaxReduceW) {
     }
 }
 
-TEST_F(ReductionBranches, MinMaxReduceH) {
+TEST_F(ReductionSmoke, MinMaxReduceH) {
     auto& device = *device_;
     for (const auto& c :
          std::array<detail::MinMaxCase, 4>{{{63, 3100, 4}, {64, 3200, 4}, {63, 3100, -128}, {64, 3200, -128}}}) {
@@ -201,7 +201,7 @@ TEST_F(ReductionBranches, MinMaxReduceH) {
     }
 }
 
-TEST_F(ReductionBranches, MinMaxReduceBothDims) {
+TEST_F(ReductionSmoke, MinMaxReduceBothDims) {
     auto& device = *device_;
     for (const auto& c : std::array<detail::MinMaxCase, 2>{{{64, 64, 1}, {30, 30, -1004}}}) {
         std::vector<float> data(static_cast<size_t>(c.h) * c.w);
@@ -228,7 +228,7 @@ TEST_F(ReductionBranches, MinMaxReduceBothDims) {
 // Generic reduce: mean (AVG pool math) on the tiled W / H / multi-axis paths
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, MeanReduceW) {
+TEST_F(ReductionSmoke, MeanReduceW) {
     auto& device = *device_;
     constexpr int h = 64, w = 64;
     std::vector<float> data(h * w);
@@ -246,7 +246,7 @@ TEST_F(ReductionBranches, MeanReduceW) {
     }
 }
 
-TEST_F(ReductionBranches, MeanReduceH) {
+TEST_F(ReductionSmoke, MeanReduceH) {
     auto& device = *device_;
     constexpr int h = 64, w = 64;
     std::vector<float> data(h * w);
@@ -264,7 +264,7 @@ TEST_F(ReductionBranches, MeanReduceH) {
     }
 }
 
-TEST_F(ReductionBranches, MeanReduceBothDims) {
+TEST_F(ReductionSmoke, MeanReduceBothDims) {
     auto& device = *device_;
     constexpr int h = 64, w = 64;
     const std::vector<float> data(h * w, 3.0f);
@@ -279,7 +279,7 @@ TEST_F(ReductionBranches, MeanReduceBothDims) {
 // Generic reduce: fp32 accurate SFPU path (FLOAT32 + !fast_and_approximate)
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, Fp32AccurateMeanW) {
+TEST_F(ReductionSmoke, Fp32AccurateMeanW) {
     auto& device = *device_;
     constexpr int h = 32, w = 64;
     std::vector<float> data(h * w);
@@ -297,7 +297,7 @@ TEST_F(ReductionBranches, Fp32AccurateMeanW) {
     }
 }
 
-TEST_F(ReductionBranches, Fp32AccurateMaxW) {
+TEST_F(ReductionSmoke, Fp32AccurateMaxW) {
     auto& device = *device_;
     constexpr int h = 32, w = 64;
     std::vector<float> data(h * w);
@@ -319,7 +319,7 @@ TEST_F(ReductionBranches, Fp32AccurateMaxW) {
 // Generic reduce: INT32 SFPU paths
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, Int32SumW) {
+TEST_F(ReductionSmoke, Int32SumW) {
     auto& device = *device_;
     constexpr int h = 32, w = 64;
     std::vector<int32_t> data(h * w);
@@ -337,7 +337,7 @@ TEST_F(ReductionBranches, Int32SumW) {
     }
 }
 
-TEST_F(ReductionBranches, Int32MinMaxW) {
+TEST_F(ReductionSmoke, Int32MinMaxW) {
     auto& device = *device_;
     constexpr int h = 32, w = 64;
     std::vector<int32_t> data(h * w);
@@ -359,7 +359,7 @@ TEST_F(ReductionBranches, Int32MinMaxW) {
     }
 }
 
-TEST_F(ReductionBranches, Int32SumBothDims) {
+TEST_F(ReductionSmoke, Int32SumBothDims) {
     auto& device = *device_;
     constexpr int h = 64, w = 64;
     const std::vector<int32_t> data(h * w, 1);
@@ -374,7 +374,7 @@ TEST_F(ReductionBranches, Int32SumBothDims) {
 // Generic reduce: dense row-major paths (stay ROW_MAJOR by default)
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, RowMajorSumW) {
+TEST_F(ReductionSmoke, RowMajorSumW) {
     auto& device = *device_;
     constexpr int h = 64, w = 64;
     std::vector<float> data(h * w);
@@ -394,7 +394,7 @@ TEST_F(ReductionBranches, RowMajorSumW) {
     }
 }
 
-TEST_F(ReductionBranches, RowMajorSumHSplit) {
+TEST_F(ReductionSmoke, RowMajorSumHSplit) {
     auto& device = *device_;
     constexpr int h = 3136, w = 32;  // tall H engages the H-axis slicing heuristic
     const std::vector<float> data(static_cast<size_t>(h) * w, 1.0f);
@@ -409,7 +409,7 @@ TEST_F(ReductionBranches, RowMajorSumHSplit) {
     }
 }
 
-TEST_F(ReductionBranches, RowMajorMeanW) {
+TEST_F(ReductionSmoke, RowMajorMeanW) {
     auto& device = *device_;
     constexpr int h = 64, w = 64;
     std::vector<float> data(h * w);
@@ -432,7 +432,7 @@ TEST_F(ReductionBranches, RowMajorMeanW) {
 // Generic reduce: fast_reduce_nc and the multi-axis loop
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, FastReduceNCSum) {
+TEST_F(ReductionSmoke, FastReduceNCSum) {
     auto& device = *device_;
     // Sum over a non-H/W dim with BFLOAT16 and scalar==1.0 routes to fast_reduce_nc.
     const auto input = ttnn::ones(ttnn::Shape{2, 3, 32, 32}, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
@@ -444,7 +444,7 @@ TEST_F(ReductionBranches, FastReduceNCSum) {
     }
 }
 
-TEST_F(ReductionBranches, MultiAxisSumChain) {
+TEST_F(ReductionSmoke, MultiAxisSumChain) {
     auto& device = *device_;
     // A dim list mixing a batch dim and W takes the per-axis transpose loop
     // (bf16 multi-axis sum keeps fp32 intermediates between stages).
@@ -461,7 +461,7 @@ TEST_F(ReductionBranches, MultiAxisSumChain) {
 // std/var: Welford kernel variants
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, WelfordVarW) {
+TEST_F(ReductionSmoke, WelfordVarW) {
     auto& device = *device_;
     constexpr int h = 32, w = 64;
     std::vector<float> data(h * w);
@@ -479,7 +479,7 @@ TEST_F(ReductionBranches, WelfordVarW) {
     }
 }
 
-TEST_F(ReductionBranches, WelfordStdH) {
+TEST_F(ReductionSmoke, WelfordStdH) {
     auto& device = *device_;
     constexpr int h = 64, w = 32;
     std::vector<float> data(h * w);
@@ -497,9 +497,9 @@ TEST_F(ReductionBranches, WelfordStdH) {
     }
 }
 
-TEST_F(ReductionBranches, WelfordVarDim0) {
+TEST_F(ReductionSmoke, WelfordVarDim0) {
     auto& device = *device_;
-    // A single non-H/W dim takes the permute -> H-reduce -> inverse-permute branch.
+    // A single non-H/W dim takes the permute -> H-reduce -> inverse-permute path.
     constexpr int n = 4, h = 32, w = 32;
     std::vector<float> data(n * h * w);
     for (int p = 0; p < n; p++) {
@@ -516,7 +516,7 @@ TEST_F(ReductionBranches, WelfordVarDim0) {
     }
 }
 
-TEST_F(ReductionBranches, WelfordStdMultiDim) {
+TEST_F(ReductionSmoke, WelfordStdMultiDim) {
     auto& device = *device_;
     // 2+ reduce dims take the unified HW welford path.
     constexpr int n = 2, h = 64, w = 64;
@@ -534,7 +534,7 @@ TEST_F(ReductionBranches, WelfordStdMultiDim) {
     }
 }
 
-TEST_F(ReductionBranches, Fp32WelfordVarW) {
+TEST_F(ReductionSmoke, Fp32WelfordVarW) {
     auto& device = *device_;
     // FLOAT32 welford requires fp32_dest_acc_en, which the op defaults to.
     constexpr int h = 32, w = 64;
@@ -558,7 +558,7 @@ TEST_F(ReductionBranches, Fp32WelfordVarW) {
 // argmax: multicore RM, single-core TILE W/H, NC, global
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, ArgmaxMultiCoreRowMajorLastDim) {
+TEST_F(ReductionSmoke, ArgmaxMultiCoreRowMajorLastDim) {
     auto& device = *device_;
     constexpr int h = 32, w = 512;
     std::vector<float> data(h * w);
@@ -578,7 +578,7 @@ TEST_F(ReductionBranches, ArgmaxMultiCoreRowMajorLastDim) {
     }
 }
 
-TEST_F(ReductionBranches, ArgmaxSingleCoreTileLastDim) {
+TEST_F(ReductionSmoke, ArgmaxSingleCoreTileLastDim) {
     auto& device = *device_;
     constexpr int h = 64, w = 128;
     std::vector<float> data(h * w);
@@ -598,7 +598,7 @@ TEST_F(ReductionBranches, ArgmaxSingleCoreTileLastDim) {
     }
 }
 
-TEST_F(ReductionBranches, ArgmaxSingleCoreTileSecondLastDim) {
+TEST_F(ReductionSmoke, ArgmaxSingleCoreTileSecondLastDim) {
     auto& device = *device_;
     constexpr int h = 64, w = 128;
     std::vector<float> data(h * w);
@@ -620,7 +620,7 @@ TEST_F(ReductionBranches, ArgmaxSingleCoreTileSecondLastDim) {
     }
 }
 
-TEST_F(ReductionBranches, ArgmaxNCDim) {
+TEST_F(ReductionSmoke, ArgmaxNCDim) {
     auto& device = *device_;
     constexpr int n = 2, ch = 4, h = 32, w = 32;
     std::vector<float> data(static_cast<size_t>(n) * ch * h * w);
@@ -650,7 +650,7 @@ TEST_F(ReductionBranches, ArgmaxNCDim) {
     }
 }
 
-TEST_F(ReductionBranches, ArgmaxGlobalRowMajor) {
+TEST_F(ReductionSmoke, ArgmaxGlobalRowMajor) {
     auto& device = *device_;
     constexpr int h = 32, w = 64;
     std::vector<float> data(h * w);
@@ -672,7 +672,7 @@ TEST_F(ReductionBranches, ArgmaxGlobalRowMajor) {
 // index-dtype selection
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, TopkSingleCoreLastDim) {
+TEST_F(ReductionSmoke, TopkSingleCoreLastDim) {
     auto& device = *device_;
     constexpr int h = 32, w = 64, k = 32;
     std::vector<float> data(h * w);
@@ -697,7 +697,7 @@ TEST_F(ReductionBranches, TopkSingleCoreLastDim) {
     }
 }
 
-TEST_F(ReductionBranches, TopkSingleCoreSmallest) {
+TEST_F(ReductionSmoke, TopkSingleCoreSmallest) {
     auto& device = *device_;
     constexpr int h = 32, w = 64, k = 32;
     std::vector<float> data(h * w);
@@ -719,7 +719,7 @@ TEST_F(ReductionBranches, TopkSingleCoreSmallest) {
     }
 }
 
-TEST_F(ReductionBranches, TopkNonTileMultipleK) {
+TEST_F(ReductionSmoke, TopkNonTileMultipleK) {
     auto& device = *device_;
     // k=50 is padded to a tile multiple internally and sliced back to 50.
     constexpr int h = 32, w = 128, k = 50;
@@ -743,7 +743,7 @@ TEST_F(ReductionBranches, TopkNonTileMultipleK) {
     }
 }
 
-TEST_F(ReductionBranches, TopkFp32IndicesUint32) {
+TEST_F(ReductionSmoke, TopkFp32IndicesUint32) {
     auto& device = *device_;
     constexpr int h = 32, w = 64, k = 32;
     std::vector<float> data(h * w);
@@ -766,7 +766,7 @@ TEST_F(ReductionBranches, TopkFp32IndicesUint32) {
     }
 }
 
-TEST_F(ReductionBranches, TopkMultiCoreRows64) {
+TEST_F(ReductionSmoke, TopkMultiCoreRows64) {
     auto& device = *device_;
     // W=8192 (power of two, >= multi_core_min_width) with 64 flattened rows:
     // the multi-core factory cell where issue #53453 lived. On SKUs where the
@@ -800,7 +800,7 @@ TEST_F(ReductionBranches, TopkMultiCoreRows64) {
 // prod: prod_all (dim=None), prod_nc (dim 0), dim=-1 via permute + prod_nc
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, ProdAllDims) {
+TEST_F(ReductionSmoke, ProdAllDims) {
     auto& device = *device_;
     constexpr int h = 32, w = 32;
     std::vector<float> data(h * w, 1.0f);
@@ -815,7 +815,7 @@ TEST_F(ReductionBranches, ProdAllDims) {
     EXPECT_EQ(static_cast<float>(result[0]), 8.0f);
 }
 
-TEST_F(ReductionBranches, ProdNCDim0) {
+TEST_F(ReductionSmoke, ProdNCDim0) {
     auto& device = *device_;
     constexpr int n = 3, h = 32, w = 32;
     std::vector<float> data(static_cast<size_t>(n) * h * w);
@@ -834,7 +834,7 @@ TEST_F(ReductionBranches, ProdNCDim0) {
     }
 }
 
-TEST_F(ReductionBranches, ProdLastDim) {
+TEST_F(ReductionSmoke, ProdLastDim) {
     auto& device = *device_;
     // dim in {-1, -2} is routed through a permute to dim 0 and prod_nc.
     constexpr int h = 32, w = 64;
@@ -856,9 +856,9 @@ TEST_F(ReductionBranches, ProdLastDim) {
 // cumsum / cumprod: shared accumulation factory
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, CumsumLastDim) {
+TEST_F(ReductionSmoke, CumsumLastDim) {
     auto& device = *device_;
-    // rank - dim < 4 takes the reshape + permute-to-dim-0 branch.
+    // rank - dim < 4 takes the reshape + permute-to-dim-0 path.
     constexpr int h = 32, w = 64;
     const auto input = ttnn::ones(ttnn::Shape{1, 1, h, w}, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     const auto output = ttnn::cumsum(input, -1);
@@ -871,7 +871,7 @@ TEST_F(ReductionBranches, CumsumLastDim) {
     }
 }
 
-TEST_F(ReductionBranches, CumsumDim0NoPermute) {
+TEST_F(ReductionSmoke, CumsumDim0NoPermute) {
     auto& device = *device_;
     // rank 4, dim 0: accumulation runs directly on the outermost axis (no permute).
     constexpr int n = 4, h = 32, w = 32;
@@ -886,7 +886,7 @@ TEST_F(ReductionBranches, CumsumDim0NoPermute) {
     }
 }
 
-TEST_F(ReductionBranches, CumsumInt32) {
+TEST_F(ReductionSmoke, CumsumInt32) {
     auto& device = *device_;
     constexpr int n = 4, h = 32, w = 32;
     const std::vector<int32_t> data(static_cast<size_t>(n) * h * w, 2);
@@ -901,7 +901,7 @@ TEST_F(ReductionBranches, CumsumInt32) {
     }
 }
 
-TEST_F(ReductionBranches, CumprodLastDimReverse) {
+TEST_F(ReductionSmoke, CumprodLastDimReverse) {
     auto& device = *device_;
     constexpr int h = 32, w = 32;
     const std::vector<float> data(h * w, 2.0f);
@@ -918,7 +918,7 @@ TEST_F(ReductionBranches, CumprodLastDimReverse) {
     }
 }
 
-TEST_F(ReductionBranches, CumprodDim1) {
+TEST_F(ReductionSmoke, CumprodDim1) {
     auto& device = *device_;
     constexpr int n = 1, ch = 4, h = 32, w = 32;
     const std::vector<float> data(static_cast<size_t>(ch) * h * w, 2.0f);
@@ -938,7 +938,7 @@ TEST_F(ReductionBranches, CumprodDim1) {
 // ema
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, EmaConstantInput) {
+TEST_F(ReductionSmoke, EmaConstantInput) {
     auto& device = *device_;
     constexpr int b = 2, c = 32, t = 64;
     constexpr float alpha = 0.5f;
@@ -962,7 +962,7 @@ TEST_F(ReductionBranches, EmaConstantInput) {
 // moe (Mixtral decode shape)
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, MoeMixtralShape) {
+TEST_F(ReductionSmoke, MoeMixtralShape) {
     auto& device = *device_;
     constexpr int h = 32, w = 64;  // 32 users, expert dim padded to 64
     constexpr int experts = 8;     // E: real experts
@@ -1004,7 +1004,7 @@ TEST_F(ReductionBranches, MoeMixtralShape) {
 // sampling (greedy: per-user k=1, p=0 makes the pick deterministic)
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, SamplingGreedyTopK1) {
+TEST_F(ReductionSmoke, SamplingGreedyTopK1) {
     auto& device = *device_;
     constexpr int users = 32, w = 64;  // Wt=2: smallest width clear of the Wt=1 hang (#52348)
 
@@ -1051,19 +1051,19 @@ TEST_F(ReductionBranches, SamplingGreedyTopK1) {
 // manual_seed: all four program-factory variants
 // ---------------------------------------------------------------------------
 
-TEST_F(ReductionBranches, ManualSeedAllCores) {
+TEST_F(ReductionSmoke, ManualSeedAllCores) {
     auto& device = *device_;
     const auto out = ttnn::manual_seed(42u, std::ref(device));
     EXPECT_EQ(out.dtype(), DataType::UINT32);
 }
 
-TEST_F(ReductionBranches, ManualSeedSingleUser) {
+TEST_F(ReductionSmoke, ManualSeedSingleUser) {
     auto& device = *device_;
     const auto out = ttnn::manual_seed(42u, std::ref(device), 3u);
     EXPECT_EQ(out.dtype(), DataType::UINT32);
 }
 
-TEST_F(ReductionBranches, ManualSeedUserTensor) {
+TEST_F(ReductionSmoke, ManualSeedUserTensor) {
     auto& device = *device_;
     const std::vector<uint32_t> users = {0, 1, 2, 3};
     const auto user_tensor = detail::make_device_tensor(
@@ -1072,7 +1072,7 @@ TEST_F(ReductionBranches, ManualSeedUserTensor) {
     EXPECT_EQ(out.dtype(), DataType::UINT32);
 }
 
-TEST_F(ReductionBranches, ManualSeedPerUserSeeds) {
+TEST_F(ReductionSmoke, ManualSeedPerUserSeeds) {
     auto& device = *device_;
     const std::vector<uint32_t> seeds = {7, 8, 9, 10};
     const std::vector<uint32_t> users = {0, 1, 2, 3};
