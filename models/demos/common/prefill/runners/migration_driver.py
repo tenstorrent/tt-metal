@@ -269,7 +269,7 @@ class MigrationDriver:
 
         Must run while the runner is alive (before any SHUTDOWN sentinel): the endpoint reads source KV
         from device DRAM. ``stats`` is the producer's RunStats — only ``stats.resident`` (slot_id ->
-        (chunks_pushed, actual_isl)) is read. ``num_slots`` is the KV table's slot count when known, used
+        ``_SlotFill``) is read. ``num_slots`` is the KV table's slot count when known, used
         only to bounds-check loopback destinations. ``slot_traces`` / ``pools_by_trace`` are the producer's
         per-slot prompt maps, needed only to write the cross-endpoint handoff.
 
@@ -297,14 +297,15 @@ class MigrationDriver:
             Duplicate src is allowed (fan-out: migrate one slot to several dsts).
           * Offset (fallback, no explicit pairs) — every resident src slot -> src + dst_slot_offset.
 
-        ``real_len`` is the SRC slot's resident non-pad token count (min(chunks_pushed*chunk_size,
-        actual_isl)), matching the KV the runner wrote; slots with no data are skipped. If ``num_slots`` is
-        known (from the KV table), dst is bounds-checked so a too-large dst fails here with a clear message
-        instead of a cryptic device-side error at migrate time."""
+        ``real_len`` is the SRC slot's resident non-pad token count as recorded at push time (the last
+        ``actual_end`` the producer sent), matching the KV the runner wrote; slots with no data are
+        skipped. It is read rather than re-derived from chunk counts because a multi-turn slot resumed at
+        a non-zero prefix, so ``chunks_pushed * chunk_size`` describes only its latest turn. If
+        ``num_slots`` is known (from the KV table), dst is bounds-checked so a too-large dst fails here
+        with a clear message instead of a cryptic device-side error at migrate time."""
 
         def real_len_of(src: int) -> int:
-            chunks_pushed, actual_isl = stats.resident[src]
-            return min(chunks_pushed * self.chunk_size, actual_isl)
+            return stats.resident[src].real_len
 
         def check_dst(src: int, dst: int) -> None:
             if dst < 0:
@@ -545,8 +546,8 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
     base_dir = os.path.abspath(os.path.expanduser(dump_dir))
     os.makedirs(base_dir, exist_ok=True)
 
-    for slot_id, (chunks_pushed, actual_isl) in sorted(stats.resident.items()):
-        real_len = min(chunks_pushed * producer.CHUNK_SIZE, actual_isl)
+    for slot_id, res in sorted(stats.resident.items()):
+        real_len = res.real_len
         if real_len <= 0:
             continue
         read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block  # round to a block

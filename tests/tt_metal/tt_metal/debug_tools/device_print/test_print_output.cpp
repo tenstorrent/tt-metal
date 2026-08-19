@@ -95,6 +95,30 @@ experimental::ProgramSpec MakeQuasarPrintSpec(
     return spec;
 }
 
+// A single compute kernel on `node`, portable across generations. Gen1 runs it on TRISC0/1/2; Gen2
+// runs it on one Tensix engine's TRISCs. Both satisfy the tests that only assert on printed strings.
+experimental::ProgramSpec MakeComputePrintSpec(
+    tt::ARCH arch, std::string_view kernel_path, const experimental::NodeCoord& node = kDefaultPrintNode) {
+    experimental::ComputeHardwareConfig hw_config;
+    if (arch == tt::ARCH::QUASAR) {
+        hw_config = experimental::ComputeGen2Config{};
+    } else {
+        hw_config = experimental::ComputeGen1Config{};
+    }
+
+    const experimental::KernelSpecName name{"compute_print"};
+    return experimental::ProgramSpec{
+        .name = "dprint_compute",
+        .kernels = {experimental::KernelSpec{
+            .unique_id = name,
+            .source = std::filesystem::path{kernel_path},
+            .num_threads = 1,
+            .hw_config = hw_config,
+        }},
+        .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {name}, .target_nodes = node}},
+    };
+}
+
 // Gives every kernel in the spec its iteration count as vararg 0. The node is read back out of the
 // spec so it cannot drift from the one the kernels were placed on.
 experimental::ProgramRunArgs MakeIterationArgs(const experimental::ProgramSpec& spec, uint32_t iterations) {
@@ -634,16 +658,10 @@ TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        Program program = Program();
-        workload.add_program(device_range, std::move(program));
-        auto& program_ = workload.get_programs().at(device_range);
 
-        constexpr CoreCoord core = {0, 0};
-        CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/device_print/print_inline_function.cpp",
-            core,
-            ComputeConfig{});
+        auto spec = MakeComputePrintSpec(
+            mesh_device->arch(), "tests/tt_metal/tt_metal/test_kernels/device_print/print_inline_function.cpp");
+        workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
 
         RunProgram(mesh_device, workload);
         MetalContext::instance().dprint_server()->await();
