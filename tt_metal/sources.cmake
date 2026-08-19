@@ -26,6 +26,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed.hpp
     api/tt-metalium/distributed_context.hpp
     api/tt-metalium/distributed_host_buffer.hpp
+    api/tt-metalium/experimental/allocation_context.hpp
     api/tt-metalium/experimental/dispatch_telemetry.hpp
     api/tt-metalium/experimental/context/metal_env.hpp
     api/tt-metalium/experimental/core_subset_write/buffer_write.hpp

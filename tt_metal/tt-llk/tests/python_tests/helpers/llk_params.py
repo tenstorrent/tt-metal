@@ -726,6 +726,7 @@ class PerfRunType(Enum):
     MATH_ISOLATE = 3
     PACK_ISOLATE = 4
     L1_CONGESTION = 5
+    SFPU_ISOLATE = 6
 
 
 # Single pytest case runs every PerfRunType so the module CSV has one
@@ -739,6 +740,11 @@ PERF_RUN_TYPES_QUASAR = [
         PerfRunType.PACK_ISOLATE,
         PerfRunType.L1_CONGESTION,
     ],
+]
+
+# 4-TRISC tests also measure SFPU_ISOLATE. Keep separate so 3-TRISC schemas stay unchanged.
+PERF_RUN_TYPES_QUASAR_4_TRISC = [
+    PERF_RUN_TYPES_QUASAR[0] + [PerfRunType.SFPU_ISOLATE],
 ]
 PERF_LOOP_FACTOR_QUASAR = 32
 

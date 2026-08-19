@@ -2794,15 +2794,14 @@ class ModelArgs:
                 "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
             )
 
-        if self.num_devices > 0:
-            sampling_splits = self.num_devices if self.cluster_shape != [1, 1] else 2
-            # Only enable this optimization on the non-multi-step sampling path.
-            # The [1, 1] mesh path splits logits before TopK today and would need
-            # matching input padding in `TTSampling.sample()` to safely use it.
-            self.pad_logits_to_power_of_2 = self.cluster_shape != [1, 1] and (
-                should_pad_sampling_logits_to_power_of_2(self.base_model_name, self.padded_vocab_size, sampling_splits)
+        if self.num_devices > 0 and self.cluster_shape != [1, 1]:
+            self.pad_logits_to_power_of_2 = should_pad_sampling_logits_to_power_of_2(
+                self.base_model_name, self.padded_vocab_size, self.num_devices
             )
         else:
+            # Off on [1, 1]: an A/B on the multi-step split path (PR #53167)
+            # measured no end-to-end decode benefit from padding the topk chunks
+            # to a power of two, so the flag stays multi-device only.
             self.pad_logits_to_power_of_2 = False
 
         self.unpadded_hidden_dim = self.hidden_dim
@@ -4447,16 +4446,32 @@ class HfModelWrapper:
         position_ids = torch.tensor(
             [list(range(start_pos, start_pos + inputs_embeds.shape[1]))] * inputs_embeds.shape[0]
         )
-        logits, new_cache, hidden_states = self.model.forward(
-            inputs_embeds=inputs_embeds,
-            position_ids=position_ids,
-            use_cache=True,
-            past_key_values=self.past_key_values,
-            return_dict=False,
-            output_hidden_states=True,
-        )
+
+        # In prefill mode the reference must match the TT model, which returns the last decoder
+        # layer's output *before* the final norm. HF's output_hidden_states does not expose that
+        # tensor: the tuple is (embeddings, out_0, ..., out_{N-2}, norm(out_{N-1})), so hidden_states[-2]
+        # is the embeddings for a 1-layer model and the second-to-last layer otherwise. Capture the
+        # input to the final norm via a forward pre-hook to get the true pre-norm last-layer output.
+        captured = {}
+        handle = None
+        if mode != "decode":
+            handle = self.model.model.norm.register_forward_pre_hook(
+                lambda module, args: captured.__setitem__("pre_norm", args[0])
+            )
+        try:
+            logits, new_cache, hidden_states = self.model.forward(
+                inputs_embeds=inputs_embeds,
+                position_ids=position_ids,
+                use_cache=True,
+                past_key_values=self.past_key_values,
+                return_dict=False,
+                output_hidden_states=True,
+            )
+        finally:
+            if handle is not None:
+                handle.remove()
         self.past_key_values = new_cache
-        return logits if mode == "decode" else hidden_states[-2]  # last hidden state is final norm
+        return logits if mode == "decode" else captured["pre_norm"]
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)

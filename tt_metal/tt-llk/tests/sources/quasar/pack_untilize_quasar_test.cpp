@@ -16,6 +16,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -33,8 +34,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B         = params.buffer_B;
 #endif
     constexpr std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
-    tdma_descriptor_t td_val;
-    const std::uint32_t buf_desc_id           = 0;
     const std::uint32_t num_tiles_per_unpack  = TILE_CNT;
     const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
@@ -90,28 +89,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
             l1_addr_16B = L1_ADDRESS(buffer_A[0]);
         }
 
-        td_val = ckernel::trisc::construct_tdma_desc(tensor_shape_A, l1_addr_16B, formats.unpack_A_src, buf_desc_id, formats.unpack_A_dst);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
 
-        _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
         if constexpr (unpack_to_dest)
         {
-            _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val.reg_data_format);
+            _llk_unpack_configure_unary_<SELECTED_UNPACKER>(static_cast<DataFormat>(formats.unpack_A_dst));
             // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
             // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
             // ZEROACC to wipe subsequent tile rows after packing the first one.
-            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tensor_shape_A, BLOCK_CT_DIM);
+            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
+                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape_A, BLOCK_CT_DIM);
         }
         else
         {
             if constexpr (is_fp32_dest_acc_en)
             {
-                _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val.reg_data_format, td_val.reg_data_format);
+                _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+                    static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
             }
             else
             {
-                _llk_unpack_configure_unary_<SELECTED_UNPACKER>(td_val.reg_data_format);
+                _llk_unpack_configure_unary_<SELECTED_UNPACKER>(static_cast<DataFormat>(formats.unpack_A_dst));
             }
-            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tensor_shape_A, num_tiles_per_unpack);
+            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
+                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape_A, num_tiles_per_unpack);
         }
         PROFILER_SYNC();
     }
@@ -272,6 +273,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cpack_common.h"
+#include "llk_bfd_alloc.h"
 #include "llk_pack_common.h"
 #include "llk_pack_untilize.h"
 #include "params.h"
@@ -286,7 +288,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
-    std::uint32_t const buf_desc_id         = 31;
     {
         ZONE_SCOPED("INIT")
         // Match WH/BH PACK_ISOLATE and L1_CONGESTION: no math↔pack handshake;
@@ -309,28 +310,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        tdma_descriptor_t tdma_desc;
-
         if (tensor_shape.face_r_dim < ckernel::pack::PACR_STRIDE_OFFSET_ROWS)
         {
             // PACR_STRIDE quirk: tiny-tiles index L1 rows as tiles, so the BD is built with y_dim = 1.
-            tdma_desc = ckernel::trisc::construct_tdma_desc<ckernel::trisc::L1AccessMode::Strided>(
-                tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Strided>(
+                tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         }
         else
         {
-            tdma_desc = ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Continuous>(
+                tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         }
 
-        _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none());
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         if (tensor_shape.total_num_faces() == NUM_FACES)
         {
-            _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
+            _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape);
         }
         else
         {
-            _llk_pack_untilize_strided_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
+            _llk_pack_untilize_strided_init_<FULL_CT_DIM, BLOCK_CT_DIM>(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape);
         }
         PROFILER_SYNC();
     }
@@ -358,7 +357,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     else
                     {
-                        _llk_pack_untilize_strided_<FULL_CT_DIM>(buf_desc_id, tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
+                        _llk_pack_untilize_strided_<FULL_CT_DIM>(
+                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
                     }
                 }
             }
@@ -375,7 +375,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     else
                     {
-                        _llk_pack_untilize_strided_<FULL_CT_DIM>(buf_desc_id, tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
+                        _llk_pack_untilize_strided_<FULL_CT_DIM>(
+                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
                     }
                     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }

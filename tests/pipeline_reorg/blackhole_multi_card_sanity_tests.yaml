@@ -68,7 +68,8 @@
     pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
     pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
     pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
-    pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py -k indexer_score_qb -svv
+    pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py -k indexer_score_qb -svv
+    pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_perf.py -svv
   skus:
     bh_quietbox_2:
       timeout: 15
