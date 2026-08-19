@@ -35,8 +35,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
-    std::size_t logical_n,
-    std::size_t logical_l,
+    ttnn::transformer::LogicalLength logical_n,
+    ttnn::transformer::LogicalLength logical_l,
     const SDPAProgramConfig& program_config,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
@@ -71,8 +71,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         persistent_output_buffer_k,
         persistent_output_buffer_v,
         joint_strategy,
-        logical_n,
-        logical_l,
+        std::move(logical_n),
+        std::move(logical_l),
         program_config,
         dim,
         multi_device_global_semaphore,
@@ -599,11 +599,16 @@ void bind_sdpa(nb::module_& mod) {
             persistent_output_buffer_k (ttnn.Tensor): Persistent buffer for gathered K tensor.
             persistent_output_buffer_v (ttnn.Tensor): Persistent buffer for gathered V tensor.
             joint_strategy (str): Strategy for joint attention. Must be "rear".
-            logical_n (int): The logical sequence length N before sharding across devices.
-            logical_l (int, optional): The full prompt (joint) sequence length L before sharding.
+            logical_n (int or ttnn.Tensor): The logical sequence length N before sharding across devices.
+                A single-valued int32/uint32 device tensor is read on-device each dispatch, so one captured
+                trace can replay at different lengths (rewrite the tensor between replays). Not supported
+                with sliding-window attention, chunked-shaped prefill, or the kv_actual_isl KV-pad path.
+            logical_l (int or ttnn.Tensor, optional): The full prompt (joint) sequence length L before sharding.
                 Pass the full L when joint_tensor_q/k/v are sharded L/P per device.
                 The op infers the sharded path when per-device joint seq == logical_l / ring_size.
                 If 0 (default) or omitted, behaves as the replicated path (backward-compatible).
+                As with logical_n, a device tensor makes the value trace-dynamic; that form requires the
+                sharded-joint path (joint tensors present and ring_size > 1).
             program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to None.
