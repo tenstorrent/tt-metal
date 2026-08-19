@@ -5933,3 +5933,32 @@ Measured (judged delay-15, 12x10 x10k):
     (250 MB vs 256 MB ring capacity), present in the baseline arithmetic too, absorbed losslessly.
   - Deferred option if mover issue cost ever matters: a raw-fallback bit for >=~90%-full frames (one
     burst again). Rejected for now — it is a second wire format for a path that is not the bottleneck.
+
+## §N+59 — Op-perf CSV consumer vs the classic device profiler: semantics match; the capture costs this workload ~8-10% (bh-18, 2026-08-19)
+
+The ops-csv consumer (TT_METAL_PERF_DEBUG_OPS_CSV, first register_consumer user) was validated against
+the classic device profiler's ops_perf_results on a 20x ttnn.matmul(512x512) loop. The classic producer
+is dead on this branch (the SPSC producer replaced it at compile time), so the reference CSV came from
+temporarily flipping kernel_profiler.hpp's ARCH_QUASAR seam to the parked push producer, then reverting.
+Join key: our GLOBAL CALL COUNT (= device run_host_id) == classic's >> 10 (host op ids reserve low bits).
+
+Two attribution bugs found and fixed by the comparison, both host-consumer-side:
+  1. Only BRISC emits STICKY_PROG, so rec.prog on NCRISC/TRISC lanes is exact only to drainer-sweep
+     granularity. Back-to-back cache-hit launches put an op boundary inside nearly every frame and the
+     per-op union swallowed a neighbouring kernel: ops 5+ measured exactly ~2x (48.6k vs 23.7k cycles)
+     while compile-spaced ops 1-4 were clean. Fix: BRISC kernel windows (exact, in-ring order with the
+     sticky) define each op's span per core; other lanes' pairs are assigned by timestamp.
+  2. "Latest BRISC start at or before the pair" still misassigned ~half the pairs (NCRISC/TRISC +150%,
+     first-to-last-start +10,000%): the five RISCs get go signals independently, so a lane's wrapper can
+     open slightly BEFORE its own op's BRISC window. Fix: nearest window start (launch skew is sub-us,
+     op gaps tens of us).
+
+After both fixes, per-op agreement across all kernel columns: mean +8-10%, first-to-last-start +-2%,
+uniform across columns -- a run difference, not a measurement difference. It is systematic:
+  - within-arm spread: perf-debug +-1% (3 runs), classic -0.2% +-0.7% (2 runs);
+  - NOT sweep contention: FILL_PCT=90 (throttled sweeps) left the median at 16.7 us vs 16.5-16.9;
+  - NOT ring blocking: 0 producer stalls;
+  - lead suspect: SPSC per-marker emit cost (flow-control check per marker vs push's plain store) in
+    kernels that emit zones in loops (compute CB waits). OPEN -- needs a marker-count ablation.
+Also: no *-FW columns are possible on this branch -- the SPSC lifecycle wrapper deliberately emits no
+FW markers -- so the CSV reports kernel columns only, plus kernel start/end cycles.
