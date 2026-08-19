@@ -269,14 +269,10 @@ void kernel_main() {
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_ex(dfb_ex_id);
     DataflowBuffer dfb_ex2(dfb_ex2_id);
-    DataflowBuffer dfb_ex2_global(dfb_ex2_global_id);
-    DataflowBuffer dfb_ex2_partial(dfb_ex2_partial_id);
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
-    DataflowBuffer dfb_ex_external(dfb_ex_external_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_gamma(dfb_gamma_id);
-    DataflowBuffer dfb_in(dfb_in_id);
 #ifdef TILIZE_IN
     DataflowBuffer dfb_in_resident(dfb_in_resident_id);
 #endif
@@ -287,8 +283,6 @@ void kernel_main() {
     DataflowBuffer dfb_outgamma(dfb_outgamma_id);
     DataflowBuffer dfb_reread_out(dfb_reread_out_id);
     DataflowBuffer dfb_reread_write_out(dfb_reread_write_out_id);
-    DataflowBuffer dfb_scaler(dfb_scaler_id);
-    DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
     DataflowBuffer dfb_x(dfb_x_id);
     DataflowBuffer dfb_xmm(dfb_xmm_id);
 

@@ -114,12 +114,10 @@ void kernel_main() {
     // Note that the entire W dimension must fit in the intermed0 DFB for this kernel to be correct
     DataflowBuffer dfb_max_scaler_obj(dfb::max_scaler);
     DataflowBuffer dfb_sum_scaler_obj(dfb::sum_scaler);
-    DataflowBuffer dfb_in0_obj(dfb::in0);
     DataflowBuffer dfb_out0_obj(dfb::out0);
 #if FUSED_SCALE_MASK
     DataflowBuffer dfb_fused_scale_obj(dfb::fused_scale);
     DataflowBuffer dfb_fused_attn_obj(dfb::fused_attn);
-    DataflowBuffer dfb_scale_mask_obj(dfb::scale_mask);
 #endif
     compute_kernel_hw_startup(dfb::in0, dfb::max_scaler, dfb::exps);
 #ifdef NUMERIC_STABLE

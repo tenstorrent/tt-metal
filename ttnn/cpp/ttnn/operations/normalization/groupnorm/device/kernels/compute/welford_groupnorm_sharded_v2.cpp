@@ -147,10 +147,7 @@ void kernel_main() {
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_in(dfb_in_id);
     DataflowBuffer dfb_in_welford(dfb_in_welford_id);
-    DataflowBuffer dfb_in0_welford(dfb_in0_welford_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
-    DataflowBuffer dfb_x(dfb_x_id);
-    DataflowBuffer dfb_xmm(dfb_xmm_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN

@@ -54,13 +54,11 @@ void kernel_main() {
     DataflowBuffer dfb_epsilon(epsilon_dfb_id);
     DataflowBuffer dfb_transformation_mat(transformation_mat_dfb_id);
     DataflowBuffer dfb_reduce_result(reduce_result_dfb_id);
-    DataflowBuffer dfb_input(input_dfb_id);
     DataflowBuffer dfb_weight(weight_dfb_id);
     DataflowBuffer dfb_intermediate(intermediate_dfb_id);
     DataflowBuffer dfb_rotated_input(rotated_input_dfb_id);
     DataflowBuffer dfb_rope_cos(rope_cos_dfb_id);
     DataflowBuffer dfb_rope_sin(rope_sin_dfb_id);
-    DataflowBuffer dfb_output(output_dfb_id);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_dfb_id, transformation_mat_dfb_id, rotated_input_dfb_id);
     matmul_init(intermediate_dfb_id, transformation_mat_dfb_id);
@@ -81,8 +79,6 @@ void kernel_main() {
      */
     constexpr uint32_t mul_rms_result_dfb_id = (fuse_rope || has_weight) ? intermediate_dfb_id : output_dfb_id;
     constexpr uint32_t mul_weight_result_dfb_id = fuse_rope ? intermediate_dfb_id : output_dfb_id;
-    DataflowBuffer dfb_mul_rms_result(mul_rms_result_dfb_id);
-    DataflowBuffer dfb_mul_weight_result(mul_weight_result_dfb_id);
 
     for (uint32_t tile_row = 0; tile_row < num_tile_rows_to_process; tile_row++) {
         // ROPE tracking variables

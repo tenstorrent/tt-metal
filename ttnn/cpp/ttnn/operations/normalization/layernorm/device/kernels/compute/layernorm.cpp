@@ -95,7 +95,6 @@ void kernel_main() {
     constexpr auto dfb_fusion_id = get_named_compile_time_arg_val("cb_fusion");  // stream gamma/beta
     DataflowBuffer dfb_eps_obj(dfb_eps_id);
     DataflowBuffer dfb_in_obj(dfb_in_id);
-    DataflowBuffer dfb_inb_obj(dfb_inb_id);
     DataflowBuffer dfb_out_obj(dfb_out_id);
     DataflowBuffer dfb_ex_obj(dfb_ex_id);
     DataflowBuffer dfb_ex2_obj(dfb_ex2_id);

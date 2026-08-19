@@ -54,19 +54,12 @@ void kernel_main() {
     constexpr auto dfb_fusion_id = get_named_compile_time_arg_val("cb_fusion");            // stream gamma/beta
     constexpr auto dfb_reciprocals_id = get_named_compile_time_arg_val("cb_reciprocals");  // Pre-computed reciprocals
     DataflowBuffer dfb_eps_obj(dfb_eps_id);
-    DataflowBuffer dfb_in_obj(dfb_in_id);
-    DataflowBuffer dfb_inb_obj(dfb_inb_id);
-    DataflowBuffer dfb_out_obj(dfb_out_id);
-    DataflowBuffer dfb_gamma_obj(dfb_gamma_id);
-    DataflowBuffer dfb_beta_obj(dfb_beta_id);
     DataflowBuffer dfb_xmm_obj(dfb_xmm_id);
     DataflowBuffer dfb_ex_obj(dfb_ex_id);
     DataflowBuffer dfb_ex2_obj(dfb_ex2_id);
     DataflowBuffer dfb_ex2pe_obj(dfb_ex2pe_id);
-    DataflowBuffer dfb_fusion_obj(dfb_fusion_id);
 
     constexpr auto dfb_im_or_out_id = (do_gamma | do_beta) ? dfb_fusion_id : dfb_out_id;
-    DataflowBuffer dfb_im_or_out_obj(dfb_im_or_out_id);
 
     //  Either in or in + b if doing fused pre-add
     constexpr auto dfb_x_id = []() -> auto {
