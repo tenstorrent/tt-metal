@@ -61,6 +61,7 @@ set(TTNN_OP_CCL_API_HEADERS
     common/types/ccl_types.hpp
     common/uops/ccl_command.hpp
     mesh_partition/mesh_partition.hpp
+    shared_with_host/ccl_helpers_schedule.hpp
     shared_with_host/hetergeneous_data_structs.hpp
 )
 
