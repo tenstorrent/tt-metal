@@ -262,6 +262,13 @@ ALWI void topk_xl_reinit_mop_after_copy() {
  * which copy init rewrites, and ADDR_MOD_2, which is (re)established for the
  * unfused stride in case the preceding phase was fused. The remaining TopK
  * ADDR_MODs and SFPU index-tracking state stay live.
+ *
+ * NOT restored: ADDR_MOD_4. copy init does not touch it, but
+ * topk_xl_add_lsb_indices_init reprograms it to +16 while unfused rebuild
+ * needs +8 — so if add_lsb_indices_init has run since the last full
+ * topk_xl_init<fused=false>, run that full init instead of this helper.
+ * (tt-blaze's callers always follow add_lsb with a full init, so this
+ * sequence does not arise there.)
  */
 ALWI void topk_xl_reinit_unfused_rebuild_after_copy() {
     MATH((llk_math_eltwise_unary_sfpu_topk_xl_reinit_unfused_rebuild_after_copy()));

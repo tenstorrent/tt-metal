@@ -167,6 +167,9 @@ inline void topk_mop_config()
 // it is (re)established because the unfused rebuild needs the unfused stride and
 // the preceding phase may have been fused. All other TopK state (ADDR_MOD_1/4/5/6,
 // index tracking, and formats) remains live, so a full topk_xl_init is unnecessary.
+// Caveat: ADDR_MOD_4 stays live only if _topk_xl_add_lsb_indices_init_ (which
+// reprograms it to +16; unfused rebuild needs +8) has not run since the last full
+// unfused init — callers in that situation need topk_xl_init<false>, not this.
 inline void topk_reinit_unfused_rebuild_after_copy()
 {
     addr_mod_t {
