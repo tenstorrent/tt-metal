@@ -2679,6 +2679,11 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
         return;
     }
     this->compile(device, force_slow_dispatch);
+    // Compile-only mode warms the kernel cache without dispatching. It's run asynchronously
+    // so steps below would be invalid, therefore return early.
+    if (MetalContext::instance().rtoptions().get_compile_only()) {
+        return;
+    }
     this->allocate_circular_buffers(device);
     this->validate_circular_buffer_core_ranges(device);
     this->validate_circular_buffer_region(device);
