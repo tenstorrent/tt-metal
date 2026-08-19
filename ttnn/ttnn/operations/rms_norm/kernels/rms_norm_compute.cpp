@@ -170,8 +170,14 @@ void kernel_main() {
         ingest_gamma<Wt_core>();
     }
 
-    constexpr auto partial_scaler =
-        (W_PARTIAL > 0) ? ckl::ReducePartialScaler::last_tile_at(1) : ckl::ReducePartialScaler::none();
+    // The partial form is datapath-specific (the reader emits the matching tile at
+    // scaler index 1; see its scaler block).  `last_tile_at` carries only a scaler
+    // INDEX, which AccumulateViaAdd reads as "tile-aligned" - it needs
+    // `partial_mask`, which also carries the valid-element COUNT.
+    constexpr auto partial_scaler = (W_PARTIAL == 0)
+                                        ? ckl::ReducePartialScaler::none()
+                                        : (REDUCE_VIA_ADD ? ckl::ReducePartialScaler::partial_mask(W_PARTIAL, 1)
+                                                          : ckl::ReducePartialScaler::last_tile_at(1));
 
     for (uint32_t b = 0; b < num_row_blocks_here; ++b) {
         // ---------------- sum of squares over the reduced axis ---------------

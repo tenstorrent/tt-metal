@@ -88,6 +88,10 @@ constexpr uint32_t BARRIER_PER_BLOCK = get_compile_time_arg_val(19);
 constexpr uint32_t SKIP_DM_PAYLOAD = get_compile_time_arg_val(20);
 // Lever B5/B6: 1 = one whole-page transaction per tile (applied), 0 = two half-page ones.
 constexpr uint32_t COALESCE = get_compile_time_arg_val(21);
+// Regime B reduce datapath (see rms_norm_compute.cpp).  It selects which FORM of
+// the non-tile-aligned partial the compute side consumes, so the reader has to
+// emit the matching tile - see the scaler block in kernel_main().
+constexpr uint32_t REDUCE_VIA_ADD = get_compile_time_arg_val(22);
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t NUM_REDUCE_CHUNKS = Wt_core / WT_REDUCE_BLOCK;
@@ -128,11 +132,30 @@ void kernel_main() {
     //      meaningful (the pad only ever lives in the last W-tile, and the RM
     //      reader zero-fills it), so a full scaler is the correct one.
     if constexpr (!REGIME_A && W_PARTIAL > 0) {
-        dataflow_kernel_lib::prepare_partial_reduce_scalers<
-            cb_reduce_scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW,
-            W_PARTIAL>(1.0f);
+        // The two reduce datapaths consume DIFFERENT forms of the partial, in
+        // different tile layouts, so the tile the reader emits at index 1 is
+        // chosen by the same REDUCE_VIA_ADD knob the compute side reads:
+        //   ReduceTile       -> a PARTIAL SCALER tile (matmul-with-ones layout);
+        //                       compute passes ReducePartialScaler::last_tile_at(1).
+        //   AccumulateViaAdd -> a 0/1 MASK tile in row-0 broadcast layout, which
+        //                       the masked accumulating broadcast-mul folds into
+        //                       the last tile; compute passes partial_mask(W_PARTIAL, 1).
+        // Passing the ReduceTile form to AccumulateViaAdd is silent, catastrophic
+        // data corruption, not a compile error: valid_reduce_dim_elements stays 0,
+        // the datapath reads "tile-aligned" and NEVER masks, so the poisoned tile
+        // padding enters the sum of squares (measured rms ~1.0 on every
+        // w_non_aligned pad-poison case).
+        if constexpr (REDUCE_VIA_ADD) {
+            dataflow_kernel_lib::
+                prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
+            dataflow_kernel_lib::prepare_reduce_mask<cb_reduce_scaler, ckernel::ReduceDim::REDUCE_ROW>(W_PARTIAL);
+        } else {
+            dataflow_kernel_lib::prepare_partial_reduce_scalers<
+                cb_reduce_scaler,
+                ckernel::PoolType::SUM,
+                ckernel::ReduceDim::REDUCE_ROW,
+                W_PARTIAL>(1.0f);
+        }
     } else {
         dataflow_kernel_lib::
             prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
