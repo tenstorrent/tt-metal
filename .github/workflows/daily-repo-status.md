@@ -19,6 +19,7 @@ permissions:
 network: defaults
 
 tools:
+  bash: [] # no shell access needed — report generation works entirely through the GitHub MCP toolset
   github:
     # If in a public repo, setting `lockdown: false` allows
     # reading issues, pull requests and comments from 3rd-parties

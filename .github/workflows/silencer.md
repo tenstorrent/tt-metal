@@ -123,13 +123,11 @@ safe-outputs:
     # single hardcoded list of workflows Silencer tracks — *Scan procedure* step 2 scans
     # exactly this same list, so there is only one place to update when a tracked
     # workflow is added or removed. Entries are bare filename stems, no extension
-    # (`pr-gate` resolves `.github/workflows/pr-gate.yaml`). All 42 are confirmed to
+    # (`pr-gate` resolves `.github/workflows/pr-gate.yaml`). All 39 are confirmed to
     # declare a `workflow_dispatch` trigger, which this safe-output requires.
     workflows:
       - sanity-tests
-      - blackhole-sanity-tests
       - blackhole-e2e-tests
-      - blackhole-demo-tests
       - galaxy-profiler-tests
       - galaxy-multi-user-isolation-tests
       - galaxy-deepseek-tests
@@ -159,7 +157,6 @@ safe-outputs:
 
       - perf-device-models
       - single-card-ttnn-models-frequent-tests
-      - single-card-demo-tests
       - tt-metal-l2-nightly
       - vllm-model-tests
       - sanity-tests-debug

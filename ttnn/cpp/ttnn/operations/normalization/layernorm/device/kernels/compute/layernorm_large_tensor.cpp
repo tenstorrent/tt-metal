@@ -48,27 +48,16 @@ void kernel_main() {
     constexpr auto dfb_out_id = get_named_compile_time_arg_val("cb_out");  // output
     constexpr auto dfb_gamma_id = get_named_compile_time_arg_val("cb_gamma");
     constexpr auto dfb_beta_id = get_named_compile_time_arg_val("cb_beta");
-    constexpr uint32_t dfb_xmm_id = get_named_compile_time_arg_val("cb_xmm");   // x minus mean
-    constexpr auto dfb_ex_id = get_named_compile_time_arg_val("cb_ex");         // E[x]
-    constexpr auto dfb_ex2_id = get_named_compile_time_arg_val("cb_ex2");       // E[(x-E[x])^2]
-    constexpr auto dfb_xmm2_id = get_named_compile_time_arg_val("cb_xmm2");     // xmm^2
-    constexpr auto dfb_ex2pe_id = get_named_compile_time_arg_val("cb_ex2pe");   // E[(x-E[x])^2]+eps
-    uint32_t dfb_fusion = get_named_compile_time_arg_val("cb_fusion");          // stream gamma/beta
+    constexpr auto dfb_ex_id = get_named_compile_time_arg_val("cb_ex");        // E[x]
+    constexpr auto dfb_ex2_id = get_named_compile_time_arg_val("cb_ex2");      // E[(x-E[x])^2]
+    constexpr auto dfb_xmm2_id = get_named_compile_time_arg_val("cb_xmm2");    // xmm^2
+    constexpr auto dfb_ex2pe_id = get_named_compile_time_arg_val("cb_ex2pe");  // E[(x-E[x])^2]+eps
+    uint32_t dfb_fusion = get_named_compile_time_arg_val("cb_fusion");         // stream gamma/beta
     constexpr auto scaler0 = 0;
     constexpr auto dfb_accumulate_id = get_named_compile_time_arg_val("cb_accumulate");  // For accumulating (x-E[x])^2
 
     constexpr auto dfb_in_rm_id =
         get_named_compile_time_arg_val("cb_in_rm");  // input row-major (if row-major input, otherwise unused)
-
-#ifdef FUSE_PRE_ADD
-#ifdef RMSNORM
-    constexpr uint32_t dfb_x_id = dfb_xmm_id;
-#else
-    constexpr uint32_t dfb_x_id = get_named_compile_time_arg_val("cb_x");
-#endif
-#else
-    constexpr uint32_t dfb_x_id = dfb_in_id;
-#endif
 
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_in(dfb_in_id);
@@ -76,7 +65,6 @@ void kernel_main() {
     DataflowBuffer dfb_out(dfb_out_id);
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_beta(dfb_beta_id);
-    DataflowBuffer dfb_xmm(dfb_xmm_id);
     DataflowBuffer dfb_ex(dfb_ex_id);
     DataflowBuffer dfb_ex2(dfb_ex2_id);
     DataflowBuffer dfb_xmm2(dfb_xmm2_id);
@@ -84,15 +72,22 @@ void kernel_main() {
     DataflowBuffer dfb_accumulate(dfb_accumulate_id);
     DataflowBuffer dfb_scaler(dfb_scaler_id);
     DataflowBuffer dfb_in_rm(dfb_in_rm_id);
-    DataflowBuffer dfb_x(dfb_x_id);
 
-#ifdef FUSE_PRE_ADD
-    compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_x_id);
-#else
     // Always call compute_kernel_hw_startup regardless of TILIZE_IN.
     // This initializes llk_pack_dest_init, which sets up the MATH-PACK DST semaphore
-    // in the "available for MATH" state.  Without it, the first tilize_block call's
+    // in the "available for MATH" state. Without it, the first tilize_block call's
     // internal llk_math_wait_for_dest_available() spins forever (deadlock).
+    //
+    // The output CB argument programs the pack hardware from that CB's descriptor, so it must name
+    // a CB the host allocates on this path: the first tile packed below goes to cb_xmm2 for RMS
+    // norm and to cb_ex otherwise.
+#ifdef FUSE_PRE_ADD
+#ifdef RMSNORM
+    compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_xmm2_id);
+#else
+    compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_ex_id);
+#endif
+#else
 #ifdef RMSNORM
     compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
 #else
@@ -321,28 +316,16 @@ void kernel_main() {
             }
             dfb_inb.pop_front(block.full_block_size());
 #endif
-            tile_regs_commit();
-            tile_regs_wait();
-            // Note: We shouldn't have to pack to
-            // intermediate CB. We should be able to
-            // do a binary dest with reuse (as we used
-            // to). However, tt-llk #868 is preventing
-            // that from working at the moment.
-            dfb_xmm.reserve_back(block.full_block_size());
-            pack_reconfig_data_format(dfb_xmm_id);
+            // Multiply by 1/(√(Var(X) + ε)) in place in DST. SrcA currently holds cb_inb (fused) or
+            // cb_in (non-fused), the last operand read above; switch it to cb_ex2pe's format.
+#ifdef FUSE_PRE_ADD
+            reconfig_data_format_srca(dfb_inb_id, dfb_ex2pe_id);
+#else
+            reconfig_data_format_srca(dfb_in_id, dfb_ex2pe_id);
+#endif
+            mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_ex2pe_id);
             for (auto i : block.local()) {
-                pack_tile(i, dfb_xmm_id);
-            }
-            dfb_xmm.push_back(block.full_block_size());
-            tile_regs_release();
-
-            dfb_xmm.wait_front(block.full_block_size());
-            reconfig_data_format(dfb_xmm_id, dfb_ex2pe_id);
-            tile_regs_acquire();
-
-            mul_init(dfb_xmm_id, dfb_ex2pe_id);
-            for (auto i : block.local()) {
-                mul_tiles(dfb_xmm_id, dfb_ex2pe_id, i, 0, i);
+                mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_ex2pe_id, 0 /*in_tile_index*/, i);
 #ifdef SFPU_OP_INIT_ACTIVATION
                 // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
                 // activation will be applied after the gamma/beta multiplication/addition.
@@ -366,7 +349,6 @@ void kernel_main() {
             }
             tile_regs_release();
             DataflowBuffer(dfb_fusion).push_back(block.full_block_size());
-            dfb_xmm.pop_front(block.full_block_size());
 
             if constexpr (do_gamma == 1) {
                 tile_regs_acquire();

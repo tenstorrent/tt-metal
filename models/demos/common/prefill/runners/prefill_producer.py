@@ -79,6 +79,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import random
 import struct
@@ -631,13 +632,15 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 
 def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     """Read slot `slot_id`'s KV over [0, real_len) via the published table and PCC-check it against the
-    golden trace. Dispatches on the model: MLA (single merged kvpe config) vs M3 (multi-config triple
-    cache). Returns the min PCC across layers.
+    golden trace. Dispatches on the model: MLA (single merged kvpe config), M3 (multi-config triple
+    cache), or GPT-OSS (multi-config K/V heads, no index_k). Returns the min PCC across layers.
 
     The reader is NOT adapter-pluggable — a new model whose cache is neither of those two layouts needs
     a branch here (and its own decode), not just an adapter."""
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
+    if ADAPTER.name == "gpt_oss_d_p":
+        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
@@ -653,6 +656,63 @@ def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_
         raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
         rows.append(decode(raw, head_dim))
     return torch.cat(rows, dim=0)[:read_len]
+
+
+def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+    """GPT-OSS multi-config read-back: reconstruct per-head K/V from the 2N-config table and PCC vs the
+    GQA golden (no index_k). Config layout: k_h0..N-1 = 0..N-1, v_h0..N-1 = N..2N-1."""
+    from pathlib import Path
+
+    from safetensors import safe_open
+
+    from models.demos.gpt_oss_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    from tests.ttnn.utils_for_testing import comp_pcc
+
+    mc = ADAPTER.model_config
+    n_kv, head_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM
+    rotary_dim = getattr(mc, "ROTARY_DIM", head_dim)
+    half = rotary_dim // 2
+    perm = list(range(head_dim))
+    for m in range(rotary_dim):
+        perm[m] = half * (m % 2) + (m // 2)
+    perm = torch.tensor(perm, dtype=torch.long)
+
+    read_len = ((real_len + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK - 1) // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK) * (
+        NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    )
+    kv_dir = Path(trace_dir) / "kv_cache"
+    mins = {"k": 1.0, "v": 1.0}
+    for layer in range(NUM_LAYERS):
+        dev_k = torch.stack(
+            [
+                _read_kv_slice(table, device_map, h, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk)
+                for h in range(n_kv)
+            ],
+            dim=0,
+        )[:, :real_len]
+        dev_v = torch.stack(
+            [
+                _read_kv_slice(table, device_map, n_kv + h, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk)
+                for h in range(n_kv)
+            ],
+            dim=0,
+        )[:, :real_len]
+
+        with safe_open(str(kv_dir / f"layer_{layer}.safetensors"), framework="pt") as h:
+            g_k = h.get_tensor(f"key_cache_layer_{layer}").float()[0, :, :real_len, :][..., perm]
+            g_v = h.get_tensor(f"value_cache_layer_{layer}").float()[0, :, :real_len, :]
+
+        pcc_k = float(comp_pcc(g_k, dev_k, 0.0)[1])
+        pcc_v = float(comp_pcc(g_v, dev_v, 0.0)[1])
+        mins["k"], mins["v"] = min(mins["k"], pcc_k), min(mins["v"], pcc_v)
+        logger.info(f"  layer {layer:>2}: K={pcc_k:.5f} V={pcc_v:.5f}")
+
+    min_pcc = min(mins.values())
+    logger.info(
+        f"[producer] slot {slot_id} GPT-OSS KV PCC over [0,{real_len}) across {NUM_LAYERS} layers -> "
+        f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min_pcc:.6f})"
+    )
+    return min_pcc
 
 
 def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
@@ -880,12 +940,27 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     return min_pcc
 
 
-def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_traces: dict) -> bool:
+def _write_pcc_verdict(rank: int, ok: bool, min_pcc: float, checked: int, threshold: float) -> None:
+    """Persist this rank's PCC verdict to PREFILL_PCC_SUMMARY_DIR (opt-in). The verdict is logged to
+    stdout just before the shutdown sentinel, and mpirun drops its buffered output forwarding when the
+    runner tears down in response — so under a launcher the numbers never reach the captured log. A file
+    on shared storage is read back by the harness independently of that teardown."""
+    summary_dir = os.environ.get("PREFILL_PCC_SUMMARY_DIR")
+    if not summary_dir:
+        return
+    os.makedirs(summary_dir, exist_ok=True)
+    verdict = {"rank": rank, "ok": bool(ok), "min_pcc": min_pcc, "slots_checked": checked, "threshold": threshold}
+    with open(os.path.join(summary_dir, f"rank{rank}.json"), "w") as f:
+        json.dump(verdict, f)
+
+
+def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_traces: dict, rank: int = 0) -> bool:
     """PCC-check every slot that holds resident trace-derived KV, each against ITS OWN golden trace
     (slot_traces[slot_id]). Returns True only if at least one slot was checked and all met the threshold."""
     device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
     if not device_map:
         logger.error("[producer] no device map available; skipping KV read/PCC.")
+        _write_pcc_verdict(rank, ok=False, min_pcc=0.0, checked=0, threshold=threshold)
         return False
 
     min_pcc_overall = 1.0
@@ -902,6 +977,8 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
             failures.append((slot_id, real_len, pcc))
 
     print(f"[producer] kv_cache_pcc_complete slots_checked={checked} min_pcc={min_pcc_overall:.6f}")
+    ok = bool(checked) and not failures
+    _write_pcc_verdict(rank, ok=ok, min_pcc=min_pcc_overall, checked=checked, threshold=threshold)
     if failures:
         logger.error(f"[producer] KV cache PCC below {threshold} for (slot, real_len, pcc): {failures}")
         return False
@@ -1079,7 +1156,11 @@ def _run_validator(rank: int, world_size: int) -> None:
         ok = False
     else:
         try:
-            ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold)
+            # Rebuild the SAME config-derived slot->trace map the master builds (both ranks see identical
+            # env + the shared trace dir), so the validator PCCs its host's layers against the same goldens.
+            # Purely config-derived (no push/device state), so it's safe to resolve here on the read-back path.
+            slot_traces, _slot_lengths, _pools = _resolve_slot_prompts(cfg)
+            ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces, rank=rank)
         except Exception as e:
             logger.error(f"[producer] validator KV read/PCC failed: {type(e).__name__}: {e}")
             ok = False
@@ -1149,6 +1230,13 @@ def main() -> None:
     # If we're not performing golden trace PCC-validation, then don't consume these and allow loopback
     # migration test in prefill_runner.py to consume acks and perform the testing of loopback migration
     ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
+    if cfg.verify and ack_channel is None:
+        logger.error(
+            "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
+            "prefill (H2D push return ≠ layers done). Set PREFILL_ENABLE_LAYER_ACK=1 on the runner "
+            "(Gate 1 mock defaults this on via run_prefill_migration_gate.sh)."
+        )
+        sys.exit(1)
     if not cfg.verify:
         logger.info(
             "[producer] CHECK_PCC off — skipping the KV table read and not consuming the LayerAck "
@@ -1198,7 +1286,7 @@ def main() -> None:
     verify_ok = True
     if cfg.verify and kv_table is not None:
         try:
-            verify_ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces)
+            verify_ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces, rank=mr_rank)
         except Exception as e:
             logger.error(f"[producer] KV read/PCC failed: {type(e).__name__}: {e}")
             verify_ok = False
