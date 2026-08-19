@@ -456,7 +456,7 @@ def pytest_configure(config):
 
         is_ttsim = _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
         if (
-            (is_ttsim or not TestConfig.TEST_TARGET.run_simulator)
+            is_ttsim or not TestConfig.TEST_TARGET.run_simulator
             and TestConfig.ARCH != ChipArchitecture.QUASAR
         ):
             override_gprs_used_by_tensix_dump()
