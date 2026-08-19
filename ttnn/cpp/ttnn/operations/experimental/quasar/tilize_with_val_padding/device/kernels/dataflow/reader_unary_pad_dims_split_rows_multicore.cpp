@@ -133,8 +133,10 @@ void kernel_main() {
                 {.offset_bytes = dst_offset});
             uint32_t size_of_padding_columns = padded_X_size - unpadded_X_size;
             if (zero_pad) {
-                // dst_offset still points at the last page, so this row's pad starts one page
-                // payload further in. Drained by the single barrier after the loop.
+                // dst_offset still points at the last page's data (it is advanced below), so step over
+                // that page's payload to reach this row's padding -- the same bytes the CPU path writes
+                // as start_of_row_l1_write_addr + unpadded_X_size. Left in flight; the barrier after the
+                // loop drains every row's zeros at once.
                 noc.async_write_zeros(
                     cb_in0,
                     size_of_padding_columns,
