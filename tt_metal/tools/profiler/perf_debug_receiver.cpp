@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <sys/prctl.h>
 #include <x86intrin.h>
 
 #include <tracy/Tracy.hpp>
@@ -24,10 +25,16 @@ namespace tt::tt_metal::perf_debug {
 namespace {
 
 constexpr uint32_t kMaxFramesPerPass = 64;
+// Credit-return quantum: pop+ack every 8 decoded frames (~84 KB, about one mover push) instead of once
+// per pass, so the device sees credit at decode pace rather than in 676 KB steps.
+constexpr uint32_t kAckBatchFrames = 8;
 constexpr uint32_t kFrameBytes = profiler::kSpscFrameWords * 4;
 constexpr size_t kConsumerScratchRecs = 1 << 16;
 constexpr uint32_t kEmptyPollsBeforeSleep = 1000;
-constexpr uint32_t kIdleSleepCapUs = 100;
+// Decode threads probe the FIFO at least this often when idle; consumers are latency-tolerant and may
+// sleep longer. Anything under ~50 us needs the timer slack shrunk or sleep_for quietly rounds up to it.
+constexpr uint32_t kProbeSleepCapUs = 5;
+constexpr uint32_t kConsumerSleepCapUs = 100;
 
 inline uint64_t tsc_now() { return __rdtsc(); }
 
@@ -50,14 +57,16 @@ double ticks_to_ms(uint64_t ticks) { return ticks * tsc_ns_per_tick() / 1e6; }
 thread_local bool t_in_consumer = false;
 
 struct IdleBackoff {
+    uint32_t cap_us;
     uint32_t empty_polls = 0;
     uint32_t sleep_us = 1;
+    explicit IdleBackoff(uint32_t cap) : cap_us(cap) {}
     void idle() {
         if (++empty_polls < kEmptyPollsBeforeSleep) {
             ttsl::pause();
         } else {
             std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
-            sleep_us = std::min(sleep_us + sleep_us / 4 + 1, kIdleSleepCapUs);
+            sleep_us = std::min(sleep_us + sleep_us / 4 + 1, cap_us);
         }
     }
     void reset() {
@@ -234,6 +243,9 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
             w.emit_reserve(pos + profiler::kSpscFrameWords);
         }
         profiler::spsc_decode_frame(s.decode, frame, emit, emit_data);
+        if ((f + 1) % kAckBatchFrames == 0) {
+            s.sock->pop(kAckBatchFrames * profiler::kSpscFramePages, true);
+        }
     }
     if (pos != pos0) {
         w.emit_commit(pos);
@@ -245,7 +257,9 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     s.min_zone_ts = min_ts;
     s.max_zone_ts = max_ts;
     s.decode_ticks += tsc_now() - t0;
-    s.sock->pop(npages, true);
+    if (const uint32_t left = nframes % kAckBatchFrames; left != 0) {
+        s.sock->pop(left * profiler::kSpscFramePages, true);
+    }
     if (pos != pos0) {
         w.wake_readers();
     }
@@ -262,7 +276,8 @@ void PerfDebugReceiver::decode_thread(std::vector<Stream*> streams) {
     }
     name.pop_back();
     tracy::SetThreadName(name.c_str());
-    IdleBackoff backoff;
+    prctl(PR_SET_TIMERSLACK, 1000);  // default 50 us slack would round every probe sleep up to it
+    IdleBackoff backoff(kProbeSleepCapUs);
     uint64_t data_passes = 0;
     for (Stream* s : streams) {
         s->last_progress = std::chrono::steady_clock::now();
@@ -367,7 +382,7 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
     }
     std::vector<PerfDebugRec> scratch(kConsumerScratchRecs);
     std::vector<uint64_t> last_dropped(readers.size(), 0);
-    IdleBackoff backoff;
+    IdleBackoff backoff(kConsumerSleepCapUs);
     for (;;) {
         bool any = false;
         for (size_t r = 0; r < readers.size(); r++) {
