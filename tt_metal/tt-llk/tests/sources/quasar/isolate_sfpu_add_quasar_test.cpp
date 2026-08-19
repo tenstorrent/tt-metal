@@ -73,47 +73,35 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t buf_desc_id_pack     = 8;
 
     buffer_descriptor_u bd_unpack_0 = {0};
-    tdma_descriptor_t td_unpack_0;
     buffer_descriptor_u bd_unpack_1 = {0};
-    tdma_descriptor_t td_unpack_1;
-    buffer_descriptor_u bd_pack = {0};
-    tdma_descriptor_t td_pack;
+    buffer_descriptor_u bd_pack     = {0};
 
     // Unpack BD 0: L1 input A -> SrcS slice 0
-    bd_unpack_0.f.l1_addr_16B   = L1_ADDRESS(params.buffer_A[0]);
-    bd_unpack_0.f.format        = static_cast<std::uint8_t>(formats.unpack_S_src);
-    bd_unpack_0.f.x_dim         = PARAM_SRCS_XDIM;
-    bd_unpack_0.f.y_dim         = PARAM_SRCS_YDIM;
-    bd_unpack_0.f.z_dim         = PARAM_SRCS_ZDIM;
-    td_unpack_0.buf_desc        = bd_unpack_0;
-    td_unpack_0.buf_desc_id     = buf_desc_id_unpack_0;
-    td_unpack_0.reg_data_format = static_cast<DataFormat>(formats.unpack_S_dst);
-    _configure_buf_desc_table_(td_unpack_0.buf_desc_id, td_unpack_0.buf_desc);
-    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack_0.reg_data_format);
+    bd_unpack_0.f.l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
+    bd_unpack_0.f.format      = static_cast<std::uint8_t>(formats.unpack_S_src);
+    bd_unpack_0.f.x_dim       = PARAM_SRCS_XDIM;
+    bd_unpack_0.f.y_dim       = PARAM_SRCS_YDIM;
+    bd_unpack_0.f.z_dim       = PARAM_SRCS_ZDIM;
+    _configure_buf_desc_table_(buf_desc_id_unpack_0, bd_unpack_0);
+    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(static_cast<DataFormat>(formats.unpack_S_dst));
 
     // Unpack BD 1: L1 input B -> SrcS slice 1
-    bd_unpack_1.f.l1_addr_16B   = L1_ADDRESS(params.buffer_B[0]);
-    bd_unpack_1.f.format        = static_cast<std::uint8_t>(formats.unpack_S_src);
-    bd_unpack_1.f.x_dim         = PARAM_SRCS_XDIM;
-    bd_unpack_1.f.y_dim         = PARAM_SRCS_YDIM;
-    bd_unpack_1.f.z_dim         = PARAM_SRCS_ZDIM;
-    td_unpack_1.buf_desc        = bd_unpack_1;
-    td_unpack_1.buf_desc_id     = buf_desc_id_unpack_1;
-    td_unpack_1.reg_data_format = static_cast<DataFormat>(formats.unpack_S_dst);
-    _configure_buf_desc_table_(td_unpack_1.buf_desc_id, td_unpack_1.buf_desc);
-    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack_1.reg_data_format);
+    bd_unpack_1.f.l1_addr_16B = L1_ADDRESS(params.buffer_B[0]);
+    bd_unpack_1.f.format      = static_cast<std::uint8_t>(formats.unpack_S_src);
+    bd_unpack_1.f.x_dim       = PARAM_SRCS_XDIM;
+    bd_unpack_1.f.y_dim       = PARAM_SRCS_YDIM;
+    bd_unpack_1.f.z_dim       = PARAM_SRCS_ZDIM;
+    _configure_buf_desc_table_(buf_desc_id_unpack_1, bd_unpack_1);
+    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(static_cast<DataFormat>(formats.unpack_S_dst));
 
     // Pack BD: SrcS slice 2 -> L1 output
-    bd_pack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_Res[0]);
-    bd_pack.f.format        = static_cast<std::uint8_t>(formats.pack_S_dst);
-    bd_pack.f.x_dim         = PARAM_SRCS_XDIM;
-    bd_pack.f.y_dim         = PARAM_SRCS_YDIM;
-    bd_pack.f.z_dim         = PARAM_SRCS_ZDIM;
-    td_pack.buf_desc        = bd_pack;
-    td_pack.buf_desc_id     = buf_desc_id_pack;
-    td_pack.reg_data_format = static_cast<DataFormat>(formats.pack_S_src);
-    _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack.reg_data_format, ckernel::ReluConfig::none());
+    bd_pack.f.l1_addr_16B = L1_ADDRESS(params.buffer_Res[0]);
+    bd_pack.f.format      = static_cast<std::uint8_t>(formats.pack_S_dst);
+    bd_pack.f.x_dim       = PARAM_SRCS_XDIM;
+    bd_pack.f.y_dim       = PARAM_SRCS_YDIM;
+    bd_pack.f.z_dim       = PARAM_SRCS_ZDIM;
+    _configure_buf_desc_table_(buf_desc_id_pack, bd_pack);
+    _llk_pack_hw_configure_<p_pacr::PACK1, false>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
 
     // Implied math format disable for SrcS and sfpmem mod selection
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;

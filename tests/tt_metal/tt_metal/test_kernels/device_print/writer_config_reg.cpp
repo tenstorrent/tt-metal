@@ -230,7 +230,7 @@ void write_pack_counters(
 }
 
 void kernel_main() {
-    uint32_t register_name = get_compile_time_arg_val(0);
+    uint32_t register_name = get_arg(args::register_name);
 
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
@@ -265,7 +265,8 @@ void kernel_main() {
             tile_descriptor.f = tile_descriptor_vec[1];
             write_unpack_tile_descriptor(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32, 2, tile_descriptor);
             break;
-        case UNPACK_CONFIG: uint num_of_words_unpack_config;
+        case UNPACK_CONFIG:
+            uint num_of_words_unpack_config;
             num_of_words_unpack_config = 2;
             ckernel::unpacker::unpack_config_u unpack_config;
             generate_unpack_config(unpack_config.f);

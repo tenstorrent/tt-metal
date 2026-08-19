@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Hardware-adaptive mesh parametrization for the DeepSeek V3.2 device tests.
+Hardware-adaptive mesh parametrization for the device tests.
 
 The tests are written for a `mesh_device` whose shape is ``(sp_size, tp_size)``
 (``sp_axis, tp_axis = 0, 1``). Which shapes are valid depends on the box the

@@ -8,7 +8,7 @@ gates each K band on only the SP shards it touches and dual-sources its own slab
 same per-SP DSA reference the two-op path uses, over both K layouts, both head counts, and both link counts,
 plus the runtime knobs (bfp8_b K, multi-user cache, straddle, kv_len, program-cache reuse, validate reject).
 
-Run:  scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/experimental/test_ring_indexer_score_dsa.py
+Run:  scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py
 """
 
 import pytest
@@ -17,7 +17,7 @@ from loguru import logger
 
 import ttnn
 
-from tests.ttnn.nightly.unit_tests.operations.experimental.test_indexer_score import (
+from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import (
     assert_indexer_match,
     glx_config,
     _global_inputs,
@@ -33,7 +33,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.test_indexer_score im
     ST_CS,
     ST_T,
 )
-from tests.ttnn.nightly.unit_tests.operations.experimental.ring4_ccl_helpers import (
+from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.ring_indexer_score_test_utils import (
     _open_ring4_ccl,
     _close_ring4_ccl,
     _persistent_buffer,
@@ -199,7 +199,7 @@ def _run_fused_multiuser(heads, *, num_users, cache_batch_idx, num_links=1):
 
 
 def test_indexer_score_ring4_fused_indexed_cache():
-    """cache_batch_idx=1 (2nd user slot). One representative case (dsv32) -- the slot offset is head-independent."""
+    """cache_batch_idx=1 (2nd user slot). One representative case -- the slot offset is head-independent."""
     _run_fused_multiuser(16, num_users=2, cache_batch_idx=1)
 
 
@@ -210,7 +210,8 @@ def test_indexer_score_ring4_fused_nd_indexed_bounded_gather_cache_hit(rows_per_
     * multi-slot k_local is ND-sharded across DRAM banks;
     * the gather selects one slot into a batch-1 scratch;
     * kv_len bounds transport to complete touched block-cyclic slabs; and
-    * a second dispatch changes both slot and kv_len on the same cached program.
+    * a second dispatch changes both slot and kv_len on the same cached program; and
+    * the production two-link all-gather partition preserves those cache-hit results.
     """
     heads, num_users = 16, 3
     t_alloc = 4 * CHUNK_GLOBAL
@@ -235,7 +236,7 @@ def test_indexer_score_ring4_fused_nd_indexed_bounded_gather_cache_hit(rows_per_
                 ccl_semaphores,
                 cluster_axis=SP_AXIS,
                 topology=ttnn.Topology.Linear,
-                num_links=1,
+                num_links=2,
                 ag_sub_device_id=subdevice_id,
                 chunk_start_idx=chunk_start,
                 cache_batch_idx=slot,
@@ -372,7 +373,7 @@ def test_indexer_score_ring4_fused_program_cache_reuse(k_dtype):
     hit). chunk_start/kv_len are hash-excluded, so override_runtime_arguments must re-apply them; if not, the
     2nd dispatch reuses the 1st's frozen offset -> wrong logits. Regression guard for the program-cache
     stale-scalar bug (every other test dispatches cold). Both bf16 and production bfp8_b K."""
-    heads = 16  # dsv32; the scalar re-patch is head-independent, so one head count suffices (both dtypes kept)
+    heads = 16  # the scalar re-patch is head-independent, so one head count suffices (both dtypes kept)
     t_alloc = 4 * CHUNK_GLOBAL  # room for both chunks' causal windows (global block == CHUNK_GLOBAL)
     submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
     try:
@@ -414,8 +415,8 @@ def test_indexer_score_ring4_fused_program_cache_reuse(k_dtype):
 
 def test_indexer_score_ring4_fused_rejects_head_streaming(expect_error):
     """The fused path requires all heads resident; a streaming config (0 < head_group_size < Hi) must be
-    rejected at validate, not silently mis-scheduled. head-independent -> one representative case (dsv32)."""
-    heads = 16  # dsv32; head_group_size=8 is a streaming config (0 < 8 < 16)
+    rejected at validate, not silently mis-scheduled. head-independent -> one representative case."""
+    heads = 16  # head_group_size=8 is a streaming config (0 < 8 < 16)
     submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
     try:
         q_g, k_nat, w_g = _global_inputs(heads, CHUNK_GLOBAL, T, seed=42)

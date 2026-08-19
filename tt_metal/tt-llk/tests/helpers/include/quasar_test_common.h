@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "ckernel_trisc_common.h"
 #include "tensor_shape.h"
 
 inline void clear_dest_dvalid_wait_mask(std::uint32_t wait_mask_addr)
