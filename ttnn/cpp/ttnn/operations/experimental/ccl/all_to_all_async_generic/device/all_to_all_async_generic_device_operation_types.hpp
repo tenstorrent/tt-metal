@@ -6,8 +6,10 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <optional>
+#include <vector>
 
 namespace ttnn::experimental::prim {
 
@@ -20,6 +22,10 @@ struct AllToAllAsyncGenericParams {
     const ttnn::ccl::Topology topology;
     const std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     const std::optional<uint32_t> cluster_axis;
+    const tt::tt_fabric::Topology axis_topology;
+    const bool axis_is_straight;
+    const std::vector<tt::tt_metal::CoreCoord> drain_logical_core_candidates;
+    const std::vector<tt::tt_metal::CoreCoord> drain_virtual_cores;
 };
 
 struct AllToAllAsyncGenericInputs {
