@@ -55,9 +55,13 @@
  *       predicates (@c is_supported_scatter_dim) that a kernel turns into a @c static_assert and the
  *       host turns into a @c TT_FATAL. Neither behaviour is baked in here.
  *
- * @par WHAT IS MODELLED — the bidirectional ring reduce-scatter schedule.
- *   Shipped in this header: the schedule behind @c reduce_scatter_minimal_async's RING variant,
- *   which @c all_reduce_async's reduce half also follows. Four nested levels, in this exact order,
+ * @par WHAT IS MODELLED.
+ *   S1-S5: the schedule behind @c reduce_scatter_minimal_async's bidirectional RING variant,
+ *   which @c all_reduce_async's reduce half also follows. S6-S7: the pieces its LINE variant
+ *   shares between reader and writer (the line's slice cursor, the chunks-per-sync wait/signal
+ *   cadence, the final-reduction mode split, and the plain channel/chunk walk).
+ *
+ * @par The RING schedule (S1-S5). Four nested levels, in this exact order,
  *   because that nesting is itself part of the contract the three kernels share:
  *
  *       batch  b  in [0, batches)              // input_tensor_B
@@ -544,6 +548,196 @@ public:
 private:
     uint32_t base_ = 0;
     uint32_t offset_ = 0;
+};
+
+// ===========================================================================
+// S6 — the chunks-per-sync cadence (line + dim-zero families)
+// ===========================================================================
+
+/**
+ * @brief BOTH sides of the chunks-per-sync pairing: the reader's semaphore WAITS and the writer's
+ *        semaphore SIGNALS, driven by one counter definition.
+ *
+ * The line and dim-zero reduce-scatter kernels throttle their cross-device handshake to one
+ * semaphore exchange per @c chunks_per_sync chunks. Before this type, the reader spelled that as
+ * "wait when count % cps == 0, then count++" and the writer as "count++, then signal when
+ * count % cps == 0, plus a tail signal if count % cps != 0 after the loop" — two hand-maintained
+ * spellings of one contract, where any drift (a reset in one but not the other, an off-by-one in
+ * the tail condition) is a cross-device deadlock. Here both sides call @c advance() once per chunk
+ * and read their own predicate; the invariant "waits issued == signals issued, at every prefix"
+ * holds by construction because both predicates fold over the same counter.
+ *
+ * Usage — reader:  if (cadence.wait_due()) { wait(sem, ++target); }  cadence.advance();
+ * Usage — writer:  cadence.advance();  if (cadence.signal_due()) { inc(sem); }
+ *                  ... after the channel loop:  if (cadence.tail_due()) { inc(sem); }
+ * Both: reset() at the same point the pre-migration kernels reset their counter (per slice
+ * target / per final-reduction phase).
+ */
+class SyncCadence {
+public:
+    explicit SyncCadence(uint32_t chunks_per_sync) : cps_(chunks_per_sync) {}
+
+    /// Reader side: the wait that admits the next @c cps_ chunks is due. Read BEFORE advance().
+    bool wait_due() const { return count_ % cps_ == 0; }
+    /// Both sides: account one chunk. Call exactly once per chunk.
+    void advance() { ++count_; }
+    /// Writer side: a signal is due for the chunk just advanced past. Read AFTER advance().
+    bool signal_due() const { return count_ % cps_ == 0; }
+    /// Writer side: chunks since the last signal exist and still need their signal (the tail of a
+    /// walk whose chunk count chunks_per_sync does not divide). Read after the channel loop.
+    bool tail_due() const { return count_ % cps_ != 0; }
+    /// Restart the cadence (per slice target / per phase — mirror the paired kernel exactly).
+    void reset() { count_ = 0; }
+
+private:
+    uint32_t cps_;
+    uint32_t count_ = 0;
+};
+
+// ===========================================================================
+// S7 — the LINE reduce-scatter schedule pieces
+// ===========================================================================
+
+/// First slice a line reduce-scatter worker processes: the far end of its direction's walk
+/// (forward counts DOWN from ring_size-1; backward counts UP from 0). The walk visits
+/// num_targets_in_direction slices and never leaves [0, ring_size), so there is no wrap.
+constexpr uint32_t line_rs_first_slice(bool is_forward, uint32_t ring_size) { return is_forward ? ring_size - 1 : 0; }
+
+/**
+ * @brief Walks the line slice sequence one step per slice target. The line counterpart of
+ *        RingSliceCursor — no wrap (a line walk stays inside [0, ring_size)), and the direction
+ *        sign is inverted relative to the ring walk: FORWARD DECREMENTS, backward increments.
+ *
+ * Unlike the ring cursor there is no per-batch trap to warn about — the pre-migration line
+ * kernels also re-seed per batch, and the same rule applies: construct (or reset()) INSIDE the
+ * batch loop.
+ */
+class LineSliceCursor {
+public:
+    LineSliceCursor(bool is_forward, uint32_t ring_size) :
+        slice_idx_(line_rs_first_slice(is_forward, ring_size)), is_forward_(is_forward), ring_size_(ring_size) {}
+
+    /// Restart the walk at the first slice (per batch).
+    void reset() { slice_idx_ = line_rs_first_slice(is_forward_, ring_size_); }
+
+    /// The slice index for the current target. No wrap is needed or performed.
+    uint32_t slice() const { return slice_idx_; }
+
+    /// Step to the next slice target. Forward walks DOWN toward my_chip_id, backward UP.
+    void advance() { slice_idx_ += is_forward_ ? -1 : 1; }
+
+private:
+    int32_t slice_idx_ = 0;
+    bool is_forward_ = false;
+    uint32_t ring_size_ = 0;
+};
+
+/// The final-reduction mode split shared by the line reader and writer — one definition of WHO
+/// accumulates and WHO hands off, so the two sides of the fwd/bwd handshake cannot disagree:
+/// when both directions land a final reduction on one core pair, the BACKWARD side ACCUMULATES
+/// onto the output the forward side just wrote (reads the OUTPUT tensor instead of the input)...
+constexpr bool line_rs_accumulate_output(bool sync_with_other_direction, bool is_forward) {
+    return sync_with_other_direction && !is_forward;
+}
+/// ...and the FORWARD side hands each finished chunk to the backward reader (barrier + semaphore
+/// inc per chunk). Exactly one of the pair holds in the synced case; neither holds unsynced.
+constexpr bool line_rs_forward_hands_off(bool sync_with_other_direction, bool is_forward) {
+    return sync_with_other_direction && is_forward;
+}
+
+/// Re-base a row offset expressed against one row stride onto another. The line final reduction
+/// walks the OUTPUT tensor with the worker's start_row_offset, which the host expresses in
+/// input-tensor rows (stride input_tensor_Wt); the output slice's row stride is slice_Wt.
+constexpr uint32_t rebase_row_offset(uint32_t row_offset, uint32_t from_stride, uint32_t to_stride) {
+    return row_offset / from_stride * to_stride;
+}
+
+/**
+ * @brief The channel -> chunk walk one line-topology phase performs per slice target (and once
+ *        more for the final reduction): channels x a plain [start, end) granularity walk.
+ *
+ * There is deliberately NO parity split and NO skip here: the ring schedule interleaves its two
+ * directions over each slice's chunks (even/odd), while the line's two directions cover disjoint
+ * SLICE SEQUENCES and each walks every chunk of its own slices. The compute kernel walks this too
+ * (per reduction step), which is what keeps the three kernels' chunk boundaries — and therefore
+ * their CB protocol — identical.
+ *
+ * Construct once; reset() re-arms for the next target / batch / phase. Nest exactly:
+ * @code
+ *   walk.reset();
+ *   while (walk.next_channel()) {
+ *       // per-channel: reset_offsets() on the walkers
+ *       while (walk.next_chunk()) {
+ *           const uint32_t n = walk.tiles_this_chunk();  // 1..granularity; short final chunk normal
+ *           ...
+ *       }
+ *       // per-channel: bump_base() on the walkers
+ *   }
+ * @endcode
+ */
+class LineChannelWalk {
+public:
+    /**
+     * @param channels             Per-phase channel count (slice_C).
+     * @param tile_granularity     Maximum tiles per chunk (also the CB protocol granule).
+     * @param start_tiles_read     This worker's first tile index within a channel.
+     * @param start_tiles_to_read  This worker's end tile index within a channel (exclusive).
+     */
+    LineChannelWalk(
+        uint32_t channels, uint32_t tile_granularity, uint32_t start_tiles_read, uint32_t start_tiles_to_read) :
+        channels_(channels), granularity_(tile_granularity), start_(start_tiles_read), end_(start_tiles_to_read) {}
+
+    /// Re-arm the walk for the next target / batch / phase.
+    void reset() {
+        channel_ = 0;
+        channel_started_ = false;
+    }
+
+    /// Advance to the next channel, re-arming the chunk walk. False when channels are exhausted.
+    bool next_channel() {
+        if (channel_started_) {
+            ++channel_;
+        } else {
+            channel_started_ = true;
+        }
+        if (channel_ >= channels_) {
+            return false;
+        }
+        chunk_started_ = false;
+        tiles_read_ = start_;
+        tiles_this_chunk_ = 0;
+        return true;
+    }
+
+    /// Advance to the next chunk of this channel. False when the tile range is exhausted.
+    bool next_chunk() {
+        if (chunk_started_) {
+            tiles_read_ += tiles_this_chunk_;
+        } else {
+            chunk_started_ = true;
+        }
+        if (tiles_read_ >= end_) {
+            return false;
+        }
+        tiles_this_chunk_ = std::min(end_ - tiles_read_, granularity_);
+        return true;
+    }
+
+    uint32_t channel_idx() const { return channel_; }
+    /// Tiles covered by the current chunk (1..granularity — a line chunk is never empty).
+    uint32_t tiles_this_chunk() const { return tiles_this_chunk_; }
+
+private:
+    uint32_t channels_ = 0;
+    uint32_t granularity_ = 0;
+    uint32_t start_ = 0;
+    uint32_t end_ = 0;
+
+    uint32_t channel_ = 0;
+    uint32_t tiles_read_ = 0;
+    uint32_t tiles_this_chunk_ = 0;
+    bool channel_started_ = false;
+    bool chunk_started_ = false;
 };
 
 }  // namespace ttnn::ccl::schedule
