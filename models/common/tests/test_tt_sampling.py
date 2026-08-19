@@ -459,6 +459,15 @@ def run_sampling_generator(
 
         return outputs
     finally:
+        # Release the captured trace before the generator goes away. mesh_device is
+        # function-scoped so the region would be reclaimed at device close anyway, but a
+        # leaked trace breaks any future test that captures twice in one device session.
+        if enable_trace and sg is not None:
+            try:
+                sg.reset_trace()
+            except Exception:
+                pass
+
         if tt_log_probs is not None:
             del tt_log_probs
 
