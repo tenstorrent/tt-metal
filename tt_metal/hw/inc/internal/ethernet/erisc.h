@@ -68,7 +68,10 @@ inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync(
     // active link always has its latest credits in the ring buffer (no 5-min-timeout gating, no "peer didn't
     // dump" gaps). Alternatives: fabric_dbg_credit_stall_check() = one-shot dump on a 5-min TX freeze;
     // fabric_dbg_ringbuf_push_txrx_counts() = TX/RX time series.
-    fabric_dbg_ringbuf_push_credits();
+    // [#45872] Flood DISABLED: this per-context-switch push filled the 32-slot ring and evicted the
+    // one-shot doorbell snapshots (0x96/0x97/0x98) before the watcher could dump them. Re-enable to
+    // restore the credit time-series.
+    // fabric_dbg_ringbuf_push_credits();
     // fabric_dbg_credit_stall_check();
     // fabric_dbg_ringbuf_push_txrx_counts();
 #endif
