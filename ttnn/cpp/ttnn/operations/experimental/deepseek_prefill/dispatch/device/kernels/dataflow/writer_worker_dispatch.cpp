@@ -48,6 +48,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/debug/dprint.h"
+#include "api/debug/assert.h"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/dispatch_plan.hpp"
 
 #define ENABLE_DISPATCH_DEBUG 0
@@ -191,10 +192,10 @@ void kernel_main() {
     // staged once per slot here (see emit_slot) and the sender simply overwrites [0..2] per destination
     // and forwards the full page. Cost is one extra NOC write per group slot, on the fp8 path only.
     //
-    // One bound shapes a slot: at most MCAST_MAX_DESTS total pages (the fabric packet header holds that
-    // many address slots). Same-distance (same-chip) destinations may share a slot — the sender emits
-    // them as multiple pages to that one chip in a single sparse multicast. A direction whose pages
-    // exceed the cap spills into additional slots.
+    // One bound shapes a slot: at most NOC_SPARSE_MCAST_WRITE_MAX_DESTS total pages (the fabric packet header holds
+    // that many address slots). Same-distance (same-chip) destinations may share a slot — the sender emits them as
+    // multiple pages to that one chip in a single sparse multicast. A direction whose pages exceed the cap spills into
+    // additional slots.
     constexpr uint32_t MCAST_NUM_DIRS = 4;
     // A token can route all its top-k picks through a single direction, so each per-direction bucket
     // must hold top-k entries. top-k is not a direct arg here, but meta_scratch_slots was sized as
@@ -314,19 +315,23 @@ void kernel_main() {
                 bk_page[dir][b + 1] = pv;
                 bk_k[dir][b + 1] = kv;
             }
-            // Pack MCAST_MAX_DESTS pages per slot, in the ascending-distance order from the sort above. A
-            // same-distance run (one chip hit by multiple experts of this token) may span a slot
-            // boundary: each slot is an independent sparse multicast whose per-chip page count the sender
-            // re-derives from the contiguous distances it actually holds, so a chip's pages split across
-            // two slots still land correctly. Filling every slot to the cap minimizes fabric calls.
+            // Pack NOC_SPARSE_MCAST_WRITE_MAX_DESTS pages per slot, in the ascending-distance order from the sort
+            // above. A same-distance run (one chip hit by multiple experts of this token) may span a slot boundary:
+            // each slot is an independent sparse multicast whose per-chip page count the sender re-derives from the
+            // contiguous distances it actually holds, so a chip's pages split across two slots still land correctly.
+            // Filling every slot to the cap minimizes fabric calls.
             uint32_t a = 0;
             while (a < n) {
-                uint32_t gcount = (n - a < MCAST_MAX_DESTS) ? (n - a) : MCAST_MAX_DESTS;
+                uint32_t gcount =
+                    (n - a < NOC_SPARSE_MCAST_WRITE_MAX_DESTS) ? (n - a) : NOC_SPARSE_MCAST_WRITE_MAX_DESTS;
                 uint16_t hop_mask = 0;
                 for (uint32_t r = 0; r < gcount; r++) {
                     grouped_route_info->page_idx[r] = bk_page[dir][a + r];
                     grouped_route_info->distance[r] = bk_dist[dir][a + r];
                     grouped_route_info->k[r] = bk_k[dir][a + r];
+                    // Same 16-hop bound the sender consumes: the mask is 16 bits wide, and the
+                    // program factory only enables this path on meshes that fit it.
+                    ASSERT(bk_dist[dir][a + r] >= 1 && bk_dist[dir][a + r] <= 16);
                     hop_mask |= static_cast<uint16_t>(1u << (bk_dist[dir][a + r] - 1));
                 }
                 a += gcount;

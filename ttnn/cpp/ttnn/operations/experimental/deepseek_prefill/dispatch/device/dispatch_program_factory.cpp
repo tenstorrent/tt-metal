@@ -416,13 +416,30 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // per-128-block scale, and because a group is one token fanned out to several chips, that scale tail
     // is a per-token constant. The grouped producer stages the page (tail included) once per slot and
     // the sender overwrites only the three routing fields per destination — see writer_worker_dispatch.
-    const bool enable_sparse_mcast = is_1d_fabric && sparse_has_fabric;
+    // Hop-mask bound. The sender addresses each writing chip by bit (distance - 1) of a 16-bit hop
+    // mask, and 16 is a hard fabric limit: the 1D low-latency routing word packs 2 bits per hop into a
+    // single u32 (SparseMulticastRoutingCommandHeader::HopMaskType is uint16_t, and
+    // encode_1d_sparse_multicast asserts that width). The distance is discovered at runtime inside the
+    // kernel from the routing plan, so nothing there can reject an over-long hop before it is used —
+    // bit (distance - 1) would simply shift out of the mask and that destination would be dropped
+    // silently. So bound the mesh here, where the shape is known: exotic 1D shapes do exceed it (a
+    // 32x1 line on a Galaxy reaches 31 hops). The kernel's distance is manhattan_distance over both
+    // mesh dims, so bound the sum of the two; ring/torus wrap-around halves a dim's reach.
+    constexpr uint32_t sparse_mcast_max_hops = 16;
+    const bool topology_wraps =
+        (topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus);
+    const auto max_hops_in_dim = [topology_wraps](uint32_t dim) -> uint32_t {
+        return topology_wraps ? dim / 2 : (dim > 0 ? dim - 1 : 0);
+    };
+    const uint32_t max_dispatch_hops = max_hops_in_dim(mesh_view.num_rows()) + max_hops_in_dim(mesh_view.num_cols());
+    const bool sparse_hops_fit = max_dispatch_hops <= sparse_mcast_max_hops;
+    const bool enable_sparse_mcast = is_1d_fabric && sparse_has_fabric && sparse_hops_fit;
     // Report sparse-mcast selection for BOTH layouts (this factory is unified via is_row_major). When
-    // disabled, print each gate so the reason is obvious (2D fabric / no fabric).
+    // disabled, print each gate so the reason is obvious (2D fabric / no fabric / mesh too long).
     log_warning(
         tt::LogOp,
         "[dispatch] sparse_mcast {} for {} input (topology={}, mesh={}x{}, num_links={}) "
-        "[gates: fabric_1d={}, has_fabric={}]",
+        "[gates: fabric_1d={}, has_fabric={}, hops_fit={} (max_hops={} <= {})]",
         enable_sparse_mcast ? "ENABLED" : "DISABLED",
         is_row_major ? "row-major" : "tile",
         (int)topology,
@@ -430,7 +447,10 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         mesh_view.num_cols(),
         operation_attributes.num_links,
         is_1d_fabric,
-        sparse_has_fabric);
+        sparse_has_fabric,
+        sparse_hops_fit,
+        max_dispatch_hops,
+        sparse_mcast_max_hops);
     // Single source of truth for the route_info ring slot stride: sized here from the record layout
     // and handed to both the producer (worker writer arg 10) and the consumer (sender writer arg
     // writer_extra_args_base + 2) so neither kernel can re-derive it and drift.

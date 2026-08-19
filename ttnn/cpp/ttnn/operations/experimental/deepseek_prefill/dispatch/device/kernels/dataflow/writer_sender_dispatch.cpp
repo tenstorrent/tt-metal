@@ -23,13 +23,6 @@
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/dispatch_plan.hpp"
 
-#ifdef SPARSE_MCAST_DISPATCH
-// The grouped slot holds exactly as many destinations as the packet header has address slots.
-static_assert(
-    MCAST_MAX_DESTS == NOC_SPARSE_MCAST_WRITE_MAX_DESTS,
-    "GroupedRouteInfo destination cap must match the fabric packet header's address-slot count");
-#endif
-
 // FABRIC_2D vs 1D dispatch is handled portably via ccl_routing_utils::fabric_set_line_unicast_route
 // (templated on packet-header type). Under 1D the helper consumes route_info.distance_in_hops,
 // under 2D it consumes route_info.dst_chip_id + dst_mesh_id. The 2D fabric_route (EDM index)
@@ -340,20 +333,30 @@ void kernel_main() {
                     // Grouped ring slot (1D Ring, any top-k): one direction-group of destinations plus
                     // the fields needed to rebuild each destination's metadata here (the producer
                     // leaves the meta ring slot unwritten for groups). Layout: GroupedRouteInfo.
-                    volatile tt_l1_ptr GroupedRouteInfo* group =
-                        reinterpret_cast<volatile tt_l1_ptr GroupedRouteInfo*>(route_info);
-                    uint32_t direction = group->direction;
-                    uint32_t num_dests = group->num_dests;
-                    uint32_t token_idx = group->token_idx;
-                    uint32_t dest_pages[MCAST_MAX_DESTS];
-                    uint32_t dest_dist[MCAST_MAX_DESTS];
-                    uint8_t counts[MCAST_MAX_DESTS] = {};
+                    const volatile tt_l1_ptr GroupedRouteInfo* group =
+                        reinterpret_cast<const volatile tt_l1_ptr GroupedRouteInfo*>(route_info);
+                    // Snapshot the per-group scalars into registers. Copies, not references, on
+                    // purpose: the slot is volatile L1 written remotely by the worker, so a
+                    // `const volatile uint32_t&` would re-issue an L1 load at every use below —
+                    // the compiler may not elide, fold or hoist a volatile read. One load each,
+                    // then reuse.
+                    const uint32_t direction = group->direction;
+                    const uint32_t num_dests = group->num_dests;
+                    const uint32_t token_idx = group->token_idx;
+                    uint32_t dest_pages[NOC_SPARSE_MCAST_WRITE_MAX_DESTS];
+                    uint32_t dest_dist[NOC_SPARSE_MCAST_WRITE_MAX_DESTS];
+                    uint8_t counts[NOC_SPARSE_MCAST_WRITE_MAX_DESTS] = {};
                     uint8_t num_chips = 0;
                     uint16_t hop_mask = 0;
                     for (uint32_t i = 0; i < num_dests; ++i) {
                         dest_pages[i] = group->page_idx[i];
                         dest_dist[i] = group->distance[i];
-                        hop_mask |= static_cast<uint16_t>(1u << (dest_dist[i] - 1));  // bit (hops-1) per writing chip
+                        // bit (hops-1) per writing chip. Distances beyond 16 would shift out of the
+                        // 16-bit mask and drop that destination, so the program factory refuses to
+                        // enable this path on a mesh whose longest hop exceeds the fabric's 16-hop
+                        // sparse-multicast reach (see enable_sparse_mcast in dispatch_program_factory).
+                        ASSERT(dest_dist[i] >= 1 && dest_dist[i] <= 16);
+                        hop_mask |= static_cast<uint16_t>(1u << (dest_dist[i] - 1));
                         // dest_dist is ascending with each chip's pages contiguous (producer packing), so a
                         // new distance opens a writing chip; a repeat extends the current chip's page count.
                         if (i == 0 || dest_dist[i] != dest_dist[i - 1]) {
