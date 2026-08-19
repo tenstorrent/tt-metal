@@ -1,7 +1,7 @@
 {
   "model_id": "Qwen/Qwen3.6-35B-A3B",
   "autoport_dir": "models/autoports/qwen_qwen3_6_35b_a3b",
-  "stage": "optimized_full_model",
+  "stage": "datatype_sweep",
   "hf_advertised_context": 262144,
   "target_context": 262144,
   "current_supported_context": 262144,
@@ -262,6 +262,59 @@
         "inactive_rows_supported": true,
         "mixed_rows_synthetic_artifact": "doc/optimized_full_model/logs/hardware_smokes_watcher_final.log"
       }
+    },
+    "datatype_sweep": {
+      "selected_config_id": "baseline_default",
+      "selected_precision_config": "doc/datatype_sweep/selected_precision_config.json",
+      "hf_advertised_context_tokens": 262144,
+      "max_supported_context_tokens": 262144,
+      "kv_cache_dtype_selected": "bf16",
+      "linear_state_dtype_selected": "bf16",
+      "capacity_recomputed_for_selected_kv_dtype": true,
+      "capacity_reduced": false,
+      "largest_feasible_context_tokens": 262144,
+      "selected_kv_dtype_changes_memory_capacity": false,
+      "quality_gate_applied": true,
+      "quality_failed_candidates": [
+        "shared_moe_bfp4_lofi"
+      ],
+      "evaluated_kv_dtype_candidates": {
+        "bf16_selected": {
+          "config_id": "baseline_default",
+          "context_tokens": 262144,
+          "full_attention_kv_per_layer_bytes": 268435456,
+          "full_attention_kv_all_10_layers_bytes": 2684354560,
+          "evidence": [
+            "doc/full_model/capacity.md",
+            "doc/full_model/logs/real_full_model_load_context_alloc.log",
+            "doc/datatype_sweep/artifacts/selected_non_aligned_prompt_smoke.json"
+          ]
+        },
+        "bf8_evaluated_not_selected": {
+          "config_id": "kv_bf8_default",
+          "teacher_forcing_top1": 0.98,
+          "teacher_forcing_top5": 1.0,
+          "trace_verified_decode_t_s_u": 16.372051460101588,
+          "reason_not_selected": "slower traced teacher-forcing decode than baseline_default and did not improve final selection",
+          "capacity_note": "BF8 KV cache would reduce full-attention KV bytes, but no advertised capability reduction is applied because this candidate was not selected.",
+          "evidence": [
+            "doc/datatype_sweep/artifacts/kv_bf8_default_result.json"
+          ]
+        }
+      },
+      "non_aligned_prompt_selected_config": {
+        "prompt_len": 5,
+        "prefill_shape": [
+          1,
+          5,
+          128
+        ],
+        "decode_shape": [
+          1,
+          128
+        ],
+        "artifact": "doc/datatype_sweep/artifacts/selected_non_aligned_prompt_smoke.json"
+      }
     }
   },
   "capability_reduction": {
@@ -311,6 +364,21 @@
         "doc/full_model/capacity.md",
         "doc/functional_decoder/logs/context_probe_full_prefill_262144_sparse.log",
         "doc/functional_decoder/logs/context_probe_linear_prefill_262144_chunked.log"
+      ]
+    },
+    "datatype_sweep": {
+      "prefill_reduced_from_hf_advertised_context": false,
+      "decode_reduced_from_hf_advertised_context": false,
+      "largest_feasible_context_tokens": 262144,
+      "selected_kv_cache_dtype": "bf16",
+      "capacity_recomputed_for_selected_kv_dtype": true,
+      "hard_physical_limit_evidence": null,
+      "evidence": [
+        "doc/datatype_sweep/selected_precision_config.json",
+        "doc/datatype_sweep/artifacts/selected_precision_default_load_check.json",
+        "doc/datatype_sweep/artifacts/selected_non_aligned_prompt_smoke.json",
+        "doc/full_model/capacity.md",
+        "doc/full_model/logs/real_full_model_load_context_alloc.log"
       ]
     }
   },
@@ -602,6 +670,124 @@
           "optimized token-out no-readback comparison against readback baseline"
         ]
       }
+    },
+    "datatype_sweep": {
+      "accuracy_gate": {
+        "teacher_forcing_top1_min": 0.9,
+        "teacher_forcing_top5_min": 0.98
+      },
+      "quality_gate_applied": true,
+      "quality_failed_candidates": [
+        "shared_moe_bfp4_lofi"
+      ],
+      "selected_config_id": "baseline_default",
+      "aime24_chat_template_reference_tokens": 100,
+      "selected_prefill_top1": 0.96,
+      "selected_prefill_top5": 1.0,
+      "selected_prefill_top100": 1.0,
+      "selected_teacher_forcing_top1": 0.99,
+      "selected_teacher_forcing_top5": 1.0,
+      "selected_teacher_forcing_top100": 1.0,
+      "trace_verified": true,
+      "trace_counters": {
+        "trace_replays": 99,
+        "execute_trace_blocking": false,
+        "steady_state_token_refreshes": 98,
+        "steady_state_position_refreshes": 0,
+        "steady_state_rope_refreshes": 0,
+        "steady_state_page_table_refreshes": 0,
+        "steady_state_synchronizations": 197,
+        "steady_state_token_readbacks": 99,
+        "terminal_validation_synchronizations": 0,
+        "terminal_validation_token_readbacks": 0,
+        "host_sampling": false,
+        "full_logits_readbacks": 0
+      },
+      "default_load_check": {
+        "model_dir": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b",
+        "expected_selected_path": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/selected_precision_config.json",
+        "resolved_source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/selected_precision_config.json",
+        "config_id": "baseline_default",
+        "selected_from_config_id": "baseline_default",
+        "required_fields_present": [
+          "weight_groups",
+          "layer_exceptions",
+          "compute_fidelities",
+          "activation_dtype",
+          "residual_dtype",
+          "ccl_dtype",
+          "kv_cache_dtype",
+          "linear_state_dtype",
+          "logits_dtype",
+          "sampling_dtype"
+        ],
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "compute_fidelities": {
+          "attention": "default",
+          "linear_attention": "default",
+          "router": "default",
+          "shared_moe": "default",
+          "routed_moe": "default",
+          "lm_head": "default"
+        },
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32"
+      },
+      "non_aligned_prompt_selected_config": {
+        "artifact": "doc/datatype_sweep/artifacts/selected_non_aligned_prompt_smoke.json",
+        "prompt_len": 5
+      },
+      "qualitative_chat_suite": {
+        "prompt_format": "HF tokenizer chat template with add_generation_prompt=True",
+        "tt_outputs": "doc/datatype_sweep/artifacts/qualitative_chat_suite_64/tt_qualitative_outputs.json",
+        "hf_control_outputs_reused": "doc/datatype_sweep/artifacts/qualitative_chat_suite_64/hf_qualitative_outputs.json",
+        "degenerate_output_report": "doc/datatype_sweep/artifacts/qualitative_chat_suite_64/degenerate_output_report.json",
+        "rejected_shared_moe_bfp4_lofi_report": "doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/rejected_shared_moe_bfp4_lofi_repetition_report.json"
+      },
+      "artifacts": [
+        "doc/datatype_sweep/sweep_results.json",
+        "doc/datatype_sweep/sweep_results.csv",
+        "doc/datatype_sweep/artifacts/selected_precision_default_load_check.json",
+        "doc/datatype_sweep/artifacts/selected_non_aligned_prompt_smoke.json",
+        "doc/datatype_sweep/artifacts/qualitative_chat_suite_64/qualitative_prompt_format.json",
+        "doc/datatype_sweep/artifacts/qualitative_chat_suite_64/hf_qualitative_outputs.json",
+        "doc/datatype_sweep/artifacts/qualitative_chat_suite_64/tt_qualitative_outputs.json",
+        "doc/datatype_sweep/artifacts/qualitative_chat_suite_64/degenerate_output_report.json",
+        "doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/rejected_shared_moe_bfp4_lofi_repetition_report.json"
+      ]
     }
   },
   "performance_evidence": {
@@ -811,6 +997,32 @@
         "doc/optimized_full_model/tracy/inherited_full_model_terminal_path_reports"
       ],
       "reported_separately": true
+    },
+    "datatype_sweep": {
+      "selection_metric": "trace_verified_teacher_forcing_decode_t_s_u",
+      "quality_gate_applied": true,
+      "selected_config_id": "baseline_default",
+      "teacher_forcing": {
+        "measurement_regime": "AIME24 chat-template prefill plus trace-verified teacher-forcing decode",
+        "ttft_ms": 9079.106076154858,
+        "decode_t_s_u": 16.378532842614945,
+        "e2e_t_s_u": 6.612173304818663,
+        "trace_verified": true,
+        "artifact": "doc/datatype_sweep/artifacts/baseline_default_result.json"
+      },
+      "post_selection_token_out_no_readback": {
+        "measurement_regime": "serving_style_token_out_no_per_token_readback",
+        "prompt_len": 128,
+        "max_new_tokens": 128,
+        "ttft_ms": 5841.189489234239,
+        "decode_replay_t_s_u": 17.436088757472596,
+        "decode_including_capture_t_s_u": 16.77023321161584,
+        "artifact": "doc/datatype_sweep/artifacts/token_out_no_readback_selected_prompt128_gen128_warmed.json"
+      },
+      "pareto_plots": {
+        "top1": "doc/datatype_sweep/top1_perf_pareto.png",
+        "top5": "doc/datatype_sweep/top5_perf_pareto.png"
+      }
     }
   },
   "runtime_fallback_audit": {
@@ -978,7 +1190,11 @@
     "optimized_full_model_stage_base_sha": "72fe11456451c6dc1b6e11b69d9dcadd7a40aa3e",
     "optimized_full_model_stage_base_sha_note": "Live HEAD before final optimized-full-model local commit; evidence artifacts were generated from the dirty worktree on top of this commit.",
     "optimized_full_model_stage_commit_sha": null,
-    "optimized_full_model_stage_commit_sha_note": "Recorded after final local commit; a commit cannot contain its own final SHA."
+    "optimized_full_model_stage_commit_sha_note": "Recorded after final local commit; a commit cannot contain its own final SHA.",
+    "datatype_sweep_stage_base_sha": "13bef365ad22d21aef9ddb995f324a881ebd36e1",
+    "datatype_sweep_stage_base_sha_note": "Live HEAD before final datatype-sweep local commit; evidence artifacts were generated from the dirty worktree on top of this commit.",
+    "datatype_sweep_stage_commit_sha": null,
+    "datatype_sweep_stage_commit_sha_note": "Recorded in final response after local commit; a commit cannot contain its own final SHA."
   },
   "multichip_decoder_contract": {
     "single_chip_baseline": "models/autoports/qwen_qwen3_6_35b_a3b/tt/optimized_decoder.py::OptimizedDecoder",
@@ -1205,6 +1421,38 @@
         "moe_routed_linear_attention_layers_bf8_tp_sharded": 12079595520
       },
       "artifact": "doc/full_model/capacity.md"
+    },
+    "datatype_sweep": {
+      "selected_config_id": "baseline_default",
+      "selected_kv_cache_dtype": "bf16",
+      "selected_linear_state_dtype": "bf16",
+      "per_device_context_262144_batch1": {
+        "context_tokens": 262144,
+        "batch": 1,
+        "block_size": 32,
+        "max_num_blocks": 8192,
+        "transformed_tt_weight_bytes": 15985073536,
+        "transformed_tt_weight_gib": 14.8873,
+        "runtime_state_excluding_weights_bytes": 2768207872,
+        "runtime_state_excluding_weights_gib": 2.5781,
+        "weight_plus_runtime_state_bytes": 18753281408,
+        "weight_plus_runtime_state_gib": 17.4654,
+        "capacity_reduced": false,
+        "hard_physical_limit_evidence": null
+      },
+      "runtime_state_breakdown_bytes": {
+        "full_attention_kv_per_layer": 268435456,
+        "full_attention_kv_all_10_layers": 2684354560,
+        "linear_conv_and_recurrent_all_30_layers": 16711680,
+        "page_table": 32768,
+        "decode_rope_tables": 67108864
+      },
+      "weight_delta_vs_optimized_full_model_per_device_bytes": {
+        "shared_moe_bf8_baseline": 62914560,
+        "shared_moe_selected": 62914560,
+        "net_saved_bytes": 0
+      },
+      "artifact": "doc/datatype_sweep/README.md"
     }
   },
   "full_model_contract": {
@@ -1228,19 +1476,35 @@
       "full_attention_layers": 10,
       "tensor_parallel_axis": "mesh columns",
       "expert_parallel_axis": "mesh rows",
-      "ccl": "two-link BF16 Ring all_reduce inherited from optimized multichip decoder",
+      "ccl": "two-link BF16 Ring all_reduce selected by datatype_sweep",
       "residual_layout": "replicated BF16 DRAM/interleaved at inter-layer boundaries",
       "fallback_to_single_chip_or_host_decoder_allowed": false
     },
     "dtype_policy": {
+      "selected_precision_config": "doc/datatype_sweep/selected_precision_config.json",
+      "config_id": "baseline_default",
       "embedding": "BF16 replicated",
       "final_norm": "BF16 replicated",
-      "lm_head": "BF8 flat vocab sharded over four devices",
-      "activations": "BF16 residual/intermediate policy inherited from optimized multichip decoder",
+      "lm_head": "BF8 flat vocab sharded over four devices; BF16 logits",
+      "activations": "BF16 activation/residual boundary policy",
       "full_attention_kv_cache": "BF16 paged and TP-split by KV head",
       "linear_attention_state": "BF16 TP-split conv/recurrent state",
+      "ccl": "BF16 Ring all_reduce",
       "page_table": "replicated int32",
-      "decoder_weights": "inherited optimized multichip decoder BF8/BF4/BF16 policy"
+      "attention_weights": "BF8 qkgv/o projections",
+      "linear_attention_weights": "BF8 in/out projections",
+      "router_weights": "BF16 replicated",
+      "shared_moe_weights": "BF8 selected after BF4 shared-MoE LoFi failed qualitative repetition gate",
+      "routed_moe_weights": "BF8 on linear-attention layers, BF4 on full-attention layers",
+      "compute_fidelities": {
+        "attention": "default",
+        "linear_attention": "default",
+        "router": "default",
+        "shared_moe": "default",
+        "routed_moe": "default",
+        "lm_head": "default"
+      },
+      "sampling": "uint32 token buffers; greedy top-k1 device sampler"
     },
     "low_level_api": {
       "allocate_kv_cache": "explicit max_batch_size, max_seq_len, optional page_table",
@@ -1306,5 +1570,23 @@
     ],
     "final_verdict": "clean-pass",
     "final_review_artifact": "stage-review subagent 01a01aa9-8cf5-73f0-84f4-97a0df531484"
+  },
+  "datatype_sweep_stage_review": {
+    "initial_verdict": "more-work-needed",
+    "initial_review_artifact": "stage-review subagent 01a01b13-6a3a-7d73-8f81-103b22af1c95",
+    "initial_findings_fixed": [
+      "Rejected shared_moe_bfp4_lofi after prompt-correct qualitative outputs showed repeated punctuation and raw token-id runs on prompts 1 and 4.",
+      "Extended models/common/readiness_check/check_degenerate_output.py to catch repeated punctuation and raw token-id runs, then reran final and rejected qualitative checks.",
+      "Regenerated sweep aggregation so shared_moe_bfp4_lofi is fail_quality and baseline_default is selected as fastest overall passing config."
+    ],
+    "rereview_verdict": "more-work-needed",
+    "rereview_artifact": "stage-review subagent 01a01b29-28fc-7aa0-8d75-e5fce6eae54f",
+    "rereview_findings_fixed": [
+      "Regenerated rejected shared_moe_bfp4_lofi repetition report with artifact paths pointing at the preserved rejected directory.",
+      "Replaced rejected qualitative verdict with an explicit rejected verdict.",
+      "Updated selected_precision_config.json metadata so the selection rule includes the qualitative quality gate."
+    ],
+    "final_verdict": "clean-pass",
+    "final_review_artifact": "stage-review subagent 01a01b2f-2403-7461-b92c-e1ddaaec1548"
   }
 }

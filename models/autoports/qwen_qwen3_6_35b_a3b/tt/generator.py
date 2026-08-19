@@ -22,6 +22,7 @@ from models.autoports.qwen_qwen3_6_35b_a3b.tt.model import (
     QwenFullModel,
     QwenFullModelCache,
 )
+from models.autoports.qwen_qwen3_6_35b_a3b.tt.precision_config import load_precision_config
 from models.common.readiness_check.contract import Generator
 from models.common.sampling import SamplingParams, format_sampling_params
 from models.common.utility_functions import nearest_32
@@ -55,10 +56,15 @@ class QwenReadinessGenerator(Generator):
         prefill_chunk_size: int = DEFAULT_PREFILL_CHUNK_SIZE,
         host_sampling_compat: bool = False,
         model: QwenFullModel | None = None,
+        precision_config: str | Path | dict[str, Any] | None = None,
     ):
         self.model_dir = Path(model_dir)
         self.mesh_device = mesh_device
         self.model_id = model_id
+        self.precision_config, self.precision_config_source = load_precision_config(
+            model_dir=self.model_dir,
+            precision_config=precision_config,
+        )
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_id,
             trust_remote_code=True,
@@ -71,6 +77,8 @@ class QwenReadinessGenerator(Generator):
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
             prefill_chunk_size=prefill_chunk_size,
+            precision_config=self.precision_config,
+            precision_config_source=self.precision_config_source,
         )
         self.host_sampling_compat = host_sampling_compat
         self.cache: QwenFullModelCache | None = None
@@ -536,7 +544,7 @@ class QwenReadinessGenerator(Generator):
         return ttnn.from_torch(
             data,
             device=None if on_host else self.mesh_device,
-            dtype=ttnn.uint32,
+            dtype=self.model.sampling_dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=None if on_host else ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),

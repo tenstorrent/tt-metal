@@ -1,0 +1,73 @@
+2026-08-19 16:06:40.064 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /localdev/vkovacevic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/vkovacevic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, cov-7.0.0, benchmark-5.2.3, anyio-4.14.2, split-0.11.0, dash-2.15.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 7 items
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py::test_readiness_generator_contract_exports PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py::test_runtime_fallback_audit_declares_full_multichip_path PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py::test_full_model_non_aligned_prompt_smoke SKIPPED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py::test_full_model_mixed_prompt_inactive_row_smoke SKIPPED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py::test_full_model_decode_page_table_override_smoke SKIPPED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py::test_full_model_traced_token_out_smoke SKIPPED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py::test_full_model_token_out_no_readback_measurement_smoke SKIPPED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+
+(16 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py::test_readiness_generator_contract_exports
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py::test_runtime_fallback_audit_declares_full_multichip_path
+SKIPPED [1] models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py:68: set RUN_QWEN36_FULL_MODEL_SMOKE=1 to run the 2x2 synthetic full-model smoke
+SKIPPED [1] models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py:96: set RUN_QWEN36_FULL_MODEL_SMOKE=1 to run the 2x2 synthetic full-model smoke
+SKIPPED [1] models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py:119: set RUN_QWEN36_FULL_MODEL_SMOKE=1 to run the 2x2 synthetic full-model smoke
+SKIPPED [1] models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py:183: set RUN_QWEN36_FULL_MODEL_SMOKE=1 to run the 2x2 synthetic full-model smoke
+SKIPPED [1] models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py:235: set RUN_QWEN36_FULL_MODEL_SMOKE=1 to run the 2x2 synthetic full-model smoke
+=================== 2 passed, 5 skipped, 2 warnings in 1.34s ===================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 1 instances!
+ - leaked instance 0x70d552391c98 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 15 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - ... skipped remainder
+nanobind: leaked 233 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function ""
+ - leaked function "default_core_range"
+ - leaked function "compute_output_specs"
+ - leaked function "pad_to_tile"
+ - leaked function "element_size"
+ - leaked function "to_json"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

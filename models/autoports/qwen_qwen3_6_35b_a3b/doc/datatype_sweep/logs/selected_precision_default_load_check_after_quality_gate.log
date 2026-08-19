@@ -1,0 +1,94 @@
+2026-08-19 17:36:46.402 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+{
+  "model_dir": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b",
+  "expected_selected_path": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/selected_precision_config.json",
+  "resolved_source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/selected_precision_config.json",
+  "config_id": "baseline_default",
+  "selected_from_config_id": "baseline_default",
+  "required_fields_present": [
+    "weight_groups",
+    "layer_exceptions",
+    "compute_fidelities",
+    "activation_dtype",
+    "residual_dtype",
+    "ccl_dtype",
+    "kv_cache_dtype",
+    "linear_state_dtype",
+    "logits_dtype",
+    "sampling_dtype"
+  ],
+  "weight_groups": {
+    "embedding": {
+      "dtype": "bf16"
+    },
+    "norms": {
+      "dtype": "bf16"
+    },
+    "attention": {
+      "dtype": "bf8"
+    },
+    "linear_attention": {
+      "dtype": "bf8"
+    },
+    "router": {
+      "dtype": "bf16"
+    },
+    "shared_moe": {
+      "dtype": "bf8"
+    },
+    "routed_moe": {
+      "dtype": {
+        "linear_attention": "bf8",
+        "full_attention": "bf4"
+      }
+    },
+    "lm_head": {
+      "dtype": "bf8"
+    }
+  },
+  "compute_fidelities": {
+    "attention": "default",
+    "linear_attention": "default",
+    "router": "default",
+    "shared_moe": "default",
+    "routed_moe": "default",
+    "lm_head": "default"
+  },
+  "activation_dtype": "bf16",
+  "residual_dtype": "bf16",
+  "ccl_dtype": "bf16",
+  "kv_cache_dtype": "bf16",
+  "linear_state_dtype": "bf16",
+  "logits_dtype": "bf16",
+  "sampling_dtype": "uint32"
+}
+nanobind: leaked 2 instances!
+ - leaked instance 0x7a0ae44bb2b8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7a0ae45c35b8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 341 functions!
+ - leaked function "compute_with_storage_grid_size"
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function "__ne__"
+ - leaked function "buffer_num_pages"
+ - leaked function ""
+ - leaked function "__hash__"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

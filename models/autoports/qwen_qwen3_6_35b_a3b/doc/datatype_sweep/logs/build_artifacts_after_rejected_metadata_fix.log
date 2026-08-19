@@ -1,0 +1,36 @@
+{
+  "selected_config_id": "baseline_default",
+  "selected_decode_t_s_u": 16.378532842614945,
+  "selected_top1": 0.99,
+  "selected_top5": 1.0,
+  "selected_precision_config": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/selected_precision_config.json",
+  "selected_weight_groups": {
+    "embedding": {
+      "dtype": "bf16"
+    },
+    "norms": {
+      "dtype": "bf16"
+    },
+    "attention": {
+      "dtype": "bf8"
+    },
+    "linear_attention": {
+      "dtype": "bf8"
+    },
+    "router": {
+      "dtype": "bf16"
+    },
+    "shared_moe": {
+      "dtype": "bf8"
+    },
+    "routed_moe": {
+      "dtype": {
+        "linear_attention": "bf8",
+        "full_attention": "bf4"
+      }
+    },
+    "lm_head": {
+      "dtype": "bf8"
+    }
+  }
+}

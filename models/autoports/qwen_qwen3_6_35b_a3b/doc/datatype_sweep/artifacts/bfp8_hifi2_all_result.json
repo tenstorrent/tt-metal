@@ -1,0 +1,187 @@
+{
+  "config_id": "bfp8_hifi2_all",
+  "precision_config_path": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/bfp8_hifi2_all.json",
+  "measurement_regime": "AIME24 chat-template prefill plus trace-verified teacher-forcing decode",
+  "reference": {
+    "path": "models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/aime24_chat_100.refpt",
+    "hf_model_id": "Qwen/Qwen3.6-35B-A3B",
+    "k": 100,
+    "entries": 1,
+    "prompt_lengths": [
+      161
+    ],
+    "generated_token_lengths": [
+      100
+    ],
+    "chat_template": "AIME24 main readiness reference"
+  },
+  "prefill": {
+    "per_entry": [
+      {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 99,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100
+      }
+    ],
+    "aggregate": {
+      "top1": 0.99,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 99,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100
+    }
+  },
+  "teacher_forcing": {
+    "per_entry": [
+      {
+        "top1": 0.95,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 95,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100,
+        "elapsed_s": 14.897196172736585,
+        "e2e_t/s/u": 6.7126725620362295,
+        "ttft_ms": 8846.268536988646,
+        "decode_tokens": 99.0,
+        "decode_elapsed_s": 6.050911905709654,
+        "decode_t/s/u": 16.36117027362163
+      }
+    ],
+    "aggregate": {
+      "top1": 0.95,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 95,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100,
+      "elapsed_s": 14.897196172736585,
+      "e2e_t_s_u": 6.7126725620362295,
+      "ttft_ms": 8846.268536988646,
+      "decode_tokens": 99.0,
+      "decode_elapsed_s": 6.050911905709654,
+      "decode_t_s_u": 16.36117027362163
+    },
+    "trace_verified": true,
+    "trace_counters": {
+      "trace_replays": 99,
+      "execute_trace_blocking": false,
+      "steady_state_token_refreshes": 98,
+      "steady_state_position_refreshes": 0,
+      "steady_state_rope_refreshes": 0,
+      "steady_state_page_table_refreshes": 0,
+      "steady_state_synchronizations": 197,
+      "steady_state_token_readbacks": 99,
+      "terminal_validation_synchronizations": 0,
+      "terminal_validation_token_readbacks": 0,
+      "host_sampling": false,
+      "full_logits_readbacks": 0
+    }
+  },
+  "thresholds": {
+    "top1": 0.9,
+    "top5": 0.98
+  },
+  "status": "pass",
+  "runtime_policy_summary": {
+    "config_id": "bfp8_hifi2_all",
+    "source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/bfp8_hifi2_all.json",
+    "activation_dtype": "bf16",
+    "residual_dtype": "bf16",
+    "ccl_dtype": "bf16",
+    "kv_cache_dtype": "bf16",
+    "linear_state_dtype": "bf16",
+    "logits_dtype": "bf16",
+    "sampling_dtype": "uint32",
+    "lm_head_weight_dtype": "bf8",
+    "lm_head_compute_fidelity": "HiFi2",
+    "weight_groups": {
+      "embedding": {
+        "dtype": "bf16"
+      },
+      "norms": {
+        "dtype": "bf16"
+      },
+      "attention": {
+        "dtype": "bf8"
+      },
+      "linear_attention": {
+        "dtype": "bf8"
+      },
+      "router": {
+        "dtype": "bf16"
+      },
+      "shared_moe": {
+        "dtype": "bf8"
+      },
+      "routed_moe": {
+        "dtype": {
+          "linear_attention": "bf8",
+          "full_attention": "bf4"
+        }
+      },
+      "lm_head": {
+        "dtype": "bf8"
+      }
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "hifi2",
+      "linear_attention": "hifi2",
+      "router": "hifi2",
+      "shared_moe": "hifi2",
+      "routed_moe": "hifi2",
+      "lm_head": "hifi2"
+    },
+    "first_full_attention_layer": {
+      "layer_idx": 3,
+      "qkgv_weight_dtype": "bf8",
+      "o_proj_weight_dtype": "bf8",
+      "compute_fidelity": "HiFi2",
+      "ccl_dtype": "bf16",
+      "routed_moe_weight_dtype": "bf4",
+      "routed_moe_compute_fidelity": "HiFi2",
+      "shared_moe_weight_dtype": "bf8",
+      "shared_moe_compute_fidelity": "HiFi2"
+    },
+    "first_linear_attention_layer": {
+      "layer_idx": 0,
+      "in_proj_weight_dtype": "bf8",
+      "out_proj_weight_dtype": "bf8",
+      "compute_fidelity": "HiFi2",
+      "ccl_dtype": "bf16",
+      "routed_moe_weight_dtype": "bf8",
+      "routed_moe_compute_fidelity": "HiFi2",
+      "shared_moe_weight_dtype": "bf8",
+      "shared_moe_compute_fidelity": "HiFi2"
+    }
+  },
+  "hardware": {
+    "mesh_device": "P300C",
+    "fabric_config": "FABRIC_1D_RING",
+    "mesh_shape": [
+      2,
+      2
+    ],
+    "num_devices": 4,
+    "product": "Blackhole p300c"
+  },
+  "command": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/scripts/evaluate_candidate.py --model-dir models/autoports/qwen_qwen3_6_35b_a3b --reference models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/aime24_chat_100.refpt --config-id bfp8_hifi2_all --precision-config models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/bfp8_hifi2_all.json --mesh-device P300C --fabric-config FABRIC_1D_RING --output models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/bfp8_hifi2_all_result.json",
+  "env": {
+    "TT_READINESS_TRACE_REGION_SIZE": "64000000",
+    "TT_METAL_WATCHER_DISABLE_ETH": "1"
+  },
+  "elapsed_s": 355.9669129648246
+}

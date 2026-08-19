@@ -1,0 +1,26 @@
+[
+  {
+    "prompt": "Write a haiku about machine learning.",
+    "greedy_completion": "Thinking Process:\n\n1.  **Deconstruct the request:**\n    *   Topic: Machine Learning.\n    *   Form: Haiku (5-7-5 syllables).\n\n2.  **Brainstorming keywords and concepts:**\n    *   Data, patterns, learning, neural nets,"
+  },
+  {
+    "prompt": "Explain the difference between supervised and unsupervised learning in simple terms.",
+    "greedy_completion": "Here's a thinking process:\n\n1.  **Understand User Request:**\n   - **Topic:** Supervised vs. Unsupervised Learning\n   - **Requirement:** Explain in simple terms!!!!!!!!!!!!!!!!!!!!!!!!"
+  },
+  {
+    "prompt": "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered",
+    "greedy_completion": "Here's a thinking thinking sequence\n\n1.  **Deconstruct and Analyze the Prompt:**\n    *   Prompt: \"Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered...\"\n    *   Key elements: \"Once upon a time\" (fairy tale/f"
+  },
+  {
+    "prompt": "What are the three laws of thermodynamics?",
+    "greedy_completion": "Here's a thinking process that leads to the explanation of the three laws of thermodynamics:\n\n1.  **Analyze the Request:**\n    *   **Topic:** The three laws of thermodynamics.\n    *   **Goal:** Explain them clearly.\n    *   **Target Audience:** General audience ("
+  },
+  {
+    "prompt": "Translate the following to French: \"Hello, how are you today?\"",
+    "greedy_completion": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Source text:** \"Hello, how are you today?\"\n   - **Target language:** French\n  !!!!!!!!!!!!!!!!!!!!!!!"
+  },
+  {
+    "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+    "greedy_completion": "Here's a thinking process:\n\n1.  **Understand User Request:** The user wants a Python function to calculate the Fibonacci sequence. This is a common programming task. I need to provide a clear, efficient, and well-explained solution.\n\n2.  **Identify Key Requirements:**\n   -"
+  }
+]

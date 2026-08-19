@@ -71,6 +71,13 @@ class OptimizedDecoderPolicy:
     decode_sdpa_q_chunk_size: int = TILE_SIZE
     decode_sdpa_k_chunk_size: int = 2 * TILE_SIZE
     decode_sdpa_max_cores_per_head_batch: int = 16
+    attention_compute_fidelity: str | None = "default"
+    linear_attention_compute_fidelity: str | None = "default"
+    router_compute_fidelity: str | None = "default"
+    shared_moe_compute_fidelity: str | None = "default"
+    routed_moe_compute_fidelity: str | None = "default"
+    lm_head_compute_fidelity: str | None = "default"
+    ccl_dtype: Literal["bf16", "bf8"] | None = None
 
 
 DEFAULT_OPTIMIZED_POLICY = OptimizedDecoderPolicy()

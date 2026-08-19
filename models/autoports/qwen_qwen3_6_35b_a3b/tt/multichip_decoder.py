@@ -63,6 +63,7 @@ from .optimized_decoder import (
     OptimizedDecoderPolicy,
     _optimized_sparse_matmul_program_config,
 )
+from .precision_config import compute_kernel_config_from_fidelity
 
 
 @dataclass(frozen=True)
@@ -393,7 +394,9 @@ class _MultichipFullAttention:
         self.cfg = cfg
         self.device = device
         self.policy = policy
-        self.plan = TARGET_MESH_PLAN
+        ccl_dtype = policy.ccl_dtype or TARGET_MESH_PLAN.ccl_dtype
+        self.plan = replace(TARGET_MESH_PLAN, ccl_dtype=ccl_dtype)
+        self.compute_kernel_config = compute_kernel_config_from_fidelity(policy.attention_compute_fidelity)
         self.tp = self.plan.tensor_parallel_size
         self.local_q_heads = cfg.num_attention_heads // self.tp
         self.local_kv_heads = cfg.num_key_value_heads // self.tp
@@ -409,7 +412,13 @@ class _MultichipFullAttention:
         self.k_norm_weight = _rms_weight(state, "self_attn.k_norm.weight", device=device, add_unit_offset=True)
 
     def _project_qkgv(self, x: ttnn.Tensor):
-        packed = ttnn.linear(x, self.qkgv_proj, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        packed = ttnn.linear(
+            x,
+            self.qkgv_proj,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         q_and_gate = _slice_last(packed, 0, self.local_q_gate_width)
         k = _slice_last(packed, self.local_q_gate_width, self.local_q_gate_width + self.local_kv_width)
         v = _slice_last(packed, self.local_q_gate_width + self.local_kv_width, self.local_qkgv_width)
@@ -501,18 +510,20 @@ class _MultichipFullAttention:
                 raise ValueError("full-attention paged prefill requires page_table when kv_cache is supplied")
             keys, values = kv_cache.keys, kv_cache.values
             fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+            k_fill = ttnn.typecast(k, dtype=keys.dtype) if k.dtype != keys.dtype else k
+            v_fill = ttnn.typecast(v, dtype=values.dtype) if v.dtype != values.dtype else v
             if batch == 1:
-                ttnn.experimental.paged_fill_cache(keys, k, fill_page_table, batch_idx=user_id)
-                ttnn.experimental.paged_fill_cache(values, v, fill_page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(keys, k_fill, fill_page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(values, v_fill, fill_page_table, batch_idx=user_id)
             else:
                 for batch_idx in range(batch):
                     k_b = _slice(
-                        k,
+                        k_fill,
                         (batch_idx, 0, 0, 0),
                         (batch_idx + 1, self.local_kv_heads, seq_len, self.cfg.head_dim),
                     )
                     v_b = _slice(
-                        v,
+                        v_fill,
                         (batch_idx, 0, 0, 0),
                         (batch_idx + 1, self.local_kv_heads, seq_len, self.cfg.head_dim),
                     )
@@ -560,7 +571,13 @@ class _MultichipFullAttention:
             input_tensor_b_activations=_SIGMOID,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        out = ttnn.linear(attn_out, self.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.linear(
+            attn_out,
+            self.o_proj,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         return _all_reduce_tp(out, self.plan)
 
     def decode_forward(
@@ -603,16 +620,27 @@ class _MultichipFullAttention:
             input_tensor_b_activations=_SIGMOID,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        out = ttnn.linear(attn_out, self.o_proj, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.linear(
+            attn_out,
+            self.o_proj,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
         out = _all_reduce_tp(out, self.plan)
         return ttnn.reshape(out, (1, 1, batch, self.cfg.hidden_size))
 
 
 class _MultichipLinearAttention:
-    def __init__(self, state: dict[str, Any], cfg, *, device, dtype):
+    def __init__(self, state: dict[str, Any], cfg, *, device, dtype, policy: OptimizedDecoderPolicy):
         self.cfg = cfg
         self.device = device
-        self.plan = TARGET_MESH_PLAN
+        ccl_dtype = policy.ccl_dtype or TARGET_MESH_PLAN.ccl_dtype
+        self.plan = replace(TARGET_MESH_PLAN, ccl_dtype=ccl_dtype)
+        self.projection_compute_kernel_config = compute_kernel_config_from_fidelity(
+            policy.linear_attention_compute_fidelity
+        )
+        self.state_compute_kernel_config = compute_kernel_config_from_fidelity(policy.linear_attention_compute_fidelity)
         self.tp = self.plan.tensor_parallel_size
         self.local_key_heads = cfg.linear_num_key_heads // self.tp
         self.local_value_heads = cfg.linear_num_value_heads // self.tp
@@ -682,7 +710,11 @@ class _MultichipLinearAttention:
 
     def _project_inputs(self, hidden_states: ttnn.Tensor):
         packed = ttnn.linear(
-            hidden_states, self.in_proj_qkv_zba, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            hidden_states,
+            self.in_proj_qkv_zba,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.projection_compute_kernel_config,
         )
         mixed_qkv_raw = _slice_last(packed, 0, self.local_conv_dim)
         z = _slice_last(packed, self.local_conv_dim, self.local_conv_dim + self.local_value_dim)
@@ -743,7 +775,13 @@ class _MultichipLinearAttention:
         g = ttnn.exp(g, fast_and_approximate_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         decayed_state = ttnn.mul(state.recurrent_state, g, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        kv_mem = ttnn.matmul(key, decayed_state, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        kv_mem = ttnn.matmul(
+            key,
+            decayed_state,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.state_compute_kernel_config,
+        )
         delta = ttnn.mul(
             ttnn.subtract(value, kv_mem, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             beta,
@@ -751,16 +789,34 @@ class _MultichipLinearAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         key_t = ttnn.transpose(key, -2, -1)
-        outer = ttnn.matmul(key_t, delta, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        outer = ttnn.matmul(
+            key_t,
+            delta,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.state_compute_kernel_config,
+        )
         recurrent_state = ttnn.add(decayed_state, outer, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        core = ttnn.matmul(query, recurrent_state, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        core = ttnn.matmul(
+            query,
+            recurrent_state,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.state_compute_kernel_config,
+        )
 
         core = ttnn.reshape(core, (1, 1, heads, self.cfg.linear_value_head_dim))
         z = ttnn.reshape(z, (1, 1, heads, self.cfg.linear_value_head_dim))
         core = _rms_norm(core, self.norm_weight, self.cfg.rms_norm_eps)
         core = ttnn.mul(core, z, input_tensor_b_activations=_SILU, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         core = ttnn.reshape(core, (1, 1, batch, self.local_value_dim))
-        out = ttnn.linear(core, self.out_proj, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.linear(
+            core,
+            self.out_proj,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.projection_compute_kernel_config,
+        )
         out = _all_reduce_tp(out, self.plan)
         return out, QwenLinearAttentionState(conv_state=conv_state, recurrent_state=recurrent_state)
 
@@ -846,7 +902,13 @@ class _MultichipLinearAttention:
         solved = attn0
         for idx in range(1, self.linear_chunk_size):
             row = ttnn.mul(solved, self.row_prefix_masks[idx], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            update = ttnn.matmul(row, solved, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+            update = ttnn.matmul(
+                row,
+                solved,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.state_compute_kernel_config,
+            )
             new_row = ttnn.add(row, update, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             kept = ttnn.mul(solved, self.row_keep_masks[idx], memory_config=ttnn.DRAM_MEMORY_CONFIG)
             solved = ttnn.add(kept, new_row, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -862,7 +924,13 @@ class _MultichipLinearAttention:
         recurrent_state: ttnn.Tensor,
     ):
         log_g = ttnn.cumsum(log_g, dim=2, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        g_rows = ttnn.matmul(log_g, self.chunk_ones_1x64, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        g_rows = ttnn.matmul(
+            log_g,
+            self.chunk_ones_1x64,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.state_compute_kernel_config,
+        )
         g_cols = ttnn.transpose(g_rows, -2, -1)
         decay = ttnn.subtract(g_rows, g_cols, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         decay = ttnn.exp(decay, fast_and_approximate_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -881,7 +949,11 @@ class _MultichipLinearAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         kk = ttnn.matmul(
-            k_beta, ttnn.transpose(key, -2, -1), memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16
+            k_beta,
+            ttnn.transpose(key, -2, -1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.state_compute_kernel_config,
         )
         attn0 = ttnn.mul(kk, -1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn0 = ttnn.mul(
@@ -891,19 +963,36 @@ class _MultichipLinearAttention:
         )
         local_attn = self._solve_chunk_attn(attn0)
 
-        local_value = ttnn.matmul(local_attn, v_beta, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        local_value = ttnn.matmul(
+            local_attn,
+            v_beta,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.state_compute_kernel_config,
+        )
         exp_g = ttnn.exp(log_g, fast_and_approximate_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         k_cumdecay = ttnn.matmul(
             local_attn,
             ttnn.mul(k_beta, exp_g, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
+            compute_kernel_config=self.state_compute_kernel_config,
         )
 
-        v_prime = ttnn.matmul(k_cumdecay, recurrent_state, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        v_prime = ttnn.matmul(
+            k_cumdecay,
+            recurrent_state,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.state_compute_kernel_config,
+        )
         v_new = ttnn.subtract(local_value, v_prime, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         content_attn = ttnn.matmul(
-            query, ttnn.transpose(key, -2, -1), memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16
+            query,
+            ttnn.transpose(key, -2, -1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.state_compute_kernel_config,
         )
         content_attn = ttnn.mul(content_attn, decay, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn_inter = ttnn.matmul(
@@ -911,10 +1000,17 @@ class _MultichipLinearAttention:
             recurrent_state,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
+            compute_kernel_config=self.state_compute_kernel_config,
         )
         core = ttnn.add(
             attn_inter,
-            ttnn.matmul(content_attn, v_new, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16),
+            ttnn.matmul(
+                content_attn,
+                v_new,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.state_compute_kernel_config,
+            ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -932,7 +1028,11 @@ class _MultichipLinearAttention:
         )
         state_update_key = ttnn.mul(key, state_scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         state_update = ttnn.matmul(
-            ttnn.transpose(state_update_key, -2, -1), v_new, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16
+            ttnn.transpose(state_update_key, -2, -1),
+            v_new,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.state_compute_kernel_config,
         )
         recurrent_state = ttnn.add(state_decay, state_update, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return core, recurrent_state
@@ -943,7 +1043,13 @@ class _MultichipLinearAttention:
         core = ttnn.reshape(core, (batch, self.local_value_heads, length, self.cfg.linear_value_head_dim))
         core = ttnn.permute(core, (0, 2, 1, 3))
         core = ttnn.reshape(core, (1, batch, length, self.local_value_dim))
-        out = ttnn.linear(core, self.out_proj, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.linear(
+            core,
+            self.out_proj,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.projection_compute_kernel_config,
+        )
         return _all_reduce_tp(out, self.plan)
 
     def decode_forward(self, hidden_states: ttnn.Tensor, *, linear_state: QwenLinearAttentionState):
@@ -995,7 +1101,11 @@ class _MultichipQwenMoe:
         self.cfg = cfg
         self.device = device
         self.policy = policy
-        self.plan = TARGET_MESH_PLAN
+        ccl_dtype = policy.ccl_dtype or TARGET_MESH_PLAN.ccl_dtype
+        self.plan = replace(TARGET_MESH_PLAN, ccl_dtype=ccl_dtype)
+        self.router_compute_kernel_config = compute_kernel_config_from_fidelity(policy.router_compute_fidelity)
+        self.shared_compute_kernel_config = compute_kernel_config_from_fidelity(policy.shared_moe_compute_fidelity)
+        self.routed_compute_kernel_config = compute_kernel_config_from_fidelity(policy.routed_moe_compute_fidelity)
         self.tp = self.plan.tensor_parallel_size
         self.ep = self.plan.expert_parallel_size
         self.chunk_size = chunk_size
@@ -1038,7 +1148,13 @@ class _MultichipQwenMoe:
         )
 
     def _router_dense(self, flat: ttnn.Tensor) -> ttnn.Tensor:
-        logits = ttnn.linear(flat, self.router, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        logits = ttnn.linear(
+            flat,
+            self.router,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.router_compute_kernel_config,
+        )
         probs = ttnn.softmax(logits, dim=-1, numeric_stable=True)
         top_values, top_indices = ttnn.topk(probs, k=self.cfg.num_experts_per_tok, dim=-1, sorted=True)
         denom = ttnn.sum(top_values, dim=-1, keepdim=True)
@@ -1046,14 +1162,30 @@ class _MultichipQwenMoe:
         return ttnn.scatter(ttnn.zeros_like(probs), dim=-1, index=top_indices, src=top_values)
 
     def _shared(self, flat: ttnn.Tensor) -> ttnn.Tensor:
-        gate_up = ttnn.linear(flat, self.shared_gate_up, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        gate_up = ttnn.linear(
+            flat,
+            self.shared_gate_up,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.shared_compute_kernel_config,
+        )
         gate = _slice_last(gate_up, 0, self.local_shared_intermediate_size)
         up = _slice_last(gate_up, self.local_shared_intermediate_size, self.local_shared_gate_up_width)
         hidden = _silu_mul_fused(gate, up)
-        hidden = ttnn.linear(hidden, self.shared_down, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        hidden = ttnn.linear(
+            hidden,
+            self.shared_down,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.shared_compute_kernel_config,
+        )
         hidden = _all_reduce_tp(hidden, self.plan)
         gate_scalar = ttnn.linear(
-            flat, self.shared_expert_gate, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            flat,
+            self.shared_expert_gate,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.router_compute_kernel_config,
         )
         return ttnn.mul(
             hidden,
@@ -1094,6 +1226,7 @@ class _MultichipQwenMoe:
             output_tile=output_tile,
             program_config=gate_up_config,
             dtype=self.policy.sparse_decode_output_dtype,
+            compute_kernel_config=self.routed_compute_kernel_config,
         )
         gate_up = ttnn.reshape(gate_up, (tokens, self.cfg.num_experts, 1, self.local_gate_up_width))
         gate_up = ttnn.transpose(gate_up, 1, 2)
@@ -1122,6 +1255,7 @@ class _MultichipQwenMoe:
             output_tile=output_tile,
             program_config=down_config,
             dtype=self.policy.sparse_decode_output_dtype,
+            compute_kernel_config=self.routed_compute_kernel_config,
         )
         routed = ttnn.permute(routed, (0, 2, 1, 3))
         routed = ttnn.reshape(routed, (tokens, self.cfg.num_experts, self.cfg.hidden_size))
@@ -1206,6 +1340,7 @@ class MultichipDecoder(OptimizedDecoder):
                 cfg,
                 device=mesh_device,
                 dtype=policy.linear_attention_weight_dtype,
+                policy=policy,
             )
         else:
             token_mixer = _MultichipFullAttention(

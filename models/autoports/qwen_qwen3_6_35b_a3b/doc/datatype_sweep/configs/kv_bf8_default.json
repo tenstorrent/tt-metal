@@ -1,0 +1,5 @@
+{
+  "config_id": "kv_bf8_default",
+  "description": "Baseline weight and compute policy with BF8 paged full-attention KV cache.",
+  "kv_cache_dtype": "bf8"
+}

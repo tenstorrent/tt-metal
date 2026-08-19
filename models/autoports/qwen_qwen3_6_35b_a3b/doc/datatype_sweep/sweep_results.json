@@ -1,0 +1,1648 @@
+{
+  "model_id": "Qwen/Qwen3.6-35B-A3B",
+  "stage": "datatype_sweep",
+  "thresholds": {
+    "teacher_forcing_top1_min": 0.9,
+    "teacher_forcing_top5_min": 0.98
+  },
+  "selection_metric": "trace_verified_teacher_forcing_decode_t_s_u",
+  "selected_config_id": "baseline_default",
+  "rows": [
+    {
+      "config_id": "baseline_default",
+      "precision_config_path": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/baseline_default.json",
+      "result_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/baseline_default_result.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32"
+      },
+      "compute_fidelity_policy": {
+        "attention": "default",
+        "linear_attention": "default",
+        "router": "default",
+        "shared_moe": "default",
+        "routed_moe": "default",
+        "lm_head": "default"
+      },
+      "prefill_top1": 0.96,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "teacher_forcing_top1": 0.99,
+      "teacher_forcing_top5": 1.0,
+      "teacher_forcing_top100": 1.0,
+      "ttft_ms": 9079.106076154858,
+      "trace_verified_teacher_forcing_decode_t_s_u": 16.378532842614945,
+      "teacher_forcing_e2e_t_s_u": 6.612173304818663,
+      "measurement_regime": "AIME24 chat-template prefill plus trace-verified teacher-forcing decode",
+      "command": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/scripts/evaluate_candidate.py --model-dir models/autoports/qwen_qwen3_6_35b_a3b --reference models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/aime24_chat_100.refpt --config-id baseline_default --precision-config models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/baseline_default.json --mesh-device P300C --fabric-config FABRIC_1D_RING --output models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/baseline_default_result.json",
+      "env": {
+        "TT_READINESS_TRACE_REGION_SIZE": "64000000",
+        "TT_METAL_WATCHER_DISABLE_ETH": "1"
+      },
+      "hardware": {
+        "mesh_device": "P300C",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "num_devices": 4,
+        "product": "Blackhole p300c"
+      },
+      "mesh": {
+        "mesh_device": "P300C",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "trace_counters": {
+        "trace_replays": 99,
+        "execute_trace_blocking": false,
+        "steady_state_token_refreshes": 98,
+        "steady_state_position_refreshes": 0,
+        "steady_state_rope_refreshes": 0,
+        "steady_state_page_table_refreshes": 0,
+        "steady_state_synchronizations": 197,
+        "steady_state_token_readbacks": 99,
+        "terminal_validation_synchronizations": 0,
+        "terminal_validation_token_readbacks": 0,
+        "host_sampling": false,
+        "full_logits_readbacks": 0
+      },
+      "runtime_policy_summary": {
+        "config_id": "baseline_default",
+        "source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/baseline_default.json",
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32",
+        "lm_head_weight_dtype": "bf8",
+        "lm_head_compute_fidelity": "default",
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "default",
+          "linear_attention": "default",
+          "router": "default",
+          "shared_moe": "default",
+          "routed_moe": "default",
+          "lm_head": "default"
+        },
+        "first_full_attention_layer": {
+          "layer_idx": 3,
+          "qkgv_weight_dtype": "bf8",
+          "o_proj_weight_dtype": "bf8",
+          "compute_fidelity": "default",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf4",
+          "routed_moe_compute_fidelity": "default",
+          "shared_moe_weight_dtype": "bf8",
+          "shared_moe_compute_fidelity": "default"
+        },
+        "first_linear_attention_layer": {
+          "layer_idx": 0,
+          "in_proj_weight_dtype": "bf8",
+          "out_proj_weight_dtype": "bf8",
+          "compute_fidelity": "default",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf8",
+          "routed_moe_compute_fidelity": "default",
+          "shared_moe_weight_dtype": "bf8",
+          "shared_moe_compute_fidelity": "default"
+        }
+      },
+      "accuracy_gate_pass": true,
+      "quality_gate": {
+        "status": "pass",
+        "pass": true
+      },
+      "quality_gate_pass": true,
+      "pass": true,
+      "status": "pass",
+      "selected": true
+    },
+    {
+      "config_id": "bfp8_hifi2_all",
+      "precision_config_path": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/bfp8_hifi2_all.json",
+      "result_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/bfp8_hifi2_all_result.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32"
+      },
+      "compute_fidelity_policy": {
+        "attention": "hifi2",
+        "linear_attention": "hifi2",
+        "router": "hifi2",
+        "shared_moe": "hifi2",
+        "routed_moe": "hifi2",
+        "lm_head": "hifi2"
+      },
+      "prefill_top1": 0.99,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "teacher_forcing_top1": 0.95,
+      "teacher_forcing_top5": 1.0,
+      "teacher_forcing_top100": 1.0,
+      "ttft_ms": 8846.268536988646,
+      "trace_verified_teacher_forcing_decode_t_s_u": 16.36117027362163,
+      "teacher_forcing_e2e_t_s_u": 6.7126725620362295,
+      "measurement_regime": "AIME24 chat-template prefill plus trace-verified teacher-forcing decode",
+      "command": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/scripts/evaluate_candidate.py --model-dir models/autoports/qwen_qwen3_6_35b_a3b --reference models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/aime24_chat_100.refpt --config-id bfp8_hifi2_all --precision-config models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/bfp8_hifi2_all.json --mesh-device P300C --fabric-config FABRIC_1D_RING --output models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/bfp8_hifi2_all_result.json",
+      "env": {
+        "TT_READINESS_TRACE_REGION_SIZE": "64000000",
+        "TT_METAL_WATCHER_DISABLE_ETH": "1"
+      },
+      "hardware": {
+        "mesh_device": "P300C",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "num_devices": 4,
+        "product": "Blackhole p300c"
+      },
+      "mesh": {
+        "mesh_device": "P300C",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "trace_counters": {
+        "trace_replays": 99,
+        "execute_trace_blocking": false,
+        "steady_state_token_refreshes": 98,
+        "steady_state_position_refreshes": 0,
+        "steady_state_rope_refreshes": 0,
+        "steady_state_page_table_refreshes": 0,
+        "steady_state_synchronizations": 197,
+        "steady_state_token_readbacks": 99,
+        "terminal_validation_synchronizations": 0,
+        "terminal_validation_token_readbacks": 0,
+        "host_sampling": false,
+        "full_logits_readbacks": 0
+      },
+      "runtime_policy_summary": {
+        "config_id": "bfp8_hifi2_all",
+        "source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/bfp8_hifi2_all.json",
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32",
+        "lm_head_weight_dtype": "bf8",
+        "lm_head_compute_fidelity": "HiFi2",
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "hifi2",
+          "linear_attention": "hifi2",
+          "router": "hifi2",
+          "shared_moe": "hifi2",
+          "routed_moe": "hifi2",
+          "lm_head": "hifi2"
+        },
+        "first_full_attention_layer": {
+          "layer_idx": 3,
+          "qkgv_weight_dtype": "bf8",
+          "o_proj_weight_dtype": "bf8",
+          "compute_fidelity": "HiFi2",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf4",
+          "routed_moe_compute_fidelity": "HiFi2",
+          "shared_moe_weight_dtype": "bf8",
+          "shared_moe_compute_fidelity": "HiFi2"
+        },
+        "first_linear_attention_layer": {
+          "layer_idx": 0,
+          "in_proj_weight_dtype": "bf8",
+          "out_proj_weight_dtype": "bf8",
+          "compute_fidelity": "HiFi2",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf8",
+          "routed_moe_compute_fidelity": "HiFi2",
+          "shared_moe_weight_dtype": "bf8",
+          "shared_moe_compute_fidelity": "HiFi2"
+        }
+      },
+      "accuracy_gate_pass": true,
+      "quality_gate": {
+        "status": "pass",
+        "pass": true
+      },
+      "quality_gate_pass": true,
+      "pass": true,
+      "status": "pass",
+      "selected": false
+    },
+    {
+      "config_id": "bfp8_lofi_all",
+      "precision_config_path": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/bfp8_lofi_all.json",
+      "result_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/bfp8_lofi_all_result.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32"
+      },
+      "compute_fidelity_policy": {
+        "attention": "lofi",
+        "linear_attention": "lofi",
+        "router": "lofi",
+        "shared_moe": "lofi",
+        "routed_moe": "lofi",
+        "lm_head": "lofi"
+      },
+      "prefill_top1": 0.95,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "teacher_forcing_top1": 0.96,
+      "teacher_forcing_top5": 1.0,
+      "teacher_forcing_top100": 1.0,
+      "ttft_ms": 8896.132422145456,
+      "trace_verified_teacher_forcing_decode_t_s_u": 16.37200541635136,
+      "teacher_forcing_e2e_t_s_u": 6.692070944472964,
+      "measurement_regime": "AIME24 chat-template prefill plus trace-verified teacher-forcing decode",
+      "command": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/scripts/evaluate_candidate.py --model-dir models/autoports/qwen_qwen3_6_35b_a3b --reference models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/aime24_chat_100.refpt --config-id bfp8_lofi_all --precision-config models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/bfp8_lofi_all.json --mesh-device P300C --fabric-config FABRIC_1D_RING --output models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/bfp8_lofi_all_result.json",
+      "env": {
+        "TT_READINESS_TRACE_REGION_SIZE": "64000000",
+        "TT_METAL_WATCHER_DISABLE_ETH": "1"
+      },
+      "hardware": {
+        "mesh_device": "P300C",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "num_devices": 4,
+        "product": "Blackhole p300c"
+      },
+      "mesh": {
+        "mesh_device": "P300C",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "trace_counters": {
+        "trace_replays": 99,
+        "execute_trace_blocking": false,
+        "steady_state_token_refreshes": 98,
+        "steady_state_position_refreshes": 0,
+        "steady_state_rope_refreshes": 0,
+        "steady_state_page_table_refreshes": 0,
+        "steady_state_synchronizations": 197,
+        "steady_state_token_readbacks": 99,
+        "terminal_validation_synchronizations": 0,
+        "terminal_validation_token_readbacks": 0,
+        "host_sampling": false,
+        "full_logits_readbacks": 0
+      },
+      "runtime_policy_summary": {
+        "config_id": "bfp8_lofi_all",
+        "source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/bfp8_lofi_all.json",
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32",
+        "lm_head_weight_dtype": "bf8",
+        "lm_head_compute_fidelity": "LoFi",
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "lofi",
+          "linear_attention": "lofi",
+          "router": "lofi",
+          "shared_moe": "lofi",
+          "routed_moe": "lofi",
+          "lm_head": "lofi"
+        },
+        "first_full_attention_layer": {
+          "layer_idx": 3,
+          "qkgv_weight_dtype": "bf8",
+          "o_proj_weight_dtype": "bf8",
+          "compute_fidelity": "LoFi",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf4",
+          "routed_moe_compute_fidelity": "LoFi",
+          "shared_moe_weight_dtype": "bf8",
+          "shared_moe_compute_fidelity": "LoFi"
+        },
+        "first_linear_attention_layer": {
+          "layer_idx": 0,
+          "in_proj_weight_dtype": "bf8",
+          "out_proj_weight_dtype": "bf8",
+          "compute_fidelity": "LoFi",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf8",
+          "routed_moe_compute_fidelity": "LoFi",
+          "shared_moe_weight_dtype": "bf8",
+          "shared_moe_compute_fidelity": "LoFi"
+        }
+      },
+      "accuracy_gate_pass": true,
+      "quality_gate": {
+        "status": "pass",
+        "pass": true
+      },
+      "quality_gate_pass": true,
+      "pass": true,
+      "status": "pass",
+      "selected": false
+    },
+    {
+      "config_id": "ccl_bf8_default",
+      "precision_config_path": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/ccl_bf8_default.json",
+      "result_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/ccl_bf8_default_result.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf8",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32"
+      },
+      "compute_fidelity_policy": {
+        "attention": "default",
+        "linear_attention": "default",
+        "router": "default",
+        "shared_moe": "default",
+        "routed_moe": "default",
+        "lm_head": "default"
+      },
+      "prefill_top1": 0.98,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "teacher_forcing_top1": 0.97,
+      "teacher_forcing_top5": 1.0,
+      "teacher_forcing_top100": 1.0,
+      "ttft_ms": 9063.127228990197,
+      "trace_verified_teacher_forcing_decode_t_s_u": 16.162703074010903,
+      "teacher_forcing_e2e_t_s_u": 6.5839903304466985,
+      "measurement_regime": "AIME24 chat-template prefill plus trace-verified teacher-forcing decode",
+      "command": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/scripts/evaluate_candidate.py --model-dir models/autoports/qwen_qwen3_6_35b_a3b --reference models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/aime24_chat_100.refpt --config-id ccl_bf8_default --precision-config models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/ccl_bf8_default.json --mesh-device P300C --fabric-config FABRIC_1D_RING --output models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/ccl_bf8_default_result.json",
+      "env": {
+        "TT_READINESS_TRACE_REGION_SIZE": "64000000",
+        "TT_METAL_WATCHER_DISABLE_ETH": "1"
+      },
+      "hardware": {
+        "mesh_device": "P300C",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "num_devices": 4,
+        "product": "Blackhole p300c"
+      },
+      "mesh": {
+        "mesh_device": "P300C",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "trace_counters": {
+        "trace_replays": 99,
+        "execute_trace_blocking": false,
+        "steady_state_token_refreshes": 98,
+        "steady_state_position_refreshes": 0,
+        "steady_state_rope_refreshes": 0,
+        "steady_state_page_table_refreshes": 0,
+        "steady_state_synchronizations": 197,
+        "steady_state_token_readbacks": 99,
+        "terminal_validation_synchronizations": 0,
+        "terminal_validation_token_readbacks": 0,
+        "host_sampling": false,
+        "full_logits_readbacks": 0
+      },
+      "runtime_policy_summary": {
+        "config_id": "ccl_bf8_default",
+        "source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/ccl_bf8_default.json",
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf8",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32",
+        "lm_head_weight_dtype": "bf8",
+        "lm_head_compute_fidelity": "default",
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "default",
+          "linear_attention": "default",
+          "router": "default",
+          "shared_moe": "default",
+          "routed_moe": "default",
+          "lm_head": "default"
+        },
+        "first_full_attention_layer": {
+          "layer_idx": 3,
+          "qkgv_weight_dtype": "bf8",
+          "o_proj_weight_dtype": "bf8",
+          "compute_fidelity": "default",
+          "ccl_dtype": "bf8",
+          "routed_moe_weight_dtype": "bf4",
+          "routed_moe_compute_fidelity": "default",
+          "shared_moe_weight_dtype": "bf8",
+          "shared_moe_compute_fidelity": "default"
+        },
+        "first_linear_attention_layer": {
+          "layer_idx": 0,
+          "in_proj_weight_dtype": "bf8",
+          "out_proj_weight_dtype": "bf8",
+          "compute_fidelity": "default",
+          "ccl_dtype": "bf8",
+          "routed_moe_weight_dtype": "bf8",
+          "routed_moe_compute_fidelity": "default",
+          "shared_moe_weight_dtype": "bf8",
+          "shared_moe_compute_fidelity": "default"
+        }
+      },
+      "accuracy_gate_pass": true,
+      "quality_gate": {
+        "status": "pass",
+        "pass": true
+      },
+      "quality_gate_pass": true,
+      "pass": true,
+      "status": "pass",
+      "selected": false
+    },
+    {
+      "config_id": "kv_bf8_default",
+      "precision_config_path": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/kv_bf8_default.json",
+      "result_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/kv_bf8_default_result.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf8",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32"
+      },
+      "compute_fidelity_policy": {
+        "attention": "default",
+        "linear_attention": "default",
+        "router": "default",
+        "shared_moe": "default",
+        "routed_moe": "default",
+        "lm_head": "default"
+      },
+      "prefill_top1": 0.98,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "teacher_forcing_top1": 0.98,
+      "teacher_forcing_top5": 1.0,
+      "teacher_forcing_top100": 1.0,
+      "ttft_ms": 11124.3767561391,
+      "trace_verified_teacher_forcing_decode_t_s_u": 16.372051460101588,
+      "teacher_forcing_e2e_t_s_u": 5.823675983089313,
+      "measurement_regime": "AIME24 chat-template prefill plus trace-verified teacher-forcing decode",
+      "command": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/scripts/evaluate_candidate.py --model-dir models/autoports/qwen_qwen3_6_35b_a3b --reference models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/aime24_chat_100.refpt --config-id kv_bf8_default --precision-config models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/kv_bf8_default.json --mesh-device P300C --fabric-config FABRIC_1D_RING --output models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/kv_bf8_default_result.json",
+      "env": {
+        "TT_READINESS_TRACE_REGION_SIZE": "64000000",
+        "TT_METAL_WATCHER_DISABLE_ETH": "1"
+      },
+      "hardware": {
+        "mesh_device": "P300C",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "num_devices": 4,
+        "product": "Blackhole p300c"
+      },
+      "mesh": {
+        "mesh_device": "P300C",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "trace_counters": {
+        "trace_replays": 99,
+        "execute_trace_blocking": false,
+        "steady_state_token_refreshes": 98,
+        "steady_state_position_refreshes": 0,
+        "steady_state_rope_refreshes": 0,
+        "steady_state_page_table_refreshes": 0,
+        "steady_state_synchronizations": 197,
+        "steady_state_token_readbacks": 99,
+        "terminal_validation_synchronizations": 0,
+        "terminal_validation_token_readbacks": 0,
+        "host_sampling": false,
+        "full_logits_readbacks": 0
+      },
+      "runtime_policy_summary": {
+        "config_id": "kv_bf8_default",
+        "source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/kv_bf8_default.json",
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf8",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32",
+        "lm_head_weight_dtype": "bf8",
+        "lm_head_compute_fidelity": "default",
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "default",
+          "linear_attention": "default",
+          "router": "default",
+          "shared_moe": "default",
+          "routed_moe": "default",
+          "lm_head": "default"
+        },
+        "first_full_attention_layer": {
+          "layer_idx": 3,
+          "qkgv_weight_dtype": "bf8",
+          "o_proj_weight_dtype": "bf8",
+          "compute_fidelity": "default",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf4",
+          "routed_moe_compute_fidelity": "default",
+          "shared_moe_weight_dtype": "bf8",
+          "shared_moe_compute_fidelity": "default"
+        },
+        "first_linear_attention_layer": {
+          "layer_idx": 0,
+          "in_proj_weight_dtype": "bf8",
+          "out_proj_weight_dtype": "bf8",
+          "compute_fidelity": "default",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf8",
+          "routed_moe_compute_fidelity": "default",
+          "shared_moe_weight_dtype": "bf8",
+          "shared_moe_compute_fidelity": "default"
+        }
+      },
+      "accuracy_gate_pass": true,
+      "quality_gate": {
+        "status": "pass",
+        "pass": true
+      },
+      "quality_gate_pass": true,
+      "pass": true,
+      "status": "pass",
+      "selected": false
+    },
+    {
+      "config_id": "routed_all_bfp4_hifi2",
+      "precision_config_path": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/routed_all_bfp4_hifi2.json",
+      "result_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/routed_all_bfp4_hifi2_result.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf4",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32"
+      },
+      "compute_fidelity_policy": {
+        "attention": "default",
+        "linear_attention": "default",
+        "router": "default",
+        "shared_moe": "default",
+        "routed_moe": "hifi2",
+        "lm_head": "default"
+      },
+      "prefill_top1": 0.96,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "teacher_forcing_top1": 0.96,
+      "teacher_forcing_top5": 1.0,
+      "teacher_forcing_top100": 1.0,
+      "ttft_ms": 8620.880531147122,
+      "trace_verified_teacher_forcing_decode_t_s_u": 16.366124842773818,
+      "teacher_forcing_e2e_t_s_u": 6.816639278447382,
+      "measurement_regime": "AIME24 chat-template prefill plus trace-verified teacher-forcing decode",
+      "command": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/scripts/evaluate_candidate.py --model-dir models/autoports/qwen_qwen3_6_35b_a3b --reference models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/aime24_chat_100.refpt --config-id routed_all_bfp4_hifi2 --precision-config models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/routed_all_bfp4_hifi2.json --mesh-device P300C --fabric-config FABRIC_1D_RING --output models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/routed_all_bfp4_hifi2_result.json",
+      "env": {
+        "TT_READINESS_TRACE_REGION_SIZE": "64000000",
+        "TT_METAL_WATCHER_DISABLE_ETH": "1"
+      },
+      "hardware": {
+        "mesh_device": "P300C",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "num_devices": 4,
+        "product": "Blackhole p300c"
+      },
+      "mesh": {
+        "mesh_device": "P300C",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "trace_counters": {
+        "trace_replays": 99,
+        "execute_trace_blocking": false,
+        "steady_state_token_refreshes": 98,
+        "steady_state_position_refreshes": 0,
+        "steady_state_rope_refreshes": 0,
+        "steady_state_page_table_refreshes": 0,
+        "steady_state_synchronizations": 197,
+        "steady_state_token_readbacks": 99,
+        "terminal_validation_synchronizations": 0,
+        "terminal_validation_token_readbacks": 0,
+        "host_sampling": false,
+        "full_logits_readbacks": 0
+      },
+      "runtime_policy_summary": {
+        "config_id": "routed_all_bfp4_hifi2",
+        "source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/routed_all_bfp4_hifi2.json",
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32",
+        "lm_head_weight_dtype": "bf8",
+        "lm_head_compute_fidelity": "default",
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf4",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "default",
+          "linear_attention": "default",
+          "router": "default",
+          "shared_moe": "default",
+          "routed_moe": "hifi2",
+          "lm_head": "default"
+        },
+        "first_full_attention_layer": {
+          "layer_idx": 3,
+          "qkgv_weight_dtype": "bf8",
+          "o_proj_weight_dtype": "bf8",
+          "compute_fidelity": "default",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf4",
+          "routed_moe_compute_fidelity": "HiFi2",
+          "shared_moe_weight_dtype": "bf8",
+          "shared_moe_compute_fidelity": "default"
+        },
+        "first_linear_attention_layer": {
+          "layer_idx": 0,
+          "in_proj_weight_dtype": "bf8",
+          "out_proj_weight_dtype": "bf8",
+          "compute_fidelity": "default",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf4",
+          "routed_moe_compute_fidelity": "HiFi2",
+          "shared_moe_weight_dtype": "bf8",
+          "shared_moe_compute_fidelity": "default"
+        }
+      },
+      "accuracy_gate_pass": true,
+      "quality_gate": {
+        "status": "pass",
+        "pass": true
+      },
+      "quality_gate_pass": true,
+      "pass": true,
+      "status": "pass",
+      "selected": false
+    },
+    {
+      "config_id": "routed_all_bfp4_lofi",
+      "precision_config_path": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/routed_all_bfp4_lofi.json",
+      "result_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/routed_all_bfp4_lofi_result.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf4",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32"
+      },
+      "compute_fidelity_policy": {
+        "attention": "default",
+        "linear_attention": "default",
+        "router": "default",
+        "shared_moe": "default",
+        "routed_moe": "lofi",
+        "lm_head": "default"
+      },
+      "prefill_top1": 0.96,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "teacher_forcing_top1": 0.96,
+      "teacher_forcing_top5": 1.0,
+      "teacher_forcing_top100": 1.0,
+      "ttft_ms": 9082.026984076947,
+      "trace_verified_teacher_forcing_decode_t_s_u": 16.359801544194575,
+      "teacher_forcing_e2e_t_s_u": 6.607871659880033,
+      "measurement_regime": "AIME24 chat-template prefill plus trace-verified teacher-forcing decode",
+      "command": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/scripts/evaluate_candidate.py --model-dir models/autoports/qwen_qwen3_6_35b_a3b --reference models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/aime24_chat_100.refpt --config-id routed_all_bfp4_lofi --precision-config models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/routed_all_bfp4_lofi.json --mesh-device P300C --fabric-config FABRIC_1D_RING --output models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/routed_all_bfp4_lofi_result.json",
+      "env": {
+        "TT_READINESS_TRACE_REGION_SIZE": "64000000",
+        "TT_METAL_WATCHER_DISABLE_ETH": "1"
+      },
+      "hardware": {
+        "mesh_device": "P300C",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "num_devices": 4,
+        "product": "Blackhole p300c"
+      },
+      "mesh": {
+        "mesh_device": "P300C",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "trace_counters": {
+        "trace_replays": 99,
+        "execute_trace_blocking": false,
+        "steady_state_token_refreshes": 98,
+        "steady_state_position_refreshes": 0,
+        "steady_state_rope_refreshes": 0,
+        "steady_state_page_table_refreshes": 0,
+        "steady_state_synchronizations": 197,
+        "steady_state_token_readbacks": 99,
+        "terminal_validation_synchronizations": 0,
+        "terminal_validation_token_readbacks": 0,
+        "host_sampling": false,
+        "full_logits_readbacks": 0
+      },
+      "runtime_policy_summary": {
+        "config_id": "routed_all_bfp4_lofi",
+        "source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/routed_all_bfp4_lofi.json",
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32",
+        "lm_head_weight_dtype": "bf8",
+        "lm_head_compute_fidelity": "default",
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf8"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf4",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "default",
+          "linear_attention": "default",
+          "router": "default",
+          "shared_moe": "default",
+          "routed_moe": "lofi",
+          "lm_head": "default"
+        },
+        "first_full_attention_layer": {
+          "layer_idx": 3,
+          "qkgv_weight_dtype": "bf8",
+          "o_proj_weight_dtype": "bf8",
+          "compute_fidelity": "default",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf4",
+          "routed_moe_compute_fidelity": "LoFi",
+          "shared_moe_weight_dtype": "bf8",
+          "shared_moe_compute_fidelity": "default"
+        },
+        "first_linear_attention_layer": {
+          "layer_idx": 0,
+          "in_proj_weight_dtype": "bf8",
+          "out_proj_weight_dtype": "bf8",
+          "compute_fidelity": "default",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf4",
+          "routed_moe_compute_fidelity": "LoFi",
+          "shared_moe_weight_dtype": "bf8",
+          "shared_moe_compute_fidelity": "default"
+        }
+      },
+      "accuracy_gate_pass": true,
+      "quality_gate": {
+        "status": "pass",
+        "pass": true
+      },
+      "quality_gate_pass": true,
+      "pass": true,
+      "status": "pass",
+      "selected": false
+    },
+    {
+      "config_id": "shared_moe_bfp4_hifi2",
+      "precision_config_path": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/shared_moe_bfp4_hifi2.json",
+      "result_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/shared_moe_bfp4_hifi2_result.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf4"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32"
+      },
+      "compute_fidelity_policy": {
+        "attention": "default",
+        "linear_attention": "default",
+        "router": "default",
+        "shared_moe": "hifi2",
+        "routed_moe": "default",
+        "lm_head": "default"
+      },
+      "prefill_top1": 0.96,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "teacher_forcing_top1": 0.95,
+      "teacher_forcing_top5": 1.0,
+      "teacher_forcing_top100": 1.0,
+      "ttft_ms": 8569.50194016099,
+      "trace_verified_teacher_forcing_decode_t_s_u": 16.36357422871703,
+      "teacher_forcing_e2e_t_s_u": 6.840159723268021,
+      "measurement_regime": "AIME24 chat-template prefill plus trace-verified teacher-forcing decode",
+      "command": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/scripts/evaluate_candidate.py --model-dir models/autoports/qwen_qwen3_6_35b_a3b --reference models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/aime24_chat_100.refpt --config-id shared_moe_bfp4_hifi2 --precision-config models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/shared_moe_bfp4_hifi2.json --mesh-device P300C --fabric-config FABRIC_1D_RING --output models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/shared_moe_bfp4_hifi2_result.json",
+      "env": {
+        "TT_READINESS_TRACE_REGION_SIZE": "64000000",
+        "TT_METAL_WATCHER_DISABLE_ETH": "1"
+      },
+      "hardware": {
+        "mesh_device": "P300C",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "num_devices": 4,
+        "product": "Blackhole p300c"
+      },
+      "mesh": {
+        "mesh_device": "P300C",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "trace_counters": {
+        "trace_replays": 99,
+        "execute_trace_blocking": false,
+        "steady_state_token_refreshes": 98,
+        "steady_state_position_refreshes": 0,
+        "steady_state_rope_refreshes": 0,
+        "steady_state_page_table_refreshes": 0,
+        "steady_state_synchronizations": 197,
+        "steady_state_token_readbacks": 99,
+        "terminal_validation_synchronizations": 0,
+        "terminal_validation_token_readbacks": 0,
+        "host_sampling": false,
+        "full_logits_readbacks": 0
+      },
+      "runtime_policy_summary": {
+        "config_id": "shared_moe_bfp4_hifi2",
+        "source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/shared_moe_bfp4_hifi2.json",
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32",
+        "lm_head_weight_dtype": "bf8",
+        "lm_head_compute_fidelity": "default",
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf4"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "default",
+          "linear_attention": "default",
+          "router": "default",
+          "shared_moe": "hifi2",
+          "routed_moe": "default",
+          "lm_head": "default"
+        },
+        "first_full_attention_layer": {
+          "layer_idx": 3,
+          "qkgv_weight_dtype": "bf8",
+          "o_proj_weight_dtype": "bf8",
+          "compute_fidelity": "default",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf4",
+          "routed_moe_compute_fidelity": "default",
+          "shared_moe_weight_dtype": "bf4",
+          "shared_moe_compute_fidelity": "HiFi2"
+        },
+        "first_linear_attention_layer": {
+          "layer_idx": 0,
+          "in_proj_weight_dtype": "bf8",
+          "out_proj_weight_dtype": "bf8",
+          "compute_fidelity": "default",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf8",
+          "routed_moe_compute_fidelity": "default",
+          "shared_moe_weight_dtype": "bf4",
+          "shared_moe_compute_fidelity": "HiFi2"
+        }
+      },
+      "accuracy_gate_pass": true,
+      "quality_gate": {
+        "status": "pass",
+        "pass": true
+      },
+      "quality_gate_pass": true,
+      "pass": true,
+      "status": "pass",
+      "selected": false
+    },
+    {
+      "config_id": "shared_moe_bfp4_lofi",
+      "precision_config_path": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/shared_moe_bfp4_lofi.json",
+      "result_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/shared_moe_bfp4_lofi_result.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf4"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32"
+      },
+      "compute_fidelity_policy": {
+        "attention": "default",
+        "linear_attention": "default",
+        "router": "default",
+        "shared_moe": "lofi",
+        "routed_moe": "default",
+        "lm_head": "default"
+      },
+      "prefill_top1": 0.96,
+      "prefill_top5": 1.0,
+      "prefill_top100": 1.0,
+      "teacher_forcing_top1": 0.95,
+      "teacher_forcing_top5": 1.0,
+      "teacher_forcing_top100": 1.0,
+      "ttft_ms": 9126.488070935011,
+      "trace_verified_teacher_forcing_decode_t_s_u": 16.383797999965257,
+      "teacher_forcing_e2e_t_s_u": 6.5923643175335584,
+      "measurement_regime": "AIME24 chat-template prefill plus trace-verified teacher-forcing decode",
+      "command": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/scripts/evaluate_candidate.py --model-dir models/autoports/qwen_qwen3_6_35b_a3b --reference models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/aime24_chat_100.refpt --config-id shared_moe_bfp4_lofi --precision-config models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/shared_moe_bfp4_lofi.json --mesh-device P300C --fabric-config FABRIC_1D_RING --output models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/shared_moe_bfp4_lofi_result.json",
+      "env": {
+        "TT_READINESS_TRACE_REGION_SIZE": "64000000",
+        "TT_METAL_WATCHER_DISABLE_ETH": "1"
+      },
+      "hardware": {
+        "mesh_device": "P300C",
+        "fabric_config": "FABRIC_1D_RING",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "num_devices": 4,
+        "product": "Blackhole p300c"
+      },
+      "mesh": {
+        "mesh_device": "P300C",
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "fabric_config": "FABRIC_1D_RING"
+      },
+      "trace_counters": {
+        "trace_replays": 99,
+        "execute_trace_blocking": false,
+        "steady_state_token_refreshes": 98,
+        "steady_state_position_refreshes": 0,
+        "steady_state_rope_refreshes": 0,
+        "steady_state_page_table_refreshes": 0,
+        "steady_state_synchronizations": 197,
+        "steady_state_token_readbacks": 99,
+        "terminal_validation_synchronizations": 0,
+        "terminal_validation_token_readbacks": 0,
+        "host_sampling": false,
+        "full_logits_readbacks": 0
+      },
+      "runtime_policy_summary": {
+        "config_id": "shared_moe_bfp4_lofi",
+        "source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/shared_moe_bfp4_lofi.json",
+        "activation_dtype": "bf16",
+        "residual_dtype": "bf16",
+        "ccl_dtype": "bf16",
+        "kv_cache_dtype": "bf16",
+        "linear_state_dtype": "bf16",
+        "logits_dtype": "bf16",
+        "sampling_dtype": "uint32",
+        "lm_head_weight_dtype": "bf8",
+        "lm_head_compute_fidelity": "default",
+        "weight_groups": {
+          "embedding": {
+            "dtype": "bf16"
+          },
+          "norms": {
+            "dtype": "bf16"
+          },
+          "attention": {
+            "dtype": "bf8"
+          },
+          "linear_attention": {
+            "dtype": "bf8"
+          },
+          "router": {
+            "dtype": "bf16"
+          },
+          "shared_moe": {
+            "dtype": "bf4"
+          },
+          "routed_moe": {
+            "dtype": {
+              "linear_attention": "bf8",
+              "full_attention": "bf4"
+            }
+          },
+          "lm_head": {
+            "dtype": "bf8"
+          }
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "default",
+          "linear_attention": "default",
+          "router": "default",
+          "shared_moe": "lofi",
+          "routed_moe": "default",
+          "lm_head": "default"
+        },
+        "first_full_attention_layer": {
+          "layer_idx": 3,
+          "qkgv_weight_dtype": "bf8",
+          "o_proj_weight_dtype": "bf8",
+          "compute_fidelity": "default",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf4",
+          "routed_moe_compute_fidelity": "default",
+          "shared_moe_weight_dtype": "bf4",
+          "shared_moe_compute_fidelity": "LoFi"
+        },
+        "first_linear_attention_layer": {
+          "layer_idx": 0,
+          "in_proj_weight_dtype": "bf8",
+          "out_proj_weight_dtype": "bf8",
+          "compute_fidelity": "default",
+          "ccl_dtype": "bf16",
+          "routed_moe_weight_dtype": "bf8",
+          "routed_moe_compute_fidelity": "default",
+          "shared_moe_weight_dtype": "bf4",
+          "shared_moe_compute_fidelity": "LoFi"
+        }
+      },
+      "accuracy_gate_pass": true,
+      "quality_gate": {
+        "status": "fail_quality",
+        "pass": false,
+        "reason": "Rejected after stage review: prompt-correct qualitative outputs produced long repeated '!' runs and raw token-id 0 runs on prompts 1 and 4, unlike the HF/full-model controls.",
+        "artifacts": [
+          "doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json",
+          "doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json",
+          "doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/rejected_shared_moe_bfp4_lofi_repetition_report.json",
+          "doc/datatype_sweep/logs/check_rejected_shared_moe_bfp4_lofi_repetition_after_move.log"
+        ]
+      },
+      "quality_gate_pass": false,
+      "pass": false,
+      "status": "fail_quality",
+      "selected": false
+    }
+  ]
+}

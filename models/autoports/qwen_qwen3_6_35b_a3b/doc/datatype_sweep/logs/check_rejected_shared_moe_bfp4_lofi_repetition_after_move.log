@@ -1,0 +1,44 @@
+measured: prompt[0] greedy_completion ('Write a haiku about machine learning.') [models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 25, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.12}
+measured: prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l') [models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json] {'source': 'words', 'repeated_punctuation_run': 24, 'num_tokens': 19, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.1579}
+measured: prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,') [models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 38, 'adjacent_duplication': 0.0541, 'trigram_loop_fraction': 0.1579}
+measured: prompt[3] greedy_completion ('What are the three laws of thermodynamics?') [models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 34, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.1765}
+measured: prompt[4] greedy_completion ('Translate the following to French: "Hello, how are you today') [models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json] {'source': 'words', 'repeated_punctuation_run': 23, 'num_tokens': 19, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.1579}
+measured: prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.') [models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 41, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0732}
+measured: prompt[0] completion ('') [models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json] {'source': 'words', 'token_id_run': 1, 'num_tokens': 25, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.12}
+measured: prompt[1] completion ('') [models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json] {'source': 'words', 'repeated_punctuation_run': 24, 'token_id_run': 24, 'num_tokens': 19, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.1579}
+measured: prompt[2] completion ('') [models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json] {'source': 'words', 'token_id_run': 2, 'num_tokens': 38, 'adjacent_duplication': 0.0541, 'trigram_loop_fraction': 0.1579}
+measured: prompt[3] completion ('') [models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json] {'source': 'words', 'token_id_run': 1, 'num_tokens': 34, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.1765}
+measured: prompt[4] completion ('') [models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json] {'source': 'words', 'repeated_punctuation_run': 23, 'token_id_run': 23, 'num_tokens': 19, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.1579}
+measured: prompt[5] completion ('') [models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json] {'source': 'words', 'token_id_run': 1, 'num_tokens': 41, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0732}
+
+6 finding(s):
+
+[CRITICAL] repeated_punctuation_run=24.0 (threshold 16.0)
+  artifact: models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json
+  where:    prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')
+  Completion contains a long run of the same punctuation token. This is a sampler/logit-collapse signature that word-based duplication checks can miss.
+
+[CRITICAL] repeated_punctuation_run=23.0 (threshold 16.0)
+  artifact: models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json
+  where:    prompt[4] greedy_completion ('Translate the following to French: "Hello, how are you today')
+  Completion contains a long run of the same punctuation token. This is a sampler/logit-collapse signature that word-based duplication checks can miss.
+
+[CRITICAL] repeated_punctuation_run=24.0 (threshold 16.0)
+  artifact: models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json
+  where:    prompt[1] completion ('')
+  Completion contains a long run of the same punctuation token. This is a sampler/logit-collapse signature that word-based duplication checks can miss.
+
+[CRITICAL] token_id_run=24.0 (threshold 16.0)
+  artifact: models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json
+  where:    prompt[1] completion ('')
+  Generated token ids contain a long contiguous run of the same token. Verify token feedback, sampling, and dtype/fidelity changes against the HF or previous-stage control.
+
+[CRITICAL] repeated_punctuation_run=23.0 (threshold 16.0)
+  artifact: models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json
+  where:    prompt[4] completion ('')
+  Completion contains a long run of the same punctuation token. This is a sampler/logit-collapse signature that word-based duplication checks can miss.
+
+[CRITICAL] token_id_run=23.0 (threshold 16.0)
+  artifact: models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json
+  where:    prompt[4] completion ('')
+  Generated token ids contain a long contiguous run of the same token. Verify token feedback, sampling, and dtype/fidelity changes against the HF or previous-stage control.

@@ -1,0 +1,10 @@
+{
+  "config_id": "shared_moe_bfp4_lofi",
+  "description": "Shared expert gate/up/down weights are BF4 with LoFi shared-expert matmul compute; routed MoE remains at baseline.",
+  "weight_groups": {
+    "shared_moe": {"dtype": "bf4"}
+  },
+  "compute_fidelities": {
+    "shared_moe": "lofi"
+  }
+}

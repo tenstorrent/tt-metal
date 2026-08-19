@@ -1,0 +1,167 @@
+{
+  "findings": [
+    {
+      "severity": "critical",
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json",
+      "label": "prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')",
+      "metric": "repeated_punctuation_run",
+      "value": 24.0,
+      "threshold": 16.0,
+      "detail": "Completion contains a long run of the same punctuation token. This is a sampler/logit-collapse signature that word-based duplication checks can miss."
+    },
+    {
+      "severity": "critical",
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json",
+      "label": "prompt[4] greedy_completion ('Translate the following to French: \"Hello, how are you today')",
+      "metric": "repeated_punctuation_run",
+      "value": 23.0,
+      "threshold": 16.0,
+      "detail": "Completion contains a long run of the same punctuation token. This is a sampler/logit-collapse signature that word-based duplication checks can miss."
+    },
+    {
+      "severity": "critical",
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json",
+      "label": "prompt[1] completion ('')",
+      "metric": "repeated_punctuation_run",
+      "value": 24.0,
+      "threshold": 16.0,
+      "detail": "Completion contains a long run of the same punctuation token. This is a sampler/logit-collapse signature that word-based duplication checks can miss."
+    },
+    {
+      "severity": "critical",
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json",
+      "label": "prompt[1] completion ('')",
+      "metric": "token_id_run",
+      "value": 24.0,
+      "threshold": 16.0,
+      "detail": "Generated token ids contain a long contiguous run of the same token. Verify token feedback, sampling, and dtype/fidelity changes against the HF or previous-stage control."
+    },
+    {
+      "severity": "critical",
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json",
+      "label": "prompt[4] completion ('')",
+      "metric": "repeated_punctuation_run",
+      "value": 23.0,
+      "threshold": 16.0,
+      "detail": "Completion contains a long run of the same punctuation token. This is a sampler/logit-collapse signature that word-based duplication checks can miss."
+    },
+    {
+      "severity": "critical",
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json",
+      "label": "prompt[4] completion ('')",
+      "metric": "token_id_run",
+      "value": 23.0,
+      "threshold": 16.0,
+      "detail": "Generated token ids contain a long contiguous run of the same token. Verify token feedback, sampling, and dtype/fidelity changes against the HF or previous-stage control."
+    }
+  ],
+  "measured": [
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json",
+      "label": "prompt[0] greedy_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 25,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.12
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json",
+      "label": "prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "repeated_punctuation_run": 24,
+      "num_tokens": 19,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1579
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json",
+      "label": "prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 38,
+      "adjacent_duplication": 0.0541,
+      "trigram_loop_fraction": 0.1579
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json",
+      "label": "prompt[3] greedy_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 34,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1765
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json",
+      "label": "prompt[4] greedy_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "repeated_punctuation_run": 23,
+      "num_tokens": 19,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1579
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json",
+      "label": "prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 41,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0732
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json",
+      "label": "prompt[0] completion ('')",
+      "source": "words",
+      "token_id_run": 1,
+      "num_tokens": 25,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.12
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json",
+      "label": "prompt[1] completion ('')",
+      "source": "words",
+      "repeated_punctuation_run": 24,
+      "token_id_run": 24,
+      "num_tokens": 19,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1579
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json",
+      "label": "prompt[2] completion ('')",
+      "source": "words",
+      "token_id_run": 2,
+      "num_tokens": 38,
+      "adjacent_duplication": 0.0541,
+      "trigram_loop_fraction": 0.1579
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json",
+      "label": "prompt[3] completion ('')",
+      "source": "words",
+      "token_id_run": 1,
+      "num_tokens": 34,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1765
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json",
+      "label": "prompt[4] completion ('')",
+      "source": "words",
+      "repeated_punctuation_run": 23,
+      "token_id_run": 23,
+      "num_tokens": 19,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1579
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json",
+      "label": "prompt[5] completion ('')",
+      "source": "words",
+      "token_id_run": 1,
+      "num_tokens": 41,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0732
+    }
+  ],
+  "exit_code": 2
+}

@@ -1,0 +1,88 @@
+{
+  "config_id": "baseline_default",
+  "precision_config_source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/selected_precision_config.json",
+  "prompt_len": 5,
+  "prefill_shape": [
+    1,
+    5,
+    128
+  ],
+  "decode_shape": [
+    1,
+    128
+  ],
+  "runtime_policy_summary": {
+    "config_id": "baseline_default",
+    "source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/selected_precision_config.json",
+    "activation_dtype": "bf16",
+    "residual_dtype": "bf16",
+    "ccl_dtype": "bf16",
+    "kv_cache_dtype": "bf16",
+    "linear_state_dtype": "bf16",
+    "logits_dtype": "bf16",
+    "sampling_dtype": "uint32",
+    "lm_head_weight_dtype": "bf8",
+    "lm_head_compute_fidelity": "default",
+    "weight_groups": {
+      "embedding": {
+        "dtype": "bf16"
+      },
+      "norms": {
+        "dtype": "bf16"
+      },
+      "attention": {
+        "dtype": "bf8"
+      },
+      "linear_attention": {
+        "dtype": "bf8"
+      },
+      "router": {
+        "dtype": "bf16"
+      },
+      "shared_moe": {
+        "dtype": "bf8"
+      },
+      "routed_moe": {
+        "dtype": {
+          "linear_attention": "bf8",
+          "full_attention": "bf4"
+        }
+      },
+      "lm_head": {
+        "dtype": "bf8"
+      }
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "default",
+      "linear_attention": "default",
+      "router": "default",
+      "shared_moe": "default",
+      "routed_moe": "default",
+      "lm_head": "default"
+    },
+    "first_full_attention_layer": {
+      "layer_idx": 1,
+      "qkgv_weight_dtype": "bf8",
+      "o_proj_weight_dtype": "bf8",
+      "compute_fidelity": "default",
+      "ccl_dtype": "bf16",
+      "routed_moe_weight_dtype": "bf4",
+      "routed_moe_compute_fidelity": "default",
+      "shared_moe_weight_dtype": "bf8",
+      "shared_moe_compute_fidelity": "default"
+    },
+    "first_linear_attention_layer": {
+      "layer_idx": 0,
+      "in_proj_weight_dtype": "bf8",
+      "out_proj_weight_dtype": "bf8",
+      "compute_fidelity": "default",
+      "ccl_dtype": "bf16",
+      "routed_moe_weight_dtype": "bf8",
+      "routed_moe_compute_fidelity": "default",
+      "shared_moe_weight_dtype": "bf8",
+      "shared_moe_compute_fidelity": "default"
+    }
+  },
+  "non_aligned_prompt_supported": true
+}

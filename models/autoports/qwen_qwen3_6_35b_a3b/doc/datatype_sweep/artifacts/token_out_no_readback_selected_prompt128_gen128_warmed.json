@@ -1,0 +1,160 @@
+{
+  "measurement_regime": "serving_style_token_out_no_per_token_readback",
+  "prompt_file": "models/common/readiness_check/autoregressive_prompt.txt",
+  "prompt_len": 128,
+  "max_new_tokens": 128,
+  "decode_tokens": 127,
+  "first_token": 248045,
+  "final_token": 22960,
+  "ttft_ms": 5841.189489234239,
+  "trace_capture_ms": 289.1981890425086,
+  "decode_replay_s": 7.283743605948985,
+  "decode_replay_t_s_u": 17.436088757472596,
+  "decode_including_capture_s": 7.572941794991493,
+  "decode_including_capture_t_s_u": 16.77023321161584,
+  "e2e_s": 13.414884147234261,
+  "e2e_t_s_u": 9.541640359703717,
+  "trace_present": true,
+  "trace_generated_steps": 127,
+  "position_end_expected_exclusive": 256,
+  "host_boundary_counters": {
+    "trace_replays": 127,
+    "trace_decode_steps": 127,
+    "execute_trace_blocking": false,
+    "steady_state_token_refreshes": 0,
+    "steady_state_position_refreshes": 0,
+    "steady_state_rope_refreshes": 0,
+    "steady_state_page_table_refreshes": 0,
+    "steady_state_synchronizations": 0,
+    "steady_state_token_readbacks": 0,
+    "terminal_validation_synchronizations": 1,
+    "terminal_validation_token_readbacks": 1,
+    "host_sampling": false,
+    "full_logits_readbacks": 0
+  },
+  "raw_timings": {
+    "ttft_s": 5.841189489234239,
+    "trace_capture_s": 0.2891981890425086,
+    "decode_replay_s": 7.283743605948985,
+    "decode_s": 7.283743605948985,
+    "decode_s_including_capture": 7.572941794991493,
+    "e2e_s": 13.414884147234261,
+    "generated_tokens": 128.0,
+    "decode_tokens": 127.0
+  },
+  "runtime_policy_summary": {
+    "config_id": "baseline_default",
+    "source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/selected_precision_config.json",
+    "activation_dtype": "bf16",
+    "residual_dtype": "bf16",
+    "ccl_dtype": "bf16",
+    "kv_cache_dtype": "bf16",
+    "linear_state_dtype": "bf16",
+    "logits_dtype": "bf16",
+    "sampling_dtype": "uint32",
+    "lm_head_weight_dtype": "bf8",
+    "lm_head_compute_fidelity": "default",
+    "weight_groups": {
+      "embedding": {
+        "dtype": "bf16"
+      },
+      "norms": {
+        "dtype": "bf16"
+      },
+      "attention": {
+        "dtype": "bf8"
+      },
+      "linear_attention": {
+        "dtype": "bf8"
+      },
+      "router": {
+        "dtype": "bf16"
+      },
+      "shared_moe": {
+        "dtype": "bf8"
+      },
+      "routed_moe": {
+        "dtype": {
+          "linear_attention": "bf8",
+          "full_attention": "bf4"
+        }
+      },
+      "lm_head": {
+        "dtype": "bf8"
+      }
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "default",
+      "linear_attention": "default",
+      "router": "default",
+      "shared_moe": "default",
+      "routed_moe": "default",
+      "lm_head": "default"
+    },
+    "first_full_attention_layer": {
+      "layer_idx": 3,
+      "qkgv_weight_dtype": "bf8",
+      "o_proj_weight_dtype": "bf8",
+      "compute_fidelity": "default",
+      "ccl_dtype": "bf16",
+      "routed_moe_weight_dtype": "bf4",
+      "routed_moe_compute_fidelity": "default",
+      "shared_moe_weight_dtype": "bf8",
+      "shared_moe_compute_fidelity": "default"
+    },
+    "first_linear_attention_layer": {
+      "layer_idx": 0,
+      "in_proj_weight_dtype": "bf8",
+      "out_proj_weight_dtype": "bf8",
+      "compute_fidelity": "default",
+      "ccl_dtype": "bf16",
+      "routed_moe_weight_dtype": "bf8",
+      "routed_moe_compute_fidelity": "default",
+      "shared_moe_weight_dtype": "bf8",
+      "shared_moe_compute_fidelity": "default"
+    }
+  },
+  "command": "models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/scripts/measure_token_out_no_readback.py --model-dir models/autoports/qwen_qwen3_6_35b_a3b --prompt-len 128 --max-new-tokens 128 --mesh-device P300C --fabric-config FABRIC_1D_RING --output models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/token_out_no_readback_selected_prompt128_gen128_warmed.json",
+  "env": {
+    "QWEN36_PRECISION_CONFIG": null,
+    "TT_READINESS_TRACE_REGION_SIZE": "64000000",
+    "TT_METAL_WATCHER_DISABLE_ETH": "1"
+  },
+  "warmup_before_measurement": true,
+  "warmup_metrics": {
+    "prompt_len": 128,
+    "max_new_tokens": 1,
+    "first_token": 248045,
+    "final_token": 248045,
+    "trace_present": false,
+    "trace_generated_steps": 0,
+    "position_end_expected_exclusive": 129,
+    "raw_timings": {
+      "ttft_s": 5.940546104684472,
+      "trace_capture_s": 0.0,
+      "decode_replay_s": 0.0,
+      "decode_s": 0.0,
+      "decode_s_including_capture": 0.0,
+      "e2e_s": 5.94054716732353,
+      "generated_tokens": 1.0,
+      "decode_tokens": 0.0
+    },
+    "host_boundary_counters": {
+      "trace_replays": 0,
+      "trace_decode_steps": 0,
+      "execute_trace_blocking": false,
+      "steady_state_token_refreshes": 0,
+      "steady_state_position_refreshes": 0,
+      "steady_state_rope_refreshes": 0,
+      "steady_state_page_table_refreshes": 0,
+      "steady_state_synchronizations": 0,
+      "steady_state_token_readbacks": 0,
+      "terminal_validation_synchronizations": 0,
+      "terminal_validation_token_readbacks": 0,
+      "host_sampling": false,
+      "full_logits_readbacks": 0
+    }
+  },
+  "before_readback_baseline": null
+}

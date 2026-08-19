@@ -1,0 +1,270 @@
+2026-08-19 17:00:10.439 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-19 17:00:10.705 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-19 17:00:10.705 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-19 17:00:10.705 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-19 17:00:10.705 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-19 17:00:10.706 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-19 17:00:10.706 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-19 17:00:10.710 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-19 17:00:10.930 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-19 17:00:10.930 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-19 17:00:10.930 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-19 17:00:10.930 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-19 17:00:10.932 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-19 17:00:11.061 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-19 17:00:11.178 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 17:00:11.178 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 17:00:11.178 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 17:00:11.178 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 17:00:11.178 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 17:00:11.178 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 17:00:11.178 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 17:00:11.178 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 17:00:11.178 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 17:00:11.178 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 17:00:11.178 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 17:00:11.178 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 17:00:11.179 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 17:00:11.179 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 17:00:11.227 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-19 17:00:11.243 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-19 17:00:11.244 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-19 17:00:11.245 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-19 17:00:11.246 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-19 17:00:11.246 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-19 17:00:11.246 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-08-19 17:00:11.286 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929248_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 17:00:11.286 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929249_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 17:00:11.286 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931936_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 17:00:11.286 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931937_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 17:00:11.865 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349996 GHz, device_time_at_sync=28166154032624 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 17:00:11.865 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349991 GHz, device_time_at_sync=28153718568819 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 17:00:11.866 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349992 GHz, device_time_at_sync=28141190129123 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 17:00:11.866 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349994 GHz, device_time_at_sync=28159212145926 cycles (realtime_profiler_manager.cpp:1127)
+prefill[0]           top1=0.960 (96/100)  top5=1.000 (100/100)  top100=1.000 (100/100)
+prefill agg          top1=0.960 (96/100)  top5=1.000 (100/100)  top100=1.000 (100/100)
+teacher[0]           top1=0.950 (95/100)  top5=1.000 (100/100)  top100=1.000 (100/100)
+teacher agg          top1=0.950 (95/100)  top5=1.000 (100/100)  top100=1.000 (100/100)
+{
+  "config_id": "shared_moe_bfp4_hifi2",
+  "precision_config_path": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/shared_moe_bfp4_hifi2.json",
+  "measurement_regime": "AIME24 chat-template prefill plus trace-verified teacher-forcing decode",
+  "reference": {
+    "path": "models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/aime24_chat_100.refpt",
+    "hf_model_id": "Qwen/Qwen3.6-35B-A3B",
+    "k": 100,
+    "entries": 1,
+    "prompt_lengths": [
+      161
+    ],
+    "generated_token_lengths": [
+      100
+    ],
+    "chat_template": "AIME24 main readiness reference"
+  },
+  "prefill": {
+    "per_entry": [
+      {
+        "top1": 0.96,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 96,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100
+      }
+    ],
+    "aggregate": {
+      "top1": 0.96,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 96,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100
+    }
+  },
+  "teacher_forcing": {
+    "per_entry": [
+      {
+        "top1": 0.95,
+        "top5": 1.0,
+        "top100": 1.0,
+        "matches_top1": 95,
+        "matches_top5": 100,
+        "matches_top100": 100,
+        "total": 100,
+        "k": 100,
+        "elapsed_s": 14.619541654828936,
+        "e2e_t/s/u": 6.840159723268021,
+        "ttft_ms": 8569.50194016099,
+        "decode_tokens": 99.0,
+        "decode_elapsed_s": 6.0500229727476835,
+        "decode_t/s/u": 16.36357422871703
+      }
+    ],
+    "aggregate": {
+      "top1": 0.95,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 95,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100,
+      "elapsed_s": 14.619541654828936,
+      "e2e_t_s_u": 6.840159723268021,
+      "ttft_ms": 8569.50194016099,
+      "decode_tokens": 99.0,
+      "decode_elapsed_s": 6.0500229727476835,
+      "decode_t_s_u": 16.36357422871703
+    },
+    "trace_verified": true,
+    "trace_counters": {
+      "trace_replays": 99,
+      "execute_trace_blocking": false,
+      "steady_state_token_refreshes": 98,
+      "steady_state_position_refreshes": 0,
+      "steady_state_rope_refreshes": 0,
+      "steady_state_page_table_refreshes": 0,
+      "steady_state_synchronizations": 197,
+      "steady_state_token_readbacks": 99,
+      "terminal_validation_synchronizations": 0,
+      "terminal_validation_token_readbacks": 0,
+      "host_sampling": false,
+      "full_logits_readbacks": 0
+    }
+  },
+  "thresholds": {
+    "top1": 0.9,
+    "top5": 0.98
+  },
+  "status": "pass",
+  "runtime_policy_summary": {
+    "config_id": "shared_moe_bfp4_hifi2",
+    "source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/shared_moe_bfp4_hifi2.json",
+    "activation_dtype": "bf16",
+    "residual_dtype": "bf16",
+    "ccl_dtype": "bf16",
+    "kv_cache_dtype": "bf16",
+    "linear_state_dtype": "bf16",
+    "logits_dtype": "bf16",
+    "sampling_dtype": "uint32",
+    "lm_head_weight_dtype": "bf8",
+    "lm_head_compute_fidelity": "default",
+    "weight_groups": {
+      "embedding": {
+        "dtype": "bf16"
+      },
+      "norms": {
+        "dtype": "bf16"
+      },
+      "attention": {
+        "dtype": "bf8"
+      },
+      "linear_attention": {
+        "dtype": "bf8"
+      },
+      "router": {
+        "dtype": "bf16"
+      },
+      "shared_moe": {
+        "dtype": "bf4"
+      },
+      "routed_moe": {
+        "dtype": {
+          "linear_attention": "bf8",
+          "full_attention": "bf4"
+        }
+      },
+      "lm_head": {
+        "dtype": "bf8"
+      }
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "attention": "default",
+      "linear_attention": "default",
+      "router": "default",
+      "shared_moe": "hifi2",
+      "routed_moe": "default",
+      "lm_head": "default"
+    },
+    "first_full_attention_layer": {
+      "layer_idx": 3,
+      "qkgv_weight_dtype": "bf8",
+      "o_proj_weight_dtype": "bf8",
+      "compute_fidelity": "default",
+      "ccl_dtype": "bf16",
+      "routed_moe_weight_dtype": "bf4",
+      "routed_moe_compute_fidelity": "default",
+      "shared_moe_weight_dtype": "bf4",
+      "shared_moe_compute_fidelity": "HiFi2"
+    },
+    "first_linear_attention_layer": {
+      "layer_idx": 0,
+      "in_proj_weight_dtype": "bf8",
+      "out_proj_weight_dtype": "bf8",
+      "compute_fidelity": "default",
+      "ccl_dtype": "bf16",
+      "routed_moe_weight_dtype": "bf8",
+      "routed_moe_compute_fidelity": "default",
+      "shared_moe_weight_dtype": "bf4",
+      "shared_moe_compute_fidelity": "HiFi2"
+    }
+  },
+  "hardware": {
+    "mesh_device": "P300C",
+    "fabric_config": "FABRIC_1D_RING",
+    "mesh_shape": [
+      2,
+      2
+    ],
+    "num_devices": 4,
+    "product": "Blackhole p300c"
+  },
+  "command": "models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/scripts/evaluate_candidate.py --model-dir models/autoports/qwen_qwen3_6_35b_a3b --reference models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_full_model/artifacts/aime24_chat_100.refpt --config-id shared_moe_bfp4_hifi2 --precision-config models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/configs/shared_moe_bfp4_hifi2.json --mesh-device P300C --fabric-config FABRIC_1D_RING --output models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/artifacts/shared_moe_bfp4_hifi2_result.json",
+  "env": {
+    "TT_READINESS_TRACE_REGION_SIZE": "64000000",
+    "TT_METAL_WATCHER_DISABLE_ETH": "1"
+  },
+  "elapsed_s": 353.8160339030437
+}
+nanobind: leaked 2 instances!
+ - leaked instance 0x7bb2163aaec8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x7bb2162aeb68 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 44 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "ttnn._ttnn.types.iterator"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - ... skipped remainder
+nanobind: leaked 345 functions!
+ - leaked function "is_sharded"
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function "id"
+ - leaked function "__eq__"
+ - leaked function "__next__"
+ - leaked function "buffer_page_size"
+ - leaked function "get_system_mesh_id"
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function "__len__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-19 17:06:05.315 | info     |    BuildKernels | JIT cache stats: 794/800 hits (99.2%) [794 cached, 1105 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-19 17:06:05.315 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-19 17:06:05.334 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-19 17:06:05.334 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-19 17:06:05.951 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-19 17:06:05.952 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-19 17:06:05.952 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

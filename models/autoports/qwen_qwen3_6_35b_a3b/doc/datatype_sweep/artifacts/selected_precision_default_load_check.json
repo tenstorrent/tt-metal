@@ -1,0 +1,63 @@
+{
+  "model_dir": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b",
+  "expected_selected_path": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/selected_precision_config.json",
+  "resolved_source": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/datatype_sweep/selected_precision_config.json",
+  "config_id": "baseline_default",
+  "selected_from_config_id": "baseline_default",
+  "required_fields_present": [
+    "weight_groups",
+    "layer_exceptions",
+    "compute_fidelities",
+    "activation_dtype",
+    "residual_dtype",
+    "ccl_dtype",
+    "kv_cache_dtype",
+    "linear_state_dtype",
+    "logits_dtype",
+    "sampling_dtype"
+  ],
+  "weight_groups": {
+    "embedding": {
+      "dtype": "bf16"
+    },
+    "norms": {
+      "dtype": "bf16"
+    },
+    "attention": {
+      "dtype": "bf8"
+    },
+    "linear_attention": {
+      "dtype": "bf8"
+    },
+    "router": {
+      "dtype": "bf16"
+    },
+    "shared_moe": {
+      "dtype": "bf8"
+    },
+    "routed_moe": {
+      "dtype": {
+        "linear_attention": "bf8",
+        "full_attention": "bf4"
+      }
+    },
+    "lm_head": {
+      "dtype": "bf8"
+    }
+  },
+  "compute_fidelities": {
+    "attention": "default",
+    "linear_attention": "default",
+    "router": "default",
+    "shared_moe": "default",
+    "routed_moe": "default",
+    "lm_head": "default"
+  },
+  "activation_dtype": "bf16",
+  "residual_dtype": "bf16",
+  "ccl_dtype": "bf16",
+  "kv_cache_dtype": "bf16",
+  "linear_state_dtype": "bf16",
+  "logits_dtype": "bf16",
+  "sampling_dtype": "uint32"
+}

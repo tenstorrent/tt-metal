@@ -1,0 +1,12 @@
+{
+  "config_id": "bfp8_lofi_all",
+  "description": "Baseline weight dtypes with LoFi compute fidelity on material BFP8/BFP4 matmul groups.",
+  "compute_fidelities": {
+    "attention": "lofi",
+    "linear_attention": "lofi",
+    "router": "lofi",
+    "shared_moe": "lofi",
+    "routed_moe": "lofi",
+    "lm_head": "lofi"
+  }
+}

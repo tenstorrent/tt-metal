@@ -1,0 +1,12 @@
+{
+  "config_id": "bfp8_hifi2_all",
+  "description": "Baseline weight dtypes with explicit HiFi2 compute fidelity on material BFP8/BFP4 matmul groups.",
+  "compute_fidelities": {
+    "attention": "hifi2",
+    "linear_attention": "hifi2",
+    "router": "hifi2",
+    "shared_moe": "hifi2",
+    "routed_moe": "hifi2",
+    "lm_head": "hifi2"
+  }
+}

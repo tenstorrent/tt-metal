@@ -1,0 +1,5 @@
+{
+  "config_id": "ccl_bf8_default",
+  "description": "Baseline weight and compute policy with BF8 CCL all-reduce payloads, typecast back to BF16 residuals.",
+  "ccl_dtype": "bf8"
+}

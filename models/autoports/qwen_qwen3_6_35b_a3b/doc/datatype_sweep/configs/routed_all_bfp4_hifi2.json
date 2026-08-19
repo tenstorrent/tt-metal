@@ -1,0 +1,10 @@
+{
+  "config_id": "routed_all_bfp4_hifi2",
+  "description": "Routed MoE expert gate/up/down weights are BF4 on both linear-attention and full-attention layers, with HiFi2 routed sparse matmul compute.",
+  "weight_groups": {
+    "routed_moe": {"dtype": {"linear_attention": "bf4", "full_attention": "bf4"}}
+  },
+  "compute_fidelities": {
+    "routed_moe": "hifi2"
+  }
+}

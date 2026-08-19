@@ -1,0 +1,13 @@
+{
+  "shared_moe_bfp4_lofi": {
+    "status": "fail_quality",
+    "pass": false,
+    "reason": "Rejected after stage review: prompt-correct qualitative outputs produced long repeated '!' runs and raw token-id 0 runs on prompts 1 and 4, unlike the HF/full-model controls.",
+    "artifacts": [
+      "doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/vllm_qualitative_outputs.json",
+      "doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/tt_qualitative_outputs.json",
+      "doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/rejected_shared_moe_bfp4_lofi_repetition_report.json",
+      "doc/datatype_sweep/logs/check_rejected_shared_moe_bfp4_lofi_repetition_after_move.log"
+    ]
+  }
+}

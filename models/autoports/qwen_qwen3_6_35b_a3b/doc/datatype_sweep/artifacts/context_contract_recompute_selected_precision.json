@@ -1,0 +1,55 @@
+{
+  "selected_config_id": "baseline_default",
+  "selected_kv_cache_dtype": "bf16",
+  "max_supported_context_tokens": 262144,
+  "capacity_reduced": false,
+  "per_device_context_262144_batch1": {
+    "context_tokens": 262144,
+    "batch": 1,
+    "block_size": 32,
+    "max_num_blocks": 8192,
+    "transformed_tt_weight_bytes": 15985073536,
+    "transformed_tt_weight_gib": 14.8873,
+    "runtime_state_excluding_weights_bytes": 2768207872,
+    "runtime_state_excluding_weights_gib": 2.5781,
+    "weight_plus_runtime_state_bytes": 18753281408,
+    "weight_plus_runtime_state_gib": 17.4654,
+    "capacity_reduced": false,
+    "hard_physical_limit_evidence": null
+  },
+  "runtime_state_breakdown_bytes": {
+    "full_attention_kv_per_layer": 268435456,
+    "full_attention_kv_all_10_layers": 2684354560,
+    "linear_conv_and_recurrent_all_30_layers": 16711680,
+    "page_table": 32768,
+    "decode_rope_tables": 67108864
+  },
+  "evaluated_kv_dtype_candidates": {
+    "bf16_selected": {
+      "config_id": "baseline_default",
+      "context_tokens": 262144,
+      "full_attention_kv_per_layer_bytes": 268435456,
+      "full_attention_kv_all_10_layers_bytes": 2684354560,
+      "evidence": [
+        "doc/full_model/capacity.md",
+        "doc/full_model/logs/real_full_model_load_context_alloc.log",
+        "doc/datatype_sweep/artifacts/selected_non_aligned_prompt_smoke.json"
+      ]
+    },
+    "bf8_evaluated_not_selected": {
+      "config_id": "kv_bf8_default",
+      "teacher_forcing_top1": 0.98,
+      "teacher_forcing_top5": 1.0,
+      "trace_verified_decode_t_s_u": 16.372051460101588,
+      "reason_not_selected": "slower traced teacher-forcing decode than baseline_default and did not improve final selection",
+      "capacity_note": "BF8 KV cache would reduce full-attention KV bytes, but no advertised capability reduction is applied because this candidate was not selected.",
+      "evidence": [
+        "doc/datatype_sweep/artifacts/kv_bf8_default_result.json"
+      ]
+    }
+  },
+  "quality_gate_applied": true,
+  "quality_failed_candidates": [
+    "shared_moe_bfp4_lofi"
+  ]
+}

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
 
 from transformers import AutoTokenizer
@@ -63,6 +65,7 @@ def main() -> None:
             local_files_only=args.local_files_only,
         )
         try:
+            runtime_policy_summary = generator.model.describe_precision_policy()
             warmup_metrics = None
             if args.warmup:
                 warmup_metrics = generator.measure_token_out_no_readback(
@@ -140,6 +143,13 @@ def main() -> None:
         "position_end_expected_exclusive": metrics["position_end_expected_exclusive"],
         "host_boundary_counters": counters,
         "raw_timings": timings,
+        "runtime_policy_summary": runtime_policy_summary,
+        "command": " ".join(sys.argv),
+        "env": {
+            "QWEN36_PRECISION_CONFIG": os.environ.get("QWEN36_PRECISION_CONFIG"),
+            "TT_READINESS_TRACE_REGION_SIZE": os.environ.get("TT_READINESS_TRACE_REGION_SIZE"),
+            "TT_METAL_WATCHER_DISABLE_ETH": os.environ.get("TT_METAL_WATCHER_DISABLE_ETH"),
+        },
         "warmup_before_measurement": bool(args.warmup),
         "warmup_metrics": warmup_metrics,
         "before_readback_baseline": readback_baseline,

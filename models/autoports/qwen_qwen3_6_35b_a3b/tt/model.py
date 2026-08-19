@@ -10,6 +10,7 @@ full-stack cache/state contract used by readiness generators.
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 from dataclasses import dataclass, replace
@@ -36,6 +37,16 @@ from .functional_decoder import (
     _text_config,
 )
 from .multichip_decoder import MultichipDecoder, _validate_target_mesh
+from .optimized_decoder import DEFAULT_OPTIMIZED_POLICY, OptimizedDecoderPolicy
+from .precision_config import (
+    compute_fidelity_name,
+    compute_kernel_config_from_fidelity,
+    dtype_from_name,
+    dtype_to_name,
+    group_dtype_name,
+    layer_exception,
+    normalize_precision_config,
+)
 
 BLOCK_SIZE = 32
 DEFAULT_PREFILL_CHUNK_SIZE = 64
@@ -127,6 +138,44 @@ def _as_text_config(hf_config):
     return getattr(hf_config, "text_config", hf_config)
 
 
+def _group_dtype(config: dict[str, Any], group: str, *, layer_type: str | None = None):
+    return dtype_from_name(group_dtype_name(config, group, layer_type=layer_type))
+
+
+def _decoder_policy_for_layer(config: dict[str, Any], *, layer_idx: int, layer_type: str) -> OptimizedDecoderPolicy:
+    exception = layer_exception(config, layer_idx)
+    group_overrides = exception.get("weight_groups", {})
+    compute_overrides = exception.get("compute_fidelities", {})
+
+    def dtype_for(group: str):
+        if group in group_overrides:
+            value = (
+                group_overrides[group]["dtype"] if isinstance(group_overrides[group], dict) else group_overrides[group]
+            )
+            if isinstance(value, dict):
+                value = value[layer_type]
+            return dtype_from_name(str(value))
+        return _group_dtype(config, group, layer_type=layer_type)
+
+    def fidelity_for(group: str) -> str:
+        return str(compute_overrides.get(group, compute_fidelity_name(config, group)))
+
+    return replace(
+        DEFAULT_OPTIMIZED_POLICY,
+        attention_weight_dtype=dtype_for("attention"),
+        linear_attention_weight_dtype=dtype_for("linear_attention"),
+        shared_moe_weight_dtype=dtype_for("shared_moe"),
+        routed_moe_weight_dtype=dtype_for("routed_moe"),
+        attention_compute_fidelity=fidelity_for("attention"),
+        linear_attention_compute_fidelity=fidelity_for("linear_attention"),
+        router_compute_fidelity=fidelity_for("router"),
+        shared_moe_compute_fidelity=fidelity_for("shared_moe"),
+        routed_moe_compute_fidelity=fidelity_for("routed_moe"),
+        lm_head_compute_fidelity=fidelity_for("lm_head"),
+        ccl_dtype=str(config.get("ccl_dtype", "bf16")),
+    )
+
+
 def _vocab_size(hf_config) -> int:
     return int(_as_text_config(hf_config).vocab_size)
 
@@ -178,6 +227,8 @@ class QwenFullModel:
         sampling: SamplingGenerator | None = None,
         cos_matrix: ttnn.Tensor | None = None,
         sin_matrix: ttnn.Tensor | None = None,
+        precision_config: dict[str, Any] | None = None,
+        precision_config_source: str = "<built-in-default>",
     ):
         _validate_target_mesh(mesh_device, MultichipDecoder.mesh_plan)
         if prefill_chunk_size % block_size != 0:
@@ -200,6 +251,17 @@ class QwenFullModel:
         self.sampling = sampling
         self.cos_matrix = cos_matrix
         self.sin_matrix = sin_matrix
+        self.precision_config = normalize_precision_config(precision_config)
+        self.precision_config_source = precision_config_source
+        self.kv_cache_dtype = dtype_from_name(str(self.precision_config["kv_cache_dtype"]))
+        self.linear_state_dtype = dtype_from_name(str(self.precision_config["linear_state_dtype"]))
+        self.activation_dtype = dtype_from_name(str(self.precision_config["activation_dtype"]))
+        self.residual_dtype = dtype_from_name(str(self.precision_config["residual_dtype"]))
+        self.logits_dtype = dtype_from_name(str(self.precision_config["logits_dtype"]))
+        self.sampling_dtype = dtype_from_name(str(self.precision_config["sampling_dtype"]))
+        self.lm_head_compute_kernel_config = compute_kernel_config_from_fidelity(
+            compute_fidelity_name(self.precision_config, "lm_head")
+        )
         self.full_attention_layers = [
             idx for idx, layer_type in enumerate(self.cfg.layer_types) if layer_type == "full_attention"
         ]
@@ -218,9 +280,11 @@ class QwenFullModel:
         max_seq_len: int | None = None,
         block_size: int = BLOCK_SIZE,
         prefill_chunk_size: int = DEFAULT_PREFILL_CHUNK_SIZE,
-        lm_head_dtype=ttnn.bfloat8_b,
+        lm_head_dtype=None,
         enable_on_device_sampling: bool = True,
         load_rope_tables: bool = True,
+        precision_config: dict[str, Any] | None = None,
+        precision_config_source: str = "<built-in-default>",
     ) -> "QwenFullModel":
         hf_config = AutoConfig.from_pretrained(model_id, trust_remote_code=True, local_files_only=local_files_only)
         text_config = _as_text_config(hf_config)
@@ -236,6 +300,8 @@ class QwenFullModel:
             lm_head_dtype=lm_head_dtype,
             enable_on_device_sampling=enable_on_device_sampling,
             load_rope_tables=load_rope_tables,
+            precision_config=precision_config,
+            precision_config_source=precision_config_source,
         )
 
     @classmethod
@@ -249,14 +315,19 @@ class QwenFullModel:
         max_seq_len: int | None = None,
         block_size: int = BLOCK_SIZE,
         prefill_chunk_size: int = DEFAULT_PREFILL_CHUNK_SIZE,
-        lm_head_dtype=ttnn.bfloat8_b,
+        lm_head_dtype=None,
         enable_on_device_sampling: bool = True,
         load_rope_tables: bool = True,
+        precision_config: dict[str, Any] | None = None,
+        precision_config_source: str = "<built-in-default>",
     ) -> "QwenFullModel":
         text_config = _as_text_config(hf_config)
         cfg = _text_config(text_config)
         if cfg.hidden_size != HIDDEN_SIZE:
             raise ValueError(f"{MODEL_ID} full model expects hidden_size={HIDDEN_SIZE}, got {cfg.hidden_size}")
+        precision_config = normalize_precision_config(precision_config)
+        if lm_head_dtype is None:
+            lm_head_dtype = _group_dtype(precision_config, "lm_head")
 
         layers: list[MultichipDecoder] = []
         for layer_idx in range(cfg.num_hidden_layers):
@@ -268,6 +339,11 @@ class QwenFullModel:
                     hf_config=text_config,
                     layer_idx=layer_idx,
                     mesh_device=mesh_device,
+                    policy=_decoder_policy_for_layer(
+                        precision_config,
+                        layer_idx=layer_idx,
+                        layer_type=cfg.layer_types[layer_idx],
+                    ),
                 )
             )
             del state
@@ -331,6 +407,8 @@ class QwenFullModel:
             sampling=sampling,
             cos_matrix=cos_matrix,
             sin_matrix=sin_matrix,
+            precision_config=precision_config,
+            precision_config_source=precision_config_source,
         )
 
     @classmethod
@@ -344,18 +422,28 @@ class QwenFullModel:
         max_seq_len: int | None = None,
         block_size: int = BLOCK_SIZE,
         prefill_chunk_size: int = DEFAULT_PREFILL_CHUNK_SIZE,
-        lm_head_dtype=ttnn.bfloat16,
+        lm_head_dtype=None,
         enable_on_device_sampling: bool = True,
         load_rope_tables: bool = False,
+        precision_config: dict[str, Any] | None = None,
+        precision_config_source: str = "<built-in-default>",
     ) -> "QwenFullModel":
         text_config = _as_text_config(hf_config)
         cfg = _text_config(text_config)
+        precision_config = normalize_precision_config(precision_config)
+        if lm_head_dtype is None:
+            lm_head_dtype = _group_dtype(precision_config, "lm_head")
         layers = [
             MultichipDecoder.from_state_dict(
                 _layer_state_from_dict(state_dict, layer_idx),
                 hf_config=text_config,
                 layer_idx=layer_idx,
                 mesh_device=mesh_device,
+                policy=_decoder_policy_for_layer(
+                    precision_config,
+                    layer_idx=layer_idx,
+                    layer_type=cfg.layer_types[layer_idx],
+                ),
             )
             for layer_idx in range(cfg.num_hidden_layers)
         ]
@@ -411,6 +499,8 @@ class QwenFullModel:
             sampling=sampling,
             cos_matrix=cos_matrix,
             sin_matrix=sin_matrix,
+            precision_config=precision_config,
+            precision_config_source=precision_config_source,
         )
 
     def allocate_cache(
@@ -434,7 +524,7 @@ class QwenFullModel:
                 max_batch_size=batch,
                 max_seq_len=seq,
                 block_size=self.block_size,
-                dtype=ttnn.bfloat16,
+                dtype=self.kv_cache_dtype,
             )
             for idx in self.full_attention_layers
         }
@@ -443,7 +533,7 @@ class QwenFullModel:
                 hf_config=self.text_config,
                 mesh_device=self.mesh_device,
                 batch_size=batch,
-                dtype=ttnn.bfloat16,
+                dtype=self.linear_state_dtype,
             )
             for idx in self.linear_attention_layers
         }
@@ -640,8 +730,9 @@ class QwenFullModel:
         return ttnn.linear(
             hidden_states,
             self.lm_head_weight,
-            dtype=ttnn.bfloat16,
+            dtype=self.logits_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.lm_head_compute_kernel_config,
         )
 
     def _last_token_logits(self, logits: ttnn.Tensor, chunk_len: int) -> ttnn.Tensor:
@@ -806,6 +897,60 @@ class QwenFullModel:
             _copy_bf16_to_existing(src_t, dst_t)
         _copy_bf16_to_existing(src.recurrent_state, dst.recurrent_state)
         return dst
+
+    def describe_precision_policy(self) -> dict[str, Any]:
+        """Return observed runtime precision knobs from constructed TTNN modules."""
+
+        def kernel_name(value) -> str:
+            if value is None:
+                return "default"
+            return str(value.math_fidelity).split(".")[-1]
+
+        first_linear = next((layer for layer in self.layers if layer.layer_type == "linear_attention"), None)
+        first_full = next((layer for layer in self.layers if layer.layer_type == "full_attention"), None)
+        observed: dict[str, Any] = {
+            "config_id": self.precision_config.get("config_id"),
+            "source": self.precision_config_source,
+            "activation_dtype": str(self.precision_config["activation_dtype"]),
+            "residual_dtype": str(self.precision_config["residual_dtype"]),
+            "ccl_dtype": str(self.precision_config["ccl_dtype"]),
+            "kv_cache_dtype": dtype_to_name(self.kv_cache_dtype),
+            "linear_state_dtype": dtype_to_name(self.linear_state_dtype),
+            "logits_dtype": dtype_to_name(self.logits_dtype),
+            "sampling_dtype": dtype_to_name(self.sampling_dtype),
+            "lm_head_weight_dtype": dtype_to_name(self.lm_head_weight.dtype),
+            "lm_head_compute_fidelity": kernel_name(self.lm_head_compute_kernel_config),
+            "weight_groups": copy.deepcopy(self.precision_config["weight_groups"]),
+            "layer_exceptions": copy.deepcopy(self.precision_config.get("layer_exceptions", {})),
+            "compute_fidelities": copy.deepcopy(self.precision_config.get("compute_fidelities", {})),
+        }
+        if first_full is not None:
+            mixer = first_full.token_mixer
+            observed["first_full_attention_layer"] = {
+                "layer_idx": first_full.layer_idx,
+                "qkgv_weight_dtype": dtype_to_name(mixer.qkgv_proj.dtype),
+                "o_proj_weight_dtype": dtype_to_name(mixer.o_proj.dtype),
+                "compute_fidelity": kernel_name(mixer.compute_kernel_config),
+                "ccl_dtype": mixer.plan.ccl_dtype,
+                "routed_moe_weight_dtype": dtype_to_name(first_full.mlp.routed_gate_up.dtype),
+                "routed_moe_compute_fidelity": kernel_name(first_full.mlp.routed_compute_kernel_config),
+                "shared_moe_weight_dtype": dtype_to_name(first_full.mlp.shared_gate_up.dtype),
+                "shared_moe_compute_fidelity": kernel_name(first_full.mlp.shared_compute_kernel_config),
+            }
+        if first_linear is not None:
+            mixer = first_linear.token_mixer
+            observed["first_linear_attention_layer"] = {
+                "layer_idx": first_linear.layer_idx,
+                "in_proj_weight_dtype": dtype_to_name(mixer.in_proj_qkv_zba.dtype),
+                "out_proj_weight_dtype": dtype_to_name(mixer.out_proj.dtype),
+                "compute_fidelity": kernel_name(mixer.projection_compute_kernel_config),
+                "ccl_dtype": mixer.plan.ccl_dtype,
+                "routed_moe_weight_dtype": dtype_to_name(first_linear.mlp.routed_gate_up.dtype),
+                "routed_moe_compute_fidelity": kernel_name(first_linear.mlp.routed_compute_kernel_config),
+                "shared_moe_weight_dtype": dtype_to_name(first_linear.mlp.shared_gate_up.dtype),
+                "shared_moe_compute_fidelity": kernel_name(first_linear.mlp.shared_compute_kernel_config),
+            }
+        return observed
 
 
 def _infer_batch(tokens: torch.Tensor | ttnn.Tensor) -> int:

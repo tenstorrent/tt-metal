@@ -11,15 +11,20 @@ agnostic to model style, checkpoint type (base vs instruct), and content.
 
 The key signal is adjacent-token duplication: a healthy model, base or
 instruct, does not emit nearly every word twice while the text continues
-to advance ("the the difference difference between between ..."). Phrase
--level looping, by contrast, is common in base checkpoints under greedy
-decoding and is reported only as advisory.
+to advance ("the the difference difference between between ..."). Long
+single-token runs, including punctuation-only text runs, are also critical:
+they indicate the sampler has collapsed onto one token even if word
+tokenization hides the repetition. Phrase-level looping, by contrast, is
+common in base checkpoints under greedy decoding and is reported only as
+advisory.
 
 Checked artifacts (discovered under one or more roots):
 
   - ``readiness_vllm/vllm_qualitative_outputs.json`` written by
     ``run_vllm_server`` (list of {prompt, greedy_completion,
     sampled_completion}).
+  - ``tt_qualitative_outputs.json`` written by model-stage qualitative
+    runners (list of {completion, token_ids, ...}).
   - ``autoregressive_meta.json`` written by ``run_autoregressive``
     ({hf: {token_ids}, tt: {token_ids}, ...}) plus the sibling
     ``tt_completion.txt`` when present.
@@ -68,8 +73,13 @@ TRIGRAM_LOOP_ADVISORY = 0.50
 MIN_WORDS_FOR_LOOP = 50
 # Advisory: a near-empty completion when many tokens were requested.
 NEAR_EMPTY_CHARS = 5
+# Critical: same punctuation character repeated contiguously in text.
+REPEATED_PUNCTUATION_CHARS_CRITICAL = 16
+# Critical: same token id repeated contiguously in raw generated ids.
+TOKEN_ID_RUN_CRITICAL = 16
 
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
+_REPEATED_PUNCTUATION_RE = re.compile(r"([^\w\s])\1{15,}", re.UNICODE)
 
 
 @dataclass
@@ -107,6 +117,27 @@ def adjacent_duplication(tokens: Sequence[Any]) -> float:
         return 0.0
     dup = sum(1 for a, b in zip(tokens, tokens[1:]) if a == b)
     return dup / (len(tokens) - 1)
+
+
+def longest_adjacent_run(tokens: Sequence[Any]) -> int:
+    """Length of the longest contiguous run of identical tokens."""
+
+    if not tokens:
+        return 0
+    longest = current = 1
+    for prev, item in zip(tokens, tokens[1:]):
+        if item == prev:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 1
+    return longest
+
+
+def longest_repeated_punctuation_run(text: str | None) -> int:
+    if not text:
+        return 0
+    return max((len(match.group(0)) for match in _REPEATED_PUNCTUATION_RE.finditer(text)), default=0)
 
 
 def trigram_loop_fraction(tokens: Sequence[Any]) -> float:
@@ -150,6 +181,12 @@ def check_completion(
         source = "token_ids"
 
     measured: dict[str, Any] = {"artifact": str(artifact), "label": label, "source": source}
+    punctuation_run = longest_repeated_punctuation_run(text)
+    if punctuation_run:
+        measured["repeated_punctuation_run"] = punctuation_run
+    token_id_run = longest_adjacent_run(token_ids or [])
+    if token_id_run:
+        measured["token_id_run"] = token_id_run
 
     if text is not None and len(text.strip()) < NEAR_EMPTY_CHARS:
         report.findings.append(
@@ -166,6 +203,39 @@ def check_completion(
         measured["near_empty"] = True
         report.measured.append(measured)
         return
+
+    if punctuation_run >= REPEATED_PUNCTUATION_CHARS_CRITICAL:
+        report.findings.append(
+            Finding(
+                severity="critical",
+                artifact=str(artifact),
+                label=label,
+                metric="repeated_punctuation_run",
+                value=float(punctuation_run),
+                threshold=float(REPEATED_PUNCTUATION_CHARS_CRITICAL),
+                detail=(
+                    "Completion contains a long run of the same punctuation token. "
+                    "This is a sampler/logit-collapse signature that word-based "
+                    "duplication checks can miss."
+                ),
+            )
+        )
+    if token_id_run >= TOKEN_ID_RUN_CRITICAL:
+        report.findings.append(
+            Finding(
+                severity="critical",
+                artifact=str(artifact),
+                label=label,
+                metric="token_id_run",
+                value=float(token_id_run),
+                threshold=float(TOKEN_ID_RUN_CRITICAL),
+                detail=(
+                    "Generated token ids contain a long contiguous run of the same token. "
+                    "Verify token feedback, sampling, and dtype/fidelity changes against "
+                    "the HF or previous-stage control."
+                ),
+            )
+        )
 
     if tokens is None:
         report.measured.append(measured)
@@ -195,7 +265,7 @@ def check_completion(
                 ),
             )
         )
-    elif len(tokens) >= MIN_WORDS_FOR_LOOP and loop > TRIGRAM_LOOP_ADVISORY:
+    if len(tokens) >= MIN_WORDS_FOR_LOOP and loop > TRIGRAM_LOOP_ADVISORY:
         report.findings.append(
             Finding(
                 severity="advisory",
@@ -251,6 +321,14 @@ def check_vllm_qualitative(report: Report, path: Path) -> None:
                     label=f"prompt[{i}] {key} ({prompt!r})",
                     text=item.get(key) or "",
                 )
+        if "completion" in item:
+            check_completion(
+                report,
+                artifact=path,
+                label=f"prompt[{i}] completion ({prompt!r})",
+                text=item.get("completion") or "",
+                token_ids=item.get("token_ids"),
+            )
 
 
 def check_autoregressive_meta(report: Report, path: Path) -> None:
@@ -293,6 +371,7 @@ def discover(roots: Iterable[Path], scope: str) -> tuple[list[Path], list[Path]]
             continue
         if scope in ("all", "vllm"):
             vllm_files.extend(sorted(root.rglob("vllm_qualitative_outputs.json")))
+            vllm_files.extend(sorted(root.rglob("tt_qualitative_outputs.json")))
         if scope in ("all", "autoregressive"):
             meta_files.extend(sorted(root.rglob("autoregressive_meta.json")))
     return vllm_files, meta_files
