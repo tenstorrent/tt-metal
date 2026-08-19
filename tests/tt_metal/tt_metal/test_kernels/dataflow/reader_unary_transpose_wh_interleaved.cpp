@@ -32,16 +32,7 @@ void kernel_main() {
     noc.async_write_zeros(dfb1, 2048);
     noc.write_zeros_l1_barrier();
 
-    // On Quasar, dfb.get_write_ptr() returns a cacheable-alias L1 address; the noncacheable
-    // alias (required for NOC-port writes to be visible) is reached by adding
-    // MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR. On Gen1 the returned pointer is already
-    // usable; the macro doesn't exist there.
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-#ifdef ARCH_QUASAR
-        dfb1.get_write_ptr() + MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR);
-#else
-        dfb1.get_write_ptr());
-#endif
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb1.get_write_ptr());
     uint32_t idx = 0;
     for (uint32_t k = 0; k < 4; ++k) {
         uint32_t curr_idx = idx;
@@ -57,7 +48,7 @@ void kernel_main() {
     uint32_t i_tile_N = 0;  // first tile in current batch
     uint32_t i_tile = 0;
 
-    const auto s = TensorAccessor(ta::src_tensor);
+    const auto s = TensorAccessor(tensor::src_tensor);
 
     // this reader will read a NHW tensor in NWH order
     for (uint32_t n = 0; n < N; n++) {

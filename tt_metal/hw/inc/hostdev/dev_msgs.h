@@ -156,11 +156,17 @@ struct kernel_config_msg_t {
     // Ring buffer of kernel configuration data
     volatile uint32_t kernel_config_base[ProgrammableCoreType::COUNT];
     volatile uint16_t sem_offset[ProgrammableCoreType::COUNT];
+    volatile uint8_t pad_sem_offset[(ProgrammableCoreType::COUNT % 2) * 2];  // CODEGEN:skip
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[MaxProcessorsPerCoreType];
     volatile uint8_t mode;     // dispatch mode host/dev
-    volatile uint8_t pad2[3];  // CODEGEN:skip
+    volatile uint8_t pad2;     // CODEGEN:skip — align cross_node_dfb_offset
+    // Byte offset of CrossNodeDFB kernel-config region from kernel_config_base.
+    // CROSS_NODE_DFB_OFFSET_NONE (0xFF) means no CrossNodeDFBs on this launch.
+    // Valid offsets are L1-aligned and therefore never equal 0xFF. Region layout:
+    //   word[0] = num_slots; then dense [config_page_addr, entry_size, relay_dfb_id] slots.
+    volatile uint16_t cross_node_dfb_offset;
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint32_t kernel_text_size[MaxProcessorsPerCoreType];
     volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 12]; // CODEGEN:skip
@@ -179,7 +185,7 @@ struct kernel_config_msg_t {
 
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2) + 4];  // CODEGEN:skip
+    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 10) + 4];  // CODEGEN:skip
 
     // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel;
     // values fit in 8 bits) The array sizes are rounded up to a multiple of 8 bytes for alignment (i.e. a multiple of
@@ -195,6 +201,7 @@ static_assert(offsetof(kernel_config_msg_t, kernel_config_base) % sizeof(uint32_
 static_assert(offsetof(kernel_config_msg_t, sem_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, cross_node_dfb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_size) % sizeof(uint32_t) == 0);
@@ -267,6 +274,7 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeEthSrcL1AddrOverflow = 15,
     DebugSanitizeEthDestL1AddrOverflow = 16,
     DebugSanitizeCBOutOfBounds = 17,
+    DebugSanitizeNocInvalidTxnId = 18,
 };
 
 struct debug_assert_msg_t {
@@ -294,8 +302,10 @@ enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, Trans
 
 struct debug_pause_msg_t {
     volatile uint8_t flags[MaxProcessorsPerCoreType];
-    uint8_t pad[3];  // CODEGEN:skip
+    uint8_t pad[(4 - (MaxProcessorsPerCoreType % 4)) % 4];  // CODEGEN:skip
 };
+// Needs to be 32b-divisible, since the host clears pause flags from host using read_core()/write_core().
+static_assert(sizeof(debug_pause_msg_t) % sizeof(uint32_t) == 0);
 
 constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
 constexpr static int DEBUG_RING_BUFFER_SIZE = DEBUG_RING_BUFFER_ELEMENTS * sizeof(uint32_t);
@@ -351,8 +361,9 @@ enum class AddressableCoreType : uint8_t {
     PCIE = 2,
     DRAM = 3,
     HARVESTED = 4,
-    UNKNOWN = 5,
-    COUNT = 6,
+    DISPATCH = 5,
+    UNKNOWN = 6,
+    COUNT = 7,
 };
 
 struct addressable_core_t {
@@ -378,6 +389,7 @@ enum class CoreMagicNumber : uint32_t {
     ACTIVE_ETH = 0xc63050d1,
     IDLE_ETH = 0x837b6cae,
     DRAM = 0x4d92f8e1,
+    DISPATCH = 0x4021fa16,
 };
 struct core_info_msg_t {
     volatile uint64_t noc_pcie_addr_base;
@@ -413,8 +425,10 @@ struct mailboxes_t {
     volatile struct go_msg_t go_messages[go_message_num_entries];
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
     volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.
-    volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +1 for
-                                                           // the compute kernel.
+    volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4 for
+                                                           // the 4 TRISCs per engine.
+    volatile uint8_t fw_shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4
+                                                              // for the 4 TRISCs per engine.
     struct watcher_msg_t watcher;
     struct DevicePrintMemoryLayout dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;

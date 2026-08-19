@@ -12,7 +12,7 @@ Description:
     postcode state. One row per device.
 
     Groups multiple chips that share a physical sub-unit through the `Tray/Board`
-    column — UBB tray (1..4) on Wormhole/Blackhole Galaxy boards, board id on
+    column - UBB tray (1..4) on Wormhole/Blackhole Galaxy boards, board id on
     N300/P300, and board id on single-chip boards. Sort by that column to
     recover the "chips per tray/board" view.
 

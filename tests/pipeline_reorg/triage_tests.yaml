@@ -1,46 +1,18 @@
-# This file defines the test matrix for the triage tests.
-# Triage validates the on-device debug/triage tooling (watcher output parsing,
-# hang detection, triage report generation). Owned by the debug team.
+# Hang-report triage test matrix (L2 nightly and manual dispatch with test-category unit).
 #
-# Each entry represents a parallel job with the following keys:
-#   name: The display name for the job in GitHub Actions.
-#   cmd: The exact command to run (tools/triage/requirements.txt is installed
-#        by the impl workflow before cmd runs).
-#   tags: (Optional) Selection tags. The 'hang-report' tag marks the destructive
-#         hang-report test; it is excluded from the matrix unless the impl is
-#         invoked with run-hang-report-test: true.
-#   skus: A mapping of SKU names to their configuration.
-#     Each SKU entry contains:
-#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
-#   owner_id: The Slack user ID to notify on failure.
-#   team: The team that owns the test (drives the time-budget lookup).
-
+# Core merge-gate triage tests live in triage_merge_gate_tests.yaml (triage.merge_gate budget).
+# This file uses team triage with test-category unit (triage.unit budget).
+#
+# Each entry: name, cmd, skus, team, owner_id.
 # For max allowed timeout refer to .github/time_budget.yaml
+# Logical SKUs only; do not list merge-queue *_prio SKUs here.
 
-# --- Core triage tests (everything except the hang-report test) ---
-- name: triage
-  cmd: pytest -v -s ./tools/tests/triage/ --ignore=./tools/tests/triage/test_hang_report.py
-  skus:
-    wh_n150_civ2:
-      timeout: 11
-    bh_p150b_civ2_viommu_prio:
-      timeout: 11
-    bh_p150b_civ2_viommu:
-      timeout: 11
-  owner_id: U09UX6JLA3U # Ognjen Nenezic
-  team: debug
-
-# --- Hang report generation test (opt-in only) ---
 - name: triage_hang_report
   cmd: pytest -v -s ./tools/tests/triage/test_hang_report.py
-  tags:
-    - hang-report
   skus:
     wh_n150_civ2:
-      timeout: 5
-    bh_p150b_civ2_viommu_prio:
       timeout: 5
     bh_p150b_civ2_viommu:
       timeout: 5
   owner_id: U09UX6JLA3U # Ognjen Nenezic
-  team: debug
+  team: triage

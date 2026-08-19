@@ -82,10 +82,16 @@ flatbuffer::DataFormat to_flatbuffer(tt::DataFormat input) {
         case tt::DataFormat::Lf8: return flatbuffer::DataFormat::Lf8;
         case tt::DataFormat::Fp8_e4m3: return flatbuffer::DataFormat::Fp8_e4m3;
         case tt::DataFormat::MxFp4: return flatbuffer::DataFormat::MxFp4;
+        case tt::DataFormat::MxFp4_2x_A:
+        case tt::DataFormat::MxFp4_2x_B:
+            TT_THROW("MxFp4_2x is a register-only format and should not be serialized to flatbuffer.");
         case tt::DataFormat::MxFp6P: return flatbuffer::DataFormat::MxFp6P;
         case tt::DataFormat::MxFp6R: return flatbuffer::DataFormat::MxFp6R;
         case tt::DataFormat::MxFp8R: return flatbuffer::DataFormat::MxFp8R;
         case tt::DataFormat::MxFp8P: return flatbuffer::DataFormat::MxFp8P;
+        case tt::DataFormat::MxInt8: return flatbuffer::DataFormat::MxInt8;
+        case tt::DataFormat::MxInt4: return flatbuffer::DataFormat::MxInt4;
+        case tt::DataFormat::MxInt2: return flatbuffer::DataFormat::MxInt2;
         case tt::DataFormat::Int8: return flatbuffer::DataFormat::Int8;
         case tt::DataFormat::Tf32: return flatbuffer::DataFormat::Tf32;
         case tt::DataFormat::UInt8: return flatbuffer::DataFormat::UInt8;

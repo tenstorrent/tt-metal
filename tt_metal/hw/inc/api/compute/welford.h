@@ -23,7 +23,7 @@ namespace ckernel {
  * ClearStats (default): Clears the previous mean and M2 values stored in the registers. Use for a
  *     fresh Welford pass.
  * PreserveStats: Leaves the running mean and M2 accumulators (LREG4/5) intact. Use when re-arming
- *     the SFPU replay buffer mid-pass after another op (e.g. `transpose_wh_tile` on the
+ *     the SFPU replay buffer mid-pass after another op (e.g. `transpose_tile` on the
  *     unpack-to-DEST fp32 path) has clobbered the welford recurrence slots.
  */
 enum class WelfordInitMode : uint8_t {
@@ -53,18 +53,14 @@ ALWI void welford_init() {
  * running mean/M2 accumulators in LREG4/5. Example usage of this is in `welford_update` - this is called once per tile
  * when the `do_scale` path runs `mul_tiles_bcast_scalar` in the same DST window.
  */
-ALWI void welford_reinit(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
+ALWI void welford_reinit(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
     state_configure(cbid, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         /*transpose=*/0, /*transpose_within_16x16_face=*/false, cbid)));
     MATH((llk_math_welfords_sfpu_reinit<DST_ACCUM_MODE>(cbid)));
-#else
-    (void)cbid;
-    (void)call_line;
-    ASSERT(false && "welford_reinit is unsupported on ARCH_QUASAR");
-#endif
 }
+#endif
 
 /**
  * @brief Clears stale mean and m2 values stored in the registers.

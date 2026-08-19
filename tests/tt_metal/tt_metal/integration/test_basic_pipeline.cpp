@@ -8,7 +8,7 @@
 // Tests data movement between N cores with proper use of semaphores for sync
 // Uses "reader_first_stage", "reader_intermediate_stage", "sender_intermediate_stage", "writer_last_stage" kernels
 // to create pipeline of cores.
-// No compute: uses blank compute kernel - "tt_metal/kernels/compute/blank.cpp"
+// No compute: uses blank compute kernel - "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp"
 // Test can be config with different number of cores, tiles, block size, number of blocks in CB, IO data in DRAM,
 // and number of repetitions
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -167,7 +167,8 @@ void create_and_run_row_pipeline(
                 .compile_args = sender_kernel_compile_time_args}));
 
         // Add blank compute kernel
-        tt_metal::CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cores[core_id], ComputeConfig{});
+        tt_metal::CreateKernel(
+            program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", cores[core_id], ComputeConfig{});
     }
 
     // TODO(agrebenisan): Once semaphores are properly allocated at 16B-aligned addresses, then

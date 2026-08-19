@@ -14,7 +14,7 @@ from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.model_config import ModelArgs
 
-from .utils import load_hf_mixtral_config
+from .utils import fuse_mixtral_experts, load_hf_mixtral_config
 
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_moe.py
 
@@ -55,7 +55,9 @@ def test_mixtral_moe_inference(mesh_device, reset_seeds, mode, device_params):
     partial_state_dict_ref = {k[22:]: v for k, v in partial_state_dict.items()}
 
     reference_model = MixtralSparseMoeBlock(hf_config)
-    reference_model.load_state_dict(convert2ref(partial_state_dict_ref))
+    reference_model.load_state_dict(
+        fuse_mixtral_experts(convert2ref(partial_state_dict_ref), hf_config.num_local_experts, "experts", "experts")
+    )
     tt_ccl = TT_CCL(mesh_device)
     tt_model = TtMoeLayer(
         mesh_device=mesh_device,
@@ -124,7 +126,11 @@ def test_mixtral_moe_inference(mesh_device, reset_seeds, mode, device_params):
         )
         # Reference Model Output
         logger.info(f"Starting Reference MOE {mode}")
-        ref_output, _ = reference_model(pt_decode_input)
+        # transformers 5.x MixtralSparseMoeBlock.forward returns only hidden_states (older
+        # versions also returned router_logits), so tolerate a single value or a tuple.
+        ref_output = reference_model(pt_decode_input)
+        if isinstance(ref_output, (tuple, list)):
+            ref_output = ref_output[0]
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 
         logger.info(comp_allclose(ref_output, tt_output_torch))

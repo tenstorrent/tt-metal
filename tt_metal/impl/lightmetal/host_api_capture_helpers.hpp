@@ -102,7 +102,7 @@ void CaptureEnqueueReadBuffer(
     void* dst,
     bool blocking);
 
-void CaptureFinish(HWCommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids);
+void CaptureFinish(HWCommandQueue& cq, ttsl::Span<const SubDeviceId> sub_device_ids);
 void CaptureProgramConstructor(Program& program);
 
 void CaptureCreateKernel(
@@ -116,7 +116,7 @@ void CaptureSetRuntimeArgsUint32(
     const Program& program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    tt::stl::Span<const uint32_t> runtime_args);
+    ttsl::Span<const uint32_t> runtime_args);
 
 void CaptureSetRuntimeArgsUint32VecPerCore(
     const Program& program,

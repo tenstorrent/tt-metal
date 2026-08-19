@@ -8,6 +8,7 @@
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 
 // Largest pack_untilize block width (<= DEST tile capacity) dividing full_ct_dim.
 constexpr uint32_t untilize_pack_block_ct(uint32_t full_ct_dim) {
@@ -156,7 +157,8 @@ void kernel_main() {
     uint32_t untilize_mode_final_matmul_partials_cb = tt::CBIndex::c_26;
     uint32_t untilize_mode_reblock_cb = tt::CBIndex::c_27;
     uint32_t out0_cb = tt::CBIndex::c_16;
-    mm_init(in0_cb, tt::CBIndex::c_1, out0_cb);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb, tt::CBIndex::c_1, out0_cb);
+    matmul_init(in0_cb, tt::CBIndex::c_1);
     for (uint32_t block_in0_h = 0; block_in0_h < num_blocks_in0_h; block_in0_h++) {
         for (uint32_t block_in1_w = 0; block_in1_w < num_blocks_in1_w; block_in1_w++) {
             enable_reload = false;
@@ -166,7 +168,7 @@ void kernel_main() {
                 if (tilize_in) {
                     tilize_activation(
                         in0_cb, in0_subblock_h, in0_block_w, in0_num_subblocks, tilize_mode_tilized_in0_cb);
-                    mm_init_short(tilize_mode_tilized_in0_cb, tt::CBIndex::c_1);
+                    matmul_init(tilize_mode_tilized_in0_cb, tt::CBIndex::c_1);
                     cb_wait_front(tilize_mode_tilized_in0_cb, in0_block_num_tiles);
 
                 } else {
@@ -188,7 +190,7 @@ void kernel_main() {
                                 copy_tile(matmul_partials_cb, i, i);
                             }
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
-                            mm_init_short(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
+                            matmul_init(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
                         }
 
                         // Compute output sub-block from in0_subblock x in1_subblock
@@ -244,7 +246,7 @@ void kernel_main() {
                                 untilize_mode_final_matmul_partials_cb,
                                 untilize_mode_reblock_cb,
                                 out0_cb);
-                            mm_init_short(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
+                            matmul_init(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
                         }
                     }
 

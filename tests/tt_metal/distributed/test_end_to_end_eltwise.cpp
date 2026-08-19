@@ -98,7 +98,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
         {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op_index]}};
     auto eltwise_binary_kernel = CreateKernel(
         *program,
-        "tt_metal/kernels/compute/eltwise_binary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
         cores_for_program,
         ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 
@@ -297,15 +297,15 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
 
     EnqueueMeshWorkload(cq, mesh_workload, true /* blocking */);
 
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), cq.id());
+    auto trace_id = mesh_device_->begin_mesh_trace(cq);
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
-    mesh_device_->end_mesh_trace(cq.id(), trace_id);
+    mesh_device_->end_mesh_trace(cq, trace_id);
 
     EnqueueWriteMeshBuffer(cq, a_buffer, a_data, false /* blocking */);
     // Block to prevent wriitng during trace, which is illegal
     EnqueueWriteMeshBuffer(cq, b_buffer, b_data, true /* blocking */);
 
-    mesh_device_->replay_mesh_trace(cq.id(), trace_id, false);
+    mesh_device_->replay_mesh_trace(cq, trace_id, false);
 
     mesh_device_->release_mesh_trace(trace_id);
 
@@ -361,15 +361,15 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
 
     EnqueueMeshWorkload(cq, mesh_workload, true /* blocking */);
 
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), cq.id());
+    auto trace_id = mesh_device_->begin_mesh_trace(cq);
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
-    mesh_device_->end_mesh_trace(cq.id(), trace_id);
+    mesh_device_->end_mesh_trace(cq, trace_id);
 
     EnqueueWriteMeshBuffer(cq, a_buffer, a_data, false /* blocking */);
     // Block to prevent wriitng during trace, which is illegal
     EnqueueWriteMeshBuffer(cq, b_buffer, b_data, true /* blocking */);
 
-    mesh_device_->replay_mesh_trace(cq.id(), trace_id, false);
+    mesh_device_->replay_mesh_trace(cq, trace_id, false);
 
     mesh_device_->release_mesh_trace(trace_id);
 
@@ -478,10 +478,10 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), multiply_and_subtract_mesh_workload, true);
 
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), kWorkloadCqId);
+    auto trace_id = mesh_device_->begin_mesh_trace(workload_cq);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), multiply_and_subtract_mesh_workload, false);
-    mesh_device_->end_mesh_trace(kWorkloadCqId, trace_id);
+    mesh_device_->end_mesh_trace(workload_cq, trace_id);
 
     uint32_t workload_0_src0_val = 2;
     uint32_t workload_0_src1_val = 3;
@@ -507,7 +507,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     MeshEvent write_event = data_movement_cq.enqueue_record_event();
     workload_cq.enqueue_wait_for_event(write_event);
 
-    mesh_device_->replay_mesh_trace(kWorkloadCqId, trace_id, false);
+    mesh_device_->replay_mesh_trace(workload_cq, trace_id, false);
 
     // Synchronize
     MeshEvent trace_event = workload_cq.enqueue_record_event();
@@ -521,8 +521,8 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     EXPECT_THAT(add_dst_vec, Each(Bfloat16Eq(workload_0_src0_val + workload_0_src1_val)));
 
     std::size_t sub_or_mul_size = mul_sub_dst_vec.size() / 2;
-    tt::stl::Span<bfloat16> mul_dst_span(mul_sub_dst_vec.data(), sub_or_mul_size);
-    tt::stl::Span<bfloat16> sub_dst_span(mul_sub_dst_vec.data() + sub_or_mul_size, sub_or_mul_size);
+    ttsl::Span<bfloat16> mul_dst_span(mul_sub_dst_vec.data(), sub_or_mul_size);
+    ttsl::Span<bfloat16> sub_dst_span(mul_sub_dst_vec.data() + sub_or_mul_size, sub_or_mul_size);
 
     EXPECT_THAT(mul_dst_span, Each(Bfloat16Eq(workload_1_src0_val * workload_1_src1_val)));
     EXPECT_THAT(sub_dst_span, Each(Bfloat16Eq(workload_1_src0_val - workload_1_src1_val)));

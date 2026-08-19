@@ -12,10 +12,9 @@
 #include <fmt/format.h>
 
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
-#include <tt-metalium/experimental/tensor/topology/distributed_tensor_configs.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape.hpp>
 
@@ -25,7 +24,10 @@ namespace tt::tt_metal::distributed {
 
 // Serializable descriptor for cross-process H2DStreamService attachment.
 struct H2DStreamServiceDescriptor {
-    static constexpr uint32_t kVersion = 1;
+    // v2: INT8 was appended to DataType at ordinal 9, moving INVALID 9->10.
+    // global_dtype is serialized as a raw DataType ordinal, so the bump forces a version mismatch (hard error)
+    // between old/new processes instead of an old peer decoding ordinal 9 as INVALID rather than INT8.
+    static constexpr uint32_t kVersion = 2;
 
     // Source-tensor spec snapshot. Limited to ROW_MAJOR / DRAM-interleaved today.
     tt::tt_metal::Shape global_shape;
@@ -44,7 +46,13 @@ struct H2DStreamServiceDescriptor {
     uint32_t metadata_size_bytes = 0;
 
     BufferType socket_buffer_type = BufferType::L1;
-    H2DMode socket_mode = H2DMode::DEVICE_PULL;
+
+    // Shared writer-completion counters for cross-process barrier semantics.
+    std::string completion_shm_name;
+    uint64_t completion_shm_size = 0;
+    uint32_t completion_issued_offset = 0;
+    uint32_t completion_completed_offset = 0;
+    uint32_t completion_completed_stride = sizeof(uint32_t);
 
     // One entry per participating mesh coord, passed directly to H2DSocket::connect_from_descriptor.
     std::vector<std::pair<MeshCoordinate, HDSocketDescriptor>> per_coord_entries;

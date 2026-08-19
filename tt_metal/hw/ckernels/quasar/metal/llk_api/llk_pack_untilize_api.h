@@ -3,17 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "chlkc_list.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "tensor_shape.h"
 #include "ckernel_template.h"
 #include "cpack_common.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_pack_common_api.h"
 #include "llk_pack_untilize.h"
 #include "api/dataflow/dataflow_buffer.h"
 
@@ -35,7 +38,20 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
 
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
-    _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(output_id, tensor_shape);
+    LLK_ASSERT(
+        tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES ||
+            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
+        "only 1x32 and 2x32 tiny tiles supported for pack untilize on Quasar");
+
+    if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
+        llk_pack_program_bfd(output_id);
+        _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(
+            ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
+    } else {
+        llk_pack_program_bfd<ckernel::trisc::L1AccessMode::Strided>(output_id);
+        _llk_pack_untilize_strided_init_<full_ct_dim, block_ct_dim>(
+            ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
+    }
 }
 
 /**
@@ -61,12 +77,18 @@ inline void llk_pack_untilize(
     std::uint32_t pack_output,
     const std::uint32_t block_c_index = 0,
     const std::uint32_t tile_dst_rt_offset = 0) {
+    LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
     const std::uint32_t output_id = get_output_id(pack_output);
 
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
     // Each tile is packed in two 16x32 halves — top faces (0+1) then bottom faces (2+3)
     // merging adjacent face-columns into a single output row. Hence we use num_faces_r_dim instead of num_faces for L1
     // strides
+
+    LLK_ASSERT(
+        tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES ||
+            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
+        "only 1x32 and 2x32 tiny tiles supported for pack untilize on Quasar");
 
     const std::uint32_t y_stride = full_ct_dim * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
@@ -76,6 +98,14 @@ inline void llk_pack_untilize(
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         const std::uint32_t dest_idx = block_rt * block_ct_dim + tile_dst_rt_offset;
         const std::uint32_t l1_tile_idx = base_l1 + block_rt * y_stride + block_c_index * block_ct_dim;
-        _llk_pack_untilize_(dest_idx, l1_tile_idx);
+        if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
+            _llk_pack_untilize_(dest_idx, l1_tile_idx);
+        } else {
+            // Strided PACR consumes buf_desc_id as an immediate; pass the id programmed by
+            // llk_pack_untilize_init (bfd_current), not the DFB output_id (which no longer doubles
+            // as the BFD id). The MOP branch already bakes in the correct id at init.
+            _llk_pack_untilize_strided_<full_ct_dim>(
+                ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape, l1_tile_idx, dest_idx);
+        }
     }
 }

@@ -18,10 +18,12 @@
 #include "ttnn/device.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "common/tt_backend_api_types.hpp"
 
 using namespace tt::tt_metal;  // For test
+using ttnn::Tensor;
 
 namespace ttnn {
 class TTNNFixtureBase : public ::testing::Test {
@@ -56,7 +58,13 @@ protected:
         device_ = device_holder_.get();
     }
 
-    void TearDown() override { device_->close(); }
+    void TearDown() override {
+        if (device_holder_) {
+            device_holder_->close();
+            device_holder_.reset();
+        }
+        device_ = nullptr;
+    }
 
     TTNNFixtureWithDevice() = default;
 
@@ -123,7 +131,13 @@ protected:
         device_ = device_holder_.get();
     }
 
-    void TearDown() override { device_->close(); }
+    void TearDown() override {
+        if (device_holder_) {
+            device_holder_->close();
+            device_holder_.reset();
+        }
+        device_ = nullptr;
+    }
 };
 
 class MultiCommandQueueT3KFixture : public TTNNFixtureBase {

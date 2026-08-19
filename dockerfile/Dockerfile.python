@@ -81,6 +81,7 @@ RUN if [ -n "${PYTHON_VERSION}" ]; then \
 # Install Python with uv and create relocatable virtual environment with base packages.
 # umask 000 ensures the venv is world-writable for multi-host NFS access.
 # MAKEFLAGS accelerates builds for packages that compile with make.
+# auditwheel/patchelf are needed to repair the in-place-built wheel (bundle transitive libs).
 RUN source /tmp/python-version.env && \
     export MAKEFLAGS="-j$(nproc)" && \
     umask 000 && \
@@ -88,7 +89,7 @@ RUN source /tmp/python-version.env && \
     uv python list | grep -q "${DETECTED_PYTHON_VERSION}" || (echo "ERROR: Python ${DETECTED_PYTHON_VERSION} installation failed" && exit 1) && \
     uv venv --link-mode copy --relocatable --managed-python --python "${DETECTED_PYTHON_VERSION}" ${PYTHON_ENV_DIR} && \
     source ${PYTHON_ENV_DIR}/bin/activate && \
-    uv pip install --no-cache uv build numpy setuptools==80 && \
+    uv pip install --no-cache uv build numpy setuptools==80 auditwheel==6.7.0 patchelf==0.17.2.4 && \
     uv clean --force
 
 # Export as scratch image with only the venv
@@ -133,12 +134,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/models/tt_dit/utils/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tools/triage/
 
 # Copy requirements files maintaining relative path structure for -r includes
 COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/
 COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
+COPY /models/tt_dit/utils/vbench-requirements.txt ${TT_METAL_INFRA_DIR}/tt-metal/models/tt_dit/utils/
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/
 
 # Install test packages into the existing venv inherited from ci-build-venv-builder.
@@ -155,6 +158,7 @@ RUN export MAKEFLAGS="-j$(nproc)" && \
     uv pip install --index-strategy unsafe-best-match -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
     uv pip install --index-strategy unsafe-best-match -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt && \
     uv pip check && \
+    uv pip install --no-deps -r ${TT_METAL_INFRA_DIR}/tt-metal/models/tt_dit/utils/vbench-requirements.txt && \
     uv clean --force
 
 # Export as scratch image with only the venv

@@ -12,6 +12,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "sanitizer/api.h"
 
 #ifndef HF
 #define HF 0
@@ -158,16 +159,18 @@ inline void matmul_configure_addrmod(
             if (transpose)
             {
                 addr_mod_t {
-                    .srca = {.incr = 32, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 16, .clr = 0, .cr = 0},
-                    // .bias = {.incr = 1},
+                    .srca = {.incr = 32, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 0, .clr = 0, .cr = 0},
+                    .dest = {.incr = 16, .clr = 0, .cr = 0},
                 }
                     .set(ADDR_MOD_2);
             }
             else
             {
                 addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 0, .clr = 0, .cr = 0}, .dest = {.incr = 16, .clr = 0, .cr = 0},
-                    // .bias = {.incr = 1},
+                    .srca = {.incr = 16, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 0, .clr = 0, .cr = 0},
+                    .dest = {.incr = 16, .clr = 0, .cr = 0},
                 }
                     .set(ADDR_MOD_2);
             }
@@ -214,15 +217,15 @@ inline void matmul_configure_addrmod(
                     .srca = {.incr = 16, .clr = 0, .cr = 1}, // srca=16
                     .srcb = {.incr = 16, .clr = 0, .cr = 0},
                     .dest = {.incr = 0, .clr = 1, .cr = 0},
-                    // .bias = {.incr = 1},
                 }
                     .set(ADDR_MOD_4);
             }
             else
             {
                 addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 16, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 1, .cr = 0},
-                    // .bias = {.incr = 1},
+                    .srca = {.incr = 16, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 16, .clr = 0, .cr = 0},
+                    .dest = {.incr = 0, .clr = 1, .cr = 0},
                 }
                     .set(ADDR_MOD_4);
             }
@@ -235,15 +238,15 @@ inline void matmul_configure_addrmod(
                     .srca = {.incr = 16, .clr = 0, .cr = 1}, // srca=16
                     .srcb = {.incr = 16, .clr = 0, .cr = 1},
                     .dest = {.incr = 0, .clr = 0, .cr = 1},
-                    // .bias = {.incr = 1},
                 }
                     .set(ADDR_MOD_4);
             }
             else
             {
                 addr_mod_t {
-                    .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 16, .clr = 0, .cr = 1}, .dest = {.incr = 0, .clr = 0, .cr = 1},
-                    // .bias = {.incr = 1},
+                    .srca = {.incr = 16, .clr = 0, .cr = 0},
+                    .srcb = {.incr = 16, .clr = 0, .cr = 1},
+                    .dest = {.incr = 0, .clr = 0, .cr = 1},
                 }
                     .set(ADDR_MOD_4);
             }
@@ -252,16 +255,18 @@ inline void matmul_configure_addrmod(
     else if (is_in0_32x16)
     {
         addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 1}, .srcb = {.incr = 16, .clr = 0, .cr = 1}, .dest = {.incr = 8, .clr = 0, .cr = 0},
-            // .bias = {.incr = 1},
+            .srca = {.incr = 0, .clr = 0, .cr = 1},
+            .srcb = {.incr = 16, .clr = 0, .cr = 1},
+            .dest = {.incr = 8, .clr = 0, .cr = 0},
         }
             .set(ADDR_MOD_4);
     }
     else if (is_in1_32x16)
     {
         addr_mod_t {
-            .srca = {.incr = 0, .clr = 0, .cr = 1}, .srcb = {.incr = 8, .clr = 0, .cr = 0}, .dest = {.incr = 16, .clr = 0, .cr = 1},
-            // .bias = {.incr = 1},
+            .srca = {.incr = 0, .clr = 0, .cr = 1},
+            .srcb = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = 16, .clr = 0, .cr = 1},
         }
             .set(ADDR_MOD_4);
     }
@@ -273,7 +278,6 @@ inline void matmul_configure_addrmod(
                 .srca = {.incr = 16, .clr = 0, .cr = 1},
                 .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
-                // .bias = {.incr = 1},
             }
                 .set(ADDR_MOD_4);
         }
@@ -284,7 +288,6 @@ inline void matmul_configure_addrmod(
                 //.srca = {.incr = srca_set, .clr = 0, .cr = 1},
                 .srcb = {.incr = 48, .clr = 0, .cr = 1}, // cr=32 before, cr+48=16 after wrapping
                 .dest = {.incr = 0, .clr = 0, .cr = 1},
-                // .bias = {.incr = 1},
             }
                 .set(ADDR_MOD_4);
         }
@@ -667,6 +670,7 @@ inline void _llk_math_matmul_init_(
 {
     // in1=32x16 NOT supported with transpose (no addr_mod handling)
     LLK_ASSERT(!(transpose && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)), "Transpose with input 1 dimensions 32x16 not supported");
+    llk::san::operation_init<llk::san::Operation::Matmul>(math_fidelity, THROTTLE_LEVEL, ct_dim, rt_dim);
 
     matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL>(transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 
@@ -710,6 +714,8 @@ inline void _llk_math_matmul_uninit_()
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
 {
+    llk::san::operation_check<llk::san::Operation::Matmul>(math_fidelity, THROTTLE_LEVEL, ct_dim, rt_dim);
+
     const bool reuse_a           = ct_dim >= rt_dim;
     const std::uint32_t t_dim    = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim  = reuse_a ? ct_dim : rt_dim; // reuse-dim

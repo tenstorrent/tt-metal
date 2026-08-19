@@ -5,53 +5,49 @@
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t col_start_tile_id =
-        get_arg_val<uint32_t>(1);  // Start id in column major order. This should be the start of a column
-    uint32_t curr_col_in_batch = get_arg_val<uint32_t>(2);
-    uint32_t num_cols = get_arg_val<uint32_t>(3);  // number of cols to read
-    uint32_t mask_h = get_arg_val<uint32_t>(4);
+        get_arg(args::col_start_tile_id);  // Start id in column major order. This should be the start of a column
+    uint32_t curr_col_in_batch = get_arg(args::curr_col_in_batch);
+    uint32_t num_cols = get_arg(args::num_cols);  // number of cols to read
+    uint32_t mask_h = get_arg(args::mask_h);
 
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t HtWt = get_compile_time_arg_val(2);
-
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t HtWt = get_arg(args::HtWt);
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
 #ifdef REDUCE_SCALER
-    constexpr uint32_t cb_id_in2 = 2;
-    constexpr auto src_args = TensorAccessorArgs<3>();
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_id_in2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
+        calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 #endif
 
-    constexpr uint32_t cb_id_mask_h = 3;
 #ifdef DO_MASK_H
-    generate_mask_h(cb_id_mask_h, mask_h);
+    DataflowBuffer dfb_mask_h_obj(dfb::mask_h);
+    generate_mask_h(dfb_mask_h_obj, mask_h);
 #endif
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(tensor::src);
 
     Noc noc;
-    CircularBuffer cb_in0_obj(cb_id_in0);
-    const auto in0_tile_bytes = get_tile_size(cb_id_in0);
+    DataflowBuffer dfb_in0_obj(dfb::input);
+    const auto in0_tile_bytes = dfb_in0_obj.get_tile_size();
 
     uint32_t w = curr_col_in_batch;
 
     for (uint32_t i = 0; i < num_cols; i++) {
         uint32_t curr_id = col_start_tile_id;
         for (uint32_t j = 0; j < Ht; j++) {
-            cb_in0_obj.reserve_back(onetile);
-            noc.async_read(s, cb_in0_obj, in0_tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+            dfb_in0_obj.reserve_back(onetile);
+            noc.async_read(s, dfb_in0_obj, in0_tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_in0_obj.push_back(onetile);
+            dfb_in0_obj.push_back(onetile);
             curr_id += Wt;
         }
         w++;

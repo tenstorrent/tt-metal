@@ -1,5 +1,0 @@
-rank_to_cluster_mock_cluster_desc:
-  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc/sp4_glx_cluster_desc_bh-glx-d03u02_rank_0.yaml"
-  1: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc/sp4_glx_cluster_desc_bh-glx-d03u08_rank_1.yaml"
-  2: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc/sp4_glx_cluster_desc_bh-glx-d04u02_rank_2.yaml"
-  3: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc/sp4_glx_cluster_desc_bh-glx-d04u08_rank_3.yaml"

@@ -10,6 +10,7 @@ import torch
 from transformers import AutoConfig
 
 import ttnn
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 from ..config import MeshConfig
 from ..tt.ccl import CCLManager
@@ -167,7 +168,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
         params = [
             pytest.param(
                 (1, 1),
-                {"fabric_config": None, "trace_region_size": 100000000},
+                {"fabric_config": None, TRACE_MODEL_KEY_PARAM: "gpt-oss-120b"},
                 id="1x1",
                 marks=pytest.mark.skip(reason="No supported gpt_oss mesh shape fits on this system"),
             )
@@ -178,7 +179,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
                 shape,
                 {
                     "fabric_config": (None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D_RING),
-                    "trace_region_size": 100000000,
+                    TRACE_MODEL_KEY_PARAM: "gpt-oss-120b",
                 },
                 id=f"{shape[0]}x{shape[1]}",
             )

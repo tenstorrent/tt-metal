@@ -4,11 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
-#include "sfpu/ckernel_sfpu_load_config.h"
+#include "cmath_common.h"
 
 using namespace sfpi;
 
@@ -32,7 +33,7 @@ inline void calculate_tanh_derivative() {
             val = lut(val, l0, l1, l2);
         }
 
-        val = val * (-val) + vConst1;
+        val = val * (-val) + 1.0f;
         dst_reg[0] = val;
 
         dst_reg++;
@@ -45,15 +46,9 @@ inline void calculate_tanh_derivative() {
 
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
-    uint imm0;
-    uint imm1;
-    uint imm2;
-    imm0 = 0x1DFF;  // 0.90625*x
-    imm1 = 0x481A;  // 0.09375*x + 0.8125
-    imm2 = 0xFF00;  // 1
-    _sfpu_load_imm16_(0, imm0);
-    _sfpu_load_imm16_(1, imm1);
-    _sfpu_load_imm16_(2, imm2);
+    l_reg[LRegs::LReg0] = vUInt(static_cast<std::uint16_t>(0x1DFF));  // 0.90625*x
+    l_reg[LRegs::LReg1] = vUInt(static_cast<std::uint16_t>(0x481A));  // 0.09375*x + 0.8125
+    l_reg[LRegs::LReg2] = vUInt(static_cast<std::uint16_t>(0xFF00));  // 1
 }
 
 // =============================================================================
@@ -103,14 +98,14 @@ sfpi_inline sfpi::vFloat inline_exp_sech2_tail(sfpi::vFloat a) {
     r = k * LN2_LO + r;
 
     // Degree-4 Taylor for exp(r)
-    sfpi::vFloat poly = PolynomialEvaluator::eval(r, sfpi::vConst1, sfpi::vConst1, C2, C3, C4);
+    sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, C2, C3, C4);
 
     // 2^k scaling via direct exponent bit manipulation (FREE)
-    sfpi::vInt p_exp = sfpi::exexp(poly, sfpi::ExponentMode::NoDebias);
+    sfpi::vInt p_exp = sfpi::exexp(poly, sfpi::ExponentMode::Biased);
     sfpi::vInt new_exp = p_exp + k_int;
 
     // FTZ: if exponent underflows, result is 0 (natural zero saturation)
-    sfpi::vFloat result = sfpi::vConst0;
+    sfpi::vFloat result = 0.0f;
     v_if(new_exp > 0) { result = sfpi::setexp(poly, new_exp); }
     v_endif;
 
@@ -153,7 +148,7 @@ constexpr float SECH2_POLY_C10 = 6.33840343077387569082e-02f;
 // Uses the same mathematical approach as the GELU backward kernel:
 // - Sollya-fitted minimax polynomial for the core region
 // - Inline Cody-Waite exp with direct exponent bit manipulation for the tail
-// No external function calls (_sfpu_exp_f32_accurate_, _sfpu_reciprocal_).
+// No external function calls (_sfpu_exp_f32_accurate_, sfpu_reciprocal_iter).
 //
 // Two regions (exploiting even symmetry via a = |x|):
 //   |x| < CORE_REGION_LIMIT:  Degree-10 polynomial in t = (2/9)·a² - 1 (~12 MAD ops)
@@ -173,7 +168,7 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATI
 inline void calculate_tanh_derivative_sech2() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::vFloat result = sfpi::vConst0;
+        sfpi::vFloat result = 0.0f;
 
         // sech²(x) is an even function: sech²(-x) = sech²(x)
         sfpi::vFloat a = sfpi::abs(val);
@@ -207,7 +202,7 @@ inline void calculate_tanh_derivative_sech2() {
 
         // Explicit RNE rounding for BF16 output — SFPSTORE truncates toward zero by default.
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
         sfpi::dst_reg[0] = result;
@@ -217,6 +212,7 @@ inline void calculate_tanh_derivative_sech2() {
 
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_sech2_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     // No special initialization needed — no reciprocal, no LUT.
     // Polynomial uses only Horner evaluation, inline exp uses only arithmetic.
 }

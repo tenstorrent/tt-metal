@@ -22,7 +22,6 @@ struct PolyNorm3ForwardDeviceOperation {
     static void validate_on_program_cache_miss(const PolyNorm3FWAttributes&, const PolyNorm3FWTensorArgs&);
     static PolyNorm3FWSpecReturn compute_output_specs(const PolyNorm3FWAttributes&, const PolyNorm3FWTensorArgs&);
     static PolyNorm3FWTensorReturn create_output_tensors(const PolyNorm3FWAttributes&, const PolyNorm3FWTensorArgs&);
-    static ttsl::hash::hash_t compute_program_hash(const PolyNorm3FWAttributes&, const PolyNorm3FWTensorArgs&);
 };
 
 }  // namespace ttml::metal::ops::polynorm3_fw::device

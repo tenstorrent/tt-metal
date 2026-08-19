@@ -12,21 +12,7 @@ on:
           - all
           - tteager
           - trace stress
-          # - llama3.2-vision # Tier 3 models
-          # - n300 mesh llama3.2-vision # Tier 3 models
-          - llama3.2-90b-vision # Tier 2 model
-          - llama3
-          - llama3 accuracy
-          - llama3_70n90b accuracy
-          - llama3_90b
-          - resnet
-          - sd35_large
-          - flux1
-          - motif
           - qwenimage
-          - mistral
-          - wan2.2
-          - mochi
           - deepseek-modules
       platform:
         required: false
@@ -60,6 +46,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -68,11 +55,12 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   t3000-integration-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/t3000-integration-tests-impl.yaml
     with:

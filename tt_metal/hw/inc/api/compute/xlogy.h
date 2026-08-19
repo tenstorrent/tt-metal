@@ -29,22 +29,22 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void xlogy_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
         (APPROX, BinaryOp::XLOGY, 8 /* ITERATIONS */),
-        RC,
         idst0,
         idst1,
-        odst)));
+        odst,
+        VectorMode::RC)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void xlogy_binary_tile_init() {
-    MATH((SFPU_BINARY_INIT_CB(unused, sfpu::sfpu_binary_init, (APPROX, BinaryOp::XLOGY))));
+    MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, BinaryOp::XLOGY))));
 }
 
 }  // namespace ckernel

@@ -44,14 +44,37 @@ inline void update_block_stats(BlockStats& s, float f) {
     }
 }
 
+// Quantize one (already block-scaled) value to its packed element bits, choosing
+// the integer (MxInt2/4/8) or floating-point (MXFP*) encoding from FormatParams.
+// `params` is a constexpr at every call site, so the branch folds away after
+// inlining.
+inline uint32_t mx_encode_elem(float scaled, const FormatParams& params) {
+    return params.is_integer ? convert_to_mxint_elem_bits(scaled, params) : convert_to_mxfp_elem_bits(scaled, params);
+}
+
+// Decode one packed element field back to its pre-block-scale float value, again
+// dispatching on the integer vs floating-point encoding. The integer decoder
+// needs no scale byte: its 0xFF (NaN-scale) block is zeroed by the caller.
+inline float mx_decode_elem(uint32_t elem_bits, uint8_t scale_exp_biased, const FormatParams& params) {
+    return params.is_integer ? convert_from_mxint_elem_bits(elem_bits, params)
+                             : convert_from_mxfp_elem_bits(elem_bits, scale_exp_biased, params);
+}
+
 // Generic MX tile packer. Works for any FormatParams whose
 // `block_size * elem_width_storage_bits` is a multiple of 32 (whole-word
 // per-block packing) and whose `elem_width_storage_bits` divides 32 evenly
 // (MXFP4: 4-bit storage / 8 elems per word, MXFP6: 8-bit storage / 4 elems
 // per word). Format-specific bit layout falls out of `FormatParams`.
+//
+// The block-scale derivation (E8M0), [scales | elements] tile layout, and
+// per-block word packing are shared by every MX format. Only the per-element
+// conversion differs: floating-point formats extract IEEE fields, integer
+// formats (params.is_integer) quantize to a signed two's-complement integer.
+// params is a constexpr at each call site (kMxFp4Params, kMxInt8Params, ...),
+// so the is_integer branch constant-folds away per translation unit.
 template <typename T>
 std::vector<uint32_t> pack_as_mx_tiles_impl(
-    tt::stl::Span<const T> data,
+    ttsl::Span<const T> data,
     bool row_major_input,
     const std::optional<tt::tt_metal::Tile>& tile,
     const FormatParams& params) {
@@ -159,7 +182,7 @@ std::vector<uint32_t> pack_as_mx_tiles_impl(
                 for (uint32_t b = 0; b < elements_per_word; ++b) {
                     float v = tile_values[base + w * elements_per_word + b];
                     float scaled = v * scale_pack;
-                    uint32_t bits = convert_to_mx_elem_bits(scaled, params);
+                    uint32_t bits = mx_encode_elem(scaled, params);
                     word |= (bits & elem_mask) << (elem_shift + b * elem_storage_bits);
                 }
                 packed[blk_word_base + w] = word;
@@ -171,11 +194,13 @@ std::vector<uint32_t> pack_as_mx_tiles_impl(
 }
 
 // Generic MX tile unpacker. Same FormatParams constraints as
-// pack_as_mx_tiles_impl. Inline rather than .cpp-out-of-line so call sites
-// with a constexpr FormatParams (kMxFp4Params, kMxFp6RParams, ...) can
-// constant-fold the inner loops and the `convert_from_mx_elem_bits` branches.
+// pack_as_mx_tiles_impl, and likewise serves both the floating-point and the
+// integer (params.is_integer) MX formats. Inline rather than .cpp-out-of-line
+// so call sites with a constexpr FormatParams (kMxFp4Params, kMxInt8Params, ...)
+// can constant-fold the inner loops, the is_integer branch, and the
+// `convert_from_mxfp_elem_bits` branches.
 inline std::vector<float> unpack_mx_tiles_into_float_vec_impl(
-    tt::stl::Span<const uint32_t> mx_tiles,
+    ttsl::Span<const uint32_t> mx_tiles,
     bool row_major_output,
     const std::optional<tt::tt_metal::Tile>& tile,
     const FormatParams& params) {
@@ -232,18 +257,31 @@ inline std::vector<float> unpack_mx_tiles_into_float_vec_impl(
         for (uint32_t blk = 0; blk < exp_count; ++blk) {
             uint8_t scale_exp_biased =
                 static_cast<uint8_t>((mx_tiles[tile_base + (blk >> 2)] >> ((blk & 0x3u) * 8)) & 0xFFu);
-            int scale_exp_unbiased = static_cast<int>(scale_exp_biased) - params.scale_bias;
-            const float scale_unpack = pow2_f32(scale_exp_unbiased);
-
             uint32_t base = blk * block_size;
             size_t blk_word_base = elem_base + static_cast<size_t>(blk) * elem_words_per_block;
+
+            // OCP MX rule: a NaN block scale (0xFF) zeros the whole block. The
+            // integer formats have no NaN element to carry it, so handle it here
+            // and avoid the 0 * 2^(0xFF-bias) = 0 * inf = NaN trap of the generic
+            // multiply below. The floating-point path is left untouched: it
+            // relies on convert_from_mxfp_elem_bits returning NaN for a 0xFF
+            // scale (then NaN * inf = NaN), preserving its existing behaviour.
+            if (params.is_integer && scale_exp_biased == 0xFFu) {
+                for (uint32_t i = 0; i < block_size; ++i) {
+                    tile_target[base + i] = 0.0f;
+                }
+                continue;
+            }
+
+            int scale_exp_unbiased = static_cast<int>(scale_exp_biased) - params.scale_bias;
+            const float scale_unpack = pow2_f32(scale_exp_unbiased);
 
             for (uint32_t w = 0; w < elem_words_per_block; ++w) {
                 uint32_t word = mx_tiles[blk_word_base + w];
                 for (uint32_t b = 0; b < elements_per_word; ++b) {
                     uint32_t raw_unit = (word >> (b * elem_storage_bits)) & elem_unit_mask;
                     uint32_t elem_bits = (raw_unit >> elem_shift) & elem_mask;
-                    float elem_pre_scale = convert_from_mx_elem_bits(elem_bits, scale_exp_biased, params);
+                    float elem_pre_scale = mx_decode_elem(elem_bits, scale_exp_biased, params);
                     tile_target[base + w * elements_per_word + b] = elem_pre_scale * scale_unpack;
                 }
             }

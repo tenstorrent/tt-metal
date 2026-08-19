@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -48,71 +48,79 @@ void kernel_main() {
     const auto beta_addrg = TensorAccessor(beta_args, beta_addr);
 #endif
 
-    fill_cb_with_value(cb_id_scaler, scaler);
-    fill_cb_with_value(cb_id_eps, eps);
+    DataflowBuffer dfb_scaler(cb_id_scaler);
+    DataflowBuffer dfb_eps(cb_id_eps);
+    fill_cb_with_value(dfb_scaler, scaler);
+    fill_cb_with_value(dfb_eps, eps);
 
 #ifdef DO_MASK_H
-    generate_mask_h(cb_id_mask_h, mask_h);
+    {
+        DataflowBuffer dfb_mask_h(cb_id_mask_h);
+        generate_mask_h(dfb_mask_h, mask_h);
+    }
 #endif
 
 #ifdef DO_MASK_W
-    generate_mask_w(cb_id_mask_w, mask_w);
+    {
+        DataflowBuffer dfb_mask_w(cb_id_mask_w);
+        generate_mask_w(dfb_mask_w, mask_w);
+    }
 #endif
 
     constexpr uint32_t onetile = 1;
     uint32_t offs = 0;
 
     Noc noc;
-    CircularBuffer cb_input(cb_id_input);
+    DataflowBuffer dfb_input(cb_id_input);
 #ifdef GAMMA_HAS_VALUE
-    CircularBuffer cb_gamma(cb_id_gamma);
+    DataflowBuffer dfb_gamma(cb_id_gamma);
 #endif
 #ifdef BETA_HAS_VALUE
-    CircularBuffer cb_beta(cb_id_beta);
+    DataflowBuffer dfb_beta(cb_id_beta);
 #endif
 
     uint32_t input_tile_idx;
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
-        cb_input.reserve_back(num_inner);
+        dfb_input.reserve_back(num_inner);
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx++) {
             input_tile_idx = tile_offset + outer_idx * num_inner + inner_idx;
             noc.async_read(
                 input_addrg,
-                cb_input,
+                dfb_input,
                 input_tile_bytes,
                 {.page_id = input_tile_idx},
                 {.offset_bytes = inner_idx * input_tile_bytes});
         }  // num_inner loop
         noc.async_read_barrier();
-        cb_input.push_back(num_inner);
+        dfb_input.push_back(num_inner);
 
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
 #ifdef GAMMA_HAS_VALUE
-            cb_gamma.reserve_back(block_size);
+            dfb_gamma.reserve_back(block_size);
             for (uint32_t r = 0; r < block_size; r++) {
                 noc.async_read(
                     gamm_addrg,
-                    cb_gamma,
+                    dfb_gamma,
                     gamma_tile_bytes,
                     {.page_id = inner_idx + r},
                     {.offset_bytes = r * gamma_tile_bytes});
             }  // block_size loop
             noc.async_read_barrier();
-            cb_gamma.push_back(block_size);
+            dfb_gamma.push_back(block_size);
 #endif
 
 #ifdef BETA_HAS_VALUE
-            cb_beta.reserve_back(block_size);
+            dfb_beta.reserve_back(block_size);
             for (uint32_t r = 0; r < block_size; r++) {
                 noc.async_read(
                     beta_addrg,
-                    cb_beta,
+                    dfb_beta,
                     beta_tile_bytes,
                     {.page_id = inner_idx + r},
                     {.offset_bytes = r * beta_tile_bytes});
             }  // block_size loop
             noc.async_read_barrier();
-            cb_beta.push_back(block_size);
+            dfb_beta.push_back(block_size);
 #endif
         }  // num_inner loop
         offs += num_inner;

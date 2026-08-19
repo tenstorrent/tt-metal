@@ -63,6 +63,21 @@ void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes
             optional_output_tensor_m.value().device() == mesh_device,
             "Output tensor must be allocated on same mesh device as input tensor");
     }
+    const auto& input_s = tensor_args.input_tensor_s;
+    const auto& input_m = tensor_args.input_tensor_m;
+
+    TT_FATAL(
+        input_l.layout() == tt::tt_metal::Layout::TILE && input_s.layout() == tt::tt_metal::Layout::TILE &&
+            input_m.layout() == tt::tt_metal::Layout::TILE,
+        "ReduceToRoot requires TILE layout for all three input tensors, got l: {}, s: {}, m: {}",
+        input_l.layout(),
+        input_s.layout(),
+        input_m.layout());
+
+    TT_FATAL(
+        input_l.is_sharded() && input_s.is_sharded() && input_m.is_sharded(),
+        "ReduceToRoot requires all three input tensors to be sharded");
+
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     const uint32_t input_page_size_bytes = input_l.tensor_spec().compute_page_size_bytes();
 
@@ -84,20 +99,31 @@ ReduceToRootOp::spec_return_value_t ReduceToRootOp::compute_output_specs(
     const auto& input_tensor_s = tensor_args.input_tensor_s;
     const auto& input_tensor_m = tensor_args.input_tensor_m;
 
-    std::vector<TensorSpec> final_output_spec = {
+    std::vector<tt::tt_metal::TensorSpec> final_output_spec = {
         input_tensor_l.tensor_spec(), input_tensor_s.tensor_spec(), input_tensor_m.tensor_spec()};
 
-    std::vector<TensorSpec> intermediate_specs;
+    std::vector<tt::tt_metal::TensorSpec> intermediate_specs;
     if (tensor_args.optional_intermediate_tensor.has_value()) {
         intermediate_specs.push_back(tensor_args.optional_intermediate_tensor.value().tensor_spec());
         return {intermediate_specs, final_output_spec};
     }
-    // intermediate shape is the shape of the 3 tenssors combined so that we can send them all in a single packet
-    uint32_t shape_0 = final_output_spec[0].memory_config().shard_spec()->shape[0];
-    uint32_t shape_1 = final_output_spec[0].memory_config().shard_spec()->shape[1] +
-                       (2 * final_output_spec[1].memory_config().shard_spec()->shape[1]);
-    Shape intermediate_shape = Shape{shape_0, shape_1};
-    TensorSpec intermediate_spec(intermediate_shape, final_output_spec[0].tensor_layout());
+    // Every shard core receives one packet holding its l shard plus the matching s and m pages, so each core needs a
+    // shard of (l shard width + 2 * s shard width) and the tensor spans that shard on every core of the l grid.
+    const auto& l_memory_config = final_output_spec[0].memory_config();
+    const auto& l_shard_spec = l_memory_config.shard_spec().value();
+    const auto& s_shard_spec = final_output_spec[1].memory_config().shard_spec().value();
+
+    const uint32_t shard_height = l_shard_spec.shape[0];
+    const uint32_t intermediate_shard_width = l_shard_spec.shape[1] + (2 * s_shard_spec.shape[1]);
+    const uint32_t num_shard_cores = l_shard_spec.num_cores();
+
+    Shape intermediate_shape = Shape{shard_height, intermediate_shard_width * num_shard_cores};
+    tt::tt_metal::ShardSpec intermediate_shard_spec(
+        l_shard_spec.grid, {shard_height, intermediate_shard_width}, l_shard_spec.orientation);
+    tt::tt_metal::MemoryConfig intermediate_memory_config(
+        l_memory_config.memory_layout(), l_memory_config.buffer_type(), intermediate_shard_spec);
+    tt::tt_metal::TensorSpec intermediate_spec(
+        intermediate_shape, final_output_spec[0].tensor_layout().with_memory_config(intermediate_memory_config));
     intermediate_specs.push_back(intermediate_spec);
 
     return {intermediate_specs, final_output_spec};
@@ -156,7 +182,7 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
         semaphores.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0));
     }
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready in reduce_to_root op");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
     log_debug(tt::LogOp, "Synchronize devices in reduce_to_root op done");
 
     const auto& coords = tensor_coords.coords();

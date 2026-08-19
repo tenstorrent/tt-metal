@@ -17,7 +17,7 @@ inline void cast_fp32_to_fp16a() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        x = sfpi::convert<sfpi::vFloat16a>(x, sfpi::RoundMode::NearestEven);
+        x = sfpi::convert<sfpi::vFloat16a>(x, sfpi::RoundMode::Nearest);
         sfpi::dst_reg[0] = x;
         sfpi::dst_reg++;
     }

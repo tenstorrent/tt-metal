@@ -25,8 +25,6 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
                 dim (int, optional): Dim to reduce. ``None`` reduces all elements (ROW_MAJOR input only). Default: ``None``.
                 keepdim (bool, optional): Keep reduced dim. Default: ``False``.
                 sub_core_grids (CoreRangeSet, optional): Limits execution to a subset of cores. Supported on ROW_MAJOR last-dim reductions (<= 2 ranges) and batch/channel dim reductions. Default: ``None``.
-                use_multicore (bool, optional): Enables multi-core only on ROW_MAJOR last-dim reductions. Default: ``False``.
-                    **Deprecated** — use ``sub_core_grids`` to control core assignment instead. Will be removed in a future release (tracked in #44838).
                 memory_config (ttnn.MemoryConfig, optional): Output memory (INTERLEAVED DRAM/L1). Default: input's memory_config.
                 output_tensor (ttnn.Tensor, optional): Preallocated output (must be UINT32, ROW_MAJOR, INTERLEAVED, same device). Default: ``None``.
 
@@ -37,12 +35,12 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
               - dtypes: BFLOAT16/FLOAT32/INT32/UINT32/UINT16
 
             - **dim = rank-1** (last / width):
-              - ROW_MAJOR input: BFLOAT16/FLOAT32/INT32/UINT32/UINT16 (single- or multi-core)
+              - ROW_MAJOR input: BFLOAT16/FLOAT32/INT32/UINT32/UINT16 (multi-core by default)
               - TILE input: BFLOAT16/FLOAT32 (single-core)
 
             - **dim = rank-2** (height):
               - BFLOAT16/FLOAT32 only
-              - ROW_MAJOR inputs are internally tilized; this path runs single-core (``use_multicore`` is ignored)
+              - ROW_MAJOR inputs are internally tilized; this path runs single-core
 
             - **0 <= dim < rank-2** (batch/channel dims, rank >= 3):
               - BFLOAT16/FLOAT32 only (integer dtypes not supported)
@@ -56,7 +54,6 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
             - TILE input with ``dim=None``
             - Batch/channel dim reductions with INT/UINT inputs
             - Integer dtypes on batch/channel dim reductions
-            - ``use_multicore=True`` with TILE inputs (multi-core requires ROW_MAJOR input)
         )doc";
 
     ttnn::bind_function<"argmax">(
@@ -68,7 +65,6 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
         nb::arg("keepdim") = false,
         nb::kw_only(),
         nb::arg("sub_core_grids") = nb::none(),
-        nb::arg("use_multicore") = false,
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none());
 }

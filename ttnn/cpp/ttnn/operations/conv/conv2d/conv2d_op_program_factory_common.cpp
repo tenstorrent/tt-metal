@@ -190,7 +190,11 @@ std::vector<CBInfo> get_cb_info(
             if (!conv_config.enable_activation_reuse) {
                 const bool enable_fully_buffered_weights = num_blocks_act_h > 1;
                 if (enable_fully_buffered_weights) {
-                    weight_block_num_tiles *= kernel_size[0];
+                    // 1D depthwise (non-coalesced) streams num_blocks_act_w one-tap weight blocks per
+                    // height block. Buffer all of them so they stay resident and are reused across
+                    // height blocks (the writer reads weights once, on the first block) instead of
+                    // re-reading from DRAM each block. Normal conv buffers kernel_size[0] blocks.
+                    weight_block_num_tiles *= is_1d_depthwise_conv ? num_blocks_act_w : kernel_size[0];
                 } else if (conv_config.enable_weights_double_buffer) {
                     weight_block_num_tiles *= 2;
                 }
@@ -206,14 +210,34 @@ std::vector<CBInfo> get_cb_info(
             .data_format = weights_df});
     }
 
-    // Matmul partials CB. 1D depthwise compute uses dest-reuse accumulation, so the CB is unused
-    // for that path — emit a 0-page entry so allocate_cbs skips the device allocation.
+    // Matmul partials CB. 1D depthwise compute uses dest-reuse accumulation.
+    //  - Single height block: it reuses out_cb directly for the read-back, so no partials CB
+    //    (the 0-page entry is not emitted).
+    //  - Multiple height blocks, non-coalesced: out_cb is the persistent sharded output and cannot
+    //    double as the dest-reuse scratch across blocks, so allocate a dedicated scratch CB in the
+    //    output data format.
+    const bool depthwise_dest_reuse_scratch = is_1d_depthwise_conv &&
+                                              sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
+                                              !coalesce_1d_depthwise_kw_reads && num_blocks_act_h > 1;
+    const bool partials_use_output_cb = !untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv;
+    // This must match the compute kernel's out_block_num_tiles. Both factories pass one full per-core output-width
+    // block to compute, so dedicated partials storage is exactly one output block reused through ordinary CB FIFO
+    // wraparound. When formats allow output aliasing, only the final block of the existing output allocation is used.
+    const uint32_t output_block_num_tiles = block_config.act_block_h_ntiles * per_core_out_matrix_width_ntiles;
+    TT_FATAL(
+        is_1d_depthwise_conv || output_block_num_tiles <= per_core_out_ntiles,
+        "Conv2d output block size {} exceeds the per-core output size {}",
+        output_block_num_tiles,
+        per_core_out_ntiles);
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::MATMUL_PARTIALS,
-        .num_pages = is_1d_depthwise_conv ? 0 : per_core_out_ntiles,
-        .page_size = partial_tile_size,
-        .is_globally_allocated = (!untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv),
-        .data_format = partial_df});
+        .num_pages =
+            depthwise_dest_reuse_scratch ? act_block_num_tiles : (is_1d_depthwise_conv ? 0 : output_block_num_tiles),
+        .page_size = depthwise_dest_reuse_scratch ? output_tile_size : partial_tile_size,
+        .is_globally_allocated = partials_use_output_cb,
+        .address_offset =
+            partials_use_output_cb ? (per_core_out_ntiles - output_block_num_tiles) * output_tile_size : 0,
+        .data_format = depthwise_dest_reuse_scratch ? output_df : partial_df});
 
     const bool overlap_im2col_cb =
         sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df && !skip_act_cb_create;
@@ -336,58 +360,6 @@ std::vector<CBInfo> get_cb_info(
     return cb_info;
 }
 
-void allocate_cbs(
-    std::vector<CBInfo>& cb_info,
-    tt::tt_metal::Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& all_cores,
-    const Tensor& input_tensor,
-    const Tensor& output_tensor,
-    const Tensor& l1_indices_tensor) {
-    uint32_t cb_index = 0;
-    for (auto& cb : cb_info) {
-        if (cb.num_pages == 0) {
-            // Skip circular buffers with zero pages
-            continue;
-        }
-
-        // cbs for sharded tensors.
-        Buffer* buffer = nullptr;
-        if (cb.is_globally_allocated) {
-            if (cb.name == Conv2dCb::ACT_SHARDED) {
-                buffer = input_tensor.buffer();
-            } else if (cb.name == Conv2dCb::OUT || cb.name == Conv2dCb::MATMUL_PARTIALS) {
-                buffer = output_tensor.buffer();
-            } else if (cb.name == Conv2dCb::READER_INDICES) {
-                buffer = l1_indices_tensor.buffer();
-            } else {
-                TT_THROW(
-                    "Unexpected circular buffer name {}. Expected one of: SHARDED_ACT_CB, OUT0_CB, READER_INDICES_CB",
-                    enchantum::to_string(cb.name));
-            }
-        }
-
-        std::tie(cb.index, cb.handle) =
-            tt::tt_metal::create_cb(cb_index++, program, all_cores, cb.page_size, cb.num_pages, cb.data_format, buffer);
-        log_trace(
-            tt::LogOp,
-            "Allocated circular buffer {} with index {}, num pages {}, page size {}, globally allocated: {}",
-            enchantum::to_string(cb.name),
-            cb.index,
-            cb.num_pages,
-            cb.page_size,
-            cb.is_globally_allocated);
-    }
-
-    for (auto& cb : cb_info) {
-        if (cb.overlapped_by_cb.has_value()) {
-            // If this CB is overlapped by another CB, set the handle to the overlapped CB's handle
-            const CBInfo& overlapped_cb = get_cb_info_by_name(cb_info, cb.overlapped_by_cb.value());
-            cb.handle = overlapped_cb.handle;
-            cb.index = overlapped_cb.index;
-        }
-    }
-}
-
 const CBInfo& get_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name) {
     auto it = std::find_if(cb_info.begin(), cb_info.end(), [cb_name](const CBInfo& cb) { return cb.name == cb_name; });
     return *it;
@@ -417,6 +389,7 @@ static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
 
     NocPerformanceParams params = {0, 0.0f, 0.0f};
     switch (arch) {
+        case tt::ARCH::QUASAR:  // reuse Blackhole NOC perf params until Quasar is benchmarked
         case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{4096, 1.124f, 80.48f}; break;
         case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{1024, 0.868f, 27.84f}; break;
         default: TT_THROW("Unsupported architecture when calculating NOC transfer rate");
@@ -454,6 +427,7 @@ static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
 
     NocPerformanceParams params = {0, 0.0f, 0.0f};
     switch (arch) {
+        case tt::ARCH::QUASAR:  // reuse Blackhole NOC perf params until Quasar is benchmarked
         case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{2048, 0.671f, 80.885f}; break;
         case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{2048, 0.436f, 28.411f}; break;
         default: TT_THROW("Unsupported architecture when calculating DRAM NOC transfer rate");
@@ -492,6 +466,7 @@ static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_b
     // NOLINTBEGIN(modernize-use-std-numbers)
     NocPerformanceParams params = {0, 0.0f, 0.0f};
     switch (arch) {
+        case tt::ARCH::QUASAR:  // reuse Blackhole NOC perf params until Quasar is benchmarked
         case tt::ARCH::BLACKHOLE: params = NocPerformanceParams{65536, 0.182f, 57.677f}; break;
         case tt::ARCH::WORMHOLE_B0: params = NocPerformanceParams{65536, 0.318f, 25.345f}; break;
         default: TT_THROW("Unsupported architecture when calculating multicast L1-linked NOC transfer rate");
@@ -551,7 +526,8 @@ static uint32_t get_tilize_cycles_per_tile(
                {DataType::BFLOAT8_B, {40, 43}}}}  // [non-fp32_dest_acc, fp32_dest_acc]
          }}};
 
-    auto arch_it = tilize_cycles.find(arch);
+    // Quasar is not yet benchmarked; reuse the Blackhole tilize-cycle table.
+    auto arch_it = tilize_cycles.find(arch == tt::ARCH::QUASAR ? tt::ARCH::BLACKHOLE : arch);
     if (arch_it == tilize_cycles.end()) {
         TT_THROW("Unsupported architecture when calculating tilize cycles");
     }
@@ -763,7 +739,6 @@ void emit_cb_descriptors(
     uint32_t cb_index = 0;
     for (auto& cb : cb_info) {
         if (cb.num_pages == 0) {
-            // Skip circular buffers with zero pages (matches allocate_cbs behavior).
             continue;
         }
 
@@ -784,7 +759,7 @@ void emit_cb_descriptors(
 
         cb.index = cb_index++;
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = cb.num_pages * cb.page_size,
+            .total_size = cb.cb_size_per_core(),
             .core_ranges = all_cores_set,
             .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(cb.index),
@@ -792,6 +767,7 @@ void emit_cb_descriptors(
                 .page_size = cb.page_size,
             }}},
             .buffer = buffer,
+            .address_offset = cb.address_offset,
         });
     }
 

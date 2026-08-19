@@ -9,6 +9,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/exp.h"
@@ -17,9 +18,13 @@
 #include "api/compute/eltwise_unary/softplus.h"
 #include "api/compute/mask.h"
 #include "api/compute/matmul.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
+#ifdef TRISC_MATH
+#include "experimental/llk_sfpu/ckernel_sfpu_sdpa_fw.h"
+#endif
 
 constexpr uint32_t onetile = 1U;
 
@@ -37,24 +42,8 @@ inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
 // so we process 4 SFPU iterations (half-face) instead of the standard 8,
 // saving ~75% of SFPU cycles.
 #ifdef TRISC_MATH
-void calculate_recip_first_column() {
-    constexpr int ITERATIONS_HALF_FACE = 4;
-    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat out;
-        if constexpr (DST_ACCUM_MODE) {
-            out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
-        } else {
-            out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
-        }
-        sfpi::dst_reg[0] = out;
-        sfpi::dst_reg += 2;
-    }
-}
-
 void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column, idst, VectorMode::C);
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, idst, VectorMode::C);
 }
 #endif  // TRISC_MATH
 
@@ -173,7 +162,7 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
     cb_wait_front(cb_cur_max, onetile);
 
     reconfig_data_format(cb_attention_weights, cb_cur_max);
-    sub_bcast_cols_init_short(cb_attention_weights, cb_cur_max);
+    sub_bcast_cols_init(cb_attention_weights, cb_cur_max);
 
     // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
     // sdpa_exp_tile_scaled dispatches to the arch-appropriate path (WH sfpi mul or BH LREG12 fold).
@@ -241,7 +230,7 @@ void matmul_qk_by_v(
     // matmul maps: in0(attention_weights)→SrcB, in1(value)→SrcA
     reconfig_data_format(cb_value, cb_attention_weights);
     pack_reconfig_data_format(cb_cur_mm_out);
-    mm_block_init_short(
+    matmul_block_init(
         cb_attention_weights,
         cb_value,
         /* transpose */ 0,
@@ -286,7 +275,7 @@ void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, 
     const uint32_t exp_max_diff_dst_idx = 0;
     reconfig_data_format(cb_prev_max_value, cb_cur_max_value);
     tile_regs_acquire();
-    sub_tiles_init(cb_prev_max_value, cb_cur_max_value);
+    sub_init(cb_prev_max_value, cb_cur_max_value);
     sub_tiles(
         cb_prev_max_value,
         cb_cur_max_value,
@@ -314,7 +303,7 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
 
     const uint32_t exp_sum_dst_idx = 0;
     reconfig_data_format(cb_prev_sum_exp, cb_exp_max_diff);  // reconfig data format to precise
-    mul_bcast_cols_init_short(cb_prev_sum_exp, cb_exp_max_diff);
+    mul_bcast_cols_init(cb_prev_sum_exp, cb_exp_max_diff);
     tile_regs_acquire();
     // multiply previous exp sum with exp_max_diff
     mul_tiles_bcast_cols(cb_prev_sum_exp, cb_exp_max_diff, 0, 0, exp_sum_dst_idx);
@@ -408,8 +397,7 @@ void row_reduce_tile_inplace(uint32_t cb_in_idx) {
     reconfig_data_format(cb_matmul_reduce, cb_in_idx);
     tile_regs_acquire();
 
-    mm_init(cb_in_idx, cb_matmul_reduce, cb_in_idx, 0);
-    // mm_init_short(cb_in_idx, cb_matmul_reduce, 0);
+    matmul_init(cb_in_idx, cb_matmul_reduce, 0);
     matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduce_dst_idx);
     tile_regs_commit();
 

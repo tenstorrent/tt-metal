@@ -2,95 +2,69 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import time
 import torch
+import torchvision.ops
 import ttnn
 
 import torch.nn as nn
 from typing import Tuple, Union, Optional
-from torch.autograd import Function
 from torch.nn.modules.utils import _pair, _single
 
 from models.experimental.uniad.tt.common import TtnnConv2D
+from models.experimental.uniad.tt.ttnn_modulated_deform_conv import TtModulatedDeformConv2dDevice
 
-from mmcv.utils import ext_loader
+# Diagnostic harness — set TT_DCN_TIMING=1 to print, on every TtResNet
+# forward, the accumulated time spent in TtModulatedDeformConv2dPack
+# split into:
+#   transfer: device->host reads for x / offset / mask
+#   cpu:      torchvision deform_conv2d on the host
+#   back:     host->device write of the result tensor
+# This is the diagnostic we used to confirm CPU compute (not PCIe) is
+# the dominant cost of the modulated deformable conv path.
+_DCN_TIMING = os.environ.get("TT_DCN_TIMING") == "1"
+_dcn_accum = {"transfer": 0.0, "cpu": 0.0, "back": 0.0, "device": 0.0, "n": 0}
 
-ext_module = ext_loader.load_ext("_ext", ["modulated_deform_conv_forward"])
-
-
-# TODO Raised issue for this operation - <https://github.com/tenstorrent/tt-metal/issues/25526>
-class ModulatedDeformConv2dFunction(Function):
-    @staticmethod
-    def forward(
-        ctx,
-        input: torch.Tensor,
-        offset: torch.Tensor,
-        mask: torch.Tensor,
-        weight: nn.Parameter,
-        bias: Optional[nn.Parameter] = None,
-        stride: int = 1,
-        padding: int = 0,
-        dilation: int = 1,
-        groups: int = 1,
-        deform_groups: int = 1,
-    ) -> torch.Tensor:
-        if input is not None and input.dim() != 4:
-            raise ValueError(
-                f"Expected 4D tensor as input, got {input.dim()}D tensor \
-                  instead."
-            )
-        ctx.stride = _pair(stride)
-        ctx.padding = _pair(padding)
-        ctx.dilation = _pair(dilation)
-        ctx.groups = groups
-        ctx.deform_groups = deform_groups
-        ctx.with_bias = bias is not None
-        if not ctx.with_bias:
-            bias = input.new_empty(0)  # fake tensor
-        input = input.type_as(offset)
-        weight = weight.type_as(input)
-        bias = bias.type_as(input)  # type: ignore
-        ctx.save_for_backward(input, offset, mask, weight, bias)
-        output = input.new_empty(ModulatedDeformConv2dFunction._output_size(ctx, input, weight))
-        ctx._bufs = [input.new_empty(0), input.new_empty(0)]
-        ext_module.modulated_deform_conv_forward(
-            input,
-            weight,
-            bias,
-            ctx._bufs[0],
-            offset,
-            mask,
-            output,
-            ctx._bufs[1],
-            kernel_h=weight.size(2),
-            kernel_w=weight.size(3),
-            stride_h=ctx.stride[0],
-            stride_w=ctx.stride[1],
-            pad_h=ctx.padding[0],
-            pad_w=ctx.padding[1],
-            dilation_h=ctx.dilation[0],
-            dilation_w=ctx.dilation[1],
-            group=ctx.groups,
-            deformable_group=ctx.deform_groups,
-            with_bias=ctx.with_bias,
-        )
-        return output
-
-    @staticmethod
-    def _output_size(ctx, input, weight):
-        channels = weight.size(0)
-        output_size = (input.size(0), channels)
-        for d in range(input.dim() - 2):
-            in_size = input.size(d + 2)
-            pad = ctx.padding[d]
-            kernel = ctx.dilation[d] * (weight.size(d + 2) - 1) + 1
-            stride_ = ctx.stride[d]
-            output_size += ((in_size + (2 * pad) - kernel) // stride_ + 1,)
-        if not all(map(lambda s: s > 0, output_size)):
-            raise ValueError("convolution input is too small (output would be " + "x".join(map(str, output_size)) + ")")
-        return output_size
+# Route TtModulatedDeformConv2dPack through the device-side
+# TtModulatedDeformConv2dDevice (grid_sample + fused matmul) instead of
+# the host CPU path. On by default — validated end-to-end against
+# the UniAD PCC gate (sdc_traj 0.9910, gate 0.99) and worth ~3.4 sec of
+# img_backbone wall time on Blackhole (CPU ~3.57 s → device ~0.35 s
+# across 26 DCN blocks in ResNet101 layer3/layer4). Set TT_DCN_DEVICE=0
+# to fall back to the host path for debugging or numerical bisection.
+_USE_DEVICE_DCN = os.environ.get("TT_DCN_DEVICE", "1") == "1"
 
 
-modulated_deform_conv2d = ModulatedDeformConv2dFunction.apply
+def modulated_deform_conv2d(
+    input: torch.Tensor,
+    offset: torch.Tensor,
+    mask: torch.Tensor,
+    weight: torch.Tensor,
+    bias: Optional[torch.Tensor] = None,
+    stride: int = 1,
+    padding: int = 0,
+    dilation: int = 1,
+    groups: int = 1,
+    deform_groups: int = 1,
+) -> torch.Tensor:
+    """DCNv2 host reference via `torchvision.ops.deform_conv2d`.
+
+    Offset is `(N, 2*deform_groups*K*K, H_out, W_out)` in interleaved
+    `(y, x)` order — same layout torchvision and mmcv both expect.
+    `groups` / `deform_groups` are derived by torchvision from tensor
+    shapes, so they're accepted here only for call-site compatibility.
+    """
+    return torchvision.ops.deform_conv2d(
+        input,
+        offset,
+        weight,
+        bias=bias,
+        stride=_pair(stride),
+        padding=_pair(padding),
+        dilation=_pair(dilation),
+        mask=mask,
+    )
 
 
 class TtModulatedDeformConv2dPack:
@@ -130,22 +104,84 @@ class TtModulatedDeformConv2dPack:
 
         self.conv_offset = TtnnConv2D(conv_args.conv_offset, conv_pth.conv_offset, device=device)
 
+        # Device-side modulated_deform_conv. Uploads per-chunk weights /
+        # base grids lazily, so initialisation here is cheap and warm-path
+        # cost is amortised across forward calls. Created unconditionally
+        # — `_USE_DEVICE_DCN` only gates whether __call__ uses it.
+        self.device_dcn = TtModulatedDeformConv2dDevice(
+            weight=self.weight,
+            bias=self.bias,
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            groups=self.groups,
+            deform_groups=self.deform_groups,
+            device=device,
+        )
+
     def __call__(self, x: torch.Tensor) -> torch.Tensor:  # type: ignore
         out, out_h, out_w = self.conv_offset(x)
         out = ttnn.sharded_to_interleaved(out)
-        out = ttnn.reshape(out, (6, out_h, out_w, out.shape[3]))
+        # conv_offset reports logical shape (1, 1, B*H*W, C); recover B from
+        # the total volume so this path doesn't pin the batch dimension.
+        last = out.shape[-1]
+        out_volume = out.shape[0] * out.shape[1] * out.shape[2] * out.shape[3]
+        B = out_volume // (out_h * out_w * last)
+        out = ttnn.reshape(out, (B, out_h, out_w, last))
         o1, o2, mask = ttnn.chunk(out, 3, dim=3)
         ttnn.deallocate(out)
-        offset = ttnn.concat((o1, o2), dim=3)
+        offset = ttnn.concat((o1, o2), dim=3)  # NHWC (B, H_out, W_out, 2*K*K), DCNv2 (y,x) interleaved layout
         ttnn.deallocate(o1)
         ttnn.deallocate(o2)
         mask = ttnn.sigmoid(mask)  # low pcc if we use ttnn sigmoid for mask
+
+        if _USE_DEVICE_DCN:
+            # The device path samples x at the output grid and reshapes x to
+            # (B, out_h, out_w, C_in), which only holds when input and output
+            # share spatial dims — i.e. stride 1. UniAD's ResNet101 runs all
+            # 26 DCN convs at stride 1 (downsampling happens at conv1 / the
+            # downsample shortcut, never at the DCN conv2), so this is always
+            # true here. Assert it so a future config that puts DCN on a
+            # strided conv fails with a clear message instead of a cryptic
+            # reshape volume error.
+            assert self.stride == (1, 1), (
+                f"device DCN path supports stride-1 only (got stride={self.stride}); "
+                "set TT_DCN_DEVICE=0 for the host fallback to run a strided DCN."
+            )
+            if _DCN_TIMING:
+                ttnn.synchronize_device(self.device)
+                _t0 = time.perf_counter()
+            # The caller's reshape to (B, H, W, C) doesn't always make
+            # x.shape[0] == B (the underlying tile-layout tensor can still
+            # report logical shape (1, 1, B*H*W, C)); reshape unconditionally
+            # so the scaffold sees a proper 4D NHWC tensor.
+            C_in = x.shape[-1]
+            x_nhwc = ttnn.reshape(x, (B, out_h, out_w, C_in))
+            out_nhwc = self.device_dcn(x_nhwc, offset, mask)  # (B, H_out, W_out, C_out) tile
+            ttnn.deallocate(offset)
+            ttnn.deallocate(mask)
+            C_out = out_nhwc.shape[-1]
+            result_ttnn = ttnn.reshape(out_nhwc, (1, 1, B * out_h * out_w, C_out))
+            if _DCN_TIMING:
+                ttnn.synchronize_device(self.device)
+                _dcn_accum["device"] += time.perf_counter() - _t0
+                _dcn_accum["n"] += 1
+            return result_ttnn, out_h, out_w
+
+        # Host fallback: pull x / offset / mask back, run torchvision
+        # deform_conv2d (DCNv2) on CPU.
         mask = ttnn.permute(mask, (0, 3, 1, 2))
 
+        if _DCN_TIMING:
+            ttnn.synchronize_device(self.device)
+            _t0 = time.perf_counter()
         mask = ttnn.to_torch(mask).to(dtype=torch.float)
 
         x = ttnn.to_torch(x).permute(0, 3, 1, 2).to(dtype=torch.float)
         offset = ttnn.to_torch(offset).permute(0, 3, 1, 2).to(dtype=torch.float)
+        if _DCN_TIMING:
+            _t1 = time.perf_counter()
+            _dcn_accum["transfer"] += _t1 - _t0
 
         result = modulated_deform_conv2d(
             x,
@@ -159,11 +195,19 @@ class TtModulatedDeformConv2dPack:
             self.groups,
             self.deform_groups,
         )
+        if _DCN_TIMING:
+            _t2 = time.perf_counter()
+            _dcn_accum["cpu"] += _t2 - _t1
         out_h, out_w = result.shape[2], result.shape[3]
         result = result.permute(0, 2, 3, 1)
         result = result.reshape(1, 1, result.shape[0] * result.shape[1] * result.shape[2], result.shape[3])
 
-        return ttnn.from_torch(result, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), out_h, out_w
+        result_ttnn = ttnn.from_torch(result, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        if _DCN_TIMING:
+            ttnn.synchronize_device(self.device)
+            _dcn_accum["back"] += time.perf_counter() - _t2
+            _dcn_accum["n"] += 1
+        return result_ttnn, out_h, out_w
 
 
 class TtResLayer:
@@ -462,30 +506,53 @@ class TtResNet:
 
     def __call__(self, x):
         """Forward function."""
-        x, _, _ = self.conv1(x)
+        if _DCN_TIMING:
+            _dcn_accum["transfer"] = 0.0
+            _dcn_accum["cpu"] = 0.0
+            _dcn_accum["back"] = 0.0
+            _dcn_accum["device"] = 0.0
+            _dcn_accum["n"] = 0
 
-        x = ttnn.sharded_to_interleaved(x)
-        x = ttnn.add(x, 0.0, dtype=ttnn.bfloat8_b)
+        # Per-stage timing markers — gated by the same TT_UNIAD_TIMING harness
+        # used in ttnn_uniad. Imported lazily to avoid a circular dependency
+        # at module-load time (ttnn_uniad ultimately imports this module).
+        from models.experimental.uniad.tt.ttnn_uniad import _timing_phase as _phase
 
-        x = ttnn.max_pool2d(
-            input_tensor=x,
-            batch_size=6,
-            input_h=320,
-            input_w=180,
-            channels=x.shape[3],
-            kernel_size=[3, 3],
-            stride=[2, 2],
-            padding=[1, 1],
-            dilation=[1, 1],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ceil_mode=False,
-        )
+        with _phase("        bb_stem (conv1+maxpool)", self.device):
+            x, _, _ = self.conv1(x)
+            x = ttnn.sharded_to_interleaved(x)
+            x = ttnn.add(x, 0.0, dtype=ttnn.bfloat8_b)
+            x = ttnn.max_pool2d(
+                input_tensor=x,
+                batch_size=6,
+                input_h=320,
+                input_w=180,
+                channels=x.shape[3],
+                kernel_size=[3, 3],
+                stride=[2, 2],
+                padding=[1, 1],
+                dilation=[1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                ceil_mode=False,
+            )
 
         outs = []
         for i, layer_name in enumerate(self.res_layers):
-            x = layer_name(x)
-            if i == 0:
-                x = ttnn.add(x, 0.0, dtype=ttnn.bfloat8_b)
+            with _phase(f"        bb_layer{i+1}", self.device):
+                x = layer_name(x)
+                if i == 0:
+                    x = ttnn.add(x, 0.0, dtype=ttnn.bfloat8_b)
             if i in self.out_indices:
                 outs.append(x)
+        if _DCN_TIMING and _dcn_accum["n"] > 0:
+            if _USE_DEVICE_DCN:
+                print(f"  [DCN device] count={_dcn_accum['n']:>3d} " f"device={_dcn_accum['device']*1000:.1f}ms")
+            else:
+                print(
+                    f"  [DCN host] count={_dcn_accum['n']:>3d} "
+                    f"transfer={_dcn_accum['transfer']*1000:.1f}ms "
+                    f"cpu={_dcn_accum['cpu']*1000:.1f}ms "
+                    f"back={_dcn_accum['back']*1000:.1f}ms "
+                    f"total={(_dcn_accum['transfer']+_dcn_accum['cpu']+_dcn_accum['back'])*1000:.1f}ms"
+                )
         return tuple(outs)

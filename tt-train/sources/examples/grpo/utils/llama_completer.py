@@ -7,20 +7,21 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional
 
 import numpy as np
 import ttnn
 
 import ttml
 from ttml.common.config import DeviceConfig, TransformerConfig
-from ttml.common.utils import no_grad
+from ttml.common.utils import no_grad, round_up_to_tile
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
 from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
+from .completer_common import deallocate_tensors, async_read_to_host
 from .llama_overrides import LlamaCompositeKV
 
 
@@ -42,20 +43,6 @@ class LlamaCompletionCtx:
     completions_per_prompt: int = 1
     _tokenizer: Any = None
     _pad_token: Optional[int] = None
-
-
-def deallocate_tensors(tensors: Any) -> None:
-    if tensors is None:
-        return
-    if not isinstance(tensors, (list, tuple)):
-        tensors = [tensors]
-    for t in tensors:
-        if t is None:
-            continue
-        if isinstance(t, ttml.autograd.Tensor):
-            ttnn.deallocate(t.get_value(), force=True)
-        elif isinstance(t, ttnn.Tensor):
-            ttnn.deallocate(t, force=True)
 
 
 def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> None:
@@ -84,22 +71,6 @@ def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> 
         print(f"Warning: {len(missing)} parameters not found in checkpoint:")
         for n in missing:
             print(f"  - {n}")
-
-
-def _async_read_to_host(tensors: List[Any], mesh_device: Any) -> Tuple[List[Any], Any]:
-    """Issue non-blocking d2h reads for ``tensors`` on the single command queue.
-
-    Returns ``(host_tensors, event)``. The caller must call
-    ``event_synchronize(event)`` before consuming ``host_tensors``; deallocating
-    the source ``tensors`` before then races with the in-flight DMA.
-    """
-    hosts = [t.cpu(blocking=False) for t in tensors]
-    done = ttnn.record_event(mesh_device=mesh_device, cq_id=0)
-    return hosts, done
-
-
-def _round_up(x: int) -> int:
-    return ((x + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
 
 
 class LlamaGRPOCompleter(GRPOCompleter):
@@ -215,6 +186,11 @@ class LlamaGRPOCompleter(GRPOCompleter):
         self._dp_composer: Any = (
             ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0) if self._ddp_enabled else None
         )
+        # Mesh axis to seed UNIQUELY in the sample op: the DDP (data-parallel) axis, whose devices hold
+        # DISTINCT prompts and must draw independent Gumbel noise. TP is disabled on this path (see
+        # above), so the ddp axis is the only sharded axis; None => no per-device seeding (identical noise).
+        ddp_axis = autograd_ctx.get_parallelism_context().get_ddp_axis() if self._ddp_enabled else None
+        self._seed_axes: Any = [int(ddp_axis)] if ddp_axis is not None else None
 
         local_safetensors = os.path.isdir(model_source) and any(
             f == "model.safetensors" for f in os.listdir(model_source)
@@ -320,7 +296,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
 
         logits = self._forward(inputs_np, pad_lengths, B)
 
-        Tp = _round_up(T)
+        Tp = round_up_to_tile(T)
         targets_pad = np.full((B, Tp), pad_token, dtype=np.uint32)
         targets_pad[:, :T] = targets_np
 
@@ -352,7 +328,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
     # ------------------------------------------------------------------
 
     def _tokens_to_tensor(self, tokens_np: np.ndarray, B: int) -> ttml.autograd.Tensor:
-        padded_len = _round_up(tokens_np.shape[1])
+        padded_len = round_up_to_tile(tokens_np.shape[1])
         padded = np.full((B, padded_len), self._ctx._pad_token, dtype=np.uint32)
         padded[:, : tokens_np.shape[1]] = tokens_np
         return ttml.autograd.Tensor.from_numpy(
@@ -365,8 +341,8 @@ class LlamaGRPOCompleter(GRPOCompleter):
         assert len(pad_lengths) == B
 
         whole_len = prompt_len + query_len
-        padded_q = _round_up(query_len)
-        padded_w = _round_up(whole_len)
+        padded_q = round_up_to_tile(query_len)
+        padded_w = round_up_to_tile(whole_len)
 
         mask_one_token = np.zeros((padded_q, padded_w), dtype=np.float32)
         mask_one_token[:query_len, :padded_w] = np.tri(query_len, padded_w, k=prompt_len, dtype=np.float32)
@@ -429,7 +405,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         B_local = B // total_devices
 
         V = len(ctx._tokenizer)
-        padded_V = _round_up(V)
+        padded_V = round_up_to_tile(V)
 
         kv_cache = self._get_kv_cache(B_local)
         logits_mask_tensor = self._build_logits_mask(V, padded_V) if padded_V != V else None
@@ -475,7 +451,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
             logits = self._model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
 
             next_token_tensor = ttml.ops.sample.sample_op(
-                logits, ctx.temperature, np.random.randint(low=1e7), logits_mask_tensor
+                logits, ctx.temperature, np.random.randint(low=1e7), logits_mask_tensor, self._seed_axes
             )
 
             last_token_column = ttnn.slice(
@@ -501,7 +477,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
                     if done.all():
                         break
 
-                pending_hosts, pending_event = _async_read_to_host(chunk_columns, mesh_device)
+                pending_hosts, pending_event = async_read_to_host(chunk_columns, mesh_device)
                 chunk_columns = []
 
         completions_np = to_np(generated_columns)

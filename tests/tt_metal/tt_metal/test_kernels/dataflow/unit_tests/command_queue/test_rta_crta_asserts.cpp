@@ -30,9 +30,10 @@ extern uint32_t crta_count;
 // Helper: Signal completion to dispatcher before assert hangs the kernel
 static FORCE_INLINE void signal_completion_before_assert() {
 #if defined(ARCH_QUASAR)
-    // Quasar SD: signal via go_message
     volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
     go_message_in->signal = RUN_MSG_DONE;
+    uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
+    notify_dispatch_core_done(dispatch_addr, noc_index);
 #else  // Else WH/BH
 #ifdef COMPILE_FOR_TRISC
     // signal via subordinate sync

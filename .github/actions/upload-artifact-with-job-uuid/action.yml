@@ -17,7 +17,10 @@ runs:
       id: generate-artifact-name
       shell: bash
       run: |
-        uuid=$(uuidgen)
+        # uuidgen ships with util-linux on most images but is missing from
+        # minimal containers (e.g., basic-ttnn-runtime). Fall back to the
+        # kernel's random-UUID source, which is always present on Linux.
+        uuid=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
         artifact_name="${{ inputs.prefix }}$uuid"
         echo "[UPLOAD-ARTIFACT-UUID] $artifact_name"
         echo "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import math
 import os
 from types import SimpleNamespace
@@ -10,6 +11,15 @@ from loguru import logger
 
 import ttnn
 from models.tt_transformers.tt.load_checkpoints import convert_rope_style_hf_to_meta
+
+
+def get_hf_visual(model):
+    """Return the HF vision tower.
+
+    transformers 5.x nests the vision tower under ``model.model.visual`` (``Qwen3VLModel``);
+    4.x exposed it directly as ``model.visual``. Accept either.
+    """
+    return model.visual if hasattr(model, "visual") else model.model.visual
 
 
 def merge_vision_tokens(
@@ -384,7 +394,10 @@ def multimodal_rope_from_hf(
     )
 
     # Qwen3VLModel.forward:
-    x = SimpleNamespace(device=SimpleNamespace(type="cpu"), dtype=torch.bfloat16)
+    # transformers 5.x Qwen3VLTextRotaryEmbedding.forward calls inv_freq.to(x.device), so x.device must be
+    # a real torch.device (a SimpleNamespace there makes tensor.to() raise TypeError). x only needs .device
+    # and .dtype, so a SimpleNamespace with a real device is enough without materializing a tensor.
+    x = SimpleNamespace(device=torch.device("cpu"), dtype=torch.bfloat16)
     cos, sin = reference_model.model.language_model.rotary_emb(x, position_ids)
     # apply_multimodal_rotary_pos_emb:
     unsqueeze_dim = 1
@@ -428,15 +441,24 @@ def multimodal_rope_single_user_from_hf(
     padded_attention_mask = torch.ones_like(padded_inputs, dtype=torch.int64)
 
     # Qwen3VLForConditionalGeneration.forward:
-    position_ids, rope_deltas = reference_model.model.get_rope_index(
-        padded_inputs,
-        image_grid_thw,
-        video_grid_thw=None,
-        attention_mask=padded_attention_mask,
-    )
+    rope_index_kwargs = dict(image_grid_thw=image_grid_thw, video_grid_thw=None, attention_mask=padded_attention_mask)
+    # transformers >=5.x get_rope_index added a required `mm_token_type_ids` arg (0=text, 1=image,
+    # 2=video) that the processor normally produces; reconstruct it from the placeholder token ids.
+    if "mm_token_type_ids" in inspect.signature(reference_model.model.get_rope_index).parameters:
+        config = reference_model.config
+        mm_token_type_ids = torch.zeros_like(padded_inputs, dtype=torch.int32)
+        if getattr(config, "image_token_id", None) is not None:
+            mm_token_type_ids[padded_inputs == config.image_token_id] = 1
+        if getattr(config, "video_token_id", None) is not None:
+            mm_token_type_ids[padded_inputs == config.video_token_id] = 2
+        rope_index_kwargs["mm_token_type_ids"] = mm_token_type_ids
+    position_ids, rope_deltas = reference_model.model.get_rope_index(padded_inputs, **rope_index_kwargs)
 
     # Qwen3VLModel.forward:
-    x = SimpleNamespace(device=SimpleNamespace(type="cpu"), dtype=torch.bfloat16)
+    # transformers 5.x Qwen3VLTextRotaryEmbedding.forward calls inv_freq.to(x.device), so x.device must be
+    # a real torch.device (a SimpleNamespace there makes tensor.to() raise TypeError). x only needs .device
+    # and .dtype, so a SimpleNamespace with a real device is enough without materializing a tensor.
+    x = SimpleNamespace(device=torch.device("cpu"), dtype=torch.bfloat16)
     cos, sin = reference_model.model.language_model.rotary_emb(x, position_ids)
     # apply_multimodal_rotary_pos_emb:
     unsqueeze_dim = 1

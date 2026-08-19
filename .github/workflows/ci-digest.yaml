@@ -2,7 +2,8 @@ name: "CI Digest"
 
 on:
   schedule:
-    - cron: "0 * * * *"  # top of every hour; each digest's slot is gated by its schedule
+    # Off :00, which GitHub sheds first under load. Weekdays only.
+    - cron: "12 8 * * 1-5"  # disaggregated-prefill
   workflow_dispatch:
     inputs:
       digest:
@@ -28,12 +29,12 @@ jobs:
       matrix:
         include:
           - name: disaggregated-prefill
-            schedule: "0 8 * * *"  # 08:00 UTC daily (minute must be 0)
+            schedule: "12 8 * * 1-5"  # must match a cron in on.schedule (gates this leg)
             slack_channel: "C0B7VTPPMRD"  # SLACK_BOT_TOKEN bot must be a member of this channel
             workflows:  # file names; must be shell-safe (no spaces) — passed unquoted to --workflows
               - blackhole-e2e-tests.yaml
               - t3000-e2e-tests.yaml
-              - galaxy-deepseek-prefill-tests.yaml
+              - blaze-models-prefill-tests.yaml
               - demo-sp-release.yaml
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -42,21 +43,19 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Digest selection lives here, not on the job's `if`: the `matrix` context
-      # is unavailable in a job-level `if` (evaluated before matrix expansion).
-      # On manual dispatch, run only the selected digest; scheduled runs cover all.
-      # Non-selected legs skip this step, so the steps below (gated on `produced`)
-      # skip too.
+      # Step-level `if` (matrix is unavailable in a job-level `if`). Scheduled runs
+      # match github.event.schedule (survives late delivery); dispatch uses `digest`.
       - name: Generate digest
         id: digest
-        if: github.event_name != 'workflow_dispatch' || inputs.digest == 'all' || inputs.digest == matrix.name
+        if: >-
+          (github.event_name == 'schedule' && github.event.schedule == matrix.schedule) ||
+          (github.event_name == 'workflow_dispatch' && (inputs.digest == 'all' || inputs.digest == matrix.name))
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 .github/scripts/ci_digest.py --out-dir out \
             --name "${{ matrix.name }}" \
-            --schedule "${{ matrix.schedule }}" \
-            --workflows ${{ join(matrix.workflows, ' ') }} ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }}
+            --workflows ${{ join(matrix.workflows, ' ') }}
           shopt -s nullglob
           files=(out/ci-digest-*.md)
           if [ ${#files[@]} -gt 0 ]; then
@@ -67,6 +66,11 @@ jobs:
             echo "all_green=$ag" >> "$GITHUB_OUTPUT"
           fi
 
+      # Digest in the run log, so it's readable without opening the Step Summary.
+      - name: Print digest
+        if: steps.digest.outputs.produced == 'true'
+        run: cat out/ci-digest-*.md
+
       - name: Upload digest
         if: steps.digest.outputs.produced == 'true'
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -74,12 +78,10 @@ jobs:
           name: ci-digest-${{ matrix.name }}-${{ github.run_id }}
           path: out/
 
-      # Single source of the Slack gate: post only for scheduled runs of a
-      # digest that produced output and has a channel. Both Slack steps below
-      # key off this step's `go` output (empty when this step is skipped).
+      # Single Slack gate: both Slack steps below key off this step's `go` output.
       - name: Gate Slack notification
         id: notify
-        if: steps.digest.outputs.produced == 'true' && matrix.slack_channel != '' && github.event_name != 'workflow_dispatch'
+        if: steps.digest.outputs.produced == 'true' && matrix.slack_channel != '' && github.event_name == 'schedule'
         run: echo "go=true" >> "$GITHUB_OUTPUT"
 
       - name: Resolve this job's id
@@ -89,8 +91,7 @@ jobs:
         with:
           job_name: "digest · ${{ matrix.name }}"
 
-      # #summary-<job_id> anchors directly to this job's step summary on the
-      # run-attempt page; if the anchor ever drifts it still opens the page.
+      # #summary-<job_id> deep-links to this job's step summary on the run page.
       - name: Notify Slack
         if: steps.notify.outputs.go == 'true'
         uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3

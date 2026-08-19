@@ -7,8 +7,8 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal
 
-_INTEGER_OUTPUT_DTYPES = {ttnn.uint8, ttnn.uint16, ttnn.uint32, ttnn.int32}
-_UNSIGNED_INPUT_DTYPES = {ttnn.uint8, ttnn.uint16, ttnn.uint32}
+INTEGER_OUTPUT_DTYPES = frozenset({ttnn.uint8, ttnn.uint16, ttnn.uint32, ttnn.int32})
+_UNSIGNED_INPUT_DTYPES = frozenset({ttnn.uint8, ttnn.uint16, ttnn.uint32})
 
 # Signed 32-bit extrema: min = -2^(32-1), max = 2^(32-1) - 1 (exponent is 31, not 32).
 _INT32_MIN = -(2**31)
@@ -58,7 +58,7 @@ def typecast_test_input_bounds(tt_input_dtype, tt_output_dtype):
       high = out_max + slack (80000 for uint16-scale outputs).
     - Unsigned input + uint8 output → [0, min(512, input_max)]; wider outputs → [0, min(80000, input_max)].
     """
-    if tt_output_dtype not in _INTEGER_OUTPUT_DTYPES:
+    if tt_output_dtype not in INTEGER_OUTPUT_DTYPES:
         return 0, 100
 
     out_min = _DTYPE_MIN[tt_output_dtype]
@@ -100,12 +100,5 @@ def assert_integer_typecast_equal(expected, actual):
     assert_equal(expected.to(torch.int64), actual.to(torch.int64))
 
 
-def uses_exact_integer_typecast_check(tt_input_dtype, tt_output_dtype):
-    if tt_output_dtype in (ttnn.int32, ttnn.uint32, ttnn.uint8):
-        return True
-    return tt_output_dtype == ttnn.uint16 and tt_input_dtype in (
-        ttnn.int32,
-        ttnn.uint16,
-        ttnn.uint32,
-        ttnn.uint8,
-    )
+def uses_exact_integer_typecast_check(_tt_input_dtype, tt_output_dtype):
+    return tt_output_dtype in INTEGER_OUTPUT_DTYPES

@@ -2,18 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+import os
 
 import ttnn
 from loguru import logger
 import pytest
 from models.tt_dit.tests.unit.test_ring_joint_attention import (
     run_ring_joint_sdpa,
+    run_ring_joint_sdpa_sharded_prompt,
     run_test_ring_joint_sdpa,
     create_ring_joint_sdpa_submesh,
     bh_qb_ge_unit_test_params,
     mesh_device_map,
 )
+from models.tt_dit.utils.padding import get_padded_vision_seq_len
+from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
 
 @pytest.fixture(autouse=True)
@@ -25,6 +28,7 @@ def skip_on_large_clusters():
         )
 
 
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Heavyweight ring-joint SDPA matrix is not run in CI")
 @bh_qb_ge_unit_test_params
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -90,7 +94,7 @@ def test_ring_joint_sdpa_dit_bh_qb_ge(
     ],
     ids=["sd35"],
 )
-@pytest.mark.parametrize("n_iters, trace_enabled", [(1, False)], ids=["no_trace"])
+@pytest.mark.parametrize("n_iters, trace_enabled", [(3, False)], ids=["no_trace"])
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -148,37 +152,90 @@ def test_ring_joint_sdpa_program_cache(
 
     skip_check = False
 
-    dummy_tensors = []
-    for i in range(3):
-        dummy_tensors.append(
-            ttnn.from_torch(
-                torch.rand((b, nh, seq_len, d)),
-                device=submesh,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=dtype,
-                mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=[None, None]),
-            )
-        )
-
-        run_ring_joint_sdpa(
-            submesh,
-            b,
-            nh,
-            seq_len,
-            seq_len,
-            joint_seq_len,
-            d,
-            q_chunk_size,
-            k_chunk_size,
-            dtype,
-            n_iters,
-            trace_enabled,
-            num_links,
-            rp_axis,
-            up_axis,
-            all_gather_topology,
-            skip_check,
-            pcc_threshold,
-        )
+    # Run the op n_iters (>1) times within a SINGLE run_ring_joint_sdpa invocation. The op must be
+    # exercised under one sub-device-manager lifetime: run_ring_joint_sdpa loads a sub-device manager
+    # on entry, which clears the program cache (mesh_device.cpp clear_program_cache on manager switch),
+    # so looping the whole helper would clear the cache between calls and defeat the reuse check.
+    # run_ring_joint_sdpa's internal loop runs the op n_iters times with distinct per-iter persistent
+    # buffers and global semaphores, so cache reuse is still validated against address variation.
+    run_ring_joint_sdpa(
+        submesh,
+        b,
+        nh,
+        seq_len,
+        seq_len,
+        joint_seq_len,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        n_iters,
+        trace_enabled,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+        skip_check,
+        pcc_threshold,
+    )
 
     assert submesh.cache_entries_counter.total == 1
+
+
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["line"],
+)
+@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["bh_qb_ge"]], ids=["2x2"], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "sp_axis, b, nh, base_seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
+    [
+        # sp_factor=2 on axis 0 of 2x2 mesh (same mesh as non-sharded BH nightly)
+        (0, 1, 24, 64, 128, 64, 64, 64),
+    ],
+    ids=["sp2"],
+)
+def test_ring_joint_sdpa_sharded_prompt(
+    mesh_device,
+    num_links,
+    sp_axis,
+    b,
+    nh,
+    base_seq_len,
+    joint_seq_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    all_gather_topology,
+    reset_seeds,
+):
+    """Sharded-joint path: joint Q/K/V are L/P per device; logical_l gathers joint K/V internally."""
+    sp_factor = mesh_device.shape[sp_axis]
+    up_axis = 1 - sp_axis
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*mesh_device.shape))
+    submesh.cache_entries_counter = CacheEntriesCounter(submesh)
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, sp_factor)
+    assert joint_seq_len % sp_factor == 0, "joint_seq_len must be divisible by sp_factor"
+    run_ring_joint_sdpa_sharded_prompt(
+        submesh,
+        b=b,
+        nh=nh,
+        base_seq_len=base_seq_len,
+        padded_seq_len=padded_seq_len,
+        padded_joint_seq_len=joint_seq_len,
+        d=d,
+        rp_axis=sp_axis,
+        rp_factor=sp_factor,
+        up_axis=up_axis,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        num_links=num_links,
+        topology=all_gather_topology,
+    )

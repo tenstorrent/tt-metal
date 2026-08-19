@@ -147,8 +147,8 @@ void kernel_main() {
     constexpr uint32_t dst_reg = 0;
 
     // Metalium API Calls                              Involved Cores
-    binary_op_init_common(cb_in0, cb_in1, cb_out);  // Unpack, Math, Pack
-    add_tiles_init(cb_in0, cb_in1, false);          // Unpack, Math
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out);  // Unpack, Math, Pack
+    add_init(cb_in0, cb_in1, false);          // Unpack, Math
 
     for (uint32_t i = 0; i < n_tiles; i++) {
         cb_wait_front(cb_in0, 1);                   // Unpack
@@ -495,8 +495,8 @@ inline void calculate_sine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0] * FRAC_1_PI;
-        vInt whole_v = float_to_int16(v, RoundMode::NearestEven);
-        v -= int32_to_float(whole_v, RoundMode::NearestEven);
+        vSMag16 whole_v = convert<vSMag16>(v, RoundMode::Nearest);
+        v -= convert<vFloat>(whole_v, RoundMode::Nearest);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
         v_if(whole_v & 1) { v = -v; }

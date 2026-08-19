@@ -155,11 +155,31 @@ def _tilized_index(h: int, w: int) -> int:
     return (face_r * 2 + face_c) * 256 + (h % 16) * 16 + (w % 16)
 
 
+# Formats test_dprint_tile exercises. It requires SrcA data format support.
+# WH/BH accept everything in _BYTES_PER_ELT.
+_TILE_TEST_FORMATS = (
+    [
+        DataFormat.Int8,
+        DataFormat.UInt8,
+        DataFormat.Float16_b,
+        DataFormat.Float32,
+        DataFormat.Int32,
+    ]
+    if get_chip_architecture() == ChipArchitecture.QUASAR
+    else list(_BYTES_PER_ELT.keys())
+)
+
+
 @parametrize(
-    formats=input_output_formats(list(_BYTES_PER_ELT.keys()), same=True),
+    formats=input_output_formats(_TILE_TEST_FORMATS, same=True),
 )
 def test_dprint_tile(formats):
     formats = formats[0]
+    dest_acc = (
+        DestAccumulation.Yes
+        if formats.input_format.is_32_bit()
+        else DestAccumulation.No
+    )
     src_A, tile_cnt_A, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=[32, 32],
@@ -179,6 +199,7 @@ def test_dprint_tile(formats):
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
         ),
+        dest_acc=dest_acc,
         requires_device_print=True,
     ).run()
     records = _records(outcome.device_print_lines)

@@ -19,10 +19,18 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::ccl {
 
 bool is_fabric_2d();
+
+std::optional<ttnn::DeviceComputeKernelConfig> resolve_fp32_acc_compute_kernel_config(
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    tt::tt_metal::DataType input_dtype);
+
+// Warn about ideal packet size
+void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size);
 
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis);
 
@@ -30,6 +38,10 @@ tt::tt_fabric::Topology get_usable_topology(
     const Tensor& tensor,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& cluster_axis = std::nullopt);
+
+// Resolve the topology (Ring vs Linear) for a single mesh axis
+tt::tt_fabric::Topology get_axis_topology(
+    const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis);
 
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology);
 
@@ -85,6 +97,26 @@ enum class CoreAllocationStrategy {
     COL_MAJOR,
 };
 
+struct WorkerCoreSelection {
+    CoreRangeSet core_range_set;
+    std::vector<CoreCoord> cores;
+    // Selected cores that core_grid_offset shifted off the device's worker grid. Kernels cannot be placed on these.
+    std::vector<CoreCoord> unplaceable_cores;
+
+    bool all_placeable() const { return unplaceable_cores.empty(); }
+};
+
+// Selects worker cores without asserting on the result. Callers that can adapt to a selection which does not fit at
+// core_grid_offset use this; everyone else should use choose_worker_cores(), which rejects such a selection.
+WorkerCoreSelection try_choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    CoreCoord core_grid_offset = CoreCoord(0, 0),
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    CoreAllocationStrategy strategy = CoreAllocationStrategy::ROW_MAJOR);
+
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
@@ -99,7 +131,7 @@ class EriscDatamoverBuilder;
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
     uint32_t num_devices,
-    const ttnn::SmallVector<uint32_t>& unpad_elements,
+    const ttsl::SmallVector<uint32_t>& unpad_elements,
     int dim);
 
 class LineTopology {
@@ -804,13 +836,18 @@ void fabric_mux_connection_rt_args(
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> termination_master_semaphore_id = std::nullopt);
 
-// Estimate fabric transfer time (nanoseconds).
+// Fabric transfer time in device clock cycles, as a {bandwidth_cycles, latency_cycles} pair.
+// bandwidth_cycles represents steady-state, latency_cycles is pipeline fill.
 //   arch:          Wormhole or Blackhole
-//   data_bytes:    total bytes that must traverse the bottleneck link
+//   fabric_config: fabric config
+//   clock_rate_mhz: device AICLK, used to convert ns -> cycles
+//   data_bytes:    total bytes traversing the link
 //   num_links:     number of parallel ethernet links
-//   num_hops:      number of fabric hops (for latency)
-double estimate_fabric_transfer_ns(
+//   num_hops:      number of device hops
+std::pair<int, int> estimate_fabric_transfer_cycles(
     tt::ARCH arch,
+    tt::tt_fabric::FabricConfig fabric_config,
+    int clock_rate_mhz,
     uint64_t data_bytes,
     uint32_t num_links,
     uint32_t num_hops);

@@ -75,7 +75,7 @@ Tensor div(
 
 Tensor div(
     const Tensor& input,
-    float value,
+    operations::unary::ScalarVariant value,
     bool fast_and_approximate_mode = false,
     const std::optional<std::string>& rounding_mode = std::nullopt,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -101,7 +101,7 @@ Tensor bias_gelu(
 
 Tensor bias_gelu(
     const ttnn::Tensor& input_tensor_a,
-    float bias,
+    operations::unary::ScalarVariant bias,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -120,7 +120,7 @@ Tensor fmod(
 
 Tensor fmod(
     const Tensor& input,
-    float scalar,
+    operations::unary::ScalarVariant scalar,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
@@ -139,7 +139,7 @@ Tensor remainder(
 
 Tensor remainder(
     const Tensor& input,
-    float scalar,
+    operations::unary::ScalarVariant scalar,
     const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -217,7 +217,10 @@ Tensor prelu(
     const std::array<float, 1>& weight,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-Tensor prelu(const Tensor& input, float weight, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor prelu(
+    const Tensor& input,
+    operations::unary::ScalarVariant weight,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor rsub(
     const Tensor& input_tensor_a,
@@ -231,7 +234,7 @@ Tensor rsub(
 
 Tensor rsub(
     const Tensor& input_tensor_a,
-    float input_b,
+    operations::unary::ScalarVariant input_b,
     const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -249,13 +252,17 @@ Tensor div_no_nan(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor div_no_nan(
-    const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+    const Tensor& input_a,
+    operations::unary::ScalarVariant value,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor floor_div(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor floor_div(
-    const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+    const Tensor& input_a,
+    operations::unary::ScalarVariant value,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor outer(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -263,6 +270,15 @@ Tensor outer(
 Tensor polyval(
     const Tensor& input_a,
     const std::vector<float>& coeffs,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+// Moonshot's SiTU-GLU: (beta1 * tanh(gate / beta1) * sigmoid(gate)) * (beta2 * tanh(up / beta2)).
+// gate and up are supplied pre-split; the caller decides how to extract them.
+Tensor situ_glu(
+    const Tensor& gate,
+    const Tensor& up,
+    float beta1,
+    float beta2,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 }  // namespace ttnn

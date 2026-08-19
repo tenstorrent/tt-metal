@@ -36,9 +36,17 @@ inline void dprint_tensix_pack_config_add_l1_dest_addr_offset(const ckernel::pac
     DPRINT("0x{:x}\n", config.add_l1_dest_addr_offset);
 }
 
+#if defined(ARCH_BLACKHOLE)
 inline void dprint_tensix_pack_config_reserved_0(const ckernel::packer::pack_config_t& config) {
     DPRINT("0x{:x}\n", config.reserved_0);
 }
+#endif
+
+#if defined(ARCH_WORMHOLE)
+inline void dprint_tensix_pack_config_addr_cnt_context(const ckernel::packer::pack_config_t& config) {
+    DPRINT("0x{:x}\n", config.addr_cnt_context);
+}
+#endif
 
 inline void dprint_tensix_pack_config_out_data_format(const ckernel::packer::pack_config_t& config) {
     dprint_data_format(config.out_data_format);
@@ -51,8 +59,20 @@ inline void dprint_tensix_pack_config_in_data_format(const ckernel::packer::pack
 }
 
 #if defined(ARCH_WORMHOLE)
-inline void dprint_tensix_pack_config_reserved_1(const ckernel::packer::pack_config_t& config) {
-    DPRINT("0x{:x}\n", config.reserved_1);
+inline void dprint_tensix_pack_config_dis_shared_exp_assembler(const ckernel::packer::pack_config_t& config) {
+    DPRINT("0x{:x}\n", config.dis_shared_exp_assembler);
+}
+
+inline void dprint_tensix_pack_config_force_pack_per_max_xy_plane(const ckernel::packer::pack_config_t& config) {
+    DPRINT("0x{:x}\n", config.force_pack_per_max_xy_plane);
+}
+
+inline void dprint_tensix_pack_config_enable_out_fifo(const ckernel::packer::pack_config_t& config) {
+    DPRINT("0x{:x}\n", config.enable_out_fifo);
+}
+
+inline void dprint_tensix_pack_config_sub_l1_tile_header_size(const ckernel::packer::pack_config_t& config) {
+    DPRINT("{}\n", config.sub_l1_tile_header_size);
 }
 #endif
 
@@ -61,8 +81,21 @@ inline void dprint_tensix_pack_config_src_if_sel(const ckernel::packer::pack_con
 }
 
 #if defined(ARCH_WORMHOLE)
-inline void dprint_tensix_pack_config_pack_per_xy_plane(const ckernel::packer::pack_config_t& config) {
-    DPRINT("{}\n", config.pack_per_xy_plane);
+inline void dprint_tensix_pack_config_all_pack_disable_zero_compress(const ckernel::packer::pack_config_t& config) {
+    DPRINT("0x{:x}\n", config.all_pack_disable_zero_compress);
+}
+
+inline void dprint_tensix_pack_config_all_pack_disable_zero_compress_ovrd(
+    const ckernel::packer::pack_config_t& config) {
+    DPRINT("0x{:x}\n", config.all_pack_disable_zero_compress_ovrd);
+}
+
+inline void dprint_tensix_pack_config_add_tile_header_size(const ckernel::packer::pack_config_t& config) {
+    DPRINT("{}\n", config.add_tile_header_size);
+}
+
+inline void dprint_tensix_pack_config_reserved_1(const ckernel::packer::pack_config_t& config) {
+    DPRINT("0x{:x}\n", config.reserved_1);
 }
 #endif
 
@@ -153,18 +186,30 @@ inline void dprint_tensix_pack_config_helper(const ckernel::packer::pack_config_
     dprint_tensix_pack_config_uncompressed(config);
     DPRINT("add_l1_dest_addr_offset: ");
     dprint_tensix_pack_config_add_l1_dest_addr_offset(config);
-    DPRINT("reserved_0: ");
-    dprint_tensix_pack_config_reserved_0(config);
+    DPRINT("addr_cnt_context: ");
+    dprint_tensix_pack_config_addr_cnt_context(config);
     DPRINT("out_data_format: ");
     dprint_tensix_pack_config_out_data_format(config);
     DPRINT("in_data_format: ");
     dprint_tensix_pack_config_in_data_format(config);
-    DPRINT("reserved_1: ");
-    dprint_tensix_pack_config_reserved_1(config);
+    DPRINT("dis_shared_exp_assembler: ");
+    dprint_tensix_pack_config_dis_shared_exp_assembler(config);
+    DPRINT("force_pack_per_max_xy_plane: ");
+    dprint_tensix_pack_config_force_pack_per_max_xy_plane(config);
+    DPRINT("enable_out_fifo: ");
+    dprint_tensix_pack_config_enable_out_fifo(config);
+    DPRINT("sub_l1_tile_header_size: ");
+    dprint_tensix_pack_config_sub_l1_tile_header_size(config);
     DPRINT("src_if_sel: ");
     dprint_tensix_pack_config_src_if_sel(config);
-    DPRINT("pack_per_xy_plane: ");
-    dprint_tensix_pack_config_pack_per_xy_plane(config);
+    DPRINT("all_pack_disable_zero_compress: ");
+    dprint_tensix_pack_config_all_pack_disable_zero_compress(config);
+    DPRINT("all_pack_disable_zero_compress_ovrd: ");
+    dprint_tensix_pack_config_all_pack_disable_zero_compress_ovrd(config);
+    DPRINT("add_tile_header_size: ");
+    dprint_tensix_pack_config_add_tile_header_size(config);
+    DPRINT("reserved_1: ");
+    dprint_tensix_pack_config_reserved_1(config);
     DPRINT("l1_src_addr: ");
     dprint_tensix_pack_config_l1_src_addr(config);
     DPRINT("downsample_mask: ");
@@ -545,6 +590,8 @@ inline void dprint_tensix_pack_counters(uint reg_id = 0) {
 }
 
 // Choose what register you want by id (1-4). 0 for all.
+// On Wormhole, REG_IDs 2 and 4 are the REG8 banks, whose word-2 layout differs from REG1
+// (bits 17-23, see cfg_defines.h); fields above src_if_sel are mislabeled for those banks.
 inline void dprint_tensix_pack_config(uint reg_id = 0) {
     std::array<ckernel::packer::pack_config_t, ckernel::packer::NUM_PACKERS> config_vec;
     MATH(

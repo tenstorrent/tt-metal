@@ -25,7 +25,7 @@ void kernel_main() {
     // DPRINT("consumer_idx: {} num_entries_per_consumer: {}\n", consumer_idx, num_entries_per_consumer);
 
     uint32_t entry_size = dfb.get_entry_size();
-    const auto tensor_accessor = TensorAccessor(ta::dst_tensor);
+    const auto tensor_accessor = TensorAccessor(tensor::dst_tensor);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; tile_id++) {
         uint32_t page_id = 0;

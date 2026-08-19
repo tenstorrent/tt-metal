@@ -318,7 +318,8 @@ void kernel_main() {
                 prev_nq = decoded.nq;
             }
             if constexpr (use_attention_sink) {
-                cb_attn_sink.reserve_back(Sq_chunk_t);
+                constexpr uint32_t sink_tiles = use_streaming_compute ? 1 : Sq_chunk_t;
+                cb_attn_sink.reserve_back(sink_tiles);
                 uint32_t attention_sink_write_ptr = cb_attn_sink.get_write_ptr();
                 const uint32_t sink_tile_id = attention_sink_tile_shape.id_of(0, decoded.nq, 0, 0);
                 noc.async_read(
@@ -328,9 +329,11 @@ void kernel_main() {
                     {.page_id = sink_tile_id},
                     {});
                 noc.async_read_barrier();
-                fill_attention_sink_tiles<attention_sink_tile_bytes>(
-                    cb_attention_sink, Sq_chunk_t, attention_sink_write_ptr);
-                cb_attn_sink.push_back(Sq_chunk_t);
+                if constexpr (!use_streaming_compute) {
+                    fill_attention_sink_tiles<attention_sink_tile_bytes>(
+                        cb_attention_sink, sink_tiles, attention_sink_write_ptr);
+                }
+                cb_attn_sink.push_back(sink_tiles);
             }
 
             const uint32_t nb = decoded.nb;
@@ -466,7 +469,7 @@ void kernel_main() {
                 // Forward K chunk to next core(s): initiate async write (NOC write channel)
                 // For mcast: send linked data + companion semaphore back-to-back.
                 // The companion must be issued immediately after the linked write —
-                // any noc_async_read_barrier() between them deadlocks (the read barrier
+                // any NOC read barrier between them deadlocks (the read barrier
                 // blocks while a linked write awaits its companion).
                 if (should_forward) {
                     Semaphore<> sender_sem(sender_semaphore_id);
@@ -572,8 +575,8 @@ void kernel_main() {
                 }
 
                 // Q subblock push: K is fully forwarded, now push Q one subblock at
-                // a time. Compute waits for K first (cb_wait_front(cb_k_in, K*N)),
-                // then waits for Q subblocks incrementally (accumulating cb_wait_front).
+                // a time. Compute waits for K first (waiting for K*N tiles in cb_k_in),
+                // then waits for Q subblocks incrementally (accumulating waits on cb_q_in).
                 // Each push unblocks the next QK subblock computation.
                 // Placed after K forward complete so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside read_q_subblock deadlocks on BH

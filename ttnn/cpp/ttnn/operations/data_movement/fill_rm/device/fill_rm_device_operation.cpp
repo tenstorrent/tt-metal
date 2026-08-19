@@ -41,13 +41,14 @@ void FillRMDeviceOperation::validate_on_program_cache_miss(
         "FillRM does not currently support sharding");
 }
 
-TensorSpec FillRMDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec FillRMDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
 
     const ttnn::Shape shape({args.N, args.C, args.H, args.W});
     const Tensor& input_tensor = tensor_args.input;
-    return TensorSpec(shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::ROW_MAJOR), args.output_mem_config));
+    return tt::tt_metal::TensorSpec(
+        shape, TensorLayout(input_tensor.dtype(), PageConfig(Layout::ROW_MAJOR), args.output_mem_config));
 }
 
 Tensor FillRMDeviceOperation::create_output_tensors(

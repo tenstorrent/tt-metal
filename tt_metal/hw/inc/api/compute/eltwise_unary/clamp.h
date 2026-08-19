@@ -28,10 +28,18 @@ namespace ckernel {
 */
 // clang-format on
 ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamp, (APPROX, 8 /* ITERATIONS */), RC, idst, param0, param1));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_clamp,
+        (APPROX, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC,
+        param0,
+        param1));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Performs element-wise clamp operation for int32. The DST
@@ -48,13 +56,21 @@ ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
  */
 // clang-format on
 ALWI void clamp_tile_int32(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamp_int32, (APPROX, 8 /* ITERATIONS */), RC, idst, param0, param1));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_clamp_int32,
+        (APPROX, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC,
+        param0,
+        param1));
 }
+#endif  // !ARCH_QUASAR
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void clamp_tile_init() { MATH(SFPU_INIT(clamp)); }
+ALWI void clamp_tile_init() { MATH(SFPU_UNARY_INIT(clamp)); }
 
 }  // namespace ckernel

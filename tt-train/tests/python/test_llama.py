@@ -9,7 +9,7 @@ import pytest
 
 import ttnn
 import ttml
-from ttml.common.data import build_causal_mask
+from ttml.common.utils import build_causal_mask
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig
 

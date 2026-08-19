@@ -231,7 +231,9 @@ GlobalCoresInfo map_tensor_to_gcores_nd(
 
     // Validate and normalize partition dimensions
     std::vector<int> normalized_dims;
+    normalized_dims.reserve(partition_dims.size());
     std::vector<uint32_t> dim_sizes;
+    dim_sizes.reserve(partition_dims.size());
     for (int dim : partition_dims) {
         if (dim < 0) {
             dim = tensor_rank + dim;
@@ -284,12 +286,12 @@ GlobalCoresInfo map_tensor_to_gcores_nd(
     iterate_shape(grid_shape, [&](const std::vector<uint32_t>& grid_coord_vec) {
         // Convert grid coordinate vector to MeshCoordinate
         tt::tt_metal::distributed::MeshCoordinate grid_local_coord(
-            tt::stl::Span<const uint32_t>(grid_coord_vec.data(), grid_coord_vec.size()));
+            ttsl::Span<const uint32_t>(grid_coord_vec.data(), grid_coord_vec.size()));
 
         iterate_shape(mesh_shape, [&](const std::vector<uint32_t>& mesh_coord_vec) {
             // Convert mesh coordinate vector to MeshCoordinate for grid lookup
             tt::tt_metal::distributed::MeshCoordinate mesh_coord(
-                tt::stl::Span<const uint32_t>(mesh_coord_vec.data(), mesh_coord_vec.size()));
+                ttsl::Span<const uint32_t>(mesh_coord_vec.data(), mesh_coord_vec.size()));
 
             // Get the gcore at this (mesh, grid) coordinate
             const auto& gcore = mesh_builder.get_gcore_with_local_coord(mesh_coord, grid_local_coord);

@@ -11,6 +11,8 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 namespace ttnn::prim {
 
@@ -70,6 +72,27 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     auto nnz = operation_attributes.nnz;
     auto is_input_a_sparse = operation_attributes.is_input_a_sparse;
 
+    // Indexed/gather mode: an optional `indices` operand (optional_input_tensors[0]) holds the
+    // compacted list of active sparse-group ids. When present, the reader/sender kernels iterate only
+    // the num_active selected groups (bB = indices[i]) instead of scanning all batchB sparsity slots,
+    // and the output group axis is compact (length num_active). This maps onto the existing
+    // get_batch_from_reader=false semantics: every iterated batch is processed (none skipped), so
+    // compute and the in0 receiver simply loop num_batch_compute = num_active.
+    //
+    // The mode is signalled to the kernels purely by the "num_active" named compile-time arg below
+    // (0 = off), so no preprocessor defines and no compile-time arg layout changes are needed in the
+    // shared reader kernels. Both readers are shared with the dense matmul factories, which pass
+    // {"num_active", 0} for the same reason they already pass an unused "cb_sparsity".
+    const bool use_indices = operation_attributes.use_indices && !tensor_args.optional_input_tensors.empty() &&
+                             tensor_args.optional_input_tensors.at(0).has_value();
+    uint32_t num_active = 0;
+    if (use_indices) {
+        num_active = tensor_args.optional_input_tensors.at(0)->logical_volume();
+    }
+    // In indexed mode the readers never broadcast per-slot validity (every iterated batch is valid),
+    // so get_batch_from_reader is forced false regardless of nnz.
+    const bool get_batch_from_reader = use_indices ? false : !nnz.has_value();
+
     const auto& ashape = get_matmul_tensor_padded_shape(a, /*transpose=*/false);
     const auto& bshape = get_matmul_tensor_padded_shape(b, /*transpose=*/false);
     const auto in0_tile = get_matmul_tile(a, /*transpose=*/false);
@@ -86,6 +109,13 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     const auto in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     const auto in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on Blackhole's
+    // 64B alignment) are padded to it in DRAM. in0/in1 are interleaved here, so the reader copies
+    // tiles at the padded stride; the CBs must hold pages at the aligned stride and the unpacker
+    // walks tiles at the same stride. No-op when already aligned. Replaces the staging-CB workaround.
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t in0_aligned_tile_size = tt::align(in0_single_tile_size, dram_alignment);
+    const uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
     const auto interm0_single_tile_size = output_tile.get_tile_size(output_data_format);
 
@@ -93,6 +123,13 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     auto* const in1_buffer = b.buffer();
     auto* const sparsity_buffer = sparsity.buffer();
     auto* const out_buffer = output_tensor.buffer();
+    // The in1 sender/writer's "sparsity" slot (accessor args, page size, sparsity_addr runtime arg and
+    // the c_7 buffer) carries the active-group id list in indexed/gather mode -- that kernel never
+    // reads the sparsity mask there, so reusing the slot avoids adding an operand to a kernel shared
+    // with the dense matmul factories. The in0 sender ignores its own slot entirely in this mode, so
+    // it keeps pointing at the real sparsity tensor.
+    const Tensor& in1_sparsity_tensor = use_indices ? tensor_args.optional_input_tensors.at(0).value() : sparsity;
+    auto* const in1_sparsity_buffer = in1_sparsity_tensor.buffer();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
@@ -168,7 +205,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     if (batchA * batchB * num_blocks > 1) {
         in0_CB_tiles *= ttnn::operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
-    uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
+    uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
 
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
@@ -176,7 +213,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         in1_CB_tiles *= ttnn::operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
 
-    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+    uint32_t in1_CB_size = in1_CB_tiles * in1_aligned_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
@@ -252,7 +289,16 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    uint32_t num_batch_compute = nnz.value_or(sparsity.logical_volume());
+    uint32_t num_batch_compute = use_indices ? num_active : nnz.value_or(sparsity.logical_volume());
+    // Compact output packs only the `nnz` active batch pairs in scan order. Detect it exactly as the
+    // device op (device/sparse/sparse_matmul_device_operation.cpp): [1, nnz, M, N]. Shape matching,
+    // rather than volume matching, prevents a same-volume tensor with incompatible geometry from
+    // selecting compact writer indexing.
+    // (Orthogonal to indexed/gather mode, which is already compact by construction and rejects nnz:
+    // the writer's skip path -- the only thing this flag guards -- is never reached there.)
+    const bool compact_output =
+        nnz.has_value() &&
+        output_tensor.logical_shape() == ttnn::Shape{1U, nnz.value(), a.logical_shape()[-2], b.logical_shape()[-1]};
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -308,7 +354,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)batchB,                                  // batchB
         (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
         (std::uint32_t)!is_input_a_sparse,                      // bcast_A
-        (std::uint32_t)!nnz.has_value(),                        // get_batch_from_reader
+        (std::uint32_t)get_batch_from_reader,                   // get_batch_from_reader
         // fuse op args
         (std::uint32_t)false,  // fuse_op
     };
@@ -343,9 +389,9 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)Kt * Nt,  // KtNt
         (std::uint32_t)batchA,   // batchA
         (std::uint32_t)true,     // bcast_B
-        // sparsity args
-        (std::uint32_t)batchB,                                  // batchB
-        (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
+        // sparsity args (in indexed/gather mode this slot carries the active-group id list)
+        (std::uint32_t)batchB,                                    // batchB
+        (std::uint32_t)in1_sparsity_buffer->aligned_page_size(),  // sparsity_pagesize
 
         // WRITER
         // out tensor args
@@ -365,12 +411,14 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)0,  // in3_tensor_stride_w
         // fuse op args
         (std::uint32_t)false,  // fuse_op
-        (std::uint32_t)false   // fuse_op_reduce_scatter
+        (std::uint32_t)false,  // fuse_op_reduce_scatter
+        (std::uint32_t)compact_output,
     };
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*sparsity_buffer).append_to(in1_sender_writer_compile_time_args);
+    // Indexed/gather mode reuses this slot for the active-group id list (see in1_sparsity_buffer).
+    tt::tt_metal::TensorAccessorArgs(*in1_sparsity_buffer).append_to(in1_sender_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(in1_sender_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);  // placeholder for bias
 
@@ -385,8 +433,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)num_batch_compute,  // batch
-        (std::uint32_t)!nnz.has_value(),   // get_batch_from_reader
+        (std::uint32_t)num_batch_compute,      // batch
+        (std::uint32_t)get_batch_from_reader,  // get_batch_from_reader
     };
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -411,41 +459,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
-    // Intermediate CB read
-    /*
-    Blackhole architecture alignment issue workaround for tiny tiles:
-
-    Problem: When reading tiny tiles from DRAM to circular buffers (CB), address alignment
-    issues occur. DRAM tile addresses are 64-byte aligned within each block, but L1 CB
-    addresses are not necessarily aligned due to non-64-byte-aligned page sizes.
-
-    Example scenario:
-    - Two consecutive 544-byte tiles (16x32 tile of dtype bfloat8_b) stored on different DRAM banks
-    - CB configured with size=2 to hold both tiles
-
-    Result:
-    - Tile 0: DRAM Bank 0, Address 64    → CB L1 Address 0   (64-byte aligned ✓)
-    - Tile 1: DRAM Bank 1, Address 64    → CB L1 Address 544 (not 64-byte aligned ✗)
-
-    Solution: Use an intermediate single-tile CB as a staging area. Read each tile into
-    the intermediate CB first, then copy to the destination CB. This ensures proper
-    alignment at the cost of additional memory bandwidth overhead.
-
-    Note: This workaround should only be used for this specific alignment issue case.
-    */
-    bool in0_needs_intermediate_cb_read = false;
-    bool in1_needs_intermediate_cb_read = false;
-    if (device->arch() == tt::ARCH::BLACKHOLE) {
-        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
-        if (in0_needs_intermediate_cb_read) {
-            mm_kernel_in0_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-        in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
-        if (in1_needs_intermediate_cb_read) {
-            mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-    }
-
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -463,7 +476,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 {"cb_in0", tt::CBIndex::c_0},
                 {"cb_in0_sharded", tt::CBIndex::c_2},
                 {"cb_sparsity", tt::CBIndex::c_6},
-                {"cb_in0_intermediate", tt::CBIndex::c_8},
+                {"num_active", num_active},  // indexed/gather mode loop count (0 = not indexed)
             }});
 
     tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
@@ -496,7 +509,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 {"cb_bias", tt::CBIndex::c_3},
                 {"cb_out", tt::CBIndex::c_4},
                 {"cb_sparsity", tt::CBIndex::c_7},
-                {"cb_in1_intermediate", tt::CBIndex::c_9},
+                {"num_active", num_active},  // indexed/gather mode loop count (0 = not indexed)
             }});
 
     // Compute kernel compile time args
@@ -528,9 +541,9 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         num_batch_compute,       // batch_nnz
         out_block_tiles,         // out_block_num_tiles
 
-        false,             // untilize_out
-        !nnz.has_value(),  // get_batch_from_reader
-        false,             // in0_transpose_tile
+        false,                  // untilize_out
+        get_batch_from_reader,  // get_batch_from_reader
+        false,                  // in0_transpose_tile
     };
 
     // Create compute kernel
@@ -554,8 +567,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 {"cb_bias", tt::CBIndex::c_3},
                 {"cb_out", tt::CBIndex::c_4},
                 {"cb_intermed0", tt::CBIndex::c_5},
-                {"cb_in0_intermediate", tt::CBIndex::c_8},
-                {"cb_in1_intermediate", tt::CBIndex::c_9},
                 {"cb_in0_transposed", tt::CBIndex::c_10},
             }});
 
@@ -563,7 +574,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size)
+            .set_page_size(src0_cb_index, in0_aligned_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile);
     tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
     log_debug(
@@ -577,7 +588,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size)
+            .set_page_size(src1_cb_index, in1_aligned_tile_size)
             .set_tile_dims(src1_cb_index, in1_tile);
 
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
@@ -606,10 +617,14 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         tt_metal::CircularBufferConfig(
             sparsity_cb_size, {{sparsity_cb_index0, tt::tt_metal::datatype_to_dataformat_converter(sparsity.dtype())}})
             .set_page_size(sparsity_cb_index0, sparsity_cb_size);
+    // c_7 is the in1 sender/writer's slot; in indexed/gather mode it holds the active-group id list
+    // instead of a sparsity page, so it is sized and typed from whichever tensor that kernel reads.
+    uint32_t in1_sparsity_cb_size = in1_sparsity_buffer->aligned_page_size();
     tt_metal::CircularBufferConfig sparsity_cb_config1 =
         tt_metal::CircularBufferConfig(
-            sparsity_cb_size, {{sparsity_cb_index1, tt::tt_metal::datatype_to_dataformat_converter(sparsity.dtype())}})
-            .set_page_size(sparsity_cb_index1, sparsity_cb_size);
+            in1_sparsity_cb_size,
+            {{sparsity_cb_index1, tt::tt_metal::datatype_to_dataformat_converter(in1_sparsity_tensor.dtype())}})
+            .set_page_size(sparsity_cb_index1, in1_sparsity_cb_size);
 
     tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config0);
     tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config1);
@@ -657,24 +672,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         output_single_tile_size,
         out_CB_size / output_single_tile_size,
         out_CB_size);
-
-    // Intermediate CB read
-    if (in1_needs_intermediate_cb_read) {
-        uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
-        tt_metal::CircularBufferConfig cb_in1_intermediate_config =
-            tt_metal::CircularBufferConfig(in1_single_tile_size, {{in1_intermediate_cb_index, in1_data_format}})
-                .set_page_size(in1_intermediate_cb_index, in1_single_tile_size)
-                .set_tile_dims(in1_intermediate_cb_index, in1_tile);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_in1_intermediate_config);
-    }
-    if (in0_needs_intermediate_cb_read) {
-        uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
-        tt_metal::CircularBufferConfig cb_in0_intermediate_config =
-            tt_metal::CircularBufferConfig(in0_single_tile_size, {{in0_intermediate_cb_index, in0_data_format}})
-                .set_page_size(in0_intermediate_cb_index, in0_single_tile_size)
-                .set_tile_dims(in0_intermediate_cb_index, in0_tile);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
-    }
 
     // Parameters for last row, col, or block, no need to re-calc h-dim since there's no split on height
     uint32_t last_per_core_N = Nt % per_core_N == 0 ? per_core_N : Nt % per_core_N;
@@ -745,8 +742,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 (std::uint32_t)0,  // in1_mcast_dest_noc_end_x
                 (std::uint32_t)0,  // in1_mcast_dest_noc_end_y
 
-                // sparsity args
-                (std::uint32_t)sparsity_buffer->address(),  // sparsity_addr
+                // sparsity args (the active-group id list in indexed/gather mode)
+                (std::uint32_t)in1_sparsity_buffer->address(),  // sparsity_addr
 
                 // WRITER
                 // out tensor args
@@ -817,7 +814,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
 void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const ttnn::prim::SparseMatmulParams& /*operation_attributes*/,
+    const ttnn::prim::SparseMatmulParams& operation_attributes,
     const ttnn::prim::SparseMatmulInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     auto& program = cached_program.program;
@@ -827,6 +824,13 @@ void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments
     auto* src_buffer_b = tensor_args.input_tensors.at(1).buffer();
     auto* sparsity_buffer = tensor_args.input_tensors.at(2).buffer();
     auto* dst_buffer = tensor_return_value.at(0).buffer();
+
+    // In indexed/gather mode the in1 sender/writer's sparsity slot carries the active-group id list
+    // instead of the sparsity mask (see create()), so its address arg tracks that buffer. The in0
+    // sender ignores its own sparsity slot in this mode and keeps the real sparsity address.
+    const bool use_indices = operation_attributes.use_indices && !tensor_args.optional_input_tensors.empty() &&
+                             tensor_args.optional_input_tensors.at(0).has_value();
+    auto* in1_sparsity_buffer = use_indices ? tensor_args.optional_input_tensors.at(0)->buffer() : sparsity_buffer;
 
     // Manually unroll sender core
     // in0 sender
@@ -843,7 +847,7 @@ void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments
 
         // in1 sender
         writer_runtime_args[0] = src_buffer_b->address();
-        writer_runtime_args[6] = sparsity_buffer->address();
+        writer_runtime_args[6] = in1_sparsity_buffer->address();
         writer_runtime_args[7] = dst_buffer->address();
     }
 }

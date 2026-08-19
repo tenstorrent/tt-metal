@@ -21,6 +21,7 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.demos.qwen3_vl.tt.common import (
+    get_hf_visual,
     get_pad_embedding,
     merge_vision_tokens_single_user_ttnn,
     multimodal_rope_single_user_from_hf,
@@ -51,6 +52,29 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer
         ]
 
     return [l.attention.layer_past for l in model.layers]
+
+
+def _prefill_single_user_with_sliced_page_table(
+    generator,
+    input_prefill,
+    page_table,
+    user_id,
+    decoding_pos,
+    rot_mats,
+    kv_cache,
+    deepstack_visual_embeds,
+):
+    """Run one user prefill without exposing unallocated page-table entries."""
+    user_page_table = generator._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, decoding_pos)
+    return generator.prefill_forward_single_user_text(
+        input_prefill,
+        page_table=user_page_table,
+        user_id=user_id,
+        last_token_idx=decoding_pos - 1,
+        rot_mats=rot_mats,
+        kv_cache=kv_cache,
+        deepstack_visual_embeds=deepstack_visual_embeds,
+    )
 
 
 def get_platform_specific_optimizations(model_name):
@@ -160,7 +184,7 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             optimizations=DecodersPrecision.performance(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
-        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args)
+        visual_model = DropInVisionTransformer(get_hf_visual(reference_model), vision_model_args)
 
         return cls(
             model,
@@ -308,16 +332,20 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             rot_mats = (cos, sin)
             all_rope_deltas.append(rope_deltas)
 
-            # Run text prefill for this single user
-            # Use parent class method which handles page_table slicing internally
-            logits = self.prefill_forward_single_user_text(
+            # The persistent vLLM page table is padded to max_model_len. The
+            # attention prefill path uses its width to decide how much K/V to
+            # write, so expose only blocks allocated for this user's sequence.
+            # Otherwise padded zero block IDs redirect padded K/V writes into
+            # physical block 0 and can corrupt this request's prompt cache.
+            logits = _prefill_single_user_with_sliced_page_table(
+                self,
                 ttnn.unsqueeze(input_prefill, 0),
-                page_table=page_table,
-                user_id=user_id,
-                last_token_idx=decoding_pos - 1,
-                rot_mats=rot_mats,
-                kv_cache=kv_cache,
-                deepstack_visual_embeds=deepstack_visual_embeds,
+                page_table,
+                user_id,
+                decoding_pos,
+                rot_mats,
+                kv_cache,
+                deepstack_visual_embeds,
             )
 
             # Store output

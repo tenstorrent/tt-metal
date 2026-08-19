@@ -7,6 +7,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
 
@@ -197,8 +198,16 @@ void setup_reader_defines(
     }
 
     // Set sharding defines after dataflow defines
+    // SRC_SHARDED_A always maps to CB0 (predicate)
+    // SRC_SHARDED_B maps to CB1: value_true for TTT/TTS, value_false for TST
+    // SRC_SHARDED_C maps to CB2: value_false for TTT (unused for TTS/TST)
+    // SRC_SHARDED_* is 0 for unequal shaped sharded inputs, since has_sharding and is_native_L1_sharding are both false
     reader_defines["SRC_SHARDED_A"] = (predicate_sharded && has_sharding) ? "1" : "0";
-    reader_defines["SRC_SHARDED_B"] = (value_true_sharded && has_sharding) ? "1" : "0";
+    if (variant == TernaryVariant::TST) {
+        reader_defines["SRC_SHARDED_B"] = (value_false_sharded && has_sharding) ? "1" : "0";
+    } else {
+        reader_defines["SRC_SHARDED_B"] = (value_true_sharded && has_sharding) ? "1" : "0";
+    }
     reader_defines["SRC_SHARDED_C"] = (value_false_sharded && has_sharding) ? "1" : "0";
 }
 
@@ -294,47 +303,47 @@ uint32_t get_shards_per_width(const tt::tt_metal::ShardSpec& shard_spec, TensorM
 }
 
 std::optional<AllShardSpecs> get_shard_specs(
-    const TensorSpec& predicate_spec,
-    const std::optional<TensorSpec>& true_spec,
-    const std::optional<TensorSpec>& false_spec,
-    const TensorSpec& output_spec) {
-    // Only support TTT variant
-    if (!true_spec.has_value() || !false_spec.has_value()) {
-        return std::nullopt;
-    }
-
+    const tt::tt_metal::TensorSpec& predicate_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& true_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& false_spec,
+    const tt::tt_metal::TensorSpec& output_spec) {
     bool predicate_sharded = predicate_spec.memory_config().is_sharded();
-    bool true_sharded = true_spec->memory_config().is_sharded();
-    bool false_sharded = false_spec->memory_config().is_sharded();
+    bool true_sharded = true_spec.has_value() && true_spec->memory_config().is_sharded();
+    bool false_sharded = false_spec.has_value() && false_spec->memory_config().is_sharded();
     bool output_sharded = output_spec.memory_config().is_sharded();
 
-    if ((!predicate_sharded && !true_sharded && !false_sharded) && !output_sharded) {
+    if (!predicate_sharded && !true_sharded && !false_sharded && !output_sharded) {
         return std::nullopt;
     }
 
-    // Check if output is unevenly sharded. If so, fall back to tensor accessor mode instead of direct
-    // L1 sharding to avoid kernel deadlocks when cores have different shard sizes.
     if (!is_native_L1_sharding(predicate_spec, true_spec, false_spec, output_spec.memory_config()) ||
         is_uneven(output_spec)) {
-        // treat as interleaved
         return std::nullopt;
     }
 
     const auto& predicate_shape = predicate_spec.padded_shape();
-    const auto& true_shape = true_spec->padded_shape();
-    const auto& false_shape = false_spec->padded_shape();
     const auto& output_shape = output_spec.padded_shape();
 
-    // Output must have a shard spec
     TT_FATAL(get_shard_spec(output_spec).has_value(), "Output must have a shard spec");
+    const auto& output_shard = *get_shard_spec(output_spec);
+
+    auto derive_shard_spec = [&](const std::optional<tt::tt_metal::TensorSpec>& spec,
+                                 bool sharded) -> tt::tt_metal::ShardSpec {
+        if (sharded) {
+            return *get_shard_spec(*spec);
+        }
+        if (spec.has_value()) {
+            return adjust_to_shape(output_shard, output_shape, spec->padded_shape());
+        }
+        return output_shard;
+    };
+
     return AllShardSpecs{
         predicate_sharded ? *get_shard_spec(predicate_spec)
-                          : adjust_to_shape(*get_shard_spec(output_spec), output_shape, predicate_shape),
-        true_sharded ? *get_shard_spec(*true_spec)
-                     : adjust_to_shape(*get_shard_spec(output_spec), output_shape, true_shape),
-        false_sharded ? *get_shard_spec(*false_spec)
-                      : adjust_to_shape(*get_shard_spec(output_spec), output_shape, false_shape),
-        *get_shard_spec(output_spec)};
+                          : adjust_to_shape(output_shard, output_shape, predicate_shape),
+        derive_shard_spec(true_spec, true_sharded),
+        derive_shard_spec(false_spec, false_sharded),
+        output_shard};
 }
 
 // ShardShapeGenerator class
@@ -517,7 +526,7 @@ void setup_ts_reader_args_and_dims(
     }
 }
 
-// Shared work-split so create_descriptor() and get_dynamic_runtime_args() patch the same cores.
+// Shared work-split so create_descriptor() (cache miss + cache-hit re-apply) partitions the same cores.
 struct TernaryCorePartition {
     std::vector<CoreCoord> cores;
     CoreRangeSet core_group_1;
@@ -543,8 +552,8 @@ TernaryCorePartition compute_core_partition(
     // Get shard specs early
     const auto shard_specs = get_shard_specs(
         predicate_tensor.tensor_spec(),
-        value_true_tensor.has_value() ? value_true_tensor->tensor_spec() : std::optional<TensorSpec>{},
-        value_false_tensor.has_value() ? value_false_tensor->tensor_spec() : std::optional<TensorSpec>{},
+        value_true_tensor.has_value() ? value_true_tensor->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
+        value_false_tensor.has_value() ? value_false_tensor->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
         output.tensor_spec());
     p.has_sharding = shard_specs.has_value();
     auto grid = p.has_sharding ? shard_specs->predicate_shard_spec.grid : CoreRangeSet{};
@@ -661,8 +670,10 @@ void populate_runtime_arguments(
         // work-split partition was already produced by compute_core_partition above).
         const auto shard_specs = get_shard_specs(
             predicate_tensor.tensor_spec(),
-            value_true_tensor.has_value() ? value_true_tensor->tensor_spec() : std::optional<TensorSpec>{},
-            value_false_tensor.has_value() ? value_false_tensor->tensor_spec() : std::optional<TensorSpec>{},
+            value_true_tensor.has_value() ? value_true_tensor->tensor_spec()
+                                          : std::optional<tt::tt_metal::TensorSpec>{},
+            value_false_tensor.has_value() ? value_false_tensor->tensor_spec()
+                                           : std::optional<tt::tt_metal::TensorSpec>{},
             output.tensor_spec());
         predicate_shard_shape_generator = ShardShapeGenerator(shard_specs->predicate_shard_spec, predicate_tensor);
         if (value_true_tensor.has_value()) {
@@ -835,8 +846,9 @@ void populate_runtime_arguments(
         writer_desc.emplace_runtime_args(core, writer_args);
 
         // Compute runtime args.  scalar_arg is the packed scalar_input_a/scalar_input_b; it is
-        // EXCLUDED from compute_program_hash and therefore DYNAMIC -- re-applied on every cache hit
-        // via get_dynamic_runtime_args().  Packed here via the shared single-source-of-truth helper.
+        // EXCLUDED from compute_program_hash and therefore DYNAMIC -- baked here on the cache-miss build
+        // and re-applied in place on every cache hit by override_runtime_arguments() (which writes this
+        // arg-3 slot straight into the cached program). Packed via the shared single-source-of-truth helper.
         const uint32_t scalar_arg = pack_compute_scalar_arg(operation_attributes, output.dtype());
         auto [freq, counter] = [&] {
             switch (broadcast_type) {
@@ -872,10 +884,10 @@ void populate_runtime_arguments(
 namespace ttnn::operations::ternary {
 
 std::optional<AllShardVolumes> get_shard_volumes(
-    const TensorSpec& predicate_spec,
-    const std::optional<TensorSpec>& true_spec,
-    const std::optional<TensorSpec>& false_spec,
-    const TensorSpec& output_spec) {
+    const tt::tt_metal::TensorSpec& predicate_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& true_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& false_spec,
+    const tt::tt_metal::TensorSpec& output_spec) {
     const auto shard_specs =
         CMAKE_UNIQUE_NAMESPACE::get_shard_specs(predicate_spec, true_spec, false_spec, output_spec);
 
@@ -951,11 +963,11 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     uint32_t value_false_single_tile_size = tt::tile_size(value_false_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    // Get shard volumes (using TensorSpec)
+    // Get shard volumes (using tt::tt_metal::TensorSpec)
     const auto shard_volumes = get_shard_volumes(
         predicate_tensor.tensor_spec(),
-        value_true_tensor.has_value() ? value_true_tensor->tensor_spec() : std::optional<TensorSpec>{},
-        value_false_tensor.has_value() ? value_false_tensor->tensor_spec() : std::optional<TensorSpec>{},
+        value_true_tensor.has_value() ? value_true_tensor->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
+        value_false_tensor.has_value() ? value_false_tensor->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
         output.tensor_spec());
     const bool has_sharding = shard_volumes.has_value();
     const auto predicate_sharded = has_sharding and shard_volumes->predicate_shard_volume.has_value();
@@ -1187,6 +1199,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
         tt::tt_metal::TensorAccessorArgs(
             *value_true_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
+        reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
 
     } else if (variant == TernaryVariant::TST) {
         // TST: c_0 = predicate, c_1 = value_false tensor
@@ -1197,6 +1210,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
         tt::tt_metal::TensorAccessorArgs(
             *value_false_tensor.value().buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
             .append_to(reader_compile_time_args, reader_common_runtime_args);
+        reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
     } else if (variant == TernaryVariant::TTT) {
         reader_compile_time_args.push_back((std::uint32_t)predicate_tensor_cb);
         reader_compile_time_args.push_back((std::uint32_t)value_true_tensor_cb);
@@ -1379,44 +1393,67 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
     desc.kernels.push_back(std::move(compute_desc));
+
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> TernaryDeviceOperation::get_dynamic_runtime_args(
+void TernaryDeviceOperation::TernaryProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // scalar_input_a / scalar_input_b are EXCLUDED from compute_program_hash (so calls differing
-    // only in a scalar cache-hit instead of recompiling).  On a cache hit the descriptor is never
-    // rebuilt, so the scalar baked at first miss would otherwise stay frozen.  Re-apply it here.
-    //
-    // MUST mirror create_descriptor()/populate_runtime_arguments() exactly:
-    //   - kernels are pushed reader(0), writer(1), compute(2)  -> scalar lives in kernel 2.
-    //   - compute per-core runtime args are {num_tiles_per_core, freq, counter, scalar_arg}
-    //     -> scalar is arg_idx 3.
-    //   - the scalar is written only to WORK cores (core_group_1/core_group_2); noop cores get
-    //     all-zero compute args and do no work, so they are left untouched.
-    // The packed value and the (cores, work-group) partition both come from the same helpers used
-    // by populate_runtime_arguments(), so this stays a by-construction exact mirror.
+    // Re-apply ONLY the per-dispatch args in place on the cached program (legacy shared-vars style):
+    // no descriptor rebuild, no work-split re-derivation. The per-core cores/args come straight from the
+    // cached program (GetRuntimeArgs); everything static (strides, tile counts, offsets) is a function of
+    // the cache-keyed shape and is already correct. The DYNAMIC args mirror create_descriptor exactly:
+    //   reader (kernel 0): src addrs at slots 0 (predicate), 1 (2nd operand), 2 (3rd operand, TTT only)
+    //   writer (kernel 1): dst addr at slot 0
+    //   compute(kernel 2): packed scalar at slot 3  (0 for the no-scalar variants; harmless)
+    // Kernel push order reader(0)/writer(1)/compute(2). If that order or these slots change in
+    // create_descriptor, update the constants here.
+    const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
+    const TernaryVariant variant = operation_attributes.ternary_variant;
+
+    const uint32_t pred_addr = predicate_tensor.buffer()->address();
+    // 2nd src operand: the tensor operand (TST uses value_false; TTS/TTT use value_true).
+    const auto& src1_tensor = (variant == TernaryVariant::TST) ? value_false_tensor : value_true_tensor;
+    const uint32_t src1_addr = src1_tensor.value().buffer()->address();
+    const bool has_src2 = (variant == TernaryVariant::TTT);  // only TTT has a 3rd tensor operand
+    const uint32_t src2_addr = has_src2 ? value_false_tensor.value().buffer()->address() : 0u;
+    const uint32_t out_addr = output.buffer()->address();
+    const uint32_t scalar_arg = CMAKE_UNIQUE_NAMESPACE::pack_compute_scalar_arg(operation_attributes, output.dtype());
+
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
     constexpr uint32_t kComputeKernelIdx = 2;
     constexpr uint32_t kScalarArgIdx = 3;
 
-    const uint32_t scalar_arg = CMAKE_UNIQUE_NAMESPACE::pack_compute_scalar_arg(operation_attributes, output.dtype());
-
-    auto partition = CMAKE_UNIQUE_NAMESPACE::compute_core_partition(operation_attributes, tensor_args, output);
-
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(partition.cores.size());
-    for (uint32_t i = 0; i < partition.num_cores_total; ++i) {
-        const auto& core = partition.cores[i];
-        const bool is_work_core = partition.core_group_1.contains(core) || partition.core_group_2.contains(core);
-        if (!is_work_core) {
-            continue;  // noop core: compute arg[3] stays 0, mirrors create_descriptor()
+    for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx)) {
+        for (auto& a : col) {
+            if (a.size() > 1) {
+                a[0] = pred_addr;
+                a[1] = src1_addr;
+            }
+            if (has_src2 && a.size() > 2) {
+                a[2] = src2_addr;
+            }
         }
-        dynamic_args.push_back({kComputeKernelIdx, core, kScalarArgIdx, scalar_arg});
     }
-    return dynamic_args;
+    for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx)) {
+        for (auto& a : col) {
+            if (a.size() > 0) {
+                a[0] = out_addr;
+            }
+        }
+    }
+    for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kComputeKernelIdx)) {
+        for (auto& a : col) {
+            if (a.size() > kScalarArgIdx) {
+                a[kScalarArgIdx] = scalar_arg;
+            }
+        }
+    }
 }
 
 }  // namespace ttnn::operations::ternary

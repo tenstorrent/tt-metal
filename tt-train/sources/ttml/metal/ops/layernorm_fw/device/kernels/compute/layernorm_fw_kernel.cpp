@@ -4,6 +4,7 @@
 
 #include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -34,11 +35,11 @@ constexpr uint32_t cb_mean_idx = tt::CBIndex::c_7;    // mean (for backward pass
 constexpr uint32_t cb_rstd_idx = tt::CBIndex::c_8;    // rstd (for backward pass)
 
 // CBs with intermediate computations
-constexpr uint32_t cb_sum_idx = tt::CBIndex::c_9;                   // sum of inputs
-constexpr uint32_t cb_mean_bcast_idx = tt::CBIndex::c_10;           // broadcasted mean
-constexpr uint32_t cb_variance_sum_idx = tt::CBIndex::c_11;         // sum((x - mean)^2)
-constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_12;           // broadcasted rstd
-constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_13;                // normalized x_hat
+constexpr uint32_t cb_sum_idx = tt::CBIndex::c_9;            // sum of inputs
+constexpr uint32_t cb_mean_bcast_idx = tt::CBIndex::c_10;    // broadcasted mean
+constexpr uint32_t cb_variance_sum_idx = tt::CBIndex::c_11;  // sum((x - mean)^2)
+constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_12;    // broadcasted rstd
+constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_13;         // normalized x_hat
 
 constexpr uint32_t cb_output_intermediate_idx = tt::CBIndex::c_14;  // intermediate for x_hat * gamma
 
@@ -95,7 +96,7 @@ inline void compute_sum() {
     const uint32_t mean_register = 0U;
     tile_regs_acquire();
     cb_wait_front(cb_sum_idx, onetile);
-    mm_init_short(cb_sum_idx, cb_scaler_idx, 0);
+    matmul_init(cb_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_sum_idx,
         cb_scaler_idx,
@@ -152,7 +153,7 @@ inline void compute_sum() {
     const uint32_t mean_register = 0U;
     tile_regs_acquire();
     cb_wait_front(cb_sum_idx, onetile);
-    mm_init_short(cb_sum_idx, cb_scaler_idx, 0);
+    matmul_init(cb_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_sum_idx,
         cb_scaler_idx,
@@ -293,7 +294,7 @@ inline void compute_rstd() {
     tile_regs_acquire();
 
     // Reduce variance sum and scale by 1/N
-    mm_init_short(cb_variance_sum_idx, cb_scaler_idx, 0);
+    matmul_init(cb_variance_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_variance_sum_idx,
         cb_scaler_idx,
@@ -336,7 +337,7 @@ inline void compute_x_hat() {
             uint32_t input_tile_idx = col + block_idx;
 
             // Subtract mean: (input - mean)
-            sub_tiles_init(cb_input_idx, cb_mean_bcast_idx);
+            sub_init(cb_input_idx, cb_mean_bcast_idx);
             sub_tiles(cb_input_idx, cb_mean_bcast_idx, input_tile_idx, 0, x_hat_reg);
 
             // Load broadcasted rstd
@@ -367,7 +368,7 @@ inline void compute_output() {
         tile_regs_acquire();
 
         // First multiply x_hat by gamma -> store in intermediate CB
-        mul_bcast_rows_init_short(cb_x_hat_idx, cb_gamma_idx);
+        mul_bcast_rows_init(cb_x_hat_idx, cb_gamma_idx);
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             uint32_t input_tile_idx = col + block_idx;
             mul_tiles_bcast_rows(cb_x_hat_idx, cb_gamma_idx, input_tile_idx, input_tile_idx, block_idx);
@@ -378,7 +379,7 @@ inline void compute_output() {
 
         // Then add beta from intermediate CB -> store in output CB
         tile_regs_acquire();
-        add_bcast_rows_init_short(cb_output_intermediate_idx, cb_beta_idx);
+        add_bcast_rows_init(cb_output_intermediate_idx, cb_beta_idx);
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             uint32_t input_tile_idx = col + block_idx;
             add_tiles_bcast_rows(cb_output_intermediate_idx, cb_beta_idx, block_idx, input_tile_idx, block_idx);
@@ -409,7 +410,7 @@ inline void compute_output() {
             uint32_t temp_reg = x_hat_reg + 1;
 
             // Subtract mean: (input - mean)
-            sub_tiles_init(cb_input_idx, cb_mean_bcast_idx);
+            sub_init(cb_input_idx, cb_mean_bcast_idx);
             sub_tiles(cb_input_idx, cb_mean_bcast_idx, block_idx, 0, x_hat_reg);
 
             // Load broadcasted rstd
@@ -428,7 +429,7 @@ inline void compute_output() {
         // Now compute output = x_hat * gamma + beta
         // Multiply x_hat by gamma -> store in intermediate CB
         tile_regs_acquire();
-        mul_bcast_rows_init_short(cb_x_hat_idx, cb_gamma_idx);
+        mul_bcast_rows_init(cb_x_hat_idx, cb_gamma_idx);
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             mul_tiles_bcast_rows(cb_x_hat_idx, cb_gamma_idx, block_idx, block_idx, block_idx);
         }
@@ -440,7 +441,7 @@ inline void compute_output() {
 
         // Then add beta from intermediate CB -> store in output CB
         tile_regs_acquire();
-        add_bcast_rows_init_short(cb_output_intermediate_idx, cb_beta_idx);
+        add_bcast_rows_init(cb_output_intermediate_idx, cb_beta_idx);
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             add_tiles_bcast_rows(cb_output_intermediate_idx, cb_beta_idx, block_idx, block_idx, block_idx);
         }
@@ -502,8 +503,10 @@ void kernel_main() {
 #endif
 
     init_sfpu(cb_input_idx, cb_output_idx);
-    binary_op_init_common(cb_input_idx, cb_gamma_idx, cb_output_idx);
-    mm_init(cb_sum_idx, cb_scaler_idx, cb_mean_bcast_idx);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    compute_kernel_hw_startup(cb_input_idx, cb_gamma_idx, cb_output_idx);
+    reconfig_data_format(cb_scaler_idx, cb_sum_idx);
+    matmul_init(cb_sum_idx, cb_scaler_idx);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
 #ifdef EVERYTHING_FITS_IN_L1

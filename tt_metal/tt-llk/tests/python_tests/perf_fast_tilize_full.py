@@ -13,7 +13,7 @@ from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
@@ -30,7 +30,7 @@ from helpers.test_variant_parameters import (
 @skip_for_wormhole
 @skip_for_quasar
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     rt_dim=[1],
     ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
 )
@@ -84,7 +84,7 @@ def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim):
         runtimes=[
             generate_input_dim(dimensions, dimensions),
             TILE_COUNT(tile_count),
-            LOOP_FACTOR(4),
+            LOOP_FACTOR(32),
             NUM_FACES(4),
         ],
         variant_stimuli=StimuliConfig(

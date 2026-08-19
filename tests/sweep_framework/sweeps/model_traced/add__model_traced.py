@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -80,8 +82,7 @@ def run(
 
     # Check if device is mesh device
     is_mesh_device = hasattr(device, "get_num_devices")
-    # activations is a list of dicts not parsed to ttnn objects
-    op_kwargs = build_op_kwargs(kwargs, exclude={"activations"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config, device=device)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -156,6 +157,28 @@ def run(
 
     # Compute expected output (in-place add modifies the first tensor)
     torch_output_tensor = torch_input_tensor_a.clone().add_(torch_input_tensor_b)
+
+    # The model can fuse an activation onto the add (op_kwargs["activations"], e.g.
+    # SILU); the device applies it, so the golden must too or PCC diverges. Match
+    # the op's post-add activation list.
+    _acts = kwargs.get("activations")
+    if isinstance(_acts, (list, tuple)):
+        for _a in _acts:
+            _name = ""
+            if hasattr(_a, "op_type"):
+                _name = str(_a.op_type)
+            else:
+                _m = re.search(r"UnaryOpType::?\.?(\w+)", str(_a))
+                _name = _m.group(1) if _m else str(_a)
+            _name = _name.rsplit(".", 1)[-1].rsplit("::", 1)[-1].upper()
+            if _name == "SILU":
+                torch_output_tensor = torch.nn.functional.silu(torch_output_tensor)
+            elif _name == "GELU":
+                torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor)
+            elif _name == "RELU":
+                torch_output_tensor = torch.nn.functional.relu(torch_output_tensor)
+            elif _name == "SIGMOID":
+                torch_output_tensor = torch.sigmoid(torch_output_tensor)
 
     start_time = start_measuring_time()
     ttnn.add_(input_tensor_a, input_tensor_b, **op_kwargs)

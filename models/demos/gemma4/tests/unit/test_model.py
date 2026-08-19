@@ -313,6 +313,7 @@ def test_single_layer_model(mesh_device, layer_group, reset_seeds, request):
 # ── Full Model PCC Test ─────────────────────────────────────────────────
 
 
+@pytest.mark.gemma4_hf_direct_parity
 @parametrize_mesh_with_fabric()
 def test_full_model(mesh_device, reset_seeds, request):
     """Test full model (all layers, real weights) against HuggingFace reference.
@@ -442,6 +443,21 @@ def test_full_model(mesh_device, reset_seeds, request):
     passing, pcc_msg = compare_tensors(tt_compare, hf_compare, pcc_threshold=get_pcc_threshold(request))
     logger.info(f"Full model PCC (seq_len={seq_len}): {pcc_msg}")
 
+    # Per-token PCC — shows which prompt positions drag down the full-sequence metric.
+    from models.common.utility_functions import comp_pcc
+
+    for t in range(seq_len):
+        _, pcc_t = comp_pcc(hf_compare[0, t], tt_compare[0, t], pcc=0.0)
+        hf_tok = int(hf_compare[0, t].argmax().item())
+        tt_tok = int(tt_compare[0, t].argmax().item())
+        match = "ok" if hf_tok == tt_tok else "MISMATCH"
+        logger.info(
+            f"  token[{t}] pcc={pcc_t:.6f} argmax HF={hf_tok} TT={tt_tok} ({match}) "
+            f"hf='{tokenizer.decode([hf_tok])}' tt='{tokenizer.decode([tt_tok])}'"
+        )
+    _, pcc_last_only = comp_pcc(hf_compare[0, -1], tt_compare[0, -1], pcc=0.0)
+    logger.info(f"Last-token-only PCC: {pcc_last_only:.6f}")
+
     # Also check that argmax tokens match for the last position
     hf_last_tok = hf_compare[0, -1, :].argmax().item()
     tt_last_tok = tt_compare[0, -1, :].argmax().item()
@@ -456,6 +472,7 @@ def test_full_model(mesh_device, reset_seeds, request):
 # ── Full Model DECODE PCC Test ───────────────────────────────────────────
 
 
+@pytest.mark.gemma4_hf_direct_parity
 @parametrize_mesh_with_fabric()
 def test_full_model_decode(mesh_device, reset_seeds, request):
     """End-to-end full-model DECODE PCC vs HuggingFace.
@@ -824,7 +841,26 @@ def test_single_prefill_perf(mesh_device, reset_seeds, request):
     )
     # Host stashes for PLI models (no-op for 31B/12B, which have no per-layer inputs).
     model._prefill_input_ids_torch = tokens.long()
-    model._prefill_embeds_torch = None
+    if model._embed_weight_cpu is not None:
+        import torch.nn.functional as F
+
+        model._prefill_embeds_torch = F.embedding(tokens.long(), model._embed_weight_cpu).float() * model.embed_scale
+    else:
+        model._prefill_embeds_torch = None
+
+    prefill_pli_device_tensors = None
+    if model.hidden_size_per_layer_input and model.per_layer_input_weights:
+        per_layer_inputs = model._compute_per_layer_inputs(model._prefill_input_ids_torch, model._prefill_embeds_torch)
+        prefill_pli_device_tensors = [
+            ttnn.from_torch(
+                pli.unsqueeze(0).unsqueeze(0),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=replicate,
+            )
+            for pli in per_layer_inputs
+        ]
 
     def _embed():
         emb = model.embed_tokens(tokens_tt)
@@ -837,7 +873,12 @@ def test_single_prefill_perf(mesh_device, reset_seeds, request):
     # ── Warmup prefill (kernel compile — excluded from the profile) ──
     logger.info("Single-prefill warmup (compiling kernels)...")
     warm = model.ttnn_prefill_forward(
-        x=_embed(), page_table=page_table_tt, kv_cache=tt_kv_cache, get_last_token=get_last_token, user_id=0
+        x=_embed(),
+        page_table=page_table_tt,
+        kv_cache=tt_kv_cache,
+        get_last_token=get_last_token,
+        user_id=0,
+        pli_device_tensors=prefill_pli_device_tensors,
     )
     ttnn.synchronize_device(mesh_device)
     warm.deallocate(True)
@@ -847,7 +888,13 @@ def test_single_prefill_perf(mesh_device, reset_seeds, request):
     model._prefill_trace_mode = True
     x = _embed()
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    trace_out = model.ttnn_prefill_forward(x=x, page_table=page_table_tt, kv_cache=tt_kv_cache, user_id=0)
+    trace_out = model.ttnn_prefill_forward(
+        x=x,
+        page_table=page_table_tt,
+        kv_cache=tt_kv_cache,
+        user_id=0,
+        pli_device_tensors=prefill_pli_device_tensors,
+    )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     model._prefill_trace_mode = False
     ttnn.synchronize_device(mesh_device)

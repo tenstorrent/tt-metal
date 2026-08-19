@@ -40,16 +40,16 @@ ALWI void where_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t od
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_ternary_sfpu_where<APPROX, data_format>(idst0, idst1, idst2, odst)));
 #else
-    MATH((SFPU_TERNARY_CALL_MODE(
+    MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_where_,
         (APPROX, data_format, 8 /* ITERATIONS */),
-        RC,
         idst0,
         idst1,
         idst2,
-        odst)));
+        odst,
+        VectorMode::RC)));
 #endif
 }
 
@@ -60,7 +60,7 @@ ALWI void where_tile_init() {
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_ternary_sfpu_where_init<APPROX>()));
 #else
-    MATH((SFPU_TERNARY_INIT_CB(where, sfpu::_init_where_, (APPROX))));
+    MATH((SFPU_TERNARY_INIT_FN(where, sfpu::_init_where_, (APPROX))));
 #endif
 }
 

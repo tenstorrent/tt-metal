@@ -71,7 +71,7 @@ struct AllToAllDispatchMetadataDeviceOperation {
         // which isn't supported by the visitor.
     };
 
-    using spec_return_value_t = std::array<ttnn::TensorSpec, 3>;
+    using spec_return_value_t = std::array<tt::tt_metal::TensorSpec, 3>;
 
     using tensor_return_value_t = std::array<Tensor, 3>;
 

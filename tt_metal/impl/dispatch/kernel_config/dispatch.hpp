@@ -40,6 +40,7 @@ struct dispatch_static_config_t {
     std::optional<uint32_t> unicast_go_signal_addr;
     std::optional<uint32_t> distributed_dispatcher;
     std::optional<uint32_t> first_stream_used;
+    std::optional<uint32_t> completion_counter_offset;
 
     std::optional<uint32_t> host_completion_q_wr_ptr;  // 26
     std::optional<uint32_t> dev_completion_q_wr_ptr;
@@ -59,6 +60,7 @@ struct dispatch_static_config_t {
     std::optional<uint32_t> realtime_profiler_msg_addr;
 
     std::optional<uint32_t> dispatch_telemetry_addr;
+    std::optional<uint32_t> dispatch_telemetry_control_addr;
     std::optional<bool> dispatch_telemetry_disabled;
 
     std::optional<bool> is_d_variant;

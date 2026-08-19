@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
@@ -21,22 +22,24 @@ void kernel_main() {
     DataflowBuffer dfb1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
 
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::in0, dfb::in1, dfb::out);
+
 #if (TEST_INIT_SHORT == 1)
 #if (WITH_DT == 1)
     // Intentionally wrong init (in0/in1 swapped, dst dims off-by-one) — exercises
-    // mm_block_init_short_with_dt's ability to re-init data formats from a bad state.
-    // The legacy variant of this test used a separate uint16 CB to model a true data-format
-    // mismatch; with DFBs we reuse dfb_out as the "out" argument since adding an unused
-    // dummy DFB has no Metal 2.0 equivalent. The mm_block_init_short_with_dt API path is
-    // still exercised.
-    mm_block_init(dfb::in1, dfb::in0, dfb::out, false, dst_tile_cols - 1, dst_tile_rows - 1, block_tile_dim - 1);
-    mm_block_init_short_with_dt(dfb::in0, dfb::in1, dfb::out, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
+    // the reconfig_data_format_srca + matmul_block_init ability to re-init data formats from a
+    // bad state. The legacy variant of this test used a separate uint16 CB to model a true
+    // data-format mismatch; with DFBs we reuse dfb_out as the old srcA operand since adding an
+    // unused dummy DFB has no Metal 2.0 equivalent. The reconfig path is still exercised.
+    matmul_block_init(dfb::in1, dfb::in0, false, dst_tile_cols - 1, dst_tile_rows - 1, block_tile_dim - 1);
+    reconfig_data_format_srca(dfb::out, dfb::in1);
+    matmul_block_init(dfb::in0, dfb::in1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #elif (WITH_DT == 0)
-    mm_block_init(dfb::in1, dfb::in0, dfb::out, false, dst_tile_cols - 1, dst_tile_rows - 1, block_tile_dim - 1);
-    mm_block_init_short(dfb::in0, dfb::in1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
+    matmul_block_init(dfb::in1, dfb::in0, false, dst_tile_cols - 1, dst_tile_rows - 1, block_tile_dim - 1);
+    matmul_block_init(dfb::in0, dfb::in1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #endif
 #elif (TEST_INIT_SHORT == 0)
-    mm_block_init(dfb::in0, dfb::in1, dfb::out, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
+    matmul_block_init(dfb::in0, dfb::in1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #endif
 
     tile_regs_acquire();

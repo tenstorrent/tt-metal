@@ -39,7 +39,7 @@ void bind_all_to_all_dispatch(nb::module_& mod) {
             expert_mapping_tensor (ttnn.Tensor): The one-hot encoded expert to device mapping tensor containing the location of the experts among each device and each mesh. The tensor is expected to be [1, 1, E, D] per device, fully replicated across all devices. Each row corresponds to an expert, and the value in each corresponding column is 1 if the expert is on the device, 0 otherwise. The tensor is expected to be in Row Major, Interleaved format. This tensor is expected to be the same across all devices.
 
         Keyword Args:
-            cluster_axis (int, optional): the cluster axis to dispatch along. Defaults to `None` though we assert out when it is not specified.
+            cluster_axis (int, optional): the cluster axis to dispatch along. Defaults to `None`, in which case tokens are dispatched across the entire mesh.
             num_links (number, optional): the number of cross-device links to use for dispatching the tokens. Defaults to `None`, for which the number of links is determined automatically.
             topology (ttnn.Topology, optional): the topology to use when dispatching the tokens. Defaults to what the mesh topology is initialized with. CAREFUL: no guarantees that the topology is valid for the given Fabric Init unless it matches the topology of the mesh.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the output tensors. Defaults to `None`.
@@ -53,17 +53,29 @@ void bind_all_to_all_dispatch(nb::module_& mod) {
             output_tensor: The output tensor is expected to be [1, B*D[A], S, H] per device if output_concat_dim is 1 or [1, B, S*D[A], H] per device if output_concat_dim is 2, sharded fully such that we have [D, B*D[A], S, H] or [D, B, S*D[A], H] total when gathered along dimension 0. Each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device. The tensor is expected to be in Row Major, Interleaved format.
             expert_metadata_tensor: The metadata tensor is expected to be [1, B*D[A], S, K] per device if output_concat_dim is 1 or [1, B, S*D[A], K] per device if output_concat_dim is 2, replicated across all devices. Each row contains the all the expert indices selected for each token on the mesh. This is equivalent to an all-gather of the expert indices. The tensor is expected to be in Row Major, Interleaved format.
 
-        Example:
-            >>> output_tensor, metadata_tensor = ttnn.all_to_all_dispatch(
-                            input_tensor,
-                            expert_indices_tensor,
-                            expert_mapping_tensor,
-                            cluster_axis=cluster_axis,
-                            num_links=num_links,
-                            topology=topology,
-                            memory_config=memory_config,
-                            subdevice_id=subdevice_id,
-                            output_concat_dim=output_concat_dim)
+        Supported dtypes and layouts:
+
+            .. list-table::
+                :header-rows: 1
+
+                * - Tensor
+                  - Dtypes
+                  - Layouts
+                * - input_tensor
+                  - BFLOAT16
+                  - ROW_MAJOR
+                * - expert_indices_tensor
+                  - UINT16
+                  - ROW_MAJOR
+                * - expert_mapping_tensor
+                  - UINT16
+                  - ROW_MAJOR
+
+            All input tensors must be rank 4. ``input_tensor`` and ``expert_indices_tensor`` must share their shape on all dims except the last; ``expert_mapping_tensor`` must be fully replicated across the mesh. The output tokens tensor preserves the input dtype (BFLOAT16) and the metadata tensor preserves the indices dtype (UINT16); both are ROW_MAJOR.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: not supported (output memory config must not be sharded)
         )doc";
 
     ttnn::bind_function<"all_to_all_dispatch">(

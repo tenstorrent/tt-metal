@@ -128,6 +128,7 @@ void H2DStreamServiceDescriptor::write_to_file(const std::string& path) const {
         shape_override_vec.assign(sh.cbegin(), sh.cend());
     }
     auto fb_shape_override = builder.CreateVector(shape_override_vec);
+    auto fb_completion_shm_name = builder.CreateString(completion_shm_name);
 
     std::vector<flatbuffers::Offset<flatbuffer::PerCoordEntry>> entry_offsets;
     entry_offsets.reserve(per_coord_entries.size());
@@ -150,7 +151,11 @@ void H2DStreamServiceDescriptor::write_to_file(const std::string& path) const {
         num_socket_pages,
         metadata_size_bytes,
         static_cast<uint32_t>(socket_buffer_type),
-        static_cast<uint32_t>(socket_mode),
+        fb_completion_shm_name,
+        completion_shm_size,
+        completion_issued_offset,
+        completion_completed_offset,
+        completion_completed_stride,
         fb_entries);
     builder.Finish(fb_desc);
 
@@ -209,7 +214,7 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
         const auto* fb_shape = fb_spec->shape();
         TT_FATAL(fb_shape != nullptr, "Service descriptor missing global_spec.shape");
         desc.global_shape =
-            tt::tt_metal::Shape(tt::stl::Span<const uint32_t>(fb_shape->data(), fb_shape->size()));
+            tt::tt_metal::Shape(ttsl::Span<const uint32_t>(fb_shape->data(), fb_shape->size()));
         desc.global_dtype = static_cast<DataType>(fb_spec->dtype());
     }
 
@@ -217,7 +222,7 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
         const auto* fb_mesh_shape = fb->mesh_shape();
         TT_FATAL(fb_mesh_shape != nullptr, "Service descriptor missing mesh_shape");
         desc.mesh_shape =
-            MeshShape(tt::stl::Span<const uint32_t>(fb_mesh_shape->data(), fb_mesh_shape->size()));
+            MeshShape(ttsl::Span<const uint32_t>(fb_mesh_shape->data(), fb_mesh_shape->size()));
     }
 
     {
@@ -232,7 +237,7 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
         const auto* fb_override = fb->mapper_shape_override();
         if (fb_override != nullptr && fb_override->size() > 0) {
             shape_override =
-                MeshShape(tt::stl::Span<const uint32_t>(fb_override->data(), fb_override->size()));
+                MeshShape(ttsl::Span<const uint32_t>(fb_override->data(), fb_override->size()));
         }
         desc.mapper_config =
             MeshMapperConfig{.placements = placements, .mesh_shape_override = shape_override};
@@ -242,7 +247,11 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
     desc.num_socket_pages = fb->num_socket_pages();
     desc.metadata_size_bytes = fb->metadata_size_bytes();
     desc.socket_buffer_type = static_cast<BufferType>(fb->socket_buffer_type());
-    desc.socket_mode = static_cast<H2DMode>(fb->socket_mode());
+    desc.completion_shm_name = fb->completion_shm_name() ? fb->completion_shm_name()->str() : "";
+    desc.completion_shm_size = fb->completion_shm_size();
+    desc.completion_issued_offset = fb->completion_issued_offset();
+    desc.completion_completed_offset = fb->completion_completed_offset();
+    desc.completion_completed_stride = fb->completion_completed_stride();
 
     const auto* fb_entries = fb->per_coord_entries();
     TT_FATAL(fb_entries != nullptr, "Service descriptor missing per_coord_entries");
@@ -250,7 +259,7 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
     for (const auto* fb_entry : *fb_entries) {
         const auto* fb_coord = fb_entry->coord();
         TT_FATAL(fb_coord != nullptr, "PerCoordEntry missing coord");
-        MeshCoordinate coord(tt::stl::Span<const uint32_t>{fb_coord->data(), fb_coord->size()});
+        MeshCoordinate coord(ttsl::Span<const uint32_t>{fb_coord->data(), fb_coord->size()});
 
         const auto* fb_socket = fb_entry->socket_descriptor();
         TT_FATAL(fb_socket != nullptr, "PerCoordEntry missing socket_descriptor");

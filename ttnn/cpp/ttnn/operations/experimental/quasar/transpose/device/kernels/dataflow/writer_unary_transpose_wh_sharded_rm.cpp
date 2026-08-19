@@ -1,0 +1,72 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Metal 2.0 conversion (in place; this kernel is transpose-owned). The device-side NoC + local-copy
+// logic is unchanged; only the resource bindings move to the Metal 2.0 namespaces (dfb::/args::).
+// Only instantiated on the Ht>8 path: cb_src (dfb::cb_src) is the compute kernel's tile-staging
+// output; the output shard is written by L1 address obtained from tensor::output (a local
+// TensorAccessor over the resident shard), not a borrowed self-loop CB.
+// The Ht>8 guard is preserved verbatim (always true here, since the factory only builds this kernel
+// when ht>8).
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
+
+// get_arg lives in `namespace experimental` and is normally found via ADL on the args:: accessor
+// type. The CoreLocalMem/UnicastEndpoint NoC-with-state includes this kernel pulls in change the
+// lookup context enough that ADL doesn't resolve it here, so bring the overload set in explicitly.
+using experimental::get_arg;
+
+void kernel_main() {
+    constexpr uint32_t num_hw_blocks_per_core = get_arg(args::num_hw_blocks_per_core);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t W_per_tile = get_arg(args::W_per_tile);
+    constexpr uint32_t W_per_tile_last = get_arg(args::W_per_tile_last);
+    constexpr uint32_t H_size_bytes = get_arg(args::H_size_bytes);
+    constexpr uint32_t l1_read_offset_bytes = get_arg(args::l1_read_offset_bytes);
+
+    const uint32_t stick_size_bytes = H_size_bytes;
+
+    Noc noc;
+    DataflowBuffer cb_src(dfb::cb_src);
+
+    // Local output-shard base L1 address from the resident output TensorAccessor (no borrowed self-loop CB).
+    const auto s = TensorAccessor(tensor::output);
+    uint32_t dst_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s.get_noc_addr(0));
+
+    // temporary fix until pack_untilze is fully fixed
+    if constexpr (Ht > 8) {
+        noc.set_async_write_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            UnicastEndpoint{},
+            stick_size_bytes,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = dst_addr});
+
+        for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
+            for (uint32_t w = 0; w < Wt; ++w) {
+                cb_src.wait_front(Ht);
+                uint32_t W_curr = w == Wt - 1 ? W_per_tile_last : W_per_tile;
+                for (uint32_t w_datum = 0; w_datum < W_curr; ++w_datum) {
+                    noc.async_write_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                        cb_src,
+                        UnicastEndpoint{},
+                        stick_size_bytes,
+                        {.offset_bytes = w_datum * l1_read_offset_bytes},
+                        {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                         .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                         .addr = dst_addr});
+                    dst_addr += stick_size_bytes;
+                }
+                noc.async_writes_flushed();
+                cb_src.pop_front(Ht);
+            }
+        }
+        noc.async_write_barrier();
+    }
+}

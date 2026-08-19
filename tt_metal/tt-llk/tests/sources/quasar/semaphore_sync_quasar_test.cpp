@@ -39,7 +39,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     td_val_A.buf_desc        = bd_val_A;
     td_val_A.buf_desc_id     = buf_desc_id_a;
-    td_val_A.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
+    td_val_A.reg_data_format = static_cast<DataFormat>(formats.unpack_A_dst);
 
     bd_val_B.f.l1_addr_16B = L1_ADDRESS(params.buffer_B[0]);
     bd_val_B.f.format      = static_cast<std::uint8_t>(formats.unpack_B_src);
@@ -49,16 +49,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     td_val_B.buf_desc        = bd_val_B;
     td_val_B.buf_desc_id     = buf_desc_id_b;
-    td_val_B.reg_data_format = static_cast<std::uint8_t>(formats.unpack_B_dst);
+    td_val_B.reg_data_format = static_cast<DataFormat>(formats.unpack_B_dst);
 
     _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
     _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
-    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
-    _llk_unpack_reduce_init_<REDUCE_DIM>(
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A.reg_data_format, td_val_B.reg_data_format);
+    _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(
         buf_desc_id_a, buf_desc_id_b, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/); // tiny-tiles not yet supported with reduce
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_unpack_reduce_(i, 0);
+        _llk_unpack_reduce_(i, 0, ckernel::DEFAULT_TENSOR_SHAPE);
     }
 }
 
@@ -86,7 +86,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         _llk_math_wait_for_dest_available_();
-        _llk_math_reduce_(0 /*dest_idx*/);
+        _llk_math_reduce_<POOL_TYPE, REDUCE_DIM>(0 /*dest_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 }
@@ -117,16 +117,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     tdma_desc.buf_desc        = bd_val;
     tdma_desc.buf_desc_id     = buf_desc_id;
-    tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
+    tdma_desc.reg_data_format = static_cast<DataFormat>(formats.pack_src);
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_<is_fp32_dest_acc_en>(buf_desc_id, 1 /*num_tiles_per_pack*/);
-    _llk_pack_reduce_mask_config_<REDUCE_DIM>();
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none());
+    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
+    _llk_pack_reduce_mask_config_<REDUCE_DIM>(ckernel::DEFAULT_TENSOR_SHAPE);
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         _llk_packer_wait_for_math_done_();
-        _llk_pack_(0 /*dest_idx*/, i);
+        _llk_pack_(0 /*dest_idx*/, i, ckernel::DEFAULT_TENSOR_SHAPE);
         _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
     }
     _llk_pack_reduce_mask_clear_();

@@ -18,6 +18,7 @@ from helpers.param_config import (
     generate_sfpu_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -104,7 +105,7 @@ def _is_unpack_to_dest(fmt: FormatConfig, dest_acc: DestAccumulation) -> bool:
     implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
         formats_dest_acc[0]
     ),
-    test_case=["mixed", "all_ones", "all_zeros"],
+    test_case=runtime(["mixed", "all_ones", "all_zeros"]),
     vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
 def test_sfpu_where_quasar(
@@ -222,15 +223,19 @@ def test_sfpu_where_quasar(
         formats_dest_acc[0]
     ),
     vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
+    dest_index=runtime([0, 1]),
 )
-def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mode):
+def test_sfpu_where_mcw_quasar(
+    formats_dest_acc, implied_math_format, vector_mode, dest_index
+):
     """
     Deterministic where test — alternating 0/1 condition pattern with
     known true/false scalars (2 and 11) for easy debugging.
 
-    Runs through the same C++ harness as `test_sfpu_where_quasar`, so if
-    this fails but the stimulus-driven test passes, the problem is in
-    stimulus generation rather than the kernel.
+    Runs through the same C++ harness as `test_sfpu_where_quasar`, including
+    both zero and nonzero Dest tile offsets. If this fails but the
+    stimulus-driven test passes, the problem is in stimulus generation rather
+    than the kernel.
     """
     formats, dest_acc = formats_dest_acc
     torch_format_in = format_dict[formats.input_format]
@@ -272,7 +277,7 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mod
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
-            DEST_INDEX(0),
+            DEST_INDEX(dest_index),
         ],
         variant_stimuli=StimuliConfig(
             src_A,

@@ -108,6 +108,8 @@ void kernel_main() {
                 const uint32_t block_offset = block_row_tile * Wt;
                 cache_id = block_start_id + block_offset;
 
+                // Page-table pages consumed; pop the same count waited above to balance the CB.
+                cb_page_table.pop_front(num_pages_to_read);
             } else {
                 const uint32_t cache_batch_tile_offset = my_batch_idx * cache_batch_num_tiles;
                 const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
@@ -115,6 +117,9 @@ void kernel_main() {
             }
             cache_tile_offset_B = update_idx % TILE_HEIGHT * Wbytes;
         }
+        // The index value is consumed on both the skip and update paths; the reader pushes
+        // cb_index unconditionally, so pop it here (outside the skip branch) to balance the wait.
+        cb_index.pop_front(1);
     }
 
     cb_untilized_input.wait_front(Wt);  // input tensor
@@ -169,5 +174,11 @@ void kernel_main() {
     if (send_signal) {
         // send signal to receiver core that we are done using the input CB
         Semaphore<>(receiver_sem_id).up(noc, send_core_x, send_core_y, 1);
+        // Drain the non-posted atomic before kernel_main returns. .up() lowers to a non-posted
+        // noc_semaphore_inc tracked by a separate atomic counter that noc.async_write_barrier() (line
+        // 164) does NOT drain, so without this the kernel exits with the readiness atomic still in
+        // flight -- an inter-kernel NOC race (Watcher NOC-idle assert). Mirrors the legacy sibling
+        // writer_update_cache_interleaved_start_id.cpp.
+        noc.async_atomic_barrier();
     }
 }

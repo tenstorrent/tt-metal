@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import os
 import time
 from functools import partial
 
@@ -17,7 +16,8 @@ from transformers import AutoTokenizer
 import ttnn
 from models.common.utility_functions import nearest_32
 from models.common.utils import top_k_top_p_filtering
-from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
+from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConfig
+from models.demos.t3000.falcon40b.reference.load_falcon_weights import load_falcon_reference_model
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
@@ -235,10 +235,11 @@ def run_falcon_demo_kv(
     logger.info("Loading weights...")
     profiler.start("loading_weights")
 
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(
-        model_version, local_files_only=os.getenv("CI") == "true", low_cpu_mem_usage=True
-    )
-    hugging_face_reference_model.eval()
+    # transformers 5.x silently fails to populate the vendored Falcon via from_pretrained (the TT
+    # model then gets unloaded weights and the demo hangs on device); load the raw checkpoint in
+    # its native layout instead. bfloat16 matches the checkpoint dtype and keeps the full-model
+    # load within the demo's step timeout. See issue #47924.
+    hugging_face_reference_model = load_falcon_reference_model(model_version, dtype=torch.bfloat16)
     state_dict = hugging_face_reference_model.state_dict()
 
     profiler.end("loading_weights")

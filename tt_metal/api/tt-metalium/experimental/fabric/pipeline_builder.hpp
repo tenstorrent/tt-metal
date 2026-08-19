@@ -71,14 +71,29 @@ struct GraphLayoutResult {
 
 /// Auto-discover the physical layout of a pipeline graph.
 ///
+/// @param nodes         All node names in the graph, in declaration order.  This is the
+///                      authoritative node list: it lets the resolver handle graphs whose
+///                      nodes are not all covered by edges — e.g. a single-stage pipeline
+///                      with no edges at all.  Every endpoint referenced by @p edges must
+///                      appear here; a missing endpoint raises std::runtime_error.
 /// @param edges         Graph edges as (src_name, dst_name, is_loopback) tuples.
 ///                      Non-loopback edges define the DAG; the single loopback edge
 ///                      (if present) is the return path from the last stage to stage 0.
 /// @param submesh_chips For each submesh: list of (mesh_id, chip_id, row, col) chips.
 ///                      Index in the outer vector is the submesh index.
+/// @param node_chip_counts Optional per-node expected chip count (rows*cols of the
+///                      node's declared shape).  When supplied for a node, that node
+///                      may only be assigned to a submesh with exactly that many chips,
+///                      so a stage declared 4x2 cannot be placed on a 1x2 submesh of a
+///                      different mesh just because ethernet connectivity allows it.
+///                      Nodes absent from the map are unconstrained.  An empty map
+///                      disables the shape filter entirely (legacy behavior).
 /// @returns             GraphLayoutResult with physical coords for every edge and
 ///                      unclaimed H2D/D2H chip coords in stage-0's submesh.
 GraphLayoutResult resolve_graph_layout(
-    const std::vector<EdgeInputTuple>& edges, const std::vector<std::vector<ChipTuple>>& submesh_chips);
+    const std::vector<std::string>& nodes,
+    const std::vector<EdgeInputTuple>& edges,
+    const std::vector<std::vector<ChipTuple>>& submesh_chips,
+    const std::map<std::string, uint32_t>& node_chip_counts = {});
 
 }  // namespace tt::tt_fabric

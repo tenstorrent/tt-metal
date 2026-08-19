@@ -18,7 +18,7 @@ namespace ttnn::prim {
 struct ReduceDeviceOperation {
     using operation_attributes_t = ReduceParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct ReduceSingleCoreHwProgramFactory {
@@ -56,9 +56,6 @@ struct ReduceDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static ttsl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
 ttnn::Tensor reduce(
@@ -73,6 +70,9 @@ ttnn::Tensor reduce(
     bool negate = false,
     float post_mul_scaler = 1.0f,
     bool row_major_w_dense_path = false,
-    bool row_major_h_dense_path = false);
+    bool row_major_h_dense_path = false,
+    bool use_sfpu_reduce = false,
+    uint32_t num_h_slices = 1,
+    tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE);
 
 }  // namespace ttnn::prim

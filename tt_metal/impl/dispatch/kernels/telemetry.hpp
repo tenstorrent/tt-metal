@@ -4,28 +4,12 @@
 
 #pragma once
 
-#include "api/dataflow/dataflow_api.h"
-#include "internal/risc_attribs.h"
 #include "api/debug/assert.h"
+#include "internal/risc_attribs.h"
 
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
 
-#include <cstddef>
 #include <cstdint>
-#include <type_traits>
-
-template <typename T>
-FORCE_INLINE volatile tt_l1_ptr T* write_to_l1(uint32_t dst_addr, const T& src_object);
-
-template <typename Telemetry, uint32_t telemetry_addr, bool enabled>
-FORCE_INLINE void init_telemetry() {
-    Telemetry telemetry{};
-    if constexpr (!enabled) {
-        // If disabled, invalidate the signature. This prevents reading stale telemetry values.
-        telemetry.signature = tt::tt_metal::INVALID_TELEMETRY_SIGNATURE;
-    }
-    write_to_l1(telemetry_addr, telemetry);
-}
 
 template <
     uint32_t blocked_count_store_addr,

@@ -9,6 +9,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "hal.hpp"
 #include "llrt/rtoptions.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -37,10 +38,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     constexpr uint32_t num_elements = 10;
-    constexpr uint32_t buf_a_addr = 1000 * 1024;
-    constexpr uint32_t buf_b_addr = buf_a_addr + num_elements * sizeof(uint32_t);
-    constexpr uint32_t dram_src_addr = 29000 * 1024;
-    constexpr uint32_t dram_dst_addr = 30000 * 1024;
+    const uint32_t buf_a_addr = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t buf_b_addr = buf_a_addr + num_elements * sizeof(uint32_t);
+    const uint32_t dram_src_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint32_t dram_dst_addr = dram_src_addr + (1000 * 1024);
 
     std::vector<uint32_t> initial_data(num_elements, 0);
     for (uint32_t i = 0; i < num_elements; i++) {
@@ -73,9 +75,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec dm_transform_spec{
@@ -96,9 +96,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec dm_writer_spec{
@@ -113,9 +111,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -136,21 +132,23 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dram_addr", dram_src_addr},
-                   {"l1_addr", buf_a_addr},
-                   {"num_elements", num_elements},
-                   {"dram_bank_id", 0u}}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dram_addr", dram_src_addr},
+                 {"l1_addr", buf_a_addr},
+                 {"num_elements", num_elements},
+                 {"dram_bank_id", 0u}}),
+        },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM},
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dram_addr", dram_dst_addr},
-                   {"l1_addr", buf_b_addr},
-                   {"num_elements", num_elements},
-                   {"dram_bank_id", 0u}}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dram_addr", dram_dst_addr},
+                 {"l1_addr", buf_b_addr},
+                 {"num_elements", num_elements},
+                 {"dram_bank_id", 0u}}),
+        },
     };
     experimental::SetProgramRunArgs(program, params);
 
@@ -176,6 +174,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
 
     auto mesh_device = devices_[0];
 
+    if (mesh_device->compute_with_storage_grid_size().x < 2) {
+        GTEST_SKIP() << "This test requires at least 2 worker nodes.";
+    }
+
     const experimental::NodeCoord node_0{0, 0};
     const experimental::NodeCoord node_1{1, 0};
 
@@ -185,10 +187,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     constexpr uint32_t num_elements = 10;
-    constexpr uint32_t buf_a_addr = 1000 * 1024;
-    constexpr uint32_t buf_b_addr = buf_a_addr + num_elements * sizeof(uint32_t);
-    const uint32_t dram_mid_addr = 31000 * 1024;
-    const uint32_t dram_dst_addr = 32000 * 1024;
+    const uint32_t buf_a_addr = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t buf_b_addr = buf_a_addr + num_elements * sizeof(uint32_t);
+    const uint32_t dram_mid_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint32_t dram_dst_addr = dram_mid_addr + (1000 * 1024);
 
     std::vector<uint32_t> initial_data(num_elements, 0);
     for (uint32_t i = 0; i < num_elements; i++) {
@@ -236,9 +239,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec dm_writer_0_spec{
@@ -258,9 +259,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 .runtime_arg_names =
                     {"dram_addr", "l1_addr", "num_elements", "dram_bank_id", "remote_noc_x", "remote_noc_y"},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec dm_reader_1_spec{
@@ -279,9 +278,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec dm_transform_1_spec{
@@ -302,9 +299,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
                 {"buf_a", buf_a_addr},
                 {"buf_b", buf_b_addr},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec dm_writer_1_spec{
@@ -319,9 +314,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
             {
                 .runtime_arg_names = {"dram_addr", "l1_addr", "num_elements", "dram_bank_id"},
             },
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec wu_core_0{
@@ -349,30 +342,33 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM_1},
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_WRITER_0,
-            .runtime_arg_values =
-                {{node_0,
-                  {{"dram_addr", dram_mid_addr},
-                   {"l1_addr", buf_b_addr},
-                   {"num_elements", num_elements},
-                   {"dram_bank_id", 0u},
-                   {"remote_noc_x", static_cast<uint32_t>(core_1_virtual.x)},
-                   {"remote_noc_y", static_cast<uint32_t>(core_1_virtual.y)}}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node_0,
+                {{"dram_addr", dram_mid_addr},
+                 {"l1_addr", buf_b_addr},
+                 {"num_elements", num_elements},
+                 {"dram_bank_id", 0u},
+                 {"remote_noc_x", static_cast<uint32_t>(core_1_virtual.x)},
+                 {"remote_noc_y", static_cast<uint32_t>(core_1_virtual.y)}}),
+        },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_READER_1,
-            .runtime_arg_values =
-                {{node_1,
-                  {{"dram_addr", dram_mid_addr},
-                   {"l1_addr", buf_a_addr},
-                   {"num_elements", num_elements},
-                   {"dram_bank_id", 0u}}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node_1,
+                {{"dram_addr", dram_mid_addr},
+                 {"l1_addr", buf_a_addr},
+                 {"num_elements", num_elements},
+                 {"dram_bank_id", 0u}}),
+        },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_WRITER_1,
-            .runtime_arg_values =
-                {{node_1,
-                  {{"dram_addr", dram_dst_addr},
-                   {"l1_addr", buf_b_addr},
-                   {"num_elements", num_elements},
-                   {"dram_bank_id", 0u}}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node_1,
+                {{"dram_addr", dram_dst_addr},
+                 {"l1_addr", buf_b_addr},
+                 {"num_elements", num_elements},
+                 {"dram_bank_id", 0u}}),
+        },
     };
     experimental::SetProgramRunArgs(program, params);
 

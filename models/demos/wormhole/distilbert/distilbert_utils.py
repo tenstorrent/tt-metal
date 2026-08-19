@@ -3,7 +3,7 @@
 
 from typing import Any
 
-from datasets import load_dataset
+from datasets import load_from_disk
 from loguru import logger
 from torch.utils.data import Dataset
 
@@ -91,7 +91,11 @@ def squad_divide_chunks(dataset_question, dataset_context, dataset_reference, ba
 
 
 def squadv2_1K_samples_input(tokenizer, seq_len, attention_mask, token_type_ids, microbatch=8):
-    squadv2_dataset = load_dataset("squad_v2", use_auth_token=False, streaming=True)["validation"]
+    # The newer huggingface_hub pulled in by transformers 5.x rejects the bare "squad_v2" dataset id
+    # (needs namespace/name) and the deprecated use_auth_token kwarg. Use the local CI mirror, same as
+    # models/datasets/dataset_squadv2.py (metal_BERT). Fallback for reference:
+    # load_dataset("rajpurkar/squad_v2", streaming=True)["validation"]
+    squadv2_dataset = load_from_disk("/mnt/MLPerf/tt_dnn-models/squad_v2")
     dataset_iter = iter(squadv2_dataset)
     dataset_question = []
     dataset_context = []

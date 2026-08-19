@@ -139,7 +139,7 @@ protected:
 
         const auto detected_arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(
-            detected_arch == tt::ARCH::BLACKHOLE || detected_arch == tt::ARCH::QUASAR);
+            detected_arch == tt::ARCH::BLACKHOLE || (detected_arch == tt::ARCH::QUASAR));
 
         // Parent class initializes devices and any necessary flags
         DebugToolsMeshFixture::SetUp();
@@ -219,11 +219,51 @@ protected:
     }
 };
 
-class DevicePrintFixture : public DebugToolsMeshFixture {
+// Fixture for tile counter watcher tests.
+class MeshWatcherTileCounterFixture : public MeshWatcherDumpAllFixture {
 protected:
-    int memfd_;
+    bool watcher_previous_assert_disabled_{};
 
     void SetUp() override {
+        // Save before the skip check: TearDown() runs even when SetUp() skips, so the
+        // restore must be based on the real previous state regardless of skip.
+        watcher_previous_assert_disabled_ = MetalContext::instance().rtoptions().watcher_assert_disabled();
+        if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+            GTEST_SKIP() << "Tile counters are only used on Quasar";
+        }
+        // Must be set before parent SetUp: the TRISC HW fault ISR (handle_interrupt in
+        // risc_common.h, compiled as part of trisc.cc firmware) calls ASSERT on a
+        // TILE_COUNTERS fault, which writes to the watcher mailbox and hangs. Disabling
+        // assert here makes ASSERT a no-op so the ISR clears the interrupt and returns,
+        // allowing the test to verify that watcher logs the TC mismatch correctly.
+        if (!watcher_previous_assert_disabled_) {
+            MetalContext::instance().rtoptions().disable_watcher_assert();
+        }
+        MeshWatcherDumpAllFixture::SetUp();
+    }
+
+    void TearDown() override {
+        MeshWatcherDumpAllFixture::TearDown();
+        if (!watcher_previous_assert_disabled_) {
+            MetalContext::instance().rtoptions().enable_watcher_assert();
+        }
+    }
+};
+
+class DevicePrintFixture : public DebugToolsMeshFixture {
+protected:
+    int memfd_ = -1;
+    tt::llrt::TargetSelection dprint_previous_targets_{};
+    bool test_mode_previous_{};
+
+    void SetUp() override {
+        // Save previous DPRINT / test-mode state so TearDown can restore it. TearDown runs even
+        // when SetUp skips or fails later, so capture before mutating rtoptions.
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        dprint_previous_targets_ = rtoptions.get_feature_targets(tt::llrt::RunTimeDebugFeatureDprint);
+        test_mode_previous_ = rtoptions.get_test_mode_enabled();
+        watcher_previous_enabled = rtoptions.get_watcher_enabled();
+
         const testing::TestInfo* test_info = testing::UnitTest::GetInstance()->current_test_info();
         std::string test_desc =
             fmt::format("dprint_{}_{}_{}", getpid(), test_info->test_suite_name(), test_info->name());
@@ -235,28 +275,21 @@ protected:
         // Use /proc/self/fd path which works transparently with ofstream/ifstream
         dprint_file_name = fmt::format("/proc/self/fd/{}", memfd_);
 
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(
-            tt::llrt::RunTimeDebugFeatureDprint, true);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
-            tt::llrt::RunTimeDebugFeatureDprint, false);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
+        rtoptions.set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, true);
+        rtoptions.set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, false);
+        rtoptions.set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, tt::llrt::RunTimeDebugClassWorker);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
+        rtoptions.set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassWorker);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
+        rtoptions.set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::DRAM, tt::llrt::RunTimeDebugClassWorker);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(
-            tt::llrt::RunTimeDebugFeatureDprint, true);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_mesh_coords(
-            tt::llrt::RunTimeDebugFeatureDprint, {});
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_chip_ids(
-            tt::llrt::RunTimeDebugFeatureDprint, {});
+        rtoptions.set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, true);
+        rtoptions.set_feature_mesh_coords(tt::llrt::RunTimeDebugFeatureDprint, {});
+        rtoptions.set_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint, {});
         // Send output to a file so the test can check after program is run.
-        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_file_name(
-            tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
-        tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
-        watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
-        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(false);
+        rtoptions.set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
+        rtoptions.set_test_mode_enabled(true);
+        rtoptions.set_watcher_enabled(false);
 
         ExtraSetUp();
 
@@ -269,7 +302,15 @@ protected:
         DebugToolsMeshFixture::TearDown();
         ExtraTearDown();
 
-        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        rtoptions.set_feature_targets(tt::llrt::RunTimeDebugFeatureDprint, dprint_previous_targets_);
+        rtoptions.set_test_mode_enabled(test_mode_previous_);
+        rtoptions.set_watcher_enabled(watcher_previous_enabled);
+
+        if (memfd_ >= 0) {
+            close(memfd_);
+            memfd_ = -1;
+        }
     }
 
     // Override this function in child classes for additional setup commands between DPRINT setup
@@ -308,8 +349,9 @@ public:
 
         int riscv_id = static_cast<std::underlying_type_t<tt::tt_metal::DataMovementProcessor>>(config.processor);
 
-        const auto& build_state = tt::tt_metal::BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+        const auto& build_state =
+            tt::tt_metal::BuildEnvManager::get_instance(extract_context_id(device))
+                .get_kernel_build_state(device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         const auto& kernel = program_.impl().get_kernel(kernel_handle);
         const std::string full_kernel_name = kernel->get_full_kernel_name();

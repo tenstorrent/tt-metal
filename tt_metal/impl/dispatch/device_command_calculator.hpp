@@ -121,6 +121,18 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
+    void add_dispatch_rt_profiler_flush() {
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
+    void add_dispatch_set_sub_device_worker_counts(uint32_t num_sub_devices) {
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd) + num_sub_devices * sizeof(uint32_t);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
     void add_dispatch_set_go_signal_noc_data(uint32_t num_words) {
         this->add_prefetch_relay_inline();
         this->cmd_write_offsetB += sizeof(CQDispatchCmd) + num_words * sizeof(uint32_t);

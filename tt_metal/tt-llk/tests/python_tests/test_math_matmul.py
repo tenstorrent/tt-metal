@@ -7,6 +7,7 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
+    TILE_DIM,
     MatmulGolden,
     TransposeGolden,
     get_golden_generator,
@@ -19,8 +20,9 @@ from helpers.llk_params import (
     Transpose,
     format_dict,
 )
+from helpers.logger import logger
 from helpers.matmul_sweep import sweep_matmul, sweep_tiny_tiles_matmul
-from helpers.param_config import input_output_formats
+from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import convert_to_l1_view, generate_face_matmul_data
 from helpers.test_config import TestConfig
@@ -30,7 +32,9 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     IN_TILE_DIMS,
     MATH_FIDELITY,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     PARTIAL_FACE,
     STOCHASTIC_ROUNDING,
     THROTTLE_LEVEL,
@@ -82,7 +86,7 @@ ALL_TEST_PARAMS = list(
                 MATH_FIDELITIES, MATMUL_COMBINATIONS, [1, 2, 3, 4, 5]
             )
         ),
-        # Tiny tiles matmul with throttle level 1 only
+        # Tiny tiles matmul with throttle level 0 only
         (
             (fidelity, combinations, 0)
             for fidelity, combinations in product(
@@ -179,6 +183,34 @@ def test_math_matmul(
         tilized_in1, in1_dimensions, tile_dimensions=[in1_tile_r_dim, in1_tile_c_dim]
     )
 
+    # Matmul sweep shapes deliberately fit one destination section. Repeat the
+    # complete matmul block four times so the same test also validates section
+    # hand-off without changing the operation's RT/CT/KT contract.
+    #
+    # SyncFull + 16-bit dest (dest_acc=No) holds 16 tiles. Pack CLR_ALL after a
+    # tiny-tile section whose dest window straddles the half-sync boundary
+    # leaves packer dest addressing stuck at that tile on the next section
+    # (1x32 through 16x32). Skip the 4-block handoff for those windows;
+    # restore num_blocks=4 after #53500. Windows that stay in one half,
+    # SyncHalf, dest_acc=Yes, and full 32x32 tiles still cover the handoff.
+    num_tiles_in_block = matmul_config.tile_dimensions.tile_cnt
+    dst_index = matmul_config.dst_index
+    half_dest_tiles = DEST_SYNC_TILE_LIMITS[DestSync.Half]
+    dest_straddles_half = (
+        matmul_config.dest_sync == DestSync.Full
+        and matmul_config.dest_acc == DestAccumulation.No
+        and matmul_config.tile_dimensions.in0_tile_r_dim < TILE_DIM
+        and dst_index < half_dest_tiles < dst_index + num_tiles_in_block
+    )
+    if dest_straddles_half:
+        logger.warning(
+            "Skipping 4-block dest section handoff for tiny-tile matmul "
+            "(dst_index={}, num_tiles_in_block={}); restore num_blocks=4 after #53500",
+            dst_index,
+            num_tiles_in_block,
+        )
+    num_blocks = 1 if dest_straddles_half else 4
+
     configuration = TestConfig(
         "sources/math_matmul_test.cpp",
         formats,
@@ -190,6 +222,8 @@ def test_math_matmul(
         ],
         runtimes=[
             TILE_COUNT(matmul_config.tile_dimensions.tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
             NUM_FACES(num_faces, num_faces_in0, num_faces_in1),
             UNPACK_TRANS_FACES(transpose),
             UNPACK_TRANS_WITHIN_FACE(transpose),
@@ -210,7 +244,7 @@ def test_math_matmul(
                 matmul_config.tile_dimensions.in1_tile_r_dim,
                 matmul_config.tile_dimensions.in1_tile_c_dim,
             ),
-            DEST_INDEX(matmul_config.dst_index),
+            DEST_INDEX(dst_index),
         ],
         variant_stimuli=StimuliConfig(
             tilized_in0_l1_view.flatten(),
@@ -220,15 +254,11 @@ def test_math_matmul(
             formats.output_format,
             tile_count_A=matmul_config.tile_dimensions.tile_cnt_in0,
             tile_count_B=matmul_config.tile_dimensions.tile_cnt_in1,
-            tile_count_res=matmul_config.tile_dimensions.tile_cnt,
+            tile_count_res=matmul_config.tile_dimensions.tile_cnt * num_blocks,
         ),
         dest_acc=matmul_config.dest_acc,
     )
     res_from_L1 = configuration.run().result
-
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
@@ -238,10 +268,15 @@ def test_math_matmul(
         (in0_dimensions[0], in1_dimensions[1]),
         tile_dimensions=[in0_tile_r_dim, in1_tile_c_dim],
     )
+    golden_tensor = golden_tensor.repeat(num_blocks)
+
+    assert len(res_from_L1) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
 
     if num_faces < 4:
         num_elements_per_tile = in0_tile_r_dim * in1_tile_c_dim
-        tile_cnt = matmul_config.tile_dimensions.output_tile_cnt
+        tile_cnt = matmul_config.tile_dimensions.output_tile_cnt * num_blocks
 
         # Compare each tile separately
         TILE_R_DIM, TILE_C_DIM = 32, 32

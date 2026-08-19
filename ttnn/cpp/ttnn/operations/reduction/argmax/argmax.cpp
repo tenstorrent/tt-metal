@@ -6,7 +6,6 @@
 #include "device/argmax_utils.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/core/to_layout/to_layout_op.hpp"
@@ -112,7 +111,7 @@ Tensor run_argmax_nc(
         const auto& logical_shape = row_major_out.logical_shape();
         const int32_t rank = static_cast<int32_t>(logical_shape.rank());
         const int32_t normalized_dim = dim < 0 ? dim + rank : dim;
-        ttnn::SmallVector<uint32_t> new_shape;
+        ttsl::SmallVector<uint32_t> new_shape;
         new_shape.reserve(rank - 1);
         for (int32_t i = 0; i < rank; ++i) {
             if (i == normalized_dim) {
@@ -154,11 +153,9 @@ static Tensor zero_volume_argmax(
 
     // Creating result tensor on host and copying to device (there is no direct way to write
     // to a device tensor with a scalar value).
-    const TensorSpec& tensor_spec = preallocated_tensor.tensor_spec();
-    // Note that allocate_host_buffer() doesn't allow specifying initial value, but that doesn't matter
-    // here because the tensor is 0-volume (i.e., it has no elements).
-    auto host_buffer = tt::tt_metal::tensor_impl::allocate_host_buffer(tensor_spec);
-    Tensor host_tensor(std::move(host_buffer), output_shape, tensor_spec.data_type(), tensor_spec.layout());
+    // Unspecified contents are fine here because the tensor is 0-volume (i.e., it has no elements).
+    const tt::tt_metal::TensorSpec& tensor_spec = preallocated_tensor.tensor_spec();
+    Tensor host_tensor(tt::tt_metal::HostTensor::allocate_for_overwrite(tensor_spec));
     copy_to_device(host_tensor, preallocated_tensor);
 
     return preallocated_tensor;
@@ -169,7 +166,6 @@ Tensor argmax(
     const std::optional<int>& dim,
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool use_multicore,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
@@ -222,7 +218,7 @@ Tensor argmax(
             input_shape);
         // Creating result tensor on host and copying to device (there is no direct way to write
         // to a device tensor with a scalar value).
-        const TensorSpec& preallocated_spec = preallocated_tensor.tensor_spec();
+        const tt::tt_metal::TensorSpec& preallocated_spec = preallocated_tensor.tensor_spec();
         TT_FATAL(
             preallocated_spec.data_type() == DataType::UINT32,
             "Preallocated output tensor must be UINT32 for rank 0 input tensor");
@@ -251,14 +247,12 @@ Tensor argmax(
 
     if (should_row_major_h_via_tile(input_tensor, dim, output_memory_config)) {
         const Tensor tiled_input = ttnn::to_layout(input_tensor, Layout::TILE);
-        // Multicore prim::argmax is only valid for ROW_MAJOR inputs; this path uses TILE.
         return prim::argmax(
             tiled_input,
             DataType::UINT32,
             dim,
             keepdim,
             sub_core_grids,
-            /*use_multicore=*/false,
             output_memory_config,
             std::move(optional_output_tensor));
     }
@@ -269,7 +263,6 @@ Tensor argmax(
         dim,
         keepdim,
         sub_core_grids,
-        use_multicore,
         output_memory_config,
         std::move(optional_output_tensor));
 }

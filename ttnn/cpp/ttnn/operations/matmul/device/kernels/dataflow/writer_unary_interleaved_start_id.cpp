@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -12,17 +12,17 @@ void kernel_main() {
     const uint32_t num_pages = get_arg_val<uint32_t>(1);
     const uint32_t start_id = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t dfb_id_out = get_named_compile_time_arg_val("cb_out");
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
     // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
+    const uint32_t page_bytes = get_local_cb_interface(dfb_id_out).fifo_page_size;
 
     Noc noc;
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer dfb_out(dfb_id_out);
 
 #ifdef OUT_SHARDED
-    cb_out.wait_front(num_pages);
+    dfb_out.wait_front(num_pages);
 #else
 
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
@@ -37,15 +37,10 @@ void kernel_main() {
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
-        cb_out.wait_front(onepage);
-        noc.async_write(
-            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out),
-            s,
-            page_bytes,
-            {.offset_bytes = 0},
-            {.page_id = i});
+        dfb_out.wait_front(onepage);
+        noc.async_write(dfb_out, s, page_bytes, {.offset_bytes = 0}, {.page_id = i});
         noc.async_writes_flushed();
-        cb_out.pop_front(onepage);
+        dfb_out.pop_front(onepage);
     }
     noc.async_write_barrier();
 #endif

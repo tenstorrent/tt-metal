@@ -4,22 +4,24 @@
 
 #pragma once
 
+#include <variant>
+
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm_backward {
 
 std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p);
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
+void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
 ttnn::Shape get_output_grad_shape(
-    const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim);
+    const Tensor& output_grad, const Tensor& input_grad, const ttsl::SmallVector<int64_t>& dims, const bool& keepdim);
 
 struct MorehNormBackwardOperation {
     struct operation_attributes_t {
         float p;
-        ttnn::SmallVector<int64_t> dims;
+        ttsl::SmallVector<int64_t> dims;
         bool keepdim;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
@@ -32,13 +34,18 @@ struct MorehNormBackwardOperation {
         const std::optional<Tensor>& input_grad;
     };
 
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& input_grad);
+    // Metal 2.0 program factory (MetalV2FactoryConcept).
+    struct MorehNormBackwardProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& input_grad);
+    };
+
+    using program_factory_t = std::variant<MorehNormBackwardProgramFactory>;
 
     static void validate_inputs(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -54,7 +61,7 @@ ttnn::operations::moreh::moreh_norm_backward::MorehNormBackwardOperation::tensor
     const Tensor& output,
     const Tensor& output_grad,
     float p,
-    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
+    const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim,
     bool keepdim,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,

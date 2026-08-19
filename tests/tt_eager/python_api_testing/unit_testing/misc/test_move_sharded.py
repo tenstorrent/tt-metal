@@ -61,21 +61,40 @@ def test_move_sharded_op(memory_layout, shape, device):
     compute_grid_size = device.compute_with_storage_grid_size()
     if (compute_grid_size.x * compute_grid_size.y) < 98:
         core_count = 25
-        shape[2] = 25050
+        per_core = 1024
     else:
         core_count = 98
+        per_core = 256
 
     dtype = ttnn.bfloat16
     layout = ttnn.ROW_MAJOR_LAYOUT
     shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
     shard_grid = get_shard_grid_from_num_cores(core_count, device)
-    assert shape[0] == 1 and shape[1] == 1
-    assert shape[2] % core_count == 0 and shape[3] % 32 == 0
-    shard_shape = [shape[2] // core_count, shape[3]]
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
 
-    dummy_shape = [shape[0], shape[1], shape[2] // 2, shape[3]]
-    dummy_shard_shape = [dummy_shape[2] // core_count, dummy_shape[3]]
+    # The sharded dimension is split across cores; the other dimension stays full.
+    # per_core is a multiple of 64 so the half-size dummy tensor also divides evenly
+    # and every per-core shard extent remains 32-aligned.
+    sharded_dim = per_core * core_count
+    full_dim = shape[3]
+
+    if memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        shape = [1, 1, sharded_dim, full_dim]
+        shard_shape = [shape[2] // core_count, shape[3]]
+        dummy_shape = [shape[0], shape[1], shape[2] // 2, shape[3]]
+        dummy_shard_shape = [dummy_shape[2] // core_count, dummy_shape[3]]
+    else:  # WIDTH_SHARDED: width is split across cores, height stays full
+        shape = [1, 1, full_dim, sharded_dim]
+        shard_shape = [shape[2], shape[3] // core_count]
+        dummy_shape = [shape[0], shape[1], shape[2], shape[3] // 2]
+        dummy_shard_shape = [dummy_shape[2], dummy_shape[3] // core_count]
+
+    assert shape[0] == 1 and shape[1] == 1
+    if memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        assert shape[2] % core_count == 0 and shape[3] % 32 == 0
+    else:
+        assert shape[3] % core_count == 0 and (shape[3] // core_count) % 32 == 0
+
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     dummy_shard_spec = ttnn.ShardSpec(shard_grid, dummy_shard_shape, shard_orientation)
     dummy_tensor = torch.zeros(dummy_shape)
     tt_dummy_tensor = ttnn.Tensor(dummy_tensor, dtype)
@@ -90,17 +109,17 @@ def test_move_sharded_op(memory_layout, shape, device):
     input_volume = shape[2] * shape[3]
     torch_tensor = torch.arange(1, input_volume + 1, dtype=torch.float32).reshape(shape).to(torch.bfloat16)
     tt_tensor = ttnn.Tensor(torch_tensor, dtype)
-    height_sharded_mem_config = ttnn.MemoryConfig(
+    sharded_mem_config = ttnn.MemoryConfig(
         memory_layout=memory_layout,
         buffer_type=ttnn.BufferType.L1,
         shard_spec=shard_spec,
     )
-    tt_tensor = tt_tensor.to(device, height_sharded_mem_config)
+    tt_tensor = tt_tensor.to(device, sharded_mem_config)
 
     # Free up dummy tensor from memory to make available to move
     tt_dummy_tensor.deallocate()
 
-    output = ttnn.move(tt_tensor, memory_config=height_sharded_mem_config)
+    output = ttnn.move(tt_tensor, memory_config=sharded_mem_config)
     tt_host_rm = output.cpu().to(layout)
     pyt_got_back_rm = tt_host_rm.to_torch().to(torch_tensor.dtype)
 
@@ -225,7 +244,56 @@ def test_move_sharded_custom_grid(device):
     )
 
 
-def test_move_sharded_to_interleaved_rejected(device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_move_sharded_program_cache(dtype, device):
+    """Cache-hit correctness for the sharded factory: reallocate inputs each iteration so buffer
+    addresses (and the address-derived reader args chunk = dst_addr - src_addr) differ on every hit,
+    while the program stays a single cache entry. Guards the override_runtime_arguments re-derivation."""
+    torch.manual_seed(2024)
+
+    compute_grid_size = device.compute_with_storage_grid_size()
+    core_count = min(8, compute_grid_size.x * compute_grid_size.y)
+    height_per_core = 128
+    width = 64
+    shape = [1, 1, core_count * height_per_core, width]
+    layout = ttnn.ROW_MAJOR_LAYOUT
+    shard_grid = get_shard_grid_from_num_cores(core_count, device)
+    shard_spec = ttnn.ShardSpec(shard_grid, [height_per_core, width], ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+
+    # A varying number of live dummy shards shifts the allocator so src/dst land at different
+    # addresses (hence a different chunk size) on each iteration while the hash is unchanged.
+    for n_dummy in [0, 1, 2, 1]:
+        dummies = [
+            ttnn.from_torch(
+                torch.zeros(shape, dtype=torch_dtype),
+                dtype=dtype,
+                layout=layout,
+                device=device,
+                memory_config=mem_config,
+            )
+            for _ in range(n_dummy)
+        ]
+        torch_tensor = torch.randn(shape, dtype=torch_dtype)
+        tt_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=mem_config)
+        for d in dummies:
+            d.deallocate()
+
+        output = ttnn.move(tt_tensor, memory_config=mem_config)
+        got = output.cpu().to(layout).to_torch().to(torch_tensor.dtype)
+        assert torch.equal(got, torch_tensor), f"sharded move mismatch with {n_dummy} dummy shards"
+        output.deallocate()
+        tt_tensor.deallocate()
+
+    assert device.num_program_cache_entries() == 1
+
+
+def test_move_sharded_to_interleaved_rejected(device, expect_error):
     """Verify move rejects sharded-to-interleaved conversion (output must be sharded)."""
     torch.manual_seed(42)
     shape = [1, 1, 128, 64]
@@ -248,7 +316,7 @@ def test_move_sharded_to_interleaved_rejected(device):
     )
 
     # Attempt to move to interleaved layout should fail
-    with pytest.raises(RuntimeError, match="Expected output tensor memory config to be sharded"):
+    with expect_error(RuntimeError, "Expected output tensor memory config to be sharded"):
         ttnn.move(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 

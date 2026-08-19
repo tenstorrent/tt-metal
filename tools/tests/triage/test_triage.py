@@ -275,11 +275,11 @@ class TestTriage:
         )
         assert len(result.stderr) == 0
 
-    def test_triage_initialize_with_noc1(self):
+    def test_triage_with_noc_0(self):
         global triage_script
 
         result = subprocess.run(
-            [triage_script, "--initialize-with-noc1", "--run=test_output"],
+            [triage_script, "--noc-id=0", "--run=test_output"],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -355,6 +355,9 @@ class TestTriage:
 
     def test_check_core_magic(self):
         self.run_triage_script("check_core_magic.py")
+
+    def test_check_l1_status(self):
+        self.run_triage_script("check_l1_status.py")
 
     def test_check_eth_status(self):
         self.run_triage_script("check_eth_status.py")

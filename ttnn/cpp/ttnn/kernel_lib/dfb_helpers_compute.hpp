@@ -20,9 +20,10 @@ ALWI uint32_t get_full_tile_size(DataFormat format);
 
 ALWI constexpr bool is_block_float_format(uint32_t format);
 
-#ifndef ARCH_QUASAR
+// Arch-independent CB FIFO arithmetic; needed by the regular tilize path on Quasar (no fast tilize).
 ALWI uint32_t get_dfb_num_pages(uint32_t dfb_id);
 
+#ifndef ARCH_QUASAR
 template <DataFormat format>
 ALWI bool is_valid_dfb_tile_page_size(uint32_t dfb_id);
 

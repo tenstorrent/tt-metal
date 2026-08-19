@@ -101,7 +101,7 @@ private:
     DeviceAddr pages_sent_worker_l1_base_ = 0;
     // DRISC L1 base of the per-GCB "sender state block" (RemoteSenderCBInterface
     // bytes + sender config block + receiver NOC XY table). Pre-initialized at GCB
-    // construction; on each request that targets this GCB the DRAM-core prefetcher
+    // construction; on each request that targets this GCB the Tensor prefetcher
     // kernel loads the RemoteSenderCBInterface region into its static cb_interface[]
     // slot, runs the chunk loop, and writes fifo_wr_ptr back so the ring offset
     // survives multi-GCB request switching. Layout in

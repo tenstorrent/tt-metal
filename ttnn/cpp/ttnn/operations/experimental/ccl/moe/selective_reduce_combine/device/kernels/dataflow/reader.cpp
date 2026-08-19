@@ -4,6 +4,9 @@
 
 #include "api/compile_time_args.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 
 namespace detail {
 
@@ -97,44 +100,45 @@ void kernel_main() {
     const auto token_parallel_core_id = get_arg_val<uint32_t>(arg_index++);
     const bool sync_core = get_arg_val<uint32_t>(arg_index++);
 
-    const uint32_t sync_semaphore_addr = get_semaphore(sync_semaphore_id);
+    Noc noc1_obj(1);
+    Semaphore<> sync_sem(sync_semaphore_id);
+    CircularBuffer cb_token_counts(token_counts_cb_id);
+    CircularBuffer cb_token_activations(token_activations_cb_id);
+    CircularBuffer cb_dense_token_maps(dense_token_maps_cb_id);
 
     const auto dense_token_maps_addrgen = TensorAccessor(dense_token_maps_ta_args, dense_token_maps_addr);
     const auto token_counts_addrgen = TensorAccessor(dense_token_counts_ta_args, dense_token_counts_addr);
     const auto token_activations_addrgen = TensorAccessor(token_activations_ta_args, token_activations_addr);
 
     // wait for metadata to be ready
-    auto* sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_semaphore_addr);
     if (sync_core) {
-        noc_semaphore_wait(sync_semaphore_ptr, 1);
+        sync_sem.wait(1);
         // swap start/end coordinates because this kernel is using NOC1
-        const uint64_t semaphore_mc_addr =
-            get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, sync_semaphore_addr, /*noc=*/1);
-        noc_semaphore_set_multicast(
-            sync_semaphore_addr,
-            semaphore_mc_addr,
+        sync_sem.set_multicast(
+            noc1_obj,
+            noc_x_end,
+            noc_y_end,
+            noc_x_start,
+            noc_y_start,
             worker_bounding_box_size - 1,
-            /*linked=*/false,
-            /*noc=*/1);
-        noc_async_writes_flushed(/*noc=*/1);
+            /*linked=*/false);
+        noc1_obj.async_writes_flushed();
 
     } else {
-        noc_semaphore_wait_min(sync_semaphore_ptr, 1);
+        sync_sem.wait(1);
     }
 
     // read dense token counts
-    cb_reserve_back(token_counts_cb_id, 1);
-    const uint32_t token_counts_l1_addr = get_write_ptr(token_counts_cb_id);
-    const uint64_t token_counts_noc_addr = token_counts_addrgen.get_noc_addr(0, /*offset=*/0, /*noc=*/1);
-    noc_async_read(token_counts_noc_addr, token_counts_l1_addr, token_counts_page_size_bytes, /*noc=*/1);
-    noc_async_read_barrier(/*noc=*/1);
+    cb_token_counts.reserve_back(1);
+    const uint32_t token_counts_l1_addr = cb_token_counts.get_write_ptr();
+    noc1_obj.async_read(token_counts_addrgen, cb_token_counts, token_counts_page_size_bytes, {.page_id = 0}, {});
+    noc1_obj.async_read_barrier();
 
     // read activations
-    cb_reserve_back(token_activations_cb_id, 1);
-    const uint32_t token_activations_l1_addr = get_write_ptr(token_activations_cb_id);
-    const uint64_t token_activations_noc_addr = token_activations_addrgen.get_noc_addr(0, /*offset=*/0, /*noc=*/1);
-    noc_async_read(
-        token_activations_noc_addr, token_activations_l1_addr, aligned_token_activations_page_size_bytes, /*noc=*/1);
+    cb_token_activations.reserve_back(1);
+    const uint32_t token_activations_l1_addr = cb_token_activations.get_write_ptr();
+    noc1_obj.async_read(
+        token_activations_addrgen, cb_token_activations, aligned_token_activations_page_size_bytes, {.page_id = 0}, {});
 
     // split work
     auto* token_counts_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_counts_l1_addr);
@@ -144,21 +148,20 @@ void kernel_main() {
         token_parallel_core_id, token_counts_l1_ptr, token_split_counts, token_split_offsets);
 
     // read dense token maps
-    cb_reserve_back(dense_token_maps_cb_id, num_local_experts);
-    const uint32_t dense_token_maps_l1_addr = get_write_ptr(dense_token_maps_cb_id);
+    cb_dense_token_maps.reserve_back(num_local_experts);
+    const uint32_t dense_token_maps_l1_addr = cb_dense_token_maps.get_write_ptr();
     for (uint32_t e = 0, l1_offset = 0, maps_page = 0; e < num_local_experts; ++e) {
-        const uint64_t dense_token_maps_noc_addr =
-            dense_token_maps_addrgen.get_noc_addr(maps_page++, /*offset=*/0, /*noc=*/1);
-        noc_async_read(
-            dense_token_maps_noc_addr,
-            dense_token_maps_l1_addr + l1_offset,
+        noc1_obj.async_read(
+            dense_token_maps_addrgen,
+            cb_dense_token_maps,
             dense_token_maps_page_size_bytes,
-            /*noc=*/1);
+            {.page_id = maps_page++},
+            {.offset_bytes = l1_offset});
         l1_offset += dense_token_maps_page_size_bytes;
     }
 
     // wait for activations and dense token maps
-    noc_async_read_barrier(/*noc=*/1);
+    noc1_obj.async_read_barrier();
 
     auto* dense_token_maps_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dense_token_maps_l1_addr);
     auto* token_activations_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_activations_l1_addr);
@@ -181,9 +184,9 @@ void kernel_main() {
         token_counts_l1_ptr[num_local_experts + 2 * num_local_experts + e] = token_activation_offsets[e];
     }
 
-    cb_push_back(token_counts_cb_id, 1);
-    cb_push_back(dense_token_maps_cb_id, num_local_experts);
-    cb_push_back(token_activations_cb_id, 1);
+    cb_token_counts.push_back(1);
+    cb_dense_token_maps.push_back(num_local_experts);
+    cb_token_activations.push_back(1);
 
-    noc_semaphore_set(sync_semaphore_ptr, 0);
+    sync_sem.set(0);
 }

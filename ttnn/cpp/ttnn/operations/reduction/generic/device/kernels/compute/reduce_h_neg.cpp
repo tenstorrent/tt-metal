@@ -12,10 +12,8 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 #ifdef REDUCE_POST_MUL
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -31,97 +29,24 @@ void kernel_main() {
 #endif
 
     // Circular buffers:
-    constexpr uint32_t cb_input = tt::CBIndex::c_0;
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
-    constexpr uint32_t cb_output = tt::CBIndex::c_3;
+    constexpr uint32_t dfb_input = tt::CBIndex::c_0;
+    constexpr uint32_t dfb_scaler = tt::CBIndex::c_2;
+    constexpr uint32_t dfb_output = tt::CBIndex::c_3;
     constexpr uint32_t onetile = 1;
-    constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[cb_input]);
 
-    if constexpr (is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format>()) {
-        constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT - 1;
-        constexpr uint32_t work_dst = row_chunk;
+    constexpr uint32_t dfb_acc = tt::CBIndex::c_4;
+    constexpr uint32_t dfb_ineg = tt::CBIndex::c_5;
 
-        init_sfpu(cb_input, cb_output);
-        copy_tile_to_dst_init_short(cb_input);
-        cb_wait_front(cb_scaler, onetile);
-        PACK((llk_pack_reduce_mask_config<REDUCE_DIM, PackMode::Default>(cb_output)));
-
-        for (uint32_t nc = 0; nc < NC; ++nc) {
-            for (uint32_t wt_base = 0; wt_base < Wt; wt_base += row_chunk) {
-                const uint32_t current_chunk = std::min(wt_base + row_chunk, Wt) - wt_base;
-
-                tile_regs_acquire();
-                negative_tile_init();
-                if (Ht > 1) {
-                    compute_kernel_lib::detail::sfpu_reduce_max_fold_init<reduce_format>();
-                }
-
-                for (uint32_t ht = 0; ht < Ht; ++ht) {
-                    for (uint32_t k = 0; k < current_chunk; ++k) {
-                        cb_wait_front(cb_input, onetile);
-                        if (ht == 0) {
-                            copy_tile(cb_input, 0, k);
-                            if constexpr (reduce_format == DataFormat::Int32) {
-                                negative_tile_int32(k);
-                            } else {
-                                negative_tile(k);
-                            }
-                        } else {
-                            copy_tile(cb_input, 0, work_dst);
-                            if constexpr (reduce_format == DataFormat::Int32) {
-                                negative_tile_int32(work_dst);
-                            } else {
-                                negative_tile(work_dst);
-                            }
-                            compute_kernel_lib::detail::sfpu_reduce_max_fold_tile<reduce_format>(k, work_dst, k);
-                        }
-                        cb_pop_front(cb_input, onetile);
-                    }
-                }
-
-                sfpu_reduce_init<REDUCE_OP, reduce_format>();
-                for (uint32_t k = 0; k < current_chunk; ++k) {
-                    sfpu_reduce<REDUCE_OP, reduce_format, REDUCE_DIM>(k, /*ct_dim=*/1, /*rt_dim=*/1);
-                    if constexpr (reduce_format == DataFormat::Int32) {
-                        negative_tile_int32(k);
-                    } else {
-                        negative_tile(k);
-                    }
-                }
-#ifdef REDUCE_POST_MUL
-                for (uint32_t k = 0; k < current_chunk; ++k) {
-                    compute_kernel_lib::detail::reduce_post_mul_tile<reduce_format>(k, post_mul_scaler_bits);
-                }
-#endif
-
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t k = 0; k < current_chunk; ++k) {
-                    cb_reserve_back(cb_output, onetile);
-                    pack_tile(k, cb_output);
-                    cb_push_back(cb_output, onetile);
-                }
-                tile_regs_release();
-            }
-        }
-
-        PACK((llk_pack_reduce_mask_clear()));
-        return;
-    }
-
-    constexpr uint32_t cb_acc = tt::CBIndex::c_4;
-    constexpr uint32_t cb_ineg = tt::CBIndex::c_5;
-
-    CircularBuffer cb_input_obj(cb_input);
-    CircularBuffer cb_scaler_obj(cb_scaler);
-    CircularBuffer cb_output_obj(cb_output);
-    CircularBuffer cb_acc_obj(cb_acc);
-    CircularBuffer cb_ineg_obj(cb_ineg);
+    DataflowBuffer dfb_input_obj(dfb_input);
+    DataflowBuffer dfb_scaler_obj(dfb_scaler);
+    DataflowBuffer dfb_output_obj(dfb_output);
+    DataflowBuffer dfb_acc_obj(dfb_acc);
+    DataflowBuffer dfb_ineg_obj(dfb_ineg);
 
     constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT;
 
-    compute_kernel_hw_startup(cb_input, cb_scaler, cb_output);
-    cb_scaler_obj.wait_front(1);  // scaler tile from the reader
+    compute_kernel_hw_startup(dfb_input, dfb_scaler, dfb_output);
+    dfb_scaler_obj.wait_front(1);  // scaler tile from the reader
 
     // tiles are expected to come in the N C W_skip H W_chunk order
     // W_skip(chunk size) represents the number of tile columns whose reduction will be intertwined
@@ -143,75 +68,79 @@ void kernel_main() {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 reduce_dst_idx = 0;
                 tile_regs_acquire();
-                cb_input_obj.wait_front(ntiles);
+                dfb_input_obj.wait_front(ntiles);
 
-                reconfig_data_format_srca(cb_input);
-                copy_tile_init(cb_input);
+                reconfig_data_format_srca(dfb_input);
+                copy_tile_init(dfb_input);
                 negative_tile_init();
                 // Partial chunk (ntiles < row_chunk): the input CB depth matches row_chunk, but only consume ntiles
                 // tiles. Indexed reads plus a bulk pop of ntiles do not advance the CB head during reads, leaving
                 // trailing slots effectively stale; the next pass can index into those offsets and read stale L1 data.
                 for (uint32_t i = 0; i < ntiles; ++i) {
                     // Read from index 0 and pop_front(1) per tile to keep the CB head in sync and avoid stale data.
-                    copy_tile(cb_input, 0, i);
-                    cb_input_obj.pop_front(1);
+                    copy_tile(dfb_input, 0, i);
+                    dfb_input_obj.pop_front(1);
                     negative_tile(i);
                 }
 
                 tile_regs_commit();
-                cb_ineg_obj.reserve_back(ntiles);
+                dfb_ineg_obj.reserve_back(ntiles);
                 tile_regs_wait();
-                pack_reconfig_data_format(cb_ineg);
+                pack_reconfig_data_format(dfb_ineg);
                 for (uint32_t i = 0; i < ntiles; ++i) {
-                    pack_tile(i, cb_ineg);
+                    pack_tile(i, dfb_ineg);
                 }
                 tile_regs_release();
-                cb_ineg_obj.push_back(ntiles);
+                dfb_ineg_obj.push_back(ntiles);
 
                 tile_regs_acquire();
 
                 if (ht > 0) {
-                    cb_acc_obj.wait_front(ntiles);
+                    dfb_acc_obj.wait_front(ntiles);
                 }
 
-                cb_ineg_obj.wait_front(ntiles);
+                dfb_ineg_obj.wait_front(ntiles);
 
                 if (ht > 0) {
-                    reconfig_data_format_srca(cb_acc);
-                    copy_tile_init(cb_acc);
+                    reconfig_data_format_srca(dfb_acc);
+                    copy_tile_init(dfb_acc);
                     for (uint32_t i = 0; i < ntiles; ++i) {
-                        copy_tile(cb_acc, i, i);
+                        copy_tile(dfb_acc, i, i);
                     }
                 }
-                pack_reconfig_data_format(cb_acc);
-                reduce_init<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, cb_acc);
-                for (uint32_t i = 0; i < ntiles; ++i) {
-                    reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_ineg, cb_scaler, i, 0, i);
+                pack_reconfig_data_format(dfb_acc);
+                constexpr bool swap_operands = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (REDUCE_OP != PoolType::MAX);
+                if constexpr (swap_operands) {
+                    reconfig_data_format(dfb_scaler, dfb_ineg);
                 }
-                reduce_uninit(cb_ineg);
+                reduce_init<REDUCE_OP, REDUCE_DIM>(dfb_ineg, dfb_scaler, dfb_acc);
+                for (uint32_t i = 0; i < ntiles; ++i) {
+                    reduce_tile<REDUCE_OP, REDUCE_DIM>(dfb_ineg, dfb_scaler, i, 0, i);
+                }
+                reduce_uninit(dfb_ineg);
                 tile_regs_commit();
-                cb_ineg_obj.pop_front(ntiles);
+                dfb_ineg_obj.pop_front(ntiles);
 
                 if (ht > 0) {
-                    cb_acc_obj.pop_front(ntiles);
+                    dfb_acc_obj.pop_front(ntiles);
                 }
-                cb_acc_obj.reserve_back(ntiles);
+                dfb_acc_obj.reserve_back(ntiles);
                 tile_regs_wait();
                 for (uint32_t i = 0; i < ntiles; ++i) {
-                    pack_tile(i, cb_acc);
+                    pack_tile(i, dfb_acc);
                 }
                 tile_regs_release();
-                cb_acc_obj.push_back(ntiles);
+                dfb_acc_obj.push_back(ntiles);
             }
 
             tile_regs_acquire();
 
-            cb_acc_obj.wait_front(ntiles);
+            dfb_acc_obj.wait_front(ntiles);
 
-            reconfig_data_format_srca(cb_acc);
-            copy_tile_init(cb_acc);
+            reconfig_data_format_srca(dfb_acc);
+            copy_tile_init(dfb_acc);
             for (uint32_t i = 0; i < ntiles; ++i) {
-                copy_tile(cb_acc, i, i);
+                copy_tile(dfb_acc, i, i);
             }
             negative_tile_init();
             for (uint32_t i = 0; i < ntiles; ++i) {
@@ -229,15 +158,15 @@ void kernel_main() {
 #endif
 
             tile_regs_commit();
-            cb_acc_obj.pop_front(ntiles);
-            cb_output_obj.reserve_back(ntiles);
+            dfb_acc_obj.pop_front(ntiles);
+            dfb_output_obj.reserve_back(ntiles);
             tile_regs_wait();
-            pack_reconfig_data_format(cb_output);
+            pack_reconfig_data_format(dfb_output);
             for (uint32_t i = 0; i < ntiles; ++i) {
-                pack_tile(i, cb_output);
+                pack_tile(i, dfb_output);
             }
             tile_regs_release();
-            cb_output_obj.push_back(ntiles);
+            dfb_output_obj.push_back(ntiles);
         }
     }
 }

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     PerfRunType,
@@ -10,7 +11,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
@@ -28,6 +29,7 @@ from helpers.test_variant_parameters import (
             DataFormat.Float32,
             DataFormat.Int32,
             DataFormat.Bfp8_b,
+            DataFormat.Fp8_e4m3,
         ]
     ),
     full_rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
@@ -39,6 +41,14 @@ def test_perf_pack_untilize(
     full_rt_dim,
     full_ct_dim,
 ):
+    if (
+        formats.input_format == DataFormat.Fp8_e4m3
+        or formats.output_format == DataFormat.Fp8_e4m3
+    ) and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "Pack Untilize does not support Fp8_e4m3 format on non-BLACKHOLE architectures"
+        )
+
     if formats.output_format == DataFormat.Bfp8_b:
         pytest.skip("Pack Untilize does not support Bfp8_b output")
 
@@ -75,7 +85,7 @@ def test_perf_pack_untilize(
             PerfRunType.L1_CONGESTION,
         ],
         templates=[generate_input_dim(dimensions, dimensions, block_ct_dim)],
-        runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR()],
+        runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR(32)],
         variant_stimuli=StimuliConfig(
             None,
             formats.input_format,

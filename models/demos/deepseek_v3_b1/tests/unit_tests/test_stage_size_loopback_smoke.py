@@ -92,22 +92,12 @@ def get_generic_stage_size_loopback_topology_config() -> PhysicalTopologyConfig:
 
 
 # These tests are a multi-rank pipeline (one MPI rank per stage) launched via tt-run on galaxy
-# stage-size hardware. Any plain-pytest CI box is a single process -- a p150 (shape (1,1)) or a BH
-# loudbox that presents as (4,2)/(2,4) -- and is NOT that deployment. Gate on rank count first so we
-# skip every single-box run regardless of shape (a (4,2) loudbox would otherwise pass the shape
-# check below and run). The build is also at import time because the parametrize decorators read its
-# attributes during collection; skip the whole module rather than let it become a collection ERROR.
-try:
-    _num_procs = int(ttnn.distributed_context_get_size())
-except RuntimeError:
-    # distributed_context_get_size() raises RuntimeError when no distributed context is
-    # initialized (plain pytest, not launched via tt-run). That alone means this isn't the
-    # multi-rank galaxy deployment, so treat it as a single process and skip below.
-    _num_procs = 1
-if _num_procs <= 1:
+# stage-size hardware. During collection, the distributed context may not be initialized yet, so
+# collection-time gating must use the launcher environment rather than context size.
+if not ttnn.using_distributed_env():
     pytest.skip(
-        "stage-size loopback smoke requires a multi-rank (tt-run) pipeline launch on galaxy "
-        "stage-size HW; single-process / no distributed context detected",
+        "stage-size loopback smoke requires a tt-run distributed launch on galaxy stage-size HW; "
+        "plain pytest / single-box execution detected",
         allow_module_level=True,
     )
 try:
@@ -118,6 +108,22 @@ except ValueError as exc:
         allow_module_level=True,
     )
 PIPELINE_ENDPOINT_CORE_COORD = ttnn.CoreCoord(0, 0)
+
+
+def _require_multi_rank_distributed_context() -> int:
+    """Return the distributed rank count once the runtime context is available."""
+
+    if not ttnn.distributed_context_is_initialized():
+        pytest.skip(
+            "stage-size loopback smoke requires an initialized distributed context; "
+            "launch under tt-run so rank setup completes before test execution"
+        )
+
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs <= 1:
+        pytest.skip(f"stage-size loopback smoke requires at least 2 distributed ranks, got {num_procs}")
+
+    return num_procs
 
 
 def _core_for_mesh_view_endpoint(endpoint, pipeline_core_coord):
@@ -400,6 +406,9 @@ def _terminate_components(mesh_device, host_io, forwarders):
     ttnn.synchronize_device(mesh_device)
 
 
+@pytest.mark.skip(
+    reason="This test requires first and last stage to be physically connected, enable only when applicable"
+)
 @pytest.mark.parametrize(
     "tensor_size_bytes,fifo_size,num_iterations",
     [
@@ -434,6 +443,7 @@ def test_generic_stage_size_loopback_smoke(
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
+    _require_multi_rank_distributed_context()
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
     allocation = ttnn._ttnn.multi_device.experimental.resolve_blitz_decode_pipeline_allocation(
@@ -483,15 +493,13 @@ def test_generic_stage_size_loopback_smoke(
 
 
 def _build_first_stage_input():
-    """Build the stage-0 H2D token tensor and the expected embedding row (rank 0 only).
+    """Build the stage-0 H2D metadata page and the expected embedding row (rank 0 only)."""
 
-    Writes a token id at uint32 word 7 of the DeepseekMetadata struct; expected == the embedding
-    row for that id.
-    """
     token_id = 17
     token_size_datums = DeepseekMetadata.aligned_size_bytes() // dtype_size(torch.uint32)
     torch_input = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-    torch_input[0, 7] = token_id
+    metadata_words = DeepseekMetadata(token_id=token_id).to_list()
+    torch_input[0, : len(metadata_words)] = torch.tensor(metadata_words, dtype=torch.uint32)
     input_tensor = ttnn.from_torch(
         torch_input, dtype=ttnn_dtype_from_torch_dtype(torch.uint32), layout=ttnn.ROW_MAJOR_LAYOUT
     )
@@ -525,8 +533,7 @@ def _make_readback_tensor():
         pytest.param(
             "fabric",
             marks=pytest.mark.skip(
-                reason="fabric loopback (D2H on stage 0, with the embedding) hits a D2H pinned-buffer "
-                "address anomaly"
+                reason="fabric loopback requires first and last stage to be physically connected, enable only when applicable"
             ),
         ),
     ],
@@ -553,6 +560,7 @@ def test_pipeline_level_passthrough_transport_loopback(topology_config, mesh_dev
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
+    _require_multi_rank_distributed_context()
     use_fabric_loopback = loopback_mode == "fabric"
     host_loopback = loopback_mode == "host"
 

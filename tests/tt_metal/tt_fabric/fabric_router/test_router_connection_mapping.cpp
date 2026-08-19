@@ -3,6 +3,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <vector>
+
 #include "tt_metal/fabric/builder/router_connection_mapping.hpp"
 
 using namespace tt::tt_fabric;
@@ -515,4 +518,110 @@ TEST_F(RouterConnectionMappingTest, ZRouter_VC0_NoOutgoingTargets) {
         EXPECT_TRUE(targets.empty()) << "Z router VC0 sender " << ch << " should have no targets";
         EXPECT_FALSE(mapping.has_targets(0, ch));
     }
+}
+
+// ============================================================================
+// EXPERIMENTAL: Inter-mesh Pass-Through (VC1 MESH_TO_Z) Tests
+// ============================================================================
+//
+// Pass-through (A->B->C) lets inter-mesh (VC1) traffic traverse intermediate
+// meshes instead of sinking at the first mesh boundary. For Z-stacked meshes
+// this requires the mesh router to forward VC1 traffic to the local Z router
+// (MESH_TO_Z on VC1), wiring the 4th VC1 sender channel that the channel mapping
+// already reserves on Z devices. These tests exercise the
+// `enable_mesh_pass_through` parameter of for_mesh_router directly (no env var),
+// keeping them deterministic and independent of global runtime state.
+
+namespace {
+uint32_t count_type(const std::vector<ConnectionTarget>& targets, ConnectionType type) {
+    return static_cast<uint32_t>(
+        std::count_if(targets.begin(), targets.end(), [type](const ConnectionTarget& t) { return t.type == type; }));
+}
+}  // namespace
+
+TEST_F(RouterConnectionMappingTest, PassThrough_2D_WithZ_AddsMeshToZOnVC1) {
+    // 2D mesh on a Z-stacked device, VC1 enabled, pass-through enabled.
+    // Each mesh router's VC1 receiver should forward to the local Z router
+    // (MESH_TO_Z on VC1) in addition to the 3 INTRA_MESH VC1 forwards.
+    for (auto dir : {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+        auto mapping = RouterConnectionMapping::for_mesh_router(
+            Topology::Mesh, dir, /*has_z=*/true, /*enable_vc1=*/true, /*enable_mesh_pass_through=*/true);
+
+        // VC1 receiver channel 0: 3 INTRA_MESH + 1 MESH_TO_Z
+        auto vc1_targets = mapping.get_downstream_targets(1, 0);
+        ASSERT_EQ(vc1_targets.size(), 4u) << "direction " << static_cast<int>(dir);
+        EXPECT_EQ(count_type(vc1_targets, ConnectionType::INTRA_MESH), 3u);
+        EXPECT_EQ(count_type(vc1_targets, ConnectionType::MESH_TO_Z), 1u);
+
+        // The VC1 MESH_TO_Z target must target the Z router on VC1.
+        auto mesh_to_z_it = std::find_if(vc1_targets.begin(), vc1_targets.end(), [](const ConnectionTarget& t) {
+            return t.type == ConnectionType::MESH_TO_Z;
+        });
+        ASSERT_NE(mesh_to_z_it, vc1_targets.end());
+        verify_target(*mesh_to_z_it, ConnectionType::MESH_TO_Z, /*expected_vc=*/1, RoutingDirection::Z);
+
+        // VC0 path is unchanged: 3 INTRA_MESH + 1 MESH_TO_Z (on VC0).
+        auto vc0_targets = mapping.get_downstream_targets(0, 0);
+        ASSERT_EQ(vc0_targets.size(), 4u);
+        EXPECT_EQ(count_type(vc0_targets, ConnectionType::MESH_TO_Z), 1u);
+        auto vc0_mesh_to_z = std::find_if(vc0_targets.begin(), vc0_targets.end(), [](const ConnectionTarget& t) {
+            return t.type == ConnectionType::MESH_TO_Z;
+        });
+        ASSERT_NE(vc0_mesh_to_z, vc0_targets.end());
+        EXPECT_EQ(vc0_mesh_to_z->target_vc, 0u);
+    }
+}
+
+TEST_F(RouterConnectionMappingTest, PassThrough_Disabled_NoMeshToZOnVC1) {
+    // Default (full_mesh) behavior: VC1 is enabled but pass-through is OFF.
+    // VC1 must NOT forward to the Z router (feeding the Z router's VC1 sender
+    // while it does not service VC1 would create an undrained channel).
+    auto mapping = RouterConnectionMapping::for_mesh_router(
+        Topology::Mesh, RoutingDirection::E, /*has_z=*/true, /*enable_vc1=*/true, /*enable_mesh_pass_through=*/false);
+
+    auto vc1_targets = mapping.get_downstream_targets(1, 0);
+    ASSERT_EQ(vc1_targets.size(), 3u);
+    EXPECT_EQ(count_type(vc1_targets, ConnectionType::INTRA_MESH), 3u);
+    EXPECT_EQ(count_type(vc1_targets, ConnectionType::MESH_TO_Z), 0u);
+
+    // VC0 still has its MESH_TO_Z connection regardless of pass-through.
+    EXPECT_EQ(count_type(mapping.get_downstream_targets(0, 0), ConnectionType::MESH_TO_Z), 1u);
+}
+
+TEST_F(RouterConnectionMappingTest, PassThrough_NoZDevice_NoMeshToZOnVC1) {
+    // Pass-through requested but device has no Z router: there is no Z router to
+    // forward to, so no MESH_TO_Z is created on either VC.
+    auto mapping = RouterConnectionMapping::for_mesh_router(
+        Topology::Mesh, RoutingDirection::E, /*has_z=*/false, /*enable_vc1=*/true, /*enable_mesh_pass_through=*/true);
+
+    auto vc1_targets = mapping.get_downstream_targets(1, 0);
+    ASSERT_EQ(vc1_targets.size(), 3u);
+    EXPECT_EQ(count_type(vc1_targets, ConnectionType::MESH_TO_Z), 0u);
+
+    auto vc0_targets = mapping.get_downstream_targets(0, 0);
+    EXPECT_EQ(count_type(vc0_targets, ConnectionType::MESH_TO_Z), 0u);
+}
+
+TEST_F(RouterConnectionMappingTest, PassThrough_Torus_WithZ_AddsMeshToZOnVC1) {
+    // Torus is also a 2D topology and must support pass-through identically to Mesh.
+    auto mapping = RouterConnectionMapping::for_mesh_router(
+        Topology::Torus, RoutingDirection::N, /*has_z=*/true, /*enable_vc1=*/true, /*enable_mesh_pass_through=*/true);
+
+    auto vc1_targets = mapping.get_downstream_targets(1, 0);
+    ASSERT_EQ(vc1_targets.size(), 4u);
+    EXPECT_EQ(count_type(vc1_targets, ConnectionType::MESH_TO_Z), 1u);
+}
+
+TEST_F(RouterConnectionMappingTest, PassThrough_1D_WithZ_NoVC1MeshToZ) {
+    // 1D topologies do not have VC1; pass-through must be a no-op for VC1 while
+    // leaving the VC0 MESH_TO_Z connection intact.
+    auto mapping = RouterConnectionMapping::for_mesh_router(
+        Topology::Linear, RoutingDirection::E, /*has_z=*/true, /*enable_vc1=*/true, /*enable_mesh_pass_through=*/true);
+
+    EXPECT_FALSE(mapping.has_targets(1, 0));  // No VC1 for 1D
+
+    // VC0 receiver 0 still has INTRA_MESH (opposite) + MESH_TO_Z.
+    auto vc0_targets = mapping.get_downstream_targets(0, 0);
+    ASSERT_EQ(vc0_targets.size(), 2u);
+    EXPECT_EQ(count_type(vc0_targets, ConnectionType::MESH_TO_Z), 1u);
 }
