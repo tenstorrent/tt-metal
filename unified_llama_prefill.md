@@ -164,16 +164,55 @@ has written the pairing once by hand.
 
 ## Phase 4 -- Data-format reconfig between SFPU tree leaves
 
-Latent, not blocking phase 7. `TileSource::emit` issues a bare `copy_tile` with no
-`reconfig_data_format`. Two-CB `a + b` is correct today only because every operand
-in every current test is bf16. The moment a mask or scaler arrives in a different
-format it is silently wrong.
+**DONE.** It was a real, silent bug, not a latent one: an SFPU tree whose leaves live in
+circular buffers of different data formats returned garbage, with no hang and no assert.
 
-- [ ] Decide: reconfig per leaf, or a static assert that all leaves share a format
-- [ ] Implement whichever, with a test that would fail under the other
+- [x] Decided: reconfig per leaf, not a static assert. A static check needs the format in
+      the type system, which the model does not carry -- and reconfiguring makes mixed
+      formats WORK rather than merely refusing them.
+- [x] `TileSource::emit` takes a `reconfigure` flag; when set it calls the ONE-argument
+      `reconfig_data_format_srca(cb_id)` plus `copy_tile_to_dst_init_short(cb_id)`
+- [x] `expr.hpp` gained `leaf_count_v<Node>` -- structural, beside `Need` -- and threads
+      `reconfigure` down the walk without knowing what it means
+- [x] `test_unified_mixed_format.py`: in0 bfloat16, in1 float32, one expression over both
 
-**Done when:** a deliberately mixed-format tree either works or fails to compile --
-never silently produces garbage.
+### Why the one-argument form
+
+`copy_tile` carries no format, and `copy_tile_to_dst_init_short` explicitly "does not
+reconfigure the unpacker data types" -- so ttnn's `where` kernel, which uses it across
+three buffers, is relying on the same single-format constraint this model had. The
+conditional `_with_dt(old, new)` form is cheaper but needs the PREVIOUS operand, which
+would mean tracking hardware state across the tree walk. ttnn's binary_ng does thread it,
+which it can afford because it batches all of one operand's tiles together; this per-tile
+loop cannot. The one-argument form is unconditional and needs no history, so a leaf stays
+self-sufficient.
+
+### What it costs, and what it does not
+
+Gated on leaf count, so the common cases pay nothing:
+
+| tree | reconfigs |
+|---|---|
+| one leaf (`exp_(a)`, `relu(a)`) | one, before the first tile |
+| two or more leaves | one per leaf per tile |
+
+Verified in the trace: `exp(in)` over two tiles reconfigures on tile 0 only.
+
+### The sabotage that gives the test meaning
+
+Forcing `reconfigure` to false -- the pre-phase-4 behaviour -- gives:
+
+    mixed-format (in1 float32)    max rel err = inf     FAIL
+    binary, add_exp, unary        all bfloat16          PASS
+
+So the bug was invisible to every test in the suite, which is why a dedicated
+mixed-format test had to exist rather than a note in a comment.
+
+### Still assumed
+
+Uniform TILE GEOMETRY -- one 32x32 tile per circular-buffer page. The model already
+assumes this everywhere (see `Storage::store`), and a buffer with different face geometry
+would need `is_tile_dim_reconfig_en` as well.
 
 ## Phase 5 -- Static block shapes (makes both geometries moot)
 

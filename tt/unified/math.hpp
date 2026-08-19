@@ -77,12 +77,29 @@ struct TileSource : expr::Fluent<TileSource<S>> {
 
     uint32_t cb_id;
 
-    void emit(uint32_t dst, uint32_t tile) const {
+    // `reconfigure` re-points the unpacker's srcA data format at THIS leaf's buffer.
+    // Without it a tree whose leaves live in circular buffers of different formats is
+    // silently wrong: copy_tile does not carry a format, and
+    // copy_tile_to_dst_init_short explicitly "does not reconfigure the unpacker data
+    // types". The one-argument form is used because it needs no previous operand, so a
+    // leaf stays self-sufficient and nothing has to track hardware state across the
+    // walk. ttnn's binary_ng threads the previous operand instead, which lets it use
+    // the cheaper conditional form -- possible there because it batches all of one
+    // operand's tiles together, which this per-tile loop does not.
+    //
+    // Uniform TILE GEOMETRY is a separate assumption, and one the model already makes:
+    // every circular buffer here holds exactly one 32x32 tile per page.
+    void emit(uint32_t dst, uint32_t tile, bool reconfigure) const {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        if (reconfigure) {
+            ckernel::reconfig_data_format_srca(cb_id);
+            ckernel::copy_tile_to_dst_init_short(cb_id);
+        }
         ckernel::copy_tile(cb_id, tile, dst);
 #else
         (void)dst;
         (void)tile;
+        (void)reconfigure;
 #endif
     }
 };
@@ -747,11 +764,17 @@ struct Strategy<SFPUFusion> {
             expr::need_v<Node> <= kMaxDstTiles,
             "SFPU expression needs more DST slots than the hardware has; "
             "split it across an intermediate Storage");
+        // Who pays for a format reconfig. With ONE leaf the unpacker stays pointed at
+        // that buffer for the whole loop, so pointing it there once is enough and the
+        // common unary and single-operand cases cost nothing. With more than one leaf
+        // the leaves alternate, so every one has to re-point -- that is the price of a
+        // mixed-format tree being correct rather than quietly wrong.
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        constexpr bool kEveryTile = expr::leaf_count_v<Node> > 1;
         cb_reserve_back(cb_id, num_tiles);
         for (uint32_t i = 0; i < num_tiles; ++i) {
             ckernel::tile_regs_acquire();
-            expr::emit(node, i);
+            expr::emit(node, i, kEveryTile || i == 0);
             ckernel::tile_regs_commit();
             ckernel::tile_regs_wait();
             ckernel::pack_tile(expr::result_slot_v<Node>, cb_id);
