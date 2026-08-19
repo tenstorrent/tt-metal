@@ -5873,3 +5873,19 @@ instruction count, which §N+55 showed does not move wall time, and 512-bit ops 
 load-port pressure is unchanged. Not built; the dispatch + code duplication is complexity with no predicted
 return. The remaining single-thread levers are wire-side (producer-packed records / higher span fill), not
 host-side.
+
+## §N+57 — AVX-512 emit measured: neutral-to-worse, as N+56 predicted; not kept (bh-18, 2026-08-19)
+
+Built for real (Zen 4 has avx512f/bw/dq/vl): a target-attributed emit path taking 16 markers (32
+screen-verified words) per call, with `vpermt2d` collapsing the whole shuffle network -- one pair of
+permutes deinterleaves the block, one pairs (w1, meta), and one per 4 records expands the pairs against
+the splatted (th, prog) constants into finished 64 B record lines, stored with 64 B NT streams when
+position-aligned. CPUID-dispatched (base build is v3); correctness gate exact (10,020 zones, 0 order
+regressions, 0 stranded).
+
+Measured on the judged run, two repeats: decode 106.9/96.9 and 93.9/93.8 ms (10.32 / 11.76 GB/s busy)
+against the AVX2-only 88-99 ms band (12.1 GB/s) -- inside noise, leaning worse (the extra call boundary
+per block is not free and the saved uops were not the constraint). Confirms N+55/N+56: the single-thread
+ceiling is DMA-cold line latency at fill-buffer concurrency, and no instruction-count reduction moves it.
+The code is NOT kept (measured-neutral complexity); this entry preserves the construction should a
+latency-relieved future (warm staging via a copier thread, or a denser wire) make ALU width matter again.
