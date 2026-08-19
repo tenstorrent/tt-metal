@@ -145,6 +145,38 @@ def _acc_dtype(compute_kernel_config, interm_dtype, narrow: bool):
     return interm_dtype
 
 
+def _reduce_via_add(regime, compute_kernel_config, interm_dtype, W_partial: int, lever_on: bool) -> int:
+    """Pick Regime B's reduce datapath: 1 = AccumulateViaAdd, 0 = ReduceTile.
+
+    Regime A never accumulates across reduce() calls - its reduce is the single
+    within-tile finalize of sum_of_squares' DEST accumulator - so the knob only
+    has meaning in Regime B.
+
+    AccumulateViaAdd is selected only where it is BOTH needed and correct.
+
+    NEEDED - the DEST datum is 16 bit.  There, ReduceTile's long per-tile DEST
+    accumulation carries a systematic sum-of-squares OVERESTIMATE that grows with
+    the reduced width (measured +0.84% at Wt=32 -> +10.4% at Wt=224).  With an
+    fp32 DEST accumulator the same datapath is flat in W (~0.7% rms), so there is
+    nothing to buy and the Phase-0 datapath stays.
+
+    CORRECT - AccumulateViaAdd's PARTIAL (non-tile-aligned) path folds the 0/1
+    mask tile straight out of the scaler CB with NO data-format reconfig, so a
+    masked reduce is only correct when the scaler CB - mandatorily bfloat16 -
+    already matches the reduce input CB's format.  A float32 `cb_squared` makes
+    the datapath unpack that bfloat16 mask as float32: measured rms 0.59 at W=17
+    / 0.11 at W=50 versus 0.0011 on the ReduceTile datapath.  bfloat16 and
+    bfloat8_b activations are unaffected because `_interm_dtype` already puts
+    `cb_squared` at bfloat16 for both.  A tile-aligned reduce uses no mask at all,
+    so the constraint does not apply there.
+    """
+    if regime != "B" or not lever_on:
+        return 0
+    needed = not bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
+    correct = (W_partial == 0) or (interm_dtype == ttnn.bfloat16)
+    return 1 if (needed and correct) else 0
+
+
 def _elem_size(dtype) -> int:
     """Bytes per datum, or 0 for a block format (which has no per-datum size).
 
@@ -526,10 +558,9 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         OUT_BUF_DEPTH=out_depth,
         RM_BUF_DEPTH=rm_depth,
         regime=regime,
-        # Regime A never accumulates across reduce() calls (its reduce is the
-        # single within-tile finalize of sum_of_squares' accumulator), so the
-        # datapath knob only has meaning in Regime B.
-        reduce_via_add=(1 if (regime == "B" and _lever(levers, "reduce_via_add")) else 0),
+        reduce_via_add=_reduce_via_add(
+            regime, compute_kernel_config, interm_dtype, W_partial, bool(_lever(levers, "reduce_via_add"))
+        ),
         num_row_blocks=_div_up(Rt, block_ht),
         l1_cb_budget=l1_cb_budget,
         cb_layout=tuple(
