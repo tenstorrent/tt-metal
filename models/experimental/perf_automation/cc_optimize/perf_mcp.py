@@ -2332,6 +2332,32 @@ def _read_stage_doc(state_dir_path=None, model="", task="") -> dict:
         return {}
 
 
+def _parse_gathered_weights(out: str) -> dict:
+    """{subtree: resident bytes read PER ITEM} from the pipeline's marker, or {} when it printed none.
+
+    Resident is not the same as streamed. The ceiling assumes one unit of work reads every weight in
+    its subtree once, which is true of a matmul weight and false of a lookup table -- voxtral's
+    embed_tokens is 805 MB and a decode step reads one 6 KB row of it. Nothing in the checkpoint
+    separates the two: embed_tokens and lm_head are both [131072, 3072], same size, same section.
+    The pipeline holds them and says which is which.
+    """
+    out_map: dict = {}
+    try:
+        for line in (out or "").splitlines():
+            if "TRACE_GATHERED_WEIGHTS=" not in line:
+                continue
+            for pair in line.split("TRACE_GATHERED_WEIGHTS=", 1)[1].split()[0].split(","):
+                k, _, v = pair.partition(":")
+                try:
+                    if k.strip() and int(v) > 0:
+                        out_map[k.strip()] = int(v)
+                except (TypeError, ValueError):
+                    continue
+    except Exception:  # noqa: BLE001 -- a malformed marker leaves the old behaviour
+        return {}
+    return out_map
+
+
 def _parse_census_sections(out: str) -> dict:
     """{attribute name: resident bytes} from the census marker, or {} when it did not print one.
 
@@ -2352,7 +2378,11 @@ def _parse_census_sections(out: str) -> dict:
 
 
 def _persist_device_weight_bytes(
-    nbytes: int, complete: bool, bytes_per_param: float = 0.0, sections: dict | None = None
+    nbytes: int,
+    complete: bool,
+    bytes_per_param: float = 0.0,
+    sections: dict | None = None,
+    gathered: dict | None = None,
 ) -> None:
     """Merge the census result into the model's own facts file. Best-effort; never raises.
 
@@ -2415,6 +2445,11 @@ def _persist_device_weight_bytes(
         # same run against two different ceilings.
         if sections:
             doc["device_section_bytes"] = {str(k): int(v) for k, v in sections.items() if int(v) > 0}
+        # Pinned with the total for the same reason the split is: a lever that replaces a lookup
+        # table changes this, and a value that moves between iterations scores one run against two
+        # ceilings.
+        if gathered:
+            doc["gathered_weight_bytes"] = {str(k): int(v) for k, v in gathered.items() if int(v) > 0}
         if bytes_per_param and bytes_per_param > 0:
             doc["bytes_per_param"] = float(bytes_per_param)
         tmp = p.with_suffix(p.suffix + ".tmp")
@@ -2717,6 +2752,7 @@ def _run_full_pipeline_ms():
         # take the pin, and the split arriving one line later would be refused by the very guard that
         # stops the ceiling drifting mid-run. They are one measurement, so they are written together.
         _census_sections = _parse_census_sections(out)
+        _gathered_weights = _parse_gathered_weights(out)
         for line in out.splitlines():
             # PHASE TIMINGS, MEASURED. trace_replay prints one of these per stage it traced, derived
             # from the PIPELINE_STAGES the model itself declares -- so "prefill"/"decode" here are
@@ -2788,7 +2824,7 @@ def _run_full_pipeline_ms():
                             flush=True,
                         )
                     elif _wb > 0:
-                        _persist_device_weight_bytes(_wb, _ok, _bpp, _census_sections)
+                        _persist_device_weight_bytes(_wb, _ok, _bpp, _census_sections, _gathered_weights)
                 except Exception:  # noqa: BLE001
                     pass
             if "TRACE_STAGE_OPS[" in line:

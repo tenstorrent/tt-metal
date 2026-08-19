@@ -1174,6 +1174,10 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
 
     _share_bases: dict = {}
 
+    def _root_of(stage) -> str:
+        """The subtree this stage runs, as stage_roots resolved it. "" when unmapped."""
+        return str(((mf or {}).get("stage_roots") or {}).get(str(stage)) or "").strip()
+
     def _stage_share(stage) -> float:
         _v, _b = _share_and_basis(mf, stage)
         _share_bases[str(stage)] = _b
@@ -1216,6 +1220,23 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         if _share <= 0.0:
             return 0
         base = per_dev_bytes * _share
+        # GATHERED WEIGHTS ARE RESIDENT, NOT STREAMED. The rule above -- one unit of work reads the
+        # whole weight set once -- holds for every weight a matmul consumes and fails for a lookup
+        # table. Voxtral's embed_tokens is [131072, 3072]: a decode step reads the ROW for its token,
+        # about 6 KB, and is charged all 805 MB of it. That is 25% of decode's modelled read set,
+        # which is why decode alone printed above 100% of peak; prefill carries the same error at 5%
+        # of a much larger number and encode not at all, since audio_tower has no lookup.
+        #
+        # THE TOOL CANNOT TELL. embed_tokens and lm_head are the same shape, the same size and the
+        # same checkpoint section -- one is gathered, one is streamed by the vocab matmul, and
+        # nothing in the file separates them. The profiler could (EmbeddingsDeviceOperation against
+        # MatmulDeviceOperation) but its buckets carry no byte counts. The pipeline holds both
+        # tensors and knows, so it says, exactly as it states its per-stage item counts.
+        #
+        # Subtracted in full. What is actually read is items x row, which is 6 KB for a decode step
+        # and 25 MB across a 4096-token prefill -- under half a percent of either read set, against
+        # the 25% error it replaces.
+        base = max(0.0, base - float(((mf or {}).get("gathered_weight_bytes") or {}).get(_root_of(stage), 0.0)))
         if not mf:
             return base
         # NO NAME TEST. perf_target owns which regimes it can price and raises for the rest, so ASK

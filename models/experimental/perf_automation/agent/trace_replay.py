@@ -249,6 +249,24 @@ def measure_adapter(adapter, device) -> float:
                 # The split, measured in the same walk. Printed beside the total rather than derived
                 # later from the checkpoint, which is the only other place a split was available and
                 # states disk precision, not served precision.
+                # WHICH RESIDENT WEIGHTS ARE GATHERED, from the only thing that knows. The census
+                # sums every weight and the ceiling assumes each is streamed once per unit -- true
+                # of a matmul weight, false of a lookup table, and nothing in the checkpoint tells
+                # them apart (voxtral's embed_tokens and lm_head are both [131072, 3072]). Optional:
+                # a pipeline that returns nothing changes no number.
+                try:
+                    _gw = getattr(getattr(adapter, "_pipe", None) or adapter, "gathered_weight_bytes", None)
+                    _g = _gw() if callable(_gw) else None
+                    if isinstance(_g, dict) and _g:
+                        _pairs = ",".join(
+                            "%s:%d" % (k, int(v))
+                            for k, v in _g.items()
+                            if str(k).strip() and "," not in str(k) and ":" not in str(k) and int(v) > 0
+                        )
+                        if _pairs:
+                            print("TRACE_GATHERED_WEIGHTS=%s" % _pairs, flush=True)
+                except Exception:  # noqa: BLE001 -- an unstated split is the old behaviour
+                    pass
                 _sm = _smarker(_c)
                 if _sm:
                     print(_sm, flush=True)
