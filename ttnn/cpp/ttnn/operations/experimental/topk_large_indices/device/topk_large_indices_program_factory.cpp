@@ -70,6 +70,69 @@ tt::tt_metal::TensorAccessorArgs interleaved_accessor_args(const Tensor& tensor)
                                       : tt::tt_metal::TensorAccessorArgs::create_l1_interleaved();
 }
 
+// Double-buffered input chunk-staging CB, identical in both factories.
+void create_input_cb(
+    tt::tt_metal::Program& program,
+    const CoreRangeSet& cores,
+    uint32_t cb_depth,
+    uint32_t tiles_per_sequence,
+    uint32_t input_tile_bytes,
+    uint32_t cb_in) {
+    const auto input_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            cb_depth * tiles_per_sequence * input_tile_bytes, {{cb_in, tt::DataFormat::Float16_b}})
+            .set_page_size(cb_in, input_tile_bytes);
+    tt::tt_metal::CreateCircularBuffer(program, cores, input_cb_config);
+}
+
+// Output-side CBs (materialized index row + face-reorder scratch), identical
+// in both factories; the tree factory creates them on the root cores only.
+// The indices CB carries the raw 32-bit index words the packer produces.
+void create_indices_output_cbs(
+    tt::tt_metal::Program& program,
+    const CoreRangeSet& cores,
+    LlkTargetK llk_target_k,
+    uint32_t cb_depth,
+    uint32_t indices_cb_row_bytes,
+    uint32_t indices_row_bytes,
+    uint32_t cb_indices,
+    uint32_t cb_indices_scratch) {
+    auto indices_cb_config =
+        tt::tt_metal::CircularBufferConfig(cb_depth * indices_cb_row_bytes, {{cb_indices, tt::DataFormat::Float32}})
+            .set_page_size(cb_indices, indices_cb_row_bytes);
+    if (llk_target_k == LlkTargetK::K512) {
+        indices_cb_config.set_unpack_face_geometry(cb_indices, tt::constants::FACE_HEIGHT, 2);
+    }
+    tt::tt_metal::CreateCircularBuffer(program, cores, indices_cb_config);
+
+    if (llk_target_k != LlkTargetK::K512) {
+        const auto indices_scratch_cb_config =
+            tt::tt_metal::CircularBufferConfig(indices_row_bytes, {{cb_indices_scratch, tt::DataFormat::Float32}})
+                .set_page_size(cb_indices_scratch, indices_row_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, cores, indices_scratch_cb_config);
+    }
+}
+
+// Chunked row reader (kernels/reader.cpp), shared source for both factories;
+// the tree factory passes TOPK_TREE to enable the per-core slice offset.
+tt::tt_metal::KernelHandle create_reader_kernel(
+    tt::tt_metal::Program& program,
+    const CoreRangeSet& cores,
+    const Tensor& input,
+    uint32_t cb_in,
+    uint32_t input_chunk_bytes,
+    uint32_t input_tile_bytes,
+    uint32_t tiles_per_sequence,
+    std::map<std::string, std::string> defines) {
+    std::vector<uint32_t> reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
+    interleaved_accessor_args(input).append_to(reader_compile_args);
+    return tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader.cpp",
+        cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args, std::move(defines)));
+}
+
 uint32_t rows_for_core(
     const CoreCoord& core,
     const CoreRangeSet& core_group_1,
@@ -176,35 +239,19 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t indices_cb_row_bytes = llk_k * static_cast<uint32_t>(sizeof(uint32_t));
 
     const uint32_t cb_depth = 2;
-    const auto input_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            cb_depth * tiles_per_sequence * input_tile_bytes, {{cb_in, tt::DataFormat::Float16_b}})
-            .set_page_size(cb_in, input_tile_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_config);
-
-    auto indices_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_depth * indices_cb_row_bytes, {{cb_indices, tt::DataFormat::Float32}})
-            .set_page_size(cb_indices, indices_cb_row_bytes);
-    if (llk_target_k == LlkTargetK::K512) {
-        indices_cb_config.set_unpack_face_geometry(cb_indices, tt::constants::FACE_HEIGHT, 2);
-    }
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, indices_cb_config);
-
-    if (llk_target_k != LlkTargetK::K512) {
-        const auto indices_scratch_cb_config =
-            tt::tt_metal::CircularBufferConfig(indices_row_bytes, {{cb_indices_scratch, tt::DataFormat::Float32}})
-                .set_page_size(cb_indices_scratch, indices_row_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, indices_scratch_cb_config);
-    }
-
-    std::vector<uint32_t> reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
-    interleaved_accessor_args(input).append_to(reader_compile_args);
-
-    auto reader_kernel = tt::tt_metal::CreateKernel(
+    create_input_cb(program, all_cores, cb_depth, tiles_per_sequence, input_tile_bytes, cb_in);
+    create_indices_output_cbs(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
+        llk_target_k,
+        cb_depth,
+        indices_cb_row_bytes,
+        indices_row_bytes,
+        cb_indices,
+        cb_indices_scratch);
+
+    auto reader_kernel = create_reader_kernel(
+        program, all_cores, input, cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence, /*defines=*/{});
 
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k};
     // User-requested k (<= llk_k): the data-dependent chunk-skip early-out in
@@ -633,7 +680,7 @@ void set_runtime_args_multi_core(
                 }
             }
             uint32_t num_merges = 0;
-            // 7 (x, y) pairs — must match the writer kernels' partner_x/y[7] and
+            // 7 (x, y) pairs — must match the tree writer's partner_x/y[7] and
             // the positional offsets of the args that follow (do_ship at 16).
             std::vector<uint32_t> partner_coords(14, 0);
             for (uint32_t level = 0; level < winning_levels; ++level) {
@@ -676,7 +723,7 @@ void set_runtime_args_multi_core(
             writer_args.push_back(winner_y);
             writer_args.push_back(is_empty_ship);
             writer_args.push_back(indices.buffer()->address());
-            // writer_tree.cpp reads start_row at arg 21, directly after the indices address.
+            // The tree writer reads start_row at arg 21, directly after the indices address.
             writer_args.push_back(start_row);
             tt::tt_metal::SetRuntimeArgs(program, shared.writer_kernel_id, core, writer_args);
         }
@@ -785,11 +832,7 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
             .set_page_size(cb_recv, tile32_bytes);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, recv_cb_config);
 
-    const auto input_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            cb_depth * tiles_per_sequence * input_tile_bytes, {{cb_in, tt::DataFormat::Float16_b}})
-            .set_page_size(cb_in, input_tile_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_config);
+    create_input_cb(program, all_cores, cb_depth, tiles_per_sequence, input_tile_bytes, cb_in);
 
     const auto ship_values_cb_config =
         tt::tt_metal::CircularBufferConfig(
@@ -810,54 +853,54 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
     tt::tt_metal::CreateCircularBuffer(program, all_cores, neginf_scratch_cb_config);
 
     // Root-only output CBs: identical shape to the row-parallel factory's.
-    auto indices_cb_config =
-        tt::tt_metal::CircularBufferConfig(cb_depth * indices_cb_row_bytes, {{cb_indices_out, tt::DataFormat::Float32}})
-            .set_page_size(cb_indices_out, indices_cb_row_bytes);
-    if (llk_target_k == LlkTargetK::K512) {
-        indices_cb_config.set_unpack_face_geometry(cb_indices_out, tt::constants::FACE_HEIGHT, 2);
-    }
-    tt::tt_metal::CreateCircularBuffer(program, root_core_set, indices_cb_config);
+    create_indices_output_cbs(
+        program,
+        root_core_set,
+        llk_target_k,
+        cb_depth,
+        indices_cb_row_bytes,
+        indices_row_bytes,
+        cb_indices_out,
+        cb_indices_scratch);
 
-    if (llk_target_k != LlkTargetK::K512) {
-        const auto indices_scratch_cb_config =
-            tt::tt_metal::CircularBufferConfig(indices_row_bytes, {{cb_indices_scratch, tt::DataFormat::Float32}})
-                .set_page_size(cb_indices_scratch, indices_row_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, root_core_set, indices_scratch_cb_config);
-    }
-
-    // Pairwise tree flow control (see writer_tree.cpp): ready = "my winner's
-    // recv slot is free", data = "my current partner's sequence landed".
+    // Pairwise tree flow control (see the TOPK_TREE writer role in kernels/writer.cpp):
+    // ready = "my winner's recv slot is free", data = "my current partner's sequence landed".
     const uint32_t ready_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     const uint32_t data_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
+    // Role selection for the unified kernel sources: TOPK_TREE marks a tree
+    // member (leaf slice reduction + in-DST pairwise merges); TOPK_TREE_ROOT
+    // additionally selects the root's materializing epilogue.
+    const std::map<std::string, std::string> tree_defines = {{"TOPK_TREE", "1"}};
+    const std::map<std::string, std::string> tree_root_defines = {{"TOPK_TREE", "1"}, {"TOPK_TREE_ROOT", "1"}};
+
     // Leaf reader: the row-parallel reader plus a per-core slice offset
-    // (reader_local.cpp is reused unchanged from the gather design).
-    std::vector<uint32_t> reader_compile_args = {cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence};
-    interleaved_accessor_args(input).append_to(reader_compile_args);
-    auto reader_kernel = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader_local.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
+    // (TOPK_TREE enables the extra slice_offset_bytes runtime arg).
+    auto reader_kernel = create_reader_kernel(
+        program, all_cores, input, cb_in, input_chunk_bytes, input_tile_bytes, tiles_per_sequence, tree_defines);
 
     const std::vector<uint32_t> compute_node_compile_args = {cb_in, cb_ship_values, cb_ship_indices, cb_recv, llk_k};
     auto compute_node_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute_tree.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
         node_cores_set,
-        tt::tt_metal::ComputeConfig{// Same DST configuration as the row-parallel compute kernel: the
+        tt::tt_metal::ComputeConfig{// Same DST configuration as the row-parallel compute role: the
                                     // unfused K=2048 merge occupies DEST slots 0..7 (FP32, full sync).
                                     .fp32_dest_acc_en = true,
                                     .dst_full_sync_en = true,
-                                    .compile_args = compute_node_compile_args});
+                                    .compile_args = compute_node_compile_args,
+                                    .defines = tree_defines});
 
     const std::vector<uint32_t> compute_root_compile_args = {cb_in, cb_indices_out, cb_recv, llk_k};
     auto compute_root_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute_tree_root.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
         root_core_set,
         tt::tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = true, .dst_full_sync_en = true, .compile_args = compute_root_compile_args});
+            .fp32_dest_acc_en = true,
+            .dst_full_sync_en = true,
+            .compile_args = compute_root_compile_args,
+            .defines = tree_root_defines});
 
     std::vector<uint32_t> writer_compile_args = {
         cb_ship_values,
@@ -877,9 +920,9 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
     interleaved_accessor_args(indices).append_to(writer_compile_args);
     auto writer_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer_tree.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_args, tree_defines));
 
     TopkLargeIndicesMultiCoreSharedVariables shared{
         .reader_kernel_id = reader_kernel,

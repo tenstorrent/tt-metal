@@ -2,14 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Shared compute helpers for the COLUMN-PARALLEL merge-tree kernels
-// (compute_tree.cpp / compute_tree_root.cpp).
-//
-// NOTE: compute.cpp (the row-parallel kernel) deliberately keeps its own
-// byte-identical copies of these helpers instead of including this header —
-// its JIT source hash, cached binaries, and tight (+/-1%) perf baselines must
-// stay untouched by column-parallel work. Behavioral changes to a helper must
-// be mirrored there.
+// Shared compute helpers for every role of the unified compute kernel
+// (compute.cpp: row-parallel default, TOPK_TREE node, TOPK_TREE_ROOT root).
 
 #pragma once
 
@@ -113,21 +107,23 @@ FORCE_INLINE void mark_neginf_indices(uint32_t idst) {
         ckernel::sfpu::_topk_large_indices_mark_neginf_indices_<K>, idst, VectorMode::RC_custom)));
 }
 
-// Copies one K-element chunk from the input CB into DST at dst_base, stamps
-// the fused LSB indices, locally sorts (fused), then splits into unfused FP32
-// values + row-major UINT32 global indices and advances the chunk base.
-// Leaves the sequence at [dst_base .. dst_base + tiles) values and
-// [dst_base + tiles .. dst_base + 2*tiles) indices, sorted in `ascending`
-// direction in the TopK XL engine layout.
+// First half of chunk processing: pull the chunk from the input CB into DST.
+// Always runs -- the chunk must be resident in DST to be inspected at all.
 template <uint32_t K>
-FORCE_INLINE void process_chunk(CircularBuffer& input_cb, uint32_t dst_base, uint32_t active_elements, bool ascending) {
+FORCE_INLINE void copy_chunk(CircularBuffer& input_cb, uint32_t dst_base, uint32_t active_elements) {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     const uint32_t input_cb_id = input_cb.get_cb_id();
     input_cb.wait_front(tiles_per_sequence);
     topk_xl_copy_tile_init(input_cb_id);
     topk_xl_copy_tile<K>(input_cb_id, dst_base, 0, active_elements);
     input_cb.pop_front(tiles_per_sequence);
+}
 
+// Classic (unfused) second half: stamp the fused LSB indices, locally sort
+// (fused), then split into unfused FP32 values + row-major UINT32 global
+// indices and advance the chunk base.
+template <uint32_t K>
+FORCE_INLINE void finish_chunk_classic(uint32_t dst_base, bool ascending) {
     topk_xl_add_lsb_indices_init();
     topk_xl_add_lsb_indices<K, 0>(dst_base);
 
@@ -137,6 +133,16 @@ FORCE_INLINE void process_chunk(CircularBuffer& input_cb, uint32_t dst_base, uin
     topk_xl_separate_indices_row_major_reinit();
     topk_xl_separate_indices_row_major<K>(dst_base);
     topk_xl_separate_indices_row_major_advance_chunk_base<K>();
+}
+
+// Full classic chunk step. Leaves the sequence at
+// [dst_base .. dst_base + tiles) values and
+// [dst_base + tiles .. dst_base + 2*tiles) indices, sorted in `ascending`
+// direction in the TopK XL engine layout.
+template <uint32_t K>
+FORCE_INLINE void process_chunk(CircularBuffer& input_cb, uint32_t dst_base, uint32_t active_elements, bool ascending) {
+    copy_chunk<K>(input_cb, dst_base, active_elements);
+    finish_chunk_classic<K>(dst_base, ascending);
 }
 
 }  // namespace topk_large_indices
