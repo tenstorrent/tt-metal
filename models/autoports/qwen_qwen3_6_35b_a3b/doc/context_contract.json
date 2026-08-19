@@ -1,7 +1,7 @@
 {
   "model_id": "Qwen/Qwen3.6-35B-A3B",
   "autoport_dir": "models/autoports/qwen_qwen3_6_35b_a3b",
-  "stage": "functional_decoder",
+  "stage": "multichip_decoder",
   "hf_text_config": {
     "advertised_context_length_tokens": 262144,
     "hidden_size": 2048,
@@ -154,6 +154,33 @@
       "timeout_seconds": 5400,
       "diagnostic": "doc/functional_decoder/AUTODEBUG_linear_context.md",
       "fix_design": "doc/functional_decoder/AUTOFIX_linear_chunked_design.md"
+    },
+    "multichip_decoder": {
+      "hf_advertised_context_tokens": 262144,
+      "context_capability_reduced_from_optimized_decoder": false,
+      "context_limit_evidence": "No hard physical limit was hit; per-device KV memory is reduced by 2x versus single-chip for full attention. This stage did not rerun 262144-token probes on mesh because functional/optimized context evidence already established the logical contract and multichip cache math preserves it.",
+      "sequence_lengths_exercised": [
+        1,
+        5,
+        33,
+        65
+      ],
+      "non_aligned_lengths_exercised": [
+        5,
+        33,
+        65
+      ],
+      "batch_sizes_exercised": [
+        1,
+        2
+      ],
+      "real_weight_layers_exercised": [
+        0,
+        3
+      ],
+      "full_attention_cache_layout_validated": true,
+      "linear_attention_state_layout_validated": true,
+      "paged_decode_trace_replay_validated": true
     }
   },
   "capability_reduction": {
@@ -237,7 +264,53 @@
       "doc/functional_decoder/logs/runtime_fallback_audit.log",
       "doc/functional_decoder/logs/watcher_correctness.log",
       "doc/functional_decoder/logs/py_compile.log"
-    ]
+    ],
+    "multichip_decoder": {
+      "acceptance_bar": 0.995,
+      "against": "single-chip TTNN optimized decoder baseline",
+      "synthetic_batch1": {
+        "linear_attention_layer0_seq5": {
+          "prefill_pcc": 0.9999484087608499,
+          "traced_decode_pcc": 0.9999441730343133
+        },
+        "full_attention_layer3_seq33": {
+          "prefill_pcc": 0.9999434563393946,
+          "traced_decode_pcc": 0.9999454953390461
+        },
+        "linear_attention_layer0_seq65_non_aligned": {
+          "prefill_pcc": 0.9999464359555065,
+          "traced_decode_pcc": 0.9999427554606481
+        },
+        "full_attention_layer3_seq33_non_aligned": {
+          "prefill_pcc": 0.9999434563393946,
+          "traced_decode_pcc": 0.9999454953390461
+        }
+      },
+      "synthetic_batch2": {
+        "linear_attention_layer0_seq5": {
+          "prefill_pcc": 0.9999494999613228,
+          "decode_pcc": 0.9999499535882233
+        },
+        "full_attention_layer3_seq33": {
+          "prefill_pcc": 0.9999451873736693,
+          "decode_pcc": 0.9999451794244919
+        }
+      },
+      "real_weights_batch1": {
+        "linear_attention_layer0_seq1": {
+          "prefill_pcc": 0.999973132328256,
+          "traced_decode_pcc": 0.9999286756928917
+        },
+        "full_attention_layer3_seq1": {
+          "prefill_pcc": 0.9999452009034249,
+          "traced_decode_pcc": 0.9998278764371862
+        }
+      },
+      "artifacts": [
+        "doc/multichip_decoder/logs/watcher_correctness_disable_eth.log",
+        "doc/multichip_decoder/logs/runtime_fallback_audit_exact_nnz.log"
+      ]
+    }
   },
   "performance_evidence": {
     "profiler": "Tracy plus tt-perf-report",
@@ -280,7 +353,54 @@
       }
     },
     "provenance_log": "doc/functional_decoder/logs/tracy_perf_summary.log.gz",
-    "large_artifact_packaging": "Oversized Tracy raw CSVs, the Tracy provenance log, and the linear-prefill filtered ops CSV are committed as gzip archives to satisfy the repository per-file size limit; each archive expands to the path without .gz."
+    "large_artifact_packaging": "Oversized Tracy raw CSVs, the Tracy provenance log, and the linear-prefill filtered ops CSV are committed as gzip archives to satisfy the repository per-file size limit; each archive expands to the path without .gz.",
+    "multichip_decoder": {
+      "profiler": "Tracy plus tt-perf-report",
+      "tracy_command_options": [
+        "-r",
+        "-p",
+        "-v",
+        "--no-runtime-analysis",
+        "--op-support-count=5000",
+        "--check-exit-code"
+      ],
+      "raw_ops_csv_parts": "doc/multichip_decoder/tracy/final_exact_nnz_raw/reports/2026_08_19_03_59_38/ops_perf_results_2026_08_19_03_59_38.csv.gz.parts",
+      "tt_perf_report_input_csv_parts": "doc/multichip_decoder/tracy/final_exact_nnz_raw/reports/2026_08_19_03_59_38/ops_perf_results_2026_08_19_03_59_38_blackhole.csv.gz.parts",
+      "blackhole_csv_normalization": "Blank DEVICE ARCH and AVAILABLE WORKER CORE COUNT fields were normalized to blackhole and 110 before tt-perf-report.",
+      "summary_csv": "doc/multichip_decoder/tracy/final_exact_nnz/perf_summary.csv",
+      "runs": {
+        "linear_attention_prefill_seq5": {
+          "baseline_wall_ms": 21.141,
+          "multichip_wall_ms": 19.809,
+          "wall_speedup": 1.067,
+          "four_chip_efficiency": 0.267,
+          "multichip_ccl_ms": 0.091
+        },
+        "linear_attention_traced_decode_seq5": {
+          "baseline_wall_ms": 1.539,
+          "multichip_wall_ms": 1.394,
+          "wall_speedup": 1.104,
+          "four_chip_efficiency": 0.276,
+          "multichip_ccl_ms": 0.088
+        },
+        "full_attention_prefill_seq33": {
+          "baseline_wall_ms": 8.894,
+          "multichip_wall_ms": 6.692,
+          "wall_speedup": 1.329,
+          "four_chip_efficiency": 0.332,
+          "multichip_ccl_ms": 0.169
+        },
+        "full_attention_traced_decode_seq33": {
+          "baseline_wall_ms": 1.223,
+          "multichip_wall_ms": 1.192,
+          "wall_speedup": 1.026,
+          "four_chip_efficiency": 0.257,
+          "multichip_ccl_ms": 0.091
+        }
+      },
+      "provenance_log": "doc/multichip_decoder/logs/tracy_perf_final_exact_nnz_summary.log",
+      "large_artifact_packaging": "Raw and normalized Tracy op CSVs are gzip-split into .parts directories with SHA256SUMS manifests; transient multi-GB device logs and Tracy GUI traces are intentionally not committed."
+    }
   },
   "runtime_fallback_audit": {
     "source_audit_clean": true,
@@ -291,7 +411,19 @@
       "ttnn.to_torch",
       "get_fallback_function"
     ],
-    "artifact": "doc/functional_decoder/logs/runtime_fallback_audit.log"
+    "artifact": "doc/functional_decoder/logs/runtime_fallback_audit.log",
+    "multichip_decoder": {
+      "source_audit_clean": true,
+      "throw_exception_on_fallback_run_clean": true,
+      "forbidden_runtime_calls": [
+        "torch",
+        "ttnn.from_torch",
+        "ttnn.to_torch",
+        "get_fallback_function"
+      ],
+      "artifact": "doc/multichip_decoder/logs/runtime_fallback_audit_exact_nnz.log",
+      "result": "9 passed, 5 deselected in 142.09s with throw_exception_on_fallback=true; covers source audit, synthetic multi-token prefill/decode, non-aligned lengths, batch 2, and real-weight layers"
+    }
   },
   "watcher": {
     "enabled": "TT_METAL_WATCHER=10",
@@ -301,12 +433,118 @@
       "doc/functional_decoder/logs/watcher_correctness.log",
       "doc/functional_decoder/watcher/final/generated/watcher/watcher.log"
     ],
-    "scan_result": "only pytest timeout configuration lines matched; no watcher/device error patterns"
+    "scan_result": "only pytest timeout configuration lines matched; no watcher/device error patterns",
+    "multichip_decoder": {
+      "enabled": "TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1",
+      "clean": true,
+      "artifact": "doc/multichip_decoder/logs/watcher_correctness_disable_eth.log",
+      "active_eth_watcher_limitation": "The same correctness run passed its test body with active Ethernet watcher enabled but teardown hit a fabric router active-Ethernet watcher assertion on this p300c setup. The worker/NOC watcher run with TT_METAL_WATCHER_DISABLE_ETH=1 is clean and is the accepted watcher evidence for this stage.",
+      "result": "10 passed, 4 deselected in 184.54s"
+    }
   },
   "source_revision": {
     "branch": "vkovacevic/agentic-research/qb2-qwen36-35b-a3b",
     "base_sha_at_evidence_time": "9e4baaa71435fc344b21912c9e30366a23c34a5d",
     "stage_commit_sha": null,
-    "stage_commit_sha_note": "Recorded after final local commit; a commit cannot contain its own final SHA."
+    "stage_commit_sha_note": "Recorded after final local commit; a commit cannot contain its own final SHA.",
+    "multichip_decoder_stage_commit_sha": null,
+    "multichip_decoder_stage_commit_sha_note": "Recorded after final local commit; a commit cannot contain its own final SHA."
+  },
+  "multichip_decoder_contract": {
+    "single_chip_baseline": "models/autoports/qwen_qwen3_6_35b_a3b/tt/optimized_decoder.py::OptimizedDecoder",
+    "implementation": "models/autoports/qwen_qwen3_6_35b_a3b/tt/multichip_decoder.py::MultichipDecoder",
+    "target_hardware": {
+      "mesh_shape": [
+        2,
+        2
+      ],
+      "num_devices": 4,
+      "arch": "blackhole",
+      "observed_product": "p300c",
+      "fabric_config": "FABRIC_1D_RING",
+      "collective_topology": "Ring",
+      "supported_mesh_configurations": "Only the local 2x2 mesh target is implemented for this stage.",
+      "final_tt_smi_artifact": "doc/multichip_decoder/logs/tt_smi_final.log"
+    },
+    "parallelism": {
+      "residual_stream": "Replicated at decoder layer input/output boundaries.",
+      "tensor_parallel_axis": "mesh columns, cluster_axis=1, TP=2",
+      "expert_parallel_axis": "mesh rows, cluster_axis=0, EP=2",
+      "collectives": [
+        "TP all_reduce after full-attention o_proj",
+        "TP all_reduce after linear-attention out_proj",
+        "TP all_reduce after shared expert down projection",
+        "EP then TP all_reduce after routed MoE output"
+      ],
+      "rejected_alternatives": [
+        "2D activation sharding at layer boundaries: rejected because the decoder stack contract and layernorm/residual ops are simpler and currently lower risk with replicated hidden states.",
+        "KV-head replication instead of TP sharding: rejected because the model has exactly two KV heads and a 2-column split gives one KV head per device while preserving paged-cache semantics.",
+        "Physical expert-weight sharding across EP rows: rejected for this stage because TTNN sparse_matmul is driven by a global expert axis; EP rows instead execute disjoint expert masks while routed expert weights remain replicated across rows."
+      ]
+    },
+    "logical_shapes": {
+      "prefill_input": "[1, batch, seq, 2048]",
+      "decode_input": "[1, 1, batch, 2048]",
+      "prefill_output": "[1, batch, seq, 2048] replicated on every device",
+      "decode_output": "[1, 1, batch, 2048] replicated on every device",
+      "non_aligned_lengths": "Public callers may pass non-page/chunk-aligned logical lengths; padding is internal and outputs are sliced back to logical length."
+    },
+    "full_attention": {
+      "global_heads": {
+        "q": 16,
+        "kv": 2,
+        "head_dim": 256
+      },
+      "per_device_heads": {
+        "q": 8,
+        "kv": 1
+      },
+      "packed_qkgv_local_width": 4608,
+      "o_proj_local_input_width": 2048,
+      "kv_cache": {
+        "logical_shape": "[max_num_blocks, 2, 32, 256]",
+        "per_device_shape": "[max_num_blocks, 1, 32, 256]",
+        "sharding": "KV head dimension sharded across TP columns and replicated across EP rows.",
+        "page_table": "Replicated int32 caller-owned page table; reversed page-table mapping is tested.",
+        "current_pos": "Replicated int32 current-position tensor with one absolute position per batch item.",
+        "max_context_tokens_kept": 262144,
+        "max_num_blocks_batch1": 8192,
+        "per_device_kv_bytes_batch1_at_262144": 268435456,
+        "per_device_kv_mib_batch1_at_262144": 256.0,
+        "per_device_full_model_kv_mib_batch1_10_full_layers": 2560.0
+      }
+    },
+    "linear_attention": {
+      "global_key_heads": 16,
+      "global_value_heads": 32,
+      "per_device_key_heads": 8,
+      "per_device_value_heads": 16,
+      "per_device_conv_dim": 4096,
+      "packed_qkv_zba_local_width": 6176,
+      "conv_state": {
+        "logical_shape_per_tap": "[1, 1, batch, 8192]",
+        "per_device_shape_per_tap": "[1, 1, batch, 4096]",
+        "sharding": "conv channel dimension sharded across TP columns and replicated across EP rows"
+      },
+      "recurrent_state": {
+        "logical_shape": "[1, batch * 32, 128, 128]",
+        "per_device_shape": "[1, batch * 16, 128, 128]",
+        "sharding": "value-head dimension sharded across TP columns and replicated across EP rows",
+        "per_device_bytes_per_batch": 524288,
+        "per_device_mib_per_batch": 0.5,
+        "per_device_full_model_recurrent_mib_batch1_30_linear_layers": 15.0
+      },
+      "prefill_padding": "64-token internal chunks; the last partial chunk is padded and then sliced back."
+    },
+    "moe": {
+      "num_experts": 256,
+      "active_experts_per_token": 8,
+      "experts_per_ep_row_mask": 128,
+      "decode_active_experts_per_ep_row_batch1": 4,
+      "decode_path": "Gate-selected active expert sparse_matmul with moe_routing_remap; dense all-expert decode is not used.",
+      "prefill_path": "Chunked sparse_matmul with per-EP-row expert masks and post-routing EP/TP reductions.",
+      "shared_expert": "Intermediate width 512 is TP-sharded to 256 per device, followed by TP all_reduce.",
+      "routed_expert_weights": "Intermediate width is TP-sharded to 256 per device; expert weights remain replicated across EP rows while EP masks select disjoint expert halves for execution."
+    }
   }
 }

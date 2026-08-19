@@ -1,0 +1,13 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Warning: Ignoring user-specified architecture: blackhole, CSV detected blackhole architecture
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'BASE_LINEAR_DECODE'.
+Using operations until 'BASE_LINEAR_DECODE_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/qwen_qwen3_6_35b_a3b/doc/multichip_decoder/tracy/final_exact_nnz/linear_attention/baseline_decode_perf_report.csv
+Overall DRAM roofline (modeled ops): 9.8% (50 GB/s)
+Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ScatterDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/qwen_qwen3_6_35b_a3b/doc/multichip_decoder/tracy/final_exact_nnz/linear_attention/baseline_decode_summary.csv.csv
+Plotting PNG stacked report to models/autoports/qwen_qwen3_6_35b_a3b/doc/multichip_decoder/tracy/final_exact_nnz/linear_attention/baseline_decode_summary.csv.png

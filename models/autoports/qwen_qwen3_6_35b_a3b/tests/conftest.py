@@ -11,11 +11,9 @@ import ttnn
 
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "real_weights: load checkpoint tensors for Qwen3.6 functional-decoder parity")
-    config.addinivalue_line("markers", "perf: signposted warmed performance capture for functional-decoder evidence")
-    config.addinivalue_line(
-        "markers", "context: larger context/sequence probes for functional-decoder capability evidence"
-    )
+    config.addinivalue_line("markers", "real_weights: load checkpoint tensors for Qwen3.6 decoder parity")
+    config.addinivalue_line("markers", "perf: signposted warmed performance capture for decoder evidence")
+    config.addinivalue_line("markers", "context: larger context/sequence probes for decoder capability evidence")
 
 
 @pytest.fixture(scope="function")
@@ -34,3 +32,24 @@ def device(device_params):
     finally:
         ttnn.SetDefaultDevice(original_default_device)
         ttnn.close_device(device)
+
+
+@pytest.fixture(scope="function")
+def mesh_device_params(request):
+    return getattr(request, "param", {})
+
+
+@pytest.fixture(scope="function")
+def mesh_device(mesh_device_params):
+    params = dict(mesh_device_params)
+    fabric_config = params.pop("fabric_config", ttnn.FabricConfig.FABRIC_1D_RING)
+    mesh_shape = params.pop("mesh_shape", (2, 2))
+    if fabric_config is not None:
+        ttnn.set_fabric_config(fabric_config)
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(*mesh_shape), **params)
+    try:
+        yield mesh
+    finally:
+        ttnn.close_mesh_device(mesh)
+        if fabric_config is not None:
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
