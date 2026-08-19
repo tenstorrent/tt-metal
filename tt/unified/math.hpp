@@ -245,31 +245,49 @@ struct FPUFusion {};
 
 struct ReduceFusion {};
 
-// Compile-time geometry, so the strategy can unroll and the DST budget is
-// checkable with a static_assert. Names follow matmul_block's own parameters:
-// A is rt_dim x kt_dim tiles, B is kt_dim x ct_dim, C is rt_dim x ct_dim.
+// The geometry a matmul runs at, DERIVED from its operands rather than declared.
+// Names follow matmul_block's own parameters: A is rt_dim x kt_dim tiles, B is
+// kt_dim x ct_dim, C is rt_dim x ct_dim.
 //
-// `in1_row_stride` is how far to step in B's CB to move down one k row -- B's
-// full block width, which is not necessarily ct_dim when B holds several
-// subblocks side by side.
-template <uint32_t RtDim, uint32_t CtDim, uint32_t KtDim, uint32_t NumBlocks = 1, uint32_t In1RowStride = CtDim>
+// Nothing writes this type; it falls out of the two shapes. What used to be five
+// template parameters is now zero:
+//
+//   rt_dim, ct_dim, kt_dim  read off the operands, and their agreement is checked
+//   num_blocks              never used here -- it was only ever a kernel loop bound
+//   in1_row_stride          B's own width, which is what it always was
+//
+// `in1_row_stride` is how far to step in B's circular buffer to move down one k row.
+// It is B's full block width, which equals ct_dim as long as B holds exactly the
+// output's columns. Subblocking B -- several output subblocks side by side in one
+// buffer -- would make them differ, and would then be expressed by giving B a wider
+// shape than the output takes.
+template <typename SA, typename SB>
 struct MatmulGeometry {
-    static constexpr uint32_t rt_dim = RtDim;  // output rows  (A rows)
-    static constexpr uint32_t ct_dim = CtDim;  // output cols  (B cols)
-    static constexpr uint32_t kt_dim = KtDim;  // inner dim
-    static constexpr uint32_t num_blocks = NumBlocks;
-    static constexpr uint32_t in1_row_stride = In1RowStride;
-    static constexpr uint32_t out_subblock_num_tiles = RtDim * CtDim;
+    static_assert(
+        SA::cols == SB::rows, "matmul inner dimension disagrees: operand A's columns must equal operand B's rows");
+    static_assert(SA::leading == SB::leading, "matmul operands disagree on their leading (batch) extent");
+
+    static constexpr uint32_t rt_dim = SA::rows;  // output rows  (A rows)
+    static constexpr uint32_t ct_dim = SB::cols;  // output cols  (B cols)
+    static constexpr uint32_t kt_dim = SA::cols;  // inner dim
+    static constexpr uint32_t in1_row_stride = SB::cols;
+    static constexpr uint32_t out_subblock_num_tiles = rt_dim * ct_dim;
+
+    // The output block, with any leading extent carried through from A.
+    using out_shape = with_hw<SA, rt_dim, ct_dim>;
 };
 
 // No bias. A real cb id could be 0, so the sentinel has to be out of range.
 inline constexpr uint32_t kNoBias = ~uint32_t(0);
 
-template <typename Geometry, typename Chain>
-struct MatmulNode : expr::Fluent<MatmulNode<Geometry, Chain>> {
+template <typename SA, typename SB, typename Chain>
+struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Chain>> {
     using fusion_kind = FPUFusion;
-    using geometry = Geometry;
+    using lhs_shape = SA;
+    using rhs_shape = SB;
+    using geometry = MatmulGeometry<SA, SB>;
     using chain = Chain;
+    using shape = typename geometry::out_shape;
 
     // Fuse a bias, added ONCE to the finished total -- never per k-block, which
     // would scale it by the block count. It lands before the epilogue chain, so
@@ -285,14 +303,14 @@ struct MatmulNode : expr::Fluent<MatmulNode<Geometry, Chain>> {
         // the geometry. This was a runtime ASSERT on the page count, which could only
         // fire in an asserts-enabled build and only once the kernel ran.
         static_assert(
-            same_shape_v<typename Operand::shape, Shape<1, Geometry::ct_dim>>,
+            same_shape_v<typename Operand::shape, Shape<1, geometry::ct_dim>>,
             "a fused bias must be Shape<1, ct_dim> -- one row of the output block's width");
         // The bias is ct_dim tiles, one per output column. Fewer and the finishing
         // pass reads past what was pushed -- whatever is next in that buffer, with
         // nothing to notice; more and the kernel and the geometry disagree about
         // the shape. Checked here rather than in the strategy because this is where
         // the operand's page count is still in hand.
-        MatmulNode<Geometry, Chain> out{{}, in0_cb, in1_cb, operand.get_cb_id()};
+        MatmulNode<SA, SB, Chain> out{{}, in0_cb, in1_cb, operand.get_cb_id()};
         return out;
     }
 
@@ -447,11 +465,6 @@ struct node_shape<expr::Bin<Op, L, R>> {
 };
 
 // An FPU fusion's shape is its output block: rows from A, columns from B.
-template <typename Geometry, typename Chain>
-struct node_shape<MatmulNode<Geometry, Chain>> {
-    using type = Shape<Geometry::rt_dim, Geometry::ct_dim>;
-};
-
 // A reduction collapses one axis of its input grid.
 template <typename Geometry, ReduceAxis Axis, ReducePool Pool, typename Chain>
 struct node_shape<ReduceNode<Geometry, Axis, Pool, Chain>> {
@@ -532,29 +545,29 @@ auto rsqrt(const N& n) {
     return expr::Un<RsqrtOp, N>{{}, n};
 }
 
-template <typename Geometry, typename Chain>
-auto relu(const MatmulNode<Geometry, Chain>& m) {
-    return MatmulNode<Geometry, expr::chain_append_t<Chain, ReluOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+template <typename SA, typename SB, typename Chain>
+auto relu(const MatmulNode<SA, SB, Chain>& m) {
+    return MatmulNode<SA, SB, expr::chain_append_t<Chain, ReluOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
 }
 
-template <typename Geometry, typename Chain>
-auto exp_(const MatmulNode<Geometry, Chain>& m) {
-    return MatmulNode<Geometry, expr::chain_append_t<Chain, ExpOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+template <typename SA, typename SB, typename Chain>
+auto exp_(const MatmulNode<SA, SB, Chain>& m) {
+    return MatmulNode<SA, SB, expr::chain_append_t<Chain, ExpOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
 }
 
-template <typename Geometry, typename Chain>
-auto recip(const MatmulNode<Geometry, Chain>& m) {
-    return MatmulNode<Geometry, expr::chain_append_t<Chain, RecipOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+template <typename SA, typename SB, typename Chain>
+auto recip(const MatmulNode<SA, SB, Chain>& m) {
+    return MatmulNode<SA, SB, expr::chain_append_t<Chain, RecipOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
 }
 
-template <typename Geometry, typename Chain>
-auto sqrt_(const MatmulNode<Geometry, Chain>& m) {
-    return MatmulNode<Geometry, expr::chain_append_t<Chain, SqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+template <typename SA, typename SB, typename Chain>
+auto sqrt_(const MatmulNode<SA, SB, Chain>& m) {
+    return MatmulNode<SA, SB, expr::chain_append_t<Chain, SqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
 }
 
-template <typename Geometry, typename Chain>
-auto rsqrt(const MatmulNode<Geometry, Chain>& m) {
-    return MatmulNode<Geometry, expr::chain_append_t<Chain, RsqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+template <typename SA, typename SB, typename Chain>
+auto rsqrt(const MatmulNode<SA, SB, Chain>& m) {
+    return MatmulNode<SA, SB, expr::chain_append_t<Chain, RsqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
 }
 
 // The hooks expr.hpp's Fluent calls. Unqualified inside, so ordinary lookup finds
@@ -583,19 +596,12 @@ auto fluent_rsqrt(const N& n) {
 }
 }  // namespace expr
 
-// Until the geometry is inferred outright, the operands and the geometry are two
-// statements of the same fact and nothing tied them together: a wrong KtDim produced
-// silent garbage. A is rt x kt, B is kt x ct.
-template <typename Geometry, typename SA, typename SB>
+// The operands ARE the geometry now, so there is nothing left to state twice -- and
+// the inner-dimension agreement that nothing checked before is a static_assert inside
+// MatmulGeometry, reached by simply naming it.
+template <typename SA, typename SB>
 auto matmul(TileSource<SA> a, TileSource<SB> b) {
-    static_assert(
-        SA::rows == Geometry::rt_dim && SA::cols == Geometry::kt_dim,
-        "matmul operand A does not match the geometry -- A must be rt_dim x kt_dim tiles");
-    static_assert(
-        SB::rows == Geometry::kt_dim && SB::cols == Geometry::ct_dim,
-        "matmul operand B does not match the geometry -- B must be kt_dim x ct_dim tiles");
-    static_assert(SA::leading == SB::leading, "matmul operands disagree on their leading (batch) extent");
-    return MatmulNode<Geometry, expr::UnaryChain<>>{{}, a.cb_id, b.cb_id, kNoBias};
+    return MatmulNode<SA, SB, expr::UnaryChain<>>{{}, a.cb_id, b.cb_id, kNoBias};
 }
 
 // An FPU fusion cannot be an operand of a binary op: it already owns every DST
@@ -660,9 +666,10 @@ inline void compute_init(uint32_t in_cb, uint32_t out_cb) {
 // and in1 in SrcA -- plus the block dimensions programmed up front. Calling
 // compute_init() instead leaves the ALU configured for SFPU work, and matmul then
 // runs against a state it cannot use.
-template <typename Geometry>
+template <typename SA, typename SB>
 inline void matmul_init(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t transpose = 0) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+    using Geometry = MatmulGeometry<SA, SB>;
     ckernel::compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(in0_cb, in1_cb, out_cb);
     ckernel::matmul_block_init(in0_cb, in1_cb, transpose, Geometry::ct_dim, Geometry::rt_dim, Geometry::kt_dim);
 #else

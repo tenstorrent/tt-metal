@@ -378,7 +378,10 @@ auto sqrt_(const ComputeBlock<S>& b);
 template <typename S>
 auto rsqrt(const ComputeBlock<S>& b);
 
-template <typename Geometry, typename SA, typename SB>
+// The geometry is DERIVED from the operands -- see MatmulGeometry in
+// tt/unified/math.hpp. A must be rt x kt tiles and B kt x ct, and their agreement on
+// kt is a compile error rather than silent garbage.
+template <typename SA, typename SB>
 auto matmul(const ComputeBlock<SA>& a, const ComputeBlock<SB>& b);
 
 // Reduce `b`'s tile grid down one axis, within and across tiles. `Geometry` is

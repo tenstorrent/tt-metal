@@ -71,8 +71,6 @@ constexpr uint32_t kCbIn1 = 1;
 constexpr uint32_t kCbAcc = 24;  // partials, per the reference's mm_partials
 constexpr uint32_t kCbOut = 16;
 
-using Geom = u::MatmulGeometry<MM_RT, MM_CT, MM_KT, MM_K_BLOCKS>;
-
 void kernel_main() {
     constexpr auto in0_args = TensorAccessorArgs<0>();
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
@@ -85,11 +83,13 @@ void kernel_main() {
     const u::LogicalCoord me = u::LogicalCoord::this_core();
     const uint32_t out_block = me.y * MM_GRID_W + me.x;
 
-    u::matmul_init<Geom>(kCbIn0, kCbIn1, kCbOut);
-
+    // The shapes come first: they are what matmul_init programs the block dimensions
+    // from, now that the geometry is derived rather than declared.
     using In0 = u::Shape<MM_RT, MM_KT>;
     using In1 = u::Shape<MM_KT, MM_CT>;
     using Out = u::Shape<MM_RT, MM_CT>;
+
+    u::matmul_init<In0, In1>(kCbIn0, kCbIn1, kCbOut);
 
     u::Storage<In0> in0_storage(kCbIn0);
     u::Storage<In1> in1_storage(kCbIn1);
@@ -113,8 +113,8 @@ void kernel_main() {
 #endif
     acc.clear();
 
-    for (uint32_t k = 0; k < Geom::num_blocks; ++k) {
-        const bool finish = (k == Geom::num_blocks - 1);
+    for (uint32_t k = 0; k < MM_K_BLOCKS; ++k) {
+        const bool finish = (k == MM_K_BLOCKS - 1);
 
         // Thread 0 broadcasts the LHS along the row, thread 1 the RHS down the
         // column; each takes its own reserved handshake pair, so the two never
@@ -124,7 +124,7 @@ void kernel_main() {
         u::ComputeBlock b =
             u::noc_load<MM_IN1_THREAD, /*pair=*/1>(in1_storage, col, in1, me.x * MM_K_BLOCKS + k).wait();
 
-        u::Block result = acc.accumulate(u::matmul<Geom>(a, b), finish);
+        u::Block result = acc.accumulate(u::matmul(a, b), finish);
         if (finish) {
             u::noc_store<0>(std::move(result), out, out_block);
         }
