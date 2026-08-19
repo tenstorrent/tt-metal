@@ -14,7 +14,10 @@
 // POLICIES the domain header must satisfy:
 //
 //   Leaf node L:   static constexpr uint32_t need = 1;            // DST slots
-//                  void emit(uint32_t dst, uint32_t tile) const;  // tile -> dst
+//                  void emit(uint32_t dst, uint32_t tile, bool reconfigure) const;
+//                    tile -> dst. `reconfigure` asks the leaf to re-point the hardware
+//                    at its own source before copying; the driver decides when that is
+//                    necessary, since only it knows whether another leaf has intervened.
 //   Binary op Op:  static void apply(uint32_t lhs_dst, uint32_t rhs_dst, uint32_t out_dst);
 //   Unary  op Op:  static void apply(uint32_t src_dst, uint32_t out_dst);
 //   Method hooks:  fluent_<op>(node), one per op the mixin spells as a method
@@ -160,6 +163,30 @@ struct chain_append<UnaryChain<Ops...>, Op> {
 template <typename Chain, typename Op>
 using chain_append_t = typename chain_append<Chain, Op>::type;
 
+// ------------------------------------------------------------ leaf count ---
+//
+// How many leaves the tree emits. Structural, like Need, and used for the same kind of
+// reason: with a single leaf the hardware stays pointed at one source for the whole
+// loop, so it only has to be pointed there once.
+
+template <typename Node>
+struct LeafCount {
+    static constexpr uint32_t value = 1;  // leaf
+};
+
+template <typename Op, typename C>
+struct LeafCount<Un<Op, C>> {
+    static constexpr uint32_t value = LeafCount<C>::value;
+};
+
+template <typename Op, typename L, typename R>
+struct LeafCount<Bin<Op, L, R>> {
+    static constexpr uint32_t value = LeafCount<L>::value + LeafCount<R>::value;
+};
+
+template <typename Node>
+constexpr uint32_t leaf_count_v = LeafCount<Node>::value;
+
 // ------------------------------------------------------ register demand ---
 
 template <typename Node>
@@ -187,14 +214,14 @@ struct Need<Bin<Op, L, R>> {
 template <uint32_t Base, typename Node>
 struct Emit {  // leaf
     static constexpr uint32_t result = Base;
-    static void run(const Node& n, uint32_t tile) { n.emit(Base, tile); }
+    static void run(const Node& n, uint32_t tile, bool reconfigure) { n.emit(Base, tile, reconfigure); }
 };
 
 template <uint32_t Base, typename Op, typename C>
 struct Emit<Base, Un<Op, C>> {
     static constexpr uint32_t result = Base;
-    static void run(const Un<Op, C>& n, uint32_t tile) {
-        Emit<Base, C>::run(n.child, tile);
+    static void run(const Un<Op, C>& n, uint32_t tile, bool reconfigure) {
+        Emit<Base, C>::run(n.child, tile, reconfigure);
         Op::apply(Emit<Base, C>::result, Base);
     }
 };
@@ -202,10 +229,10 @@ struct Emit<Base, Un<Op, C>> {
 template <uint32_t Base, typename Op, typename L, typename R>
 struct Emit<Base, Bin<Op, L, R>> {
     static constexpr uint32_t result = Base;
-    static void run(const Bin<Op, L, R>& n, uint32_t tile) {
-        Emit<Base, L>::run(n.lhs, tile);      // left result lands in Base
-        Emit<Base + 1, R>::run(n.rhs, tile);  // right starts above it
-        Op::apply(Base, Base + 1, Base);      // fold in place
+    static void run(const Bin<Op, L, R>& n, uint32_t tile, bool reconfigure) {
+        Emit<Base, L>::run(n.lhs, tile, reconfigure);      // left result lands in Base
+        Emit<Base + 1, R>::run(n.rhs, tile, reconfigure);  // right starts above it
+        Op::apply(Base, Base + 1, Base);                   // fold in place
     }
 };
 
@@ -219,10 +246,11 @@ constexpr uint32_t need_v = Need<Node>::value;
 template <typename Node>
 constexpr uint32_t result_slot_v = Emit<0, Node>::result;
 
-// Emit the whole expression for one tile index.
+// Emit the whole expression for one tile index. `reconfigure` is passed down to every
+// leaf; see the leaf policy above and Strategy<SFPUFusion> for who decides it.
 template <typename Node>
-void emit(const Node& node, uint32_t tile) {
-    Emit<0, Node>::run(node, tile);
+void emit(const Node& node, uint32_t tile, bool reconfigure) {
+    Emit<0, Node>::run(node, tile, reconfigure);
 }
 
 }  // namespace expr

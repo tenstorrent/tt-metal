@@ -125,6 +125,9 @@ inline void copy_block(uint32_t cb, uint32_t start_tile, uint32_t start_dst, uin
 inline void reconfig_data_format_srca(uint32_t old_cb, uint32_t new_cb) {
     T("  reconfig_data_format_srca(cb" + n(old_cb) + " -> cb" + n(new_cb) + ")");
 }
+// One-argument form: unconditional, needs no previous operand. What an SFPU leaf uses.
+inline void reconfig_data_format_srca(uint32_t new_cb) { T("      reconfig_srca(cb" + n(new_cb) + ")"); }
+inline void copy_tile_to_dst_init_short(uint32_t cb) { T("      copy_init(cb" + n(cb) + ")"); }
 inline void init_sfpu(uint32_t icb, uint32_t ocb) { T("  init_sfpu(cb" + n(icb) + " -> cb" + n(ocb) + ")"); }
 }  // namespace ckernel
 
