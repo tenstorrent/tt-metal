@@ -392,10 +392,13 @@ jobs:
     uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
       summary-scope: ${{ inputs.platform }}
-      # t3000_sanity_tests.yaml today only defines wh_llmbox_civ2; the other wh-skus
-      # entries (wh_n300_civ2, wh_llmbox, wh_llmbox_civ2_viommu, wh_llmbox_perf) simply
-      # produce no matrix rows here until/unless a test entry references them.
-      enabled-skus: ${{ needs.generate-sku-matrix.outputs.wh-skus }}
+      # sanity-skus, same as ttnn-sanity-tests/ops-sanity-tests/blackhole-multi-card-fast-sanity-tests.
+      # t3000_sanity_tests.yaml today only defines wh_llmbox_civ2; every other SKU in the
+      # list (wh_n300_civ2, wh_llmbox, wh_llmbox_civ2_viommu, wh_llmbox_perf, and any bh_*/sim_*
+      # entries) simply produces no matrix row here until/unless a test entry references it.
+      # The job's own `if:` above still gates on run-wormhole, so this never fires with a
+      # SKU set lacking a wh_llmbox entry.
+      enabled-skus: ${{ needs.generate-sku-matrix.outputs.sanity-skus }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
