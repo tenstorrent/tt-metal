@@ -70,7 +70,7 @@ uint32_t run_persistent_sender_push(
     uint32_t entry_size,
     uint32_t num_entries,
     uint8_t persistent_dfb_id) {
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
     const CoreRangeSet sender_cores = pdfb.sender_cores();
     const uint32_t data_pattern = cross_node_dfb_test::data_pattern_for_write_primitive(2);
     const uint32_t staging_size =
@@ -100,7 +100,7 @@ uint32_t run_persistent_receiver_pop(
     uint32_t entry_size,
     uint32_t num_entries,
     uint8_t persistent_dfb_id) {
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
     const CoreRangeSet receiver_cores = pdfb.receiver_cores();
     Program program = CreateProgram();
     // Attach only receiver cores — consumer role in a separate program.
@@ -132,7 +132,7 @@ uint32_t run_persistent_1toN_cross_program(
     uint32_t write_primitive,
     uint8_t persistent_dfb_id = 0,
     bool simultaneous_subdevices = false) {
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
     const CoreRangeSet sender_cores = pdfb.sender_cores();
     const CoreRangeSet receiver_cores = pdfb.receiver_cores();
     const auto receivers = corerange_to_cores(receiver_cores);
@@ -563,7 +563,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_StaleCommitRejected) {
     // (PERSISTENT_DFB_CFG_FIFO_PTR_CHECKPOINT). Push one entry (not a full ring) so the
     // good checkpoint is distinguishable from fifo_start and from the poison wr_ptr.
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
     constexpr uint32_t entry_size = 256;
     constexpr uint32_t new_entry_size = 512;
     constexpr uint32_t num_entries = 4;
@@ -600,8 +600,8 @@ TEST_F(PersistentDFBFixture, PersistentDFB_StaleCommitRejected) {
 
     const uint32_t expected_checkpoint = pdfb.buffer_address() + entry_size;
     std::vector<uint32_t> words(2, 0);
-    detail::ReadFromDeviceL1(
-        cross_node_dfb_test::local_physical_device(device),
+    slow_dispatch::ReadFromL1(
+        device,
         sender_core,
         pdfb.config_address() + PERSISTENT_DFB_CFG_FIFO_PTR_CHECKPOINT * sizeof(uint32_t),
         std::span<uint8_t>(reinterpret_cast<uint8_t*>(words.data()), 2 * sizeof(uint32_t)),
@@ -712,7 +712,7 @@ static uint32_t run_persistent_relay_cross_program(
     TT_FATAL(total_entries % batch_size == 0, "Relay test total_entries must be divisible by batch_size");
     TT_FATAL(ring_depth % batch_size == 0, "Relay test ring_depth must be divisible by batch_size");
 
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
     const CoreCoord sender_core(0, 0);
     const CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     const CoreRangeSet receiver_cores = pdfb.receiver_cores();
@@ -784,11 +784,10 @@ static uint32_t run_persistent_relay_cross_program(
 
     const uint32_t expected_checksum = persistent_relay_expected_checksum(recv_total_entries);
     uint32_t pass_count = 0;
-    IDevice* physical_device = cross_node_dfb_test::local_physical_device(device);
     for (const CoreCoord& receiver_core : corerange_to_cores(receiver_cores)) {
         std::vector<uint32_t> result(2, 0);
-        detail::ReadFromDeviceL1(
-            physical_device,
+        slow_dispatch::ReadFromL1(
+            device,
             receiver_core,
             static_cast<uint32_t>(result_buffer->address()),
             std::span<uint8_t>(reinterpret_cast<uint8_t*>(result.data()), result.size() * sizeof(uint32_t)),
@@ -825,7 +824,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_CrossProgram_DMToCompute) {
 TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_Backpressure_NoOverwrite) {
     // Same-program sender + relay receiver + slow TRISC so the ring wraps under backpressure.
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
     constexpr uint32_t entry_size = 256;
     constexpr uint32_t ring_depth = 2;
     constexpr uint32_t total_entries = 8;
@@ -884,8 +883,8 @@ TEST_F(PersistentDFBFixture, PersistentDFB_RelayDFB_Backpressure_NoOverwrite) {
     persistent_run_on_mesh_device(mesh_device, std::move(program), workload);
 
     std::vector<uint32_t> result(2, 0);
-    detail::ReadFromDeviceL1(
-        cross_node_dfb_test::local_physical_device(device),
+    slow_dispatch::ReadFromL1(
+        device,
         CoreCoord(1, 0),
         static_cast<uint32_t>(result_buffer->address()),
         std::span<uint8_t>(reinterpret_cast<uint8_t*>(result.data()), result.size() * sizeof(uint32_t)),
@@ -920,7 +919,7 @@ TEST_F(PersistentDFBFixture, PersistentDFB_CrossSubDevice_CoordinatedLivePeerNon
     // E2=384 truncates the usable ring to 768 bytes. Without credit rebase, the old
     // 1024-byte credit total reconstructs offset 256 instead of checkpoint offset 0.
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
+    distributed::MeshDevice& device = *mesh_device;
     constexpr uint32_t e1 = 256;
     constexpr uint32_t e2 = 384;
     constexpr uint32_t ring_depth_e1 = 4;  // 1024 bytes → 768 usable bytes / 2 entries at E2
