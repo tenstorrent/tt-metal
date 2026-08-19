@@ -109,6 +109,13 @@ struct ExpRingJointSDPAInputs {
     std::optional<Tensor> joint_v;
     Tensor gathered_k;
     Tensor gathered_v;
+    // Trace-safe logical_n transport: a 1-element uint32 device tensor at a fixed DRAM address the host
+    // refreshes in place between replays. When present, logical_n above is the worst-case placeholder
+    // (padded_N) and every kernel reads the live value instead. Presence (not the value) enters the
+    // program hash, so one captured program serves every live length.
+    std::optional<Tensor> logical_n_tensor;
+
+    bool has_logical_n_tensor() const { return logical_n_tensor.has_value(); }
 };
 
 // Index constants for ExpRingJointSDPAResult vector
