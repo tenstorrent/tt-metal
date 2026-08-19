@@ -104,13 +104,28 @@
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     pytest --timeout 600 models/common/tests/test_tt_sampling.py
+    # test_sampling.py complements the suite above rather than duplicating it: it owns the
+    # SeedManager slot/salt state machine (salt collision, slot remap, ghost clearing, decode
+    # re-registration), broadcast/scatter_sampling_params, the vocab-split math and the
+    # host-level trace bookkeeping -- none of which test_tt_sampling.py touches, and none of
+    # which ran anywhere before this entry. In the other direction test_tt_sampling.py owns
+    # the on-device per-request penalties, batch isolation, the odd-lane stress family, top-p
+    # and the end-to-end traced path.
+    #
+    # -k selects the single-card-safe half. Every log-probs test in that file needs more than
+    # one device (T3K default mesh, an explicit (1,8), or TG galaxy) and every non-log-probs
+    # test is host-only or (1,1) -- the split is exactly along that name, verified against the
+    # file: 9 excluded, 24 selected (21 host-only + 3 single-device). The excluded 9, which
+    # include the torch-vs-TT log-probs PCC oracle, want the multi-device SKUs and belong with
+    # the follow-up that enables them. See #38316.
+    pytest --timeout 600 models/common/tests/test_sampling.py -k "not log_probs and not logprobs"
   model: sampling-common
   skus:
     wh_n150:
-      timeout: 10  # measured: ~2.5 min pytest, ~6.5 min job wall
+      timeout: 12  # test_tt_sampling ~2.5 min pytest / ~6.5 min job wall, + test_sampling's 24
       tier: 1
     bh_p150:
-      timeout: 8  # measured: ~1.7 min pytest, ~8.5 min job wall (dominated by checkout/reset)
+      timeout: 10  # test_tt_sampling ~1.7 min pytest / ~8.5 min job wall, + test_sampling's 24
       tier: 1
     # Galaxy (4,8) SKUs are disabled. The 32-chip ring fabric fails to initialize on a
     # marginal ethernet link (Device 24 handshake timeout) -- an infra/hardware issue in

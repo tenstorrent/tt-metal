@@ -1378,6 +1378,12 @@ class TestBatchIsolation:
         A request whose seed is unique among live slots always lands on salt 0, so
         single-seeded reproducibility (test_specific_seed_reproducible,
         test_seeded_replay_is_deterministic) is unaffected.
+
+        Deliberately paired with
+        test_sampling.py::test_ttsampling_duplicate_request_seeds_sample_diverse_tokens, which
+        asserts the same invariant one level down on raw TTSampling + SeedManager. This one
+        goes through SamplingGenerator and format_sampling_params, so it also covers the
+        wiring between them. Change one, check the other.
         """
         args = make_sampling_args(mesh_device)
         hot_tokens = [2500, 2501, 2502, 2503, 2504, 2505, 2506, 2507]
