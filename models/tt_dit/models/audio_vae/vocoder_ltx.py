@@ -19,6 +19,7 @@ import torch
 import ttnn
 
 from ...layers.audio_ops import (
+    TIGHT_T_ALIGN,
     ConvTranspose1dViaConv3d,
     Snake,
     SnakeBeta,
@@ -447,7 +448,10 @@ class Vocoder(Module):
         if sharded:
             factor = self.parallel_config.factor
             tile_h = 32
-            align = tile_h * factor
+            # `32 * factor` exists only so the TILE-layout mesh_partition splits on tile boundaries.
+            # Partitioning in ROW_MAJOR instead needs T divisible by `factor` alone, which for T=207
+            # means 1 pad row rather than 49 -- and those 49 get upsampled up to 800x downstream.
+            align = factor if TIGHT_T_ALIGN else tile_h * factor
             rem = x_BTC_torch.shape[1] % align
             if rem != 0:
                 t_pad = align - rem
@@ -466,9 +470,12 @@ class Vocoder(Module):
 
         if sharded and not pre_unsharded:
             # Channel-TP path: original ordering, conv_pre consumes a T-shard and gathers C itself.
-            x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)
-            x_dev = _partition_t(x_dev, self.parallel_config)
-            x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
+            if TIGHT_T_ALIGN:
+                x_dev = _partition_t(x_dev, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
+            else:
+                x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)
+                x_dev = _partition_t(x_dev, self.parallel_config)
+                x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
 
         # Channel-TP: split C up front so conv_pre's gather reconstructs full C_in (gathering a
         # channel-replicated tensor would duplicate it). conv_post stays full, so no trailing gather.
@@ -497,9 +504,12 @@ class Vocoder(Module):
         x_dev = self.conv_pre(x_dev)
 
         if sharded and pre_unsharded:
-            x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)
-            x_dev = _partition_t(x_dev, self.parallel_config)
-            x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
+            if TIGHT_T_ALIGN:
+                x_dev = _partition_t(x_dev, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
+            else:
+                x_dev = ttnn.to_layout(x_dev, ttnn.TILE_LAYOUT)
+                x_dev = _partition_t(x_dev, self.parallel_config)
+                x_dev = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
 
         for i in range(self.num_upsamples):
             x_dev = _set_tail(x_dev, cumrate, "zeros")  # ups gathers T to full and zero-pads internally

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Sequence
 
 import torch
@@ -516,6 +517,17 @@ def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tenso
     return x
 
 
+# Partitioning in TILE requires every split offset to be tile-aligned, which is the only reason T is
+# padded to `32 * factor` rather than `factor` -- and that padding is then upsampled up to 800x, so
+# band 6 runs 25600 rows/chip for 20700 of data and 1.53 of 8 chips hold nothing but padding.
+# `ttnn.mesh_partition` is happy in ROW_MAJOR at unaligned offsets (verified at 26 rows/shard), and
+# all four call sites untilize immediately afterwards anyway. Measured: 167.9 -> 146.9 ms for a
+# single clip on a 4x8 mesh at factor 8, bit-identical output, `test_audio_decode_t_parallel` passing
+# at the same 84.6 dB. Off by default pending wider coverage; flip it on with
+# MINIMAX_H3_AUDIO_TIGHT_T_ALIGN=1.
+TIGHT_T_ALIGN = os.environ.get("MINIMAX_H3_AUDIO_TIGHT_T_ALIGN", "0") == "1"
+
+
 def _partition_t(x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
     """Partition T across the mesh (inverse of _all_gather_t)."""
     if isinstance(parallel_config, AudioTParallelConfig):
@@ -585,9 +597,15 @@ def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache)
         m[:, global_T - tpad_image :, :] = 0.0
         pair = []
         for t in (m, 1.0 - m):
-            mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
-            mt = _partition_t(mt, parallel_config)
-            pair.append(ttnn.to_layout(mt, ttnn.ROW_MAJOR_LAYOUT))
+            if TIGHT_T_ALIGN:
+                # The mask ends up ROW_MAJOR anyway, so build it that way and skip the tile-aligned
+                # partition constraint entirely.
+                mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+                pair.append(_partition_t(mt, parallel_config))
+            else:
+                mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+                mt = _partition_t(mt, parallel_config)
+                pair.append(ttnn.to_layout(mt, ttnn.ROW_MAJOR_LAYOUT))
         cached = tuple(pair)
         cache[key] = cached
     return cached
@@ -1347,9 +1365,12 @@ class ConvTranspose1dViaConv3d(Module):
         y = self.conv(x_padded)
 
         if sharded:
-            y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
-            y = _partition_t(y, self.parallel_config)
-            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
+            if TIGHT_T_ALIGN:
+                y = _partition_t(y, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
+            else:
+                y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
+                y = _partition_t(y, self.parallel_config)
+                y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
 
         if ch_axis is not None:
             # Re-pad C_out to unit so the per-chip C-shard is TILE-legal.
