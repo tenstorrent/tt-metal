@@ -24,10 +24,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 namespace tt::tt_metal {
-
-// Probes NoC atomic operations beyond plain increment: pins the hardware
-// semantics of cross-domain atomic decrement and of the 4-bit compare-and-swap
-// (noc_fast_atomic_cas4) that the EXTERNAL down() lock builds on.
+// Tests that exercise the NoC atomic decrement and the 4-bit
+// compare-and-swap (noc_fast_atomic_cas4) that EXTERNAL down() builds on.
 class NocAtomicOpsFixture : public MeshDispatchFixture {
 protected:
     static constexpr experimental::NodeCoord core = {0, 0};
@@ -51,12 +49,12 @@ protected:
         l1_unreserved_base = device_->allocator()->get_base_allocator_addr(HalMemType::L1);
         is_quasar = arch_ == tt::ARCH::QUASAR;
         if (is_quasar) {
-            num_dms_ = std::min(num_dms_, 6u);  // Metal 2.0 reserves DM0/DM1
+            num_dms_ = std::min(num_dms_, 6u);
         }
     }
 
-    // Writes init_value to the shared word, runs the probe kernel (mode selected
-    // by the define) on all user DM cores, and returns the final 32-bit word.
+    // Writes init_value to the shared word, runs the kernel in the given mode
+    // on all user DM cores, and returns the final word.
     uint32_t run(const std::string& mode_define, uint32_t init_value) {
         std::vector<uint32_t> init{init_value};
         tt::tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base, init);
@@ -123,8 +121,7 @@ protected:
 };
 
 // All user DMs atomically decrement a word pre-set to num_dms*iterations; an
-// exact zero proves cross-domain atomic decrement is already reachable through
-// today's noc_semaphore_inc (INCR_GET) path.
+// exact zero proves atomic decrement works through the noc_semaphore_inc (INCR_GET) path.
 TEST_F(NocAtomicOpsFixture, TestAtomicDecrementIncrGet) {
     const uint32_t start = num_dms_ * iterations;
     const uint32_t observed = run("PROBE_DECR_INCRGET", start);
@@ -132,9 +129,7 @@ TEST_F(NocAtomicOpsFixture, TestAtomicDecrementIncrGet) {
     EXPECT_EQ(observed, 0u) << "Cross-domain atomic decrement via INCR_GET(-1) lost/added updates.";
 }
 
-// Same decrement shape, but through a raw RISCV_AMO emit. The raw emit uses
-// Quasar-only RoCC builtins, so this skips elsewhere; TestAtomicDecrementIncrGet
-// stays portable.
+// Same decrement shape, but through a raw RISCV_AMO emit.
 TEST_F(NocAtomicOpsFixture, TestAtomicDecrementAmo) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC RISCV_AMO emit is Quasar-only";
@@ -145,8 +140,7 @@ TEST_F(NocAtomicOpsFixture, TestAtomicDecrementAmo) {
     EXPECT_EQ(observed, 0u) << "Raw NOC_AT_INS_RISCV_AMO AMOADD decrement did not produce exact 0.";
 }
 
-// 4-bit compare-and-swap: a matching CAS moves the word 5 -> 9, then a
-// deliberately mismatched CAS must leave it at 9.
+// A matching 4-bit CAS moves the word 5 -> 9, then a mismatched CAS must leave it at 9.
 TEST_F(NocAtomicOpsFixture, TestAtomicCas) {
     if (!is_quasar) {
         GTEST_SKIP() << "raw NoC CAS emit is Quasar-only";
@@ -156,21 +150,15 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCas) {
     EXPECT_EQ(observed, 9u) << "Raw NOC_AT_INS_CAS did not compare-and-swap as expected.";
 }
 
-// Keystone for the EXTERNAL down() lock: noc_fast_atomic_cas4 must return the
-// pre-op word on success and on failure -- that is how a CAS loser learns the
-// current value. word2 (upper bits set) checks the word[31:4]==0 success
-// condition; the kernel also samples the return slot right after the atomic
-// barrier, with no poll, to show whether the barrier orders the return write.
+// noc_fast_atomic_cas4 must return the pre-op word on success and on failure
 TEST_F(NocAtomicOpsFixture, TestAtomicCasReturnsPreOpValue) {
     if (!is_quasar) {
         GTEST_SKIP() << "noc_fast_atomic_cas4 (RoCC builtin emit) is Quasar-only";
     }
-    // Scratch layout must match the PROBE_CAS_RET side of noc_atomic_ops_probe.cpp.
     constexpr uint32_t WORD2_OFF = 16u;
     constexpr uint32_t REPORT_OFF = 128u;
     constexpr uint32_t REPORT_WORDS = 7u;
 
-    // run() preloads word = 5; preload word2 and clear the report here.
     std::vector<uint32_t> word2_init{0x15u};
     tt::tt_metal::detail::WriteToDeviceL1(device_, core, l1_unreserved_base + WORD2_OFF, word2_init);
     std::vector<uint32_t> report_init(REPORT_WORDS, 0u);
@@ -193,7 +181,6 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCasReturnsPreOpValue) {
         result[5],
         result[6]);
 
-    // Return-value semantics.
     EXPECT_EQ(result[1], 5u)
         << "successful CAS did not return the pre-op word (expected 5): a CAS winner cannot confirm "
            "what it swapped out, so cas4's return path is unusable for a lock/down() upgrade.";
@@ -207,10 +194,6 @@ TEST_F(NocAtomicOpsFixture, TestAtomicCasReturnsPreOpValue) {
     EXPECT_EQ(result[6], 0x15u)
         << "CAS(cmp=5) on 0x15 changed the word: HW ignored the word[31:4]==0 success condition, so "
            "the 4-bit CAS is NOT safe next to words that can exceed 15.";
-
-    // Ordering gate: production down() does not rely on this (it sentinel-polls),
-    // but the perf note in noc_semaphore.h ("polls exit on their first check") does --
-    // a red here means that note went stale, not that down() is broken.
     EXPECT_EQ(result[0], result[1])
         << "noc_async_atomic_barrier does NOT order the CAS return-value write; the sentinel-poll in "
            "any consumer of cas4 returns is REQUIRED, not optional.";
