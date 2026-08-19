@@ -150,6 +150,8 @@ def gpt_oss_experts_ttnn(
     combine_config: AllToAllCombineConfig,
     program_config: ThroughputProgramConfig,
     mesh_device,
+    mesh_config,
+    ccl_manager,
 ) -> ttnn.Tensor:
     """TTNN implementation for gpt_oss_experts.
 
@@ -183,6 +185,8 @@ def gpt_oss_experts_ttnn(
         combine_config,
         program_config,
         mesh_device,
+        mesh_config=mesh_config,
+        ccl_manager=ccl_manager,
     )
 
 
@@ -430,6 +434,8 @@ def _run_experts_test(
     program_cache_enabled: bool,
     use_real_weights: bool,
     step_prefix: str,
+    mesh_config,
+    ccl_manager,
 ):
     """Run the full experts fused op test."""
 
@@ -550,6 +556,8 @@ def _run_experts_test(
         combine_config,
         program_config,
         mesh_device,
+        mesh_config,
+        ccl_manager,
     )
 
     # Convert output to torch
@@ -605,6 +613,8 @@ def _run_experts_test(
             combine_config,
             program_config,
             mesh_device,
+            mesh_config,
+            ccl_manager,
         )
 
     # Device performance measurement mode (when env var is set)
@@ -788,6 +798,8 @@ def test_gpt_oss_experts(
         program_cache_enabled,
         use_real_weights,
         f"gpt_oss_experts_{mode}_seq{seq_len}",
+        setup["mesh_config"],
+        setup["ccl_manager"],
     )
 
     logger.info(f"Test passed with PCC: {pcc}")
