@@ -287,6 +287,8 @@ ADAPTER_PATHS = {
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
+    # Mistral-Small-4-119B: dense MLA (DeepSeek-family) + GPT-OSS-family softmax top-4 MoE routing.
+    "mistral_small4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small4:MistralSmall4Adapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}
