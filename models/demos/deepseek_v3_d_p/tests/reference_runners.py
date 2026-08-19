@@ -20,6 +20,23 @@ from transformers.activations import ACT2FN
 from models.demos.common.prefill.adapter import PrefillModelAdapter as TestVariant
 
 
+def _build_act_fn(cfg):
+    """The activation an upstream MLP would build for this config.
+
+    Mirrors KimiMLP/KimiBlockSparseMLP rather than going straight to ACT2FN, which has no "situ"
+    entry -- so the override below can name either activation for either half.
+    """
+    if getattr(cfg, "hidden_act", None) == "situ":
+        from models.demos.deepseek_v3_d_p.reference.kimi_k3.modeling_kimi_moe import (
+            SituAndMul,
+            _get_situ_activation_params,
+        )
+
+        beta, linear_beta = _get_situ_activation_params(cfg)
+        return SituAndMul(beta=beta, linear_beta=linear_beta)
+    return ACT2FN[cfg.hidden_act]
+
+
 def run_reference_moe(
     variant: TestVariant,
     *,
@@ -68,7 +85,7 @@ def run_reference_moe(
         shared_cfg = copy(cfg)
         shared_cfg.hidden_act = shared_hidden_act
         shared.config = shared_cfg
-        shared.act_fn = ACT2FN[shared_hidden_act]
+        shared.act_fn = _build_act_fn(shared_cfg)
     moe.load_state_dict(
         _pack_reference_moe_state_dict(moe, gate_weights, routed_expert_weights, shared_expert_weights, latent_weights),
         strict=True,

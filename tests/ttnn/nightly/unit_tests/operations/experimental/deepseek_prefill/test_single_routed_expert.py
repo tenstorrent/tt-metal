@@ -139,9 +139,11 @@ def run_single_routed_expert(
     logger.debug("Running torch reference...")
     with torch.no_grad():
         torch_output_active = torch_expert(torch_active)
-        if torch_activation == ACTIVATION_SITU:
-            # How far into each tanh cap the inputs actually reach. Asserted below for the
-            # saturation cases, so one of those can't silently degrade into a near-linear run.
+        if torch_activation == ACTIVATION_SITU and min_cap_frac is not None:
+            # How far into each tanh cap the inputs actually reach, so a saturation case can't
+            # silently degrade into a near-linear run. Only the cases that assert it pay for the
+            # two extra host matmuls (~225 GFLOP at the 5120-token shape, and the perf harness
+            # calls this body once per iteration).
             gate_out = torch.nn.functional.linear(torch_active, weights["gate_proj"])
             up_out = torch.nn.functional.linear(torch_active, weights["up_proj"])
             gate_frac = (gate_out.abs() > _SITU_BETA_GATE).float().mean().item()
@@ -150,10 +152,9 @@ def run_single_routed_expert(
                 f"SiTU-GLU cap coverage: |gate|>{_SITU_BETA_GATE}: {gate_frac:.1%}, "
                 f"|up|>{_SITU_BETA_UP}: {up_frac:.1%}"
             )
-            if min_cap_frac is not None:
-                gate_min, up_min = min_cap_frac
-                assert gate_frac >= gate_min, f"gate cap coverage {gate_frac:.1%} below {gate_min:.1%}"
-                assert up_frac >= up_min, f"up cap coverage {up_frac:.1%} below {up_min:.1%}"
+            gate_min, up_min = min_cap_frac
+            assert gate_frac >= gate_min, f"gate cap coverage {gate_frac:.1%} below {gate_min:.1%}"
+            assert up_frac >= up_min, f"up cap coverage {up_frac:.1%} below {up_min:.1%}"
     logger.debug(f"Torch output shape: {torch_output_active.shape}")
 
     # Create TTNN input: 2D (allocated_tokens, emb_dim), replicated across the 1-device mesh.
