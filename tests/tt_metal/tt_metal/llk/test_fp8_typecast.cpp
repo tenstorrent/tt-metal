@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -365,7 +366,8 @@ static vector<std::uint32_t> run_binary_add(
     const vector<std::uint32_t>& src0_vec,
     const vector<std::uint32_t>& src1_vec,
     std::uint32_t num_tiles,
-    const std::string& compute_kernel) {
+    const std::string& compute_kernel,
+    const std::map<std::string, std::string>& compute_defines = {}) {
     IDevice* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
@@ -405,12 +407,19 @@ static vector<std::uint32_t> run_binary_add(
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    CreateKernel(program, compute_kernel, core, ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {num_tiles}});
+    auto compute = CreateKernel(
+        program,
+        compute_kernel,
+        core,
+        ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {num_tiles}, .defines = compute_defines});
 
     detail::WriteToBuffer(src0_buffer, src0_vec);
     detail::WriteToBuffer(src1_buffer, src1_vec);
     SetRuntimeArgs(program, reader, core, {src0_buffer->address(), 0, src1_buffer->address(), 0, num_tiles});
     SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles});
+    // Legacy eltwise_binary.cpp reads runtime args {per_core_block_cnt, per_core_block_size, acc_to_dst};
+    // the id-free kernel reads only the compile-time num_tiles and ignores these (harmless). One tile/block.
+    SetRuntimeArgs(program, compute, core, {num_tiles, 1, 0});
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -433,12 +442,16 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixBinaryAddSpecMatchesLegacy) {
     auto src1 = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/7, /*offset=*/-10.0f);
 
+    // Legacy baseline = the shipping classic-CB kernel eltwise_binary.cpp, driven for ADD via defines
+    // (no golden, no hand-written mirror). On silicon DST_ACCUM_MODE is a constexpr (not a macro), so the
+    // #if defined(DST_ACCUM_MODE) dest-accum path stays off and the plain 2-input add path is compiled.
     auto legacy = run_binary_add(
         mesh_device,
         src0,
         src1,
         num_tiles,
-        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary_add_legacy.cpp");
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
+        {{"ELTWISE_OP", "add_tiles"}, {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"}});
     auto spec = run_binary_add(
         mesh_device,
         src0,
