@@ -10,12 +10,12 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 import torch
+from vllm.logger import init_logger
 
 import ttnn
 from models.autoports.google_gemma_4_31b.tt.functional_decoder import HF_MODEL_ID
 from models.autoports.google_gemma_4_31b.tt.generator import Gemma4Generator, build_generator
 from models.vllm_test_utils.generative_base import GenerativeTestModelBase
-from vllm.logger import init_logger
 
 DEFAULT_MODEL_DIR = Path("models/autoports/google_gemma_4_31b")
 MODEL_DIR_ENV = "GEMMA4_31B_AUTOPORT_DIR"
@@ -39,6 +39,8 @@ def _resolve_model_dir() -> Path:
     if tt_metal_home:
         return (Path(tt_metal_home) / raw).resolve()
     return raw.resolve()
+
+
 HOST_SAMPLING_COMPAT_ENV = "GEMMA4_31B_VLLM_HOST_SAMPLING_COMPAT"
 REDUCED_LAYERS_ENV = "GEMMA4_31B_VLLM_LAYER_INDICES"
 PAGE_BLOCK_SIZE = 64
@@ -294,7 +296,7 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
                 return_all_logits=False,
             )
 
-        _require_semantic_greedy(sampling_params)
+        top_k, top_p, temperature = self.generator.resolve_sampling(sampling_params)
         logits = self.generator.prefill_forward(
             tokens.to(torch.long),
             page_table=page_tables,
@@ -306,9 +308,9 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
         sampled, _ = self.generator._sample_eager(
             logits,
             tt_out_tok=output_buffer,
-            top_k=1,
-            top_p=0.0,
-            temperature=1.0,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
         )
         tokens_host = _tokens_to_host(sampled, active_batch=len(prompt_lens_list))
         logits.deallocate(True)
@@ -356,9 +358,10 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
 
         if not enable_trace:
             raise ValueError("Gemma 4 31B on-device serving sampling requires decode tracing")
-        _require_semantic_greedy(sampling_params)
+        sampling = self.generator.resolve_sampling(sampling_params)
+        sampling_label = _sampling_trace_label(sampling)
         cache_identity = _kv_cache_identity(kv_cache)
-        steady_sampling_key = ("greedy", self._decode_active_batch_size)
+        steady_sampling_key = (sampling_label, self._decode_active_batch_size)
         if (
             bool(reuse_device_decode_inputs)
             and not bool(reset_batch)
@@ -386,7 +389,7 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
             raise ValueError("Gemma 4 31B dynamic decode requires active requests in a contiguous prefix")
         trace_tokens = tokens.reshape(tokens.shape[0], -1)[:active_batch_size, 0].to(torch.int32)
         trace_positions = positions[:active_batch_size]
-        sampling_key = ("greedy", active_batch_size)
+        sampling_key = (sampling_label, active_batch_size)
         cache_changed = self._decode_cache_identity != cache_identity
         must_prepare = (
             bool(reset_batch)
@@ -416,9 +419,9 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
                 prompt_lengths=[int(value) for value in trace_positions.tolist()],
                 active_batch_size=active_batch_size,
                 pad_to_max_batch=False,
-                top_k=1,
-                top_p=0.0,
-                temperature=1.0,
+                top_k=sampling[0],
+                top_p=sampling[1],
+                temperature=sampling[2],
             )
             logger.info(
                 "Gemma 4 decode traces ready: active_batch=%d model_trace_id=%s sampler_trace_id=%s",
@@ -569,13 +572,9 @@ def _sampling_values(sampling_params, name: str) -> list[Any]:
     return [value]
 
 
-def _require_semantic_greedy(sampling_params) -> None:
-    temperatures = _sampling_values(sampling_params, "temperature")
-    top_ks = _sampling_values(sampling_params, "top_k")
-    if len(temperatures) != len(top_ks):
-        raise ValueError("temperature and top_k must contain one value per fixed slot")
-    if not all(float(temp) <= 0.0 or int(top_k) == 1 for temp, top_k in zip(temperatures, top_ks)):
-        raise ValueError("on-device Gemma 4 31B serving sampling is greedy-only")
+def _sampling_trace_label(sampling: tuple[int, float, float]):
+    """Trace-key component, so a sampling-mode change re-prepares the decode traces."""
+    return "greedy" if sampling == (1, 0.0, 1.0) else ("sample", *sampling)
 
 
 def _kv_cache_identity(kv_cache) -> tuple[tuple[int, ...], ...]:

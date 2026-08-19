@@ -25,6 +25,7 @@ from models.autoports.google_gemma_4_31b.tt.model import (
 )
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig
 from models.common.readiness_check.contract import Generator, NextInputFn
+from models.common.sampling import SamplingParams, format_sampling_params
 
 _ARGMAX_TILE_KERNEL = "models/autoports/google_gemma_4_31b/tt/kernels/gemma4_argmax_tile_local_winner.cpp"
 _ARGMAX_PAIR_REDUCE_KERNEL = "models/autoports/google_gemma_4_31b/tt/kernels/gemma4_argmax_pair_reduce.cpp"
@@ -249,6 +250,10 @@ class Gemma4GreedyTP4Sampler:
         for tensor in (self.gathered_pairs, self.local_pairs):
             if tensor.is_allocated():
                 tensor.deallocate(True)
+
+
+_GREEDY_SAMPLING = (1, 0.0, 1.0)
+_SAMPLING_SLOTS = 32  # Sampling1D slot tensors are tile-shaped
 
 
 class Gemma4Generator(Generator):
@@ -612,6 +617,49 @@ class Gemma4Generator(Generator):
     @staticmethod
     def _is_semantic_greedy(*, top_k: int, top_p: float, temperature: float) -> bool:
         return int(top_k) == 1 and float(top_p) == 0.0 and float(temperature) == 1.0
+
+    @staticmethod
+    def resolve_sampling(sampling_params) -> tuple[int, float, float]:
+        """Normalise request sampling params into this generator's (top_k, top_p, temperature).
+
+        Delegates to the platform formatter tt_transformers uses, which clamps
+        top_k into the sampler's [1, 32] (k < 1 meaning unrestricted -> 32) and
+        inverts temperature, the form ttnn.sampling wants: its kernel multiplies
+        the top-k values by temp (sampling.cpp:465).
+        """
+        if sampling_params is None:
+            return _GREEDY_SAMPLING
+
+        def values(name: str, default: Any) -> list[Any]:
+            value = getattr(sampling_params, name, default)
+            if isinstance(value, torch.Tensor):
+                return value.reshape(-1).tolist()
+            if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+                return list(value)
+            return [value]
+
+        temperatures, top_ks, top_ps = values("temperature", 0.0), values("top_k", 1), values("top_p", 1.0)
+        if len(temperatures) != len(top_ks):
+            raise ValueError("temperature and top_k must contain one value per fixed slot")
+        if len(top_ps) == 1:
+            top_ps = top_ps * len(temperatures)
+
+        formatted = format_sampling_params(
+            SamplingParams(temperature=list(temperatures), top_k=list(top_ks), top_p=list(top_ps)),
+            _SAMPLING_SLOTS,
+        )
+        slots = len(temperatures)
+        requested = {
+            (int(k), float(p), float(t))
+            for k, p, t in zip(formatted.top_k[:slots], formatted.top_p[:slots], formatted.temperature[:slots])
+        }
+        if len(requested) > 1:
+            raise ValueError(
+                f"on-device sampling needs one shared (top_k, top_p, temperature), got {sorted(requested)}"
+            )
+        top_k, top_p, temperature = requested.pop()
+        # top-1 is argmax whatever p and T are; keep the dedicated greedy sampler.
+        return _GREEDY_SAMPLING if top_k == 1 else (top_k, top_p, temperature)
 
     def _capture_sampling_trace(
         self,
