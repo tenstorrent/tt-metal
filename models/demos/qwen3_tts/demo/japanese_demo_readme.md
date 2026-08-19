@@ -21,7 +21,8 @@ python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py \
 
 ## N300 TP=2 (1.7B and 0.6B)
 
-Needs a 2-chip N300 (or equivalent mesh). Prints RTF and writes both wavs.
+Needs a 2-chip N300 (or equivalent mesh). Weights are sharded with
+``ShardTensorToMesh`` (``tt/mesh_utils.py``). Prints RTF and writes both wavs.
 
 ```bash
 MESH_DEVICE=N300 \

@@ -57,12 +57,24 @@ class Attention(LightweightModule):
         super().__init__()
         self.device = device
         self.hidden_size = hidden_size
-        self.num_heads = num_heads
-        self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
-        self.num_kv_groups = num_heads // num_kv_heads
         self.scale = head_dim**-0.5
         self.rms_norm_eps = rms_norm_eps
+
+        is_mesh_device_flag = device.__class__.__name__ == "MeshDevice"
+        from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size
+
+        self.tp_size = get_tp_size(device) if is_mesh_device_flag else 1
+        if self.tp_size > 1:
+            assert num_heads % self.tp_size == 0
+            assert num_kv_heads % self.tp_size == 0
+        # For TP>1 override num_heads/num_kv_heads to per-chip (local) counts.
+        # num_kv_groups is the same ratio (local_heads / local_kv_heads == full ratio).
+        self.num_heads = num_heads // self.tp_size
+        self.num_kv_heads = num_kv_heads // self.tp_size
+        self.num_kv_groups = self.num_heads // self.num_kv_heads
+        # Derived local sizes used in forward (same as self.num_heads * head_dim etc.).
+        self._local_hidden = self.num_heads * head_dim
 
         def _permute_rope_head_dim_rows(weight_2d, local_heads: int, head_dim: int):
             # Convert each head block from non-interleaved [..., d0..d63, d64..d127]
@@ -84,7 +96,7 @@ class Attention(LightweightModule):
             out[1::2] = weight_1d[half_dim:]
             return out
 
-        is_mesh_device = device.__class__.__name__ == "MeshDevice"
+        is_mesh_device = is_mesh_device_flag
 
         def get_cache_name(name):
             if weight_cache_path is None:
@@ -114,13 +126,26 @@ class Attention(LightweightModule):
         #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         # )
 
-        _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
+        _mesh_mapper_replicate = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
         _dram = ttnn.DRAM_MEMORY_CONFIG
         _fused_qkv = (num_heads + 2 * num_kv_heads) * head_dim
-        # Fused QKV on host, single upload (same pattern as MLP): stable [1,1,hidden,fused] DRAM weights for traces.
+        _local_fused_qkv = (self.num_heads + 2 * self.num_kv_heads) * head_dim
+        # Fused QKV: column-parallel for TP>1 (per-chip [Q_local|K_local|V_local]),
+        # replicated for TP=1 (full [Q|K|V]).
         qkv_2d = torch.cat([q_proj_weight, k_proj_weight, v_proj_weight], dim=0)
         assert int(qkv_2d.shape[0]) == _fused_qkv
-        _wqkv_host = qkv_2d.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
+        if self.tp_size == 1:
+            _wqkv_host = qkv_2d.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
+            _wqkv_mapper = _mesh_mapper_replicate
+        else:
+            # Split Q, K, V separately by head count, then re-cat per chip.
+            q_chunks = list(torch.chunk(q_proj_weight, self.tp_size, dim=0))
+            k_chunks = list(torch.chunk(k_proj_weight, self.tp_size, dim=0))
+            v_chunks = list(torch.chunk(v_proj_weight, self.tp_size, dim=0))
+            per_chip = [torch.cat([q_chunks[i], k_chunks[i], v_chunks[i]], dim=0) for i in range(self.tp_size)]
+            # Stack on a new axis sharded across the mesh: [1, tp, hidden, local_fused].
+            _wqkv_host = torch.stack(per_chip, dim=0).transpose(-2, -1).unsqueeze(0).contiguous()
+            _wqkv_mapper = ttnn.ShardTensorToMesh(device, dim=1)
         _wqkv_cache = get_cache_name("wqkv")
         if _wqkv_cache is not None:
             self.wqkv = ttnn.as_tensor(
@@ -130,7 +155,7 @@ class Attention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=_dram,
                 cache_file_name=_wqkv_cache,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_wqkv_mapper,
             )
         else:
             self.wqkv = ttnn.from_torch(
@@ -139,7 +164,7 @@ class Attention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=_dram,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_wqkv_mapper,
             )
 
         # Torch reference (o_proj transpose on CPU, then as_tensor):
@@ -154,8 +179,17 @@ class Attention(LightweightModule):
         #     mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         # )
 
-        _o_rows = num_heads * head_dim
-        _wo_host = o_proj_weight.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
+        # O-projection: row-parallel for TP>1. Each chip owns a K-slice of the
+        # transposed weight (K = num_heads*head_dim, split by heads). The matmul
+        # per chip produces a partial sum that all_reduce completes.
+        if self.tp_size == 1:
+            _wo_host = o_proj_weight.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous()
+            _wo_mapper = _mesh_mapper_replicate
+        else:
+            wo_t = o_proj_weight.transpose(-2, -1).contiguous()  # [hidden_in, hidden_out]
+            per_chip_wo = list(torch.chunk(wo_t, self.tp_size, dim=0))  # split K
+            _wo_host = torch.stack(per_chip_wo, dim=0).unsqueeze(0).contiguous()  # [1, tp, local_hidden_in, hidden_out]
+            _wo_mapper = ttnn.ShardTensorToMesh(device, dim=1)
         _wo_cache = get_cache_name("wo")
         if _wo_cache is not None:
             self.wo = ttnn.as_tensor(
@@ -165,7 +199,7 @@ class Attention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=_dram,
                 cache_file_name=_wo_cache,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_wo_mapper,
             )
         else:
             self.wo = ttnn.from_torch(
@@ -174,7 +208,7 @@ class Attention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=_dram,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_wo_mapper,
             )
 
         # QK-norm weights (per-head RMSNorm)
@@ -196,7 +230,7 @@ class Attention(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=_qk_norm_gamma_memcfg,
                 cache_file_name=_qn_cache,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_mesh_mapper_replicate,
             )
         else:
             self.q_norm_weight = ttnn.from_torch(
@@ -205,7 +239,7 @@ class Attention(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=_qk_norm_gamma_memcfg,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_mesh_mapper_replicate,
             )
 
         _kn_cache = get_cache_name("k_norm")
@@ -217,7 +251,7 @@ class Attention(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=_qk_norm_gamma_memcfg,
                 cache_file_name=_kn_cache,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_mesh_mapper_replicate,
             )
         else:
             self.k_norm_weight = ttnn.from_torch(
@@ -226,7 +260,7 @@ class Attention(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=device,
                 memory_config=_qk_norm_gamma_memcfg,
-                mesh_mapper=_mesh_mapper,
+                mesh_mapper=_mesh_mapper_replicate,
             )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -279,10 +313,11 @@ class Attention(LightweightModule):
         self.short_seq_limit = 32
         _grid = device.compute_with_storage_grid_size()
         _fp32_linear = self.compute_kernel_config.fp32_dest_acc_en
+        # 1D program configs use per-chip sizes: QKV output = local_fused_qkv; O input = local_hidden.
         self._decode_wqkv_progcfg = make_linear_1d_program_config(
             m=1,
             k=hidden_size,
-            n=_fused_qkv,
+            n=_local_fused_qkv,
             grid_x=_grid.x,
             grid_y=_grid.y,
             fp32_dest_acc_en=_fp32_linear,
@@ -290,14 +325,14 @@ class Attention(LightweightModule):
         self._short_seq_wqkv_progcfg = make_linear_1d_program_config(
             m=self.short_seq_limit,
             k=hidden_size,
-            n=_fused_qkv,
+            n=_local_fused_qkv,
             grid_x=_grid.x,
             grid_y=_grid.y,
             fp32_dest_acc_en=_fp32_linear,
         )
         self._decode_wo_progcfg = make_linear_1d_program_config(
             m=1,
-            k=_o_rows,
+            k=self._local_hidden,
             n=hidden_size,
             grid_x=_grid.x,
             grid_y=_grid.y,
@@ -305,7 +340,7 @@ class Attention(LightweightModule):
         )
         self._short_seq_wo_progcfg = make_linear_1d_program_config(
             m=self.short_seq_limit,
-            k=_o_rows,
+            k=self._local_hidden,
             n=hidden_size,
             grid_x=_grid.x,
             grid_y=_grid.y,
@@ -313,46 +348,53 @@ class Attention(LightweightModule):
         )
 
         # === Decode-only DRAM-sharded QKV / O projections ===
-        # qkv_2d rows are reordered into KV-group-interleaved layout (shard i =
-        # [q_{2i}, q_{2i+1}, k_i, v_i]) so the sharded nlp_create_qkv_heads kernel
-        # can split the matmul output without an intermediate L1 copy.
-        self._fused_qkv = _fused_qkv
-        num_q_per_kv = num_heads // num_kv_heads
+        # qkv_2d rows are reordered into KV-group-interleaved layout so the sharded
+        # nlp_create_qkv_heads kernel can split without an intermediate L1 copy.
+        # TP>1: apply the permutation per-chip (each chip has its own local-head slice),
+        # then stack and distribute via build_dram_sharded_weight_tp.
+        # Use local head counts for _fused_qkv since the sharded weight and NLP head
+        # configs all operate on the per-chip head slice.
+        self._fused_qkv = _local_fused_qkv  # local for TP>1; same as _fused_qkv for TP=1
+        num_q_per_kv = self.num_heads // self.num_kv_heads  # same ratio for TP=1 and TP=2
 
-        # Helper: pick num_cores so in0_block_w (= k_tiles / num_cores) ≥ 2.
-        # Halves the DRAM-sharded inner-loop iteration count (and per-iter overhead).
-        # Reduces MLP/QKV/O decode matmul time by ~30% on K=2048 shapes.
-        _cg = device.compute_with_storage_grid_size()
-
-        def _pick_grid_block_w2(k_tiles, n_tiles, max_rows=_cg.y, max_cols=_cg.x):
-            max_cores = max_rows * max_cols
-            cands = [
-                c for c in range(1, max_cores + 1) if k_tiles % c == 0 and n_tiles % c == 0 and (k_tiles // c) >= 2
-            ]
-            if not cands:
-                return find_grid_k_n(k_tiles, n_tiles, max_rows=max_rows, max_cols=max_cols)
-            cands.sort(reverse=True)
-            for cores in cands:
-                for rows in range(1, max_rows + 1):
-                    if cores % rows == 0 and (cores // rows) <= max_cols:
-                        return rows, cores // rows
-            return find_grid_k_n(k_tiles, n_tiles, max_rows=max_rows, max_cols=max_cols)
-
-        row_perm = []
-        for i in range(num_kv_heads):
+        # Build KV-group-interleaved row permutation (relative indices within local heads).
+        row_perm_local = []
+        for i in range(self.num_kv_heads):
             for q_in_group in range(num_q_per_kv):
                 q_head_idx = i * num_q_per_kv + q_in_group
-                row_perm.extend(range(q_head_idx * head_dim, (q_head_idx + 1) * head_dim))
-            k_off = num_heads * head_dim
-            row_perm.extend(range(k_off + i * head_dim, k_off + (i + 1) * head_dim))
-            v_off = (num_heads + num_kv_heads) * head_dim
-            row_perm.extend(range(v_off + i * head_dim, v_off + (i + 1) * head_dim))
-        qkv_2d_kvgi = qkv_2d.index_select(0, torch.tensor(row_perm, dtype=torch.long)).contiguous()
-        wqkv_kn = qkv_2d_kvgi.transpose(-2, -1).contiguous()
-        self.wqkv_dram_sharded, k_q, n_padded_q = build_dram_sharded_weight(wqkv_kn, device, dtype=weight_dtype)
+                row_perm_local.extend(range(q_head_idx * head_dim, (q_head_idx + 1) * head_dim))
+            k_off = self.num_heads * head_dim
+            row_perm_local.extend(range(k_off + i * head_dim, k_off + (i + 1) * head_dim))
+            v_off = (self.num_heads + self.num_kv_heads) * head_dim
+            row_perm_local.extend(range(v_off + i * head_dim, v_off + (i + 1) * head_dim))
+        perm_t = torch.tensor(row_perm_local, dtype=torch.long)
+
+        if self.tp_size == 1:
+            # TP=1: permute the full fused QKV and upload as a single DRAM-sharded tensor.
+            qkv_2d_kvgi = qkv_2d.index_select(0, perm_t).contiguous()
+            wqkv_kn = qkv_2d_kvgi.transpose(-2, -1).contiguous()
+            self.wqkv_dram_sharded, k_q, n_padded_q = build_dram_sharded_weight(wqkv_kn, device, dtype=weight_dtype)
+        else:
+            # TP>1: apply permutation per chip, stack, and distribute via TP-aware helper.
+            from models.demos.qwen3_tts.tt.dram_sharded_matmul import build_dram_sharded_weight_tp
+
+            q_per_chip = list(torch.chunk(q_proj_weight, self.tp_size, dim=0))
+            k_per_chip = list(torch.chunk(k_proj_weight, self.tp_size, dim=0))
+            v_per_chip = list(torch.chunk(v_proj_weight, self.tp_size, dim=0))
+            per_chip_kvgi_kn = []
+            for i in range(self.tp_size):
+                qkv_chip = torch.cat([q_per_chip[i], k_per_chip[i], v_per_chip[i]], dim=0)
+                qkv_chip_kvgi = qkv_chip.index_select(0, perm_t).contiguous()
+                per_chip_kvgi_kn.append(qkv_chip_kvgi.transpose(-2, -1).contiguous())  # [K, N_local]
+            wqkv_kn_full = torch.cat(per_chip_kvgi_kn, dim=1)  # [K, N_total]
+            self.wqkv_dram_sharded, k_q, n_padded_q = build_dram_sharded_weight_tp(
+                wqkv_kn_full, device, self.tp_size, split_dim=1, dtype=weight_dtype
+            )
+
         self._decode_wqkv_n_padded = n_padded_q
         k_tiles_q, n_tiles_q = k_q // 32, n_padded_q // 32
-        rows_q, cols_q = _pick_grid_block_w2(k_tiles_q, n_tiles_q)
+        _cg = device.compute_with_storage_grid_size()
+        rows_q, cols_q = find_grid_k_n(k_tiles_q, n_tiles_q, max_rows=_cg.y, max_cols=_cg.x)
         self._decode_wqkv_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=k_q, n=n_padded_q, num_cores=rows_q * cols_q
         )
@@ -363,11 +405,20 @@ class Attention(LightweightModule):
             m_tiles=1, k_tiles=n_tiles_q, num_cores_x=cols_q, num_cores_y=rows_q
         )
 
-        wo_kn = o_proj_weight.transpose(-2, -1).contiguous()
-        self.wo_dram_sharded, k_o, n_padded_o = build_dram_sharded_weight(wo_kn, device, dtype=weight_dtype)
+        if self.tp_size == 1:
+            wo_kn = o_proj_weight.transpose(-2, -1).contiguous()
+            self.wo_dram_sharded, k_o, n_padded_o = build_dram_sharded_weight(wo_kn, device, dtype=weight_dtype)
+        else:
+            from models.demos.qwen3_tts.tt.dram_sharded_matmul import build_dram_sharded_weight_tp
+
+            wo_kn_full = o_proj_weight.transpose(-2, -1).contiguous()  # [hidden_in, hidden_out]
+            self.wo_dram_sharded, k_o, n_padded_o = build_dram_sharded_weight_tp(
+                wo_kn_full, device, self.tp_size, split_dim=0, dtype=weight_dtype
+            )
+
         self._decode_wo_n_padded = n_padded_o
         k_tiles_o, n_tiles_o = k_o // 32, n_padded_o // 32
-        rows_o, cols_o = _pick_grid_block_w2(k_tiles_o, n_tiles_o)
+        rows_o, cols_o = find_grid_k_n(k_tiles_o, n_tiles_o, max_rows=_cg.y, max_cols=_cg.x)
         self._decode_wo_dramshard_progcfg = dram_sharded_program_config(
             m=32, k=k_o, n=n_padded_o, num_cores=rows_o * cols_o
         )
@@ -378,77 +429,20 @@ class Attention(LightweightModule):
             m_tiles=1, k_tiles=n_tiles_o, num_cores_x=cols_o, num_cores_y=rows_o
         )
 
-        # === Prefill bucket=128 — width-sharded IN0 + 1D-mcast (mcast_in0=True) ===
-        # Reuses the same in0_block_w=2 trick from decode (halve num_cores, double
-        # per-core K shard, fewer inner-loop iterations). For QKV: 32 cores grid,
-        # IN0 shard [4 M-tiles, 2 K-tiles] per core, per_core_M=4, per_core_N=N_tiles/32.
-        _pf128_num_cores = 32
-        if k_tiles_q % _pf128_num_cores == 0 and n_tiles_q % _pf128_num_cores == 0:
-            _pf128_grid_x, _pf128_grid_y = 8, 4
-            self._prefill128_wqkv_in0_memcfg = width_sharded_l1_memcfg(
-                m_tiles=128 // 32, k_tiles=k_tiles_q, num_cores_x=_pf128_grid_x, num_cores_y=_pf128_grid_y
-            )
-            self._prefill128_wqkv_out_memcfg = width_sharded_l1_memcfg(
-                m_tiles=128 // 32, k_tiles=n_tiles_q, num_cores_x=_pf128_grid_x, num_cores_y=_pf128_grid_y
-            )
-            _pf_in0_block_w = k_tiles_q // _pf128_num_cores  # 2
-            _pf_per_core_N = n_tiles_q // _pf128_num_cores
-            _pf_per_core_M = 128 // 32  # 4
-            _sb_lim = 4 if _fp32_linear else 8
-            _pf_sbw = max(i for i in range(1, _sb_lim + 1) if _pf_per_core_N % i == 0)
-            _pf_sbh = max(i for i in range(1, _sb_lim + 1) if _pf_per_core_M % i == 0 and i * _pf_sbw <= _sb_lim)
-            self._prefill128_wqkv_progcfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(_pf128_grid_x, _pf128_grid_y),
-                in0_block_w=_pf_in0_block_w,
-                out_subblock_h=_pf_sbh,
-                out_subblock_w=_pf_sbw,
-                per_core_M=_pf_per_core_M,
-                per_core_N=_pf_per_core_N,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=True,
-            )
-        else:
-            self._prefill128_wqkv_progcfg = None
-
-        # Same for O proj
-        if k_tiles_o % _pf128_num_cores == 0 and n_tiles_o % _pf128_num_cores == 0:
-            self._prefill128_wo_in0_memcfg = width_sharded_l1_memcfg(
-                m_tiles=128 // 32, k_tiles=k_tiles_o, num_cores_x=_pf128_grid_x, num_cores_y=_pf128_grid_y
-            )
-            self._prefill128_wo_out_memcfg = width_sharded_l1_memcfg(
-                m_tiles=128 // 32, k_tiles=n_tiles_o, num_cores_x=_pf128_grid_x, num_cores_y=_pf128_grid_y
-            )
-            _po_in0_block_w = k_tiles_o // _pf128_num_cores
-            _po_per_core_N = n_tiles_o // _pf128_num_cores
-            _po_sbw = max(i for i in range(1, _sb_lim + 1) if _po_per_core_N % i == 0)
-            _po_sbh = max(i for i in range(1, _sb_lim + 1) if _pf_per_core_M % i == 0 and i * _po_sbw <= _sb_lim)
-            self._prefill128_wo_progcfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(_pf128_grid_x, _pf128_grid_y),
-                in0_block_w=_po_in0_block_w,
-                out_subblock_h=_po_sbh,
-                out_subblock_w=_po_sbw,
-                per_core_M=_pf_per_core_M,
-                per_core_N=_po_per_core_N,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=True,
-            )
-        else:
-            self._prefill128_wo_progcfg = None
-
         # === Sharded NLP head op memcfgs (decode m=32 + prefill m=128) ===
         # nlp_concat_heads HEIGHT_SHARDED input over num_heads cores (1 head/shard).
         # nlp_create_qkv_heads WIDTH_SHARDED input with shard_width=(Q/KV+2)*head_dim
         # over fused_qkv/shard_width cores (= num_kv_heads).
+        # self.num_heads / self.num_kv_heads are already local for TP>1 so these
+        # configs automatically use the per-chip head counts.
         _compute_grid = device.compute_with_storage_grid_size()
-        concat_grid = ttnn.num_cores_to_corerangeset(num_heads, _compute_grid, True)
+        concat_grid = ttnn.num_cores_to_corerangeset(self.num_heads, _compute_grid, True)
         qkv_shard_width = (num_q_per_kv + 2) * head_dim
-        qkv_num_cores = _fused_qkv // qkv_shard_width
-        assert _fused_qkv % qkv_shard_width == 0, "fused_qkv must divide qkv_shard_width"
+        qkv_num_cores = self._fused_qkv // qkv_shard_width
+        assert self._fused_qkv % qkv_shard_width == 0, "fused_qkv must divide qkv_shard_width"
         qkv_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(qkv_num_cores - 1, 0))})
-        q_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_heads - 1, 0))})
-        kv_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_kv_heads - 1, 0))})
+        q_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.num_heads - 1, 0))})
+        kv_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.num_kv_heads - 1, 0))})
 
         def _build_sharded_nlp_memcfgs(m: int):
             return {
@@ -487,8 +481,10 @@ class Attention(LightweightModule):
         self._decode_qkv_split_k_out_memcfg = _dec["k_out"]
         self._decode_qkv_split_v_out_memcfg = self._decode_qkv_split_k_out_memcfg
 
-        # Per-bucket prefill sharded NLPConcat memcfgs.
-        self._prefill_concat_configs = {m: _build_sharded_nlp_memcfgs(m) for m in _PREFILL_SEQS}
+        # Per-bucket prefill sharded NLPConcat memcfgs (TP=1 only; prefill DRAM-sharded not yet ported for TP>1).
+        self._prefill_concat_configs = (
+            {} if self.tp_size > 1 else {m: _build_sharded_nlp_memcfgs(m) for m in _PREFILL_SEQS}
+        )
 
         # Pre-compute HEIGHT_SHARDED memory configs for paged_update_cache inputs.
         # paged_update_cache requires input in [1, batch, kv_heads, head_dim] HEIGHT_SHARDED on batch cores.
@@ -498,7 +494,7 @@ class Attention(LightweightModule):
         # requires their input shards to live on DISJOINT cores (it parallelizes across
         # them). We give K core (0,0) and V core (1,0) so the fused kernel can run.
         TILE = 32
-        kv_shard_height = ((num_kv_heads + TILE - 1) // TILE) * TILE  # ceil to tile: 8→32
+        kv_shard_height = ((self.num_kv_heads + TILE - 1) // TILE) * TILE  # ceil to tile: 4 or 8→32
         _k_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
         _v_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))})
         self.paged_k_input_mem_config = ttnn.MemoryConfig(
@@ -569,26 +565,16 @@ class Attention(LightweightModule):
         else:
             wqkv_progcfg = wo_progcfg = None
 
-        # QKV projection — DRAM-sharded matmul path for seq_len <= 32.
+        # QKV projection — DRAM-sharded matmul path. Originally gated to
+        # decode (seq=1); relaxed to all seq_len <= 32 (one tile in M) so
+        # CP_prefill (seq=2) also takes the sharded fast path → 16-core
+        # nlp_create_qkv_heads instead of single-core. Larger prefill buckets
+        # (64, 128) need separate per-m shard configs to engage — TODO.
         use_dram_shard_qkv = seq_len <= 32
-        use_prefill128_qkv = (not is_decode) and (seq_len == 128) and (self._prefill128_wqkv_progcfg is not None)
         # Sharded nlp_create_qkv_heads engages downstream of the DRAM-sharded QKV
         # since wqkv was rearranged to KV-group-interleaved layout.
         sharded_qkv_split = use_dram_shard_qkv
-        if use_prefill128_qkv:
-            x_sharded = ttnn.to_memory_config(x, self._prefill128_wqkv_in0_memcfg)
-            xqkv_sharded = ttnn.linear(
-                x_sharded,
-                self.wqkv,
-                compute_kernel_config=self.compute_kernel_config,
-                program_config=self._prefill128_wqkv_progcfg,
-                memory_config=self._prefill128_wqkv_out_memcfg,
-            )
-            ttnn.deallocate(x_sharded)
-            xqkv = ttnn.to_memory_config(xqkv_sharded, ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(xqkv_sharded)
-            xqkv_already_sharded_for_split = False
-        elif use_dram_shard_qkv:
+        if use_dram_shard_qkv:
             # Skip the I→S if x is already in the matching width-sharded layout
             # (e.g. piped through from a sharded layernorm in decoder_layer).
             if x.memory_config() == self._decode_wqkv_in0_memcfg:
@@ -975,12 +961,9 @@ class Attention(LightweightModule):
 
         # Hoist use_dram_shard_o so it can also gate the direct concat→wo reshard below.
         use_dram_shard_o = is_decode and seq_len == 1
-        use_prefill128_o = (
-            (not is_decode) and (seq_len == 128) and getattr(self, "_prefill128_wo_progcfg", None) is not None
-        )
         # Pick decode (m=32) vs prefill bucket-size sharded NLPConcat memcfgs.
         sharded_concat_decode = is_decode
-        sharded_concat_prefill = not is_decode and seq_len in self._prefill_concat_configs
+        sharded_concat_prefill = (not is_decode) and (seq_len in self._prefill_concat_configs)
         use_sharded_concat = sharded_concat_decode or sharded_concat_prefill
         if sharded_concat_prefill:
             _pre = self._prefill_concat_configs[seq_len]
@@ -1016,20 +999,7 @@ class Attention(LightweightModule):
             attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
             _attn_already_in_wo_in0 = False
 
-        if use_prefill128_o:
-            attn_sharded = ttnn.to_memory_config(attn_output, self._prefill128_wo_in0_memcfg)
-            ttnn.deallocate(attn_output)
-            out_sharded = ttnn.linear(
-                attn_sharded,
-                self.wo,
-                compute_kernel_config=self.compute_kernel_config,
-                program_config=self._prefill128_wo_progcfg,
-                memory_config=self._prefill128_wo_out_memcfg,
-            )
-            ttnn.deallocate(attn_sharded)
-            output = ttnn.to_memory_config(out_sharded, ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(out_sharded)
-        elif use_dram_shard_o:
+        if use_dram_shard_o:
             if _attn_already_in_wo_in0:
                 attn_sharded = attn_output  # already 64-core width-sharded
                 _own_attn_sharded = False
@@ -1079,5 +1049,17 @@ class Attention(LightweightModule):
                 program_config=wo_progcfg,
             )
             ttnn.deallocate(attn_output)
+
+        # Row-parallel O-proj on TP>1: each chip holds a partial sum over local_hidden.
+        # all_reduce restores the full [B, 1, S, hidden] — applies to BOTH the
+        # DRAM-sharded decode path (which sets output in the if-branch above) and the
+        # regular non-DRAM path (else-branch). The one exception is DRAM-sharded with
+        # wo_n_unpadded=True (only possible on TP=1 where n_padded==hidden), which
+        # returns a width-sharded tensor for the caller's residual add — in that case
+        # tp_size==1 so the guard below is never entered.
+        if self.tp_size > 1 and not (use_dram_shard_o and self._decode_wo_n_padded == self.hidden_size):
+            from models.demos.qwen3_tts.tt.mesh_utils import tp_all_reduce
+
+            output = tp_all_reduce(output, self.device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return output, updated_kv_cache
