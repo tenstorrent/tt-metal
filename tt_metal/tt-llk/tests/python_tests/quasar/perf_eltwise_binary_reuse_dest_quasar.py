@@ -28,7 +28,7 @@ from quasar.test_eltwise_binary_reuse_dest_quasar import (
 @parametrize(
     formats=REUSE_DEST_FORMATS,
     mathop=lambda formats: reuse_dest_mathops(formats, is_perf=True),
-    math_fidelity=lambda mathop: reuse_dest_math_fidelities(mathop, is_perf=True),
+    math_fidelity=reuse_dest_math_fidelities,
     reuse_dest_type=[
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,

@@ -57,15 +57,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            const std::uint32_t scale_dvalids_per_tile = 1;
-            const std::uint32_t data_dvalids_per_tile  = num_faces;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
                     // Reduce unpack emits one persistent SrcB scale face,
                     // followed by all SrcA faces for each tile.
-                    perf_unpack_set_srcb_once_then_srca_per_face(scale_dvalids_per_tile, data_dvalids_per_tile);
+                    perf_unpack_set_srcb_once_then_srca_per_face(1 /*srcb_once_count*/, num_faces);
                 }
             }
         }
@@ -75,7 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
-                    _llk_unpack_reduce_(i, 0, tensor_shape_A);
+                    _llk_unpack_reduce_(i, 0 /*start_l1_tile_idx_1*/, tensor_shape_A);
                 }
             }
         }
@@ -104,8 +102,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces   = params.num_faces;
 #endif
     DataFormat src_format                     = static_cast<DataFormat>(formats.math);
-    DataFormat pack_src_format                = static_cast<DataFormat>(formats.pack_src);
-    const bool use_int32_dest_alu             = is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32;
+    const bool use_int32_dest_alu             = is_fp32_dest_acc_en && static_cast<DataFormat>(formats.pack_src) == DataFormat::Int32;
     const bool is_int_fpu_en                  = use_int32_dest_alu && (REDUCE_DIM == ReduceDim::REDUCE_ROW || REDUCE_DIM == ReduceDim::REDUCE_SCALAR);
     const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
     constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
@@ -120,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if (use_int32_dest_alu)
         {
-            _llk_math_srcAB_hw_configure_<false, false /* fp32 dest */, true /* int32 dest */>(src_format, src_format);
+            _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, false /* fp32 dest */, true /* int32 dest */>(src_format, src_format);
         }
         else
         {
@@ -148,13 +145,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            const std::uint32_t scale_dvalids_per_tile = 1;
-            const std::uint32_t data_dvalids_per_tile  = num_faces;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
-                    perf_math_clear_srca_per_face_then_srcb_once(data_dvalids_per_tile, scale_dvalids_per_tile);
+                    perf_math_clear_srca_per_face_then_srcb_once(num_faces, 1 /*srcb_once_count*/);
                 }
             }
         }

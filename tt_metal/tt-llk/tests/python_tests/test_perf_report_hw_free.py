@@ -335,6 +335,40 @@ def test_run_single_run_drops_empty_std(monkeypatch):
     assert stat_column("MATH_ISOLATE", STD) not in frame.columns
 
 
+def test_run_rejects_empty_stats_for_requested_run_type(monkeypatch):
+    monkeypatch.setitem(
+        Profiler.STATS_FUNCTION,
+        PerfRunType.MATH_ISOLATE,
+        lambda data: pd.DataFrame(),
+    )
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError,
+        match="no timing statistics for requested run type MATH_ISOLATE",
+    ):
+        _run_hw_free(monkeypatch, [PerfRunType.MATH_ISOLATE], run_count=1)
+
+
+def test_run_rejects_negative_mean_timing(monkeypatch):
+    mean_column = stat_column("MATH_ISOLATE", MEAN)
+    monkeypatch.setitem(
+        Profiler.STATS_FUNCTION,
+        PerfRunType.MATH_ISOLATE,
+        lambda data: pd.DataFrame(
+            {
+                MARKER: ["INIT", "TILE_LOOP"],
+                mean_column: [-1.0, -2.0],
+            }
+        ),
+    )
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError,
+        match="negative mean timing values.*MATH_ISOLATE",
+    ):
+        _run_hw_free(monkeypatch, [PerfRunType.MATH_ISOLATE], run_count=1)
+
+
 def test_postprocess_tile_loop_derives_per_tile_from_raw():
     # Public per-tile derivation used downstream on the RAW (Parquet/CSV) table.
     raw = pd.DataFrame(

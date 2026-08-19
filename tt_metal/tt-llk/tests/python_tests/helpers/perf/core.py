@@ -14,6 +14,7 @@ from typing import Any, ClassVar
 import pandas as pd
 import pytest
 
+from ..chip_architecture import ChipArchitecture
 from ..counters import print_counters, read_counters
 from ..device import BootMode
 from ..format_config import FormatConfig
@@ -476,7 +477,7 @@ def _write_run_parquet(raw_csv_paths, out_dir) -> None:
         if unknown:
             dropped = sum(len(v) for v in unknown.values())
             detail = "; ".join(f"{t}={cols}" for t, cols in sorted(unknown.items()))
-            logger.warning(
+            logger.error(
                 f"perf Parquet: {dropped} column(s) not in the schema were dropped ({detail})"
             )
         logger.info(f"Wrote run Parquet batch: {parquet_path}")
@@ -748,6 +749,40 @@ class PerfConfig(TestConfig):
         other_cols = [c for c in combined.columns if not c.startswith(TEXT_SIZE_PREFIX)]
         return combined[other_cols + text_size_cols]
 
+    @staticmethod
+    def _validate_profiler_stats(stats_df: pd.DataFrame, run_type: PerfRunType) -> None:
+        """Reject missing or invalid wall-clock output for a requested run type."""
+        if stats_df.empty:
+            raise ValueError(
+                f"Profiler produced no timing statistics for requested run type "
+                f"{run_type.name}. Check profiler zone coverage and handshakes."
+            )
+
+        expected_mean_prefix = f"{stat_prefix(MEAN)}{run_type.name}"
+        mean_columns = [
+            column
+            for column in stats_df.columns
+            if column.startswith(expected_mean_prefix)
+        ]
+        if not mean_columns:
+            raise ValueError(
+                f"Profiler statistics for requested run type {run_type.name} "
+                f"contain no mean timing column with prefix "
+                f"{expected_mean_prefix!r}: {list(stats_df.columns)}"
+            )
+
+        negative_values = {
+            column: stats_df.loc[stats_df[column] < 0, column].tolist()
+            for column in mean_columns
+            if (stats_df[column] < 0).any()
+        }
+        if negative_values:
+            raise ValueError(
+                f"Profiler produced negative mean timing values for requested "
+                f"run type {run_type.name}: {negative_values}. Check profiler "
+                f"zone handshakes."
+            )
+
     def run(self, perf_report: PerfReport, run_count=1):
         results = []
         counter_results_list = []
@@ -835,9 +870,16 @@ class PerfConfig(TestConfig):
                 variant_raw_data.append(profiler_data)
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
-            # WC build emits no ZONE_START/ZONE_END events (ZONE_SCOPED muted) — stats df is empty.
             stats_df = get_stats(ProfilerData.concat(variant_raw_data))
-            if not stats_df.empty:
+            # A WC build intentionally suppresses ZONE_SCOPED timing events and
+            # emits counter metrics instead. Quasar excludes the WC TRISC flag,
+            # so it still requires wall-clock stats even when counters are requested.
+            counter_only_build = (
+                TestConfig.ENABLE_PERF_COUNTERS
+                and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
+            )
+            if not stats_df.empty or not counter_only_build:
+                PerfConfig._validate_profiler_stats(stats_df, run_type)
                 results.append(stats_df)
 
             if variant_counter_results:

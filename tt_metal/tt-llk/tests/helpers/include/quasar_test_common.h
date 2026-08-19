@@ -7,11 +7,9 @@
 #include <cstdint>
 
 #include "ckernel_trisc_common.h"
+#include "llk_math_common.h"
 #include "perf.h"
 #include "tensor_shape.h"
-
-template <bool implied_math_format, bool fp32_dest, bool int32_dest>
-inline void _llk_math_srcAB_hw_configure_(DataFormat srca_format, DataFormat srcb_format);
 
 inline void perf_unpack_set_srcb_once_then_srca_per_face(std::uint32_t srcb_once_count, std::uint32_t srca_per_face_count)
 {

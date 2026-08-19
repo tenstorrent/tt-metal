@@ -112,7 +112,8 @@ Dest-full tall/wide is the unary throughput case. Skip dest index and SFPU
 `ct<rt` addr_mod branches and unpack-heavy vs math-heavy K are covered. MX
 inputs are LoFi-only; Float16 / Float16_b still sweep LoFi–HiFi4.
 
-**Check coverage** with `compare_test_and_perf.py --dir quasar`. Composite
+**Check coverage** with
+`compare_test_and_perf.py --dir quasar --arch quasar`. Composite
 splits name `list` as the input matrix and `tuple` as `tile_dimensions`.
 Ignore `DestSync.Full`, `implied_math_format`, `run_types`, `loop_factor`,
 and `is_perf` when judging coverage.
@@ -264,8 +265,9 @@ From the `tt-llk` root:
 5. Run the shared non-perf correctness test, including unpack-to-dest and
    destination-accumulation variants when applicable.
 6. If tile sizes or dimensions changed, run
-   `compare_test_and_perf.py --dir quasar` and confirm the composite `tuple`
-   (tile) and `list` (matrix) axes match **Perf sweep coverage**.
+   `compare_test_and_perf.py --dir quasar --arch quasar` and confirm the
+   composite `tuple` (tile) and `list` (matrix) axes match
+   **Perf sweep coverage**.
 7. Check edited files for lint errors and run `git diff --check`.
 
 Do not:

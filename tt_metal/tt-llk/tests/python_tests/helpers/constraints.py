@@ -110,7 +110,7 @@ def get_valid_math_fidelities(format, operation, PERF_RUN: bool = False):
     ]
 
 
-def get_quasar_perf_math_operations():
+def get_perf_math_operations():
     """Return the elementwise math operations covered by Quasar perf tests."""
     return [MathOperation.Elwadd, MathOperation.Elwmul]
 

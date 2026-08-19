@@ -34,7 +34,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B         = params.buffer_B;
 #endif
     constexpr std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
-    const std::uint32_t num_tiles_per_unpack  = TILE_CNT;
     const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
@@ -91,7 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_unpack_configure_unary_<SELECTED_UNPACKER>(static_cast<DataFormat>(formats.unpack_A_dst));
             }
             _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
-                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape_A, num_tiles_per_unpack);
+                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape_A, TILE_CNT);
         }
         PROFILER_SYNC();
     }
@@ -174,9 +173,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
 
-            DataFormat math_format     = static_cast<DataFormat>(formats.math);
-            DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            configure_math_hardware_for_float32_int32_or_default<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, pack_src_format);
+            configure_math_hardware_for_float32_int32_or_default<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(
+                static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.pack_src));
 
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);

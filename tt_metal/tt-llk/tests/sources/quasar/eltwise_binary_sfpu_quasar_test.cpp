@@ -95,8 +95,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // Quasar's 32-bit A2D datacopy is ELWADD and consumes SrcA
                 // plus the dummy SrcB dvalid emitted by the unpack MOP.
-                const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT;
-                _perf_unpack_loop_set_valid<true, is_fp32_dest_acc_en>(src_handshake_iters);
+                _perf_unpack_loop_set_valid<true /*set_a*/, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
@@ -181,8 +180,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // so integer ordering is preserved. Other ops use the inferred mode.
         if constexpr (test_utils::quasar_binary_op_is_max_min(SFPU_BINARY_OP))
         {
-            const DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            configure_math_hardware_for_float32_int32_or_default<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, pack_src_format);
+            configure_math_hardware_for_float32_int32_or_default<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(
+                math_format, static_cast<DataFormat>(formats.pack_src));
         }
         else
         {
@@ -191,8 +190,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (!unpack_to_dest)
         {
-            const std::uint32_t num_rows = num_faces * TEST_FACE_R_DIM;
-            _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1);
+            _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM, 1 /*num_matrices*/);
         }
         // SFPU uses ADDR_MOD_7 and does not overwrite the datacopy MOP's
         // ADDR_MOD_0/1 or bank-0 programming, so both initializers can remain in
@@ -207,8 +205,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT;
-                _perf_math_loop_clear_valid<true, is_fp32_dest_acc_en>(src_handshake_iters);
+                _perf_math_loop_clear_valid<true /*clear_a*/, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
@@ -267,7 +264,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t DST_TILE_IDX = params.DST_TILE_IDX;
     const Operand& buffer_Res        = params.buffer_Res;
 #endif
-    const std::uint32_t num_tiles_per_pack = 1; // only the SFPU result tile is packed
 
     {
         ZONE_SCOPED("INIT")
@@ -293,7 +289,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
+        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*only the SFPU result tile*/);
         PROFILER_SYNC();
     }
     {

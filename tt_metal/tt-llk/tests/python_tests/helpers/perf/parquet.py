@@ -61,21 +61,24 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from ..chip_architecture import ChipArchitecture
 from .wide_schema import DB_SCHEMA, DROPPED_COLUMNS, MANDATORY, PROVENANCE
 
 
-def schema_for_arch(arch) -> list:
+def schema_for_arch(arch: ChipArchitecture) -> list:
     """Published Parquet table for this architecture family.
 
     Wormhole and Blackhole share ``wide_schema.DB_SCHEMA``. Quasar has its own
     table so Quasar-only columns are not mixed into the WH/BH schema, and
     WH/BH-only columns stay out of Quasar batches.
     """
-    if arch == "quasar":
+    if arch == ChipArchitecture.QUASAR:
         from .wide_schema_quasar import DB_SCHEMA as QSR_SCHEMA
 
         return QSR_SCHEMA
-    return DB_SCHEMA
+    if arch in (ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE):
+        return DB_SCHEMA
+    raise ValueError(f"Unsupported architecture: {arch!r}")
 
 
 _BOOL_MAP = {
@@ -176,7 +179,7 @@ def build_run_batch(
     union to that arch's published schema (missing columns -> NULL) and casts
     types. One row is one test configuration in one execution context.
     """
-    columns = schema_for_arch(arch)
+    columns = schema_for_arch(ChipArchitecture.from_string(arch))
     stamped = [
         stamp_provenance(
             df,
@@ -275,7 +278,7 @@ def convert_csvs_to_parquet(
     conversion that writes anyway. Either way it returns the diagnostics: per
     test, the dropped columns and the coerced values.
     """
-    columns = schema_for_arch(provenance.get("arch"))
+    columns = schema_for_arch(ChipArchitecture.from_string(provenance.get("arch")))
     schema_by_name = {c.name: c for c in columns}
     frames = {}
     diagnostics = {"unknown_columns": {}, "coerced_values": {}}

@@ -113,7 +113,7 @@ def reduce_implied_math_formats(formats, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
-def reduce_input_dimensions(*, is_perf=False):
+def reduce_input_dimensions():
     return [64, 64]
 
 
@@ -197,7 +197,7 @@ def test_reduce_quasar(
         )
 
     input_dimensions = (
-        reduce_input_dimensions(is_perf=True)
+        reduce_input_dimensions()
         if is_perf
         else [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
     )
@@ -388,7 +388,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
     is_perf=False,
     perf_report=None,
 ):
-    input_dimensions = reduce_input_dimensions(is_perf=is_perf)
+    input_dimensions = reduce_input_dimensions()
     tile_shape = construct_tile_shape((32, 32))
 
     src_A, tile_cnt, _, _ = generate_stimuli(

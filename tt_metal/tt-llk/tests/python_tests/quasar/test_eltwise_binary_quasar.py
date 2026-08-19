@@ -71,7 +71,7 @@ def eltwise_binary_implied_math_formats(formats, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
-def eltwise_binary_math_fidelities(mathop, formats, *, is_perf=False):
+def eltwise_binary_math_fidelities(mathop, formats):
     if (
         mathop in [MathOperation.Elwadd, MathOperation.Elwsub]
         or formats.input_format == DataFormat.Int8
@@ -131,9 +131,7 @@ ELTWISE_FORMATS = input_output_formats(
         MathOperation.Elwsub,
         MathOperation.Elwmul,
     ],
-    math_fidelity=lambda mathop, formats: eltwise_binary_math_fidelities(
-        mathop, formats, is_perf=False
-    ),
+    math_fidelity=eltwise_binary_math_fidelities,
     implied_math_format=lambda formats: eltwise_binary_implied_math_formats(
         formats, is_perf=False
     ),

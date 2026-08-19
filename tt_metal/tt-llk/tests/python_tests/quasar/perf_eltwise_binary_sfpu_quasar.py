@@ -54,22 +54,19 @@ def _perf_kwargs(perf_report):
 
 @pytest.mark.perf
 @pytest.mark.quasar
-@pytest.mark.parametrize(
-    "binary_op, mathop, clamp_inputs", _INT_OPS, ids=[op for op, _, _ in _INT_OPS]
+@parametrize(
+    binary_op_mathop_clamp_inputs=_INT_OPS,
+    data_format_dest_acc=[(DataFormat.Int32, DestAccumulation.Yes)],
+    tile_indices=runtime([DEFAULT_SFPU_BINARY_TILE_INDICES]),
 )
-@pytest.mark.parametrize(
-    "data_format, dest_acc", [(DataFormat.Int32, DestAccumulation.Yes)]
-)
-@pytest.mark.parametrize("tile_indices", [DEFAULT_SFPU_BINARY_TILE_INDICES])
 def test_perf_eltwise_binary_sfpu_int_quasar(
     perf_report,
-    data_format,
-    dest_acc,
-    binary_op,
-    mathop,
-    clamp_inputs,
+    binary_op_mathop_clamp_inputs,
+    data_format_dest_acc,
     tile_indices,
 ):
+    binary_op, mathop, clamp_inputs = binary_op_mathop_clamp_inputs
+    data_format, dest_acc = data_format_dest_acc
     run_eltwise_binary_sfpu_int_quasar(
         data_format,
         dest_acc,
@@ -83,10 +80,8 @@ def test_perf_eltwise_binary_sfpu_int_quasar(
 
 @pytest.mark.perf
 @pytest.mark.quasar
-@pytest.mark.parametrize(
-    "binary_op, mathop", _FLOAT_OPS, ids=[op for op, _ in _FLOAT_OPS]
-)
 @parametrize(
+    binary_op_mathop=_FLOAT_OPS,
     formats_dest_acc=_get_valid_float_formats_dest_acc(),
     implied_math_format=[ImpliedMathFormat.Yes],
     tile_indices=runtime([DEFAULT_SFPU_BINARY_TILE_INDICES]),
@@ -96,9 +91,9 @@ def test_perf_eltwise_binary_sfpu_float_quasar(
     formats_dest_acc,
     implied_math_format,
     tile_indices,
-    binary_op,
-    mathop,
+    binary_op_mathop,
 ):
+    binary_op, mathop = binary_op_mathop
     run_eltwise_binary_sfpu_float_quasar(
         formats_dest_acc,
         implied_math_format,
@@ -111,16 +106,16 @@ def test_perf_eltwise_binary_sfpu_float_quasar(
 
 @pytest.mark.perf
 @pytest.mark.quasar
-@pytest.mark.parametrize(
-    "binary_op, mathop", _BF16_ADD_SUB_OPS, ids=[op for op, _ in _BF16_ADD_SUB_OPS]
+@parametrize(
+    binary_op_mathop=_BF16_ADD_SUB_OPS,
+    tile_indices=runtime([DEFAULT_SFPU_BINARY_TILE_INDICES]),
 )
-@pytest.mark.parametrize("tile_indices", [DEFAULT_SFPU_BINARY_TILE_INDICES])
 def test_perf_eltwise_binary_sfpu_bf16_rne_quasar(
     perf_report,
     tile_indices,
-    binary_op,
-    mathop,
+    binary_op_mathop,
 ):
+    binary_op, mathop = binary_op_mathop
     run_eltwise_binary_sfpu_bf16_rne_quasar(
         tile_indices,
         binary_op,

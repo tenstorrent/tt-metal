@@ -40,8 +40,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            const DataFormat src_format = static_cast<DataFormat>(formats.math);
-            if (src_format == DataFormat::Int32)
+            if (static_cast<DataFormat>(formats.math) == DataFormat::Int32)
             {
                 _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
             }
@@ -98,8 +97,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // Quasar's 32-bit A2D datacopy is ELWADD and consumes SrcA
                 // plus the dummy SrcB dvalid emitted by the unpack MOP.
-                const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT;
-                _perf_unpack_loop_set_valid<true, is_fp32_dest_acc_en>(src_handshake_iters);
+                _perf_unpack_loop_set_valid<true /*set_a*/, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
@@ -170,8 +168,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (!unpack_to_dest)
         {
-            const std::uint32_t num_rows = num_faces * TEST_FACE_R_DIM;
-            _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1);
+            _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM, 1 /*num_matrices*/);
         }
         // SFPU uses ADDR_MOD_7 and does not overwrite the datacopy MOP's
         // ADDR_MOD_0/1 or bank-0 programming, so both initializers can remain in
@@ -211,13 +208,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT;
-                _perf_math_loop_clear_valid<true, is_fp32_dest_acc_en>(src_handshake_iters);
+                _perf_math_loop_clear_valid<true /*clear_a*/, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT);
             }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
-            const DataFormat sfpu_format = static_cast<DataFormat>(formats.sfpu_math);
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 if constexpr (!unpack_to_dest)
@@ -240,7 +235,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         APPROX_MODE,
                         SFPU_ITERATIONS,
                         TYPECAST_IN_FORMAT,
-                        TYPECAST_OUT_FORMAT>(DST_INDEX + i, sfpu_format);
+                        TYPECAST_OUT_FORMAT>(DST_INDEX + i, static_cast<DataFormat>(formats.sfpu_math));
                 }
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {

@@ -32,7 +32,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
 #endif
-    const std::uint32_t num_tiles_per_unpack = TILE_CNT;
 
     {
         ZONE_SCOPED("INIT")
@@ -47,7 +46,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-            num_tiles_per_unpack);
+            TILE_CNT);
         PROFILER_SYNC();
     }
     {
@@ -65,7 +64,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // Real broadcast unpack emits SrcA once, then SrcB once
                     // per broadcast face. Combining these handshakes blocks
                     // the second SrcB face while SrcA remains valid.
-                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(1);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(1 /*iterations*/);
                     _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(srcb_dvalids_per_tile);
                 }
             }
@@ -109,11 +108,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        DataFormat math_format     = static_cast<DataFormat>(formats.math);
-        DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
+        DataFormat math_format = static_cast<DataFormat>(formats.math);
         if constexpr (is_fp32_dest_acc_en)
         {
-            if (pack_src_format == DataFormat::Int32)
+            if (static_cast<DataFormat>(formats.pack_src) == DataFormat::Int32)
             {
                 _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
             }
@@ -145,7 +143,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // ROW/COL math clears SrcB after each non-final face,
                     // then clears SrcA and the final SrcB together.
                     _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(srcb_only_clears);
-                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(1);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(1 /*iterations*/);
                 }
             }
         }
@@ -193,7 +191,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    const std::uint32_t num_tiles_per_pack = TILE_CNT;
 
     {
         ZONE_SCOPED("INIT")
@@ -211,7 +208,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
             ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
+        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
         PROFILER_SYNC();
     }
     {

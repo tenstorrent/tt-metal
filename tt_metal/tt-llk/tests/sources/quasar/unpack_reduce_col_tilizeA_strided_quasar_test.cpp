@@ -67,15 +67,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            const std::uint32_t scale_dvalids_per_tile = 1;
-            const std::uint32_t data_dvalids_per_tile  = num_faces;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
                     // The strided reduce MOP emits one SrcB scale face and
                     // all SrcA data faces for each tile.
-                    perf_unpack_set_srcb_once_then_srca_per_face(scale_dvalids_per_tile, data_dvalids_per_tile);
+                    perf_unpack_set_srcb_once_then_srca_per_face(1 /*srcb_once_count*/, num_faces);
                 }
             }
         }
@@ -85,10 +83,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
                 {
-                    std::uint32_t offset = block_rt * y_stride_external;
                     for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
                     {
-                        const std::uint32_t l1_unpack_tilize_idx = offset + block_ct;
+                        const std::uint32_t l1_unpack_tilize_idx = block_rt * y_stride_external + block_ct;
                         _llk_unpack_reduce_col_tilizeA_strided_(tensor_shape, l1_unpack_tilize_idx, 0 /*start_l1_tile_idx_1*/);
                     }
                 }
@@ -130,11 +127,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        DataFormat math_format     = static_cast<DataFormat>(formats.math);
-        DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
+        DataFormat math_format = static_cast<DataFormat>(formats.math);
         if constexpr (is_fp32_dest_acc_en)
         {
-            if (pack_src_format == DataFormat::Int32)
+            if (static_cast<DataFormat>(formats.pack_src) == DataFormat::Int32)
             {
                 _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
             }
@@ -158,13 +154,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            const std::uint32_t scale_dvalids_per_tile = 1;
-            const std::uint32_t data_dvalids_per_tile  = num_faces;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
-                    perf_math_clear_srca_per_face_then_srcb_once(data_dvalids_per_tile, scale_dvalids_per_tile);
+                    perf_math_clear_srca_per_face_then_srcb_once(num_faces, 1 /*srcb_once_count*/);
                 }
             }
         }
@@ -212,8 +206,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    const std::uint32_t num_tiles_per_pack = TILE_CNT;
-    const auto tensor_shape                = tensor_shape_from_params(params);
+    const auto tensor_shape = tensor_shape_from_params(params);
 
     {
         ZONE_SCOPED("INIT")
@@ -231,7 +224,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
 
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, num_tiles_per_pack);
+        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, TILE_CNT);
         _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape);
         PROFILER_SYNC();
     }

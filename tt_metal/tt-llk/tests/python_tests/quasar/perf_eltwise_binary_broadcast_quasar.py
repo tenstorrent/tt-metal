@@ -3,7 +3,7 @@
 
 import pytest
 from helpers.constraints import (
-    get_quasar_perf_math_operations,
+    get_perf_math_operations,
     get_valid_dest_accumulation_modes,
 )
 from helpers.llk_params import (
@@ -28,10 +28,10 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
 @parametrize(
     formats=BINARY_BROADCAST_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
-    mathop=get_quasar_perf_math_operations,
+    mathop=get_perf_math_operations,
     broadcast_type=BROADCAST_TYPES,
     math_fidelity=lambda formats, mathop: binary_broadcast_math_fidelities(
-        formats, mathop, is_perf=True
+        formats, mathop
     ),
     implied_math_format=lambda formats: binary_broadcast_implied_math_formats(
         formats, is_perf=True

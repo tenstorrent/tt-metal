@@ -34,9 +34,10 @@ Read the perf test — `tests/python_tests/perf_[op].py` or
 - the architecture: the `quasar/` directory or a `*_[arch].py` suffix implies
   it, otherwise ask.
 
-For Quasar, `compare_test_and_perf.py --dir quasar` is the sweep-audit against
-the functional counterpart (composite `list` = matrix, `tuple` = tile shape).
-Flag stale-report risk when current test axes are absent from the CSV.
+For Quasar, `compare_test_and_perf.py --dir quasar --arch quasar` is the
+sweep-audit against the functional counterpart (composite `list` = matrix,
+`tuple` = tile shape). Flag stale-report risk when current test axes are absent
+from the CSV.
 
 Decide scope before running. A narrowed sweep (`-k`, `--op`) is right for
 debugging; a report meant for analysis must cover the full intended sweep.

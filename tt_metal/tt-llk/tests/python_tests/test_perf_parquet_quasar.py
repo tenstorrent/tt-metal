@@ -10,6 +10,8 @@ no chip.
 
 import pandas as pd
 import pyarrow.parquet as pq
+import pytest
+from helpers.chip_architecture import ChipArchitecture
 from helpers.perf.parquet import (
     arrow_schema,
     convert_csvs_to_parquet,
@@ -49,9 +51,16 @@ def _write_csv(tmp_path, name, df):
 
 
 def test_schema_for_arch_selects_quasar_table():
-    assert schema_for_arch("quasar") is QSR_SCHEMA
-    assert schema_for_arch("wormhole") is WH_BH_SCHEMA
-    assert schema_for_arch("blackhole") is WH_BH_SCHEMA
+    assert schema_for_arch(ChipArchitecture.QUASAR) is QSR_SCHEMA
+    assert schema_for_arch(ChipArchitecture.WORMHOLE) is WH_BH_SCHEMA
+    assert schema_for_arch(ChipArchitecture.BLACKHOLE) is WH_BH_SCHEMA
+
+
+def test_schema_for_arch_rejects_unsupported_architecture():
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="Unsupported architecture"
+    ):
+        schema_for_arch("grayskull")
 
 
 def test_quasar_schema_is_not_wh_bh_schema():

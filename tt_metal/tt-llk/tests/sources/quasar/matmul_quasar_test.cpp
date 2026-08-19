@@ -111,11 +111,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        DataFormat math_format     = static_cast<DataFormat>(formats.math);
-        DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
+        DataFormat math_format = static_cast<DataFormat>(formats.math);
         if constexpr (is_fp32_dest_acc_en)
         {
-            if (pack_src_format == DataFormat::Int32)
+            if (static_cast<DataFormat>(formats.pack_src) == DataFormat::Int32)
             {
                 _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
             }

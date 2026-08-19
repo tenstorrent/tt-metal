@@ -66,12 +66,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                const std::uint32_t datacopy_handshake_iters = INPUT_TILE_CNT;
-                const std::uint32_t binary_handshake_iters   = INPUT_TILE_CNT * num_faces;
                 // Phase 1 datacopy consumes SrcA once per tile.
-                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(datacopy_handshake_iters);
+                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(INPUT_TILE_CNT);
                 // Phase 2 reuse-dest binary consumes both sources per face.
-                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(binary_handshake_iters);
+                _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(INPUT_TILE_CNT * num_faces);
             }
         }
         else
@@ -156,10 +154,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                const std::uint32_t datacopy_handshake_iters = INPUT_TILE_CNT;
-                const std::uint32_t binary_handshake_iters   = INPUT_TILE_CNT * num_faces;
-                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(datacopy_handshake_iters);
-                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(binary_handshake_iters);
+                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(INPUT_TILE_CNT);
+                _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(INPUT_TILE_CNT * num_faces);
             }
         }
         else
