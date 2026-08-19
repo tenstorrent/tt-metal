@@ -8,36 +8,15 @@
 // deterministic inputs with exact (or op-tolerance) expected outputs, so a
 // kernel that runs but produces garbage fails.
 //
-// Program factory / code path -> test map (front-end dispatch in
-// generic_reductions.cpp unless noted):
-//   ReduceMultiCoreW/H (SUM), tall shapes SumReduceW / SumReduceH
-//   HW single-core (1 tile) + two-step    SumReduceBothDims
-//   ReduceMultiCoreW/H (MAX, MIN-negate)  MinMaxReduceW / MinMaxReduceH
-//   HW (MAX, MIN-negate), ± data          MinMaxReduceBothDims
-//   ReduceMultiCoreW/H (AVG)             MeanReduceW / MeanReduceH
-//   multi-axis loop (mean)               MeanReduceBothDims
-//   fp32 accurate SFPU path              Fp32AccurateMeanW / Fp32AccurateMaxW
-//   INT32 SFPU W / HW two-step           Int32SumW, Int32MinMaxW / Int32SumBothDims
-//   dense row-major W / H(split) / AVG   RowMajorSumW / RowMajorSumHSplit / RowMajorMeanW
-//   fast_reduce_nc                       FastReduceNCSum
-//   bf16 multi-axis fp32 chain           MultiAxisSumChain
-//   welford W / H / non-HW permute / HW  WelfordVarW / WelfordStdH / WelfordVarDim0 / WelfordStdMultiDim
-//   welford fp32 (fp32_dest_acc default) Fp32WelfordVarW
-//   argmax multicore RM / TILE W / TILE H / NC / global
-//   topk single-core / multi-core rows>32 / smallest / non-tile k / fp32→uint32 indices
-//   prod_all / prod_nc dim0 / dim=-1 via permute+prod_nc
-//   accumulation: cumsum permuted / dim0 direct / int32; cumprod reverse / dim1
-//   ema single factory; moe single factory; sampling single factory
-//   manual_seed: all four program-factory variants
-//
-// Not covered here (covered by python suites): sharded I/O variants of the
-// generic reduce, block-float dtypes, zero-volume / rank-0 host paths.
+// Each test states in a comment which program factory or code path it covers.
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <vector>
@@ -421,6 +400,7 @@ TEST_F(ReductionSmoke, RowMajorMeanW) {
     const auto input =
         detail::make_device_tensor(device, ttnn::Shape{1, 1, h, w}, data, DataType::BFLOAT16, Layout::ROW_MAJOR);
     const auto output = ttnn::mean(input, -1, true);
+    EXPECT_EQ(output.layout(), Layout::ROW_MAJOR);  // dense-RM path contract (AVG)
     const auto result = output.to_vector<bfloat16>();
     ASSERT_EQ(result.size(), static_cast<size_t>(h));
     for (int r = 0; r < h; r++) {
@@ -1048,19 +1028,77 @@ TEST_F(ReductionSmoke, SamplingGreedyTopK1) {
 }
 
 // ---------------------------------------------------------------------------
-// manual_seed: all four program-factory variants
+// manual_seed: all four program-factory variants. Verification mirrors
+// test_manual_seed.py: seed -> sample without a per-call seed -> perturb the
+// device RNG -> re-seed identically -> sample again; the picks must reproduce.
+// A seed kernel that silently does nothing leaves the perturbed state in
+// place and fails the comparison. (The returned tensor is synthetic - the op
+// cannot return void - so its dtype alone proves nothing.)
 // ---------------------------------------------------------------------------
+
+namespace detail {
+
+// Stochastic sampling with NO per-call seed: reads the device RNG state that
+// ttnn::manual_seed set. Gentle value slope + k=10, p=0.9 keeps several
+// plausible picks per user, so the picks depend on the RNG state.
+inline std::vector<int64_t> sample_picks(tt::tt_metal::distributed::MeshDevice& device) {
+    constexpr int users = 32, w = 64;
+    std::vector<float> values(static_cast<size_t>(users) * w);
+    std::vector<int32_t> indices(static_cast<size_t>(users) * w);
+    for (int r = 0; r < users; r++) {
+        for (int j = 0; j < w; j++) {
+            values[static_cast<size_t>(r) * w + j] = 2.0f - 0.1f * static_cast<float>(j);
+            indices[static_cast<size_t>(r) * w + j] = r * 1000 + j;
+        }
+    }
+    const auto values_tensor =
+        make_device_tensor(device, ttnn::Shape{1, 1, users, w}, values, DataType::BFLOAT16, Layout::TILE);
+    const auto indices_tensor =
+        make_device_tensor(device, ttnn::Shape{1, 1, users, w}, indices, DataType::INT32, Layout::ROW_MAJOR);
+    const ttnn::Shape user_shape(std::array<uint32_t, 1>{users});
+    const auto k =
+        make_device_tensor(device, user_shape, std::vector<int32_t>(users, 10), DataType::INT32, Layout::ROW_MAJOR);
+    const auto p =
+        make_device_tensor(device, user_shape, std::vector<float>(users, 0.9f), DataType::BFLOAT16, Layout::ROW_MAJOR);
+    const auto temp =
+        make_device_tensor(device, user_shape, std::vector<float>(users, 1.0f), DataType::BFLOAT16, Layout::ROW_MAJOR);
+    const auto out = ttnn::sampling(values_tensor, indices_tensor, k, p, temp, std::nullopt);
+    std::vector<int64_t> picks(users);
+    if (out.dtype() == DataType::UINT32) {
+        const auto result = out.to_vector<uint32_t>();
+        std::copy(result.begin(), result.end(), picks.begin());
+    } else {
+        const auto result = out.to_vector<int32_t>();
+        std::copy(result.begin(), result.end(), picks.begin());
+    }
+    return picks;
+}
+
+}  // namespace detail
 
 TEST_F(ReductionSmoke, ManualSeedAllCores) {
     auto& device = *device_;
     const auto out = ttnn::manual_seed(42u, std::ref(device));
     EXPECT_EQ(out.dtype(), DataType::UINT32);
+    const auto picks1 = detail::sample_picks(device);
+    ttnn::manual_seed(999u, std::ref(device));  // perturb the RNG state
+    (void)detail::sample_picks(device);
+    ttnn::manual_seed(42u, std::ref(device));
+    const auto picks2 = detail::sample_picks(device);
+    ASSERT_EQ(picks1, picks2);
 }
 
 TEST_F(ReductionSmoke, ManualSeedSingleUser) {
     auto& device = *device_;
+    ttnn::manual_seed(7u, std::ref(device));  // known base state on all cores
     const auto out = ttnn::manual_seed(42u, std::ref(device), 3u);
     EXPECT_EQ(out.dtype(), DataType::UINT32);
+    const auto picks1 = detail::sample_picks(device);
+    ttnn::manual_seed(999u, std::ref(device));  // perturb all users
+    (void)detail::sample_picks(device);
+    ttnn::manual_seed(42u, std::ref(device), 3u);  // restore only user 3
+    const auto picks2 = detail::sample_picks(device);
+    ASSERT_EQ(picks1[3], picks2[3]);  // the re-seeded user's pick reproduces
 }
 
 TEST_F(ReductionSmoke, ManualSeedUserTensor) {
@@ -1070,6 +1108,14 @@ TEST_F(ReductionSmoke, ManualSeedUserTensor) {
         device, ttnn::Shape(std::array<uint32_t, 1>{4}), users, DataType::UINT32, Layout::ROW_MAJOR);
     const auto out = ttnn::manual_seed(43u, std::ref(device), user_tensor);
     EXPECT_EQ(out.dtype(), DataType::UINT32);
+    const auto picks1 = detail::sample_picks(device);
+    ttnn::manual_seed(999u, std::ref(device));  // perturb all users
+    (void)detail::sample_picks(device);
+    ttnn::manual_seed(43u, std::ref(device), user_tensor);  // restore users 0-3
+    const auto picks2 = detail::sample_picks(device);
+    for (int r = 0; r < 4; r++) {
+        ASSERT_EQ(picks1[r], picks2[r]) << "user " << r;
+    }
 }
 
 TEST_F(ReductionSmoke, ManualSeedPerUserSeeds) {
@@ -1081,6 +1127,14 @@ TEST_F(ReductionSmoke, ManualSeedPerUserSeeds) {
     const auto user_tensor = detail::make_device_tensor(device, shape, users, DataType::UINT32, Layout::ROW_MAJOR);
     const auto out = ttnn::manual_seed(seed_tensor, std::nullopt, user_tensor);
     EXPECT_EQ(out.dtype(), DataType::UINT32);
+    const auto picks1 = detail::sample_picks(device);
+    ttnn::manual_seed(999u, std::ref(device));  // perturb all users
+    (void)detail::sample_picks(device);
+    ttnn::manual_seed(seed_tensor, std::nullopt, user_tensor);  // restore users 0-3
+    const auto picks2 = detail::sample_picks(device);
+    for (int r = 0; r < 4; r++) {
+        ASSERT_EQ(picks1[r], picks2[r]) << "user " << r;
+    }
 }
 
 }  // namespace ttnn::operations::reduction::test
