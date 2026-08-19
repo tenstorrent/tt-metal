@@ -92,11 +92,14 @@ ALWI void custom_mm_reuse_dest_srcb_block_init_short(
 // clang-format off
 /**
  * Matmul whose in0 is read out of DEST instead of a CB: computes
- * out[1, nt_dim*32] += in0_from_dest[1, kt_dim*32] @ in1[kt_dim*32, nt_dim*32].
+ * out[in0_tile_r_dim, nt_dim*32] += in0_from_dest[in0_tile_r_dim, kt_dim*32]
+ *     @ in1[kt_dim*32, nt_dim*32].
  *
  * in0 is whatever the preceding custom_mm left at DEST row `isrc`, laid out
- * one tile every `src_tile_stride` rows.  The result accumulates into DEST at
- * row `idst` in the dense 16-rows-per-tile layout.
+ * one tile every `src_tile_stride` rows; the math LLK copies `in0_tile_r_dim`
+ * source rows per tile (1, 2, 4 or 8).  The result accumulates the same
+ * `in0_tile_r_dim` output rows into DEST at row `idst` in the dense
+ * 16-rows-per-tile layout.
  *
  * | Argument         | Description                                                    | Type     | Valid Range                    | Required |
  * |------------------|----------------------------------------------------------------|----------|--------------------------------|----------|
