@@ -81,7 +81,9 @@ Options:
                         (default: /data/\$(whoami)/tt-metal)
   --home-dir <path>     Host directory to back \$HOME inside the container
                         (default: <parent of this clone>/.exabox-home)
-  --entrypoint <path>   Override the image entrypoint. Not needed for the default
+  --entrypoint <path>   Override the image entrypoint. Must be a shell that
+                        accepts -c (e.g. /bin/bash); the build script is handed
+                        to it as -c <script>. Not needed for the default
                         ci-build image (which declares none); for variants that
                         do set one, e.g. dev or release.
   --sync-to <path>      After a successful build, rsync the tree to <path> on
@@ -162,6 +164,10 @@ fi
 if [[ -z "${HOME_DIR}" ]]; then
   HOME_DIR="$(dirname "${SRC}")/.exabox-home"
 fi
+# Docker treats a relative -v source as a named VOLUME, not a path, so a
+# relative --home-dir would silently mount something other than the directory
+# this script creates below.
+[[ "${HOME_DIR}" == /* ]] || die "--home-dir must be absolute (got '${HOME_DIR}')"
 
 IMAGE_REF="${IMAGE}:${TAG}"
 
@@ -400,8 +406,16 @@ DOCKER_ARGS+=(
   # NOTE: ccache intentionally not configured yet (see header).
   # NOTE: if your tt-metal revision still requires ARCH_NAME, add it here.
   "${IMAGE_REF}"
-  bash -c "${CONTAINER_SCRIPT}"
 )
+# Everything after the image name becomes ARGUMENTS to an overridden
+# entrypoint, so with --entrypoint set the shell named there gets just
+# -c <script> — a leading 'bash' token would be read by it as a script
+# *filename*. Without an override, this is the whole command.
+if [[ -n "${ENTRYPOINT}" ]]; then
+  DOCKER_ARGS+=(-c "${CONTAINER_SCRIPT}")
+else
+  DOCKER_ARGS+=(bash -c "${CONTAINER_SCRIPT}")
+fi
 
 cat <<EOF
 
@@ -443,11 +457,26 @@ if [[ -n "${SYNC_TO}" ]]; then
   # One rsync per top-level entry, ${SYNC_JOBS} at a time. Sources have no
   # trailing slash, so directories copy recursively and plain files copy as
   # themselves, and --exclude patterns mean the same as in a single rsync of
-  # the whole tree. Syncs in place: a concurrent reader on another node could
-  # see a partially-written tree mid-sync.
+  # the whole tree — including for the top-level entries themselves: rsync
+  # applies filters to explicitly named source arguments too (only trailing-
+  # slash "dot dir" sources are exempt), so e.g. the .cpmcache job transfers
+  # nothing. --delete makes reruns converge instead of accreting files that
+  # were since removed or renamed in ${SRC}. Syncs in place: a concurrent
+  # reader on another node could see a partially-written tree mid-sync.
   find "${SRC}" -mindepth 1 -maxdepth 1 -printf '%f\n' \
-    | xargs -P "${SYNC_JOBS}" -I{} rsync -a --human-readable "${RSYNC_EXCLUDE_ARGS[@]}" "${SRC}/{}" "${SYNC_TO}/" \
+    | xargs -P "${SYNC_JOBS}" -I{} rsync -a --delete --human-readable "${RSYNC_EXCLUDE_ARGS[@]}" "${SRC}/{}" "${SYNC_TO}/" \
     || die "sync to ${SYNC_TO} failed; re-run to continue (rsync skips what already matches)."
+  # --delete only reaches entries that still exist in ${SRC}; a top-level
+  # entry removed or renamed since an earlier sync never gets a job at all,
+  # so its stale copy is reaped here. Excluded names are left alone, matching
+  # rsync's own rule that --exclude protects destination paths from --delete.
+  while IFS= read -r entry; do
+    [[ -e "${SRC}/${entry}" ]] && continue
+    for pat in "${SYNC_EXCLUDES[@]}"; do
+      [[ "${entry}" == ${pat} ]] && continue 2
+    done
+    rm -rf -- "${SYNC_TO}/${entry}"
+  done < <(find "${SYNC_TO}" -mindepth 1 -maxdepth 1 -printf '%f\n')
   info "Sync finished in $(( (SECONDS - sync_start) / 60 ))m $(( (SECONDS - sync_start) % 60 ))s"
   cat <<EOF
 
