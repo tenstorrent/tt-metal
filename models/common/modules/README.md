@@ -43,7 +43,7 @@ Every TTTv2 module is a `LightweightModule` subclass that exposes the same surfa
 - a **simple constructor** (90% path) that takes only weights + essential dimensions and derives everything else;
 - a **`from_config(cfg)`** classmethod (10% path) for full customization;
 - a **`forward(...)`** that is a straight line of compute (no static if-else — see Zen #2);
-- a **`from_model_args(...)`** bridge used by the retiring TTTv1 stack. It exists for backward compatibility and most users can ignore it.
+- selected **1D modules** retain a `from_model_args(...)` bridge for the retiring TTTv1 stack. New 2D modules intentionally do not expose this bridge; product models construct their configs explicitly.
 
 Current module inventory:
 
@@ -52,12 +52,17 @@ Current module inventory:
 | MLP (1D) | `MLP1D` (`mlp/mlp_1d.py`) | `MLP1D(w1, w2, w3)` | `forward(x, mode)` |
 | MLP (2D) | `MLP2D` (`mlp/mlp_2d.py`) | `MLP2D(w1, w2, w3)` | `forward(x, mode)` |
 | Attention | `Attention1D` (`attention/attention_1d.py`) | `Attention1D(wqkv, wo, n_heads, n_kv_heads, head_dim, max_batch_size, max_seq_len)` | `forward(..., mode)` |
+| Attention (2D) | `Attention2D` (`attention/attention_2d.py`) | `Attention2D(wqkv, wo, ...)` | `forward(..., mode)` |
 | RMSNorm (1D) | `RMSNorm1D` (`rmsnorm/rmsnorm_1d.py`) | `RMSNorm1D(weight)` | `forward(x, mode)` |
 | RMSNorm (2D) | `RMSNorm2D` (`rmsnorm/rmsnorm_2d.py`) | `RMSNorm2D(weight)` | `forward(x, mode)` |
 | RoPE | `RotarySetup1D` (`rope/rope_1d.py`) | `RotarySetup1D(cos_matrix, sin_matrix, max_batch_size)` | `forward(mode, **kwargs)` |
+| RoPE (2D) | `RotarySetup2D` (`rope/rope_2d.py`) | `RotarySetup2D(cos_matrix, sin_matrix, max_batch_size)` | `forward(mode, **kwargs)` |
 | Embedding | `Embedding1D` (`embedding/embedding_1d.py`) | `Embedding1D(weights, embed_scale=1.0)` | `forward(x)` |
+| Embedding (2D) | `Embedding2D` (`embedding/embedding_2d.py`) | `Embedding2D(weights, embed_scale=1.0)` | `forward(x, mode)` |
 | LM Head | `LMHead1D` (`lm_head/lm_head_1d.py`) | `LMHead1D(output_weights)` | `forward(x)` |
+| LM Head (2D) | `LMHead2D` (`lm_head/lm_head_2d.py`) | `LMHead2D(output_weights, vocab_size)` | `forward(x, mode)` |
 | Sampling | `Sampling1D` (`sampling/sampling_1d.py`) | `Sampling1D(vocab_size, mesh_device)` | `forward(logits, **kwargs)` |
+| Sampling (2D) | `Sampling2D` (`sampling/sampling_2d.py`) | `Sampling2D(vocab_size, mesh_device)` | `forward(logits, **kwargs)` |
 | Penalties | `Penalties1D` (`sampling/penalties_1d.py`) | `Penalties1D(vocab_size, mesh_device)` | `forward(logits, params, accum)` |
 
 Notes:
@@ -200,9 +205,15 @@ Multi-device modules need collective ops (reduce-scatter, all-gather). `TT_CCL` 
 
 ## 1D vs 2D Modules
 
-`*1D` modules target 1D-topology devices: N150 (1×1), N300 (1×2), and T3K (1×8). `*2D` modules (`MLP2D`, `RMSNorm2D`) target larger 2D mesh shapes (e.g. Galaxy, 8×4). The 2D variants share the same contract as their 1D counterparts.
+`*1D` modules target 1D-topology devices: N150 (1×1), N300 (1×2), and T3K (1×8). Production `*2D` configs target Wormhole Galaxy with the canonical logical mesh shape `(8, 4)` and exactly 32 devices. Resolution fails closed for another architecture, mesh orientation, device count, incompatible collaborator, or indivisible partition.
 
-As TTTv1's 2D mesh support is not tested in CI, the 2D modules do not yet have a comprehensive test suite (`test_mlp_2d.py` / `test_rmsnorm_2d.py` contain basic parameters). We will add more targeted unit tests — like the ones in `test_mlp_1d.py` — as 2D models are implemented.
+The 2D tensor-placement contract is explicit in each config: source and padded weight shapes, row/column shard dimensions, decode and prefill input/output placement, and transient ownership are resolved before execution. Static strategy decisions do not branch in a module hot path.
+
+Galaxy collectives are injected from `models/common/models/galaxy`; 2D modules do not extend or specialize the 1D `TT_CCL` owner. The target ownership contract makes `Prefetcher2D` the model-owned resource root for subdevice managers, the global circular buffer, and sealed weight-address registration. Modules borrow immutable prefill/decode contexts, and the executor activates a context at operation boundaries and owns deterministic cleanup. Integrated Prefetcher2D/Galaxy-resource ownership has host coverage but is not yet qualified on hardware.
+
+The reusable 2D set consists of `Embedding2D`, `RotarySetup2D`, `RMSNorm2D`, `Attention2D`, `MLP2D`, `LMHead2D`, and `Sampling2D`. There is no `Penalties2D`.
+
+Milestone A is still in progress. See [Milestone A 2D Module Status](MILESTONE_A_STATUS.md) for the evidence matrix, modularity scorecard, and hardware paths that remain unqualified.
 
 ---
 
@@ -224,7 +235,7 @@ pytest models/common/tests/modules/mlp/test_mlp_1d.py::test_mlp_1d_config_creati
 pytest models/common/tests/modules/ -v
 ```
 
-Test files by module: `mlp/test_mlp_1d.py`, `mlp/test_mlp_2d.py`, `attention/test_attention_1d.py`, `rmsnorm/test_rmsnorm_1d.py`, `rmsnorm/test_rmsnorm_2d.py`, `rope/test_rope_1d.py`, `embedding/test_embedding_1d.py`, `lm_head/test_lm_head_1d.py`, `sampling/test_sampling_1d.py`, `sampling/test_penalties_1d.py`. Shared infrastructure has its own tests too (`test_lazy_buffer.py`, `test_tensor_utils.py`).
+Test files follow the module layout and use `test_<name>_1d.py` / `test_<name>_2d.py` where both variants exist. `prefetcher/test_prefetcher_2d.py` covers explicit registration, sealing, activation, and cleanup. Shared infrastructure has its own tests too (`test_lazy_buffer.py`, `test_tensor_utils.py`).
 
 ### Device Topologies Tested
 
