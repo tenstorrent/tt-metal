@@ -35,9 +35,10 @@ struct operation_attributes_t {
     std::optional<uint32_t> valid_length{};
     // INTERNAL (not exposed through the public API): override the column-parallel slice count P
     // (tree cores splitting each row). Single row: the classic column-parallel tree. Multiple
-    // rows: opts into the multi-rectangle variant — one P-core tree per rectangle, rows split
-    // contiguously over as many rectangles as tile the worker grid, all concurrent (the cost
-    // model never auto-selects this form; only the hybrid wrapper's remainder window sets it).
+    // rows: the multi-rectangle variant — one P-core tree per rectangle, rows split contiguously
+    // over as many rectangles as tile the worker grid, all concurrent (the cost model can also
+    // auto-select this form when it models a win; the override bypasses the model and pins an
+    // exact P — the hybrid wrapper's remainder window sets it to a searched-width-modeled P).
     // Values outside [2, 128] or above the row's chunk count are loud errors; P is clamped only
     // against the physical core grid (with a warning). Changes the program structure, so it is
     // part of the program hash. nullopt = the built-in cost model.
