@@ -8,7 +8,7 @@ gates each K band on only the SP shards it touches and dual-sources its own slab
 same per-SP DSA reference the two-op path uses, over both K layouts, both head counts, and both link counts,
 plus the runtime knobs (bfp8_b K, multi-user cache, straddle, kv_len, program-cache reuse, validate reject).
 
-Run:  scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/experimental/test_ring_indexer_score_dsa.py
+Run:  scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa.py
 """
 
 import pytest
@@ -17,7 +17,7 @@ from loguru import logger
 
 import ttnn
 
-from tests.ttnn.nightly.unit_tests.operations.experimental.test_indexer_score import (
+from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import (
     assert_indexer_match,
     glx_config,
     _global_inputs,
@@ -33,7 +33,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.test_indexer_score im
     ST_CS,
     ST_T,
 )
-from tests.ttnn.nightly.unit_tests.operations.experimental.ring4_ccl_helpers import (
+from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.ring_indexer_score_test_utils import (
     _open_ring4_ccl,
     _close_ring4_ccl,
     _persistent_buffer,
@@ -210,7 +210,8 @@ def test_indexer_score_ring4_fused_nd_indexed_bounded_gather_cache_hit(rows_per_
     * multi-slot k_local is ND-sharded across DRAM banks;
     * the gather selects one slot into a batch-1 scratch;
     * kv_len bounds transport to complete touched block-cyclic slabs; and
-    * a second dispatch changes both slot and kv_len on the same cached program.
+    * a second dispatch changes both slot and kv_len on the same cached program; and
+    * the production two-link all-gather partition preserves those cache-hit results.
     """
     heads, num_users = 16, 3
     t_alloc = 4 * CHUNK_GLOBAL
@@ -235,7 +236,7 @@ def test_indexer_score_ring4_fused_nd_indexed_bounded_gather_cache_hit(rows_per_
                 ccl_semaphores,
                 cluster_axis=SP_AXIS,
                 topology=ttnn.Topology.Linear,
-                num_links=1,
+                num_links=2,
                 ag_sub_device_id=subdevice_id,
                 chunk_start_idx=chunk_start,
                 cache_batch_idx=slot,

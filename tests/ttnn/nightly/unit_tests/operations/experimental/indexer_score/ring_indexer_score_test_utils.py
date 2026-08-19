@@ -11,7 +11,7 @@ directly and keeps its own copy of `_open_ccl` (no (2,4)->(1,4) submesh carve).
 
 import ttnn
 
-from tests.ttnn.nightly.unit_tests.operations.experimental.test_indexer_score import (
+from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import (
     QB_HISTORY,
     QB_SQ,
 )
