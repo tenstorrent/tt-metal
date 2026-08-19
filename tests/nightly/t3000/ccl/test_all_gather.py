@@ -1182,6 +1182,15 @@ def test_all_gather_page_indexing(
         ([1, 1, 512, 128], 2, ttnn.TILE_LAYOUT, _l1_nd_sharded([1, 1, 64, 64]), _l1_nd_sharded([1, 1, 64, 64])),
         # split (s=2), stride 1: iteration 0's run reassembles the input page the split cut up.
         ([1, 1, 32, 512], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_width_sharded(32, 64, 1), _l1_width_sharded(32, 32, 16)),
+        # split (s=2) with stride 16: iteration 0 walks in the output's order, so its input chunks are
+        # no longer adjacent and each must go on its own.
+        (
+            [1, 1, 256, 512],
+            2,
+            ttnn.ROW_MAJOR_LAYOUT,
+            _l1_width_sharded(32, 64, 8),
+            _l1_width_sharded(256, 32, 16),
+        ),
         # concat (m=8) with k=4: chunks are packed inside an output page, so the run is intra-page.
         ([1, 1, 32, 2048], -1, ttnn.ROW_MAJOR_LAYOUT, _l1_width_sharded(32, 64, 4), _l1_width_sharded(32, 512, 4)),
         # Padded output page (16B content, 32B DRAM page): a run would step by the aligned size while
@@ -1196,6 +1205,7 @@ def test_all_gather_page_indexing(
         "width_sharded_strided_runs",
         "sharded_page_order_runs",
         "split_input_page_runs",
+        "split_strided_no_input_runs",
         "concat_intra_page_runs",
         "padded_output_page_no_runs",
         "empty_worker_slices",

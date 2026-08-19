@@ -81,8 +81,7 @@ void kernel_main() {
     const uint32_t stride = (concat || !out_page_runs) ? 1u : out_page_stride;
 
     const bool in_packed = input_tensor_accessor.get_aligned_page_size() == split_factor * output_chunk_size;
-    // Iteration 0 walks in the output's order, so input runs only line up when that is page order.
-    const bool in_page_runs = in_packed && stride == 1 && input_tensor_accessor.contiguous_page_stride() == 1;
+    const bool in_page_runs = in_packed && input_tensor_accessor.contiguous_page_stride() == 1;
     const uint32_t input_end_page = (slice_first_chunk + slice_chunks) / split_factor;
 
     StripeWalk<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
@@ -95,8 +94,9 @@ void kernel_main() {
                 n += (output_tensor_accessor.num_contiguous_pages(it.page_id(), it.end_page_id()) - 1) *
                      output_chunks_per_page;
             }
-            return std::min(n, it.chunks_to_stripe_end());
+            return it.seqnos_in_chunk_ids(n);
         } else {
+            // num_contiguous_pages already steps by the walk's stride, so this is a seqno count.
             return out_page_runs ? output_tensor_accessor.num_contiguous_pages(it.page_id(), it.end_page_id()) : 1u;
         }
     };
@@ -106,7 +106,27 @@ void kernel_main() {
         if (in_page_runs) {
             n += (input_tensor_accessor.num_contiguous_pages(page, input_end_page) - 1) * split_factor;
         }
-        return std::min(n, it.chunks_to_stripe_end());
+        return it.seqnos_in_chunk_ids(n);
+    };
+
+    // Debug-only: a run has to be linear. Checks page/offset truth, which is what a run claims.
+    auto run_is_linear = [&](uint32_t chunks, bool input_src) {
+        auto probe = it;
+        auto addr = [&] {
+            return input_src ? input_tensor_accessor.get_noc_addr(
+                                   probe.chunk_id() / split_factor,
+                                   (probe.chunk_id() % split_factor) * output_chunk_size,
+                                   noc.get_noc_id())
+                             : output_tensor_accessor.get_noc_addr(probe.page_id(), probe.byte_off(), noc.get_noc_id());
+        };
+        const uint64_t first = addr();
+        for (uint32_t k = 0; k < chunks; ++k) {
+            if (addr() != first + k * output_chunk_size) {
+                return false;
+            }
+            probe.advance(1);
+        }
+        return true;
     };
 
     auto read_run = [&](uint64_t src, uint32_t l1_write_addr, uint32_t chunks) {
@@ -171,6 +191,7 @@ void kernel_main() {
                     chunks = output_run();
                 }
                 chunks = std::min(std::min(chunks, left), max_burst_chunks);
+                ASSERT(run_is_linear(chunks, from_input));
                 read_run(src, l1_write_addr, chunks);
                 l1_write_addr += chunks * output_chunk_size;
                 left -= chunks;

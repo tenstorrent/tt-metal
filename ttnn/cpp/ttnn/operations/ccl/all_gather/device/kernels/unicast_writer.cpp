@@ -143,10 +143,27 @@ void kernel_main() {
                 n += (output_tensor_accessor.num_contiguous_pages(it.page_id(), it.end_page_id()) - 1) *
                      output_chunks_per_page;
             }
-            return std::min(n, it.chunks_to_stripe_end());
+            return it.seqnos_in_chunk_ids(n);
         } else {
+            // num_contiguous_pages already steps by the walk's stride, so this is a seqno count.
             return out_page_runs ? output_tensor_accessor.num_contiguous_pages(it.page_id(), it.end_page_id()) : 1u;
         }
+    };
+
+    // Debug-only: a run has to be linear. Checks page/offset truth; the fabric address follows it.
+    auto run_is_linear = [&](uint32_t chunks) {
+        auto probe = it;
+        auto addr = [&] {
+            return output_tensor_accessor.get_noc_addr(probe.page_id(), probe.byte_off(), noc.get_noc_id());
+        };
+        const uint64_t first = addr();
+        for (uint32_t k = 0; k < chunks; ++k) {
+            if (addr() != first + k * output_chunk_size) {
+                return false;
+            }
+            probe.advance(1);
+        }
+        return true;
     };
 
     auto local_write = [&](uint32_t l1_read_addr, uint64_t dst, uint32_t chunks) {
@@ -194,6 +211,7 @@ void kernel_main() {
                 const uint32_t page = it.page_id();
                 const uint32_t off = it.byte_off();
                 uint32_t chunks = std::min(std::min(output_run(), left), max_run_chunks);
+                ASSERT(run_is_linear(chunks));
                 fabric.queue_segment(
                     l1_read_addr,
                     tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page, off),

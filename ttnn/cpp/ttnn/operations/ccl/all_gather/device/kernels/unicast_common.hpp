@@ -96,6 +96,15 @@ public:
     // Chunks left in this stripe. A run clipped here keeps advance() inside one row.
     FORCE_INLINE uint32_t chunks_to_stripe_end() const { return (stripe_end() - c_ + stride_ - 1) / stride_; }
 
+    // A run measured in consecutive chunk ids, as a count of seqnos. The two match only at stride 1.
+    FORCE_INLINE uint32_t seqnos_in_chunk_ids(uint32_t chunk_ids) const {
+        if (stride_ != 1) {
+            return 1;
+        }
+        const uint32_t limit = chunks_to_stripe_end();
+        return chunk_ids < limit ? chunk_ids : limit;
+    }
+
     // One past the stripe's last page, for num_contiguous_pages to clip against.
     FORCE_INLINE uint32_t end_page_id() const {
         if constexpr (output_chunks_per_page == 1) {
