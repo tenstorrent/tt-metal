@@ -46,14 +46,18 @@ def test_a_per_stack_cap_is_seen(monkeypatch):
     assert active_depth_caps() == {"TT_PERF_STACK0_LAYERS": 2, "TT_PERF_STACK1_LAYERS": 2}
 
 
-def test_a_per_stage_cap_is_seen(monkeypatch):
-    """These names are derived from the model's declared stages, so no list could hold them."""
+def test_a_per_stage_cap_is_seen_when_the_model_declares_that_stage(monkeypatch):
+    """The names come FROM THE MODEL. test_one_depth_vocabulary states the rule the repair, the
+    generator and the bridge already share -- the knob for stage X is TT_PERF_X_LAYERS -- and
+    stack_knob_repair.stage_names() reads PIPELINE_STAGES from the model's source. So a stage nobody
+    anticipated is covered by asking, not by a pattern over the environment."""
     from agent.layer_depth import active_depth_caps
 
     _clear(monkeypatch)
     monkeypatch.setenv("TT_PERF_VOCODE_LAYERS", "4")
 
-    assert active_depth_caps() == {"TT_PERF_VOCODE_LAYERS": 4}
+    assert active_depth_caps(stages=["vocode"]) == {"TT_PERF_VOCODE_LAYERS": 4}
+    assert active_depth_caps() == {}, "a stage no model declares is not a cap this tool set"
 
 
 def test_nothing_set_is_full_depth(monkeypatch):

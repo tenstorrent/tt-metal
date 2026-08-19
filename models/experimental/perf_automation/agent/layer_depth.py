@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from pathlib import Path
 
 ENV = "TT_PERF_LAYERS"
@@ -229,38 +228,55 @@ def set_depth(env, depth, key: str | None = None) -> dict:
     return env
 
 
-_ANY_DEPTH_VAR = re.compile(r"^TT_PERF_[A-Z0-9_]*LAYERS$")
-
-
-def active_depth_caps(environ=None) -> dict:
-    """Every depth cap currently in force, as {variable: layers}. Empty means full depth.
+def active_depth_caps(environ=None, model_root=None, stages=None) -> dict:
+    """Every depth cap in force, as {variable: layers}. Empty means full depth.
 
     READ_DEPTH SEES ONE VARIABLE, AND A MULTI-STACK MODEL IS CAPPED BY OTHERS. A model with two
-    towers is capped per stack -- TT_PERF_STACK0_LAYERS, TT_PERF_STACK1_LAYERS, and the per-stage
-    TT_PERF_<STAGE>_LAYERS the generated test binds -- while TT_PERF_LAYERS stays unset. Every reader
-    of depth in this tool asks read_depth() or reads TT_PERF_LAYERS directly, so all of them
-    concluded "all layers" for a build that had two of thirty.
+    towers is capped per stage -- TT_PERF_ENCODE_LAYERS, TT_PERF_PREFILL_LAYERS, ... -- or, when it
+    declares no stages, positionally as TT_PERF_STACK0_LAYERS and so on, while TT_PERF_LAYERS stays
+    unset. Every reader of depth in this tool asks read_depth() or reads TT_PERF_LAYERS directly, so
+    all of them concluded "all layers" for a build that had two layers of thirty.
 
-    Measured, run 11, 2026-08-19: the census reported depth=all and weighed 1.247 B parameters of a
-    4.676 B model. Its own sections say what it saw -- `rest`, which holds layers 3..30, came back at
-    114 MB, about two layers -- and the refusal added for exactly this case passed it, because the
-    caps in force were not the variable it looked at.
+    Measured, run 11, 2026-08-19: the census reported depth=all and pinned 1.247 B parameters of a
+    4.676 B model, with TT_PERF_STACK0_LAYERS=2 and TT_PERF_STACK1_LAYERS=2 in its environment. The
+    refusal added that morning for exactly this case was correct and blind -- it asked the one
+    variable that was not set.
 
-    Matched on the SHAPE of the name, not a list of them: the tool derives these variables per stage
-    and per stack, so a list would need extending every time a model declares a stage nobody
-    anticipated.
+    THE NAMES COME FROM THE MODEL, not from a pattern over the environment. test_one_depth_vocabulary
+    states the rule the repair, the generator and the bridge already share: "the depth knob for stage
+    X is the build argument X_layers, set by the environment variable TT_PERF_X_LAYERS", and
+    stack_knob_repair.stage_names() reads PIPELINE_STAGES out of the model's own source without a
+    build, a device or an execution. So this asks that, and falls back to the positional form only
+    for a model that declares no stages -- which is the same order the generator emits them in.
     """
     src = os.environ if environ is None else environ
-    out: dict = {}
-    for k, v in src.items():
-        if not _ANY_DEPTH_VAR.match(str(k)):
-            continue
+
+    def _cap(name):
         try:
-            n = int(str(v).strip())
+            n = int(str(src.get(name) or "").strip())
         except (TypeError, ValueError):
-            continue
-        if n > 0:
-            out[str(k)] = n
+            return 0
+        return n if n > 0 else 0
+
+    names = [ENV]
+    _stages = list(stages or [])
+    if not _stages and model_root is not None:
+        try:
+            from .stack_knob_repair import stage_names
+
+            _stages = list(stage_names(model_root) or [])
+        except Exception:  # noqa: BLE001 -- an unreadable source leaves the positional form below
+            _stages = []
+    names += ["TT_PERF_%s_LAYERS" % str(st).strip().upper() for st in _stages]
+    # The positional vocabulary the generator uses for a model that declares no stages. Bounded by
+    # the stacks a model can plausibly have; a cap set beyond it would also have no generated reader.
+    names += ["TT_PERF_STACK%d_LAYERS" % i for i in range(8)]
+
+    out: dict = {}
+    for name in names:
+        n = _cap(name)
+        if n:
+            out[name] = n
     return out
 
 

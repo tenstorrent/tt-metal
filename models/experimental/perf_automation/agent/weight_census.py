@@ -509,6 +509,9 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
         # incomplete census outright rather than using it as a bound, and falls back to the
         # checkpoint's own byte count -- which is exactly the right answer when no checkpoint was
         # available to classify against.
+        # THE DEPTH IT WAS TAKEN AT, recorded here because this is where the walked object is: the
+        # stage names that spell the per-stage caps come from that model's PIPELINE_STAGES.
+        "depth": census_depth(root),
         "complete": unknown == 0 and bool(tensors) and _have_ckpt,
         "source": "device census (built model)",
     }
@@ -559,7 +562,30 @@ def sections_marker(c: dict) -> str:
     return "TRACE_WEIGHT_SECTIONS=%s" % ",".join("%s:%d" % (k, int(v)) for k, v in safe)
 
 
-def census_depth() -> str:
+def _model_root_of(root):
+    """The model directory the object being censused came from, or None.
+
+    Its class's module file sits inside the model's own tree, which is where PIPELINE_STAGES is --
+    the same derivation _checkpoint_for_census uses to find the weights.
+    """
+    import sys as _sys
+
+    try:
+        mod = _sys.modules.get(type(root).__module__)
+        f = getattr(mod, "__file__", None) if mod else None
+        if not f:
+            return None
+        for par in list(Path(f).resolve().parents)[:4]:
+            if (par / "tt" / "pipeline.py").is_file():
+                return par
+            if (par / ".git").exists():
+                break
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def census_depth(root=None) -> str:
     """The layer cap this process is building at: a positive int as a string, or "all".
 
     A CENSUS OF A CAPPED BUILD IS NOT THE MODEL'S RESIDENT BYTES, and it looks exactly like one.
@@ -579,7 +605,9 @@ def census_depth() -> str:
     try:
         from .layer_depth import active_depth_caps, read_depth
 
-        caps = active_depth_caps()
+        # The stage names come from the model, so the census hands over the pipeline it just walked;
+        # stack_knob_repair reads PIPELINE_STAGES from its source without building anything.
+        caps = active_depth_caps(model_root=_model_root_of(root))
         if caps:
             # Name the tightest cap in force, so the log says which knob shrank the build.
             k = min(caps, key=lambda x: caps[x])
@@ -607,7 +635,7 @@ def marker(c: dict) -> str:
         float(c.get("bytes_per_param") or 0.0),
         # THE DEPTH IT WAS TAKEN AT. A census of a capped build is not the model's resident bytes and
         # looks exactly like one; see census_depth().
-        census_depth(),
+        str(c.get("depth") or census_depth()),
         # The mix itself, so a reader can see WHY the average is what it is rather than trust it.
         ",".join(
             "%s:%d" % (d, n)
