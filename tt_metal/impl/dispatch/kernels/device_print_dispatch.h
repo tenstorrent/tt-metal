@@ -109,7 +109,7 @@ public:
         for (uint32_t i = 0; i < noc_locations_count; i++) {
             uint32_t buffer_size = noc_locations[i].buf_size + std::max(NocL1ToDramAlignment, NocL1ToL1Alignment);
 
-            min_buffer_end = std::max(min_buffer_end, l1_device_print_buffer_start + buffer_size);
+            min_buffer_end = std::max<uintptr_t>(min_buffer_end, l1_device_print_buffer_start + buffer_size);
         }
 
         NocCmdBufGuardWithInit guard;
