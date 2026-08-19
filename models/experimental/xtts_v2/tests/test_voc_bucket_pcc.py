@@ -16,23 +16,33 @@ import types
 
 import pytest
 import torch
-import torch.nn.functional as F
 import ttnn
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.xtts_v2.reference.xtts_hifigan_ref import HifiganReference
-from models.experimental.xtts_v2.tests.reference_helpers import hifigan_reference
+from models.experimental.xtts_v2.tests.reference_helpers import gpt_reference, hifigan_reference
 from models.experimental.xtts_v2.tt.ttnn_xtts_hifigan import (
     TTNNHifiganGenerator,
     preprocess_hifigan_parameters,
 )
-from models.experimental.xtts_v2.tt.ttnn_xtts_model import HOP, VOC_BUCKETS, VOC_L, XttsV2, _voc_bucket
+from models.experimental.xtts_v2.tt.ttnn_xtts_model import (
+    HOP,
+    OUTPUT_SR,
+    VOC_BUCKETS,
+    VOC_L,
+    XttsV2,
+    _voc_bucket,
+    _voc_input,
+    _voc_pad,
+)
 
 TARGET_PCC = 0.999
 TARGET_PCC_WAV = 0.99  # traced waveform vs the CPU reference, same gate as test_hifigan_pcc
 NUM_CONVS = 78  # conv_pre + conv_post + 4 upsamples + 12 resblocks x 6
 MAX_LAYOUTS = 84  # a few convs prepare a second layout, at one length boundary each
 MAX_LAYOUT_MB = 100  # ceiling on the shared prepared weights
+TAIL_MS = 100  # window the padding's boundary burst lands in
+MAX_TAIL_DIFF = 0.05  # ceiling on how much padding may move a kept sample
 
 
 def run_voc_bucket_invariance(device):
@@ -49,7 +59,7 @@ def run_voc_bucket_invariance(device):
         _voc_traces={},
     )
     bucketed = XttsV2._vocode(model, z, g)  # pads L -> _voc_bucket(L)
-    at_cap = XttsV2._vocode(model, F.pad(z, (0, VOC_L - L)), g)[:, :, : L * HOP]  # pre-bucketing behaviour
+    at_cap = XttsV2._vocode(model, _voc_pad(z, VOC_L), g)[:, :, : L * HOP]  # as if there were no buckets
 
     passed, msg = comp_pcc(at_cap, bucketed, pcc=TARGET_PCC)
     print(f"L={L} -> bucket {_voc_bucket(L)} vs cap {VOC_L}, wav {tuple(bucketed.shape)}  pcc: {msg}")
@@ -104,13 +114,53 @@ def run_voc_traced_reference(device):
     for Lb in VOC_BUCKETS:
         L = Lb - 7  # inside the bucket, so each replay pads as a real request does
         z = z_ref.repeat(1, 1, L // z_ref.shape[-1] + 1)[:, :, :L]  # only the length matters here
-        gold = reference(F.pad(z, (0, Lb - L)), g)[:, :, : L * HOP]
+        gold = reference(_voc_pad(z, Lb), g)[:, :, : L * HOP]
         passed, pcc = comp_pcc(gold, XttsV2._vocode(model, z, g), pcc=TARGET_PCC_WAV)
         print(f"bucket {Lb:5d} (L={L}) vs CPU reference  pcc: {pcc}")
         results.append((Lb, passed, pcc))
 
     Lb, _, pcc = min(results, key=lambda r: r[2])
     return all(r[1] for r in results), f"worst bucket {Lb} pcc {pcc}"
+
+
+def _at_true_length(voc, device, z, g):
+    """The same latents with no padding at all — one eager run at their own frame count."""
+    z_tt = ttnn.from_torch(
+        z.permute(0, 2, 1).reshape(1, 1, z.shape[-1], 1024),
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    g_tt = ttnn.from_torch(g.reshape(1, 512), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    return ttnn.to_torch(voc(z_tt, g_tt)).to(torch.float32).reshape(1, 1, -1)
+
+
+def run_voc_pad_tail(device):
+    """Padding up to a bucket must not change the audio that is KEPT.
+
+    The generator answers a step at the boundary with a burst that reaches back inside the trim.
+    A PCC gate averages over the whole waveform and cannot see something that brief, so run the
+    same latents at their TRUE length too and take the worst sample. Real GPT latents, because they
+    end quietly in audio while staying full-magnitude — the case that shows this at all, and the
+    one every request produces."""
+    z = _voc_input(gpt_reference()["latents"])
+    g = hifigan_reference()["g"]
+    L = z.shape[-1]
+    assert _voc_bucket(L) > L, "these latents must need padding or this compares nothing"
+
+    voc = TTNNHifiganGenerator(device, preprocess_hifigan_parameters(device))
+    model = types.SimpleNamespace(mesh_device=device, vocoder=voc, _voc_traces={})
+    bucketed = XttsV2._vocode(model, z, g)
+    exact = _at_true_length(voc, device, z, g)
+
+    tail = int(TAIL_MS * OUTPUT_SR / 1000)
+    worst = (exact - bucketed).abs().max().item()
+    rms = [float((x[0, 0, -tail:] ** 2).mean().sqrt()) for x in (exact, bucketed)]
+    print(
+        f"L={L} -> bucket {_voc_bucket(L)}: worst sample {worst:.4f}, "
+        f"last {TAIL_MS}ms rms {rms[0]:.5f} true vs {rms[1]:.5f} bucketed"
+    )
+    return worst < MAX_TAIL_DIFF, f"worst sample {worst:.4f} (limit {MAX_TAIL_DIFF})"
 
 
 def run_voc_prepared_weight_dedup(device):
@@ -165,6 +215,12 @@ def test_voc_traced_reference(device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 262144}], indirect=True)
+def test_voc_pad_tail(device):
+    passed, msg = run_voc_pad_tail(device)
+    assert passed, f"padding to the bucket changed the audio that is kept: {msg}"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 262144}], indirect=True)
 def test_voc_prepared_weight_dedup(device):
     passed, msg = run_voc_prepared_weight_dedup(device)
     assert passed, f"prepared conv weights are not deduplicated as expected: {msg}"
@@ -181,8 +237,9 @@ if __name__ == "__main__":
         ok2, msg2 = run_voc_trace_replay(dev)
         ok3, msg3 = run_voc_prepared_weight_dedup(dev)
         ok4, msg4 = run_voc_traced_reference(dev)
+        ok5, msg5 = run_voc_pad_tail(dev)
     finally:
         ttnn.close_device(dev)
-    all_ok = ok and ok2 and ok3 and ok4
-    print(("PASSED " if all_ok else "FAILED ") + f"{msg}; {msg2}; {msg3}; {msg4}")
+    all_ok = ok and ok2 and ok3 and ok4 and ok5
+    print(("PASSED " if all_ok else "FAILED ") + f"{msg}; {msg2}; {msg3}; {msg4}; {msg5}")
     sys.exit(0 if all_ok else 1)
