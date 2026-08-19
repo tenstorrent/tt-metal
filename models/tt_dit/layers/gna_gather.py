@@ -109,6 +109,77 @@ def fixed_window_mask(block, kernel):
     return m
 
 
+def _clamp_origin(bi, b, half, ext, L):
+    return min(max(bi * b - half, 0), L - ext)
+
+
+def mask_table(grid, block, kernel):
+    """Deduped clamped masks for the GNA halo path. The per-block window mask depends only on each axis's
+    CLAMP CLASS (low-edge / interior / high-edge), so there are few distinct [vol, box] masks (interior + edge
+    combinations, typically 27). Returns:
+      box_idx   [num_blocks, box_vol] int64 clamped gather indices (in-grid, no sentinels; for ttnn.embedding)
+      table     [n_distinct, vol, box_vol] bool window masks
+      mask_id   [num_blocks] int -> row of `table` for each block
+    box_idx + table[mask_id] == the full per-block (box_gather_indices, window_mask), so it reproduces exact
+    neighborhood attention (validated) while staying memory-bounded (table is tiny; box_idx is num_blocks x box)."""
+    T, H, W = grid
+    bt, bh, bw = block
+    kt, kh, kw = kernel
+    Tb, Hb, Wb = T // bt, H // bh, W // bw
+    ext_t, ext_h, ext_w = box_dims(block, kernel, grid)
+    ht, hh, hw = min(kt, T) // 2, min(kh, H) // 2, min(kw, W) // 2
+    ker_t, ker_h, ker_w = min(kt, T), min(kh, H), min(kw, W)
+    vol, box_vol = bt * bh * bw, ext_t * ext_h * ext_w
+    nb = Tb * Hb * Wb
+
+    def clampL(bi, b, half, ext, L):  # vectorized clamped box origin per block-axis-index
+        return (bi * b - half).clamp(0, L - ext)
+
+    # per-block axis indices + clamped origins (vectorized)
+    bidx = torch.arange(nb)
+    bti, bhi, bwi = bidx // (Hb * Wb), (bidx // Wb) % Hb, bidx % Wb
+    t0 = clampL(bti, bt, ht, ext_t, T)
+    h0 = clampL(bhi, bh, hh, ext_h, H)
+    w0 = clampL(bwi, bw, hw, ext_w, W)
+    # box cell offsets (T-outer/H-mid/W-inner), flat [box_vol]
+    jt = torch.arange(ext_t).view(-1, 1, 1).expand(ext_t, ext_h, ext_w).reshape(-1)
+    jh = torch.arange(ext_h).view(1, -1, 1).expand(ext_t, ext_h, ext_w).reshape(-1)
+    jw = torch.arange(ext_w).view(1, 1, -1).expand(ext_t, ext_h, ext_w).reshape(-1)
+    box_idx = ((w0[:, None] + jw[None, :]) * H + (h0[:, None] + jh[None, :])) * T + (
+        t0[:, None] + jt[None, :]
+    )  # [nb, box_vol]
+
+    # class per block = (clamp offset per axis); dedup -> mask_id + representative block per class
+    ot = t0 - (bti * bt - ht)
+    oh = h0 - (bhi * bh - hh)
+    ow = w0 - (bwi * bw - hw)
+    keys = ot * 1_000_000 + oh * 1000 + ow  # unique key per (ot,oh,ow) combo
+    uniq, mask_id = torch.unique(keys, return_inverse=True)  # [n_distinct], [nb]
+    reps = torch.stack([(keys == u).nonzero()[0, 0] for u in uniq])  # one rep block per class
+    # build table [n_distinct, vol, box_vol] from reps (vectorized over vol x box_vol)
+    dt = torch.arange(vol) // (bh * bw)
+    dh = (torch.arange(vol) // bw) % bh
+    dw = torch.arange(vol) % bw
+    rti, rhi, rwi = reps // (Hb * Wb), (reps // Wb) % Hb, reps % Wb
+    rt0, rh0, rw0 = clampL(rti, bt, ht, ext_t, T), clampL(rhi, bh, hh, ext_h, H), clampL(rwi, bw, hw, ext_w, W)
+
+    def nbr_start_vec(q, L, ker):
+        ker = min(ker, L)
+        return (q - ker // 2).clamp(0, L - ker)
+
+    def axis_mask(rbi, rb, r0, d, L, ker, ext, jc):  # [n_distinct, vol, box_vol] bool for one axis
+        w = nbr_start_vec(rbi[:, None] * rb + d[None, :], L, ker)  # [n_distinct, vol]
+        cell = r0[:, None, None] + jc[None, None, :]  # [n_distinct,1,box_vol]
+        return (w[:, :, None] <= cell) & (cell < w[:, :, None] + min(ker, L))
+
+    table = (
+        axis_mask(rti, bt, rt0, dt, T, kt, ext_t, jt)
+        & axis_mask(rhi, bh, rh0, dh, H, kh, ext_h, jh)
+        & axis_mask(rwi, bw, rw0, dw, W, kw, ext_w, jw)
+    )  # [n_distinct, vol, box_vol]
+    return box_idx, table, mask_id
+
+
 def window_mask(grid, block, kernel):
     """[num_blocks, vol, box_vol] bool: query (in block) attends box cell iff within its +-k//2 window. Depends
     on the block's clamped box origin, so it's per-block (edge blocks differ). vol = bt*bh*bw."""
