@@ -82,7 +82,7 @@ class LayerNorm(LightweightModule):
             )
             self.sharded_output_config = self.sharded_input_config
 
-    def forward(self, x: ttnn.Tensor, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, in_sharded=False, out_sharded=False, memory_config=None) -> ttnn.Tensor:
         if in_sharded:
             x = ttnn.layer_norm(
                 x,
@@ -111,5 +111,8 @@ class LayerNorm(LightweightModule):
                     fp32_dest_acc_en=False,
                     packer_l1_acc=False,
                 ),
+                # The consuming matmul may want its input 0 in L1 and cannot move it itself, so
+                # write it where asked (None keeps ttnn's default).
+                memory_config=memory_config,
             )
             return x

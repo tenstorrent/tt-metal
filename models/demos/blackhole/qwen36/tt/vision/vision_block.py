@@ -105,8 +105,10 @@ class VisionBlock(LightweightModule):
             x.memory_config() == skip_mem_cfg
         ), f"VisionBlock input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
 
-        # The norm gathers along dim=3 and outputs a replicated tensor.
-        attn_in = self.attention_norm(x)
+        # The norm gathers along dim=3 and outputs a replicated tensor, into L1 when qkv is faster
+        # reading input 0 from there (a matmul cannot place its own input -- see vision_mm_plan).
+        seq_len = x.shape[-2]
+        attn_in = self.attention_norm(x, memory_config=self.attention.qkv_plan(seq_len).in0_memory_config)
         # Attention takes replicated input and produces a tensor fractured
         # along dim=3 (because tt_all_reduce reduce-scatters on T3K/QB2).
         attn_out = self.attention.forward(
@@ -119,9 +121,9 @@ class VisionBlock(LightweightModule):
         ttnn.deallocate(attn_out)
         ttnn.deallocate(x)
 
-        ff_in = self.ff_norm(h)
+        ff_in = self.ff_norm(h, memory_config=self.feed_forward.fc1_plan(seq_len).in0_memory_config)
+        # MLP.forward owns ff_in and frees it after fc1, so it must not be freed again here.
         ff_out = self.feed_forward.forward(ff_in, mode=Mode.PREFILL)
-        ttnn.deallocate(ff_in)
         out = ttnn.add(
             h,
             ff_out,
