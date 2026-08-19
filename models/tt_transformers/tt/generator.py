@@ -165,9 +165,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self.prefill_traces_warmup = False
         self.already_warmed_up_prefill = False
         self.mode = None
-        # Trace capture ordering: while this is set, prepared traces are stashed instead of captured, so
-        # that every compile pass and every persistent trace-input allocation happens before the first
-        # capture. See _prepare_trace_prefill for why that ordering matters.
+        # Set for the duration of the first traced prefill call: its decode trace is prepared before that
+        # call's prefill captures anything, and recorded once the prefill is done. Prefill traces are
+        # captured as they are prepared. See _prepare_decode_trace_text for why the decode ordering matters.
         self._defer_trace_recording = False
         self._pending_prefill_traces = {}
         self._pending_decode_trace = None
@@ -271,55 +271,33 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
 
     def finalize_deferred_traces(self, kv_cache, page_table, can_sample_on_device, prefill_samples_on_device=None):
-        """Prepare the remaining traces and capture everything that is pending.
+        """Record the decode trace that this call deferred.
 
-        Called once the prefill that triggered warmup has finished, so every prefill trace variant that run
-        actually uses -- including the batched-prefill one, which warmup cannot know about -- has already
-        been prepared. Everything below still runs before the first capture, so once this returns nothing
-        allocates outside a capture window.
+        The first traced prefill call prepares decode (compile pass, persistent inputs, sampling
+        pre-compile) before its own prefill captures anything, then records it here once that prefill is
+        done. Prefill traces are captured as they are prepared, so nothing else is pending by this point.
 
-        ``can_sample_on_device`` is decode's sampling mode (it keys the decode trace).
-        ``prefill_samples_on_device`` is prefill's, which keys the post-prefill trace -- the two differ when
-        a caller samples on device during decode but reads logits back on host during prefill (GPT-OSS).
-        Capturing the post-prefill tail in the mode prefill does not use would leave a trace nothing replays.
-        Defaults to ``can_sample_on_device`` for callers that do not distinguish them.
+        ``prefill_samples_on_device`` is accepted for call-site compatibility and is unused: the
+        post-prefill trace it used to key is not part of this change.
         """
         if not self._defer_trace_recording:
             return
-        if prefill_samples_on_device is None:
-            prefill_samples_on_device = can_sample_on_device
         try:
-            # One post-prefill trace per model, shaped from any prepared prefill variant's body output.
-            for prepared in self._pending_prefill_traces.values():
-                model_id = prepared["model_id"]
-                if model_id in self._pending_post_prefill_traces:
-                    continue
-                # Tracing the tail needs a slice that can write into a pre-allocated buffer; without it the
-                # replay would allocate its own input every call, which is the very thing being avoided.
-                # Models that do not implement it keep the eager tail (and its allocations).
-                if getattr(self.model[model_id], "slice_last_token_block", None) is None:
-                    continue
-                sampling_enabled = prefill_samples_on_device and getattr(self.model[model_id], "sampling", None)
-                self._pending_post_prefill_traces[model_id] = self._prepare_post_prefill_trace(
-                    model_id, prepared, bool(sampling_enabled)
-                )
-
-            # Decode last, so its compile pass and its capture stay adjacent: capturing a program the
-            # cache has not seen fails outright, and the sampling configuration must not drift in between.
-            #
-            # Unless it was already prepared up front. The no-warmup path does that deliberately, because
-            # there the flush happens after a real prefill and the decode compile pass would write mock K/V
-            # over it (see _prefill_forward_text_impl).
+            # Prepared up front by _prefill_forward_text_impl, before this call's prefill filled the KV
+            # cache -- the decode compile pass is a real decode step at position 0 with mock inputs, so
+            # preparing it here instead would write mock K/V over the prefilled cache.
             if self._pending_decode_trace is None:
                 self._pending_decode_trace = self._prepare_decode_trace_for_warmup(
                     kv_cache=kv_cache,
                     page_table=page_table,
                     on_device_sampling=can_sample_on_device,
                 )
+            self._record_pending_traces()
         finally:
+            # Cleared even if recording raised, and the stash is dropped with it: leaving the latch armed
+            # would make every later prefill defer a capture that nothing flushes.
             self._defer_trace_recording = False
-
-        self._record_pending_traces()
+            self._pending_decode_trace = None
 
     def _warmup_prefill_sweep(
         self,
@@ -653,22 +631,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         return self.trace_output_post_prefill[model_id]
 
     def _record_pending_traces(self):
-        """Capture every trace prepared while recording was deferred.
+        """Capture the decode trace prepared while recording was deferred.
 
-        Runs back to back with no allocation in between: each capture only binds to buffers that were
-        allocated during the preparation phase, before any trace existed.
+        Its compile pass, persistent inputs and sampling pre-compile all ran in
+        :meth:`_prepare_decode_trace_text` before this call's prefill captured anything, so this binds only
+        to buffers that already existed and allocates nothing itself.
         """
-
-        for model_id, prepared in self._pending_post_prefill_traces.items():
-            trace_id, tt_out_trace, last_token_buffer = self._record_post_prefill_trace(prepared)
-            self.trace_id_post_prefill[model_id] = trace_id
-            self.trace_input_post_prefill[model_id] = last_token_buffer
-            self.trace_output_post_prefill[model_id] = tt_out_trace
-            self.post_prefill_sampling_mode[model_id] = prepared["sampling_enabled"]
-        self._pending_post_prefill_traces = {}
-
-        # The decode trace was prepared last (compile + inputs) and is recorded last, so its capture stays
-        # adjacent to its compile pass.
         if self._pending_decode_trace is not None:
             prepared, self._pending_decode_trace = self._pending_decode_trace, None
             on_device_sampling = prepared["on_device_sampling"]
@@ -1065,8 +1033,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             and getattr(self.model[0], "sampling", None) is not None
         )
         if warmup_prefill:
-            # Warmup leaves trace recording deferred; the wrapper flushes once this call's own prefill has
-            # prepared any variant warmup could not know about (batched prefill).
+            # Warmup captures its prefill traces as it sweeps, exactly as on main; only this call's decode
+            # trace is deferred, and the wrapper flushes it once this call's own prefill is done.
             #
             # warmup_prefill defaults to True, so the warmup sweep's own nested calls land here too. Only
             # the outermost call may record these -- a nested one would replace the real page table with its
