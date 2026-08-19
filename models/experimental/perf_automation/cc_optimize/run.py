@@ -1358,10 +1358,23 @@ def _bridge_depth_env(
         return {}
     full_op = int(full_hint)
     full_sp = int(full_blocks)
-    # Use the primary depth value for the uncapped probe (an int regardless of single/multi-stack).
     _cov_int = next(iter(cov.values())) if isinstance(cov, dict) else int(cov)
     if full_op <= 0:
-        _, _, seq = _run_op_sigs(repo_root, mcp_env, devices, node, case, _cov_int)
+        # ALL LAYERS FOR THE BASELINE. This measured the "uncapped" probe at _cov_int -- the CAP --
+        # so both halves of the comparison ran at the same depth and were identical by construction:
+        # the knob could never be shown to reduce work, and every model was profiled at full depth
+        # with "did not reduce work ... ignoring" in the log. Run 10, 2026-08-19: op-count
+        # 3572 -> 3572, on a pipeline that implements the cap correctly for BOTH towers.
+        #
+        # It survived because it only bites models whose depth knob IS this tool's own env
+        # convention. A model exposing a custom knob ignores TT_PERF_LAYERS, so writing it left that
+        # baseline genuinely uncapped and the comparison worked -- which is every model the bridge
+        # was developed against. An emit-e2e-shaped pipeline reads exactly the variable under test.
+        #
+        # set_depth(env, 0) is the established "no cap" form: it clears the depth variable and arms
+        # PERF_MCP_FORCE_ALL_LAYERS, rather than writing a literal 0 that a builder reads as "build
+        # zero layers".
+        _, _, seq = _run_op_sigs(repo_root, mcp_env, devices, node, case, 0)
         full_op = _work_signal(seq)
         full_sp = _blocks_ran(seq)
     if full_op <= 0:
