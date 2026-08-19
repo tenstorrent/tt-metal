@@ -9,6 +9,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <algorithm>
 
 namespace ttnn::prim {
 
@@ -93,14 +94,18 @@ tt::tt_metal::ProgramDescriptor EmbeddingsTilizedIndicesProgramFactory::create_d
     });
 
     constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
+    // The reader reads a full aligned index page (one tile) into this scratch CB, so it must be at
+    // least one aligned page; FACE_HEIGHT sticks under-allocates it and the NOC read overruns.
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
+    uint32_t index_cb_page_size =
+        std::max<uint32_t>(FACE_HEIGHT * index_page_size, static_cast<uint32_t>(a.buffer()->aligned_page_size()));
     desc.cbs.push_back(CBDescriptor{
-        .total_size = FACE_HEIGHT * index_page_size,
+        .total_size = index_cb_page_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = src1_cb_index,
             .data_format = input_cb_data_format,
-            .page_size = FACE_HEIGHT * index_page_size,
+            .page_size = index_cb_page_size,
         }}},
     });
 
