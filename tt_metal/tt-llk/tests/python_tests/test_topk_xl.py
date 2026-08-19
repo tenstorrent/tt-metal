@@ -859,16 +859,33 @@ def test_topk_xl_dest_sync_half(K):
     _run_test_topk(K, num_chunks=2, num_rows=2, dest_sync=DestSync.Half)
 
 
-@parametrize(K=[512, 1024, 2048])
-def test_topk_xl_local_sort_order(K):
-    """local_sort leaves the whole K-element sequence sorted descending in Dest."""
-    (K,) = K
+# The generic body is what local_sort dispatches to for K = 512 and K = 1024, so both
+# modes have to leave a total order there. K = 2048 has no generic full sort, so it runs
+# Dispatch only, through its own fast path.
+@parametrize(
+    K=[512, 1024, 2048],
+    sort_direction=list(TopKSortDirection),
+    sort_mode=lambda K: (
+        [TopKXLSortMode.Dispatch]
+        if K == 2048
+        else [TopKXLSortMode.Dispatch, TopKXLSortMode.Generic]
+    ),
+)
+def test_topk_xl_local_sort_order(K, sort_direction, sort_mode):
+    """local_sort leaves the whole K-element sequence sorted in Dest."""
+    values = [
+        hi16
+        for hi16, _ in _sorted_sequence(
+            K, sort_direction=sort_direction, sort_mode=sort_mode
+        )
+    ]
 
-    values = [hi16 for hi16, _ in _sorted_sequence(K)]
-    inversions = [p for p in range(K - 1) if values[p] < values[p + 1]]
+    ascending = sort_direction == TopKSortDirection.Ascending
+    inversions = [p for p in range(K - 1) if (values[p] < values[p + 1]) != ascending]
     assert not inversions, (
-        f"Dest is not descending in sort-position order: {len(inversions)} inversions, "
-        f"first between positions {inversions[0]} and {inversions[0] + 1}"
+        f"Dest is not {'ascending' if ascending else 'descending'} in sort-position "
+        f"order: {len(inversions)} inversions, first between positions "
+        f"{inversions[0]} and {inversions[0] + 1}"
     )
 
 
@@ -936,6 +953,31 @@ def test_topk_xl_add_lsb_indices_row_major(K, core_id):
         core_id=core_id,
         row_major=True,
     )
+
+
+# The other index op that reports a raw coordinate. remove_msb_values packs in place,
+# so the row_major numbering has to survive as [0 | core_id<<11 | chunk offset] with
+# nothing left to decode.
+@parametrize(K=[512, 1024, 2048], core_id=[0, 31])
+def test_topk_xl_remove_msb_row_major(K, core_id):
+    result, rows = _run(
+        K, index_op=TopKXLIndexOp.RemoveMsb, core_id=core_id, lsb_row_major=True
+    )
+    for r, (fused, _) in enumerate(_extract_hw_topk(result, K, rows.shape[0], 1)):
+        assert fused.numel() == K, f"row {r}: expected {K} lanes, got {fused.numel()}"
+        untouched = int(torch.count_nonzero(fused >> 16))
+        assert untouched == 0, f"row {r}: value half not zeroed in {untouched} lanes"
+
+        hw_core = (fused >> CORE_ID_SHIFT) & CORE_ID_MASK
+        assert torch.all(hw_core == core_id), (
+            f"row {r}: core_id field is "
+            f"{sorted(set(int(c) for c in hw_core.tolist()))[:4]}, want {core_id}"
+        )
+
+        pos = [_index_to_chunk_offset(int(x), K, True) for x in fused.tolist()]
+        assert set(pos) == set(
+            range(K)
+        ), f"row {r}: offsets are not the full 0..K-1 set"
 
 
 # Check reinits that run after copy init.
