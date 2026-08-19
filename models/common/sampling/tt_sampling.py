@@ -826,18 +826,9 @@ class TTSampling(LightweightModule):
             topk_indices_list = []
 
             for i in range(len(x_bf16_list)):
-                # Pad a non-power-of-2 chunk so ttnn.topk hits the multi-core factory.
-                # Padded slots hold -inf and can never be selected; the post-concat
-                # per-chunk offsets use the unpadded chunk width, so real indices are
-                # unaffected.
-                if self.pad_to_power_of_2 and not is_power_of_2(x_bf16_list[i].shape[-1]):
-                    padded_value = upper_power_of_2(x_bf16_list[i].shape[-1])
-                    x_bf16_list[i] = ttnn.pad(
-                        x_bf16_list[i],
-                        [(0, 0), (0, 0), (0, 0), (0, padded_value - x_bf16_list[i].shape[-1])],
-                        value=-sys.float_info.max,
-                        sub_core_grids=self.sub_core_grids,
-                    )
+                # Chunks are not padded to a power of two here: an A/B on this path
+                # (PR #53167) measured no end-to-end decode benefit from steering
+                # ttnn.topk to the multi-core factory, so single-core chunks stay.
                 topk_values, topk_indices = ttnn.topk(
                     x_bf16_list[i],
                     k=self.max_top_k,
