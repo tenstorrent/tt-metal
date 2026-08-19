@@ -599,7 +599,7 @@ models/experimental/tt_transformers_v2 @gwangTT @yieldthought @uaydonat @tenstor
 models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/perf/ @yieldthought @esmalTT @mtairum @uaydonat @tenstorrent/codeowner-bypass
 models/perf/benchmarking_utils.py @williamlyTT @mtairum @uaydonat @tenstorrent/codeowner-bypass
-models/tt_dit/ @jonathansuTT @cglagovichTT @kevinmi-TT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/tt_dit/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT @ppetrovicTT @tenstorrent/codeowner-bypass
 models/tt_transformers/tt/generator*.py @gwangTT @cglagovichTT @yieldthought @mtairum @ppetrovicTT @uaydonat @tenstorrent/codeowner-bypass
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
