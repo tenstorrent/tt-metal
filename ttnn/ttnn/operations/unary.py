@@ -8,7 +8,7 @@ from ttnn.operations import integer_golden
 
 
 def register_ttnn_cpp_unary_function(unary_function):
-    def _golden_function(input_tensor: ttnn.Tensor, **_):
+    def _golden_function(input_tensor: ttnn.Tensor, *args, **_):
         import torch
 
         def torch_cbrt(x, *args, **kwargs):
@@ -61,10 +61,14 @@ def register_ttnn_cpp_unary_function(unary_function):
                 return integer_golden.clamp(x, 0, 6)
             return torch.nn.functional.relu6(x)
 
+        def torch_bitcast(x, dtype):
+            # Tensor.view requires the torch dtype corresponding to the TTNN output dtype.
+            return x.view(ttnn.ttnn_dtype_to_torch_dtype(dtype))
+
         name_to_golden_function = {
             "abs": torch.abs,
             "atan": torch.atan,
-            "bitcast": lambda x, dtype, **_: x.view(dtype),
+            "bitcast": torch_bitcast,
             "cos": torch.cos,
             "erfinv": torch.erfinv,
             "exp2": torch.exp2,
@@ -139,7 +143,8 @@ def register_ttnn_cpp_unary_function(unary_function):
             )
 
         torch_function = name_to_golden_function[unary_function.__name__.split(".")[-1]]
-        return torch_function(input_tensor)
+        # Preserve operation-specific positional parameters while discarding TTNN-only kwargs.
+        return torch_function(input_tensor, *args)
 
     ttnn.attach_golden_function(unary_function, golden_function=_golden_function)
 
@@ -244,9 +249,10 @@ def _golden_function_softplus(input_tensor, *args, beta=1.0, threshold=20.0, **k
 ttnn.attach_golden_function(ttnn.softplus, golden_function=_golden_function_softplus)
 
 
-def _golden_function_asin(input_tensor_a, *args, device, **kwargs):
+def _golden_function_asin(input_tensor_a, *args, **kwargs):
     import torch
 
+    # Comparison mode does not inject device, and this reference does not use it.
     result = torch.asin(input_tensor_a)
     # ttnn returns inf instead of nan for bfloat16, so mask NaNs to inf in torch.asin
     return (
@@ -259,9 +265,10 @@ def _golden_function_asin(input_tensor_a, *args, device, **kwargs):
 ttnn.attach_golden_function(ttnn.asin, golden_function=_golden_function_asin)
 
 
-def _golden_function_acos(input_tensor_a, *args, device, **kwargs):
+def _golden_function_acos(input_tensor_a, *args, **kwargs):
     import torch
 
+    # Comparison mode does not inject device, and this reference does not use it.
     result = torch.acos(input_tensor_a)
     # ttnn returns inf instead of nan for bfloat16, so mask NaNs to inf in torch.acos
     return (

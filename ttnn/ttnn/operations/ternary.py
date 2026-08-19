@@ -62,7 +62,12 @@ ttnn.attach_golden_function(ttnn.mac, golden_function=_golden_function_mac)
 def _golden_function_where(input_tensor_a, input_tensor_b, input_tensor_c, *args, **kwargs):
     import torch
 
-    return torch.where(input_tensor_a, input_tensor_b, input_tensor_c)
+    # TT where selects true only for positive predicates; torch.where requires bool.
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        condition = integer_golden.compare(input_tensor_a, 0, torch.gt)
+    else:
+        condition = torch.gt(input_tensor_a, 0)
+    return torch.where(condition, input_tensor_b, input_tensor_c)
 
 
 ttnn.attach_golden_function(ttnn.where, golden_function=_golden_function_where)

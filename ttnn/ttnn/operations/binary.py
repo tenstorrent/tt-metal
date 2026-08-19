@@ -30,8 +30,12 @@ def apply_activations(tensor, activations):
 
     if activations is not None:
         for activation in activations:
-            activation_function = act_func_map[activation.op_type]
-            tensor = activation_function(tensor)
+            if activation.op_type == ttnn.UnaryOpType.POWER:
+                # POWER carries its exponent in UnaryWithParam instead of the function map.
+                tensor = torch.pow(tensor, activation.params[0])
+            else:
+                activation_function = act_func_map[activation.op_type]
+                tensor = activation_function(tensor)
     return tensor
 
 
@@ -311,6 +315,9 @@ def _golden_function_maximum(input_tensor_a, input_tensor_b, *args, **kwargs):
     if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
         # Evaluate unsupported unsigned min/max in int64 and restore the input dtype.
         return integer_golden.binary(input_tensor_a, input_tensor_b, torch.maximum)
+    if not torch.is_tensor(input_tensor_b):
+        # PyTorch maximum requires two tensors even though TTNN accepts a scalar operand.
+        input_tensor_b = torch.tensor(input_tensor_b, dtype=input_tensor_a.dtype, device=input_tensor_a.device)
     return torch.maximum(input_tensor_a, input_tensor_b)
 
 
@@ -434,6 +441,9 @@ def _golden_function_remainder(input_tensor_a, input_tensor_b, *args, device=Non
 
     # Comparison mode does not inject device, and this reference does not use it.
     input_dtype = input_tensor_a.dtype
+    if integer_golden.is_unsigned_dtype(input_dtype):
+        # PyTorch lacks unsigned remainder kernels; widen and restore the input dtype.
+        return integer_golden.binary(input_tensor_a, input_tensor_b, torch.remainder)
     if not torch.is_tensor(input_tensor_b):
         if input_dtype == torch.bfloat16:
             input_tensor_a = input_tensor_a.float()
