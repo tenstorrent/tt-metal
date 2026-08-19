@@ -118,6 +118,33 @@ def _depth_from_mapping(obj) -> int | None:
     return max(found) if found else None
 
 
+def depths_from_checkpoint(model_id: str = "", model_dir=None) -> list:
+    """Block depths counted from the checkpoint's OWN tensor names, deepest first. [] if unreadable.
+
+    NO CONFIG KEY TO GUESS. A checkpoint names its blocks by index --
+    `language_model.model.layers.29.mlp.gate_proj.weight` -- so the depth of a stack is the highest
+    index it contains, plus one. That is a property of the file, identical for every model that has
+    repeated blocks at all, in any architecture and any naming convention.
+
+    The alternative below it, _DEPTH_KEYS, is nine guesses at what the CONFIG might call the field:
+    num_hidden_layers, n_layers, num_layers, n_layer, num_blocks, num_decoder_layers,
+    decoder_layers, gpt_layers, depth. Each was added when a model used a spelling the list did not
+    have, and a tenth spelling is one model away. It also cannot separate two stacks that share a
+    key name, which is why voxtral's audio tower and text decoder both read 32 and the tool capped
+    the wrong one.
+
+    checkpoint_sections.declared_sections already does the counting -- the same join stage_roots and
+    the tower split use -- so this is a reader, not a second implementation.
+    """
+    try:
+        from .checkpoint_sections import declared_sections
+
+        secs = declared_sections(model_dir or "", str(model_id or "")) or {}
+    except Exception:  # noqa: BLE001 -- an unreadable checkpoint falls through to the config
+        return []
+    return sorted({int(v) for v in secs.values() if int(v) > 0}, reverse=True)
+
+
 def full_depth_from_config(model_id: str = "", model_dir=None) -> int | None:
     """How many repeated blocks does this model have, read WITHOUT building or running it.
 
@@ -130,6 +157,10 @@ def full_depth_from_config(model_id: str = "", model_dir=None) -> int | None:
     Returns None rather than a guess when nothing declares it, so the caller falls back to letting
     the builder reveal its own depth. Never recurses: see _FOREIGN_DIRS for why.
     """
+    # THE CHECKPOINT COUNTS; THE CONFIG IS GUESSED AT. See depths_from_checkpoint.
+    _ck = depths_from_checkpoint(model_id=model_id, model_dir=model_dir)
+    if _ck:
+        return int(_ck[0])
     if model_id:
         try:
             from transformers import AutoConfig
@@ -228,6 +259,11 @@ def declared_section_depths(model_id: str = "", model_dir=None) -> list:
 
     Sorted descending so the caller reads the deepest first; empty when nothing declares a depth.
     """
+    # PER SECTION, COUNTED. The config walk below returns every depth it can find anywhere in the
+    # mapping and cannot say which stack each belongs to; the checkpoint names them.
+    _ck = depths_from_checkpoint(model_id=model_id, model_dir=model_dir)
+    if _ck:
+        return _ck
     if model_id:
         try:
             from transformers import AutoConfig
