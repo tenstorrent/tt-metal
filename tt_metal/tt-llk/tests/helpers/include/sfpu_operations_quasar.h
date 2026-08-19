@@ -270,9 +270,9 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     else if constexpr (is_trig_op(OPERATION))
     {
         // One op-templated kernel serves sine/cosine/acosh/asinh/atanh; OPERATION picks the branch
-        // at compile time. APPROXIMATION_MODE=false selects the full-polynomial (accurate) path;
-        // VectorMode::RC (the params default) runs the functor once per face.
-        _llk_math_eltwise_unary_sfpu_params_(calculate_trigonometry<OPERATION, false /* APPROX */, is_fp32_dest_acc_en, ITERATIONS>, dst_index);
+        // at compile time. APPROXIMATION_MODE=false selects the full-polynomial (accurate) path.
+        SFPU_UNARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_trigonometry, (OPERATION, false /* APPROX */, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
     }
     else if constexpr (OPERATION == SfpuType::negative)
     {
