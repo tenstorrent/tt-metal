@@ -133,12 +133,9 @@ namespace {
 // A tri-state env var (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES) overrides the auto-detect:
 //   =1 → force enable, =0 → force disable, unset → auto-detect (below).
 //
-// Two independent constraints for auto-detect, both about the application owning the right DRAM RISC core:
-//   - Firmware must support it (arch + firmware-bundle floor) -- resolved by check_firmware_capabilities.
-//   - Topology: with DRAM harvesting the specific core the application must write to for GCB credits can
-//     differ per device, which breaks our programming model that the cores look identical on every
-//     device. A single device has no cross-device consistency to break, and an unharvested multi-device
-//     system lines the cores up the same way -- so require no harvested DRAM channels, OR a single device.
+// Auto-detect resolves firmware support only (architecture + firmware-bundle floor, via
+// check_firmware_capabilities). DRAM harvesting no longer disables the core type: DRAM programs and
+// GCB credit targets resolve sender coordinates from each device's SOC descriptor.
 bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, const llrt::RunTimeOptions& rtoptions) {
     const auto override = rtoptions.get_blackhole_dram_programmable_cores_override();
     if (override.has_value()) {
@@ -158,21 +155,7 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
         {.firmware_bundle = cluster.get_cluster_desc()->get_cluster_firmware_bundle_version()},
         req,
         res);
-    if (!res.dram_programmable_cores) {
-        return false;
-    }
-
-    if (cluster.number_of_devices() == 1) {
-        return true;
-    }
-    // Multi-device: the GCB-credit core must be the same on every device, so reject if any device has
-    // a harvested DRAM channel (which would shift that core on that device).
-    for (const auto chip : cluster.all_chip_ids()) {
-        if (cluster.get_soc_desc(chip).harvesting_masks.dram_harvesting_mask != 0) {
-            return false;
-        }
-    }
-    return true;
+    return res.dram_programmable_cores;
 }
 }  // namespace
 

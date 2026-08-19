@@ -368,8 +368,6 @@ public:
 
     // Returns whether IOMMU is enabled on the system (cached at init time)
     bool is_iommu_enabled() const;
-    // Returns whether NOC mapping is enabled on the system (cached at init time)
-    bool is_noc_mapping_enabled() const;
 
     tt::tt_metal::ClusterType get_cluster_type() const;
 
@@ -462,8 +460,6 @@ private:
 
     // Cached system IOMMU status to avoid slow queries at MeshDevice construction
     bool iommu_enabled_ = false;
-    // Cached system NOC mapping status to avoid slow queries at MeshDevice construction
-    bool noc_mapping_enabled_ = false;
 
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<ChipId, metal_SocDescriptor> sdesc_per_chip_;

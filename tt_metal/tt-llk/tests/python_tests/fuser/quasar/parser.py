@@ -134,7 +134,7 @@ UNPACKER_MAP = {
         [_broadcast_required, NO_TRANSPOSE, NO_UNPACK_TO_DEST],
     ),
     "UnpackReduceTilize": (
-        lambda s: UnpackReduceTilize(),
+        lambda s: UnpackReduceTilize(s.reduce_dim, s.reduce_pool),
         [
             NO_TRANSPOSE,
             NO_UNPACK_TO_DEST,

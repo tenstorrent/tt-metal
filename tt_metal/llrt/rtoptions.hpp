@@ -398,6 +398,13 @@ class RunTimeOptions {
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
 
+    // Process-start trace allocation tracker settings. These are static because
+    // environment variables are process-wide and the hot-path accessors do not
+    // belong to a particular MetalContext.
+    inline static bool trace_allocation_tracking_enabled_ = false;
+    inline static bool trace_allocation_diagnostics_enabled_ = false;
+    inline static bool trace_allocation_skip_program_cache_enabled_ = false;
+
     // Disable shared memory tracking for tt-smi
     bool shm_tracking_disabled = false;
     bool shm_verbose = false;
@@ -493,6 +500,12 @@ public:
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
+
+    static bool get_trace_allocation_tracking_enabled() { return trace_allocation_tracking_enabled_; }
+    static bool get_trace_allocation_diagnostics_enabled() { return trace_allocation_diagnostics_enabled_; }
+    static bool get_trace_allocation_skip_program_cache_enabled() {
+        return trace_allocation_skip_program_cache_enabled_;
+    }
 
     bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
     bool get_shm_verbose() const { return shm_verbose; }

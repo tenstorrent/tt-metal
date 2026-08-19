@@ -8,6 +8,12 @@
 #include <nlohmann/json.hpp>
 #include <tt_stl/assert.hpp>
 
+#include <tt-metalium/program.hpp>
+#include "impl/context/metal_context.hpp"
+#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
+
 namespace tt::tt_metal {
 
 thread_local std::vector<std::shared_ptr<IGraphProcessor>> GraphTracker::processors;
@@ -73,6 +79,26 @@ void GraphTracker::track_allocate_cb(
     }
 }
 
+void GraphTracker::track_allocate_dataflow_buffer(
+    const CoreRangeSet& core_range_set, uint64_t addr, uint64_t size, bool borrows_memory, const IDevice* device) {
+    if (processors.empty()) {
+        return;
+    }
+    for (auto& it : processors) {
+        it->track_allocate_dataflow_buffer(core_range_set, addr, size, borrows_memory, device);
+    }
+}
+
+void GraphTracker::track_allocate_scratchpad(
+    const CoreRangeSet& core_range_set, uint64_t addr, uint64_t size, const IDevice* device) {
+    if (processors.empty()) {
+        return;
+    }
+    for (auto& it : processors) {
+        it->track_allocate_scratchpad(core_range_set, addr, size, device);
+    }
+}
+
 void GraphTracker::track_deallocate_cb(const IDevice* device) {
     if (processors.empty()) {
         return;
@@ -82,6 +108,33 @@ void GraphTracker::track_deallocate_cb(const IDevice* device) {
     }
 }
 
+namespace {
+
+// A Metal 2.0 program holds its per-core L1 in dataflow buffers and kernel scratchpads, which -
+// unlike circular buffers - have no allocation-time tracking hook.
+void track_program_l1(GraphTracker& tracker, detail::ProgramImpl& program, const IDevice* device) {
+    for (const auto& dfb : program.dataflow_buffers()) {
+        // Alias secondaries share the primary's L1 region instead of adding one.
+        if (dfb->alias_primary_id.has_value()) {
+            continue;
+        }
+        tracker.track_allocate_dataflow_buffer(
+            dfb->core_ranges, /*addr=*/0, dfb->total_size(), dfb->borrows_memory(), device);
+    }
+    // Scratchpads stack on the same program-scope L1 region as the dataflow buffers, one region per
+    // binding: kernels may only share a scratchpad spec across disjoint cores.
+    const auto& hal = MetalContext::instance().hal();
+    for (uint32_t core_type = 0; core_type < hal.get_programmable_core_type_count(); core_type++) {
+        for (const auto& [_, kernel] : program.get_kernels(core_type)) {
+            for (const auto& scratchpad : kernel->scratchpad_binding_handles()) {
+                tracker.track_allocate_scratchpad(kernel->core_range_set(), /*addr=*/0, scratchpad.size_bytes, device);
+            }
+        }
+    }
+}
+
+}  // namespace
+
 void GraphTracker::track_program(Program* program, const IDevice* device) {
     TT_ASSERT(program);
     TT_ASSERT(device);
@@ -90,6 +143,11 @@ void GraphTracker::track_program(Program* program, const IDevice* device) {
     }
     for (auto& it : processors) {
         it->track_program(program, device);
+    }
+    // A hooked program never runs, so no allocation will report its L1 later. Addresses are not
+    // assigned yet either, matching how a capture reports this program's circular buffers.
+    if (hook_program(program)) {
+        track_program_l1(*this, program->impl(), device);
     }
 }
 

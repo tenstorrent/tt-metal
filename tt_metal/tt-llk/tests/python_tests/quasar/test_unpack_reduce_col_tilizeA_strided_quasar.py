@@ -30,14 +30,16 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
+    generate_perf_input_dimensions,
     input_output_formats,
     parametrize,
     runtime,
+    select_perf_tile_sizes,
 )
-from helpers.perf import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
@@ -47,7 +49,6 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     generate_input_dim,
@@ -117,7 +118,11 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
         """
         return in_fmt in (DataFormat.Int8, DataFormat.UInt8) and in_fmt == out_fmt
 
-    tile_sizes = [(32, 32)] if is_perf else UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES
+    tile_sizes = (
+        select_perf_tile_sizes(UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES)
+        if is_perf
+        else UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES
+    )
 
     combinations = []
 
@@ -141,8 +146,7 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
                         continue
                     tile_shape = construct_tile_shape(tile_dimensions)
                     dimensions_list = (
-                        # Perf only measures the single tile case.
-                        [[tile_shape.total_row_dim(), tile_shape.total_col_dim()]]
+                        generate_perf_input_dimensions(acc, dest_sync, tile_shape)
                         if is_perf
                         else generate_corner_case_input_dimensions(
                             dest_sync, acc, tile_shape
@@ -161,7 +165,7 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
                                     fmt,
                                     acc,
                                     dest_sync,
-                                    runtime(dimensions),
+                                    dimensions,
                                     pool_type,
                                     runtime(tile_dimensions),
                                 )
@@ -322,19 +326,16 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
         "dest_acc": dest_acc,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-            "boot_mode": boot_mode,
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

@@ -87,26 +87,26 @@ namespace tt {
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc) {
-    // When ttsim is active, derive cluster type from the simulator soc descriptor even if a mock
-    // cluster descriptor is also configured (tt-run MP sweeps set both).
-    if (rtoptions.get_simulator_enabled()) {
-        auto soc_desc =
-            tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
-        auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
-        if (arch == tt::ARCH::WORMHOLE_B0) {
-            return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
-        }
-        if (arch == tt::ARCH::BLACKHOLE) {
-            return tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE;
-        }
-        if (arch == tt::ARCH::QUASAR) {
-            return tt::tt_metal::ClusterType::SIMULATOR_QUASAR;
-        }
-        return tt::tt_metal::ClusterType::INVALID;
-    }
-
     std::unique_ptr<umd::ClusterDescriptor> temp_cluster_desc = nullptr;
     if (cluster_desc == nullptr) {
+        // Descriptor-less simulator callers have no topology to classify. Preserve the legacy architecture-only
+        // simulator types for that fallback, but prefer a supplied/discovered descriptor below so direct simulation
+        // is classified the same way as silicon (for example, a discovered two-chip N300 remains an N300).
+        if (rtoptions.get_simulator_enabled()) {
+            auto soc_desc =
+                tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
+            auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
+            if (arch == tt::ARCH::WORMHOLE_B0) {
+                return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
+            }
+            if (arch == tt::ARCH::BLACKHOLE) {
+                return tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE;
+            }
+            if (arch == tt::ARCH::QUASAR) {
+                return tt::tt_metal::ClusterType::SIMULATOR_QUASAR;
+            }
+            return tt::tt_metal::ClusterType::INVALID;
+        }
         temp_cluster_desc = rtoptions.get_mock_enabled() ? get_mock_cluster_desc(rtoptions)
                                                          : tt::umd::Cluster::create_cluster_descriptor();
         cluster_desc = temp_cluster_desc.get();
@@ -221,8 +221,6 @@ bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type)
 
 bool Cluster::is_iommu_enabled() const { return this->iommu_enabled_; }
 
-bool Cluster::is_noc_mapping_enabled() const { return this->noc_mapping_enabled_; }
-
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     ZoneScoped;
     log_info(tt::LogDevice, "Opening user mode device driver");
@@ -334,7 +332,6 @@ void Cluster::initialize_device_drivers() {
 
     // Cache IOMMU status (expensive to query repeatedly)
     this->iommu_enabled_ = false;
-    this->noc_mapping_enabled_ = false;
     if (this->target_type_ == tt::TargetDevice::Silicon) {
         const auto& mmio_ids = this->driver_->get_target_mmio_device_ids();
         if (!mmio_ids.empty()) {
@@ -342,7 +339,6 @@ void Cluster::initialize_device_drivers() {
             auto* pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
             if (pci) {
                 this->iommu_enabled_ = pci->is_iommu_enabled();
-                this->noc_mapping_enabled_ = tt::umd::PCIDevice::is_mapping_buffer_to_noc_supported();
             }
         }
     }
@@ -771,11 +767,9 @@ uint32_t Cluster::get_arc_timer_heartbeat(const ChipId& chip_id) const {
     }
 
     auto* fw = tt_device->get_firmware_info_provider();
-    if (!fw) {
-        return 0;
-    }
 
-    return fw->get_heartbeat();  // ← THIS is the correct call path
+    const std::optional<uint32_t> heartbeat = fw->get_heartbeat();
+    return heartbeat.value_or(0);
 }
 
 bool Cluster::is_arc_telemetry_available(const ChipId& chip_id) const {

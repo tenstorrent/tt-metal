@@ -24,6 +24,10 @@
 *
 * This function initializes the unpacker to unpack operand 0 from the input0 operand circular buffer into SrcB
 * and operand 1 from the input1 operand circular buffer into SrcA. Matrix multiply FPU operation does SrcB * SrcA.
+*
+* Each operand gets a BFD id allocated from the unpack partition and its table entry is programmed here;
+* the DFB ids are used only to fetch buffer info, never as BFD ids. Mind the role flip: operandA feeds
+* UNPACR1 -> SrcB (Unp1) and operandB feeds UNPACR0 -> SrcA (Unp0).
 */
 template <bool TRANSPOSE_EN = false>
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
@@ -32,12 +36,29 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,
     const std::uint32_t kt_dim = 1) {
-    // In0 -> srcB
-    // In1 -> srcA
+    // In0 -> srcB (UNPACR1)
+    // In1 -> srcA (UNPACR0)
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
-    _llk_unpack_matmul_init_<TRANSPOSE_EN>(operandA_id, operandB_id, ct_dim, rt_dim, kt_dim);
+    // _llk_unpack_matmul_ takes no TensorShape, so it does not scale its L1 tile indices by the face
+    // count; Quasar matmul is full-tile only (tt-metal #45208).
+    LLK_ASSERT(
+        get_operand_tensor_shape(operandA_id).total_num_faces() == ckernel::MAX_NUM_FACES,
+        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
+    LLK_ASSERT(
+        get_operand_tensor_shape(operandB_id).total_num_faces() == ckernel::MAX_NUM_FACES,
+        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
+
+    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandA_id);
+    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandB_id);
+
+    _llk_unpack_matmul_init_<TRANSPOSE_EN>(
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+        ct_dim,
+        rt_dim,
+        kt_dim);
 }
 
 /**

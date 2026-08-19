@@ -22,7 +22,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_buffer import LazyBuffer, resolve_lazy_buffer
-from models.common.modules.tt_ccl import default_topology, get_tt_ccl
+from models.common.modules.tt_ccl import get_tt_ccl
 from models.common.sampling.vocab_padding import (
     build_invalid_vocab_mask,
     build_tail_invalid_vocab_mask,
@@ -71,6 +71,8 @@ class Sampling1DConfig:
     allow_force_argmax: bool = False
     num_argmax_gather_links: Optional[int] = None  # None → same as num_gather_links
     ag_topology: Optional[ttnn.Topology] = None  # None → Topology.Linear
+    argmax_chunks_per_sync: int = 10
+    argmax_num_workers_per_link: int = 1
     # Pad each per-device logit shard up to the next power of 2 before ttnn.topk. Big device-perf
     # win for non-power-of-2 vocab on the multi-device path (TTTv1's pad_logits_to_power_of_2).
     # Strict TTTv1 parity: only the multi-device path is padded — the 1×1 multi_step split path
@@ -80,9 +82,6 @@ class Sampling1DConfig:
     # --- Persistent buffer specs (LazyBuffer | ttnn.Tensor | None) ---
     # Static index buffers (computed from vocab_size + num_devices, never mutated)
     index_offsets: LazyBuffer | ttnn.Tensor | None = None  # [1,1,32,max_top_k*num_devices], int32, TILE
-    local_indices: LazyBuffer | ttnn.Tensor | None = (
-        None  # [1,1,32,W], uint16, TILE (W=vocab for 1x1, per_dev_vocab otherwise)
-    )
     invalid_vocab_mask: LazyBuffer | ttnn.Tensor | None = None  # Full fallback mask, sharded like logits
     invalid_vocab_tail_mask: LazyBuffer | ttnn.Tensor | None = None  # Compact [1,1,32,tail] local mask
     invalid_vocab_tail_width: int = 0
@@ -103,7 +102,7 @@ class Sampling1DConfig:
             return False
         if self.mesh_device.get_num_devices() > 1 and self.tt_ccl is None:
             return False
-        required_buffers = ["index_offsets", "local_indices", "seeds", "user_ids"]
+        required_buffers = ["index_offsets", "seeds", "user_ids"]
         if not all(self._buf_resolved(getattr(self, f)) for f in required_buffers):
             return False
         if self.valid_vocab_size is not None and self.valid_vocab_size < self.vocab_size:
@@ -170,15 +169,11 @@ class Sampling1D(LightweightModule):
         # CCL introspection (port from TTSampling.__init__ lines 77-91)
         self._line_all_gather = getattr(self.config.tt_ccl, "line_all_gather", None) if self.config.tt_ccl else None
         self._line_all_gather_supports_buffer_key = False
-        self._line_all_gather_supports_dtype = False
         if callable(self._line_all_gather):
             try:
                 sig = inspect.signature(self._line_all_gather)
                 params = sig.parameters
                 self._line_all_gather_supports_buffer_key = "buffer_key" in params or any(
-                    p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-                )
-                self._line_all_gather_supports_dtype = "dtype" in params or any(
                     p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
                 )
             except (TypeError, ValueError):
@@ -194,29 +189,73 @@ class Sampling1D(LightweightModule):
         assert self.config.is_resolved(), "config must be resolved before loading device buffers!"
         cfg = self.config
 
-        self._index_offsets = _materialize(cfg.index_offsets)
-        self._local_indices = _materialize(cfg.local_indices)
-        self._invalid_vocab_mask = _materialize(cfg.invalid_vocab_mask) if cfg.invalid_vocab_mask is not None else None
-        self._invalid_vocab_tail_mask = (
-            _materialize(cfg.invalid_vocab_tail_mask) if cfg.invalid_vocab_tail_mask is not None else None
-        )
-        self._invalid_vocab_tail_width = cfg.invalid_vocab_tail_width
-        self._seeds = _materialize(cfg.seeds)
-        self._user_ids = _materialize(cfg.user_ids)
-        from models.common.utils import LogProbsCalculator  # lazy: transitively imports torch
-
-        self._log_probs_calculator = LogProbsCalculator(cfg.mesh_device, cfg.sub_core_grids, cfg.tt_ccl)
-
-        # Pre-compute static sub_core_grids for ttnn.sampling()
-        self._sampling_sub_core_grids = (
-            ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                cfg.start_core, cfg.max_batch_size, cfg.sub_core_grids, row_wise=True
+        try:
+            self._index_offsets = _materialize(cfg.index_offsets)
+            self._local_indices = _materialize(cfg.local_indices)
+            self._invalid_vocab_mask = (
+                _materialize(cfg.invalid_vocab_mask) if cfg.invalid_vocab_mask is not None else None
             )
-            if cfg.sub_core_grids is not None
-            else None
-        )
+            self._invalid_vocab_tail_mask = (
+                _materialize(cfg.invalid_vocab_tail_mask) if cfg.invalid_vocab_tail_mask is not None else None
+            )
+            self._invalid_vocab_tail_width = cfg.invalid_vocab_tail_width
+            self._seeds = _materialize(cfg.seeds)
+            self._user_ids = _materialize(cfg.user_ids)
+            from models.common.utils import LogProbsCalculator  # lazy: transitively imports torch
+
+            self._log_probs_calculator = LogProbsCalculator(cfg.mesh_device, cfg.sub_core_grids, cfg.tt_ccl)
+
+            # Pre-compute static sub_core_grids for ttnn.sampling()
+            self._sampling_sub_core_grids = (
+                ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                    cfg.start_core, cfg.max_batch_size, cfg.sub_core_grids, row_wise=True
+                )
+                if cfg.sub_core_grids is not None
+                else None
+            )
+        except BaseException as primary:
+            try:
+                self.release()
+            except BaseException as cleanup_error:
+                failures = (cleanup_error,) + tuple(getattr(cleanup_error, "cleanup_failures", ()))
+                _attach_cleanup_failures(primary, failures)
+            raise
 
         self._device_buffers_loaded = True
+
+    def release(self) -> None:
+        """Release model-owned buffers idempotently and permit rematerialization."""
+        failures = []
+        calculator = getattr(self, "_log_probs_calculator", None)
+        if calculator is not None:
+            try:
+                calculator.release()
+            except BaseException as error:
+                failures.append(error)
+            else:
+                self._log_probs_calculator = None
+
+        for name in (
+            "index_offsets",
+            "local_indices",
+            "invalid_vocab_mask",
+            "invalid_vocab_tail_mask",
+            "seeds",
+            "user_ids",
+        ):
+            specification = getattr(self.config, name, None)
+            if isinstance(specification, LazyBuffer):
+                try:
+                    specification.release()
+                except BaseException as error:
+                    failures.append(error)
+            if not isinstance(specification, LazyBuffer) or specification._value is None:
+                setattr(self, f"_{name}", None)
+
+        self._sampling_sub_core_grids = None
+        self._device_buffers_loaded = False
+        if failures:
+            _raise_cleanup_failures(failures)
 
     # -- Forward methods ------------------------------------------------------
 
@@ -271,7 +310,7 @@ class Sampling1D(LightweightModule):
         """Dispatcher."""
         return self.decode_forward(logits, **kwargs)
 
-    # -- Argmax path (port from tt_sampling.py:310-341) -----------------------
+    # -- Argmax path (port of the argmax branch of TTSampling.forward) --------
 
     def _sample_argmax(self, logits, tt_out_tok):
         slice_valid_vocab = self._can_slice_valid_vocab_for_argmax()
@@ -315,21 +354,11 @@ class Sampling1D(LightweightModule):
         For other meshes, fall back to the clamped Linear+barrier path.
         """
         cfg = self.config
-        if default_topology(cfg.mesh_device) == ttnn.Topology.Ring:
-            return ttnn.experimental.all_gather_async(
-                logits,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
-                memory_config=logits.memory_config(),
-                topology=ttnn.Topology.Ring,
-                chunks_per_sync=24,
-                num_workers_per_link=4,
-                num_buffers_per_channel=2,
-            )
-        cluster_axis = 1
+        cluster_axis = None if 1 in cfg.mesh_device.shape else 1
         num_links, topology = self._get_argmax_all_gather_config(cluster_axis)
+        kwargs = {}
+        if cluster_axis is not None:
+            kwargs["cluster_axis"] = cluster_axis
         return ttnn.experimental.all_gather_async(
             logits,
             persistent_output_buffer=None,
@@ -337,12 +366,12 @@ class Sampling1D(LightweightModule):
             multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
             num_links=num_links,
             memory_config=logits.memory_config(),
-            cluster_axis=cluster_axis,
             topology=topology,
             barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=1,
+            chunks_per_sync=cfg.argmax_chunks_per_sync,
+            num_workers_per_link=cfg.argmax_num_workers_per_link,
             num_buffers_per_channel=2,
+            **kwargs,
         )
 
     @staticmethod
@@ -368,7 +397,7 @@ class Sampling1D(LightweightModule):
         """DRAM memory config: no extra round-trip needed."""
         return topk_values, topk_indices_int32
 
-    # -- Top-k sampling (port from tt_sampling.py:343-481) --------------------
+    # -- Top-k sampling (port of the top-k branch of TTSampling.forward) ------
 
     def _sample_topk(self, logits, k, p, temp, seeds, tt_out_tok):
         cfg = self.config
@@ -377,7 +406,8 @@ class Sampling1D(LightweightModule):
         x_bf16 = self._mask_invalid_vocab_logits(x_bf16)
 
         # Strategy-dispatched top-k
-        topk_values, topk_indices = self._topk(x_bf16)
+        active_batch = int(x_bf16.shape[2])
+        topk_values, topk_indices = self._topk(x_bf16, active_batch)
 
         # Convert indices to int32
         topk_indices_int32 = ttnn.typecast(topk_indices, dtype=ttnn.int32, sub_core_grids=cfg.sub_core_grids)
@@ -385,14 +415,19 @@ class Sampling1D(LightweightModule):
         topk_values, topk_indices_int32 = self._prepare_topk_memory(topk_values, topk_indices_int32)
 
         # Add device offsets for global vocabulary indices
+        index_offsets, sliced_offsets = self._slice_user_rows(
+            self._index_offsets, int(topk_indices_int32.shape[2]), cfg.sampling_memory_config
+        )
         topk_global_indices = ttnn.add(
-            self._index_offsets,
+            index_offsets,
             topk_indices_int32,
             dtype=ttnn.int32,
             memory_config=cfg.sampling_memory_config,
             sub_core_grids=cfg.sub_core_grids,
         )
         ttnn.deallocate(topk_indices_int32)
+        if sliced_offsets:
+            ttnn.deallocate(index_offsets)
 
         # Use distinct names so we can free the interleaved intermediate after untilize
         topk_global_indices_interleaved = ttnn.to_memory_config(topk_global_indices, ttnn.DRAM_MEMORY_CONFIG)
@@ -406,7 +441,7 @@ class Sampling1D(LightweightModule):
         ttnn.manual_seed(
             seeds=seeds_tensor,
             user_ids=self._user_ids,
-            sub_core_grids=cfg.sub_core_grids,
+            sub_core_grids=self._sampling_sub_core_grids,
         )
 
         # Sample
@@ -516,13 +551,30 @@ class Sampling1D(LightweightModule):
             sub_core_grids=cfg.sub_core_grids,
         )
 
+    def _slice_user_rows(self, tensor, active_batch, memory_config):
+        if int(tensor.shape[2]) == active_batch:
+            return tensor, False
+        return (
+            ttnn.slice(
+                tensor,
+                [0, 0, 0, 0],
+                [tensor.shape[0], tensor.shape[1], active_batch, tensor.shape[3]],
+                memory_config=memory_config,
+                sub_core_grids=self.config.sub_core_grids,
+            ),
+            True,
+        )
+
     # -- Top-k strategies (bound at init, no if-else in forward) --------------
 
-    def _topk_single_device(self, x_bf16):
+    def _topk_single_device(self, x_bf16, active_batch):
         """Split vocab in half → two topk → concat. Port of tt_sampling.py:346-371."""
         cfg = self.config
         x_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
-        indices_list = ttnn.split(self._local_indices, self._local_indices.shape[-1] // 2, dim=3)
+        local_indices, sliced_indices = self._slice_user_rows(
+            self._local_indices, active_batch, self._local_indices.memory_config()
+        )
+        indices_list = ttnn.split(local_indices, local_indices.shape[-1] // 2, dim=3)
 
         values_parts = []
         indices_parts = []
@@ -532,12 +584,10 @@ class Sampling1D(LightweightModule):
                 k=cfg.max_top_k,
                 dim=-1,
                 sub_core_grids=cfg.sub_core_grid_topk,
-                indices_tensor=indices_list[i],
             )
             values_parts.append(vals)
             indices_parts.append(idxs)
             x_list[i].deallocate()
-            indices_list[i].deallocate()
 
         gathered_values = ttnn.concat(values_parts, dim=3)
         gathered_indices = ttnn.concat(indices_parts, dim=3)
@@ -545,17 +595,18 @@ class Sampling1D(LightweightModule):
         for v, i in zip(values_parts, indices_parts):
             ttnn.deallocate(v)
             ttnn.deallocate(i)
+        if sliced_indices:
+            ttnn.deallocate(local_indices)
 
         return gathered_values, gathered_indices
 
-    def _topk_multi_device(self, x_bf16):
+    def _topk_multi_device(self, x_bf16, active_batch):
         """Local topk → all_gather across devices. Port of tt_sampling.py:372-421."""
         cfg = self.config
         cluster_shape = cfg.mesh_device.shape
 
         # Pad the per-device shard up to the next power of 2 so ttnn.topk hits its fast path.
-        # Padded entries get -inf so they are never selected; the pre-padded _local_indices buffer
-        # is widened to match (see _resolve_sampling1d_config). Mirrors tt_sampling.py:451-458.
+        # Padded entries get -inf so they are never selected. Mirrors the padding in TTSampling.forward.
         if cfg.pad_to_power_of_2 and not _is_power_of_2(x_bf16.shape[-1]):
             padded_width = _upper_power_of_2(x_bf16.shape[-1])
             x_bf16 = ttnn.pad(
@@ -565,13 +616,18 @@ class Sampling1D(LightweightModule):
                 sub_core_grids=cfg.sub_core_grids,
             )
 
+        local_indices, sliced_indices = self._slice_user_rows(
+            self._local_indices, active_batch, self._local_indices.memory_config()
+        )
         topk_values, topk_indices = ttnn.topk(
             x_bf16,
             k=cfg.max_top_k,
             dim=-1,
             sub_core_grids=cfg.sub_core_grid_topk,
-            indices_tensor=self._local_indices,
+            indices_tensor=local_indices,
         )
+        if sliced_indices:
+            ttnn.deallocate(local_indices)
 
         # For 1D meshes use cluster_axis=None
         sampling_cluster_axis = None if 1 in cluster_shape else 0
@@ -595,7 +651,6 @@ class Sampling1D(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             num_links=cfg.num_gather_links,
             buffer_key="SAMPLING_INDICES",
-            dtype=ttnn.uint16,
         )
         ttnn.deallocate(topk_indices)
 
@@ -603,10 +658,10 @@ class Sampling1D(LightweightModule):
 
     # -- CCL helper -----------------------------------------------------------
 
-    def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
+    def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None):
         """Flexible all-gather: prefer line_all_gather if available, else ttnn.all_gather.
 
-        Port of TTSampling._perform_all_gather (tt_sampling.py:231-259).
+        Port of TTSampling._perform_all_gather.
         """
         if callable(self._line_all_gather):
             kwargs = {
@@ -617,8 +672,6 @@ class Sampling1D(LightweightModule):
             }
             if self._line_all_gather_supports_buffer_key and buffer_key is not None:
                 kwargs["buffer_key"] = buffer_key
-            if self._line_all_gather_supports_dtype and dtype is not None:
-                kwargs["dtype"] = dtype
             return self._line_all_gather(tensor, **kwargs)
 
         return ttnn.all_gather(
@@ -658,11 +711,14 @@ class Sampling1D(LightweightModule):
         allow_force_argmax = False
         num_argmax_gather_links = num_gather_links
         ag_topology = ttnn.Topology.Linear
+        argmax_chunks_per_sync = 10
+        argmax_num_workers_per_link = 1
         if "SAMPLING_AG_CONFIG" in mc:
             ag_cfg = mc["SAMPLING_AG_CONFIG"]
             allow_force_argmax = ag_cfg.get("allow_force_argmax", False)
             num_argmax_gather_links = ag_cfg.get("num_links", num_gather_links)
             ag_topology = ag_cfg.get("topology", ttnn.Topology.Linear)
+            argmax_chunks_per_sync = ag_cfg.get("chunks_per_sync", 10)
 
         config = Sampling1DConfig(
             vocab_size=vocab_size,
@@ -679,6 +735,8 @@ class Sampling1D(LightweightModule):
             allow_force_argmax=allow_force_argmax,
             num_argmax_gather_links=num_argmax_gather_links,
             ag_topology=ag_topology,
+            argmax_chunks_per_sync=argmax_chunks_per_sync,
+            argmax_num_workers_per_link=argmax_num_workers_per_link,
             pad_to_power_of_2=getattr(args, "pad_logits_to_power_of_2", False),
         )
         return cls.from_config(config)
@@ -756,40 +814,6 @@ def _resolve_sampling1d_config(config: Sampling1DConfig) -> Sampling1DConfig:
     )
     to_set["index_offsets"] = _resolve_buf(config.index_offsets, idx_defaults, _make_index_offsets)
 
-    # local_indices: [1, 1, B, local_indices_width]
-    # For multi-device: width = per_device_vocab (each device's shard)
-    # For single-device split (multi_step_reduction): width = V (full vocab), so that
-    #   after ttnn.split(..., V//2, dim=3) each half has width V//2 = per_device_vocab,
-    #   matching the logits half width. Each half contains a 0-based range [0..V//2-1].
-    #   Bug fix: TTTv1 used per_device_vocab here too, causing a 2x width mismatch
-    #   between indices_tensor and logits in ttnn.topk on single-device.
-    local_indices_width = V if multi_step_reduction else per_device_vocab
-
-    def _make_local_indices():
-        if multi_step_reduction:
-            half = local_indices_width // 2
-            r = torch.arange(half, dtype=torch.int32)
-            row = torch.cat([r, r])
-        else:
-            row = torch.arange(local_indices_width, dtype=torch.int32)
-        out = row.unsqueeze(0).unsqueeze(0).expand(1, 1, B, -1).contiguous()
-        # Pad the indices buffer to match the power-of-2-padded topk input width (multi-device
-        # path only — strict TTTv1 parity, so the 1×1 split path is never padded). Fill with -1
-        # (invalid index) so the padded slots are never used. Mirrors tt_sampling.py:277-284.
-        if config.pad_to_power_of_2 and not multi_step_reduction and not _is_power_of_2(local_indices_width):
-            padded_width = _upper_power_of_2(local_indices_width)
-            out = torch.nn.functional.pad(out, (0, padded_width - local_indices_width), mode="constant", value=-1)
-        return out
-
-    local_idx_defaults = dict(
-        dtype=ttnn.uint16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=replicate_mapper,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    to_set["local_indices"] = _resolve_buf(config.local_indices, local_idx_defaults, _make_local_indices)
-
     vocab_shard_dims = get_vocab_shard_dims(cluster_shape)
     invalid_vocab_defaults = dict(
         dtype=ttnn.bfloat16,
@@ -854,3 +878,24 @@ def _materialize(buf):
     if isinstance(buf, ttnn.Tensor):
         return buf
     return buf.get_device_buffer()
+
+
+def _attach_cleanup_failures(primary, failures):
+    if not failures:
+        return
+    previous = tuple(getattr(primary, "cleanup_failures", ()))
+    primary.cleanup_failures = previous + tuple(failures)
+    add_note = getattr(primary, "add_note", None)
+    if callable(add_note):
+        add_note(f"cleanup also encountered {len(failures)} failure(s)")
+
+
+def _raise_cleanup_failures(failures):
+    primary = failures[0]
+    if len(failures) > 1:
+        previous = tuple(getattr(primary, "cleanup_failures", ()))
+        primary.cleanup_failures = previous + tuple(failures[1:])
+        add_note = getattr(primary, "add_note", None)
+        if callable(add_note):
+            add_note(f"cleanup also encountered {len(failures) - 1} additional failure(s)")
+    raise primary

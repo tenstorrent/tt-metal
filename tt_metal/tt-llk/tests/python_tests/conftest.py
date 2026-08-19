@@ -43,7 +43,7 @@ from helpers.device import LLKAssertException
 from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
-from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
+from helpers.perf.core import PerfConfig, PerfReport, combine_perf_reports
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
 from ttexalens.tt_exalens_lib import get_tensix_state
@@ -404,14 +404,6 @@ def pytest_configure(config):
         _RECORD_TEST_ORDER = True
         utils_module._RECORD_TEST_ORDER = True
 
-    is_ttsim = _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
-    if (
-        (is_ttsim or not TestConfig.TEST_TARGET.run_simulator)
-        and TestConfig.ARCH != ChipArchitecture.QUASAR
-        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
-    ):
-        override_gprs_used_by_tensix_dump()
-
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
         # Refresh order folder with setup_files function
@@ -448,9 +440,11 @@ def pytest_configure(config):
                         "Re-run without it.",
                         returncode=1,
                     )
+                TestConfig.resolve_worker_tensix_location()
             elif not hasattr(config, "workerinput"):
                 # RTL simulator: only the controller process manages the server; xdist workers
-                # just connect to the already-running instance.
+                # just connect to the already-running instance. TENSIX_LOCATION is bound
+                # after init_ttexalens_remote in pytest_runtest_setup, once the server is up.
                 global _exalens_server
                 _exalens_server = ExalensServer(
                     simulator_path=_SIMULATOR_PATH,
@@ -458,6 +452,15 @@ def pytest_configure(config):
                 )
         else:
             tt_exalens_init.init_ttexalens()
+            TestConfig.resolve_worker_tensix_location()
+
+        is_ttsim = _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
+        if (
+            is_ttsim
+            or not TestConfig.TEST_TARGET.run_simulator
+            and TestConfig.ARCH != ChipArchitecture.QUASAR
+        ):
+            override_gprs_used_by_tensix_dump()
 
 
 def pytest_ignore_collect(collection_path, config):
@@ -831,6 +834,7 @@ def pytest_runtest_setup(item):
         tt_exalens_init.init_ttexalens_remote(
             port=TestConfig.TEST_TARGET.simulator_port
         )
+        TestConfig.resolve_worker_tensix_location()
     elif not _exalens_server.running:
         logger.error("tt-exalens server is no longer running unexpectedly.")
         pytest.exit(returncode=1)
@@ -841,6 +845,7 @@ def pytest_runtest_setup(item):
         tt_exalens_init.init_ttexalens_remote(
             port=TestConfig.TEST_TARGET.simulator_port
         )
+        TestConfig.resolve_worker_tensix_location()
 
 
 def pytest_sessionstart(session):

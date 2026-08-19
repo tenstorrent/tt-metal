@@ -184,6 +184,9 @@ class TestConfig:
 
     WORKER_ID: ClassVar[str] = "master"
     TENSIX_LOCATION: ClassVar[str] = "0,0"
+    # xdist worker index waiting for Exalens. setup_mode cannot ask the card yet:
+    # silicon init_ttexalens and the RTL remote connect both happen after it.
+    _PENDING_WORKER_INDEX: ClassVar[int | None] = None
     STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
     SIMULATOR_TIMEOUT: ClassVar[int] = 600
 
@@ -482,6 +485,7 @@ class TestConfig:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-2xx/quasar",
                 "-I../../hw/ckernels/quasar/metal/llk_api",
+                "-I../../hw/ckernels/quasar/metal/llk_api/llk_sfpu",
             ]
 
         if detailed_artefacts:
@@ -519,17 +523,24 @@ class TestConfig:
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
-        TestConfig.INCLUDES = [
-            "-Isfpi/include",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
-            "-I../common",
-            "-I../../hw/inc",
-            "-Ifirmware/riscv/common",
-            "-Ihelpers/include",
-            "-I../../hostdevcommon/api",
-        ] + hw_specific_includes
+        TestConfig.INCLUDES = (
+            [
+                "-Isfpi/include",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
+                "-I../common",
+                "-I../../hw/inc",
+                "-Ifirmware/riscv/common",
+                "-Ihelpers/include",
+                "-I../../hostdevcommon/api",
+            ]
+            + hw_specific_includes
+            + [
+                # TODO: remove this after kernels get moved into Metal experimental (#52837)
+                "-I../../../ttnn/cpp/ttnn/operations/experimental",
+            ]
+        )
 
     @staticmethod
     def setup_build(
@@ -560,11 +571,19 @@ class TestConfig:
     ):
         TestConfig.WORKER_ID = worker_id
 
-        if worker_id != "master":
+        TestConfig._PENDING_WORKER_INDEX = None
+        if worker_id == "master":
+            TestConfig.TENSIX_LOCATION = "0,0"
+        elif compile_producer:
+            # Builds ELFs on the CPU and never reads the device, so it is not worth
+            # opening a context per worker to answer a question it does not ask.
             row, col = divmod(int(worker_id[2:]), 8)
             TestConfig.TENSIX_LOCATION = f"{row},{col}"
         else:
-            TestConfig.TENSIX_LOCATION = "0,0"
+            # Silicon and RTL do not have an Exalens context until later in
+            # pytest_configure / pytest_runtest_setup. Asking now would miss,
+            # and a cached miss used to pin the session to the 8-wide fallback.
+            TestConfig._PENDING_WORKER_INDEX = int(worker_id[2:])
 
         if compile_consumer and compile_producer:
             raise RuntimeError(
@@ -615,6 +634,15 @@ class TestConfig:
             and worker_id == "master"
         ):
             shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
+
+    @staticmethod
+    def resolve_worker_tensix_location():
+        """Bind TENSIX_LOCATION from the card once Exalens has a context."""
+        index = TestConfig._PENDING_WORKER_INDEX
+        if index is None:
+            return
+        TestConfig.TENSIX_LOCATION = device_module.tensix_location_for_worker(index)
+        TestConfig._PENDING_WORKER_INDEX = None
 
     # === Instance fields and methods ===
     def __init__(
