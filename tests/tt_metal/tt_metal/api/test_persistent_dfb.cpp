@@ -219,6 +219,10 @@ TEST_F(PersistentDFBFixture, CreatePersistentDFB_TopologyRejects) {
         std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{CoreCoord(0, 0), cores}, {CoreCoord(0, 1), cores2}};
         EXPECT_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4), std::exception);
     }
+    {
+        std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{CoreCoord(0, 0), CoreRangeSet{}}};
+        EXPECT_THROW(experimental::CreatePersistentDFB(mesh_device.get(), mapping, 256, 4), std::exception);
+    }
 }
 
 TEST_F(PersistentDFBFixture, CreatePersistentDFB_GeometryRejects) {
