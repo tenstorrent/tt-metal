@@ -3080,7 +3080,9 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
             cfg.num_entries,
             /*globally_allocated=*/false,
             dfb_face_r_dim,
-            dfb_num_faces);
+            dfb_num_faces,
+            cfg.producer_risc_mask,
+            cfg.consumer_risc_mask);
 
         // STRIDED gets M TCs, ALL DM-DM gets P*C, spaced by MAX_TC_SLOTS_PER_DFB so DFBs cannot
         // collide. DFBSyncState belongs to the same model, so it is populated here too.
