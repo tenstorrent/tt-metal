@@ -16,6 +16,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
 from models.demos.qwen3_tts.tt.speech_tokenizer import SpeechTokenizerConfig
 from models.demos.qwen3_tts.tt.ttnn_conv_decoder import TTNNConv1d, TTNNConvTranspose1d, ttnn_snake_activation
 
@@ -690,7 +691,7 @@ class TTNNSpeechTokenizerDecoder(LightweightModule):
         audio_tt, out_len = self.forward_ttnn(embeddings_tt, seq_len)
 
         # Convert back to PyTorch
-        audio = ttnn.to_torch(audio_tt)  # [batch, 1, out_len, 1]
+        audio = _mesh_to_torch(audio_tt)  # [batch, 1, out_len, 1]
         audio = audio.squeeze(1).squeeze(-1)  # [batch, out_len]
         audio = audio.unsqueeze(1)  # [batch, 1, out_len]
 
