@@ -78,13 +78,9 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_ack_stream_ids;
 };
 
-// Credit transport is chosen per VC, so the type is a function of the channel rather than one alias
-// for the whole router. One receiver channel serves each VC, and credits only flow back within a VC,
-// so the receiver channel index selects directly.
-//
-// When every VC picks the same transport these are all the same type and the container below is
-// homogeneous, which is exactly the shape this code had before. That is deliberate: switching the
-// whole router to one transport is just a particular host plan, not a separate code path.
+// Credit transport is chosen per VC, so the type depends on the channel rather than being one alias for
+// the whole router. One receiver channel serves each VC and credits only flow back within a VC, so the
+// receiver channel index selects directly.
 template <size_t RECEIVER_CHANNEL>
 using ReceiverChannelResponseCreditSenderFor = std::conditional_t<
     receiver_channel_uses_counter_credits(RECEIVER_CHANNEL),
@@ -110,8 +106,7 @@ struct ReceiverChannelResponseCreditSendersImpl<std::index_sequence<Is...>> {
     std::tuple<ReceiverChannelResponseCreditSenderFor<Is>...> credit_senders{
         make_credit_sender<ReceiverChannelResponseCreditSenderFor<Is>>(Is)...};
 
-    // Every access site already has the channel as a compile-time value, so nothing needs runtime
-    // indexing into this.
+    // Every access site has the channel as a compile-time value, so no runtime indexing is needed.
     template <size_t RECEIVER_CHANNEL>
     FORCE_INLINE auto& get() {
         return std::get<RECEIVER_CHANNEL>(credit_senders);

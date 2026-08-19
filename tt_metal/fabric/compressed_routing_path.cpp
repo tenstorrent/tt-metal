@@ -160,13 +160,9 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
     }
 }
 
-// Indexed (destination-keyed) 2D routing table generation: consumes routing generation's first-hop
-// facade (get_forwarding_direction) and packs it with the codec packer. Axis decomposition follows
-// DOR (Y completes before X): while rows differ the first hop is a Y move (N/S/Z), probed
-// same-column — which is also how the columnar express chords surface; once rows match the first
-// hop is an X move (E/W), probed same-row. Row/column uniformity makes the answers independent of
-// the representative column/row; a DOR or representational violation makes the packer return false
-// and is asserted here, never silently packed.
+// Builds the destination-indexed 2D routing table from first-hop directions. Axis decomposition
+// follows DOR: while rows differ the first hop is a Y move (N/S/Z) probed same-column, and once rows
+// match it is an X move (E/W) probed same-row.
 void indexed_route_vectors_t::calculate_chip_to_all_routing_fields(
     const FabricNodeId& src_fabric_node_id, uint16_t num_chips) {
     const auto mesh_id = src_fabric_node_id.mesh_id;

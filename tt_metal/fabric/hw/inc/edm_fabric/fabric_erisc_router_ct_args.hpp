@@ -32,13 +32,13 @@ constexpr size_t NUM_ROUTER_CARDINAL_DIRECTIONS = 4;
 // ============================================================================
 constexpr uint32_t to_receiver_0_pkts_sent_id = NAMED_CT_ARG("TO_RECEIVER_0_PKTS_SENT_ID");
 constexpr uint32_t to_receiver_1_pkts_sent_id = NAMED_CT_ARG("TO_RECEIVER_1_PKTS_SENT_ID");
+constexpr uint32_t to_receiver_2_pkts_sent_id = NAMED_CT_ARG("TO_RECEIVER_2_PKTS_SENT_ID");
 constexpr uint32_t to_sender_0_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_0_PKTS_ACKED_ID");
 constexpr uint32_t to_sender_1_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_1_PKTS_ACKED_ID");
 constexpr uint32_t to_sender_2_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_2_PKTS_ACKED_ID");
 constexpr uint32_t to_sender_3_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_3_PKTS_ACKED_ID");
-// A five-wide VC0 needs a fifth first-level-ack stream. The out-of-range sentinel when the
-// configuration has no such sender, or when VC0 carries its credits in L1 counters and needs no
-// ack register at all.
+// A five-wide VC0 needs a fifth first-level-ack stream. Set to the sentinel when no such sender
+// exists, or when VC0 carries its credits in L1 counters.
 constexpr uint32_t to_sender_4_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_4_PKTS_ACKED_ID");
 constexpr uint32_t to_sender_0_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_0_PKTS_COMPLETED_ID");
 constexpr uint32_t to_sender_1_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_1_PKTS_COMPLETED_ID");
@@ -98,14 +98,10 @@ constexpr size_t MAX_NUM_SENDER_CHANNELS_VC2 = ACTUAL_VC2_SENDER_CHANNELS;
 constexpr size_t VC1_LOCAL_CHANNEL_START = ACTUAL_VC0_SENDER_CHANNELS;
 constexpr size_t VC2_LOCAL_CHANNEL_START = ACTUAL_VC0_SENDER_CHANNELS + ACTUAL_VC1_SENDER_CHANNELS;
 
-// The shared sender free-slots table is fabric-flat: a VC's entries sit at the fabric's family
-// maxima's prefix sums, identical on every router in the fabric, because the downstream lookup
-// resolves another router's register through this router's own table. These bases come from the
-// host's assignment (fabric-scoped), not from this router's own counts.
-//
-// The two index spaces are named so a mix-up is unwritable, not merely wrong: positions in the
-// shared table are FABRIC positions (VC*_FABRIC_POSITION_START), while this router's own arrays
-// stay compact (VC*_LOCAL_CHANNEL_START). Positions convert through fabric_position_for_compact_sender.
+// The shared sender free-slots table is fabric-flat: every router uses the same host-assigned VC base
+// offsets, so a downstream lookup can resolve another router's register through this router's table.
+// This router's own arrays stay compact (VC*_LOCAL_CHANNEL_START); the two index spaces convert
+// through fabric_position_for_compact_sender.
 constexpr size_t VC1_FABRIC_POSITION_START = NAMED_CT_ARG("VC1_FABRIC_POSITION_START");
 constexpr size_t VC2_FABRIC_POSITION_START = NAMED_CT_ARG("VC2_FABRIC_POSITION_START");
 
@@ -322,24 +318,17 @@ constexpr size_t receiver_txq_id = NAMED_CT_ARG("RECEIVER_TXQ_ID");
 constexpr bool multi_txq_enabled = sender_txq_id != receiver_txq_id;
 
 // Whether a VC's receiver-to-sender ack and completion credits travel through L1 counters instead of
-// stream registers.
+// stream registers. Multi-TXQ requires counters on every VC; express routing also needs them on VC1,
+// since widening VC0 to five senders exhausts the 32 stream registers an ethernet core has.
 //
-// Multi-TXQ requires the counter form on every VC, but it is no longer the only reason to select it:
-// the counter form consumes no stream registers, and an ethernet core has only 32. Express routing
-// widens VC0 to five senders, which needs one more ack register than exists, so moving VC1's credits
-// to counters frees its completion registers to cover the gap.
-//
-// Selected per VC rather than for the whole router so that VC0's stream assignments hold in every
-// configuration and only VC1's change. Reuse of a register is unavoidable at a full budget; keeping it
-// confined to one VC is what keeps the map readable.
-//
-// Decided on host, since the reasons are host-side facts.
+// Selected per VC, and on host, so that VC0's stream assignments hold in every configuration.
 constexpr bool vc0_uses_counter_credits = NAMED_CT_ARG("VC0_USES_COUNTER_CREDITS") != 0;
 constexpr bool vc1_uses_counter_credits = NAMED_CT_ARG("VC1_USES_COUNTER_CREDITS") != 0;
-constexpr bool any_vc_uses_counter_credits = vc0_uses_counter_credits || vc1_uses_counter_credits;
+constexpr bool vc2_uses_counter_credits = NAMED_CT_ARG("VC2_USES_COUNTER_CREDITS") != 0;
+constexpr bool any_vc_uses_counter_credits =
+    vc0_uses_counter_credits || vc1_uses_counter_credits || vc2_uses_counter_credits;
 
-// Flat sender channels are laid out VC0, then VC1, then VC2, so the existing boundaries answer which
-// VC owns a channel without any new state.
+// Flat sender channels are laid out VC0, then VC1, then VC2.
 constexpr size_t vc_of_sender_channel(size_t sender_channel) {
     if (sender_channel < VC1_LOCAL_CHANNEL_START) {
         return 0;
@@ -354,18 +343,44 @@ constexpr bool sender_channel_uses_counter_credits(size_t sender_channel) {
     switch (vc_of_sender_channel(sender_channel)) {
         case 0: return vc0_uses_counter_credits;
         case 1: return vc1_uses_counter_credits;
-        default: return false;  // VC2 keeps stream registers
+        default: return vc2_uses_counter_credits;
     }
 }
 
-// One receiver channel per VC, and credits only ever flow back within the same VC.
+// Credits only ever flow back within the same VC, so both ends must resolve to the same VC before
+// reading the plan. The receiver index is NOT the VC id: VC2's receiver densifies onto index 1 when
+// VC1 has no senders, so asking the plan for "channel 1" there would hand VC2 whatever VC1 chose and
+// leave its sender listening on the other transport.
+constexpr size_t vc_of_receiver_channel(size_t receiver_channel) {
+    if (ACTUAL_VC2_SENDER_CHANNELS > 0 && receiver_channel == VC2_RECEIVER_CHANNEL) {
+        return 2;
+    }
+    return receiver_channel;
+}
+
 constexpr bool receiver_channel_uses_counter_credits(size_t receiver_channel) {
-    switch (receiver_channel) {
+    switch (vc_of_receiver_channel(receiver_channel)) {
         case 0: return vc0_uses_counter_credits;
         case 1: return vc1_uses_counter_credits;
-        default: return false;
+        default: return vc2_uses_counter_credits;
     }
 }
+
+// A VC whose two ends pick different transports cannot return credits at all: the receiver writes
+// one mechanism and the sender polls the other, the sender's slots never free, and the link wedges
+// with no error. Cheap to state, and the failure it catches is a silent hang.
+static_assert(
+    ACTUAL_VC0_SENDER_CHANNELS == 0 ||
+        sender_channel_uses_counter_credits(0) == receiver_channel_uses_counter_credits(VC0_RECEIVER_CHANNEL),
+    "VC0 sender and receiver disagree on credit transport");
+static_assert(
+    ACTUAL_VC1_SENDER_CHANNELS == 0 || sender_channel_uses_counter_credits(VC1_LOCAL_CHANNEL_START) ==
+                                           receiver_channel_uses_counter_credits(VC1_RECEIVER_CHANNEL),
+    "VC1 sender and receiver disagree on credit transport");
+static_assert(
+    ACTUAL_VC2_SENDER_CHANNELS == 0 || sender_channel_uses_counter_credits(VC2_LOCAL_CHANNEL_START) ==
+                                           receiver_channel_uses_counter_credits(VC2_RECEIVER_CHANNEL),
+    "VC2 sender and receiver disagree on credit transport");
 
 constexpr size_t iterations_between_ctx_switch_and_teardown_checks =
     NAMED_CT_ARG("ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS");
@@ -410,23 +425,16 @@ constexpr bool is_intramesh_router_on_edge = NAMED_CT_ARG("IS_INTRAMESH_ROUTER_O
 // ============================================================================
 // Express routing
 // ============================================================================
-// Deployment-wide compile-time selector between the legacy hop-program 2D path and the indexed
-// destination-keyed 2D ABI that realizes the express routing design. The two decodes must never
-// mix — despite the feature-flag-style name, this is an ABI selector and is never safe to toggle
-// per workload. OFF by default. Enabling requires BOTH:
-//   1. -DFABRIC_EXPRESS_ENABLED on the ERISC kernel compile, and
-//   2. the builder emitting MESH_Y_SIZE / MESH_X_SIZE (the pinned mesh shape) and the per-channel
-//      IS_RECEIVER_CHANNEL_*_INTERMESH_INGRESS (ingress capability) named CT args.
-// Without those named args the #if branch does not compile (fail-fast). The #else zeros are never
-// read: every use is gated on express_enabled.
+// Deployment-wide selector between the legacy hop-program 2D path and the indexed destination-keyed
+// 2D ABI; the two decodes must never mix, so this is not safe to toggle per workload. Enabling needs
+// -DFABRIC_EXPRESS_ENABLED plus the MESH_*_SIZE and IS_RECEIVER_CHANNEL_*_INTERMESH_INGRESS named CT
+// args, and the #else values below are never read.
 #if defined(FABRIC_EXPRESS_ENABLED)
 constexpr bool express_enabled = true;
 constexpr size_t EXPRESS_MESH_Y_SIZE = NAMED_CT_ARG("MESH_Y_SIZE");
 constexpr size_t EXPRESS_MESH_X_SIZE = NAMED_CT_ARG("MESH_X_SIZE");
-// The landing intercept is keyed on the builder-provided INTERMESH ingress capability of
-// the receiving channel. A whole-kernel flag is not sufficient — a boundary-facing router's intrachip
-// channels carry intramesh egress traffic that must NOT be re-encoded. Named CT args like the mesh
-// shape args above: absent emission fails the compile.
+// The landing intercept is keyed per receiver channel, not per kernel: a boundary-facing router's
+// intrachip channels carry intramesh egress traffic that must not be re-encoded.
 constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_is_intermesh_ingress = {
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_0_INTERMESH_INGRESS")),
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_1_INTERMESH_INGRESS")),
@@ -684,10 +692,12 @@ constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
 
 constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
     take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
+        // Indexed by receiver CHANNEL, not by VC. VC2's receiver densifies onto channel 1 when VC1
+        // has none and channel 2 when it does, so the host allocates this table by channel too --
+        // an entry left unassigned here is a stream nobody increments and the receiver polls
+        // forever, with the packets already delivered.
         std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{
-            to_receiver_0_pkts_sent_id,
-            to_receiver_1_pkts_sent_id,
-            tt::tt_fabric::k_unused_stream_id});  // no third receiver
+            to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id, to_receiver_2_pkts_sent_id});
 
 // not in symbol table - because not used
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =
@@ -720,11 +730,8 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_6_pkts_completed_id,
             to_sender_7_pkts_completed_id,
             to_sender_8_pkts_completed_id,
-            // Position 9 is the one exempt slot: it is VC2's sender, which is worker-type and has
-            // no router completion. The exemption attaches to the channel's TYPE, not its position
-            // -- Z is no longer synonymous with intermesh, so a positional "Z-router extra"
-            // exemption cannot hold (the boundary family's fourth VC1 sender is a router-type
-            // channel at flat 8, covered by the ninth name above).
+            // Position 9 is VC2's sender: worker-type, so no router completion. The exemption follows
+            // the channel type, not the position -- flat 8 is a router-type VC1 sender, named above.
             tt::tt_fabric::k_unused_stream_id});
 
 // Miscellaneous configuration
