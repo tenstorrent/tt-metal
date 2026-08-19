@@ -67,10 +67,14 @@ void kernel_main() {
     const uint32_t bias_addr = get_arg_val<uint32_t>(3);
 #endif
 
-    u::Storage in0_storage(kCbIn0, kIn0Tiles);
-    u::Storage in1_storage(kCbIn1, kIn1Tiles);
-    u::Storage acc_storage(kCbAcc, kOutTiles);  // running total -- must NOT be kCbOut
-    u::Storage out_storage(kCbOut, kOutTiles);
+    using In0 = u::Shape<MM_RT_DIM, MM_KT_DIM>;
+    using In1 = u::Shape<MM_KT_DIM, MM_CT_DIM>;
+    using Out = u::Shape<MM_RT_DIM, MM_CT_DIM>;
+
+    u::Storage<In0> in0_storage(kCbIn0);
+    u::Storage<In1> in1_storage(kCbIn1);
+    u::Storage<Out> acc_storage(kCbAcc);  // running total -- must NOT be kCbOut
+    u::Storage<Out> out_storage(kCbOut);
 
     // The FPU path needs its own hardware startup: SrcOrder::Reverse plus the
     // block dims. compute_init() (init_sfpu) would leave the ALU configured for
@@ -88,7 +92,7 @@ void kernel_main() {
     // would be popped after one use and the next block would hang waiting for a
     // refill that never comes. The CB holds exactly ct tiles, so the one reserve
     // below is the only one it ever gets.
-    u::Storage bias_storage(kCbBias, MM_CT_DIM);
+    u::Storage<u::Shape<1, MM_CT_DIM>> bias_storage(kCbBias);
     const auto bias_acc = TensorAccessor(bias_args, bias_addr);
     u::ComputeBlock bias = u::noc_load<1>(bias_storage, bias_acc, 0).wait();
 #endif
@@ -96,9 +100,9 @@ void kernel_main() {
 #if defined(MM_ACC_L1)
     // L1: the packer sums into acc_storage, so DST only ever holds one block's
     // product and a per-step chain sees that contribution alone.
-    u::Accumulator<u::AccumulatorMode::L1> acc(acc_storage, out_storage);
+    u::Accumulator<u::AccumulatorMode::L1, Out> acc(acc_storage, out_storage);
 #else
-    u::Accumulator<u::AccumulatorMode::Dst> acc(acc_storage, out_storage);
+    u::Accumulator<u::AccumulatorMode::Dst, Out> acc(acc_storage, out_storage);
 #endif
     acc.clear();
 

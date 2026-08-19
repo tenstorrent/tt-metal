@@ -81,11 +81,19 @@ void kernel_main() {
 
     u::compute_init(kCbIn0, kCbOut);
 
-    u::Storage in0_storage(kCbIn0, PerCore::num_tiles);
-    u::Storage scaler_storage(kCbScaler, 1);
-    u::Storage tmp0_storage(kCbTmp0, reduced_tiles_per_block);
-    u::Storage tmp1_storage(kCbTmp1, reduced_tiles_per_block * num_cores_y);
-    u::Storage out_storage(kCbOut, reduced_tiles_per_block);
+    // Shapes, not page counts: `Gathered` is the stage-1 result stacked once per
+    // core in the column, which is exactly stage 2's input shape -- so the
+    // relationship the old `reduced_tiles_per_block * num_cores_y` asserted by hand
+    // is now one the compiler derives.
+    using In = u::Shape<in_ht, in_wt>;
+    using Reduced = u::reduce_shape<In, kAxis>;
+    using Gathered = u::Shape<num_cores_y * Reduced::rows, Reduced::cols>;
+
+    u::Storage<In> in0_storage(kCbIn0);
+    u::Storage<u::Shape<1, 1>> scaler_storage(kCbScaler);
+    u::Storage<Reduced> tmp0_storage(kCbTmp0);
+    u::Storage<Gathered> tmp1_storage(kCbTmp1);
+    u::Storage<Reduced> out_storage(kCbOut);
 
     const auto in0 = TensorAccessor(in0_args, in0_addr);
     const auto out = TensorAccessor(out_args, out_addr);

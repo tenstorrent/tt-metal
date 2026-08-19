@@ -36,6 +36,7 @@
 #include <type_traits>
 
 #include <tt/unified/expr.hpp>
+#include <tt/unified/shape.hpp>
 
 // Every op body below is guarded on IS_COMPUTE_THREAD, which a binding defines.
 // Without one they would all silently compile to nothing, so refuse instead.
@@ -317,6 +318,12 @@ enum class ReduceAxis { Rows, Cols, Both };
 // type that appears in shared kernel code, and PoolType only exists on a compute
 // build.
 enum class ReducePool { Sum, Avg, Max };
+
+// The shape a reduction leaves behind: the collapsing axis becomes 1 and everything
+// else is preserved, leading extents included. This is exactly what the destination
+// Storage must hold.
+template <typename S, ReduceAxis Axis>
+using reduce_shape = with_hw<S, (Axis == ReduceAxis::Cols ? S::rows : 1), (Axis == ReduceAxis::Rows ? S::cols : 1)>;
 
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
 // Ours -> metal's, in the one place metal's enums are nameable. Note the axis
