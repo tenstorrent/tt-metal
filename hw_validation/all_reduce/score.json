@@ -1,0 +1,61 @@
+{
+  "op_name": "all_reduce",
+  "op_path": "/localdev/wransom/tt-metal-eval/ttnn/ttnn/operations/all_reduce",
+  "total_score": 93.3,
+  "grade": "A",
+  "criteria": [
+    {
+      "name": "golden_score",
+      "raw_score": 91.7,
+      "weight": 0.5,
+      "weighted_score": 45.85,
+      "details": "Golden: 11/12 passed",
+      "sub_scores": {
+        "passed": 11,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "hangs": 0,
+        "total": 12
+      }
+    },
+    {
+      "name": "helper_usage",
+      "raw_score": 90.0,
+      "weight": 0.25,
+      "weighted_score": 22.5,
+      "details": "Helper usage: full; cb sync ops (expected): cb_pop_front, cb_push_back, cb_reserve_back, cb_wait_front",
+      "sub_scores": {
+        "usage_level": "full",
+        "helper_includes": [],
+        "helper_calls": [],
+        "raw_compute_ops": [],
+        "cb_sync_ops": [
+          "cb_pop_front",
+          "cb_push_back",
+          "cb_reserve_back",
+          "cb_wait_front"
+        ],
+        "design_helpers_recommended": [
+          "reduce",
+          "reduce_helpers_compute",
+          "ccl_helpers_dataflow"
+        ],
+        "followed_design": false
+      }
+    },
+    {
+      "name": "execution_time",
+      "raw_score": 100.0,
+      "weight": 0.25,
+      "weighted_score": 25.0,
+      "details": "Overall: 15s (score: 100)",
+      "sub_scores": {
+        "overall_duration_s": 15,
+        "overall_score": 100.0,
+        "phases": {}
+      }
+    }
+  ],
+  "summary": "all_reduce: 93.3/100 (A) \u2014 11/12 golden"
+}

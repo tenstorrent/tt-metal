@@ -1,0 +1,58 @@
+{
+  "op_name": "point_to_point",
+  "op_path": "/localdev/wransom/tt-metal-eval/ttnn/ttnn/operations/point_to_point",
+  "total_score": 93.2,
+  "grade": "A",
+  "criteria": [
+    {
+      "name": "golden_score",
+      "raw_score": 86.5,
+      "weight": 0.5,
+      "weighted_score": 43.25,
+      "details": "Golden: 383/443 passed, 24 failed, 36 skipped",
+      "sub_scores": {
+        "passed": 383,
+        "failed": 24,
+        "errors": 0,
+        "skipped": 36,
+        "hangs": 0,
+        "total": 443
+      }
+    },
+    {
+      "name": "helper_usage",
+      "raw_score": 100.0,
+      "weight": 0.25,
+      "weighted_score": 25.0,
+      "details": "Dataflow-helper usage in 4 kernel(s); includes: ccl_helpers_dataflow",
+      "sub_scores": {
+        "source": "dataflow_kernels",
+        "helper_includes": [
+          "ccl_helpers_dataflow"
+        ],
+        "helper_calls": [
+          "FabricStreamSender",
+          "arm_inc",
+          "arm_unicast_write",
+          "ccl",
+          "signal",
+          "unicast_route",
+          "write_page"
+        ]
+      }
+    },
+    {
+      "name": "execution_time",
+      "raw_score": 100.0,
+      "weight": 0.25,
+      "weighted_score": 25.0,
+      "details": "Overall: 3m 54s (score: 100)",
+      "sub_scores": {
+        "overall_duration_s": 234,
+        "overall_score": 100.0,
+        "phases": {}
+      }
+    }
+  ],
+  "summary": "point_to_point: 93.2/100 (A) \u2014 383/443 golden"
+}

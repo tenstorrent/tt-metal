@@ -1,0 +1,54 @@
+{
+  "op_name": "all_gather",
+  "op_path": "/localdev/wransom/tt-metal-eval/ttnn/ttnn/operations/all_gather",
+  "total_score": 52.0,
+  "grade": "D",
+  "criteria": [
+    {
+      "name": "golden_score",
+      "raw_score": 9.1,
+      "weight": 0.5,
+      "weighted_score": 4.55,
+      "details": "Golden: 36/395 passed, 64 skipped",
+      "sub_scores": {
+        "passed": 36,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 64,
+        "hangs": 0,
+        "total": 395
+      }
+    },
+    {
+      "name": "helper_usage",
+      "raw_score": 90.0,
+      "weight": 0.25,
+      "weighted_score": 22.5,
+      "details": "Helper usage: full",
+      "sub_scores": {
+        "usage_level": "full",
+        "helper_includes": [],
+        "helper_calls": [],
+        "raw_compute_ops": [],
+        "cb_sync_ops": [],
+        "design_helpers_recommended": [
+          "ccl_helpers_dataflow"
+        ],
+        "followed_design": false
+      }
+    },
+    {
+      "name": "execution_time",
+      "raw_score": 100.0,
+      "weight": 0.25,
+      "weighted_score": 25.0,
+      "details": "Overall: 2m 30s (score: 100)",
+      "sub_scores": {
+        "overall_duration_s": 150,
+        "overall_score": 100.0,
+        "phases": {}
+      }
+    }
+  ],
+  "summary": "all_gather: 52.0/100 (D) \u2014 36/395 golden"
+}

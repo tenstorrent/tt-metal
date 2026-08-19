@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="19" time="17.647" timestamp="2026-08-19T00:22:17.318014+00:00" hostname="bh-qb-13-special-wransom-for-reservation-69336"><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout0-mesh_device0-device_params0]" time="2.600"><properties><property name="start_timestamp" value="2026-08-19T00:22:17" /><property name="end_timestamp" value="2026-08-19T00:22:19" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point_with_device_delay[blackhole-dtype0-row_major-mesh_device0-device_params0]" time="0.866"><properties><property name="start_timestamp" value="2026-08-19T00:22:19" /><property name="end_timestamp" value="2026-08-19T00:22:20" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point_optional_intermediate[blackhole-mesh_device0-device_params0]" time="2.336"><properties><property name="start_timestamp" value="2026-08-19T00:22:20" /><property name="end_timestamp" value="2026-08-19T00:22:23" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point_cache_hit_with_output_tensor[blackhole-mesh_device0-device_params0]" time="0.363"><properties><property name="start_timestamp" value="2026-08-19T00:22:23" /><property name="end_timestamp" value="2026-08-19T00:22:23" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout1-mesh_device0-device_params0]" time="0.336"><properties><property name="start_timestamp" value="2026-08-19T00:22:23" /><property name="end_timestamp" value="2026-08-19T00:22:23" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point_with_device_delay[blackhole-dtype0-tile-mesh_device0-device_params0]" time="0.345"><properties><property name="start_timestamp" value="2026-08-19T00:22:23" /><property name="end_timestamp" value="2026-08-19T00:22:24" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout2-mesh_device0-device_params0]" time="0.335"><properties><property name="start_timestamp" value="2026-08-19T00:22:24" /><property name="end_timestamp" value="2026-08-19T00:22:24" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout3-mesh_device0-device_params0]" time="0.344"><properties><property name="start_timestamp" value="2026-08-19T00:22:24" /><property name="end_timestamp" value="2026-08-19T00:22:24" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout4-mesh_device0-device_params0]" time="0.345"><properties><property name="start_timestamp" value="2026-08-19T00:22:24" /><property name="end_timestamp" value="2026-08-19T00:22:25" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout5-mesh_device0-device_params0]" time="0.344"><properties><property name="start_timestamp" value="2026-08-19T00:22:25" /><property name="end_timestamp" value="2026-08-19T00:22:25" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout6-mesh_device0-device_params0]" time="1.641"><properties><property name="start_timestamp" value="2026-08-19T00:22:25" /><property name="end_timestamp" value="2026-08-19T00:22:27" /></properties><failure message="AssertionError: Max ATOL Delta: nan, Max RTOL Delta: nan">mesh_device = MeshDevice(1x4 grid, 4 devices)
+shape_coords_layout = ((1, 1, 8, 16), ((0, 0), (0, 1)), Layout.ROW_MAJOR)
+dtype = torch.bfloat16
+
+    @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+    @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+    @pytest.mark.parametrize("shape_coords_layout", _get_test_coords_and_shapes_with_layout(MESH_SHAPE, TEST_SHAPES))
+    @pytest.mark.parametrize("dtype", [torch.bfloat16])
+    def test_point_to_point(mesh_device, shape_coords_layout, dtype):
+        shape, coords, layout = shape_coords_layout
+
+        devices = prod(list(mesh_device.shape))
+        multi_device_shape = tuple(s * (devices if i == 0 else 1) for i, s in enumerate(shape))
+
+        lcoord0, lcoord1 = (_linear_coord(c, list(mesh_device.shape)) for c in coords)
+        coord0, coord1 = (ttnn.MeshCoordinate(c) for c in coords)
+
+        idx_start0, idx_end0 = lcoord0 * shape[0], (lcoord0 + 1) * shape[0]
+        idx_start1, idx_end1 = lcoord1 * shape[0], (lcoord1 + 1) * shape[0]
+
+        input_tensor_torch = torch.zeros(multi_device_shape, dtype=dtype)
+        input_tensor_torch[idx_start0:idx_end0, :, :, :] = (
+            torch.linspace(1, prod(shape), prod(shape)).reshape(shape).to(dtype=dtype)
+        )
+        input_tensor = ttnn.from_torch(
+            input_tensor_torch,
+            layout=layout,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
+
+        sent_tensor = ttnn.point_to_point(
+            input_tensor,
+            coord0,
+            coord1,
+            topology=ttnn.Topology.Linear,
+        )
+        sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+&gt;       assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], sent_tensor_torch[idx_start1:idx_end1, :, :, :])
+
+tests/nightly/t3000/ccl/test_point_to_point.py:113:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+expected_pytorch_result = tensor([[[[  1.,   2.,   3.,   4.,   5.,   6.,   7.,   8.,   9.,  10.,  11.,
+            12.,  13.,  14.,  15.,  16.],
+          [ 17.,  18.,  19.,  20.,  21.,  22.,  23.,  24.,  25.,  26.,  27.,
+            28.,  29.,  30.,  31.,  32.],
+          [ 33.,  34.,  35.,  36.,  37.,  38.,  39.,  40.,  41.,  42.,  43.,
+            44.,  45.,  46.,  47.,  48.],
+          [ 49.,  50.,  51.,  52.,  53.,  54.,  55.,  56.,  57.,  58.,  59.,
+            60.,  61.,  62.,  63.,  64.],
+          [ 65.,  66.,  67.,  68.,  69.,  70.,  71.,  72.,  73.,  74.,  75.,
+            76.,  77.,  78.,  79.,  80.],
+          [ 81.,  82.,  83.,  84.,  85.,  86.,  87.,  88.,  89.,  90.,  91.,
+            92.,  93.,  94.,  95.,  96.],
+          [ 97.,  98.,  99., 100., 101., 102., 103., 104., 105., 106., 107.,
+           108., 109., 110., 111., 112.],
+          [113., 114., 115., 116., 117., 118., 119., 120., 121., 122., 123.,
+           124., 125., 126., 127., 128.]]]], dtype=torch.bfloat16)
+actual_pytorch_result = tensor([[[[ 1.0000e+00,  2.0000e+00,  3.0000e+00,  4.0000e+00,  5.0000e+00,
+            6.0000e+00,  7.0000e+00,  8.0000e+00,  9.0000e+00,  1.0000e+01,
+            1.1000e+01,  1.2000e+01,  1.3000e+01,  1.4000e+01,  1.5000e+01,
+            1.6000e+01],
+          [ 4.5918e-40,  0.0000e+00,  1.4694e-39,  0.0000e+00,  5.8775e-39,
+            0.0000e+00,  0.0000e+00,  0.0000e+00,  4.0625e-34,  4.4081e-39,
+            0.0000e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00,  0.0000e+00,
+            0.0000e+00],
+          [ 3.3000e+01,  3.4000e+01,  3.5000e+01,  3.6000e+01,  3.7000e+01,
+            3.8000e+01,  3.9000e+01,  4.0000e+01,  4.1000e+01,  4.2000e+01,
+            4.3000e+01,  4.4000e+01,  4.5000e+01,  4.6000e+01,  4.7000e+01,
+            4.8000e+01],
+          [-1.4477e-13, -4.4861e+37, -9.0483e-15, -4.4861e+37, -2.2118e-34,
+            2.4796e-38,  2.3021e+33, -1.6416e+38, -5.5295e-35,         nan,
+            4.2879e+24,  1.0750e+02, -1.4477e-13, -4.4861e+37, -9.0483e-15,
+           -4.4861e+37],
+          [ 6.5000e+01,  6.6000e+01,  6.7000e+01,  6.8000e+01,  6.9000e+01,
+            7.0000e+01,  7.1000e+01,  7.2000e+01,  7.3000e+01,  7.4000e+01,
+            7.5000e+01,  7.6000e+01,  7.7000e+01,  7.8000e+01,  7.9000e+01,
+            8.0000e+01],
+          [ 2.2725e-16,  6.4285e-40,  2.7648e-35,  2.9387e-39, -1.3807e-19,
+            1.6806e-38, -1.8337e-25,  1.8183e-38,  1.8180e-15,  6.5203e-39,
+           -2.2091e-18,  2.1214e-38,  5.0793e-15,         nan, -3.5345e-17,
+            2.5391e-35],
+          [ 9.7000e+01,  9.8000e+01,  9.9000e+01,  1.0000e+02,  1.0100e+02,
+            1.0200e+02,  1.0300e+02,  1.0400e+02,  1.0500e+02,  1.0600e+02,
+            1.0700e+02,  1.0800e+02,  1.0900e+02,  1.1000e+02,  1.1100e+02,
+            1.1200e+02],
+          [-2.2091e-18,  5.6946e-30, -5.6552e-16,  5.6946e-30,  1.8367e-40,
+           -0.0000e+00,  1.3767e-34,         nan,  1.1059e-34,  6.4285e-40,
+            5.3779e-37, -1.1874e-07,  1.3807e-19,  9.4591e-39,  3.4418e-35,
+           -2.3749e-07]]]], dtype=torch.bfloat16)
+
+    def assert_equal(expected_pytorch_result, actual_pytorch_result):
+        """
+        Assert that two PyTorch tensors are exactly equal.
+
+        This function performs an exact equality comparison between two tensors, checking that
+        all corresponding elements are identical. Both tensor shapes and values must match exactly.
+
+        Args:
+            expected_pytorch_result (torch.Tensor): The expected reference tensor
+            actual_pytorch_result (torch.Tensor): The actual tensor to compare against the reference
+
+        Returns:
+            tuple: A tuple containing:
+                - equal_passed (bool): True if the tensors are exactly equal, False otherwise
+                - equal_message (str): A message describing the equality comparison result
+
+        Raises:
+            AssertionError: If the tensor shapes don't match or if the tensors are not exactly equal
+        """
+        expected_pytorch_result = _normalize_tensor(expected_pytorch_result)
+        actual_pytorch_result = _normalize_tensor(actual_pytorch_result)
+
+        assert list(expected_pytorch_result.shape) == list(
+            actual_pytorch_result.shape
+        ), f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}"
+        equal_passed, equal_message = comp_equal(expected_pytorch_result, actual_pytorch_result)
+&gt;       assert equal_passed, equal_message
+E       AssertionError: Max ATOL Delta: nan, Max RTOL Delta: nan
+
+tests/ttnn/utils_for_testing.py:411: AssertionError</failure></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout7-mesh_device0-device_params0]" time="1.047"><properties><property name="start_timestamp" value="2026-08-19T00:22:27" /><property name="end_timestamp" value="2026-08-19T00:22:28" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout8-mesh_device0-device_params0]" time="1.621"><properties><property name="start_timestamp" value="2026-08-19T00:22:28" /><property name="end_timestamp" value="2026-08-19T00:22:30" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout9-mesh_device0-device_params0]" time="0.957"><properties><property name="start_timestamp" value="2026-08-19T00:22:30" /><property name="end_timestamp" value="2026-08-19T00:22:31" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout10-mesh_device0-device_params0]" time="0.336"><properties><property name="start_timestamp" value="2026-08-19T00:22:31" /><property name="end_timestamp" value="2026-08-19T00:22:31" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout11-mesh_device0-device_params0]" time="0.338"><properties><property name="start_timestamp" value="2026-08-19T00:22:31" /><property name="end_timestamp" value="2026-08-19T00:22:31" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout12-mesh_device0-device_params0]" time="0.336"><properties><property name="start_timestamp" value="2026-08-19T00:22:31" /><property name="end_timestamp" value="2026-08-19T00:22:32" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout13-mesh_device0-device_params0]" time="1.251"><properties><property name="start_timestamp" value="2026-08-19T00:22:32" /><property name="end_timestamp" value="2026-08-19T00:22:33" /></properties></testcase><testcase classname="tests.nightly.t3000.ccl.test_point_to_point" name="test_point_to_point[blackhole-dtype0-shape_coords_layout14-mesh_device0-device_params0]" time="1.678"><properties><property name="start_timestamp" value="2026-08-19T00:22:33" /><property name="end_timestamp" value="2026-08-19T00:22:34" /></properties></testcase></testsuite></testsuites>
