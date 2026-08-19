@@ -26,7 +26,7 @@
 #   mkdir -p /tmp/$USER && cd /tmp/$USER
 #   git clone --recursive https://github.com/tenstorrent/tt-metal
 #   cd tt-metal
-#   ./tools/scaleout/exabox/build_metal_exabox.sh
+#   ./tools/scaleout/exabox/build_metal_exabox.sh --sync-to /data/$USER/tt-metal
 #
 # ccache is deliberately NOT wired up yet: the image ships ccache (and
 # ENV CCACHE_TEMPDIR=/tmp/ccache) but nothing here sets CCACHE_DIR /
