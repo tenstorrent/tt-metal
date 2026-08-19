@@ -364,6 +364,57 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     "fresh i1 selector supports only non-approx, bf16 dest");
                 SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_i1_fresh_cpp, (iterations), block_tile, VectorMode::None);
             }
+            // Storm S2 (agent/storm-s2): canonical fresh_cpp/<op>.h semantic bodies.
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::fill)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_fill_fresh_cpp, (iterations), block_tile, VectorMode::None, FRESH_FILL_VALUE);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::heaviside)
+            {
+                SFPU_UNARY_CALL(
+                    DST_SYNC, is_fp32_dest_acc_en, calculate_heaviside_fresh_cpp, (iterations), block_tile, VectorMode::None, FRESH_HEAVISIDE_VALUE);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::hardshrink)
+            {
+                SFPU_UNARY_CALL(
+                    DST_SYNC, is_fp32_dest_acc_en, calculate_hardshrink_fresh_cpp, (iterations), block_tile, VectorMode::None, FRESH_HARDSHRINK_LAMBDA);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::hardmish)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_hardmish_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::elu)
+            {
+                // The fresh elu states the bf16 contract (exp recombination +
+                // bf16 RNE store); guard only variants that select this branch.
+                static_assert(
+                    FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::elu || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fresh elu selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_elu_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::exp2)
+            {
+                static_assert(
+                    FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::exp2 || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fresh exp2 selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_exp2_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::erf)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_erf_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::erfc)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_erfc_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::erfinv)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_erfinv_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::digamma)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_digamma_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
             else if constexpr (RECIPROCAL_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::reciprocal)
             {
                 _llk_math_eltwise_unary_sfpu_params_(

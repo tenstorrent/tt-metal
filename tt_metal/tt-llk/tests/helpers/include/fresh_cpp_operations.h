@@ -1319,8 +1319,18 @@ inline void call_left_shift_fresh_cpp(
 // consumer keeps a single include.  Pre-storm bodies above migrate here over
 // time; new bodies never land in this file.
 // Lane S2 slice (agent/storm-s2):
+#include "fresh_cpp/digamma.h"
+#include "fresh_cpp/elu.h"
+#include "fresh_cpp/erf.h"
+#include "fresh_cpp/erfc.h"
+#include "fresh_cpp/erfinv.h"
+#include "fresh_cpp/exp2.h"
 #include "fresh_cpp/expm1.h"
 #include "fresh_cpp/expm1cw.h"
+#include "fresh_cpp/fill.h"
 #include "fresh_cpp/fmod.h"
 #include "fresh_cpp/gelu.h"
+#include "fresh_cpp/hardmish.h"
+#include "fresh_cpp/hardshrink.h"
 #include "fresh_cpp/hardtanh.h"
+#include "fresh_cpp/heaviside.h"
