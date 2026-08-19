@@ -308,7 +308,7 @@ ALWI void requant_int8_in_tile_init(const uint32_t zero_point) {
 /**
  * Initialize the sfpu for requantize reading an int8 input tensor and writing a uint8 output tensor. Shares the
  * int8-input handling of requant_int8_in_tile_init (see that function). Must be called before using the op.
- * Repeated callsare redundant.
+ * Repeated calls are redundant.
  *
  * Return value: None
  *

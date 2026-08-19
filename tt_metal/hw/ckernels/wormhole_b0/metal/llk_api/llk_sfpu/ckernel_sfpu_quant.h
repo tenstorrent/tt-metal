@@ -34,22 +34,22 @@ namespace ckernel::sfpu {
 //
 // Body content (see the inits for the exact emission order):
 //   QUANT   (3)            : SFPMAD, SFPNOP, STOCH_RND
-//   QUANT   (int8-out, 9)  : SFPMAD, SFPNOP, <7-instr offset-128 pack: SFPSETCC,
-//                            SFPMOV, SFPENCC, SFPNOP, STOCH_RND, SFPNOP, SFPXOR>
+//   QUANT   (int8-out, 7)  : SFPMAD, SFPNOP, <5-instr offset-128 pack: SFPSETCC,
+//                            SFPMOV, SFPENCC, STOCH_RND, SFPXOR>
 //   REQUANT (4)            : SFPCAST(int->fp32), SFPMAD, SFPNOP, STOCH_RND
-//   REQUANT (int8-out, 10) : SFPCAST(int->fp32), SFPMAD, SFPNOP, <7-instr pack>
+//   REQUANT (int8-out, 8)  : SFPCAST(int->fp32), SFPMAD, SFPNOP, <5-instr pack>
 //   DEQUANT (5)            : SFPCAST(int->fp32), SFPADD, SFPNOP, SFPMUL, SFPNOP
 //
 // The int8-out bodies fold the +128 offset into the fp32 zero-point once at init,
 // so the per-iteration MAD already yields v + 128 and the pack needs no per-element SFPADDI.
 constexpr std::uint32_t QUANT_REPLAY_SLOT = 0;
 constexpr std::uint32_t QUANT_REPLAY_LEN = 3;
-constexpr std::uint32_t QUANT_REPLAY_LEN_INT8_OUT = 9;
+constexpr std::uint32_t QUANT_REPLAY_LEN_INT8_OUT = 7;
 constexpr std::uint32_t QUANT_REPLAY_LEN_MAX = QUANT_REPLAY_LEN_INT8_OUT;
 
 constexpr std::uint32_t REQUANT_REPLAY_SLOT = QUANT_REPLAY_SLOT + QUANT_REPLAY_LEN_MAX;
 constexpr std::uint32_t REQUANT_REPLAY_LEN = 4;
-constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT = 10;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT = 8;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_MAX = REQUANT_REPLAY_LEN_INT8_OUT;
 
 constexpr std::uint32_t DEQUANT_REPLAY_SLOT = REQUANT_REPLAY_SLOT + REQUANT_REPLAY_LEN_MAX;
@@ -204,15 +204,13 @@ inline void _int8_pack_fixup_() {
     TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
     TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
     TTI_SFPENCC(0, 0, 0, 0);
-    TTI_SFPNOP;
     TTI_SFP_STOCH_RND(
         sfpi::SFPSTOCHRND_RND_EVEN,
         0 /*imm8*/,
         p_sfpu::LCONST_0,
         p_sfpu::LREG0,
         p_sfpu::LREG0,
-        sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);  // u = round(v + 128) in [0, 255]
-    TTI_SFPNOP;
+        sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);       // u = round(v + 128) in [0, 255]
     TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);  // b = u ^ 0x80
 }
 
@@ -244,15 +242,13 @@ inline void calculate_requant_int32_int8_pack(
     // The int8-input unbias (byte ^ 0x80) stays inline before the replay.
     constexpr std::uint32_t dst_tile_size = 64;
 
-    constexpr InstrModLoadStore int_mode = InstrModLoadStore::INT32_2S_COMP;
-
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
     const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
     const std::uint32_t out_off = dst_index_out * dst_tile_size;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(p_sfpu::LREG0, int_mode, ADDR_MOD_3, in0_off);                 // operand A (int32/byte)
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, in0_off);  // operand A (int32/byte)
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
         if constexpr (INT8_INPUT) {
             _int8_input_unbias_();  // byte ^ 0x80
