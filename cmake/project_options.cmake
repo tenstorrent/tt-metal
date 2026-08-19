@@ -28,12 +28,24 @@ option(TT_INSTALL "Define installation rules" ON)
 option(TT_USE_SYSTEM_SFPI "Use system path for SFPI. SFPI is used to compile firmware." OFF)
 option(TT_METAL_USE_EMULE "Build with tt-emule software emulation (no hardware required)" OFF)
 set(TT_EMULE_PATH "" CACHE PATH "Local path to tt-emule source (overrides CPM fetch from GitHub)")
+set(EMULE_CB_CEILING
+    "128"
+    CACHE STRING
+    "Emule-only circular-buffer slot count. Sizes CB arrays; the enforced cap stays the arch's unless TT_EMULE_NUM_CBS raises it. 64..256."
+)
 
 if(TT_METAL_USE_EMULE)
+    if(NOT EMULE_CB_CEILING MATCHES "^[0-9]+$" OR EMULE_CB_CEILING LESS 64 OR EMULE_CB_CEILING GREATER 256)
+        message(FATAL_ERROR "EMULE_CB_CEILING must be an integer from 64 through 256")
+    endif()
     set(TT_UMD_BUILD_EMULE ON)
     if(TT_EMULE_PATH)
         set(CPM_tt_emule_SOURCE "${TT_EMULE_PATH}")
     endif()
+    # Build-WIDE, not per-target: this sizes std::array members of CircularBufferConfig, so a
+    # target that disagreed (ttnn does not get TT_METAL_USE_EMULE) would see a different
+    # sizeof for a type passed across the boundary.
+    add_compile_definitions(EMULE_CB_CEILING=${EMULE_CB_CEILING})
 endif()
 
 ###########################################################################################

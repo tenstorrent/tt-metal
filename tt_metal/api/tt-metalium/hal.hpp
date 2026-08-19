@@ -106,4 +106,13 @@ float get_inf();
  */
 uint32_t get_arch_num_circular_buffers();
 
+/**
+ * @brief The number of circular buffers the hardware actually has, ignoring any emule-only debug
+ * ceiling. Use this to reason about silicon feasibility; use get_arch_num_circular_buffers to size
+ * a container or to bound an allocation.
+ *
+ * @return Number of circular buffers on real silicon for this architecture
+ */
+uint32_t get_silicon_num_circular_buffers();
+
 }  // namespace tt::tt_metal::hal

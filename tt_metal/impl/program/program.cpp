@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <bitset>
 #include <cstdint>
 #include <cstdlib>
@@ -355,11 +356,16 @@ detail::ProgramImpl::ProgramImpl() :
         core_to_kernel_group_index_table_.push_back({});
     }
 
+#if defined(EMULE_CB_CEILING)
+    // The mask is firmware plumbing only, and emule runs no firmware: L1 is sized from
+    // KernelGroup's exact extents, so a cap past the mask width costs nothing here.
+#else
     TT_ASSERT(
         cb_mask_width_ >= max_cbs_,
         "CB mask width ({}) is insufficient for architecture's {} CBs",
         cb_mask_width_,
         max_cbs_);
+#endif
 
     program_configs_.resize(programmable_core_count_);
     program_config_sizes_.resize(programmable_core_count_ + 2);
@@ -810,6 +816,7 @@ KernelGroup::KernelGroup(
     uint32_t programmable_core_type_index,
     std::vector<KernelHandle> kernel_ids,
     uint64_t local_cb_mask,
+    uint32_t max_local_cb_end_index,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges,
     const dev_msgs::Factory& dev_msgs_factory) :
@@ -817,7 +824,9 @@ KernelGroup::KernelGroup(
 
     kernel_ids(std::move(kernel_ids)),
     launch_msg(dev_msgs_factory.create<dev_msgs::launch_msg_t>()),
-    go_msg(dev_msgs_factory.create<dev_msgs::go_msg_t>()) {
+    go_msg(dev_msgs_factory.create<dev_msgs::go_msg_t>()),
+    max_local_cb_end_index(max_local_cb_end_index),
+    min_remote_cb_start_index(min_remote_cb_start_index) {
     this->core_ranges = this->core_ranges.merge(new_ranges);
 
     auto kernel_config = this->launch_msg.view().kernel_config();
@@ -984,6 +993,67 @@ KernelGroup* detail::ProgramImpl::kernels_on_core(const CoreCoord& core, uint32_
                                                          : kernel_groups_[programmable_core_type_index].at(index).get();
 }
 
+namespace {
+
+// CB-index scans over std::bitset. These replace __builtin_clzll/ctzll on a to_ullong()
+// value, which throws once the bitset exceeds 64 bits with a high bit set.
+template <size_t N>
+uint32_t cb_highest_set_plus_one(const std::bitset<N>& bs) {
+    for (size_t i = N; i-- > 0;) {
+        if (bs[i]) {
+            return static_cast<uint32_t>(i) + 1;
+        }
+    }
+    return 0;
+}
+
+template <size_t N>
+uint32_t cb_lowest_set(const std::bitset<N>& bs) {
+    for (size_t i = 0; i < N; ++i) {
+        if (bs[i]) {
+            return static_cast<uint32_t>(i);
+        }
+    }
+    return static_cast<uint32_t>(N);
+}
+
+template <size_t N>
+uint32_t cb_first_clear(const std::bitset<N>& bs) {
+    for (size_t i = 0; i < N; ++i) {
+        if (!bs[i]) {
+            return static_cast<uint32_t>(i);
+        }
+    }
+    return static_cast<uint32_t>(N);
+}
+
+// Set bits strictly above the first clear bit — the width-agnostic form of `m & (m + 1)`,
+// i.e. the indices that make the used-CB set non-contiguous from zero.
+template <size_t N>
+std::bitset<N> cb_non_contiguous(const std::bitset<N>& bs) {
+    std::bitset<N> out;
+    for (size_t i = cb_first_clear(bs) + 1; i < N; ++i) {
+        if (bs[i]) {
+            out.set(i);
+        }
+    }
+    return out;
+}
+
+// Low 64 bits only: what a fixed-width firmware mask field can carry.
+template <size_t N>
+uint64_t cb_low64(const std::bitset<N>& bs) {
+    uint64_t v = 0;
+    for (size_t i = 0; i < std::min<size_t>(N, 64); ++i) {
+        if (bs[i]) {
+            v |= (1ull << i);
+        }
+    }
+    return v;
+}
+
+}  // namespace
+
 void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_index) {
     if (core_to_kernel_group_index_table_[programmable_core_type_index].empty()) {
         // Get the extent of the kernels in x, y
@@ -1059,19 +1129,18 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         auto core = CoreCoord({x, y});
                         auto local_val = per_core_local_cb_indices_.find(core);
                         if (local_val != per_core_local_cb_indices_.end() && local_val->second.any()) {
-                            uint64_t used_cbs = local_val->second.to_ullong();
-                            local_cb_mask |= used_cbs;
-                            uint32_t calculated_index =
-                                cb_mask_width_ - static_cast<uint32_t>(__builtin_clzll(used_cbs));
-                            max_local_cb_end_index = std::max(max_local_cb_end_index, calculated_index);
+                            const auto& used_cbs = local_val->second;
+                            // The mask is firmware-only and fixed-width; the extents below come
+                            // from the bitset so they stay exact past that width.
+                            local_cb_mask |= cb_low64(used_cbs);
+                            max_local_cb_end_index =
+                                std::max(max_local_cb_end_index, cb_highest_set_plus_one(used_cbs));
                             if (!logged_noncontiguous) {
-                                // Zeroes out the contiguous run of set bits starting at zero. Anything remaining is
-                                // above a zero bit.
-                                uint64_t non_contiguous_cbs = used_cbs & (used_cbs + 1);
-                                if (non_contiguous_cbs) {
-                                    // ~used_cbs is always nonzero, because otherwise all CBs are in use and therefore
-                                    // contiguous.
-                                    uint32_t first_unused_index = static_cast<uint32_t>(__builtin_ctzll(~used_cbs));
+                                // Anything above the first zero bit, i.e. not a contiguous run from zero.
+                                std::bitset<NUM_CIRCULAR_BUFFERS> non_contiguous_cbs = cb_non_contiguous(used_cbs);
+                                if (non_contiguous_cbs.any()) {
+                                    // Always in range: otherwise all CBs are in use and therefore contiguous.
+                                    uint32_t first_unused_index = cb_first_clear(used_cbs);
                                     std::string kernels_str;
                                     for (auto id : kernels) {
                                         std::shared_ptr<Kernel> kernel = handle_to_kernel.at(id);
@@ -1081,13 +1150,23 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                         kernels_str += kernel->kernel_source().name();
                                     }
 
+                                    std::string cb_ids;
+                                    for (uint32_t i = 0; i < max_cbs_; i++) {
+                                        if (non_contiguous_cbs[i]) {
+                                            if (!cb_ids.empty()) {
+                                                cb_ids += ",";
+                                            }
+                                            cb_ids += std::to_string(i);
+                                        }
+                                    }
+
                                     static std::mutex m;
                                     std::lock_guard lock(m);
                                     // Keep track of which programs have been logged to avoid spamming the log. This is
-                                    // particularly important for mesh devices.
-                                    static std::set<std::tuple<uint64_t, uint32_t, std::string>> logged;
-                                    auto cb_tuple =
-                                        std::make_tuple(non_contiguous_cbs, first_unused_index, kernels_str);
+                                    // particularly important for mesh devices. Keyed on the rendered id list rather
+                                    // than a fixed-width mask so distinct high-index sets stay distinguishable.
+                                    static std::set<std::tuple<std::string, uint32_t, std::string>> logged;
+                                    auto cb_tuple = std::make_tuple(cb_ids, first_unused_index, kernels_str);
 
                                     if (!logged.contains(cb_tuple)) {
                                         logged.insert(cb_tuple);
@@ -1097,15 +1176,6 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                             MetalContext::instance().hal().get_programmable_core_type_index(
                                                 HalProgrammableCoreType::TENSIX));
 
-                                        std::string cb_ids;
-                                        for (uint32_t i = 0; i < max_cbs_; i++) {
-                                            if (non_contiguous_cbs & (1ULL << i)) {
-                                                if (!cb_ids.empty()) {
-                                                    cb_ids += ",";
-                                                }
-                                                cb_ids += std::to_string(i);
-                                            }
-                                        }
                                         log_debug(
                                             tt::LogMetal,
                                             "Circular buffer indices are not contiguous starting at 0. This will hurt "
@@ -1121,9 +1191,8 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         }
                         auto remote_val = per_core_remote_cb_indices_.find(core);
                         if (remote_val != per_core_remote_cb_indices_.end() && remote_val->second.any()) {
-                            min_remote_cb_start_index = std::min(
-                                min_remote_cb_start_index,
-                                static_cast<uint32_t>(__builtin_ctzll(remote_val->second.to_ullong())));
+                            min_remote_cb_start_index =
+                                std::min(min_remote_cb_start_index, cb_lowest_set(remote_val->second));
                         }
 
                         if (not hal.get_supports_dfbs(programmable_core_type_index)) {
@@ -1146,13 +1215,38 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 programmable_core_type_index,
                 max_local_cb_end_index,
                 min_remote_cb_start_index);
+#if defined(EMULE_CB_CEILING)
+            // Says the program actually depended on the fantasy cap, not just that it was
+            // enabled. Deduped like the non-contiguous diagnostic below, which mesh devices
+            // would otherwise repeat per device.
+            const uint32_t silicon_num_cbs = hal.get_silicon_num_circular_buffers();
+            if (max_local_cb_end_index > silicon_num_cbs) {
+                static std::mutex above_cap_mutex;
+                std::lock_guard lock(above_cap_mutex);
+                static std::set<uint32_t> logged_above_cap;
+                if (logged_above_cap.insert(max_local_cb_end_index).second) {
+                    log_warning(
+                        tt::LogMetal,
+                        "FANTASY CB MODE: this program uses circular buffer index {}, above this arch's cap of {}. "
+                        "It cannot run on silicon as written; see docs/cb-fantasy-mode.md.",
+                        max_local_cb_end_index - 1,
+                        silicon_num_cbs);
+                }
+            }
+#endif
             TT_FATAL(
                 !(local_cb_mask != 0 && num_dfbs != 0),
                 "Cannot use both circular buffers and dataflow buffers on the same core. "
                 "local_cb_mask: {}, num_dfbs: {}",
                 local_cb_mask,
                 num_dfbs);
-            local_cb_mask = (num_dfbs > 0 && local_cb_mask == 0) ? num_dfbs : local_cb_mask;
+            if (num_dfbs > 0 && local_cb_mask == 0) {
+                // DFBs reuse the CB firmware init path, so this field carries a DFB *count* here;
+                // finalize_dfb_masks rewrites it to a slot bitmask, but only after L1 sizing has
+                // run. Mirror the count's bit width, which is what the sizing derived from it.
+                local_cb_mask = num_dfbs;
+                max_local_cb_end_index = static_cast<uint32_t>(std::bit_width(num_dfbs));
+            }
             std::vector<KernelHandle> kernel_ids(kernels.begin(), kernels.end());
             // Sort kernel ids by processor index, so loops over this array will be in processor order
             std::sort(kernel_ids.begin(), kernel_ids.end(), [&](KernelHandle a, KernelHandle b) {
@@ -1173,6 +1267,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 programmable_core_type_index,
                 std::move(kernel_ids),
                 local_cb_mask,
+                max_local_cb_end_index,
                 min_remote_cb_start_index,
                 cores,
                 hal.get_dev_msgs_factory(hal.get_programmable_core_type(programmable_core_type_index))));

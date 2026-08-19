@@ -65,4 +65,8 @@ uint32_t get_arch_num_circular_buffers() {
     return tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
 }
 
+uint32_t get_silicon_num_circular_buffers() {
+    return tt::tt_metal::MetalContext::instance().hal().get_silicon_num_circular_buffers();
+}
+
 }  // namespace tt::tt_metal::hal
