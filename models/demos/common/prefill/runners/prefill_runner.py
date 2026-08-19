@@ -602,20 +602,31 @@ def run_request_loop(
     # verified nothing. Runs after _drain_and_log_e2e so the chunk's KV writes are flushed first.
     if os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0") == "1" and c > 0:
         # Bring-up validation of the production path (golden-trace input): the same optional runtime hook
-        # standalone uses. n_chunks = the count the producer actually pushed. Single-rank only (a pipeline
-        # rank owns a layer slice; kv_cache_pcc_check offsets by first_layer_idx, but multi-rank KV PCC is
-        # driven via the standalone loop).
+        # standalone uses. Single-rank only (a pipeline rank owns a layer slice; kv_cache_pcc_check offsets
+        # by first_layer_idx, but multi-rank KV PCC is driven via the standalone loop).
         pcc_check = getattr(runtime, "kv_cache_pcc_check", None)
         if pcc_check is None:
             raise RuntimeError(
                 f"PREFILL_REQUEST_LOOP_PCC=1 but {type(runtime).__name__} implements no kv_cache_pcc_check "
                 "(optional bring-up hook; see ADDING_A_PREFILL_MODEL.md §2)."
             )
+        trace_dir = os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)
+        slot_trace_spec = os.environ.get("PREFILL_REQUEST_LOOP_SLOT_TRACES", "").strip()
+        if slot_trace_spec:
+            slot_traces = [entry.strip() for entry in slot_trace_spec.split(",") if entry.strip()]
+            if not slot_traces:
+                raise ValueError("PREFILL_REQUEST_LOOP_SLOT_TRACES contains no trace paths")
+            trace_dir = slot_traces[slot_id % len(slot_traces)]
+        logger.info(
+            f"[pp rank {rank}] validating final slot={slot_id} chunks={chunks_per_slot[slot_id]} "
+            f"real_len={real_end_per_slot[slot_id]} trace={trace_dir}"
+        )
         pcc_check(
             kv_caches,
             slot_id=slot_id,
-            n_chunks=c,
-            trace_dir=os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default),
+            n_chunks=chunks_per_slot[slot_id],
+            real_len=real_end_per_slot[slot_id],
+            trace_dir=trace_dir,
             first_layer_idx=cfg.first_layer_idx,
         )
 

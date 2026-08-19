@@ -11,13 +11,14 @@ transport:
   connect_timeout_s: 60
 
 workload:
-  num_users: 1               # one slot answers the question; halves the run. [MATCH RUNNER NUM_USERS]
-  chunks: "11"               # full prompt
-  max_requests: 1
+  num_users: 3               # [MATCH RUNNER NUM_USERS]
+  max_requests: 3            # one resident request per slot; no slot recycling
   interleave: round_robin
   check_pcc: false           # runner validates its device-owned KV after the shutdown sentinel
-  # The pushed tokens must match the runner's PREFILL_TRACE_DIR golden.
-  trace_dir: /mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+  slot_prompts:
+    - /mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_longbook_55k_vllm
+    - /mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+    - /home/jameszianxu/tt-metal/prompt_generation_testing/generated_traces
 
 migration:
   issue: false               # no endpoint, migration worker, or KV copy

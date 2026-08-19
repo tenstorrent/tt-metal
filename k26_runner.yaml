@@ -12,12 +12,13 @@ global_env:
   PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
   PREFILL_FABRIC_MODE: "2d"
 
-  PREFILL_NUM_USERS: "1"
+  PREFILL_NUM_USERS: "3"
 
   # Expose /tt_prefill_layer_acks_kimi26_prefill and emit one ack per completed layer.
   PREFILL_ENABLE_LAYER_ACK: "1"
 
-  # After the producer closes the request stream, validate the runner-owned KV cache against this trace.
+  # After shutdown, validate only the slot that received the final chunk against its assigned trace.
   PREFILL_REQUEST_LOOP_PCC: "1"
   PREFILL_TRACE_DIR: "/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm"
+  PREFILL_REQUEST_LOOP_SLOT_TRACES: "/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_longbook_55k_vllm,/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm,/home/jameszianxu/tt-metal/prompt_generation_testing/generated_traces"
   PREFILL_STANDALONE_CHUNKED_PCC: "0.88"
