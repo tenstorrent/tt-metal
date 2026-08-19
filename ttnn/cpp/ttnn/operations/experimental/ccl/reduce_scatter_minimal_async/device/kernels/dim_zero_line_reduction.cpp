@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/accumulate_helpers_compute.hpp"
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
@@ -19,42 +20,21 @@ void kernel_main() {
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
-    CircularBuffer cb_input(input_cb_id);
-    CircularBuffer cb_intermediate(intermediate_cb);
-    CircularBuffer cb_output(output_cb);
-
+    // Hardware startup stays with the kernel; the accumulator owns only the op-level init.
+    // (upstream renamed binary_op_init_common -> compute_kernel_hw_startup + per-op add_init.)
     compute_kernel_hw_startup(input_cb_id, intermediate_cb, output_cb);
-    add_init(input_cb_id, intermediate_cb, false);
+
+    // Arm once: hoists add_init out of the chunk loop and asserts tile_granularity fits DEST.
+    auto acc = compute_kernel_lib::BlockAccumulate::arm(input_cb_id, intermediate_cb, output_cb, tile_granularity);
 
     for (uint32_t i = 0; i < num_total_reduction_steps; i++) {  // Don't reduce on the first slice
         for (uint32_t b = 0; b < slice_B; ++b) {
             uint32_t tiles_read = start_tiles_read;
-            uint32_t tiles_to_read = start_tiles_to_read;
+            const uint32_t tiles_to_read = start_tiles_to_read;
 
             while (tiles_read < tiles_to_read) {
-                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
-
-                cb_input.wait_front(tile_granularity);
-                cb_intermediate.wait_front(tile_granularity);
-
-                tile_regs_acquire();
-                for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
-                    add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
-                }
-                tile_regs_commit();
-
-                cb_input.pop_front(tile_granularity);
-                cb_intermediate.pop_front(tile_granularity);
-
-                cb_output.reserve_back(tile_granularity);
-                tile_regs_wait();
-                for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
-                    pack_tile(tile_id, output_cb);
-                }
-                tile_regs_release();
-                cb_output.push_back(tile_granularity);
-
+                const uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                acc.run(num_pages_to_read);
                 tiles_read += num_pages_to_read;
             }
         }

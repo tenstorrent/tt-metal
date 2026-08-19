@@ -24,6 +24,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/debug/dprint.h"
 #include "strided_ring_reduce_scatter_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/accumulate_helpers_compute.hpp"
 
 void kernel_main() {
     // Compile-time arguments (must match reader/writer on same device)
@@ -63,6 +64,8 @@ void kernel_main() {
     const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
+    // The addcmul epilogue below still drives these CBs by hand, so keep upstream's Device 2.0
+    // CircularBuffer handles; only the plain accumulation step moves onto the accumulator.
     CircularBuffer cb_in(input_cb);
     CircularBuffer cb_intermediate(intermediate_cb);
     CircularBuffer cb_out(output_cb);
@@ -72,8 +75,14 @@ void kernel_main() {
     CircularBuffer cb_addcmul_b(addcmul_b_cb);
 #endif
 
+    // Hardware startup stays with the kernel; the accumulator owns only the op-level init (upstream
+    // renamed binary_op_init_common -> compute_kernel_hw_startup + per-op add_init). Note this
+    // kernel's tile_granularity comes from a host expression that hardcodes 8 with no fp32_dest_acc
+    // clamp (strided_reduce_scatter_async_program.cpp), unlike reduce_scatter_minimal_async's
+    // `fp32_dest_acc_en ? 4 : 8`. arm()'s DEST assert is what will catch that if fp32 accumulation is
+    // ever enabled here, instead of silently overflowing DEST.
     compute_kernel_hw_startup(input_cb, intermediate_cb, output_cb);
-    add_init(input_cb, intermediate_cb, false);
+    auto acc = compute_kernel_lib::BlockAccumulate::arm(input_cb, intermediate_cb, output_cb, tile_granularity);
 
     for (uint32_t b = 0; b < batch_size; b++) {
         for (uint32_t m_block_iter = 0; m_block_iter < mm_M_unit_blocks_per_core; m_block_iter++) {
@@ -219,28 +228,17 @@ void kernel_main() {
                                 }
                                 tile_regs_release();
                                 cb_out.push_back(tile_granularity);
+
+                                // The addcmul epilogue above reprogrammed the unpack/math state
+                                // (mul_init, its own add_init, reconfig_data_format), so the
+                                // accumulator's cached mode is stale. Re-establish it before the
+                                // next normal step, which the pre-migration kernel got away with only
+                                // because it re-issued the op init on every single chunk.
+                                acc.rearm();
                             } else {
 #endif
                                 // Normal ring accumulation step: acc = input + intermediate
-                                cb_in.wait_front(tile_granularity);
-                                cb_intermediate.wait_front(tile_granularity);
-
-                                tile_regs_acquire();
-                                for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
-                                    add_tiles(input_cb, intermediate_cb, tile_id, tile_id, tile_id);
-                                }
-                                tile_regs_commit();
-
-                                cb_in.pop_front(tile_granularity);
-                                cb_intermediate.pop_front(tile_granularity);
-
-                                cb_out.reserve_back(tile_granularity);
-                                tile_regs_wait();
-                                for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
-                                    pack_tile(tile_id, output_cb);
-                                }
-                                tile_regs_release();
-                                cb_out.push_back(tile_granularity);
+                                acc.run(tiles_to_read_in_this_step);
 #ifdef FUSE_RS_ADDCMUL
                             }  // end else (non-final ring step)
 #endif

@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_binary.h"
-#include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/accumulate_helpers_compute.hpp"
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
@@ -76,40 +76,23 @@ void kernel_main() {
             actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
         }
 
-        uint32_t input_slice_cb_id = input_slice_cb_ids[actual_slice_idx];
-        uint32_t intermediate_slice_cb_id = intermediate_slice_cb_ids[actual_slice_idx];
-        CircularBuffer cb_input_slice(input_slice_cb_id);
-        CircularBuffer cb_intermediate_slice(intermediate_slice_cb_id);
-        CircularBuffer cb_compute(compute_cb_id);
+        const uint32_t input_slice_cb_id = input_slice_cb_ids[actual_slice_idx];
+        const uint32_t intermediate_slice_cb_id = intermediate_slice_cb_ids[actual_slice_idx];
 
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+        // This op uses a DISTINCT CB pair per ring slice, so both the hardware startup and the arm
+        // genuinely belong inside this loop — unlike the other reduction kernels, where a per-slice
+        // init would be pure overhead. The accumulator still hoists add_init out of the inner
+        // chunk loop, which is where the original re-issued nothing but did the CB/DST protocol by hand.
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init
+        // (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
         compute_kernel_hw_startup(input_slice_cb_id, intermediate_slice_cb_id, compute_cb_id);
-        add_init(input_slice_cb_id, intermediate_slice_cb_id, false);
+        auto acc = compute_kernel_lib::BlockAccumulate::arm(
+            input_slice_cb_id, intermediate_slice_cb_id, compute_cb_id, tile_granularity);
 
         uint32_t tiles_read = start_tiles_read;
-        uint32_t tiles_to_read = start_tiles_to_read;
+        const uint32_t tiles_to_read = start_tiles_to_read;
         while (tiles_read < tiles_to_read) {
-            cb_input_slice.wait_front(tile_granularity);
-            cb_intermediate_slice.wait_front(tile_granularity);
-
-            tile_regs_acquire();
-            for (uint32_t tile_id = 0; tile_id < tile_granularity; ++tile_id) {
-                add_tiles(input_slice_cb_id, intermediate_slice_cb_id, tile_id, tile_id, tile_id);
-            }
-            tile_regs_commit();
-
-            cb_input_slice.pop_front(tile_granularity);
-            cb_intermediate_slice.pop_front(tile_granularity);
-
-            cb_compute.reserve_back(tile_granularity);
-
-            tile_regs_wait();
-            for (uint32_t tile_id = 0; tile_id < tile_granularity; ++tile_id) {
-                pack_tile(tile_id, compute_cb_id);
-            }
-            tile_regs_release();
-
-            cb_compute.push_back(tile_granularity);
+            acc.run(tile_granularity);
             tiles_read += tile_granularity;
         }
 

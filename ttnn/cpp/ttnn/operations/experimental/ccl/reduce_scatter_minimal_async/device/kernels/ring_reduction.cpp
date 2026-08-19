@@ -9,6 +9,10 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_common/kernels/common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/accumulate_helpers_compute.hpp"
+#include "ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp"
+
+namespace sched = ttnn::ccl::schedule;
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
@@ -26,104 +30,42 @@ void kernel_main() {
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
 
-    CircularBuffer cb_input(cb_input_id);
-    CircularBuffer cb_interm(cb_interm_id);
-    CircularBuffer cb_interm2(cb_interm2_id);
-    CircularBuffer cb_compute_output(cb_compute_output_id);
+    // The ring schedule — the batch/step/channel/chunk walk, the per-step flags and the even/odd
+    // chunk split — comes from the shared header, so this kernel, the reader and the writer walk ONE
+    // definition instead of three hand-maintained copies of it.
+    sched::RingRsSchedule schedule(
+        ring_size, input_tensor_B, slice_C, tile_granularity, start_tiles_read, start_tiles_to_read, direction);
 
+    // Hardware startup stays here, verbatim and unchanged — the accumulator deliberately does not own
+    // it (the hw startup and the per-op add_init are not interchangeable).
     compute_kernel_hw_startup(cb_interm_id, cb_input_id, cb_compute_output_id);
 
-    for (uint32_t b = 0; b < input_tensor_B; ++b) {
-        constexpr uint32_t ring_size_by_2 = ring_size / 2;
-        uint32_t num_iters = ring_size_by_2 + 1;
-        for (uint32_t i = 0; i < num_iters; ++i) {
-            // State machine for control variables
-            bool even_chunks, odd_chunks, reduce_even_chunks, reduce_odd_chunks, reduce_output;
-            if (i == 0) {
-                even_chunks = direction;     // process the even chunks (half the tensor slice)
-                odd_chunks = !direction;     // process the odd chunks (other half of tensor slice)
-                reduce_even_chunks = false;  // (input_tensor + interm_tensor) or (input_tensor)
-                reduce_odd_chunks = false;   // (input_tensor + interm_tensor) or (input_tensor)
-                reduce_output =
-                    false;  // (input_tensor + interm_tensor + output_tensor) or (input_tensor + interm_tensor)
-            } else if (i == ring_size_by_2) {
-                even_chunks = direction;
-                odd_chunks = !direction;
-                reduce_even_chunks = even_chunks;
-                reduce_odd_chunks = odd_chunks;
-                reduce_output = true;
-            } else if (i == 1) {
-                even_chunks = true;
-                odd_chunks = true;
-                reduce_even_chunks = direction;
-                reduce_odd_chunks = !direction;
-                reduce_output = false;
-            } else {
-                even_chunks = true;
-                odd_chunks = true;
-                reduce_even_chunks = even_chunks;
-                reduce_odd_chunks = odd_chunks;
-                reduce_output = false;
-            }
+    // Arm the accumulator once: hoists add_tiles_init out of the chunk loop (the pre-migration kernel
+    // re-issued it every chunk) and asserts tile_granularity fits the DEST register — the invariant
+    // the host is reproducing when it clamps granularity to fp32_dest_acc_en ? 4 : 8. The operand
+    // order matches the pre-migration add_tiles(cb_interm_id, cb_input_id, ...).
+    auto acc =
+        compute_kernel_lib::BlockAccumulate::arm(cb_interm_id, cb_input_id, cb_compute_output_id, tile_granularity);
 
-            for (uint32_t c = 0; c < slice_C; ++c) {
-                uint32_t tiles_read = start_tiles_read;
-                uint32_t total_tiles_to_read = start_tiles_to_read;
-
-                while (tiles_read < total_tiles_to_read) {
-                    const auto [is_even_chunk, tiles_to_read] =
-                        reduce_scatter_common::chunk_ring_parity<tile_granularity>(tiles_read, total_tiles_to_read);
-
-                    if ((is_even_chunk && !even_chunks) || (!is_even_chunk && !odd_chunks) || tiles_to_read == 0) {
-                        // Skip this chunk
-                        tiles_read += tiles_to_read;
+    while (schedule.next_batch()) {
+        while (schedule.next_step()) {
+            // Terminal ring step reduces THREE tensors (input + intermediate + output); every other
+            // reducing step adds two.
+            const bool reduce_output = schedule.flags().reduce_output;
+            while (schedule.next_channel()) {
+                while (schedule.next_chunk()) {
+                    // Not this worker's parity this step (or the zero-tile chunk): the reader does
+                    // not push for it, so there is nothing to reduce.
+                    if (schedule.skip() || !schedule.reduce_interm()) {
+                        continue;
+                    }
+                    if (reduce_output) {
+                        acc.run_seeded(cb_interm2_id, schedule.tiles_this_chunk());
                     } else {
-                        const bool reduce_interm =
-                            (is_even_chunk && reduce_even_chunks) || (!is_even_chunk && reduce_odd_chunks);
-
-                        if (reduce_interm) {
-                            // If reduce_output, add 3 tensors. Else add 2 tensors.
-                            if (reduce_output) {
-                                cb_interm2.wait_front(tile_granularity);
-                            }
-                            cb_input.wait_front(tile_granularity);
-                            cb_interm.wait_front(tile_granularity);
-
-                            tile_regs_acquire();  // acquire DST registers for MATH thread, resets DST to 0
-                            if (reduce_output) {
-                                copy_tile_init(cb_interm2_id);
-                                for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
-                                    copy_tile(cb_interm2_id, tile_id, tile_id);  // load DST
-                                }
-                                add_init(cb_interm_id, cb_input_id, true);  // DST = srcA + srcB + DST
-                            } else {
-                                add_init(cb_interm_id, cb_input_id, false);  // DST = srcA + srcB
-                            }
-                            for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
-                                add_tiles(cb_interm_id, cb_input_id, tile_id, tile_id, tile_id);
-                            }
-                            tile_regs_commit();  // release lock on DST by MATH thread, signal the PACK thread
-
-                            if (reduce_output) {
-                                cb_interm2.pop_front(tile_granularity);
-                            }
-                            cb_input.pop_front(tile_granularity);
-                            cb_interm.pop_front(tile_granularity);
-
-                            cb_compute_output.reserve_back(tile_granularity);
-                            tile_regs_wait();  // acquire lock on DST for PACK thread
-                            for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
-                                pack_tile(tile_id, cb_compute_output_id, tile_id);  // pack results from DST registers
-                                                                                    // to output circular buffers
-                            }
-                            tile_regs_release();  // release lock on DST by PACK thread
-                            cb_compute_output.push_back(tile_granularity);
-                        }
-                        tiles_read += tiles_to_read;
-
-                    }  // if skip or process
-                }  // while total_tiles_to_read
-            }  // for slice_C
-        }  // for num_iters
-    }  // for input_tensor_B
+                        acc.run(schedule.tiles_this_chunk());
+                    }
+                }
+            }
+        }
+    }
 }
