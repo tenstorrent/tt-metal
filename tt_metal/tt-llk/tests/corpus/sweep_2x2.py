@@ -151,6 +151,7 @@ Typical one-command full sweep:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import hashlib
 import json
@@ -2949,6 +2950,43 @@ exit $RC
         # silicon() code, consuming the executor's per-leg evidence via the
         # keyed hash-matched resume path).
         prelim = []  # ordered: ("row", row, classifications, attribution)
+        if "classify" in phases and getattr(self.a, "classify_workers", 1) > 1:
+            # Parallel classify prewarm (owner order 2026-08-19): every
+            # (row, selector) classify is independent — its work dir, rt
+            # roots, logs, and verdict file are disjoint — so compile them
+            # concurrently here; the sequential row loop below then resumes
+            # every verdict hash-matched from cache.  Errors surface in the
+            # loop exactly as before (the prewarm ignores them on purpose:
+            # the cached COMPILE_FAIL verdict replays identically).
+            self.verify_toolchain("classify")
+            prewarm = []
+            for row in self.rows:
+                if row["kind"] == "skip":
+                    continue
+                p_legs = (
+                    (("default", row["pin_flags"]),)
+                    if row["kind"] == "pinpair"
+                    else None
+                )
+                for sel in SELECTORS:
+                    if row["nodes"][sel]:
+                        prewarm.append((row, sel, p_legs))
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=self.a.classify_workers
+            ) as pool:
+                futs = [
+                    (
+                        pool.submit(self.classify, row, sel, legs=p_legs)
+                        if p_legs
+                        else pool.submit(self.classify, row, sel)
+                    )
+                    for row, sel, p_legs in prewarm
+                ]
+                for fut in concurrent.futures.as_completed(futs):
+                    try:
+                        fut.result()
+                    except Exception as exc:  # surfaced by the loop's rerun
+                        print(f"classify prewarm exception (deferred): {exc}")
         for row in self.rows:
             if row["kind"] == "skip":
                 skips.append(
@@ -3183,6 +3221,15 @@ def main():
         "--skip-craq-gate",
         action="store_true",
         help="documented override: run silicon without a green CRAQ gate (control experiments only)",
+    )
+    ap.add_argument(
+        "--classify-workers",
+        type=int,
+        default=int(os.environ.get("SWEEP_CLASSIFY_WORKERS", "6")),
+        help="concurrent classify (row,selector) compile sessions in the "
+        "prewarm pool (work dirs are disjoint per (row,selector); verdicts "
+        "are hash-keyed so the sequential loop replays them from cache). "
+        "1 disables the prewarm (legacy sequential classify).",
     )
     ap.add_argument(
         "--force",
