@@ -8,6 +8,7 @@
 
 #include "cmath_common.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
@@ -325,6 +326,8 @@ inline void _llk_math_pack_sync_init_()
 
     _reset_dest_register_offset_();
     _set_dest_section_base_<TRISC_ID>(_get_dest_buffer_base_());
+
+    _llk_dest_dvalid_math_init_();
 
     constexpr std::uint32_t num_sem = (DST == DstSync::SyncFull) ? 1 : 2;
     TTI_SEMINIT(num_sem, 0, 0, p_stall::SEMAPHORE_1);

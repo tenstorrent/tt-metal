@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel_trisc_common.h"
+#include "llk_dest_dvalid.h"
 #include "llk_unpack_common.h"
 using namespace ckernel;
 
@@ -72,6 +73,8 @@ inline void _llk_unpack_matmul_mop_config_(
 template <bool TRANSPOSE_EN>
 inline void _llk_unpack_matmul_init_(std::uint32_t buf_desc_id_0, std::uint32_t buf_desc_id_1, std::uint8_t ct_dim, std::uint8_t rt_dim, std::uint32_t kt_dim)
 {
+    _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
+
     static_assert((TRANSPOSE_EN == false), "TODO: Transpose srcA not available yet");
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, TRANSPOSE_EN);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);

@@ -8,6 +8,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 #include "llk_unpack_common.h"
 #include "tensor_shape.h"
 using namespace ckernel;
@@ -86,6 +87,8 @@ template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION>
 inline void _llk_unpack_reduce_init_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape& tensor_shape, const std::uint32_t num_tiles = NUM_TILES)
 {
+    _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
+
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW));
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "llk_dest_dvalid.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary.h"
 #include "llk_math_eltwise_binary_broadcast.h"
@@ -46,6 +47,8 @@ using namespace ckernel::math;
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType broadcast_type>
 inline void _llk_math_eltwise_binary_init_custom_([[maybe_unused]] const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    _llk_dest_dvalid_configure_<dest_dvalid::client::FPU>();
+
     static_assert(broadcast_type == BroadcastType::COL, "custom sub bcast-col path supports COL broadcast only");
     static_assert(eltwise_binary_type == EltwiseBinaryType::ELWSUB, "custom sub bcast-col path supports ELWSUB only");
 

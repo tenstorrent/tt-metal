@@ -8,6 +8,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "cunpack_common.h"
+#include "llk_dest_dvalid.h"
 #include "llk_unpack_common.h"
 #include "tensor_shape.h"
 using namespace ckernel;
@@ -83,6 +84,8 @@ template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
 inline void _llk_unpack_tilize_init_(
     const std::uint32_t buf_desc_id, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim, const TensorShape& tensor_shape)
 {
+    _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
+
     // Pack all UNPACK_TILIZE stride fields into a single struct to perform a direct 32-bit cfg write
     ckernel::unpack::unpack_tilize_cfg_u unpk_cfg = {};
     unpk_cfg.f.src_z_stride                       = tensor_shape.num_faces_c_dim; // col dim of a tile in L1 in units of 16 datums (1 face). This is used for
@@ -182,6 +185,8 @@ inline void _llk_unpack_tilize_block_mop_config_(const std::uint32_t buf_desc_id
 template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM>
 inline void _llk_unpack_tilize_block_init_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape)
 {
+    _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
+
     ckernel::unpack::unpack_tilize_cfg_u unpk_cfg = {};
     unpk_cfg.f.src_z_stride                       = tensor_shape.num_faces_c_dim; // col dim of a tile in L1 in units of 16 datums (1 face)
     // Z stride unit = face_r_dim datums. Each tile = total_num_faces faces × face_r_dim rows per face.
@@ -270,6 +275,8 @@ inline void _llk_unpack_tilize_strided_mop_config_(const std::uint32_t buf_desc_
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM>
 inline void _llk_unpack_tilize_strided_init_(const std::uint32_t buf_desc_id, const TensorShape& tensor_shape)
 {
+    _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
+
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0); // Disable transpose
@@ -429,6 +436,8 @@ template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
 inline void _llk_unpack_tilize_strided_init_small_faces_(
     const std::uint32_t buf_desc_id, const TensorShape& tensor_shape, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim)
 {
+    _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
+
     // Disable transpose
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);

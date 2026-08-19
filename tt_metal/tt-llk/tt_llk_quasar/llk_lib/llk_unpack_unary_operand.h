@@ -8,7 +8,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
-#include "llk_sync.h"
+#include "llk_dest_dvalid.h"
 #include "llk_unpack_common.h"
 #include "tensor_shape.h"
 
@@ -296,7 +296,8 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  * @tparam TRANSPOSE_EN: Enables transpose of a tile, supported for SrcA and SrcB, values = <true/false>
  * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @tparam reuse_dest: When not NONE, configures per-face unpack with dummy dvalid, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
- * @tparam unpack_to_dest: When true, selects the semaphore-synchronized unpack-to-DEST path; requires UNP_SEL == UNP_DEST, values = <true/false>
+ * @tparam unpack_to_dest: When true, selects the unpack-to-DEST path and makes UNPACK the head of the dest data-valid chain; requires UNP_SEL == UNP_DEST,
+ * values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
@@ -320,18 +321,17 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
     {
         static_assert(UNP_SEL == p_unpacr::UNP_DEST, "unpack_to_dest path requires UNP_SEL == p_unpacr::UNP_DEST");
 
-        // Unpack owns the DEST section base in the unpack-to-dest path: it is the DEST
-        // producer (UNP_DEST), so it programs the per-TRISC section base itself rather than
-        // letting the math middleman set it on its behalf
-        // Establish the initial bank-0 base here; the per-tile call flips
-        // it in SyncHalf. TriscID::Unpack selects the same SEC slot the UNP_DEST client reads.
-        ckernel::trisc::_reset_dest_register_offset_();
-        ckernel::trisc::_set_dest_section_base_<to_underlying(ckernel::trisc::TriscID::Unpack)>(ckernel::trisc::_get_dest_buffer_base_());
+        _llk_dest_dvalid_configure_<dest_dvalid::client::UNPACK, true>();
 
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0 /*TRANSPOSE_EN forced false for UNP_DEST*/);
         cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
         _llk_unpack_unary_operand_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
         return;
+    }
+
+    if constexpr (reuse_dest == EltwiseBinaryReuseDestType::NONE)
+    {
+        _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
     }
 
     if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
@@ -378,8 +378,9 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
  *
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
  * @tparam reuse_dest: When not NONE, sets the source counter for the CB unpacker only, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
- * @tparam unpack_to_dest: When true, runs the UNPACK_MATH/MATH_PACK semaphore handshake for unpack-to-DEST; requires UNP_SEL == UNP_DEST, values = <true/false>
- * @tparam DEST_SYNC_MODE: In the unpack-to-DEST path, SyncHalf flips the DEST section base to the other bank after each tile, values = <SyncFull/SyncHalf>
+ * @tparam unpack_to_dest: When true, unpacks straight into DEST and hands the section to the next dest data-valid client; requires UNP_SEL == UNP_DEST, values
+ * = <true/false>
+ * @tparam DEST_SYNC_MODE: Dest register buffering mode used by the dest data-valid signal, values = <SyncFull/SyncHalf>
  * @param l1_tile_idx: Index into the L1 buffer for a tile.
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @note Call @ref _llk_unpack_unary_operand_init_ with matching template args before this function.
@@ -395,25 +396,12 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Te
     {
         static_assert(UNP_SEL == p_unpacr::UNP_DEST, "unpack_to_dest path requires UNP_SEL == p_unpacr::UNP_DEST");
 
-        // The math thread is the middleman with two single-counting semaphores (max=N each).
-        // Without an extra wait on MATH_PACK, unpack could race 2N iterations ahead of pack
-        // and overwrite a bank that pack has not read yet. Waiting on both keeps unpack
-        // within N iterations of pack.
-        _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);
-
         // UNP_DEST is driven off the UNP_A bank's counters.
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx);
         TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
 
-        // Drain UNPACK0 before posting "filled" so the post does not race the writes math reads.
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
-        _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
-
-        // Unpack owns the DEST section base, so it flips to the other bank for the next iteration
-        if constexpr (DEST_SYNC_MODE == ckernel::DstSync::SyncHalf)
-        {
-            _llk_sync_advance_dest_section_<to_underlying(ckernel::trisc::TriscID::Unpack), true /*EN_32BIT_DEST*/, p_stall::UNPACK0>();
-        }
+        _llk_dest_dvalid_signal_<dest_dvalid::client::UNPACK, DEST_SYNC_MODE, false>();
         return;
     }
 

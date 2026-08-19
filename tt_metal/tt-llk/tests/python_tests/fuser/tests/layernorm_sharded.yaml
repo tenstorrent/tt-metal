@@ -140,9 +140,9 @@ operations:
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
-      - type: "UnarySfpu"
-        operation: "Rsqrt"
-        iterations: 32
+      # - type: "UnarySfpu"
+      #   operation: "Rsqrt"
+      #   iterations: 32
     block_size: [32, 32]
     pack:
       - output: "ex2pe"

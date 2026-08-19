@@ -43,19 +43,17 @@ class DatacopyFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        if compute_unit.unpack_to_dest.value:
-            return ""
-
         stage = operation.stage_id
         data_copy_type = compute_unit.data_copy_type.cpp_enum_value
         num_faces = operation.tile_shape.total_num_faces()
         face_r_dim = operation.tile_shape.face_r_dim
         num_rows_per_matrix = face_r_dim * num_faces
         en_32bit_dest = config.dest_acc.cpp_enum_value
+        unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
 
         return (
             f"// Operation {stage}: Datacopy FPU\n"
-            f"_llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {en_32bit_dest}>"
+            f"_llk_math_eltwise_unary_datacopy_init_<{data_copy_type}, {en_32bit_dest}, {unpack_to_dest}>"
             f"({num_rows_per_matrix}, {block.block_tiles_x});\n"
         )
 
@@ -67,10 +65,7 @@ class DatacopyFpu(Fpu):
         block: BlockData,
     ) -> str:
         if compute_unit.unpack_to_dest.value:
-            return (
-                "_llk_sync_wait_<p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);\n"
-                "_llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);\n"
-            )
+            return ""
 
         return f"_llk_math_eltwise_unary_datacopy_({block.tile_id_block});\n"
 

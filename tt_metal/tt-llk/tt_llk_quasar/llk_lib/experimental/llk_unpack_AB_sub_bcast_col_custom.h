@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "llk_dest_dvalid.h"
 #include "llk_unpack_common.h"
 #include "tensor_shape.h"
 
@@ -34,6 +35,8 @@ using namespace ckernel;
  */
 inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
+    _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
+
     // One predicate for all three threads; see @ref validate_tensor_shape_sub_bcast_col_custom_ for why
     // this path is stricter than validate_tensor_shape_tile_dependent_ops_.
     LLK_ASSERT(validate_tensor_shape_sub_bcast_col_custom_(tensor_shape), "custom sub bcast-col path supports 32x32 and 16x32 tiles only");

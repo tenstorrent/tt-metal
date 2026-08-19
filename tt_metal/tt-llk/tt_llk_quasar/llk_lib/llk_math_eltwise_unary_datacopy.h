@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "llk_dest_dvalid.h"
 #include "llk_math_common.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
@@ -111,9 +112,16 @@ inline void _llk_math_eltwise_unary_datacopy_addrmod_(const std::uint32_t num_ro
  * pack thread, pair with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
  */
-template <DataCopyType DATA_COPY_TYPE, bool IS_32b_DEST_EN>
+template <DataCopyType DATA_COPY_TYPE, bool IS_32b_DEST_EN, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_per_matrix, const std::uint32_t num_matrices = NUM_TILES)
 {
+    _llk_dest_dvalid_configure_<dest_dvalid::client::FPU, unpack_to_dest>();
+
+    if constexpr (unpack_to_dest)
+    {
+        return;
+    }
+
     const std::uint32_t num_rows_per_move_instrn = [num_rows_per_matrix]() -> const std::uint32_t
     {
         if constexpr (IS_32b_DEST_EN)

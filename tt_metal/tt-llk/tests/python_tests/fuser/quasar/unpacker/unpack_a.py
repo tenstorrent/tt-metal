@@ -11,7 +11,7 @@ from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.tile_loop import LoopBlockRow, LoopTileByTile, TileLoop
-from helpers.llk_params import DestSync, EltwiseBinaryReuseDestType
+from helpers.llk_params import EltwiseBinaryReuseDestType
 
 
 def _unp_sel(compute_unit: FpuNode) -> str:
@@ -76,15 +76,10 @@ class UnpackerA(Unpacker):
             else block.block_tiles_x
         )
 
-        code = ""
-        if compute_unit.unpack_to_dest.value:
-            num_sem = 2 if operation.dest_sync == DestSync.Half else 1
-            code += f"_llk_sync_init_(semaphore::UNPACK_MATH, {num_sem}, 0);\n"
-        code += (
+        return (
             f"_llk_unpack_unary_operand_init_<{unp_sel}, {transpose_en}, {en_32bit_dest}, {reuse_dest}, {unpack_to_dest}>"
             f"({buf_desc_id}, {tensor_shape}, {num_tiles});\n"
         )
-        return code
 
     def unpack(
         self,

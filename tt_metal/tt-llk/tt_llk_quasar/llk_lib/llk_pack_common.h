@@ -10,6 +10,7 @@
 #include "cpack_common.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
+#include "llk_dest_dvalid.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -348,4 +349,5 @@ inline void _llk_pack_dest_init_()
 {
     _reset_dest_register_offset_();
     _set_packer_dest_registers_<PACK_SEL, DST>();
+    _llk_dest_dvalid_configure_<dest_dvalid::client::PACK>();
 }

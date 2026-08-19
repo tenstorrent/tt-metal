@@ -7,6 +7,7 @@
 
 #include <cstdint>
 
+#include "llk_dest_dvalid.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary.h"
 #include "tensor_shape.h"
@@ -163,6 +164,8 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_shape)
 {
+    _llk_dest_dvalid_configure_<dest_dvalid::client::FPU>();
+
     _llk_math_eltwise_binary_broadcast_addrmod_<BROADCAST_TYPE, MATH_FIDELITY_TYPE>();
     _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
 

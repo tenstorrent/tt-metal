@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "llk_dest_dvalid.h"
 #include "llk_unpack_common.h"
 using namespace ckernel;
 
@@ -123,6 +124,15 @@ inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t
 template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false>
 inline void _llk_unpack_unary_broadcast_operands_init_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
+    if constexpr (unpack_to_dest)
+    {
+        _llk_dest_dvalid_configure_<dest_dvalid::client::UNPACK, true>();
+    }
+    else
+    {
+        _llk_dest_dvalid_disable_<dest_dvalid::client::UNPACK>();
+    }
+
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
     _llk_unpack_unary_broadcast_operands_mop_config_<UNP_SEL, BROADCAST_TYPE, unpack_to_dest>(buf_desc_id, num_tiles);
@@ -133,10 +143,11 @@ inline void _llk_unpack_unary_broadcast_operands_init_(const std::uint32_t buf_d
  *
  * @tparam UNP_SEL: Logical unpack select for static checks; counter uses UNP_A when unpack_to_dest, values = <p_unpacr::UNP_A/UNP_B>
  * @tparam unpack_to_dest: Use the UNP_A dest path vs the UNP_B SrcB path, values = <true/false>
+ * @tparam DEST_SYNC_MODE: Dest register buffering mode used by the dest data-valid signal on the unpack-to-DEST path, values = <SyncFull/SyncHalf>
  * @param start_l1_tile_idx: Starting source tile index for face/row counters.
  * @note Call @ref _llk_unpack_unary_broadcast_operands_init_ with matching template args before this function.
  */
-template <std::uint32_t UNP_SEL, bool unpack_to_dest = false>
+template <std::uint32_t UNP_SEL, bool unpack_to_dest = false, ckernel::DstSync DEST_SYNC_MODE = ckernel::DstSync::SyncFull>
 inline void _llk_unpack_unary_broadcast_operands_(const std::uint32_t start_l1_tile_idx)
 {
     static_assert(
@@ -147,4 +158,9 @@ inline void _llk_unpack_unary_broadcast_operands_(const std::uint32_t start_l1_t
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, counter_unp_sel, start_l1_tile_idx);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, counter_unp_sel, 0);
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+
+    if constexpr (unpack_to_dest)
+    {
+        _llk_dest_dvalid_signal_<dest_dvalid::client::UNPACK, DEST_SYNC_MODE, false>();
+    }
 }

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "llk_dest_dvalid.h"
 #include "llk_math_common.h"
 #include "tensor_shape.h"
 using namespace ckernel;
@@ -282,6 +283,8 @@ template <
     bool ENABLE_DIRECT_INDEXING           = false>
 inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_shape, bool acc_to_dest = false)
 {
+    _llk_dest_dvalid_configure_<dest_dvalid::client::FPU>();
+
     if constexpr (ENABLE_DIRECT_INDEXING)
     {
         _llk_math_eltwise_di_binary_addrmod_<MATH_FIDELITY_TYPE>();

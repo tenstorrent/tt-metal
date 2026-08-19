@@ -33,7 +33,7 @@ def _emit_configure(
     unpack_B_dst: DataFormat,
 ) -> str:
     if _is_unary_broadcast_unpacker(compute_node):
-        return f"_llk_unpack_configure_unary_<p_unpacr::UNP_B>({unpack_B_dst.cpp_underlying_value});\n"
+        return f"_llk_unpack_configure_unary_<p_unpacr::UNP_B>({unpack_B_dst.cpp_enum_value});\n"
 
     is_unary = is_unary_unpacker(compute_node)
     has_reuse_dest = compute_node.reuse_dest != EltwiseBinaryReuseDestType.NONE
@@ -44,11 +44,11 @@ def _emit_configure(
         code += f"_llk_math_upk_to_dest_hw_configure_<false, {dest_acc}, false>();\n"
 
     if is_unary and ((dest_acc == "true" and not unpack_to_dest) or has_reuse_dest):
-        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>({unpack_A_dst.cpp_underlying_value}, {unpack_A_dst.cpp_underlying_value});\n"
+        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>({unpack_A_dst.cpp_enum_value}, {unpack_A_dst.cpp_enum_value});\n"
     elif is_unary:
-        code += f"_llk_unpack_configure_unary_<p_unpacr::UNP_A>({unpack_A_dst.cpp_underlying_value});\n"
+        code += f"_llk_unpack_configure_unary_<p_unpacr::UNP_A>({unpack_A_dst.cpp_enum_value});\n"
     else:
-        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>({unpack_A_dst.cpp_underlying_value}, {unpack_B_dst.cpp_underlying_value});\n"
+        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>({unpack_A_dst.cpp_enum_value}, {unpack_B_dst.cpp_enum_value});\n"
 
     return code
 
@@ -81,9 +81,7 @@ def configure_unpack(
     return _emit_configure(compute_node, dest_acc, new_A_dst, new_B_dst)
 
 
-def dvalid_init(quasar_use_dvalid: bool = False) -> str:
-    if quasar_use_dvalid:
-        return "set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
+def dvalid_init(**kwargs) -> str:
     return ""
 
 

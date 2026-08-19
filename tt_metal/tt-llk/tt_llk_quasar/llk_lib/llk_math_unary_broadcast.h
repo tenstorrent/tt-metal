@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "llk_dest_dvalid.h"
 #include "llk_math_common.h"
 #include "tensor_shape.h"
 using namespace ckernel;
@@ -222,6 +223,8 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
 template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest>
 inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape& tensor_shape)
 {
+    _llk_dest_dvalid_configure_<dest_dvalid::client::FPU, unpack_to_dest>();
+
     LLK_ASSERT(
         tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
         "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");

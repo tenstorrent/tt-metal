@@ -21,7 +21,7 @@ def hw_configure_pack(
     pack_dst: DataFormat,
     pack_mode: str = "PackMode::Default",
 ) -> str:
-    return f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>({pack_src.cpp_underlying_value}, ReluConfig::from_packed(0));\n"
+    return f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>({pack_src.cpp_enum_value}, ReluConfig::from_packed(0));\n"
 
 
 def configure_pack(
@@ -30,7 +30,7 @@ def configure_pack(
     pack_src: DataFormat,
     pack_dst: DataFormat,
 ) -> str:
-    return f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>({pack_src.cpp_underlying_value}, ReluConfig::from_packed(0));\n"
+    return f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>({pack_src.cpp_enum_value}, ReluConfig::from_packed(0));\n"
 
 
 def relu_config(
@@ -55,17 +55,13 @@ def l1_accumulation_config(
 def pack_dest_init(
     config: "GlobalConfig", operation: "L1Operation", node: "PackNode"
 ) -> str:
-    if config.quasar_use_dvalid:
-        return "set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
-    elif operation.stage_id != 1:
+    if operation.stage_id != 1:
         return ""
     return f"_llk_pack_dest_init_<p_pacr::PACK0, {operation.dest_sync.cpp_enum_value}>();\n"
 
 
 def packer_wait_for_math(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if config.skip_sync or config.quasar_use_dvalid:
-        return ""
-    return "_llk_packer_wait_for_math_done_();\n"
+    return ""
 
 
 def packer_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> str:
@@ -73,9 +69,7 @@ def packer_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -
         return ""
     dest_sync = operation.dest_sync.cpp_enum_value
     dest_acc = config.dest_acc.cpp_enum_value
-    if config.quasar_use_dvalid:
-        return f"_llk_pack_dest_dvalid_section_done_<{dest_sync}, {dest_acc}>();\n"
-    return f"_llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, {dest_sync}, {dest_acc}>();\n"
+    return f"_llk_dest_dvalid_signal_<dest_dvalid::client::PACK, {dest_sync}, {dest_acc}>();\n"
 
 
 def packer_sync_with_unpacker(config: "GlobalConfig", operation: "L1Operation") -> str:

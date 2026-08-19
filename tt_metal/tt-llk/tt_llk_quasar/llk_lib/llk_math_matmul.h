@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "llk_dest_dvalid.h"
 #include "llk_math_common.h"
 using namespace ckernel;
 using namespace ckernel::trisc;
@@ -404,6 +405,8 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool ENABLE_DIRECT_INDEXING = false, bool ENABLE_2X_FORMAT = false>
 inline void _llk_math_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
+    _llk_dest_dvalid_configure_<dest_dvalid::client::FPU>();
+
     if constexpr (ENABLE_DIRECT_INDEXING)
     {
         // Direct-indexing path. Supports plain DI and DI+X2 (DI+X2 is the original
