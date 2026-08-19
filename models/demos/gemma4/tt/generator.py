@@ -916,6 +916,24 @@ class ChunkedPrefillPageTableGuardMixin:
             page_table_user_padded = ensure_page_table_width(page_table_user, chunk_grid_blocks)
             CHUNK_USER_ID = 0
 
+            # Upload the full-width page table ONCE for the whole prompt. It is
+            # identical for every chunk (only ``chunk_page_table`` slides), so the
+            # per-chunk ``prepare_inputs_prefill`` was allocating and transferring
+            # the same table again for each chunk -- at 128K/4K that is 32 uploads
+            # of a table 32x wider than the chunk table it accompanies, plus 32
+            # DRAM allocations the allocator then has to churn. The traced chunk
+            # path already skips the repeat via ``refreshed_pt_keys``; this is the
+            # eager equivalent. ``prepare_inputs_prefill`` passes an already-
+            # uploaded ttnn table straight through, and nothing in the forward
+            # deallocates it. Bit-exact: the same bytes, transferred once.
+            # ``GEMMA4_PREFILL_PT_HOIST=0`` restores the per-chunk upload.
+            hoist_pt = os.environ.get("GEMMA4_PREFILL_PT_HOIST", "1").lower() not in ("0", "false", "no")
+            page_table_dev = (
+                self.model[model_id]._page_table_torch_to_ttnn(page_table_user_padded)
+                if hoist_pt and not kwargs.get("trace_enabled", False)
+                else page_table_user_padded
+            )
+
             # Inject an expanded last start when adjust moves it off the chunk grid.
             last_abs = num_cached_tokens + last_chunk_start
             chunk_starts = list(range(num_cached_tokens, num_cached_tokens + seq_len, chunk_size))
@@ -961,7 +979,7 @@ class ChunkedPrefillPageTableGuardMixin:
                 chunk_inputs = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
                     start_pos=chunk_start,
-                    page_table=page_table_user_padded,
+                    page_table=page_table_dev,
                     chunk_page_table=chunk_page_table,
                     batch_size=batch_size,
                     user_id=CHUNK_USER_ID,
@@ -1210,6 +1228,82 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
 
     def _maybe_disable_pli_prefill_trace(self, enable_trace: bool, batch_size: int = 1) -> bool:
         return maybe_disable_pli_prefill_trace(enable_trace, self.model[0], batch_size=batch_size)
+
+    # Element count above which trimming a replicated decode read to shard 0 pays
+    # for the extra ``get_device_tensors`` + separate ``.cpu()``. Measured on 1x8 WH:
+    # the 128 B token read is latency-bound, so the 7 extra shards ride along free
+    # and the trim swings -133%..+79% between repeats -- noise, not a win; the
+    # 16 MB/shard full-vocab read is bandwidth-bound, so dropping 7 of 8 takes
+    # ~45-50% off it. Do NOT lower this to cover the token read. The threshold sits
+    # ~3 orders of magnitude from either case, so its exact value is not load-bearing.
+    _DECODE_READ_SHARD_MIN_ELEMS = 32 * 1024
+
+    def _decode_read_shard(self, tt, model_id: int = 0):
+        """First mesh shard of a large replicated decode output, else ``tt``.
+
+        Gemma4 decode outputs are *replicated* across the mesh: sampled tokens come
+        out of ``ttnn.sampling`` on every device, and full-vocab logits are
+        all-gathered before readback (``_apply_lm_head``, ``allow_sharded=False``).
+        ``process_output_decode`` therefore consumes ``get_device_tensors(...)[0]``
+        and discards the other shards -- so reading all of them pays one DMA per
+        device for data the caller never looks at.
+
+        That only *costs* anything once the payload is big enough to be
+        bandwidth-bound, which is the host-sampling path (``GEMMA4_HOST_SAMPLE=1``,
+        vLLM host logits, logprobs): 32 rows x 262144 vocab in bf16 = 16 MB per
+        device, and trimming halves the read. The default device-sampling path
+        reads 128 B of token ids per step, where the trim is unmeasurable -- see
+        ``_DECODE_READ_SHARD_MIN_ELEMS`` -- so it is left alone rather than
+        traded for noise.
+
+        Bit-exact by construction: the same shard 0 bytes reach
+        ``process_output_decode`` either way -- only shards 1..N-1, which it
+        already drops, stop being copied.
+
+        Not valid for models that shard the decode *batch* across the mesh
+        (``users_row_sharded``): there shard 0 holds only B/num_shards users.
+        Gemma4 replicates the batch, but the guard is kept so a future
+        row-sharded config degrades to the full read rather than to wrong tokens.
+
+        ``GEMMA4_DECODE_READ_SHARD=0`` restores the all-shard read (A/B + bisect).
+        """
+        if not isinstance(tt, ttnn.Tensor):
+            return tt
+        if os.environ.get("GEMMA4_DECODE_READ_SHARD", "1").lower() in ("0", "false", "no"):
+            return tt
+        model = self.model[model_id]
+        mesh_config = getattr(model, "mesh_config", None)
+        if mesh_config is None or getattr(mesh_config, "tp", 1) <= 1:
+            return tt
+        if getattr(model, "users_row_sharded", False):
+            return tt
+        elems = 1
+        for dim in tt.shape:
+            elems *= int(dim)
+        if elems < self._DECODE_READ_SHARD_MIN_ELEMS:
+            return tt
+        shards = ttnn.get_device_tensors(tt)
+        return shards[0] if len(shards) > 1 else tt
+
+    def read_decode_output(self, tt_out, async_read=False):
+        """``Generator.read_decode_output``, skipping shards the caller discards.
+
+        Trims each large replicated decode output to its first mesh shard before
+        the readback (see :meth:`_decode_read_shard` for when and why), then defers
+        to the shared implementation so event recording / logprobs handling stay in
+        one place. ``process_decode_output_host`` is unaffected: a single-shard host
+        tensor still answers ``get_device_tensors(...)[0]`` with itself.
+        """
+        trimmed = []
+        for i, out in enumerate(tt_out):
+            model_id = i if i < len(self.model) else 0
+            if isinstance(out, tuple):
+                # Logprobs stay whole: LogProbsResult is not a ttnn.Tensor and its
+                # per-shard layout is owned by the sampling module, not by us.
+                trimmed.append((self._decode_read_shard(out[0], model_id), *out[1:]))
+            else:
+                trimmed.append(self._decode_read_shard(out, model_id))
+        return super().read_decode_output(trimmed, async_read=async_read)
 
     def warmup_model_prefill(
         self,

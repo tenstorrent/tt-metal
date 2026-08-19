@@ -1657,8 +1657,15 @@ class Gemma4Model:
             mesh_mapper=mesh_mapper,
         )
 
+        # Already-uploaded tables pass straight through (same contract as
+        # ``chunk_start_idx`` below). Eager multi-chunk prefill uploads the
+        # full-width page table once and reuses it for every chunk instead of
+        # re-``from_torch``-ing an identical table per chunk; nothing in the
+        # forward deallocates it, so one device buffer serves the whole prompt.
         tt_page_table = None
-        if page_table is not None:
+        if isinstance(page_table, ttnn.Tensor):
+            tt_page_table = page_table
+        elif page_table is not None:
             tt_page_table = ttnn.from_torch(
                 page_table,
                 device=device,
@@ -1668,7 +1675,9 @@ class Gemma4Model:
             )
 
         tt_chunk_page_table = None
-        if chunk_page_table is not None:
+        if isinstance(chunk_page_table, ttnn.Tensor):
+            tt_chunk_page_table = chunk_page_table
+        elif chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
                 device=device,
@@ -2006,30 +2015,93 @@ class Gemma4Model:
     ):
         """Last-token hidden rows from batched prefill for on-device sampling.
 
-        Generator reshapes pre-norm hidden to ``[B, 1, S, H]`` then calls this
-        + ``_apply_norm_and_lm_head``. Concat TP column-shards when present and
-        replicate the full hidden — Gemma4 RMSNorm is not DistributedNorm.
+        Generator reshapes pre-norm hidden to ``[B, 1, S, H]`` then calls this +
+        ``_apply_norm_and_lm_head``. Returns ``[1, 1, target_batch, hidden_size]``
+        holding the full hidden on every device -- Gemma4 RMSNorm is not
+        DistributedNorm, so it needs the whole width, not a TP column shard.
+
+        Stays on device. This used to read every TP shard of the last-token tile
+        block to host, ``torch.cat`` them into the full hidden, pick one row per
+        user, and upload the result again: at padded_batch=4 on 12B that is
+        4x1x32x480 bf16 = 123 KB per device (~1 MB across an 8-chip mesh) down, a
+        host concat, and a 30 KB upload -- per prefill group -- to rearrange data
+        that never needed to leave the mesh. One ``ttnn.slice`` per user, one
+        ``ttnn.concat``, and (only when the hidden arrives TP-sharded) one
+        all-gather of the *selected rows* do the same thing with no host hop and
+        no blocking read.
+
+        Selecting before gathering is what keeps it cheap: before the row select
+        the hidden is ``[B, 1, S, hidden/tp]`` with S the whole padded prefill
+        length; after it, ``[1, 1, B, hidden/tp]``.
+
+        Bit-exact: slice, concat and all-gather are pure data movement, no
+        arithmetic. One behavioural note -- the old path read shard 0 and
+        broadcast it to every device, silently forcing cross-device agreement;
+        this path leaves each device with its own bits. For a replicated hidden
+        they are equal by construction (the residual stream is produced by CCLs
+        that land identical bits on every device), which is the same assumption
+        the old code made when it treated shard 0 as representative.
+
+        ``GEMMA4_BATCHED_EXTRACT_DEVICE=0`` restores the host round trip (A/B + bisect).
         """
         del prefill_seq_len
-        hidden_states = maybe_interleave(hidden_states)
-        active_indices = [lt for lt in last_token_idx_list if lt > 0]
-        all_same = len(set(active_indices)) <= 1
-        tile = ttnn.TILE_SIZE
-
-        if all_same and active_indices:
-            common_last = active_indices[0]
-            get_last = (common_last // tile) * tile
-            row = common_last % tile
-            block = ttnn.slice(
-                hidden_states,
-                (0, 0, get_last, 0),
-                (padded_batch, 1, get_last + tile, hidden_states.shape[-1]),
+        if os.environ.get("GEMMA4_BATCHED_EXTRACT_DEVICE", "1").lower() in ("0", "false", "no"):
+            return self._extract_last_tokens_batched_prefill_host(
+                hidden_states, last_token_idx_list, padded_batch, target_batch
             )
-        else:
-            block = hidden_states
-            row = None
+        hidden_states = maybe_interleave(hidden_states)
+        per_dev = int(hidden_states.shape[-1])
+        tp = self.mesh_config.tp if self.mesh_config is not None else 1
+        if per_dev != self.hidden_size and per_dev * tp != self.hidden_size:
+            raise ValueError(
+                f"batched prefill hidden last dim {per_dev} x tp {tp} " f"does not match hidden_size {self.hidden_size}"
+            )
 
-        host_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(block)]
+        target_batch = padded_batch if target_batch is None else target_batch
+        if target_batch < padded_batch:
+            raise ValueError(f"target_batch {target_batch} must be >= padded_batch {padded_batch}")
+
+        # One row per user, each at its own last token -- no all-same special case
+        # is needed once the select happens on device. Inactive slots report
+        # last_token_idx <= 0 and their row is never consumed downstream, so
+        # clamping them to row 0 keeps the slice in range.
+        rows = []
+        for slot in range(padded_batch):
+            last = max(int(last_token_idx_list[slot]), 0)
+            rows.append(ttnn.slice(hidden_states, (slot, 0, last, 0), (slot + 1, 1, last + 1, per_dev)))
+        combined = ttnn.concat(rows, dim=2) if len(rows) > 1 else rows[0]
+        for row_tensor in rows:
+            if row_tensor is not combined:
+                row_tensor.deallocate(True)
+
+        if per_dev != self.hidden_size:
+            from models.demos.gemma4.tt.ccl import ccl_allgather
+
+            combined = ccl_allgather(combined, self.mesh_config, self.ccl_manager)
+
+        if target_batch > padded_batch:
+            grown = ttnn.pad(
+                combined,
+                padding=[(0, 0), (0, 0), (0, target_batch - padded_batch), (0, 0)],
+                value=0.0,
+            )
+            combined.deallocate(True)
+            combined = grown
+
+        if combined.dtype != ttnn.bfloat16:
+            # The host path forced bf16 through ``from_torch``; keep that contract
+            # for ``_apply_norm_and_lm_head``.
+            combined = ttnn.typecast(combined, ttnn.bfloat16)
+        return combined
+
+    def _extract_last_tokens_batched_prefill_host(self, hidden_states, last_token_idx_list, padded_batch, target_batch):
+        """``GEMMA4_BATCHED_EXTRACT_DEVICE=0`` fallback: the original host round trip.
+
+        Reads every TP shard, concatenates them on host, picks one row per user and
+        uploads the result. Kept for A/B and bisecting only.
+        """
+        hidden_states = maybe_interleave(hidden_states)
+        host_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(hidden_states)]
         per_dev = int(host_tensors[0].shape[-1])
         if per_dev == self.hidden_size:
             host_full = host_tensors[0]
@@ -2040,14 +2112,16 @@ class Gemma4Model:
                 f"batched prefill hidden last dim {per_dev} x {len(host_tensors)} devices "
                 f"does not match hidden_size {self.hidden_size}"
             )
-        if row is not None:
-            combined = host_full[:, :, row : row + 1, :].reshape(1, 1, padded_batch, -1).contiguous()
-        else:
-            rows = [
-                host_full[slot : slot + 1, :, last_token_idx_list[slot] : last_token_idx_list[slot] + 1, :]
-                for slot in range(padded_batch)
+        rows = [
+            host_full[
+                slot : slot + 1,
+                :,
+                max(int(last_token_idx_list[slot]), 0) : max(int(last_token_idx_list[slot]), 0) + 1,
+                :,
             ]
-            combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
+            for slot in range(padded_batch)
+        ]
+        combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
 
         target_batch = padded_batch if target_batch is None else target_batch
         if target_batch < padded_batch:
