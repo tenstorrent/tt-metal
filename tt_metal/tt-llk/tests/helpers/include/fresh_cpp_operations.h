@@ -1320,6 +1320,7 @@ inline void call_left_shift_fresh_cpp(
 // time; new bodies never land in this file.
 // Lane S2 slice (agent/storm-s2):
 #include "fresh_cpp/digamma.h"
+#include "fresh_cpp/div_int32_floor.h"
 #include "fresh_cpp/elu.h"
 #include "fresh_cpp/erf.h"
 #include "fresh_cpp/erfc.h"
@@ -1329,6 +1330,7 @@ inline void call_left_shift_fresh_cpp(
 #include "fresh_cpp/expm1cw.h"
 #include "fresh_cpp/fill.h"
 #include "fresh_cpp/fmod.h"
+#include "fresh_cpp/gcd.h"
 #include "fresh_cpp/gelu.h"
 #include "fresh_cpp/hardmish.h"
 #include "fresh_cpp/hardshrink.h"

@@ -786,6 +786,52 @@ def test_fresh_cpp_left_shift(formats, dest_acc, mathop, fresh_cpp_impl):
     )
 
 
+# Storm S2 (agent/storm-s2): canonical fresh_cpp/<op>.h semantic bodies.
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuGcd],
+    dest_acc=[DestAccumulation.Yes],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_gcd(formats, dest_acc, mathop, fresh_cpp_impl):
+    """Handwritten (metal ckernel_sfpu_gcd.h hand-issued REPLAY-loop kernel) vs
+    fresh typed-C++ binary GCD (fresh_cpp/gcd.h, Stein's algorithm) A/B over
+    identical Int32 stimuli/golden; exact integer contract. Stimuli mirror
+    test_sfpu_binary_int_uniform's SfpuGcd range (positive 17-bit operands —
+    the fresh body's fixed 34-round bound is derived from that width)."""
+    low, high = _INT_BINARY_STIMULI[MathOperation.SfpuGcd]
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=low, high=high),
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuDivInt32Floor],
+    dest_acc=[DestAccumulation.Yes],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_div_int32_floor(formats, dest_acc, mathop, fresh_cpp_impl):
+    """Handwritten (metal ckernel_sfpu_div_int32_floor.h) vs fresh typed-C++
+    floor division (fresh_cpp/div_int32_floor.h: Newton reciprocal estimate +
+    exact fp32 residual fixups) A/B over identical Int32 stimuli/golden; exact
+    integer contract. Stimuli mirror test_sfpu_binary_int_uniform's
+    SfpuDivInt32Floor range (positive operands < 2^23, so every fp32
+    conversion and residual in the fresh body is exact)."""
+    low, high = _INT_BINARY_STIMULI[MathOperation.SfpuDivInt32Floor]
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=low, high=high),
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     mathop=[MathOperation.SfpuMask],
