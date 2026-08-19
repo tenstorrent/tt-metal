@@ -17,6 +17,9 @@
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 template <bool kv_pad_rotation_enabled>
 constexpr void assert_kv_pad_rotation_streaming_only() {
@@ -88,7 +91,13 @@ void kernel_main() {
     constexpr bool joint_is_sharded = get_compile_time_arg_val(52) == 1;
     // Slot 53: true (unpadded) joint length in tiles (similar to spatial logical_nt). Drives the
     // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
-    constexpr uint32_t logical_lt = get_compile_time_arg_val(53);
+    constexpr uint32_t logical_lt_compile = get_compile_time_arg_val(53);
+    // Slots 54-55: logical-length transport. Compute cannot NoC-read DRAM, so the live values arrive
+    // through cb_kv_pad_derived from the reader; the compile-time values are the placeholder's.
+    constexpr bool has_logical_n_tensor = get_compile_time_arg_val(54) == 1;
+    constexpr bool has_logical_l_tensor = get_compile_time_arg_val(55) == 1;
+    constexpr bool has_logical_length_tensor = has_logical_n_tensor || has_logical_l_tensor;
+    uint32_t logical_lt = logical_lt_compile;
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
@@ -107,13 +116,17 @@ void kernel_main() {
     // Lightweight mask: all mask tiles live in cb_mask_in.
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
     constexpr bool local_n_has_padding = kv_local_padded_Nt % Sk_chunk_t != 0;
-    constexpr bool global_n_has_padding = logical_n_compile % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    // A tensor-supplied length can land mid-chunk / mid-tile at any dispatch, so compile the mask path in
+    // regardless of the placeholder. Keep in sync with the factory and the writer (which generates them).
+    constexpr bool global_n_has_padding =
+        (logical_n_compile % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0) || has_logical_n_tensor;
     // Joint needs a mask when either the per-device joint shard is not a whole number of K-chunks
     // (Lt_local % Sk_chunk_t != 0 -> fully-padded trailing tiles, the local_n analogue), or real tokens
     // do not fill the last real shard's chunk (logical_lt % Sk_chunk_t != 0 or a sub-tile partial
     // column, the global_n analogue).
     constexpr bool joint_has_padding =
-        L > 0 && ((Lt_local % Sk_chunk_t != 0) || (logical_lt % Sk_chunk_t != 0) || (joint_l_partial_col != 0));
+        L > 0 && ((Lt_local % Sk_chunk_t != 0) || (logical_lt_compile % Sk_chunk_t != 0) ||
+                  (joint_l_partial_col != 0) || has_logical_l_tensor);
     constexpr bool needs_lightweight_mask =
         (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled || has_sliding_window;
 
@@ -121,11 +134,15 @@ void kernel_main() {
     constexpr uint32_t causal_diag_tile_idx = diag_tile_enabled ? 1 : 0;
     constexpr uint32_t edge_mask_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : (diag_tile_enabled ? 1 : 0);
     constexpr uint32_t base_partial_offset = 1 + edge_mask_tiles;
-    constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? base_partial_offset : 0;
+    constexpr bool has_global_n_partial_tile =
+        ring_joint::partial_tile_present(global_n_partial_col, has_logical_n_tensor);
+    constexpr bool has_joint_l_partial_tile =
+        ring_joint::partial_tile_present(joint_l_partial_col, has_logical_l_tensor);
+    constexpr uint32_t global_n_partial_tile_idx = has_global_n_partial_tile ? base_partial_offset : 0;
     constexpr uint32_t joint_l_partial_tile_idx =
-        (joint_l_partial_col > 0) ? (base_partial_offset + (global_n_partial_col > 0 ? 1 : 0)) : 0;
+        has_joint_l_partial_tile ? (base_partial_offset + (has_global_n_partial_tile ? 1 : 0)) : 0;
     constexpr uint32_t total_mask_tiles =
-        1 + edge_mask_tiles + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
+        1 + edge_mask_tiles + (has_global_n_partial_tile ? 1 : 0) + (has_joint_l_partial_tile ? 1 : 0);
 
     constexpr uint32_t q_start_idx_t =
         chunked_enabled && !kv_pad_rotation_enabled ? logical_nt_compile - q_local_padded_Nt * ring_size : 0;
@@ -155,11 +172,11 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    // Compute fixed slot 51: trace-safe KV-pad derivation flag. Slots 52/53 are the sharded-joint
-    // scalars (joint_is_sharded, logical_lt) declared near the top of the kernel, so the CB block
-    // starts at 54.
+    // Compute fixed slot 51: trace-safe KV-pad derivation flag. Slots 52-55 (sharded-joint scalars and
+    // the logical-length transport flags) are declared near the top of the kernel, so the CB block
+    // starts at 56.
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(51) == 1;
-    constexpr uint32_t cb_arg_offset = 54;
+    constexpr uint32_t cb_arg_offset = 56;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -189,15 +206,36 @@ void kernel_main() {
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 23);
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 24);
 
-    if constexpr (kv_pad_from_metadata) {
+    // Placeholder-derived defaults, overwritten from the CB on the tensor path. 0 gates the stamp off.
+    uint32_t global_n_partial_col_live = global_n_partial_col;
+    uint32_t joint_l_partial_col_live = joint_l_partial_col;
+
+    if constexpr (kv_pad_from_metadata || has_logical_length_tensor) {
         CircularBuffer cb_derived(cb_kv_pad_derived);
         cb_derived.wait_front(1);
-        logical_nt = ckernel::read_tile_value(cb_kv_pad_derived, 0, 0);
-        kv_pad_q_pre_wrap_start_tile = ckernel::read_tile_value(cb_kv_pad_derived, 0, 1);
-        kv_pad_q_pre_wrap_tile_count = ckernel::read_tile_value(cb_kv_pad_derived, 0, 2);
-        kv_pad_q_post_wrap_start_tile = ckernel::read_tile_value(cb_kv_pad_derived, 0, 3);
-        kv_pad_q_valid_tile_count = ckernel::read_tile_value(cb_kv_pad_derived, 0, 4);
-        active_ring_iter_mask = ckernel::read_tile_value(cb_kv_pad_derived, 0, 5);
+        constexpr uint32_t kDerivedTile = 0;
+        logical_nt = ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedLogicalNt);
+        if constexpr (kv_pad_from_metadata) {
+            kv_pad_q_pre_wrap_start_tile =
+                ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedQPreWrapStartTile);
+            kv_pad_q_pre_wrap_tile_count =
+                ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedQPreWrapTileCount);
+            kv_pad_q_post_wrap_start_tile =
+                ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedQPostWrapStartTile);
+            kv_pad_q_valid_tile_count =
+                ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedQValidTileCount);
+        }
+        active_ring_iter_mask =
+            ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedActiveRingIterMask);
+        if constexpr (has_logical_n_tensor) {
+            global_n_partial_col_live =
+                ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedGlobalNPartialCol);
+        }
+        if constexpr (has_logical_l_tensor) {
+            logical_lt = ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedLogicalLt);
+            joint_l_partial_col_live =
+                ckernel::read_tile_value(cb_kv_pad_derived, kDerivedTile, ring_joint::kDerivedJointLPartialCol);
+        }
         cb_derived.pop_front(1);
     }
 
@@ -282,7 +320,7 @@ void kernel_main() {
         const uint32_t global_n_padded_tiles_iter =
             global_n_is_within_ring_iter ? Sk_chunk_t - global_n_valid_tiles_in_chunk : 0;
         // Sub-tile partial column exists only on the boundary shard (never a fully-real earlier one).
-        const bool global_n_apply_partial_col = global_n_is_within_ring_iter && (global_n_partial_col > 0);
+        const bool global_n_apply_partial_col = global_n_is_within_ring_iter && (global_n_partial_col_live > 0);
         const bool ring_iter_needs_global_n_mask =
             global_n_is_within_ring_iter && (global_n_padded_tiles_iter > 0 || global_n_apply_partial_col);
 
@@ -322,7 +360,7 @@ void kernel_main() {
         const uint32_t joint_n_padded_tiles_iter =
             joint_n_is_within_ring_iter ? Sk_chunk_t - joint_valid_tiles_in_chunk : 0;
         // Partial sub-tile column exists only on the boundary shard, never on a fully-real earlier one.
-        const bool joint_apply_partial_col = joint_boundary_in_shard && (joint_l_partial_col > 0);
+        const bool joint_apply_partial_col = joint_boundary_in_shard && (joint_l_partial_col_live > 0);
         const bool ring_iter_needs_joint_n_mask =
             do_joint_kv && joint_n_is_within_ring_iter && (joint_n_padded_tiles_iter > 0 || joint_apply_partial_col);
 
@@ -334,12 +372,12 @@ void kernel_main() {
             neginf_tile_idx,
             causal_diag_tile_idx,
             local_n_padded_tiles,
-            global_n_partial_col,
-            joint_l_partial_col,
             global_n_partial_tile_idx,
             joint_l_partial_tile_idx,
             straddle_chunk_id>
             lw_mask;
+        lw_mask.global_n_partial_col = global_n_partial_col_live;
+        lw_mask.joint_l_partial_col = joint_l_partial_col_live;
         lw_mask.is_causal = chunked_enabled || (is_causal && ring_iter == 0);
         // Straddle mask fires only on the rix>rid halved-range iters that would otherwise exclude
         // the straddle chunk. Must agree with the K-loop extension condition below.

@@ -9,7 +9,11 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
+#include "metadata_scalar_read.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "exp_fused_op_indexer.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 #ifdef USE_MUX
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
@@ -75,8 +79,8 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
     constexpr uint32_t local_padded_N = get_compile_time_arg_val(5);
     constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(6);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(7);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(8);
+    constexpr uint32_t logical_n_ct = get_compile_time_arg_val(7);
+    constexpr uint32_t logical_nt_ct = get_compile_time_arg_val(8);
     constexpr uint32_t Lt = get_compile_time_arg_val(9);
     constexpr uint32_t L = get_compile_time_arg_val(10);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(11);
@@ -90,8 +94,13 @@ void kernel_main() {
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(19);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(20);
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
+    // Trace-safe logical_n: when set, logical_n_ct above is only the worst-case placeholder.
+    constexpr bool has_logical_n_tensor = get_compile_time_arg_val(23) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<23>();
+    // Sits ahead of the output accessors so the offsets below (and the MUX/AG block chaining off
+    // stats_args_skip) keep deriving normally in both modes.
+    constexpr auto logical_n_args = TensorAccessorArgs<24>();
+    constexpr auto out_args = TensorAccessorArgs<logical_n_args.next_compile_time_args_offset()>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     // stats_args follows joint_out_args but is unused by the writer (stats are only
     // needed for multi-Q accumulator save/restore which this kernel doesn't support).
@@ -297,14 +306,39 @@ void kernel_main() {
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
+    // Read the live length ONCE, before the ring loop. This kernel is a protocol participant, not just a
+    // mask producer: the MUX forwarding loop below skips chunks on the same predicate as the reader and
+    // sends one per-link atomic_inc per forwarded chunk, which is exactly what the reader's injector gate
+    // counts. Reader and writer must therefore derive identical values from the same tensor.
+    uint32_t logical_n = logical_n_ct;
+    uint32_t logical_nt = logical_nt_ct;
+    [[maybe_unused]] uint32_t global_n_partial_col_live = global_n_partial_col;
+    if constexpr (has_logical_n_tensor) {
+        // Borrow cb_mask_in's L1 as read scratch: this runs before the mask tiles are generated into it.
+        logical_n = trace_metadata::read_metadata_scalar_u32(
+            noc, logical_n_args, get_common_arg_val<uint32_t>(0), CircularBuffer(cb_mask_in).get_write_ptr());
+        logical_nt = ring_joint::tiles_for(logical_n);
+        global_n_partial_col_live = ring_joint::tile_partial_col(logical_n);
+    }
+
     // Lightweight mask: generate all mask tiles once into single CB before the ring loop.
     // Only needed when any K/joint dimension has padding that doesn't fill a chunk.
     constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
-    constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool global_n_has_padding =
+        has_logical_n_tensor || (logical_n_ct % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0);
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
+    // partial_tile_present keeps tile presence in lock-step with the factory's CB sizing and compute's tile
+    // indices. A present tile needs a non-zero template column (fall back to 1) so
+    // generate_lightweight_mask_tiles allocates the slot; the stamped live column may still be 0, which
+    // compute ignores.
+    constexpr uint32_t global_n_partial_col_layout =
+        ring_joint::partial_tile_present(global_n_partial_col, has_logical_n_tensor)
+            ? (global_n_partial_col > 0 ? global_n_partial_col : 1u)
+            : 0u;
     if constexpr (needs_lightweight_mask) {
-        generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in>(noc);
+        generate_lightweight_mask_tiles<global_n_partial_col_layout, joint_l_partial_col, cb_mask_in>(
+            noc, global_n_partial_col_live, joint_l_partial_col);
     }
 
     const uint32_t last_active_ring_iter =

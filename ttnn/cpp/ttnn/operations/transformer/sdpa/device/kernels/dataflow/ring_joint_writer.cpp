@@ -11,6 +11,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 #include "ring_joint_kv_pad_derivation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "metadata_scalar_read.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
@@ -448,6 +449,11 @@ void kernel_main() {
     // Slot 37: true (unpadded) joint length in tiles (twins spatial logical_nt). Drives the joint
     // mask-generation gate together with joint_l_partial_col.
     constexpr uint32_t logical_lt = get_compile_time_arg_val(37);
+    // Slots 38-39: logical-length transport. Being a dataflow kernel, the writer NoC-reads the live values
+    // itself (as it already does for kv_actual_isl) and re-derives the masks and partial-column stamps.
+    constexpr bool has_logical_n_tensor = get_compile_time_arg_val(38) == 1;
+    constexpr bool has_logical_l_tensor = get_compile_time_arg_val(39) == 1;
+    constexpr bool has_logical_length_tensor = has_logical_n_tensor || has_logical_l_tensor;
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. The program factory masks kernel_is_causal off when chunked is on, so only one of
     // the two paths drives the stamp per program — but they share the CB slot layout.
@@ -462,15 +468,28 @@ void kernel_main() {
     // Effective joint length for masking: per-shard (L_local = L/ring_size) for sharded, full L for replicated.
     constexpr uint32_t L_effective = has_gathered_joint_k ? L / ring_size : L;
 
-    // Slots 34-37: sliding_window_size, kv_pad_from_metadata, joint_is_sharded, logical_lt.
-    constexpr auto out_args = TensorAccessorArgs<38>();
+    // Slots 34-39: sliding_window_size, kv_pad_from_metadata, joint_is_sharded, logical_lt, and the two
+    // logical-length transport flags.
+    constexpr uint32_t kFirstAccessorArgOffset = 40;
+    constexpr auto out_args = TensorAccessorArgs<kFirstAccessorArgOffset>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
     // Metadata accessor (metadata path only) follows the output accessors and precedes the CB compile
     // args; gate the offset on kv_pad_from_metadata so the no-metadata program never names a non-accessor
-    // compile arg (fall back to a valid unused accessor offset = out_args' slot 38).
-    constexpr uint32_t meta_args_offset = kv_pad_from_metadata ? stats_args.next_compile_time_args_offset() : 38;
+    // compile arg (fall back to a valid unused accessor offset = out_args' slot).
+    constexpr uint32_t meta_args_offset =
+        kv_pad_from_metadata ? stats_args.next_compile_time_args_offset() : kFirstAccessorArgOffset;
     constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();
+    // logical_n / logical_l accessors follow the metadata accessor, appended as a pair so the offsets do
+    // not depend on which one was supplied.
+    constexpr uint32_t post_meta_args_offset =
+        kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : stats_args.next_compile_time_args_offset();
+    constexpr uint32_t logical_n_args_offset =
+        has_logical_length_tensor ? post_meta_args_offset : kFirstAccessorArgOffset;
+    constexpr auto logical_n_args = TensorAccessorArgs<logical_n_args_offset>();
+    constexpr uint32_t logical_l_args_offset =
+        has_logical_length_tensor ? logical_n_args.next_compile_time_args_offset() : logical_n_args_offset;
+    constexpr auto logical_l_args = TensorAccessorArgs<logical_l_args_offset>();
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -487,7 +506,7 @@ void kernel_main() {
 
     // The stats CB is aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
     constexpr uint32_t cb_arg_offset =
-        kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : stats_args.next_compile_time_args_offset();
+        has_logical_length_tensor ? logical_l_args.next_compile_time_args_offset() : post_meta_args_offset;
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
@@ -507,28 +526,81 @@ void kernel_main() {
 
     Noc noc;
 
+    // Common runtime args: kv_actual_isl slot first when present, then the logical-length pair.
+    constexpr uint32_t logical_length_common_arg_base =
+        kv_pad_from_metadata ? ring_joint::kWriterMetadataCommonArgCount : 0;
+    [[maybe_unused]] uint32_t global_n_partial_col_live = global_n_partial_col;
+    [[maybe_unused]] uint32_t joint_l_partial_col_live = joint_l_partial_col;
+
+    if constexpr (has_logical_length_tensor) {
+        CircularBuffer cb_meta_scratch(cb_out);
+        const uint32_t meta_l1 = cb_meta_scratch.get_write_ptr();
+        uint32_t logical_lt_live = logical_lt;
+        if constexpr (has_logical_n_tensor) {
+            const uint32_t logical_n_live = trace_metadata::read_metadata_scalar_u32(
+                noc, logical_n_args, get_common_arg_val<uint32_t>(logical_length_common_arg_base), meta_l1);
+            logical_nt = ring_joint::tiles_for(logical_n_live);
+            global_n_partial_col_live = ring_joint::tile_partial_col(logical_n_live);
+        }
+        if constexpr (has_logical_l_tensor) {
+            const uint32_t logical_l_live = trace_metadata::read_metadata_scalar_u32(
+                noc, logical_l_args, get_common_arg_val<uint32_t>(logical_length_common_arg_base + 1), meta_l1);
+            logical_lt_live = ring_joint::tiles_for(logical_l_live);
+            joint_l_partial_col_live = ring_joint::tile_partial_col(logical_l_live);
+        }
+        // Re-derive from the live lengths so the writer agrees with the reader about which iterations and
+        // chunks carry work; see the same call there.
+        const auto masks = ring_joint::build_ring_work_masks_device({
+            .device_index = fused_op_receiver.seq.ring_index,
+            .ring_size = ring_size,
+            .backward_writes_expected = fused_op_receiver.seq.expected[0],
+            .forward_writes_expected = fused_op_receiver.seq.expected[1],
+            .num_local_k_chunks = num_local_k_chunks,
+            .k_chunk_tile_count = Sk_chunk_t,
+            .kv_local_padded_Nt = kv_local_padded_Nt,
+            .kernel_chunked = chunked_enabled,
+            .q_chunk_group_tile_count = chunk_size_t,
+            .q_local_padded_Nt = q_local_padded_Nt,
+            .logical_nt = logical_nt,
+            .num_joint_k_chunks = num_joint_k_chunks,
+            .joint_seq_len = L,
+            // Always false here: the logical-length-tensor path is validated incompatible with KV-pad rotation.
+            .kv_pad_rotation_enabled = false,
+            .kernel_is_causal = is_causal != 0,
+            .is_balanced = is_balanced != 0,
+            .joint_is_sharded = joint_is_sharded,
+            // Writer slot 12 (Lt) is already the per-device joint tile count; matches the reader's Lt_local.
+            .joint_local_padded_Nt = Lt,
+            .logical_lt = logical_lt_live,
+        });
+        active_ring_iter_mask = masks.active_ring_iter_mask;
+        single_valid_kv_chunk_mask = masks.single_valid_kv_chunk_mask;
+    }
+
     if constexpr (kv_pad_from_metadata) {
         CircularBuffer cb_meta_scratch(cb_out);
         const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
             noc, meta_args, get_common_arg_val<uint32_t>(0), cb_meta_scratch.get_write_ptr());
         logical_nt = ring_joint::compute_logical_nt(kv_actual_isl, chunk_size_t * 32, 32);
-        const auto masks = ring_joint::build_ring_work_masks_device(
-            fused_op_receiver.seq.ring_index,
-            ring_size,
-            fused_op_receiver.seq.expected[0],
-            fused_op_receiver.seq.expected[1],
-            num_local_k_chunks,
-            Sk_chunk_t,
-            kv_local_padded_Nt,
-            chunked_enabled,
-            chunk_size_t,
-            q_local_padded_Nt,
-            logical_nt,
-            num_joint_k_chunks,
-            L,
-            true,
-            is_causal != 0,
-            is_balanced != 0);
+        // Joint trio stays defaulted: KV-pad rotation is validated incompatible with a sharded joint.
+        const auto masks = ring_joint::build_ring_work_masks_device({
+            .device_index = fused_op_receiver.seq.ring_index,
+            .ring_size = ring_size,
+            .backward_writes_expected = fused_op_receiver.seq.expected[0],
+            .forward_writes_expected = fused_op_receiver.seq.expected[1],
+            .num_local_k_chunks = num_local_k_chunks,
+            .k_chunk_tile_count = Sk_chunk_t,
+            .kv_local_padded_Nt = kv_local_padded_Nt,
+            .kernel_chunked = chunked_enabled,
+            .q_chunk_group_tile_count = chunk_size_t,
+            .q_local_padded_Nt = q_local_padded_Nt,
+            .logical_nt = logical_nt,
+            .num_joint_k_chunks = num_joint_k_chunks,
+            .joint_seq_len = L,
+            .kv_pad_rotation_enabled = true,
+            .kernel_is_causal = is_causal != 0,
+            .is_balanced = is_balanced != 0,
+        });
         active_ring_iter_mask = masks.active_ring_iter_mask;
         single_valid_kv_chunk_mask = masks.single_valid_kv_chunk_mask;
     }
@@ -570,15 +642,27 @@ void kernel_main() {
     //     not fill the last real shard's chunk — fully-padded trailing tiles and/or a sub-tile column.
     constexpr bool joint_has_padding =
         L > 0 && ((Lt % Sk_chunk_t != 0) || (logical_lt % Sk_chunk_t != 0) || (joint_l_partial_col != 0));
-    constexpr bool needs_lightweight_mask =
-        (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled || has_sliding_window;
+    constexpr bool needs_lightweight_mask = (local_n_has_padding || global_n_has_padding || joint_has_padding) ||
+                                            diag_tile_enabled || has_sliding_window || has_logical_length_tensor;
+    // partial_tile_present keeps tile presence in lock-step with the factory's CB sizing and compute's tile
+    // indices. A present tile needs a non-zero template column (fall back to 1) so
+    // generate_lightweight_mask_tiles allocates the slot; the stamped live column may still be 0, which
+    // compute ignores.
+    constexpr uint32_t global_n_partial_col_layout =
+        ring_joint::partial_tile_present(global_n_partial_col, has_logical_n_tensor)
+            ? (global_n_partial_col > 0 ? global_n_partial_col : 1u)
+            : 0u;
+    constexpr uint32_t joint_l_partial_col_layout =
+        ring_joint::partial_tile_present(joint_l_partial_col, has_logical_l_tensor)
+            ? (joint_l_partial_col > 0 ? joint_l_partial_col : 1u)
+            : 0u;
     if constexpr (needs_lightweight_mask) {
         generate_lightweight_mask_tiles<
-            global_n_partial_col,
-            joint_l_partial_col,
+            global_n_partial_col_layout,
+            joint_l_partial_col_layout,
             cb_mask_in,
             (is_causal == 1) || chunked_enabled,
-            sliding_window_size>(noc);
+            sliding_window_size>(noc, global_n_partial_col_live, joint_l_partial_col_live);
     }
 
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
