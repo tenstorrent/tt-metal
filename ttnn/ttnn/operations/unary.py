@@ -319,7 +319,7 @@ ttnn.attach_golden_function(ttnn.reciprocal, golden_function=_golden_function_re
 def _golden_function_pow(input_tensor_a, exponent, *args, **kwargs):
     import torch
 
-    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+    if torch.is_tensor(input_tensor_a) and integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
         # Evaluate unsupported unsigned power in int64 and restore TT wraparound.
         return integer_golden.power(input_tensor_a, exponent)
     return torch.pow(input_tensor_a, exponent)
@@ -395,7 +395,11 @@ ttnn.attach_golden_function(ttnn.relu_min, golden_function=_golden_function_relu
 def _golden_function_relu_max(input_tensor_a, upper_limit, *args, **kwargs):
     import torch
 
-    return torch.relu(torch.min(input_tensor_a, torch.tensor(upper_limit)))
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Unsigned ReLU max needs the widened clamp path because Torch lacks its kernel.
+        return integer_golden.clamp(input_tensor_a, 0, upper_limit)
+    upper_limit = torch.tensor(upper_limit, dtype=input_tensor_a.dtype, device=input_tensor_a.device)
+    return torch.relu(torch.minimum(input_tensor_a, upper_limit))
 
 
 ttnn.attach_golden_function(ttnn.relu_max, golden_function=_golden_function_relu_max)

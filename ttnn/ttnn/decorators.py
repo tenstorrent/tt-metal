@@ -430,6 +430,25 @@ def default_preprocess_golden_function_inputs(function_args, function_kwargs):
     return tuple(new_args), new_kwargs
 
 
+def prepare_backward_golden_inputs(function_args_and_kwargs):
+    import torch
+
+    def prepare(object_value):
+        if isinstance(object_value, torch.Tensor) and (
+            object_value.dtype.is_floating_point or object_value.dtype.is_complex
+        ):
+            object_value.requires_grad_(True)
+        elif isinstance(object_value, (list, tuple)):
+            object_value = type(object_value)(prepare(element) for element in object_value)
+        elif isinstance(object_value, dict):
+            object_value = {key: prepare(value) for key, value in object_value.items()}
+        return object_value
+
+    args, kwargs = function_args_and_kwargs
+    # Backward goldens need autograd-enabled references even in comparison mode.
+    return prepare(args), prepare(kwargs)
+
+
 def default_postprocess_golden_function_outputs(output, function_args, function_kwargs):
     input_tensors = get_ttnn_tensors((function_args, function_kwargs))
 
@@ -821,6 +840,12 @@ class Operation:
                 local_golden_function_output = None
                 if local_golden_function_args_and_kwargs is not None:
                     local_golden_function_args, local_golden_function_kwargs = local_golden_function_args_and_kwargs
+                    # Backward goldens call backward() and read input gradients.
+                    # Comparison preprocessing otherwise supplies detached Torch inputs.
+                    if self.python_fully_qualified_name.endswith("_bw"):
+                        local_golden_function_args, local_golden_function_kwargs = prepare_backward_golden_inputs(
+                            (local_golden_function_args, local_golden_function_kwargs)
+                        )
                     try:
                         local_golden_function_output = self.golden_function(
                             *local_golden_function_args, **local_golden_function_kwargs
@@ -836,6 +861,11 @@ class Operation:
                 global_golden_function_output = None
                 if global_golden_function_args_and_kwargs is not None:
                     global_golden_function_args, global_golden_function_kwargs = global_golden_function_args_and_kwargs
+                    # Global backward goldens need the same autograd inputs as local goldens.
+                    if self.python_fully_qualified_name.endswith("_bw"):
+                        global_golden_function_args, global_golden_function_kwargs = prepare_backward_golden_inputs(
+                            (global_golden_function_args, global_golden_function_kwargs)
+                        )
                     try:
                         global_golden_function_output = self.golden_function(
                             *global_golden_function_args, **global_golden_function_kwargs

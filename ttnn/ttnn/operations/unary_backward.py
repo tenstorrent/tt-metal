@@ -11,9 +11,18 @@ THIS_MODULE = sys.modules[__name__]
 __all__ = []
 
 
+def _prepare_input_for_backward(input_tensor):
+    if not input_tensor.requires_grad:
+        # Backward operations call backward() and return input_tensor.grad.
+        # Comparison-mode inputs are detached Torch tensors, so enable gradients locally.
+        input_tensor.requires_grad_(True)
+    return input_tensor
+
+
 def _golden_function_unary_backward(torch_op, grad_tensor, input_tensor, *args, **kwargs):
     import torch
 
+    _prepare_input_for_backward(input_tensor)
     if torch_op == "softsign":
         pyt_y = torch.nn.functional.softsign(input_tensor)
     else:
@@ -28,6 +37,7 @@ def _golden_function_unary_backward(torch_op, grad_tensor, input_tensor, *args, 
 def _golden_function_div_no_nan(torch_op, grad_tensor, input_tensor, alpha, *args, **kwargs):
     import torch
 
+    _prepare_input_for_backward(input_tensor)
     pyt_y = torch.where(torch.tensor(alpha) == 0, torch.zeros_like(input_tensor), torch.div(input_tensor, alpha))
     input_tensor.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
@@ -39,6 +49,7 @@ def _golden_function_div_no_nan(torch_op, grad_tensor, input_tensor, alpha, *arg
 def _golden_function_unary_backward_with_float(torch_op, grad_tensor, input_tensor, *args, **kwargs):
     import torch
 
+    _prepare_input_for_backward(input_tensor)
     if torch_op in ["hardshrink", "softshrink", "leaky_relu", "elu", "celu"]:
         pyt_fn = getattr(torch.nn.functional, torch_op)
     else:
@@ -55,6 +66,7 @@ def _golden_function_unary_backward_with_two_float(
 ):
     import torch
 
+    _prepare_input_for_backward(input_tensor)
     pyt_fn = getattr(torch, torch_op)
     if pyt_fn == torch.clamp:
         pyt_y = torch.clamp(input_tensor, min=a, max=b)
@@ -71,6 +83,7 @@ def _golden_function_backward_with_reverse_string(
 ):
     import torch
 
+    _prepare_input_for_backward(input_tensor_a)
     pyt_fn = getattr(torch, torch_op)
     if pyt_fn == torch.div:
         pyt_y = pyt_fn(input_tensor_b, input_tensor_a, rounding_mode=value)
@@ -477,7 +490,7 @@ ttnn.attach_golden_function(ttnn.frac_bw, golden_function=_golden_function_frac)
 def _golden_function_gelu(grad_tensor, input_tensor, *args, **kwargs):
     import torch
 
-    input_tensor.retain_grad()
+    _prepare_input_for_backward(input_tensor).retain_grad()
     pyt_y = torch.nn.functional.gelu(input_tensor)
     pyt_y.backward(gradient=grad_tensor)
     return [input_tensor.grad]
@@ -658,7 +671,7 @@ ttnn.attach_golden_function(ttnn.tan_bw, golden_function=_golden_function_tan)
 def _golden_function_tanh(grad_tensor, input_tensor, *args, **kwargs):
     import torch
 
-    input_tensor.retain_grad()
+    _prepare_input_for_backward(input_tensor).retain_grad()
     pyt_y = torch.tanh(input_tensor)
     pyt_y.backward(gradient=grad_tensor)
     return [input_tensor.grad]

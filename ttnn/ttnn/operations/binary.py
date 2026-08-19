@@ -266,6 +266,9 @@ ttnn.attach_golden_function(ttnn.bias_gelu_, golden_function=_golden_function)
 def _golden_function_squared_difference(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        # Widen unsigned subtraction and square before restoring TTNN wraparound.
+        return integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: torch.square(torch.sub(a, b)))
     return torch_squared_difference(input_tensor_a, input_tensor_b)
 
 
@@ -330,6 +333,9 @@ def _golden_function_minimum(input_tensor_a, input_tensor_b, *args, **kwargs):
     if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
         # Evaluate unsupported unsigned min/max in int64 and restore the input dtype.
         return integer_golden.binary(input_tensor_a, input_tensor_b, torch.minimum)
+    if not torch.is_tensor(input_tensor_b):
+        # PyTorch minimum requires two tensors even though TTNN accepts a scalar operand.
+        input_tensor_b = torch.tensor(input_tensor_b, dtype=input_tensor_a.dtype, device=input_tensor_a.device)
     return torch.minimum(input_tensor_a, input_tensor_b)
 
 
@@ -393,6 +399,10 @@ ttnn.attach_golden_function(ttnn.nextafter, golden_function=_golden_function_nex
 def _golden_function_isclose(input_tensor_a, input_tensor_b, *args, rtol=1e-05, atol=1e-08, equal_nan=False, **kwargs):
     import torch
 
+    if torch.is_tensor(input_tensor_b) and input_tensor_a.dtype != input_tensor_b.dtype:
+        common_dtype = torch.promote_types(input_tensor_a.dtype, input_tensor_b.dtype)
+        input_tensor_a = input_tensor_a.to(common_dtype)
+        input_tensor_b = input_tensor_b.to(common_dtype)
     return torch.isclose(input_tensor_a, input_tensor_b, rtol=rtol, atol=atol, equal_nan=equal_nan)
 
 
@@ -458,9 +468,10 @@ def _golden_function_remainder(input_tensor_a, input_tensor_b, *args, device=Non
 ttnn.attach_golden_function(ttnn.remainder, golden_function=_golden_function_remainder)
 
 
-def _golden_function_fmod(input_tensor_a, input_tensor_b, *args, device, **kwargs):
+def _golden_function_fmod(input_tensor_a, input_tensor_b, *args, device=None, **kwargs):
     import torch
 
+    # Comparison-mode golden calls do not provide the unused device argument.
     if not torch.is_tensor(input_tensor_b):
         input_dtype = input_tensor_a.dtype
         if input_dtype == torch.bfloat16:

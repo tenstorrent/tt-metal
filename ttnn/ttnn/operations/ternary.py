@@ -65,6 +65,18 @@ def _golden_function_where(input_tensor_a, input_tensor_b, input_tensor_c, *args
     # TT where selects true only for positive predicates; torch.where requires bool.
     if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
         condition = integer_golden.compare(input_tensor_a, 0, torch.gt)
+        # Widen unsigned branches because Torch has no UInt16/UInt32 where kernel.
+        output_dtype = (
+            input_tensor_b.dtype
+            if torch.is_tensor(input_tensor_b)
+            else input_tensor_c.dtype
+            if torch.is_tensor(input_tensor_c)
+            else input_tensor_a.dtype
+        )
+        input_tensor_b = input_tensor_b.to(torch.int64) if torch.is_tensor(input_tensor_b) else input_tensor_b
+        input_tensor_c = input_tensor_c.to(torch.int64) if torch.is_tensor(input_tensor_c) else input_tensor_c
+        result = torch.where(condition, input_tensor_b, input_tensor_c)
+        return result.to(output_dtype)
     else:
         condition = torch.gt(input_tensor_a, 0)
     return torch.where(condition, input_tensor_b, input_tensor_c)
