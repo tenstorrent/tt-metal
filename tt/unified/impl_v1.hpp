@@ -234,6 +234,13 @@ Semaphore<thread>& Semaphore<thread>::set_mcast(LogicalMcast mcast) {
 template <typename S>
 template <typename Node>
 Block<S> Storage<S>::store(const Node& node) {
+    // The destination must be exactly the shape the expression produces. This is the
+    // check that replaces every hand-derived page count: a reduction's output, a
+    // matmul's output block, a gather's stacked extent.
+    static_assert(
+        same_shape_v<node_shape_t<Node>, S>,
+        "this Storage's shape is not the shape the expression produces -- compare the Storage<...> "
+        "argument against the operands' shapes and the axis or geometry driving the op");
     Strategy<expr::kind_of_t<Node>>::run(node, cb_id, num_pages);
     return Block<S>(cb_id);
 }
@@ -366,33 +373,33 @@ ComputeBlock<S>::~ComputeBlock() {
 
 // TileSource identifies a circular buffer, so this must be the cb id.
 template <typename S>
-TileSource as_node(const ComputeBlock<S>& b) {
-    return TileSource{{}, b.get_cb_id()};
+TileSource<S> as_node(const ComputeBlock<S>& b) {
+    return TileSource<S>{{}, b.get_cb_id()};
 }
 
 template <typename S>
 auto relu(const ComputeBlock<S>& b) {
-    return expr::Un<ReluOp, TileSource>{{}, as_node(b)};
+    return expr::Un<ReluOp, TileSource<S>>{{}, as_node(b)};
 }
 
 template <typename S>
 auto exp_(const ComputeBlock<S>& b) {
-    return expr::Un<ExpOp, TileSource>{{}, as_node(b)};
+    return expr::Un<ExpOp, TileSource<S>>{{}, as_node(b)};
 }
 
 template <typename S>
 auto recip(const ComputeBlock<S>& b) {
-    return expr::Un<RecipOp, TileSource>{{}, as_node(b)};
+    return expr::Un<RecipOp, TileSource<S>>{{}, as_node(b)};
 }
 
 template <typename S>
 auto sqrt_(const ComputeBlock<S>& b) {
-    return expr::Un<SqrtOp, TileSource>{{}, as_node(b)};
+    return expr::Un<SqrtOp, TileSource<S>>{{}, as_node(b)};
 }
 
 template <typename S>
 auto rsqrt(const ComputeBlock<S>& b) {
-    return expr::Un<RsqrtOp, TileSource>{{}, as_node(b)};
+    return expr::Un<RsqrtOp, TileSource<S>>{{}, as_node(b)};
 }
 
 template <typename Geometry, typename SA, typename SB>
@@ -564,6 +571,10 @@ Block<D> NocAsyncWriteCoreTx<thread, D, S>::wait(uint32_t num_writers) const {
 
 template <int thread, typename S>
 Block<S> fill_reduce_scaler(const Storage<S>& scaler, uint32_t value_bits) {
+    // One tile, and the body assumes it: it lays the pattern into a single page's four
+    // faces. Previously the page count was simply hardcoded to 1 and a wider Storage
+    // would have been silently under-filled.
+    static_assert(same_shape_v<S, Shape<1, 1>>, "a reduce scaler is exactly one tile -- Shape<1, 1>");
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_reserve_back(scaler.cb_id, 1);

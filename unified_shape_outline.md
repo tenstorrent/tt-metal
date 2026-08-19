@@ -5,8 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # `Shape` as a template parameter -- what it looks like, and what it costs
 
-> **Status.** The `Extent` rename and Stage 1 (mechanical templating) have landed.
-> Stages 2-4 are still outlined below. Stage 1 came in at **+188/-158 lines** across
+> **Status.** The `Extent` rename, Stage 1 (mechanical templating) and Stage 2 (the
+> checks) have landed. Stages 3-4 are still outlined below. Stage 1 came in at **+188/-158 lines** across
 > `api.h`, `impl_v1.hpp`, `shape.hpp`, seven kernels and the selftest, with all three
 > selftest traces byte-identical and all eight device tests passing.
 
@@ -240,3 +240,31 @@ Real costs, not hidden:
 3. **Dynamic: not yet.** A `DynamicShape` class, used *instead of* `Shape`, is the
    eventual escape for the runtime-extent cases. Leave room for it; do not build or
    design it out now.
+
+## 8. What Stage 2 found
+
+Six checks landed, each proven by a violation that must fail to compile, plus a
+control proving the legal case still passes. What building them turned up:
+
+- **The core-copy invariant is not equality.** The first version asserted
+  `same_shape_v<D, S>` and `test_unified_reduction.py` rejected it immediately: a
+  GATHER has n writers each depositing its own source at its own `byte_offset`, so the
+  destination is legitimately n times the source. The correct invariant is
+  `S::num_pages <= D::num_pages` together with `D::num_pages % S::num_pages == 0` --
+  the source fits, and it tiles the destination evenly, one slot per writer.
+- **The trace harness was nondeterministic for one commit.** Giving the selftest a real
+  L1 stand-in -- needed because `fill_reduce_scaler` dereferences the write pointer --
+  let an ASLR-randomised mmap address reach the trace through the NOC address
+  `noc_core_write` builds. Byte-identical trace comparison is the entire safety net for
+  this refactor, so it is now mapped at a fixed address with `MAP_FIXED_NOREPLACE`,
+  verified deterministic over five runs.
+- **The syntax probe had been silently inconsistent.** It stored a
+  `MatmulGeometry<2,2,2>` result -- `Shape<2,2>` -- into a `Storage<Shape<1,2>>`. The
+  new `store` conformance check caught it on its first compile.
+- **One runtime `ASSERT` became redundant and is gone.** `Strategy<ReduceFusion>`
+  checked `num_tiles == kOut` at runtime and only in asserts-enabled builds. `store`
+  conformance subsumes it: compile-time, unconditional, and on the full shape rather
+  than just the page count.
+- **The bias check now catches a rank error.** `Shape<ct_dim, 1>` and
+  `Shape<1, ct_dim>` have identical page counts, so the old runtime page-count `ASSERT`
+  could not tell a column from a row. Both are now rejected; verified on device.
