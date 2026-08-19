@@ -1,6 +1,6 @@
-# REVIEW_RECORD-352aee85ec92 — silicon authorization for the pin-cycle-7 build
+# REVIEW_RECORD-352aee85ec92 — silicon authorization for the pin-cycle-8 flip build
 
-Pin: cc1plus sha256 `87688520648a3a706ff1f739db472858bc3f8204cf71bf1fcfc8333f11ee8872`
+Pin: cc1plus sha256 `352aee85ec922ac43bdaccbff6443d255c9d65db58d7b06dcef03138ea93d8a4`
 Built from: sfpi-gcc `7b4e4d96fb6` (13 lanes: +BM counted-row/pricing, +BQ crosscall-hoist, +BT cgraph-edge TU-scan fix) via sfpi (`scripts/build.sh`; log `~/sfpi-uplift/toolchain-rebuild-pin12d.log`; single-writer verified after a build-overlap incident (12a/12b killed, stage2 wiped); stage2 stamp removed, cc1plus sha VERIFIED CHANGED from pin-10 `2911f0e680e4…`)
 Date: `2026-08-18`
 Reviewer: orchestrator session (Claude, session a64aef93, operated by nkapre@tenstorrent.com)
