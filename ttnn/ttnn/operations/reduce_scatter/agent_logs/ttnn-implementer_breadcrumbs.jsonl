@@ -1,0 +1,1 @@
+{"event":"initial_implementation","note":"Mode 1 fresh op: gather-then-reduce-local-slice per op_design.md; structural clone of proven all_reduce Phase A; Phase B uses SliceRowWalker (schedule hpp) + compute_kernel_lib::sum_blocks(pop_input=true)","ts":"2026-08-19T21:59:32+00:00"}
