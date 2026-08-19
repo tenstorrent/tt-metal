@@ -516,9 +516,10 @@ def run_request_loop(
     writes the DONE sentinel for the runner to poll. So the loop exits after that many chunks and returns
     to validate_after_prefill. Returns (chunks_per_slot, real_end_per_slot, total_chunks).
 
-    PREFILL_REQUEST_LOOP_PCC=1 (single-rank, bring-up only) PCC-checks the populated KV against the golden
-    trace once the stream closes — the production analogue of standalone's per-rank KV check, driven by the
-    real H2D producer path (and, under use_trace, the replayed forward + post-compile LayerAck)."""
+    PREFILL_REQUEST_LOOP_PCC=1 PCC-checks the last slot's populated KV against the NFS golden once the
+    stream closes. Each pipeline rank checks only its local layer slice (first_layer_idx); a barrier then
+    an allgather of the per-rank verdict keeps a failing rank from desyncing MPI. Driven by the real H2D
+    producer path (and, under use_trace, the replayed forward + post-compile LayerAck)."""
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
@@ -602,33 +603,48 @@ def run_request_loop(
     # verified nothing. Runs after _drain_and_log_e2e so the chunk's KV writes are flushed first.
     if os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0") == "1" and c > 0:
         # Bring-up validation of the production path (golden-trace input): the same optional runtime hook
-        # standalone uses. Single-rank only (a pipeline rank owns a layer slice; kv_cache_pcc_check offsets
-        # by first_layer_idx, but multi-rank KV PCC is driven via the standalone loop).
+        # standalone uses. Each pipeline rank PCCs its own layer slice (first_layer_idx) against the NFS
+        # golden; the barrier + verdict allgather keep a failing rank from desyncing MPI.
         pcc_check = getattr(runtime, "kv_cache_pcc_check", None)
         if pcc_check is None:
             raise RuntimeError(
                 f"PREFILL_REQUEST_LOOP_PCC=1 but {type(runtime).__name__} implements no kv_cache_pcc_check "
                 "(optional bring-up hook; see ADDING_A_PREFILL_MODEL.md §2)."
             )
-        trace_dir = os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)
-        slot_trace_spec = os.environ.get("PREFILL_REQUEST_LOOP_SLOT_TRACES", "").strip()
-        if slot_trace_spec:
-            slot_traces = [entry.strip() for entry in slot_trace_spec.split(",") if entry.strip()]
-            if not slot_traces:
-                raise ValueError("PREFILL_REQUEST_LOOP_SLOT_TRACES contains no trace paths")
-            trace_dir = slot_traces[slot_id % len(slot_traces)]
-        logger.info(
-            f"[pp rank {rank}] validating final slot={slot_id} chunks={chunks_per_slot[slot_id]} "
-            f"real_len={real_end_per_slot[slot_id]} trace={trace_dir}"
-        )
-        pcc_check(
-            kv_caches,
-            slot_id=slot_id,
-            n_chunks=chunks_per_slot[slot_id],
-            real_len=real_end_per_slot[slot_id],
-            trace_dir=trace_dir,
-            first_layer_idx=cfg.first_layer_idx,
-        )
+        if num_ranks > 1:
+            ttnn.distributed_context_barrier()
+        err = None
+        try:
+            trace_dir = os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)
+            slot_trace_spec = os.environ.get("PREFILL_REQUEST_LOOP_SLOT_TRACES", "").strip()
+            if slot_trace_spec:
+                slot_traces = [entry.strip() for entry in slot_trace_spec.split(",") if entry.strip()]
+                if not slot_traces:
+                    raise ValueError("PREFILL_REQUEST_LOOP_SLOT_TRACES contains no trace paths")
+                trace_dir = slot_traces[slot_id % len(slot_traces)]
+            logger.info(
+                f"[pp rank {rank}] validating final slot={slot_id} chunks={chunks_per_slot[slot_id]} "
+                f"real_len={real_end_per_slot[slot_id]} layers=[{cfg.first_layer_idx}, "
+                f"{cfg.first_layer_idx + cfg.num_layers}) trace={trace_dir}"
+            )
+            pcc_check(
+                kv_caches,
+                slot_id=slot_id,
+                n_chunks=chunks_per_slot[slot_id],
+                real_len=real_end_per_slot[slot_id],
+                trace_dir=trace_dir,
+                first_layer_idx=cfg.first_layer_idx,
+            )
+        except Exception as e:
+            logger.exception(f"[pp rank {rank}] PREFILL_REQUEST_LOOP_PCC failed: {type(e).__name__}: {e}")
+            err = e
+        if num_ranks > 1:
+            verdicts = ttnn.distributed_context_allgather_int(0 if err is not None else 1)
+            if not all(verdicts):
+                failed = [i for i, v in enumerate(verdicts) if not v]
+                raise AssertionError(f"PREFILL_REQUEST_LOOP_PCC failed on rank(s) {failed}") from err
+        elif err is not None:
+            raise err
 
     return chunks_per_slot, real_end_per_slot, c
 

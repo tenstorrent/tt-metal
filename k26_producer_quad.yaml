@@ -1,0 +1,28 @@
+# Pair with k26_runner_quad.yaml. Run on rank 0's host after the runner logs the [h2d] descriptor:
+#   python3 -m models.demos.common.prefill.runners.prefill_producer \
+#     --manifest k26_producer_quad.yaml
+model:
+  variant: kimi_k2_6         # [MATCH RUNNER] the PREFILL_MODEL kimi26.json selects
+  num_layers: 61             # [MATCH RUNNER] ack count is num_layers x chunks; a mismatch hangs the drain
+  max_seq_len: 56320         # [MATCH RUNNER]
+  chunk_size: 5120           # [MATCH RUNNER] 56320 / 5120 = 11 chunks exactly, no partial tail
+
+transport:
+  sp: 8                      # [MATCH RUNNER] 8x4 = one 32-chip BH galaxy (rank 0's mesh)
+  tp: 4
+  h2d_service_id: kimi26_prefill   # [MATCH RUNNER] PREFILL_H2D_SERVICE_ID
+  connect_timeout_s: 60
+
+workload:
+  num_users: 1               # [MATCH RUNNER NUM_USERS] single slot so last slot_id is 0
+  max_requests: 1            # one resident request; no slot recycling
+  interleave: round_robin
+  check_pcc: false           # runner validates its device-owned KV after the shutdown sentinel
+  slot_prompts:
+    - /mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
+
+migration:
+  issue: false               # no endpoint, migration worker, or KV copy
+
+env:
+  PREFILL_SEND_SHUTDOWN: "1" # end the request loop so the runner performs its post-loop PCC check
