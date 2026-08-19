@@ -92,50 +92,26 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-# Model-independent sampling-module coverage (temperature / top-k / top-p / seed /
-# penalties / batch isolation), see #38316. Uses synthetic logits + on-device
-# TTSampling/SamplingGenerator -- no model weights and no /mnt/MLPerf access, so this is
-# the only entry here that does not exercise a real model. It lives in the sweep pipeline
-# rather than unit_tier1 because the suite is an 82-case cross-product (lanes x seeds x
-# meshes x batch sizes) and the unit_tier1 wh_n150 pool has no headroom.
-# The mesh_device fixture auto-skips the (4,8) multi-device cases when the runner has
-# fewer than 32 devices, so on the single-card SKUs below only the [1] cases run.
+# Model-independent sampling coverage (temperature / top-k / top-p / seed / penalties /
+# batch isolation) on synthetic logits -- no model weights. In the sweep pipeline rather than
+# unit_tier1, which has no wh_n150 headroom left. See #38316.
 - name: Sampling module sweep (common)
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     pytest --timeout 600 models/common/tests/test_tt_sampling.py
-    # test_sampling.py complements the suite above rather than duplicating it: it owns the
-    # SeedManager slot/salt state machine (salt collision, slot remap, ghost clearing, decode
-    # re-registration), broadcast/scatter_sampling_params, the vocab-split math and the
-    # host-level trace bookkeeping -- none of which test_tt_sampling.py touches, and none of
-    # which ran anywhere before this entry. In the other direction test_tt_sampling.py owns
-    # the on-device per-request penalties, batch isolation, the odd-lane stress family, top-p
-    # and the end-to-end traced path.
-    #
-    # -k selects the single-card-safe half. Every log-probs test in that file needs more than
-    # one device (T3K default mesh, an explicit (1,8), or TG galaxy) and every non-log-probs
-    # test is host-only or (1,1) -- the split is exactly along that name, verified against the
-    # file: 9 excluded, 24 selected (21 host-only + 3 single-device). The excluded 9, which
-    # include the torch-vs-TT log-probs PCC oracle, want the multi-device SKUs and belong with
-    # the follow-up that enables them. See #38316.
+    # Complements the above: SeedManager slot/salt state machine, params broadcast/scatter,
+    # host-level trace bookkeeping. -k drops the log-probs tests, the only ones needing >1 device.
     pytest --timeout 600 models/common/tests/test_sampling.py -k "not log_probs and not logprobs"
   model: sampling-common
   skus:
     wh_n150:
-      timeout: 12  # test_tt_sampling ~2.5 min pytest / ~6.5 min job wall, + test_sampling's 24
+      timeout: 12
       tier: 1
     bh_p150:
-      timeout: 10  # test_tt_sampling ~1.7 min pytest / ~8.5 min job wall, + test_sampling's 24
+      timeout: 10
       tier: 1
-    # Galaxy (4,8) SKUs are disabled. The 32-chip ring fabric fails to initialize on a
-    # marginal ethernet link (Device 24 handshake timeout) -- an infra/hardware issue in
-    # fabric bring-up, before any sampling code runs, not a test fault. The (4,8) test
-    # cases stay in the suite (they auto-skip on the single-card runners above).
-    # Re-enabling needs (a) galaxy link health confirmed and (b) a sweep_tier1 budget key
-    # for the SKU -- .github/time_budget.yaml currently defines only wh_galaxy (30 min,
-    # 10 free) under models.sweep_tier1, not wh_galaxy_perf or bh_galaxy. See #38316.
-    # wh_galaxy:
-    #   timeout: 10  # [1] + (4,8); size against a real galaxy run before enabling
-    #   tier: 1
+    # Galaxy (4,8) SKUs disabled: the 32-chip ring fabric fails to initialise on a marginal
+    # ethernet link (Device 24 handshake timeout), and sweep_tier1 has no budget key for
+    # wh_galaxy_perf / bh_galaxy. The (4,8) cases stay in the suite and auto-skip here.
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
