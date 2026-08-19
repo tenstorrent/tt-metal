@@ -14,7 +14,7 @@
  *        semaphore operations atomic.
  *
  *  - LOCAL_NONATOMIC: Stored in L1 and accessed by read-modify-write. Picked only when at most
- *.                    one binder instance exists.
+ *                     one binder instance exists.
  *  - DM_LOCAL_CACHED: Stored in a dedicated L1 pool and accessed through the DM cache via
  *                     RISC-V AMO. Picked only when all binders are DMs on the same node where
  *                     the semaphore exists.
@@ -25,6 +25,10 @@
  *
  * Per-kernel scope tables are constructed at build time by the host and baked into the kernel.
  * The kernel code can then query the scope of a semaphore for the appropriate mechanism to use.
+ *
+ * @note Never access a bound semaphore's word directly (get_semaphore(), the noc_semaphore_*
+ *       free functions, raw pointers), always go through this class. A raw access is
+ *       invisible to the host's mechanism choice and can silently race it.
  */
 enum class SemScope : uint8_t {
     LOCAL_NONATOMIC = 0,
