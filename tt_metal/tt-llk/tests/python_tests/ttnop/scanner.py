@@ -4,12 +4,16 @@
 """Thin wrapper over the C++ scanner: build it on demand, run it, cache the result."""
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SCANNER = HERE / "scan"
+# One scanner per arch: the filler encodings are compiled in, and the same
+# UNPACR_NOP word means "delay this unpacker" on one arch and "zero SrcA and set
+# its dvalid" on another.
+SCANNER = HERE / f"scan-{os.environ.get('CHIP_ARCH', 'wormhole').strip().lower()}"
 
 
 @dataclass(frozen=True)
@@ -47,7 +51,7 @@ _cache: dict = {}
 
 
 def _build() -> None:
-    subprocess.run(["make", "--silent", "scan"], cwd=HERE, check=True)
+    subprocess.run(["make", "--silent", SCANNER.name], cwd=HERE, check=True)
 
 
 def scan(elf: str, mode: str = "sync") -> Scan:
