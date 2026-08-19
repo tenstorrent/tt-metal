@@ -564,11 +564,6 @@ def _run_int32_reduce(mathop, reduce_pool, injected_value, base_range=(-1000, 10
 # dedicated two's-complement compare-and-swap paths correct over the full Int32 range, rather than the
 # sign-magnitude cast around a plain SFPSWAP that ranked INT32_MIN as 0.
 #
-# The Blackhole non-strict xfail this carried is retired. All 24 variants pass on a p100a, on this branch
-# and on main alike, which is the signal it was built to emit — it reported XPASS once the kernel was
-# fixed — and keeping it would leave 6 permanent XPASSes asserting nothing. Its "measured on p100a:
-# exactly these 6 fail" note no longer reproduces on that SKU; #49589 landed 2026-08-07 and the note was
-# written on the 12th, so what the two runs disagree about is not recorded here.
 @pytest.mark.parametrize(
     "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
 )
