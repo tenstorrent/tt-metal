@@ -233,16 +233,17 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     ////////////////////////////////////////////////////////////////
     // Page indexing
     //
-    // Glossary:
-    //   input page     -- one page of the input tensor.
-    //   output page    -- one page of the output tensor (the real buffer page).
-    //   chunk          -- one NOC write = min(input_page, output_page) bytes. An input
-    //                     page = split_factor chunks; an output page = output_chunks_per_page
-    //                     chunks. The kernel iterator walks chunks.
-    //   stripe         -- a run of consecutive chunks this device writes before
-    //                     jumping past other devices' contributions.
-    //   stripe jump    -- value the kernel adds to output_page_id at the stripe
-    //                     boundary.
+    // Glossary (shared with the kernels):
+    //   input/output page -- one page of the input/output tensor buffer.
+    //   chunk             -- the transfer unit, min(input page, output page). An input page is
+    //                        split_factor chunks; an output page is output_chunks_per_page chunks.
+    //   chunk id          -- a chunk's index in this device's contribution.
+    //   global            -- a chunk's index in the output tensor: chunk id + a row/stripe bias.
+    //   seqno             -- a chunk's position in the emission order. This is what data_valid counts.
+    //   lane              -- residue class mod stride; the walk covers lane 0's chunks, then lane 1's.
+    //   run               -- consecutive chunks contiguous at the destination. Sent as one transfer.
+    //   segment           -- one scatter-list entry in a packet.
+    //   stripe            -- the chunks this device contributes per row of the output.
     //
     // Three copy modes, picked by input vs output page sizes:
     //   matched (in == out): 1 chunk per input page, output_chunks_per_page = 1.
@@ -250,11 +251,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     //                        chunk lands at a byte offset within a shared output page.
     //   split   (in > out) : split_factor chunks per input page, output_chunks_per_page = 1.
     //
-    // Kernel is a dumb chunk iterator. Iteration pattern is:
-    //   byte_offset++ within an output page -> chunk++ -> stripe+=jump
-    //
-    // Host supplies the requisite geometry constants + each worker's slice; the kernel's
-    // OutputStripeIterator derives the remaining iterator parameters at compile-time.
+    // Host supplies geometry and each worker's slice. Where the runs are and how long they get comes
+    // from TensorAccessor::num_contiguous_pages in the kernel, so no layout is special-cased here.
     ////////////////////////////////////////////////////////////////
 
     const auto& input_shape = input_tensor.padded_shape();
@@ -287,18 +285,21 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         num_input_pages,
         split_factor);
 
+    // TODO: fix the messaging in below function
     ::ttnn::ccl::validate_packet_size(arch, packet_size, output_chunk_size);
 
     // --- CB sizing ---
-    // cb_page_size is a multiple of input_page_size, which is itself a multiple of
-    // output_chunk_size = min(input, output), so the kernel increments both
-    // the cb_read_ptr and cb_write_ptr cleanly.
-    const uint32_t pages_per_packet = std::max(1u, packet_size / input_page_size);
-    uint32_t cb_page_size = input_page_size * pages_per_packet;
+    // A CB entry holds a whole number of packets, so a packet is never cut short at the entry
+    // boundary. Rounded to whole input pages (split) or output pages (concat) so a run is not cut
+    // there either; one of those two counts is always 1.
+    const uint32_t chunks_per_group = std::max(split_factor, output_chunks_per_page);
+    uint32_t chunks_per_packet = std::max(1u, packet_size / output_chunk_size);
+    chunks_per_packet = std::max(chunks_per_group, (chunks_per_packet / chunks_per_group) * chunks_per_group);
+    uint32_t cb_page_size = chunks_per_packet * output_chunk_size;
     uint32_t cb_depth = 3;
-    // Perf hack: pack multiple pages into a single CB page to reduce CB sync frequency between reader and
-    // writer. Note this increases effective CB depth. Row-major is safe too: an integer multiplier preserves
-    // the multiple-of-input_page_size property above.
+    // Perf hack: pack multiple packets into a single CB page to reduce CB sync frequency between reader and
+    // writer. Note this increases effective CB depth. An integer multiplier preserves the whole-packet and
+    // whole-page properties above.
     // Empirically determined heuristic, works well for all tensor sizes
     const uint32_t ideal_multiplier = (arch == tt::ARCH::BLACKHOLE) ? 4 : 3;
     const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
@@ -367,7 +368,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // KERNEL CREATION
     // Reader
     std::vector<uint32_t> reader_compile_args = {
-        input_page_size,           // input tensor page size
+        split_factor,              // chunks per input page (1 unless split)
         output_chunk_size,         // NOC write size = min(input, output)
         output_chunks_per_page,    // chunks per output page (1 unless concat)
         output_chunks_per_stripe,  // stripe length in chunks
@@ -501,17 +502,20 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                     num_granular = downstream_iters > 0 ? downstream_iters - 1 : 0;
                 }
 
-                uint32_t final_start = local_output_start;
-                uint32_t final_count = num_worker_output_chunks;
+                // Even ring: the antipode stripe is split between the two directions. Expressed as a range of
+                // seqnos, not chunk ids, so the downstream reader's data_valid arithmetic holds once the walk
+                // is strided.
+                uint32_t final_skip = 0;
+                uint32_t final_take = num_worker_output_chunks;
                 if (ring_even_split) {
-                    final_start = is_forward ? local_output_start : (local_output_start + half);
-                    final_count = is_forward ? half : (num_worker_output_chunks - half);
+                    final_skip = is_forward ? 0 : half;
+                    final_take = is_forward ? half : (num_worker_output_chunks - half);
                 }
 
                 // Chunks the upstream delivers into our output (relayed full stripes + sink). The even-ring
-                // antipode arrives as a half, so it contributes final_count instead of a full stripe.
+                // antipode arrives as a half, so it contributes final_take instead of a full stripe.
                 const uint32_t total_chunks = num_recv * num_worker_output_chunks -
-                                              (ring_even_split ? (num_worker_output_chunks - final_count) : 0);
+                                              (ring_even_split ? (num_worker_output_chunks - final_take) : 0);
 
                 std::vector<uint32_t> reader_rt_args = {
                     input_addr,                // input tensor address
@@ -520,12 +524,10 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                     stripe_step,               // stripe index step per iteration
                     num_iters,                 // iterations this direction runs
                     total_chunks,              // chunks upstream delivers (completion wait)
-                    local_output_start,        // this worker's slice start (chunks)
+                    local_output_start,        // this worker's slice start (chunk id)
                     num_worker_output_chunks,  // this worker's slice length (chunks)
-                    final_start,               // last-iteration slice start (even-ring split)
-                    final_count,               // last-iteration slice length (even-ring split)
-                    input_tile_id_start,       // local data: input page start
-                    input_tile_id_end,         // local data: input page end
+                    final_skip,                // last-iteration seqno offset (even-ring split)
+                    final_take,                // last-iteration seqno count (even-ring split)
                     barrier_sem.address(),     // barrier_sem L1 address
                     data_valid_sem.address(),  // data_valid_sem L1 address
                 };
@@ -539,10 +541,10 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                     device_idx,                       // this device's index (initial stripe)
                     stripe_step,                      // stripe index step per iteration
                     num_iters,                        // iterations this direction runs
-                    local_output_start,               // this worker's slice start (chunks)
+                    local_output_start,               // this worker's slice start (chunk id)
                     num_worker_output_chunks,         // this worker's slice length (chunks)
-                    final_start,                      // last-iteration slice start (even-ring split)
-                    final_count,                      // last-iteration slice length (even-ring split)
+                    final_skip,                       // last-iteration seqno offset (even-ring split)
+                    final_take,                       // last-iteration seqno count (even-ring split)
                     do_local_write ? 1u : 0u,         // write local data into local output on iteration 0
                     barrier_sem.address(),            // barrier_sem L1 address
                     data_valid_sem.address(),         // data_valid_sem L1 address
@@ -613,12 +615,12 @@ void AllGatherUnicastFactory::override_runtime_arguments(
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
         for (const auto& core : shared_vars.worker_cores) {
-            // reader: [0]=input_addr, [1]=output_addr, [12]=barrier_sem, [13]=data_valid_sem
+            // reader: [0]=input_addr, [1]=output_addr, [10]=barrier_sem, [11]=data_valid_sem
             auto& reader_args = reader_args_by_core[core.x][core.y];
             reader_args[0] = input_addr;
             reader_args[1] = output_addr;
-            reader_args[12] = barrier_addr;
-            reader_args[13] = data_valid_addr;
+            reader_args[10] = barrier_addr;
+            reader_args[11] = data_valid_addr;
             // writer: [0]=output_addr, [9]=barrier_sem, [10]=data_valid_sem
             auto& writer_args = writer_args_by_core[core.x][core.y];
             writer_args[0] = output_addr;

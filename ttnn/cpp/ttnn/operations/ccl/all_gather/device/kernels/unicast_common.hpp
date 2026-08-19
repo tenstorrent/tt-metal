@@ -7,102 +7,144 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
-#include <array>
 #include <cstdint>
 #include <type_traits>
-#include <utility>
 
 // Store-and-forward AllGather: every fabric send is a single 1-hop unicast to the neighbor.
 // Runs on any effectively-1D topology (both Fabric 1D and 2D).
 namespace fabric_api = tt::tt_fabric::linear::experimental;
 
 ////////////////////////////////////////////////////////////////
+// Runs
+//
+// Glossary (chunk, chunk id, global, seqno, lane, run, segment, stripe) is in
+// all_gather_unicast_factory.cpp.
+//
+// Runs come from TensorAccessor::num_contiguous_pages, so no layout is special-cased here or on the
+// host. They must be stepped by the accessor's own contiguous_page_stride(); any other step lands in
+// a different bank or shard. Reading the stride from the accessor rather than a compile arg also
+// makes every device agree on the seqno order for free.
+////////////////////////////////////////////////////////////////
+
+////////////////////////////////////////////////////////////////
 // data_valid semaphore protocol
 //
 // data_valid counts the chunks upstream has relayed into our output -- cumulative over the op, reset at
-// completion. A chunk's absolute position is base_chunk + within-slice offset, with base_chunk = (iter-1) *
-// slice_count. The writer maintains the count (atomic-inc per chunks delivered); the reader waits on it with
-// noc_semaphore_wait_min at the last chunk of each batch it reads, then a final wait for total_chunks before
-// reset.
+// completion. A chunk's absolute position is base_seqno + its seqno in the batch, with base_seqno =
+// (iter-1) * slice_chunks + skip. The writer maintains the count (atomic-inc per chunks delivered); the
+// reader waits on it with noc_semaphore_wait_min at the last chunk of each batch it reads, then a final
+// wait for total_chunks before reset.
 //
-// Waiting on an absolute position (not a signal count) lets one reader path cover every case with no alignment
-// or per-topology special-casing:
-//   - full relay, and even-ring split prefix half (offset 0) / suffix half (offset = half): same per-batch
-//     wait, differing only in base_chunk/count;
+// Waiting on an absolute position (not a signal count) lets one reader path cover every case with no
+// alignment or per-topology special-casing:
+//   - full relay, and even-ring split prefix half (skip 0) / suffix half (skip = half): same per-batch
+//     wait, differing only in base_seqno/take;
 //   - sink stripe (a line endpoint's incoming, or a ring antipode): no relay wait, covered by the final
 //     total_chunks wait;
 //   - sink direction (num_iters == 0): only the total_chunks wait runs.
 // So data_valid_granularity is a pure writer-side perf knob: the reader auto-paces to the writer's cadence.
 ////////////////////////////////////////////////////////////////
 
-// Walks the output-tensor chunks of one stripe. Templated on the geometry so per-stripe starts are computed
-// here and the matched/split fast path (output_chunks_per_page == 1) folds away. Re-pointed to any stripe each
-// relay iteration via init(). A stripe's src address on this device equals its dst address on the neighbor, so
-// reader and writer share this iterator unchanged.
+// Walks the chunks of one stripe in stride order, in runs. A stripe's src address on this device equals
+// its dst address on the neighbor, so reader and writer share this walk unchanged.
+//
+// Position is held once, as a chunk id; page and byte offset are derived from it. Only the row bias is
+// carried forward, and only across a row boundary, so there is no incremental copy of the mapping that
+// could drift from the closed form in seat().
 template <
     uint32_t output_chunks_per_stripe,
     uint32_t output_chunks_per_page,
     uint32_t output_chunk_size,
     uint32_t num_devices>
-class OutputStripeIterator {
-    static constexpr uint32_t output_page_size = output_chunks_per_page * output_chunk_size;
-    static constexpr uint32_t stripe_distance_chunks = num_devices * output_chunks_per_stripe;
-    static constexpr uint32_t output_pages_per_row = stripe_distance_chunks / output_chunks_per_page;
+class StripeWalk {
+    static constexpr uint32_t row_bias_step = (num_devices - 1) * output_chunks_per_stripe;
 
 public:
-    // Point at `stripe` for the chunk range [start, start + count).
-    FORCE_INLINE void init(uint32_t stripe, uint32_t start, uint32_t count) {
-        const uint32_t s_start = (start / output_chunks_per_stripe) * stripe_distance_chunks +
-                                 (start % output_chunks_per_stripe) + stripe * output_chunks_per_stripe;
-        page_id_ = s_start / output_chunks_per_page;
-        byte_off_ = (s_start % output_chunks_per_page) * output_chunk_size;
-        if constexpr (output_chunks_per_page == 1) {
-            phase_ = 0;
-            stripe_jump_ = output_pages_per_row - (output_chunks_per_stripe - 1);
-        } else {
-            // In concat mode the page phase (and hence the stripe jump) depends on the stripe.
-            const uint32_t off = (stripe * output_chunks_per_stripe) % output_chunks_per_page;
-            phase_ = off * output_chunk_size;
-            stripe_jump_ = output_pages_per_row - (off + output_chunks_per_stripe - 1) / output_chunks_per_page;
+    // Walk `stripe` over chunk ids [start, start + count), emitting seqnos [skip, skip + take).
+    // The order is defined over the whole range even when we emit part of it, because a seqno has to
+    // mean the same thing on the device that sent these chunks -- that is what data_valid counts.
+    FORCE_INLINE void init(
+        uint32_t stripe, uint32_t start, uint32_t count, uint32_t skip, uint32_t take, uint32_t stride) {
+        stripe_ = stripe;
+        start_ = start;
+        end_ = start + count;
+        take_ = take;
+        stride_ = stride;
+        emitted_ = 0;
+        // Lane r holds ceil((count - r) / stride) chunks, so finding the one holding `skip` is a
+        // stride-long scan. Runs once per iteration, never per chunk.
+        uint32_t lane = 0;
+        uint32_t before = 0;
+        for (; lane + 1 < stride; ++lane) {
+            const uint32_t in_lane = (count > lane) ? (count - lane + stride - 1) / stride : 0;
+            if (before + in_lane > skip) {
+                break;
+            }
+            before += in_lane;
         }
-        chunk_in_stripe_ = start % output_chunks_per_stripe;
-        sent_ = 0;
-        count_ = count;
+        lane_ = lane;
+        seat(start + lane + (skip - before) * stride);
     }
 
-    FORCE_INLINE bool valid() const { return sent_ < count_; }
+    FORCE_INLINE bool valid() const { return emitted_ < take_; }
 
-    // Return {output_page_id, byte_offset} of the current chunk, then advance.
-    FORCE_INLINE std::pair<uint32_t, uint32_t> next() {
-        std::pair<uint32_t, uint32_t> loc{page_id_, byte_off_};
-        sent_++;
-        if (++chunk_in_stripe_ == output_chunks_per_stripe) {
-            chunk_in_stripe_ = 0;
-            page_id_ += stripe_jump_;
-            byte_off_ = phase_;
+    FORCE_INLINE uint32_t chunk_id() const { return c_; }
+    FORCE_INLINE uint32_t page_id() const { return global() / output_chunks_per_page; }
+    FORCE_INLINE uint32_t byte_off() const { return (global() % output_chunks_per_page) * output_chunk_size; }
+    FORCE_INLINE uint32_t seqnos_left() const { return take_ - emitted_; }
+
+    // Chunks left in this stripe. A run clipped here keeps advance() inside one row.
+    FORCE_INLINE uint32_t chunks_to_stripe_end() const { return (stripe_end() - c_ + stride_ - 1) / stride_; }
+
+    // One past the stripe's last page, for num_contiguous_pages to clip against.
+    FORCE_INLINE uint32_t end_page_id() const {
+        if constexpr (output_chunks_per_page == 1) {
+            return stripe_end() + bias_;
         } else {
-            byte_off_ += output_chunk_size;
-            if (byte_off_ == output_page_size) {
-                byte_off_ = 0;
-                page_id_++;
-            }
+            return (stripe_end() + bias_ + output_chunks_per_page - 1) / output_chunks_per_page;
         }
-        return loc;
+    }
+
+    // `n` must not exceed chunks_to_stripe_end().
+    FORCE_INLINE void advance(uint32_t n) {
+        emitted_ += n;
+        if (emitted_ == take_) {
+            return;  // done -- do not step outside the range
+        }
+        c_ += n * stride_;
+        if (c_ >= end_) {
+            seat(start_ + ++lane_);  // this lane is done, restart on the next
+        } else if (c_ >= row_end_) {
+            row_end_ += output_chunks_per_stripe;
+            bias_ += row_bias_step;
+        }
     }
 
 private:
-    uint32_t page_id_, byte_off_, chunk_in_stripe_, sent_, count_, phase_, stripe_jump_;
+    FORCE_INLINE uint32_t global() const { return c_ + bias_; }
+    FORCE_INLINE uint32_t stripe_end() const { return row_end_ < end_ ? row_end_ : end_; }
+
+    // The only closed-form site. Runs once per init and once per lane, never per chunk.
+    FORCE_INLINE void seat(uint32_t c) {
+        const uint32_t row = c / output_chunks_per_stripe;
+        c_ = c;
+        row_end_ = (row + 1) * output_chunks_per_stripe;
+        bias_ = row * row_bias_step + stripe_ * output_chunks_per_stripe;
+    }
+
+    uint32_t c_, bias_, row_end_;
+    uint32_t stripe_, start_, end_, take_, emitted_, lane_, stride_;
 };
 
-// Unicasts pages one hop to the single neighbor. Handles packetization (pack several pages into one
-// scatter-write packet when they fit, else split a big page across packets), and the semaphore increments
-// that announce them.
+// Unicasts segments one hop to the single neighbor. Packs segments into a packet until either the
+// payload or the scatter-chunk count runs out, and sends the one-segment case as a unicast write --
+// which costs the receiving ERISC a single NoC command instead of one per segment.
 //
 // Templated on the sender type (SenderT*) so the same writer drives either a direct WorkerToFabricEdmSender
 // (one worker per direction) or a FabricMuxV2Sender (workers sharing a fabric mux). The send calls accept
 // either (see CheckFabricSenderType in api_common.h), so no route-manager is needed -- which is also why this
 // class routes its own headers.
-template <uint32_t page_size, uint32_t packet_size, typename SenderT>
+template <uint32_t packet_size, typename SenderT>
 class FabricWriter {
 public:
     FabricWriter(const Noc& noc, SenderT* sender, uint16_t neighbor_chip_id, uint16_t neighbor_mesh_id) :
@@ -112,16 +154,13 @@ public:
         unicast_packet_header{PacketHeaderPool::allocate_header(1)},
         sem_packet_header{PacketHeaderPool::allocate_header(1)},
         scatter_header({}, {}),
-        chunk_count{0} {
-        std::array<uint64_t, max_pages_per_packet> dummy_addrs{};  // init to 0s
-        std::array<uint16_t, max_pages_per_packet - 1> chunk_sizes{};
-        chunk_sizes.fill(page_size);
+        chunk_count{0},
+        payload{0} {
         constexpr uint8_t num_hops = 1;  // store-and-forward: always the immediate neighbor
 
-        fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::ChunkSizes>(
-            scatter_packet_header,
-            num_hops,
-            NocUnicastScatterCommandHeader(dummy_addrs.data(), chunk_sizes.data(), pages_per_packet));
+        // Addresses and sizes both vary per packet, so set_state only fixes the route.
+        fabric_api::fabric_unicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::None>(
+            scatter_packet_header, num_hops);
 
         fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
             unicast_packet_header, num_hops);
@@ -146,7 +185,7 @@ public:
     }
 
     ~FabricWriter() {
-        ASSERT(chunk_count == 0);  // outstanding chunks! flush() not called correctly
+        ASSERT(chunk_count == 0);  // outstanding segments! flush_packet_and_wait() not called correctly
     }
 
     // Increment a semaphore on the neighbor.
@@ -156,85 +195,69 @@ public:
             sender, sem_packet_header, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{addr, val});
     }
 
-    void async_write(uint32_t l1_addr, uint64_t remote_noc_addr) {
-        if constexpr (use_scatter_write) {
-            // Queue up multiple pages to send in a single packet.
-            // Assumption: pages are contiguous in local memory (L1).
-            // Note: currently, scatter_write necessitates chunk_count >= 2.
-            if (chunk_count == 0) {
-                start_l1_addr = l1_addr;
-            }
-            scatter_header.noc_address[chunk_count++] = remote_noc_addr;
-            if (chunk_count == pages_per_packet) {
-                noc.async_writes_flushed();
-                scatter_header.chunk_count = chunk_count;
-                fabric_api::fabric_unicast_noc_scatter_write_with_state<
-                    UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
-                    sender, scatter_packet_header, start_l1_addr, scatter_header, payload_size);
-                chunk_count = 0;
-            }
-        } else {
-            // Page larger than a packet: split across packets.
-            for (uint32_t packet = 0; packet < packets_per_page; ++packet) {
-                noc.async_writes_flushed();
-                fabric_api::fabric_unicast_noc_unicast_write_with_state<
-                    UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                    sender,
-                    unicast_packet_header,
-                    l1_addr,
-                    tt::tt_fabric::NocUnicastCommandHeader{remote_noc_addr},
-                    (packet < packets_per_page - 1) ? payload_size : last_payload_size);
-                l1_addr += payload_size;
-                remote_noc_addr += payload_size;
-            }
+    // A segment that does not fit starts a new packet rather than spilling into this one: splitting it
+    // would fill the tail but cost an extra scatter chunk, i.e. an extra NoC write at the receiver.
+    FORCE_INLINE void queue_segment(uint32_t l1_addr, uint64_t remote_noc_addr, uint32_t bytes) {
+        // Only a chunk larger than a packet gets here; the caller caps runs at packet_size.
+        while (bytes > packet_size) {
+            send();
+            push(l1_addr, remote_noc_addr, packet_size);
+            send();
+            l1_addr += packet_size;
+            remote_noc_addr += packet_size;
+            bytes -= packet_size;
         }
+        if (chunk_count == max_chunks || payload + bytes > packet_size) {
+            send();
+        }
+        push(l1_addr, remote_noc_addr, bytes);
     }
 
-    // Call this before popping CB entry
-    void async_writes_flushed() {
-        if constexpr (use_scatter_write) {
-            static_assert(min_pages_per_packet == 2, "hardcoded to assume scatter_write min_pages_per_packet == 2");
-            if (chunk_count > 0) {
-                noc.async_writes_flushed();
-                if (chunk_count == 1) {
-                    // Note: currently, scatter_write necessitates chunk_count >= 2, so we use unicast_write
-                    // for chunk_count == 1.
-                    // Note: this is hardcoded assuming NOC_SCATTER_WRITE_MIN_CHUNKS == 2. Else need to put
-                    // the below unicast_write in a loop.
-                    fabric_api::fabric_unicast_noc_unicast_write_with_state<
-                        UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
-                        sender,
-                        unicast_packet_header,
-                        start_l1_addr,
-                        tt::tt_fabric::NocUnicastCommandHeader{scatter_header.noc_address[0]},
-                        page_size);
-                } else {
-                    scatter_header.chunk_count = chunk_count;
-                    fabric_api::fabric_unicast_noc_scatter_write_with_state<
-                        UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::PayloadSize>(
-                        sender, scatter_packet_header, start_l1_addr, scatter_header, chunk_count * page_size);
-                }
-                chunk_count = 0;
-            }
-        }
-        // Wait for Fabric writes to be sent out before popping CB entry
+    // Call this before popping a CB entry: a queued packet still points into it.
+    void flush_packet_and_wait() {
+        send();
         noc.async_writes_flushed();
     }
 
 private:
-    // Fabric limits
-    static constexpr uint32_t max_pages_per_packet = NOC_SCATTER_WRITE_MAX_CHUNKS;
-    static constexpr uint32_t min_pages_per_packet = NOC_SCATTER_WRITE_MIN_CHUNKS;
-    // When page_size < packet_size
-    static constexpr uint32_t pages_per_packet = std::min(packet_size / page_size, max_pages_per_packet);  // div_down
-    // When page_size > packet_size
-    static constexpr uint32_t packets_per_page = (page_size + packet_size - 1) / packet_size;  // div_up
-    // Use scatter_write or unicast_write (currently scatter_write imposes a min chunk_count)
-    static constexpr bool use_scatter_write = pages_per_packet >= min_pages_per_packet;
-    // Steady-state payload size. Note (pages_per_packet * page_size) may not equal packet_size.
-    static constexpr uint32_t payload_size = use_scatter_write ? (pages_per_packet * page_size) : packet_size;
-    // Last payload for the page_size >= packet_size case (a page sent as multiple packets).
-    static constexpr uint32_t last_payload_size = page_size - ((packets_per_page - 1) * packet_size);
+    static constexpr uint32_t max_chunks = NOC_SCATTER_WRITE_MAX_CHUNKS;
+    static_assert(packet_size <= 0xFFFF, "NocUnicastScatterCommandHeader::chunk_size is uint16_t");
+
+    FORCE_INLINE void push(uint32_t l1_addr, uint64_t remote_noc_addr, uint32_t bytes) {
+        if (chunk_count == 0) {
+            start_l1_addr = l1_addr;
+        }
+        // Only the first max_chunks-1 sizes travel; the last one is implied by the payload size.
+        if (chunk_count < max_chunks - 1) {
+            scatter_header.chunk_size[chunk_count] = static_cast<uint16_t>(bytes);
+        }
+        scatter_header.noc_address[chunk_count++] = remote_noc_addr;
+        payload += bytes;
+    }
+
+    void send() {
+        if (chunk_count == 0) {
+            return;
+        }
+        noc.async_writes_flushed();
+        if (chunk_count == 1) {
+            fabric_api::fabric_unicast_noc_unicast_write_with_state<
+                UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+                sender,
+                unicast_packet_header,
+                start_l1_addr,
+                tt::tt_fabric::NocUnicastCommandHeader{scatter_header.noc_address[0]},
+                payload);
+        } else {
+            scatter_header.chunk_count = chunk_count;
+            fabric_api::fabric_unicast_noc_scatter_write_with_state<
+                UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                UnicastScatterWriteUpdateMask::PayloadSize>(
+                sender, scatter_packet_header, start_l1_addr, scatter_header, payload);
+        }
+        chunk_count = 0;
+        payload = 0;
+    }
 
     const Noc& noc;
     SenderT* sender;  // direct or mux sender
@@ -242,6 +265,7 @@ private:
     volatile tt_l1_ptr PACKET_HEADER_TYPE* unicast_packet_header;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* sem_packet_header;
     NocUnicastScatterCommandHeader scatter_header;
-    uint8_t chunk_count;     // accumulated chunks not yet sent in a packet
-    uint32_t start_l1_addr;  // start address of the accumulated contiguous chunks
+    uint8_t chunk_count;     // segments queued for the current packet
+    uint32_t payload;        // bytes queued for the current packet
+    uint32_t start_l1_addr;  // start of the queued segments, contiguous in L1
 };
