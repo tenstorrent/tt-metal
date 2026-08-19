@@ -108,6 +108,7 @@ Blocking::Blocking(
 
     std::tie(kr_sizes, kr_starts) = split(emb_t, kgroups);
     kr_pad = *std::max_element(kr_sizes.begin(), kr_sizes.end());
+    gu_chunks_target = GU_CHUNKS;
 
     const auto choice = choose_hn_pad();
     hn_pad = choice.hn_pad;
@@ -136,7 +137,12 @@ Blocking::Blocking(
     mgroup_cores = hgroups * mgroup_rows;
     std::tie(ec_group_sizes, ec_group_starts) = split(emb_t, mgroup_cores);
     ec_group_max = *std::max_element(ec_group_sizes.begin(), ec_group_sizes.end());
-    wd_mgroups = WD_MGROUPS && wd_mrow_rounds && M_BLOCK % 2 == 0 && kgroups == M_BLOCK && ec_group_max <= DEST_LIMIT;
+    // Promote the measured K3 and 6Kx2K 12x8 geometries. The device kernels still runtime-gate
+    // this to sufficiently large, full M blocks.
+    const bool tuned_grouped_shape = (emb == 3584 && hidden == 3072) || (emb == 6144 && hidden == 2048);
+    const bool enable_wd_mgroups = WD_MGROUPS || (hgroups == 12 && kgroups == 8 && tuned_grouped_shape);
+    wd_mgroups = enable_wd_mgroups && wd_mrow_rounds && M_BLOCK % 2 == 0 && kgroups == M_BLOCK &&
+                 ec_group_max <= std::min(4u, DEST_LIMIT);
     wd_ec_max = wd_mgroups ? ec_group_max : ec_max;
 
     TT_FATAL(
@@ -221,9 +227,9 @@ Blocking::HnChoice Blocking::choose_hn_pad() const {
         }
         std::vector<uint32_t> chunks(candidate);
         std::iota(chunks.begin(), chunks.end(), 1);
-        std::sort(chunks.begin(), chunks.end(), [](uint32_t a, uint32_t b) {
-            const uint32_t da = a > GU_CHUNKS ? a - GU_CHUNKS : GU_CHUNKS - a;
-            const uint32_t db = b > GU_CHUNKS ? b - GU_CHUNKS : GU_CHUNKS - b;
+        std::sort(chunks.begin(), chunks.end(), [this](uint32_t a, uint32_t b) {
+            const uint32_t da = a > gu_chunks_target ? a - gu_chunks_target : gu_chunks_target - a;
+            const uint32_t db = b > gu_chunks_target ? b - gu_chunks_target : gu_chunks_target - b;
             return da == db ? a < b : da < db;
         });
         for (const uint32_t chunk_count : chunks) {

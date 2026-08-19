@@ -109,7 +109,7 @@ constexpr uint32_t WD_RESIDENT = CT(WD_RESIDENT);
 constexpr uint32_t WD_MROW_ROUNDS = CT(WD_MROW_ROUNDS);
 constexpr uint32_t WD_MGROUPS = CT(WD_MGROUPS);
 constexpr uint32_t WD_MGROUP_MIN_BLOCKS = CT(WD_MGROUP_MIN_BLOCKS);
-constexpr uint32_t MGROUP_ROWS = M_BLOCK / 2;
+constexpr uint32_t MGROUP_ROWS = CT(MGROUP_ROWS);
 constexpr uint32_t MGROUP_CORES = HGROUPS * MGROUP_ROWS;
 constexpr bool WD_PACKED = WD_RESIDENT && moe_fused_swiglu::hidden_blocks_are_balanced(HID_T, HGROUPS, HN_PAD);
 constexpr uint32_t HROW_T = HID_T;
@@ -505,14 +505,20 @@ void kernel_main() {
                     // it DIRECTLY into `dst`; cb_tilize_done is only a one-page completion channel, so
                     // the reader remains the sole owner of cb_x_tiles' push/write-pointer state.
                     if (!staged_early) {
-                        cb_reserve_back(cb_x_in, TILE_H);
-                        issue_x_row(row, get_write_ptr(cb_x_in));
-                        noc_async_read_barrier();
-                        cb_push_back(cb_x_in, TILE_H);
+                        {
+                            MaybeDeviceZoneScope("reader_x_read");
+                            cb_reserve_back(cb_x_in, TILE_H);
+                            issue_x_row(row, get_write_ptr(cb_x_in));
+                            noc_async_read_barrier();
+                            cb_push_back(cb_x_in, TILE_H);
+                        }
                     }
 
-                    cb_wait_front(cb_tilize_done, 1);
-                    cb_pop_front(cb_tilize_done, 1);
+                    {
+                        MaybeDeviceZoneScope("reader_x_tilize_wait");
+                        cb_wait_front(cb_tilize_done, 1);
+                        cb_pop_front(cb_tilize_done, 1);
+                    }
                 } else {
                     // bfp8_b TILE: the tiles land straight in the resident slot, no tilize.
                     if (!staged_early) {
@@ -530,9 +536,17 @@ void kernel_main() {
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_XSTAGED)) = block_idx + 1;
         }
 
-        // The staging prologue's barriers are behind us, so this prefetch has the multicast chain
-        // and the up matmul to land under instead of standing in front of the stick reads.
-        issue_wg_chunk(0);
+        // The row-wide release targets the latency-critical one-block dispatch. Multi-block work
+        // keeps the original pipeline: later X is prefetched, and perturbing its steady state costs
+        // more than protecting the first block saves. With no row multicast there is no collective
+        // rendezvous at all. Otherwise protect_x_stage releases W_gate inside round 0, only after
+        // every core in the row has staged X, so an early core cannot starve a lagging core on NoC0.
+        const bool protect_x_stage = (m_blocks == 1) && !staged_early;
+        if constexpr (!XMCAST_ACTIVE) {
+            issue_wg_chunk(0);
+        } else if (!protect_x_stage) {
+            issue_wg_chunk(0);
+        }
 
         // ---- x multicast chain ----
         // m_eff rounds, not M_BLOCK: at count 128 that is half the handshake chain and half the
@@ -548,6 +562,29 @@ void kernel_main() {
                     if (round == my_col) {
                         noc_semaphore_wait(x_free, XMCAST_CONSUMERS);
                         noc_semaphore_set(x_free, 0);
+                        if (t == 0 && protect_x_stage) {
+                            // The normal round-0 free acknowledgements double as a row-wide
+                            // X-staged barrier. Release W_gate uniformly, then use a second free
+                            // acknowledgement to ensure every receiver consumed this phase before
+                            // reusing x_ready for the payload-ready signal below.
+                            constexpr uint32_t X_STAGED = 2;
+                            issue_wg_chunk(0);
+                            noc_semaphore_set(x_ready, X_STAGED);
+                            noc_semaphore_set_multicast(
+                                static_cast<uint32_t>(get_semaphore(XMCAST_READY_SEM)),
+                                get_noc_multicast_addr(
+                                    xbounds.sx,
+                                    xbounds.sy,
+                                    xbounds.ex,
+                                    xbounds.ey,
+                                    static_cast<uint32_t>(get_semaphore(XMCAST_READY_SEM))),
+                                x_mcast_dests,
+                                /*linked=*/false);
+                            noc_async_writes_flushed();
+                            noc_semaphore_set(x_ready, INVALID);
+                            noc_semaphore_wait(x_free, XMCAST_CONSUMERS);
+                            noc_semaphore_set(x_free, 0);
+                        }
                         const uint32_t src = x_base + t * X_ROW_BYTES;
                         ncrisc_noc_fast_write_any_len<noc_mode>(
                             noc_index,
@@ -580,6 +617,14 @@ void kernel_main() {
                         const uint32_t sy = get_arg_val<uint32_t>(RT_XMCAST + 4 + 2 * round + 1);
                         noc_semaphore_inc(
                             get_noc_addr(sx, sy, static_cast<uint32_t>(get_semaphore(XMCAST_FREE_SEM))), 1);
+                        if (t == 0 && protect_x_stage) {
+                            constexpr uint32_t X_STAGED = 2;
+                            noc_semaphore_wait(x_ready, X_STAGED);
+                            noc_semaphore_set(x_ready, INVALID);
+                            issue_wg_chunk(0);
+                            noc_semaphore_inc(
+                                get_noc_addr(sx, sy, static_cast<uint32_t>(get_semaphore(XMCAST_FREE_SEM))), 1);
+                        }
                         noc_semaphore_wait(x_ready, VALID);
                         noc_semaphore_set(x_ready, INVALID);
                     }
@@ -594,7 +639,6 @@ void kernel_main() {
             // than it can hide. Preserve the original one-push handoff for those blocks.
             cb_push_back(cb_x_tiles, x_slot_tiles);
         }
-
         // ---- Phase 1b: W_gate landed under the x rounds; publish it ----
         // (W_up is the writer's twin on NoC1.) Publish chunk c, then issue c+1 and block on it, so
         // the reader sits in DRAM while compute chews c. Only chunk c is ever outstanding at a
@@ -688,35 +732,53 @@ void kernel_main() {
         // contributor and push WHOLE. This is also cb_h_local's flow control, transitively: my
         // invite for block_idx+1 is issued after my phase 2 of block_idx has read it, and no worker's
         // h-slice send for block_idx+1 can precede this invite. So the h landing needs no second handshake.
-        if (slice_tiles) {
-            cb_reserve_back(cb_gather_gate, GATHER_PAGES);
-            cb_reserve_back(cb_gather_up, GATHER_PAGES);
+        {
+            MaybeDeviceZoneScope("reader_reduce_reserve");
+            if (slice_tiles) {
+                cb_reserve_back(cb_gather_gate, GATHER_PAGES);
+                cb_reserve_back(cb_gather_up, GATHER_PAGES);
+            }
         }
         // cb_gather_gate aliases cb_h_slice and cb_out_tiles at bfp8 output. Reserving touches only
         // this view's FIFO state, but the invite authorises PEERS to write the shared physical SRAM
         // — so block_idx must wait for this core's writer to drain block_idx-1's output DMA.
-        if constexpr (PHASE_CB_ALIAS) {
-            if (block_idx != 0) {
-                moe_fused_swiglu::sem_wait_min(SEM_PHASE_FREE, block_idx);
+        {
+            MaybeDeviceZoneScope("reader_reduce_phase_wait");
+            if constexpr (PHASE_CB_ALIAS) {
+                if (block_idx != 0) {
+                    moe_fused_swiglu::sem_wait_min(SEM_PHASE_FREE, block_idx);
+                }
             }
         }
         const uint32_t sem_go = static_cast<uint32_t>(get_semaphore(SEM_GO));
-        for (uint32_t i = 0; i < KGROUPS; ++i) {
-            const uint32_t p = i;
-            const uint32_t px = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 0);
-            const uint32_t py = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 1);
-            noc_semaphore_inc(get_noc_addr(px, py, sem_go), 1);
-        }
-        noc_async_atomic_barrier();
         {
-            cb_wait_front(cb_up_acc, h_block_tiles);
+            MaybeDeviceZoneScope("reader_reduce_invite");
+            for (uint32_t i = 0; i < KGROUPS; ++i) {
+                const uint32_t p = i;
+                const uint32_t px = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 0);
+                const uint32_t py = get_arg_val<uint32_t>(RT_PEERS + 2 * p + 1);
+                noc_semaphore_inc(get_noc_addr(px, py, sem_go), 1);
+            }
+            noc_async_atomic_barrier();
+        }
+        {
+            {
+                MaybeDeviceZoneScope("reader_reduce_up_wait");
+                cb_wait_front(cb_up_acc, h_block_tiles);
+            }
             // The UP half of the column all-to-all, on NOC_0; the writer carries the GATE half.
             // Wait for the WHOLE column's invites first, exactly as the writer does: every core
             // invites once per peer per M-block, so (block_idx+1)*KGROUPS is the exact total.
-            moe_fused_swiglu::sem_wait_min(SEM_GO, (block_idx + 1) * KGROUPS);
+            {
+                MaybeDeviceZoneScope("reader_reduce_invite_wait");
+                moe_fused_swiglu::sem_wait_min(SEM_GO, (block_idx + 1) * KGROUPS);
+            }
             if constexpr (SCATTER_ONE_SIGNAL) {
-                moe_fused_swiglu::scatter_payload(
-                    RT_PEERS, cb_up_acc, cb_gather_up, slice_worker_count, slice_tiles_each, my_row, BFP8_TILE);
+                {
+                    MaybeDeviceZoneScope("reader_reduce_up_payload");
+                    moe_fused_swiglu::scatter_payload(
+                        RT_PEERS, cb_up_acc, cb_gather_up, slice_worker_count, slice_tiles_each, my_row, BFP8_TILE);
+                }
                 // The payload barrier in scatter_payload is the data-before-publish proof.  The
                 // writer invalidates while polling this monotone mailbox word, then signals the
                 // destination only after its independent gate payload has landed too.
@@ -739,7 +801,10 @@ void kernel_main() {
             // One signal per payload by default; SCATTER_ONE_SIGNAL keeps both payloads concurrent
             // but has the source writer signal once, after both have landed.
             data_arrivals += (SCATTER_ONE_SIGNAL ? 1 : 2) * KGROUPS;
-            noc_semaphore_wait_min(sem_data_ptr, data_arrivals);
+            {
+                MaybeDeviceZoneScope("reader_reduce_data_wait");
+                noc_semaphore_wait_min(sem_data_ptr, data_arrivals);
+            }
             cb_push_back(cb_gather_gate, GATHER_PAGES);
             cb_push_back(cb_gather_up, GATHER_PAGES);
         }
