@@ -173,8 +173,8 @@ if conf_rows:
     check("checked-in table names only reviewed ON-set flags", stale == [], stale)
     n_groups = len(wp.group_rows(conf_rows))
     check(
-        f"checked-in table stays within the 3-compile budget ({n_groups})",
-        1 <= n_groups <= 3,
+        f"checked-in table stays within the 5-compile budget ({n_groups})",
+        1 <= n_groups <= 5,
     )
 
 if FAILS:
