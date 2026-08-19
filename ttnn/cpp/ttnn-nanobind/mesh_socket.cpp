@@ -167,6 +167,10 @@ void py_module_types(nb::module_& mod) {
                 const tt::tt_metal::distributed::SocketConfig&>(),
             nb::arg("device"),
             nb::arg("config"),
+            // The constructor blocks in the peer descriptor handshake. Holding the GIL across that
+            // wait deadlocks any peer that lives in the same interpreter (emule in-process ranks):
+            // the peer cannot run Python to reach its own endpoint and answer.
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Initialize a MeshSocket with a device and socket configuration.
 
@@ -240,6 +244,8 @@ void py_module(nb::module_& mod) {
         nb::arg("sender_mesh_device"),
         nb::arg("receiver_mesh_device"),
         nb::arg("socket_config"),
+        // Constructs both endpoints, so it blocks in the same handshake as the constructor above.
+        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
             Create a pair of sockets between two mesh devices.
 
