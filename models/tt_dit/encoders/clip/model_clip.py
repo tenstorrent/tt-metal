@@ -12,7 +12,7 @@ from ttnn.distributed.distributed import ConcatMeshToTensor
 import ttnn
 
 from ...layers.feedforward import FeedForward, ParallelFeedForward
-from ...layers.linear import ColParallelLinear, Linear
+from ...layers.linear import ColParallelLinear, Linear, LoRAColParallelLinear, LoRALinear
 from ...layers.module import Module, ModuleList, Parameter
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
@@ -84,6 +84,7 @@ class CLIPEncoder(Module):
         ccl_manager: CCLManager,
         parallel_config: EncoderParallelConfig,
         eos_token_id: int,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
         self.config = config
@@ -100,7 +101,9 @@ class CLIPEncoder(Module):
 
         self.embeddings = TextEmbeddings(config, mesh_device)
         self.eos_token_id = eos_token_id
-        self.encoder = CLIPStack(config, self.mesh_device, self.ccl_manager, self.parallel_config)
+        self.encoder = CLIPStack(
+            config, self.mesh_device, self.ccl_manager, self.parallel_config, lora_enabled=lora_enabled
+        )
 
         self.final_layer_norm = Parameter(total_shape=[config.embed_dim], device=mesh_device)
         self.final_layer_norm_bias = Parameter(total_shape=[config.embed_dim], device=mesh_device)
@@ -249,6 +252,7 @@ class CLIPStack(Module):
         mesh_device: ttnn.Device,
         ccl_manager: CCLManager,
         parallel_config: EncoderParallelConfig,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
         self.config = config
@@ -261,7 +265,8 @@ class CLIPStack(Module):
             packer_l1_acc=True,
         )
         self.layers = ModuleList(
-            CLIPEncoderLayer(config, mesh_device, ccl_manager, parallel_config) for _ in range(config.num_hidden_layers)
+            CLIPEncoderLayer(config, mesh_device, ccl_manager, parallel_config, lora_enabled=lora_enabled)
+            for _ in range(config.num_hidden_layers)
         )
 
     def forward(
@@ -289,6 +294,7 @@ class CLIPEncoderLayer(Module):
         mesh_device: ttnn.Device,
         ccl_manager: CCLManager,
         parallel_config: EncoderParallelConfig,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
         self.config = config
@@ -301,7 +307,7 @@ class CLIPEncoderLayer(Module):
             packer_l1_acc=True,
         )
         self.layer_norm_eps = config.layer_norm_eps
-        self.self_attn = CLIPAttention(config, mesh_device, ccl_manager, parallel_config)
+        self.self_attn = CLIPAttention(config, mesh_device, ccl_manager, parallel_config, lora_enabled=lora_enabled)
         self.parallel_config = parallel_config
         if self.parallel_config.tensor_parallel.factor > 1:
             self.mlp = ParallelFeedForward(
@@ -311,6 +317,7 @@ class CLIPEncoderLayer(Module):
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
+                lora_enabled=lora_enabled,
             )
         else:
             self.mlp = FeedForward(
@@ -318,6 +325,7 @@ class CLIPEncoderLayer(Module):
                 dim_out=config.embed_dim,
                 activation_fn=config.hidden_act,
                 mesh_device=mesh_device,
+                lora_enabled=lora_enabled,
             )
         self.ccl_manager = ccl_manager
 
@@ -404,6 +412,7 @@ class CLIPAttention(Module):
         mesh_device: ttnn.Device,
         ccl_manager: CCLManager,
         parallel_config: EncoderParallelConfig,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
         self.config = config
@@ -424,29 +433,35 @@ class CLIPAttention(Module):
         self.scale = self.head_dim**-0.5
         self.attention_dropout = config.attention_dropout
 
+        # LoRA-capable variants when asked for, mirroring the pattern in
+        # models/tt_dit/models/transformers/{ltx,wan2_2}. Both default off, so an
+        # encoder built without lora_enabled is byte-for-byte the previous model.
+        ColCls = LoRAColParallelLinear if lora_enabled else ColParallelLinear
+        LinCls = LoRALinear if lora_enabled else Linear
+
         if self.parallel_config.tensor_parallel.factor > 1:
-            self.q_proj = ColParallelLinear(
+            self.q_proj = ColCls(
                 in_features=self.embed_dim,
                 out_features=self.embed_dim,
                 bias=True,
                 mesh_device=self.mesh_device,
                 mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
             )
-            self.k_proj = ColParallelLinear(
+            self.k_proj = ColCls(
                 in_features=self.embed_dim,
                 out_features=self.embed_dim,
                 bias=True,
                 mesh_device=self.mesh_device,
                 mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
             )
-            self.v_proj = ColParallelLinear(
+            self.v_proj = ColCls(
                 in_features=self.embed_dim,
                 out_features=self.embed_dim,
                 bias=True,
                 mesh_device=self.mesh_device,
                 mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
             )
-            self.o_proj = ColParallelLinear(
+            self.o_proj = ColCls(
                 in_features=self.embed_dim,
                 out_features=self.embed_dim,
                 bias=True,
@@ -454,10 +469,10 @@ class CLIPAttention(Module):
                 mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
             )
         else:
-            self.q_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
-            self.k_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
-            self.v_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
-            self.o_proj = Linear(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
+            self.q_proj = LinCls(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
+            self.k_proj = LinCls(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
+            self.v_proj = LinCls(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
+            self.o_proj = LinCls(in_features=self.embed_dim, out_features=self.embed_dim, mesh_device=self.mesh_device)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "out_proj", "o_proj")

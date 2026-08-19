@@ -4,7 +4,14 @@
 
 import ttnn
 
-from .linear import ColParallelLinear, Linear, LoRAColParallelLinear, LoRARowParallelLinear, RowParallelLinear
+from .linear import (
+    ColParallelLinear,
+    Linear,
+    LoRAColParallelLinear,
+    LoRALinear,
+    LoRARowParallelLinear,
+    RowParallelLinear,
+)
 from .module import Module
 
 
@@ -22,6 +29,7 @@ class FeedForward(Module):
         inner_dim=None,
         bias: bool = True,
         mesh_device=None,
+        lora_enabled: bool = False,
     ):
         super().__init__()
 
@@ -35,8 +43,11 @@ class FeedForward(Module):
         self.activation_fn = activation_fn
         self.bias = bias
 
-        self.ff1 = Linear(dim, inner_dim, bias=bias, mesh_device=mesh_device, activation_fn=activation_fn)
-        self.ff2 = Linear(inner_dim, dim_out, bias=bias, mesh_device=mesh_device)
+        # Matches ParallelFeedForward, which already took this flag. Defaults off, so
+        # a FeedForward built without it is unchanged.
+        LinCls = LoRALinear if lora_enabled else Linear
+        self.ff1 = LinCls(dim, inner_dim, bias=bias, mesh_device=mesh_device, activation_fn=activation_fn)
+        self.ff2 = LinCls(inner_dim, dim_out, bias=bias, mesh_device=mesh_device)
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
         ff1_out = self.ff1(x, compute_kernel_config=compute_kernel_config)
