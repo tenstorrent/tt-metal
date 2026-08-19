@@ -369,42 +369,59 @@ A-transpose costs an op plus a buffer.
 
 ## Phase 6 -- `BcastFusion` (the one structural gap)
 
-Softmax's `x - rowmax` and `x * recip` are `sub_tiles_bcast_cols` /
-`mul_tiles_bcast_cols`. These read **two CBs**, so they do not fit the SFPU
-expression tree, which fuses over DST slots of one loaded block. They fit the
-shape already built for the fused bias: `Strategy<FPUFusion>::bias_finish`
-(`tt/unified/math.hpp:482`) is a tile loop of `add_tiles_bcast_rows(acc_cb,
-bias_cb, t, t % ct_dim, t)` with a format reconfig on entry and a restore on exit.
+**DONE.** Spelled with the ordinary operators and an explicit marker on the operand being
+broadcast:
 
-So: a fourth kind, `BcastFusion`, that is `bias_finish` generalized.
-
-```
-Dim::Rows    vector 1 x Wt    tile t pairs with  t % Wt    <- what bias already does
-Dim::Cols    vector Ht x 1    tile t pairs with  t / Wt
-Dim::Scalar  vector 1 x 1     tile t pairs with  0         <- the 1/sqrt(d) scale
+```cpp
+u::ComputeBlock m = m_storage.store(u::reduce_max<u::Axis::Cols>(x, one));
+e_storage.store((x - u::bcast<u::Axis::Cols>(m)).exp());     // exp(x - rowmax), one pass
+out_storage.store(e * u::bcast<u::Axis::Cols>(r));
 ```
 
-The pairing with reduce falls out and is worth encoding in the types:
-`reduce<Rows>` produces exactly what `bcast_rows` consumes, `reduce<Cols>` what
-`bcast_cols` consumes.
+- [x] `enum class Axis { Rows, Cols, Both }`, with `ReduceAxis` kept as an alias. One
+      vocabulary: the axis a broadcast expands is the axis a reduction collapses.
+- [x] `Broadcast<A, S>` marker + `bcast<A>(ComputeBlock)`; `is_operand` stays false for it
+      so the SFPU operators cannot swallow one
+- [x] `BcastNode<Op, A, SB, SV, Chain>` with `shape = SB`, so `store` conformance and
+      `node_shape` need nothing new
+- [x] `Strategy<BcastFusion>`: hoisted `reconfig_data_format` + `init_short`, then one DST
+      slot per tile -- unlike `bias_finish`, which packs a whole block and is therefore
+      capped at 8 tiles
+- [x] Nine `(op, axis)` traits spelled out, because metal's init names are not uniform
+- [x] `unified_kernels/bcast.cpp` + `test_unified_bcast.py`, 12 cases
 
-- [ ] `tt/unified/math.hpp` -- `BcastDim`, geometry (reuse `ReduceGeometry`?),
-      `BcastNode<Geometry, Dim, Op>`, `Strategy<BcastFusion>`
-- [ ] `tt/unified/api.h` -- entry points taking (block, vector operand)
-- [ ] `tt/unified/impl_v1.hpp` -- definitions
-- [ ] Refactor the fused bias onto it and prove the selftest trace is **byte
-      identical** before and after
-- [ ] Assert the vector operand's page count matches the geometry, the way
-      `.bias()` does (`tt/unified/math.hpp:190`)
-- [ ] Standalone bcast test on device (rows, cols, scalar)
+### The axis is DECLARED, and that was the design correction
 
-**Done when:** bias is a special case of bcast with an unchanged trace, and all
-three dims match torch.
+The first draft inferred the axis from the vector's shape. That is unsound: a `Shape`
+counts TILES and the distinction lives inside one -- a single tile holding a row, a column,
+or a lone value at `[0,0]` is `Shape<1,1>` in all three cases. Inference only appeared to
+work because the three vector shapes differ when the block's tile extents differ; they
+collide for `1x6`, `4x1` and `1x1`, and `Shape<1,N>` is exactly what a reduction produces.
 
-**Known limitation, inherited:** like `.bias()`, the vector operand will be
-duck-typed on `get_cb_id()` / `get_num_pages()`, so a loop-scoped `ComputeBlock`
-passes the size assert and is then popped early. Only a distinct resident type
-would catch it -- deliberately rejected before, worth revisiting if it bites.
+So the axis is stated because it is information the shape lacks, and the shape is then
+checked against it because that is information the axis lacks. Four guards, each proven by
+a violation that must fail to compile: wrong vector shape for the axis, marker on the left,
+an expression as the block operand, and a leading batch extent.
+
+### The direction was measured, not read
+
+Metal's `add_tiles_bcast` doc asserts both that B has "a filled 0-column" and that the
+result is `C[h,w] = A[h,w] + B[w]` -- opposite claims. `test_unified_bcast.py` settles it:
+`_bcast_cols` reads B as a COLUMN, so metal's "0-column" wording was right and its `B[w]`
+was the typo. Swapping the rows/cols traits fails all six directional cases with errors of
+0.59-1.53 while leaving `Both` untouched, which is what makes the test a measurement.
+
+Two properties make it unable to pass wrongly: a non-square 2x3 block, so the two vector
+shapes are different types; and vector entries that VARY along their length, so a wrong
+direction cannot coincidentally agree.
+
+### A broadcast followed by an SFPU op
+
+The outline flagged this as the test that turns phase 4's "should" into "does", and it
+earned its place. Dropping just `copy_tile_to_dst_init_short` from the SFPU leaf -- keeping
+the format reconfig -- leaves all NINE plain broadcast cases passing and breaks only the
+follow-on ones: `Rows` returns `err = 1.0` and `Cols` hangs the device outright. Nothing
+else in the suite notices.
 
 ## Phase 7 -- Attention kernel + test
 

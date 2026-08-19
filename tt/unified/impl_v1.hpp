@@ -417,6 +417,11 @@ auto matmul(const ComputeBlock<SA>& a, const ComputeBlock<SB>& b) {
     return matmul<Tr>(as_node(a), as_node(b));
 }
 
+template <Axis A, typename S>
+Broadcast<A, S> bcast(const ComputeBlock<S>& v) {
+    return Broadcast<A, S>{v.get_cb_id()};
+}
+
 template <ReduceAxis Axis, typename SB, typename SC>
 ReduceNode<SB, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
     const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler) {
