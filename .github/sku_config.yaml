@@ -6,12 +6,7 @@
 #   merge_queue_sku: (Optional) Concrete prio SKU to use when github.event_name is
 #     merge_group. Logical test-list SKUs should set this instead of listing prio
 #     SKUs in YAML. Multiple logical SKUs may share the same merge_queue_sku.
-#   allocation: (Optional) Configuration for TTOP allocation
-#     type: "Count" or "MGD"
-#     count: Number of nodes (for Count type)
-#     match_labels: Dictionary of Kubernetes labels
-#     topology_keys: List of topology keys (for MGD type)
-#   mgd: (Optional) MGD configuration text for runtime topology
+#   weights-cache-mode: (Optional) How model weights are mounted for the SKU.
 skus:
   wh_llmbox:
     runs_on:
@@ -181,46 +176,23 @@ skus:
       - in-service
     weights-cache-mode: yyz4-mnt-models
 
+  # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc1:
     runs_on:
-      - exabox-multihost-with-nfs
-    allocation:
-      type: Count
-      count: 1
+      - exabox-multihost-ci-sc1
 
-  # Like bh_sc1, but restricts the single-galaxy allocation to nodes labelled
-  # exabox.tenstorrent.com/power=14kw.
+  # Like bh_sc1, but high-power pool (exabox.tenstorrent.com/power=14kw).
+  # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc1_high_power:
     runs_on:
-      - exabox-multihost-with-nfs
-    allocation:
-      type: Count
-      count: 1
-      match_labels:
-        exabox.tenstorrent.com/power: "14kw"
+      - exabox-multihost-ci-sc1-hp
 
+  # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc4:
-    runs_on:
-      - exabox-multihost-with-nfs
-    allocation:
-      type: Count
-      count: 4
-      topologyKeys:
-        - exabox.tenstorrent.com/quad
-
-  bh_sc4-blitz:
     runs_on:
       - exabox-multihost-ci-sc4
 
-  bh_sc4-mgd:
-    runs_on:
-      - exabox-multihost-with-nfs
-    allocation:
-      type: MGD
-      topologyKeys:
-        - exabox.tenstorrent.com/quad
-      mgd_file: tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
-
+  # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc16:
     runs_on:
       - exabox-multihost-ci-sc16
@@ -247,20 +219,46 @@ skus:
     runs_on:
       - tt-ubuntu-2204-medium-prio-stable
 
-  # Synthetic CPU SKUs for ttsim simulator jobs. Tests using these SKUs run on
-  # ubuntu-latest; the impl is expected to invoke .github/actions/setup-ttsim
-  # gated on `startsWith(sku, 'sim_')` to download the matching libttsim_<arch>.so
-  # and export the simulator env vars. The arch suffix on the SKU name selects
-  # the ttsim binary (sim_wormhole_b0 → libttsim_wh.so, sim_blackhole → libttsim_bh.so).
-  sim_wormhole_b0:
+  # Synthetic CPU SKUs for ttsim simulator jobs. The impl invokes
+  # .github/actions/setup-ttsim gated on `startsWith(sku, 'sim_')`; that action reads
+  # ttsim_lib below to pick which simulator binary to install, and derives the soc
+  # descriptor from its wh/bh prefix. Workflows never name a libttsim binary — add or
+  # retarget a SKU here and every pipeline that uses it follows.
+  #
+  # Each sim SKU mirrors one HW SKU's processor count, so a test can list the sim SKU
+  # alongside the HW SKU it stands in for:
+  #   ttsim_lib: (Required) libttsim binary from the tenstorrent/ttsim release pinned
+  #     in tt_metal/ttsim-version. The fetch-ttsim job downloads libttsim_*.so wholesale,
+  #     so a new lib needs no workflow change.
+  sim_wh_n150:
     runs_on:
       - ubuntu-latest
-  sim_blackhole:
+    ttsim_lib: libttsim_wh.so
+  sim_wh_n300:
     runs_on:
       - ubuntu-latest
-  sim_wormhole_b0_galaxy:
+    ttsim_lib: libttsim_wh_x2.so
+  sim_wh_llmbox:
     runs_on:
       - tt-ubuntu-2204-large-stable
-  sim_blackhole_galaxy:
+    ttsim_lib: libttsim_wh_x8.so
+  sim_wh_galaxy:
     runs_on:
       - tt-ubuntu-2204-large-stable
+    ttsim_lib: libttsim_wh_x32.so
+  sim_bh_p150:
+    runs_on:
+      - ubuntu-latest
+    ttsim_lib: libttsim_bh.so
+  sim_bh_p300:
+    runs_on:
+      - ubuntu-latest
+    ttsim_lib: libttsim_bh_x2.so
+  sim_bh_quietbox_2:
+    runs_on:
+      - tt-ubuntu-2204-large-stable
+    ttsim_lib: libttsim_bh_x4.so
+  sim_bh_galaxy:
+    runs_on:
+      - tt-ubuntu-2204-large-stable
+    ttsim_lib: libttsim_bh_x32.so

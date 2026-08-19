@@ -187,6 +187,60 @@ def test_sort_long_tensor(shape, dim, descending, device):
         assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
 
 
+def _sort_fp32_wide(descending, device):
+    # A few finite logits in a sea of -inf, as in masked vocab-size logits.
+    torch.manual_seed(0)
+    n = 151936
+    input = torch.full((1, n), float("-inf"), dtype=torch.float32)
+    input[..., torch.randperm(n)[:328]] = torch.randn(328) * 8.0
+
+    ttnn_input = ttnn.from_torch(input, ttnn.float32, layout=ttnn.Layout.TILE, device=device)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+    return input, ttnn_sort_values, ttnn_sort_indices
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_fp32_wide_values(descending, device):
+    input, ttnn_sort_values, ttnn_sort_indices = _sort_fp32_wide(descending, device)
+
+    torch_sort_values, _ = torch.sort(input, dim=-1, descending=descending)
+
+    assert ttnn_sort_indices.dtype == ttnn.uint32
+    assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+
+
+@pytest.mark.parametrize(
+    "descending",
+    [
+        False,
+        # Descending order pads the row with -inf, which ties with real -inf
+        # entries and can emit padding indices (>= n) into the output.
+        pytest.param(
+            True,
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="https://github.com/tenstorrent/tt-metal/issues/53326: padding indices leak",
+            ),
+        ),
+    ],
+)
+def test_sort_fp32_wide_index_correctness(descending, device):
+    # Ties make exact torch index parity undefined, so check invariants instead:
+    # indices form a valid permutation and gather back the sorted values.
+    input, ttnn_sort_values, ttnn_sort_indices = _sort_fp32_wide(descending, device)
+
+    n = input.shape[-1]
+    values = ttnn.to_torch(ttnn_sort_values)
+    indices = ttnn.to_torch(ttnn_sort_indices).reshape(-1).to(torch.int64)
+
+    assert (
+        indices.min() >= 0 and indices.max() < n
+    ), f"indices out of range [0, {n}): min={int(indices.min())}, max={int(indices.max())}"
+    unique_count = indices.unique().numel()
+    assert unique_count == n, f"{n - unique_count} duplicated indices"
+    assert_equal(input.reshape(-1)[indices], values.reshape(-1))
+
+
 @pytest.mark.parametrize(
     "shape, dim, descending",
     [
@@ -910,3 +964,33 @@ def test_block_sharded(layout, device):
     ), f"values mismatch max_diff={(out - ref_vals.float()).abs().max():.4f}"
     gathered = torch.gather(t, -1, ttnn.to_torch(i).to(torch.int64))
     assert torch.allclose(gathered.float(), ref_vals.float(), rtol=1e-2, atol=1e-2), "index gather mismatch"
+
+
+@pytest.mark.parametrize("descending", [False, True])
+def test_sort_row_major_multi_core_correctness(descending, device):
+    torch.manual_seed(42)
+
+    grid = device.compute_with_storage_grid_size()
+    total_cores = grid.x * grid.y
+    wt = _next_pow2(total_cores * 128 + 1)  # smallest pow2 Wt on the DRAM multi-core path
+    shape = [1, 1, TILE_HEIGHT, wt * TILE_WIDTH]
+
+    input_t = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_t, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    ttnn_values, ttnn_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending)
+
+    assert ttnn_values.get_layout() == ttnn.ROW_MAJOR_LAYOUT, "output layout must be ROW_MAJOR"
+    assert ttnn_indices.get_layout() == ttnn.ROW_MAJOR_LAYOUT, "index layout must be ROW_MAJOR"
+    assert list(ttnn_values.shape) == shape, f"values shape mismatch: got {list(ttnn_values.shape)}, expected {shape}"
+    assert (
+        list(ttnn_indices.shape) == shape
+    ), f"indices shape mismatch: got {list(ttnn_indices.shape)}, expected {shape}"
+
+    torch_values, _ = torch.sort(input_t, dim=-1, descending=descending)
+
+    out_vals = ttnn.to_torch(ttnn_values)
+    assert_equal(torch_values, out_vals)
+
+    ttnn_gathered = torch.gather(input_t, -1, ttnn.to_torch(ttnn_indices).to(torch.int64))
+    assert_equal(torch_values, ttnn_gathered)

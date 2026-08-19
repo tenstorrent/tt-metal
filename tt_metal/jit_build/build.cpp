@@ -628,13 +628,12 @@ void JitBuildState::write_reuse_cache(std::string_view kernel_name) const {
 void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
     TTZoneScopedD(JIT);
 
-    // Build the compile recipe (opt/cflags/includes/defines, including kernel-specific
-    // include paths and the named-compile-arg map) ONCE via export_target_recipe, then turn it
-    // into an argv with the shared builder and run it SHELL-FREE via exec_command — the same argv
-    // builder the JIT compile server and preprocess-and-ship use. Shell-free also means map-valued
-    // defines like
-    // -DKERNEL_COMPILE_TIME_ARG_MAP={"name",idx},... need no escaping — each define is one argv
-    // element, passed verbatim (the macro expansion lives in tt_metal/hw/inc/compile_time_args.h).
+    // Build the compile recipe (opt/cflags/includes/defines, including kernel-specific include
+    // paths and the -include for the named-compile-arg map header) ONCE via export_target_recipe,
+    // then turn it into an argv with the shared builder and run it SHELL-FREE via exec_command —
+    // the same argv builder the JIT compile server and preprocess-and-ship use. Shell-free also
+    // means defines carrying shell metacharacters, like -DFULL_KERNEL_NAME="<name>", need no
+    // escaping — each define is one argv element, passed verbatim.
     const tt::jit_build::TargetRecipe recipe = export_target_recipe(settings);
 
     std::string cflags = recipe.cflags;
@@ -918,6 +917,17 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_build).count();
     static auto& tok_build = BuildCacheTelemetry::inst().register_metric("JitBuildState::build");
     tok_build.record(elapsed_ms);
+
+    // Per-kernel compile time makes a slow/stuck compile visible instead of silent, but a workload
+    // can compile 10k+ kernels, so it is off by default (TT_METAL_LOG_KERNEL_COMPILE=1 opts in;
+    // models/tt_dit sets it for every DiT run). Read once, lazily, so an importer that sets the env
+    // before the first compile is honored; only when something actually compiled (cache hits are noise).
+    if (compiled.any() && !kernel_name.empty()) {
+        static const bool log_compile = tt::parse_env<bool>("TT_METAL_LOG_KERNEL_COMPILE", false);
+        if (log_compile) {
+            log_info(tt::LogBuildKernels, "compiled {} in {:.0f} ms", kernel_name, elapsed_ms);
+        }
+    }
 }
 
 tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSettings* settings) const {
@@ -956,22 +966,24 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
     if (settings) {
         // FULL_KERNEL_NAME: consumed by the LLK sanitizer (CTSTR(FULL_KERNEL_NAME)). Emitted
         // shell-free as one verbatim argv element with literal quotes (the unified/remote-JIT
-        // path does no shell expansion), matching the KERNEL_COMPILE_TIME_ARG_MAP convention below.
+        // path does no shell expansion).
         defines.push_back(fmt::format(R"(-DFULL_KERNEL_NAME="{}")", settings->get_full_kernel_name()));
         settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
             if (!values.empty()) {
                 defines.push_back(fmt::format("-DKERNEL_COMPILE_TIME_ARGS={}", fmt::join(values, ",")));
             }
         });
+        // KERNEL_COMPILE_TIME_ARG_MAP arrives as a force-included header (written by genfiles,
+        // see write_named_ct_arg_map_header) rather than a -D define, because one define is one
+        // argv element and the map alone can exceed the per-element MAX_ARG_STRLEN. Two argv
+        // elements, and the bare filename resolves via the "-I.." every compile carries -- so this
+        // recipe stays valid verbatim on the remote compile server, where a client-side absolute
+        // path would not resolve. See NAMED_CT_ARG_MAP_HEADER.
         settings->process_named_compile_time_args(
             [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
                 if (!named_args.empty()) {
-                    std::string compile_time_arg_map = "-DKERNEL_COMPILE_TIME_ARG_MAP=";
-                    auto it = std::back_inserter(compile_time_arg_map);
-                    for (const auto& [name, value] : named_args) {
-                        fmt::format_to(it, "{{\"{}\",{}}},", name, value);
-                    }
-                    defines.push_back(std::move(compile_time_arg_map));
+                    defines.emplace_back("-include");
+                    defines.emplace_back(tt::jit_build::utils::NAMED_CT_ARG_MAP_HEADER);
                 }
             });
     }

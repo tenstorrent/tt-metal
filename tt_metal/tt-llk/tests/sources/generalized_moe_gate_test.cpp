@@ -196,6 +196,55 @@ static inline void mop_dest_reset()
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(0);
 }
 
+// Determinism sanitize (test-only). The gate's answer is row 0, columns 0..7 of the SCORES and IDS
+// tiles -- the op's documented output (generalized_moe_gate_nanobind.cpp: "Only the first k entries of
+// row 0 are valid ... the rest of the tile is padding"), and all _gate_output reads. Every other
+// packed lane (row 0 cols 8..15, rows 1..15, the KEYS/intermediate scratch tiles, faces 1..3) holds
+// uninitialized-SFPU-LReg residue: the sort
+// and the sum_top2 "replicate down the column" broadcast SFPSTORE full 32-lane rows whose non-rank
+// lanes were never written this run, so they carry whatever the previous kernel left in the LReg file
+// (see the op's own "junk lanes ... harmless" note). That residue is bit-reproducible run-to-run only
+// because it is a fixed point once warm; run 0 (cold) differs, so the bit-exact re-run check flags it
+// though the answer is stable. Rather than scrub every SFPU stage, keep only the answer here (row 0,
+// cols 0..7 of SCORES and IDS) and zero every other DEST row the packer ships.
+static inline void gmg_sanitize_scratch()
+{
+    // Address everything through sfpi dst_reg -- the one mapping proven to land on the right rows here
+    // (raw SFP offsets / ZEROACC start mid-tile). dst_reg[k] maps to TTI address 2k, so each packed DEST
+    // tile is 32 dst_reg rows and the 4 tiles span dst_reg[0..127]. A packed 16-col row is split across
+    // TWO dst_reg rows -- even columns in dst_reg[2r], odd columns in dst_reg[2r+1] -- so the answer
+    // (packed row 0 of SCORES/IDS) lives in dst_reg pairs {0,1} (SCORES) and {32,33} (IDS). Keep those
+    // four; zero every other dst_reg row.
+    constexpr int DREG_PER_TILE = ckernel::sfpu::dst_tile_offset / 2; // 32
+    constexpr int SCORES_LO     = SCORES_TILE * DREG_PER_TILE;        // 0  (even cols of SCORES row 0)
+    constexpr int SCORES_HI     = SCORES_LO + 1;                      // 1  (odd  cols)
+    constexpr int IDS_LO        = IDS_TILE * DREG_PER_TILE;           // 32 (even cols of IDS row 0)
+    constexpr int IDS_HI        = IDS_LO + 1;                         // 33 (odd  cols)
+    constexpr int NUM_DREG      = NUM_DEST_TILES * DREG_PER_TILE;     // 128
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    for (int k = 0; k < NUM_DREG; ++k)
+    {
+        if (k == SCORES_LO || k == SCORES_HI || k == IDS_LO || k == IDS_HI)
+        {
+            continue;
+        }
+        sfpi::dst_reg[k] = 0.0f;
+    }
+    // Mask each answer row-half to the top-8: with columns split even/odd, cols 0..7 are the first four
+    // even and first four odd columns -> lanes 0..3 -> vConstTileId < 8; zero the residue past them.
+    // (Same vFloat mod-0 raw-bit round-trip finalize_ungrouped uses for the idx row -- kept ids survive.)
+    for (const int dreg : {SCORES_LO, SCORES_HI, IDS_LO, IDS_HI})
+    {
+        sfpi::vFloat v = sfpi::dst_reg[dreg];
+        v_if (sfpi::vConstTileId >= 8)
+        {
+            v = 0.0f;
+        }
+        v_endif;
+        sfpi::dst_reg[dreg] = v;
+    }
+}
+
 static inline void run_gate()
 {
     GMG_SFPU_CALL(generalized_moe_gate_sum_top2, (APPROX_MODE, is_fp32_dest_acc_en));
@@ -459,6 +508,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (GMG_MODE == MODE_GATE)
         {
             run_gate();
+            // Only the normalized answer path leaves the top-8 in row 0; produce_run leaves a
+            // re-mergeable run the test reads by cell, so it must not be sanitized.
+            if constexpr (!(GMG_PRODUCE_RUN && !GMG_GROUPED))
+            {
+                gmg_sanitize_scratch();
+            }
         }
         else if constexpr (GMG_MODE == MODE_MOVE)
         {

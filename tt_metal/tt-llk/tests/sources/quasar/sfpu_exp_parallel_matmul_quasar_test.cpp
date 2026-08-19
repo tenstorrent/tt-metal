@@ -42,7 +42,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_desc_src_a.buf_desc.f.y_dim        = FACE_R_DIM;
     tdma_desc_src_a.buf_desc.f.z_dim        = params.num_faces_A;
     tdma_desc_src_a.buf_desc_id             = buf_desc_id_src_a;
-    tdma_desc_src_a.reg_data_format         = static_cast<std::uint32_t>(formats.unpack_A_dst);
+    tdma_desc_src_a.reg_data_format         = static_cast<DataFormat>(formats.unpack_A_dst);
 
     tdma_descriptor_t tdma_desc_src_b;
     tdma_desc_src_b.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_B[0]);
@@ -52,11 +52,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_desc_src_b.buf_desc.f.y_dim        = FACE_R_DIM;
     tdma_desc_src_b.buf_desc.f.z_dim        = params.num_faces_B;
     tdma_desc_src_b.buf_desc_id             = buf_desc_id_src_b;
-    tdma_desc_src_b.reg_data_format         = static_cast<std::uint32_t>(formats.unpack_B_dst);
+    tdma_desc_src_b.reg_data_format         = static_cast<DataFormat>(formats.unpack_B_dst);
 
     _configure_buf_desc_table_(tdma_desc_src_a.buf_desc_id, tdma_desc_src_a.buf_desc);
     _configure_buf_desc_table_(tdma_desc_src_b.buf_desc_id, tdma_desc_src_b.buf_desc);
-    _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(tdma_desc_src_a, tdma_desc_src_b);
+    _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(tdma_desc_src_a.reg_data_format, tdma_desc_src_b.reg_data_format);
 
     _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(buf_desc_id_src_a, buf_desc_id_src_b, params.CT_DIM, params.RT_DIM, params.KT_DIM);
 
@@ -96,12 +96,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_ISOLATE_SFPU
 
-#include "cfg_defines.h"
+#include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_srcs.h"
 #include "params.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -110,7 +111,7 @@ using namespace ckernel::sfpu;
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
-    const volatile FormatConfig& formats = params.formats;
+    const FormatConfig& formats = params.formats;
 #endif
     const std::uint32_t num_tiles = params.TILE_CNT;
 
@@ -136,9 +137,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_unpack.f.z_dim         = PARAM_SRCS_ZDIM;
     td_unpack.buf_desc        = bd_unpack;
     td_unpack.buf_desc_id     = buf_desc_id_unpack;
-    td_unpack.reg_data_format = static_cast<std::uint8_t>(formats.unpack_S_dst);
+    td_unpack.reg_data_format = static_cast<DataFormat>(formats.unpack_S_dst);
     _configure_buf_desc_table_(td_unpack.buf_desc_id, td_unpack.buf_desc);
-    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack);
+    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack.reg_data_format);
 
     bd_pack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_Res[0]);
     bd_pack.f.format        = static_cast<std::uint8_t>(formats.pack_S_dst);
@@ -147,41 +148,48 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_pack.f.z_dim         = PARAM_SRCS_ZDIM;
     td_pack.buf_desc        = bd_pack;
     td_pack.buf_desc_id     = buf_desc_id_pack;
-    td_pack.reg_data_format = static_cast<std::uint8_t>(formats.pack_S_src);
+    td_pack.reg_data_format = static_cast<DataFormat>(formats.pack_S_src);
     _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack, ckernel::ReluConfig::none());
-
-    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
+    _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack.reg_data_format, ckernel::ReluConfig::none());
 
     _llk_unpack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
     _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
     _llk_math_eltwise_sfpu_init_();
 
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1;
+    const int load_base_addr      = ckernel::math::SFPU_SRCS_BASE_ADDR;
+
+    // The SFPU load reads what UNP_S wrote (unpack_S_dst); the folded store writes what PACK1
+    // will read (pack_S_src).
+    const std::uint32_t load_sfpmem  = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.unpack_S_dst));
+    const std::uint32_t store_sfpmem = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.pack_S_src));
+
+    // One-time setup of the exp LOADMACRO replay. The store offset (2 * YDIM = slice size) must
+    // be a compile-time constant, so branch on the runtime 32-bit mode into constexpr variants.
+    if (PARAM_SRCS_32BIT_MODE)
+    {
+        _exp_init_loadmacro_<2 * srcs_dims::ydim(true)>(load_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem);
+    }
+    else
+    {
+        _exp_init_loadmacro_<2 * srcs_dims::ydim(false)>(load_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem);
+    }
+    // One MOP run issues one REPLAY per SrcS slice of a tile. The `done` bit on the final
+    // LOADMACRO of each replay swaps the SrcS banks and resets the dvalids in hardware, so the
+    // SFPU is paced purely by the dvalid handshake with the unpacker and packer.
+    ckernel_template mop(PARAM_SRCS_SLICE_COUNT, 1, _exp_loadmacro_op_(num_sfpu_iterations));
+    mop.program(instrn_buffer);
+
+    // Full TRISC3 path: UNP_S -> SFPU exp (self-contained SFPLOADMACRO replay) -> PACK1.
+    // Pack is kicked before the MOP so PACK1 is already waiting on the output dvalids.
     for (std::uint32_t i = 0; i < num_tiles; ++i)
     {
         _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT);
         _llk_pack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_pack, i * PARAM_SRCS_SLICE_COUNT);
-
-        for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
-        {
-            const int load_base_addr  = ckernel::math::SFPU_SRCS_BASE_ADDR;
-            const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
-
-#pragma GCC unroll 8
-            for (int d = 0; d < num_sfpu_iterations; d++)
-            {
-                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, load_base_addr + (d << 1));
-                TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::EXP_MODE);
-                TT_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, store_base_addr + (d << 1));
-            }
-
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
-        }
+        ckernel_template::run(instrn_buffer);
     }
 
-    wait_sfpu_idle();
-    wait_unpack_idle();
+    wait_mop_idle();
     wait_pack_idle();
 }
 
@@ -208,10 +216,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_desc_dst.buf_desc.f.y_dim        = FACE_R_DIM;
     tdma_desc_dst.buf_desc.f.z_dim        = params.num_faces;
     tdma_desc_dst.buf_desc_id             = buf_desc_id_dst;
-    tdma_desc_dst.reg_data_format         = static_cast<std::uint8_t>(formats.pack_src);
+    tdma_desc_dst.reg_data_format         = static_cast<DataFormat>(formats.pack_src);
 
     _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc_dst, ckernel::ReluConfig::none());
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc_dst.reg_data_format, ckernel::ReluConfig::none());
     _llk_pack_matmul_init_(buf_desc_id_dst, params.RT_DIM, params.CT_DIM, 1);
 
     _llk_pack_matmul_(0, 0);

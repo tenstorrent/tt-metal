@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,11 +13,14 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, allocate_dflash_kv_cache
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 
@@ -56,6 +60,9 @@ class TtPrefillRuntimeConfig:
     # the final RMSNorm, and the LM head. `prefill()` then returns None. The pipeline
     # sets this on the last rank so the final stage is headless.
     kv_only_last_layer: bool = False
+    # Build the DFlash drafter context-KV cache during this prefill (opt-in). Every rank builds its owned fc
+    # slices from $DFLASH_HF_MODEL; only the last rank builds the KV tail + cache.
+    dflash_enabled: bool = False
     # Pipeline-parallel rank slicing. first_layer_idx is the global index of this
     # rank's first layer; is_first_rank gates the embedding, is_last_rank marks the
     # final stage (non-last ranks forward the hidden state instead of running a tail).
@@ -114,6 +121,12 @@ class TtPrefillRuntime:
         # a fresh per-call closure, so there is no shared mutable chunk-index for the callback
         # to race on (immune even if the threading model changes).
         self._layer_completion_sink = None
+        # DFlash drafter, built in _build_model when config.dflash_enabled (else all None and prefill_chunk's
+        # dflash branches are inert). Its tap closure + last-rank K/V caches are set there.
+        self._on_layer_hidden = None
+        self.drafter = None
+        self._dflash_k_cache = None
+        self._dflash_v_cache = None
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -167,6 +180,10 @@ class TtPrefillRuntime:
                 is_first_rank=self.config.is_first_rank,
                 is_last_rank=self.config.is_last_rank,
                 kv_only_last_layer=self.config.kv_only_last_layer,
+                # Required for a LatentMoE model (Kimi-K3): without it the per-block check cannot know
+                # to look for the latent-projection cache files and would call an incomplete cache
+                # complete. model_cfg is already in hand two lines up.
+                model_cfg=model_cfg,
             ):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
             else:
@@ -208,16 +225,111 @@ class TtPrefillRuntime:
         )
         self.model_built = True
 
+        if self.config.dflash_enabled:
+            self._build_dflash_drafter()
+
+    def _build_dflash_drafter(self) -> None:
+        """Build this rank's DFlash speculative-drafter when ``config.dflash_enabled``.
+
+        Each rank taps only the target layers it owns; the last rank also builds the KV tail and allocates
+        the caller-owned context K/V caches. Checkpoint (config + weights) comes from ``$DFLASH_HF_MODEL``."""
+        path = os.environ.get("DFLASH_HF_MODEL")
+        assert path, (
+            "DFlash drafter build requires DFLASH_HF_MODEL=/path/to/Kimi-K2.x-DFlash "
+            "(a dir with config.json + model.safetensors)"
+        )
+        dcfg = DFlashDrafterConfig.from_pretrained(path)
+
+        first = self.config.first_layer_idx
+        last_excl = first + self.config.num_layers
+        owned = tuple(t for t in dcfg.target_layer_ids if first <= t < last_excl)
+        # A kv-only last layer returns before its post-FFN tap fires, so a target layer at that index would
+        # be silently dropped. Kimi is safe (targets <= 58); assert so a future layout can't regress it.
+        if self.config.kv_only_last_layer and self.config.is_last_rank and self.config.num_layers > 0:
+            kv_only_idx = last_excl - 1
+            assert kv_only_idx not in dcfg.target_layer_ids, (
+                f"drafter target layer {kv_only_idx} coincides with the kv-only last layer; its post-FFN tap "
+                f"never fires. Move the tap off the last layer or disable PREFILL_KV_ONLY_LAST_LAYER."
+            )
+
+        logger.info(
+            f"Building DFlash drafter: owned_target_layers={owned} of {tuple(dcfg.target_layer_ids)}, "
+            f"build_kv_tail={self.config.is_last_rank}, "
+            f"checkpoint={path}"
+        )
+        state_dict = load_drafter_state_dict(path, build_kv_tail=self.config.is_last_rank)
+        # SINGLE-TURN SCOPE (issue #50725): the drafter context-KV cache is sized to ONE chunk and every
+        # forward() writes it at context offset 0 for a single request slot — it does NOT yet key
+        # on slot_id/num_users or a non-zero start position. So with num_users > 1 or more than one chunk, a
+        # later write overwrites the earlier one; only slot 0 / a single chunk is correct today. The deep
+        # per-user cache + block-cyclic offset writes are the multi-turn follow-up, not this PR.
+        dflash_seq = self.config.chunk_size
+        self.drafter = TtDFlashDrafter(
+            self.mesh_device,
+            dcfg,
+            state_dict=state_dict,
+            sp_axis=self.config.sp_axis,
+            tp_axis=self.config.tp_axis,
+            max_seq_len=dflash_seq,
+            num_links=self.config.num_links,
+            topology=self.config.topology,
+            owned_target_layer_ids=owned,
+            build_kv_tail=self.config.is_last_rank,
+        )
+
+        owned_set = set(owned)
+
+        def on_layer_hidden(global_idx: int, h: ttnn.Tensor) -> None:
+            if global_idx not in owned_set:
+                return
+            self.drafter.tap(h, global_idx)
+
+        self._on_layer_hidden = on_layer_hidden
+
+        # Only the last rank finalizes the drafter KV → allocate the caller-owned context caches it fills.
+        if self.config.is_last_rank:
+            self._dflash_k_cache, self._dflash_v_cache = allocate_dflash_kv_cache(
+                self.mesh_device,
+                dcfg,
+                dflash_seq,  # chunk_size — MUST match the drafter's cache_seq/rope (see note above)
+                sp_axis=self.config.sp_axis,
+                tp_axis=self.config.tp_axis,
+            )
+
+    def _pack_activation(self, hidden: ttnn.Tensor, partial: ttnn.Tensor) -> ttnn.Tensor:
+        """Fuse this rank's output hidden and finalized drafter FC partial into ONE activation for the D2D
+        handoff — per-chip ``[1,1,chunk/sp,H/tp]`` → ``[1,1,chunk/sp,2H/tp]`` (the runner widens the D2D
+        activation spec to 2H when dflash is on). Consumes both inputs; only a non-last rank packs."""
+        packed = ttnn.concat([hidden, partial], dim=3)
+        ttnn.deallocate(hidden)
+        ttnn.deallocate(partial)
+        return packed
+
+    def _unpack_activation(self, packed: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Inverse of :meth:`_pack_activation`: split the received per-chip ``[1,1,chunk/sp,2H/tp]`` into the
+        hidden fed to the verifier and the drafter partial imported into the drafter (each
+        ``[1,1,chunk/sp,H/tp]``). Only a non-first rank unpacks."""
+        half = packed.shape[-1] // 2
+        s0, s1, s2, s3 = packed.shape
+        hidden = ttnn.slice(packed, [0, 0, 0, 0], [s0, s1, s2, half])
+        partial = ttnn.slice(packed, [0, 0, 0, half], [s0, s1, s2, s3])
+        return hidden, partial
+
     def make_placeholder_activation(self) -> ttnn.Tensor:
-        """Allocate a zero hidden-state activation matching the embedding output:
-        [1, 1, chunk_per_chip, emb_dim/tp], TILE_LAYOUT, DRAM, replicated.
+        """Allocate a zero hidden-state activation matching what the D2D socket delivers:
+        [1, 1, chunk_per_chip, emb_dim/tp] — or 2·emb_dim/tp under DFlash, which packs the drafter
+        partial alongside the hidden — TILE_LAYOUT, DRAM, replicated.
 
         Stand-in input for a non-first rank until the upstream D2D-socket sync op
         delivers the real activation. The first block's attn_norm reads from this
-        tensor; once the sync op lands, the wait-op overwrites it in place.
+        tensor; once the sync op lands, the wait-op overwrites it in place. Under DFlash the
+        delivered tensor is the packed [hidden ‖ partial]; prefill_chunk unpacks it before the model runs.
         """
         chunk_per_chip = self.config.chunk_size // self.config.sp_factor
-        emb_per_tp = self.hf_config.hidden_size // self.config.tp_factor
+        # DFlash packs [hidden ‖ drafter-partial] into the D2D activation, so a non-first rank receives a
+        # 2H-wide tensor and this receive buffer must match. Non-dflash keeps H.
+        feature_size = self.hf_config.hidden_size * (2 if self.config.dflash_enabled else 1)
+        emb_per_tp = feature_size // self.config.tp_factor
         zeros = torch.zeros(1, 1, chunk_per_chip, emb_per_tp, dtype=torch.bfloat16)
         return ttnn.from_torch(
             zeros,
@@ -499,19 +611,37 @@ class TtPrefillRuntime:
         else:
             on_layer_complete = self._on_layer_complete
 
+        model_input = input_tensor
+        if self.config.dflash_enabled:
+            self.drafter.reset()
+            if not self.config.is_first_rank:
+                model_input, partial = self._unpack_activation(input_tensor)
+                ttnn.deallocate(input_tensor)
+                self.drafter.import_partial(partial)
+
         out = self.model.forward(
-            input_tensor,
+            model_input,
             kv_caches.kvpe,
             actual_isl=actual_end - actual_start,
             d2h_service=d2h_service,
             record_dev=record_dev,
             on_layer_complete=on_layer_complete,
+            on_layer_hidden=self._on_layer_hidden,
             actual_start=actual_start,
             actual_end=actual_end,
             cache_user_id=slot_id,
             index_kv_cache=kv_caches.index,
         )
-        ttnn.deallocate(input_tensor)
+        ttnn.deallocate(model_input)
+
+        if self.config.dflash_enabled:
+            if self.config.is_last_rank:
+                # Finalize the drafter context-KV into the runtime-owned caches (read back for PCC / migration).
+                self.drafter.forward(self._dflash_k_cache, self._dflash_v_cache)
+                return None
+            # Non-last rank: pack this rank's finalized FC partial alongside the hidden for the next rank.
+            return self._pack_activation(out, self.drafter.export_partial())
+
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
         # Last/single rank: forward returns the (token, prob, intermediates) tuple, which this
         # KV-output path ignores.
@@ -611,14 +741,22 @@ class TtPrefillRuntime:
         only; the pipeline-parallel path (stage_layout given) migrates the KVPE cache alone."""
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
-        # PP path migrates the primary (KVPE) cache only; the sparse/DSA index cache isn't wired
-        # through the cross-stage merge yet (port it into _build_and_serialize_merged_kv_chunk_table
-        # to add it) — fail loudly rather than silently drop it.
-        if stage_layout is not None:
-            assert kv_caches.index is None, (
+        # The CROSS-STAGE merge migrates the primary (KVPE) cache only; the sparse/DSA index cache
+        # isn't wired through it yet (port it into _build_and_serialize_merged_kv_chunk_table to add
+        # it) — fail loudly rather than silently drop it.
+        #
+        # A SINGLE-stage layout is not that case: the runner all-gathers one unconditionally whenever
+        # migration is enabled (prefill_runner._serve_request), so a single-galaxy sparse run arrived
+        # here with a 1-element stage_layout and tripped the assert before it could ever reach the
+        # endpoint. The merged builder does not consume stage_layout — it gathers its OWN layout per
+        # cache, since each config needs that cache's DRAM base — so dropping it here is lossless and
+        # keeps the dual-cache table reachable single-rank.
+        if stage_layout is not None and kv_caches.index is not None:
+            assert len(stage_layout) == 1, (
                 "build_kv_chunk_table: index-cache (sparse/DSA) migration is not supported on the "
-                "pipeline-parallel path yet."
+                f"pipeline-parallel path yet (got {len(stage_layout)} stages)."
             )
+            stage_layout = None
 
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
@@ -649,22 +787,38 @@ class TtPrefillRuntime:
         # the same path kv_cache_pcc_check takes. (Using `kvpe` directly here raised
         # 'MlaKvCache' object has no attribute 'shape'.)
         kvpe = kv_caches.kvpe
-        storage = kvpe.storage
-        s = list(storage.shape)
-        sl = ttnn.slice(
-            storage,
-            [slot * num_layers, 0, 0, 0],
-            [(slot + 1) * num_layers, s[1], s[2], s[3]],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        physical = ttnn.to_torch(
-            sl, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-        )[
-            :, :1
-        ]  # one TP replica: [num_layers, 1, seq_cache, packed_row]
-        ttnn.deallocate(sl)
-        block = kvpe.unpack_host(physical).to(torch.float32)  # [num_layers, 1, seq_cache, kvpe_logical]
-        return [block]
+        composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+
+        def _slot_block(tensor, rows_per_slot: int):
+            """This slot's rows of a user-major cache, gathered to host as one TP replica:
+            [rows_per_slot, 1, seq_cache, row]. `rows_per_slot` differs per cache — see below."""
+            s = list(tensor.shape)
+            sl = ttnn.slice(
+                tensor,
+                [slot * rows_per_slot, 0, 0, 0],
+                [(slot + 1) * rows_per_slot, s[1], s[2], s[3]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            host = ttnn.to_torch(sl, mesh_composer=composer)[:, :1]
+            ttnn.deallocate(sl)
+            return host
+
+        physical = _slot_block(kvpe.storage, num_layers)
+        blocks = [kvpe.unpack_host(physical).to(torch.float32)]  # [num_layers, 1, seq_cache, kvpe_logical]
+        if kv_caches.index is not None:
+            # Sparse/DSA second cache (the lightning-indexer keys). Returned so a slot-vs-slot
+            # comparison (validate_migrations_pairwise, which is length-agnostic over the returned
+            # list) covers BOTH caches — without this a migrated sparse model reports "PASSED"
+            # having checked only the KVPE half.
+            #
+            # Two ways it differs from `.kvpe`: its per-slot stride is its OWN layer count, NOT
+            # config.num_layers (GLM-5.2 sizes it to the `full` indexer layers only, so 21 vs 78);
+            # and it is a plain ttnn.Tensor, so there is no `.storage` / `unpack_host` (bfp8_b TILE
+            # dequantizes on to_torch).
+            index = kv_caches.index
+            rows_per_slot = index.shape[0] // self.config.num_users
+            blocks.append(_slot_block(index, rows_per_slot).to(torch.float32))
+        return blocks
 
     def kv_cache_pcc_check(
         self,
@@ -683,7 +837,7 @@ class TtPrefillRuntime:
         PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1). Thin forwarder into the model's validation module.
         `real_len` caps the compared extent to the real (non-pad) tokens — a partial last chunk makes
         n_chunks * chunk_size overshoot the prompt; `pt_path_override` selects a per-slot .pt golden
-        (both are used by the migration validators in prefill/runners/validation.py)."""
+        (both are for out-of-tree callers; nothing in-tree passes either)."""
         from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import kv_cache_pcc_check
 
         return kv_cache_pcc_check(
