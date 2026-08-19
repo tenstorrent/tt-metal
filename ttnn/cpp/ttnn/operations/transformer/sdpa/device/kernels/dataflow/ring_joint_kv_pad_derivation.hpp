@@ -128,7 +128,12 @@ inline RingWorkMasks build_ring_work_masks_device(
     uint32_t joint_seq_len,
     bool kv_pad_rotation_enabled,
     bool kernel_is_causal,
-    bool is_balanced) {
+    bool is_balanced,
+    // Sharded-joint tail (mirrors the host's valid_joint_kv_chunks loop). Defaults reproduce the
+    // replicated-joint behaviour, where every selected chunk counts.
+    bool joint_is_sharded = false,
+    uint32_t joint_local_padded_Nt = 0,
+    uint32_t logical_lt = 0) {
     RingWorkMasks plan;
     plan.active_ring_iter_mask = 0;
     plan.single_valid_kv_chunk_mask = 0;
@@ -138,7 +143,22 @@ inline RingWorkMasks build_ring_work_masks_device(
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         const uint32_t ring_id = seq.get_next_ring_id(noop_sync);
-        const bool joint_contributes = ring_id == ring_size - 1 && num_joint_k_chunks > 0 && joint_seq_len != 0;
+        const bool has_joint_work = num_joint_k_chunks > 0 && joint_seq_len != 0;
+        const bool joint_iter_selected = has_joint_work && (joint_is_sharded || ring_id == ring_size - 1);
+        uint32_t valid_joint_kv_chunks = 0;
+        if (joint_iter_selected) {
+            if (joint_is_sharded) {
+                for (uint32_t k = 0; k < num_joint_k_chunks; ++k) {
+                    const uint32_t joint_global_start_tile = ring_id * joint_local_padded_Nt + k * k_chunk_tile_count;
+                    if (joint_global_start_tile < logical_lt) {
+                        valid_joint_kv_chunks++;
+                    }
+                }
+            } else {
+                valid_joint_kv_chunks = num_joint_k_chunks;
+            }
+        }
+        const bool joint_contributes = valid_joint_kv_chunks > 0;
         uint32_t valid_spatial_kv_chunks = 0;
         for (uint32_t k_chunk = 0; k_chunk < num_local_k_chunks; ++k_chunk) {
             const uint32_t local_tile_start = k_chunk * k_chunk_tile_count;
@@ -155,7 +175,7 @@ inline RingWorkMasks build_ring_work_masks_device(
                 valid_spatial_kv_chunks++;
             }
         }
-        const uint32_t valid_kv_chunks = valid_spatial_kv_chunks + (joint_contributes ? num_joint_k_chunks : 0);
+        const uint32_t valid_kv_chunks = valid_spatial_kv_chunks + valid_joint_kv_chunks;
         const bool has_kv_work = (kernel_chunked && !kv_pad_rotation_enabled) || valid_spatial_kv_chunks > 0;
         const bool ring_iter_does_work =
             (has_kv_work || joint_contributes) && !(kernel_is_causal && device_index < ring_id && !is_balanced);

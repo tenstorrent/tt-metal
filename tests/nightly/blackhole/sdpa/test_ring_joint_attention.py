@@ -202,6 +202,9 @@ def test_ring_joint_sdpa_program_cache(
     ],
     ids=["sp2"],
 )
+# Both ways of supplying logical_n / logical_l must agree: "scalar" is the host-int path, "tensor" reads
+# both values from single-valued device tensors (the trace-dynamic transport).
+@pytest.mark.parametrize("logical_as_tensor", [False, True], ids=["scalar", "tensor"])
 def test_ring_joint_sdpa_sharded_prompt(
     mesh_device,
     num_links,
@@ -213,6 +216,7 @@ def test_ring_joint_sdpa_sharded_prompt(
     d,
     q_chunk_size,
     k_chunk_size,
+    logical_as_tensor,
     all_gather_topology,
     reset_seeds,
 ):
@@ -237,5 +241,6 @@ def test_ring_joint_sdpa_sharded_prompt(
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         num_links=num_links,
+        logical_as_tensor=logical_as_tensor,
         topology=all_gather_topology,
     )
