@@ -218,6 +218,7 @@ void kernel_main() {
 
             if (num_chunks == 1) {
                 topk_xl_init<K, false>();
+                topk_xl_stamp_seq_ranks<K>(slot0);
                 topk_xl_rebuild<K, false>(slot0, ship_after_leaf);
             }
 
@@ -385,6 +386,7 @@ void kernel_main() {
             topk_xl_rebuild<K, true>(slot0, false);
 #else
             topk_xl_init<K, false>();
+            topk_xl_stamp_seq_ranks<K>(slot0);
             topk_xl_rebuild<K, false>(slot0, false);
 #endif
         }

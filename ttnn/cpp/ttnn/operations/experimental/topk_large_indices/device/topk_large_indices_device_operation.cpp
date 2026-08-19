@@ -163,6 +163,8 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         // Internal P override: also reflected in the derived split_config fields
         // below, but hashed directly so intent and derivation can never skew.
         attrs.num_slices,
+        // Sequential-ties mode compiles different kernels (TOPK_XL_STABLE_TIES).
+        attrs.stable,
         input.dtype(),
         input.layout(),
         input.memory_config().memory_layout(),
@@ -218,14 +220,16 @@ TopkLargeIndicesDeviceOperation::invoke(
     std::optional<uint32_t> valid_length,
     std::optional<uint32_t> num_slices,
     std::optional<uint32_t> row_start,
-    std::optional<uint32_t> row_count) {
+    std::optional<uint32_t> row_count,
+    bool stable) {
     return {
         operation_attributes_t{
             .k = k,
             .valid_length = valid_length,
             .num_slices = num_slices,
             .row_start = row_start,
-            .row_count = row_count},
+            .row_count = row_count,
+            .stable = stable},
         tensor_args_t{.input_tensor = input_tensor}};
 }
 
@@ -308,11 +312,11 @@ std::optional<HybridSplit> hybrid_row_split(
 
 }  // namespace
 
-Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length) {
+Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length, bool stable) {
     using Op = operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation;
     if (const auto split = hybrid_row_split(input_tensor, k, std::nullopt, valid_length)) {
         auto run = [&](uint32_t start, uint32_t count, std::optional<uint32_t> window_slices) {
-            auto [attrs, args] = Op::invoke(input_tensor, k, valid_length, window_slices, start, count);
+            auto [attrs, args] = Op::invoke(input_tensor, k, valid_length, window_slices, start, count, stable);
             return ttnn::device_operation::launch<Op>(attrs, args);
         };
         Tensor full_waves = run(0, split->full_wave_rows, std::nullopt);
@@ -320,7 +324,8 @@ Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<
         const int rows_dim = static_cast<int>(input_tensor.logical_shape().rank()) - 2;
         return ttnn::concat(std::vector<Tensor>{full_waves, remainder}, rows_dim);
     }
-    auto [operation_attributes, tensor_args] = Op::invoke(input_tensor, k, valid_length);
+    auto [operation_attributes, tensor_args] =
+        Op::invoke(input_tensor, k, valid_length, std::nullopt, std::nullopt, std::nullopt, stable);
     return ttnn::device_operation::launch<Op>(operation_attributes, tensor_args);
 }
 

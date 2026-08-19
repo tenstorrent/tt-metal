@@ -271,6 +271,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         case ComputeBodyMode::FusedE2E: compute_defines["FUSED_E2E"] = "1"; break;
         case ComputeBodyMode::Classic: break;
     }
+    // Sequential (stable) tie-breaking: compile the TopK XL LLK with the
+    // rank-stamp machinery. Part of the program hash via attrs.stable.
+    if (operation_attributes.stable) {
+        compute_defines["TOPK_XL_STABLE_TIES"] = "1";
+    }
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
@@ -873,7 +878,14 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
     // member (leaf slice reduction + in-DST pairwise merges); TOPK_TREE_ROOT
     // additionally selects the root's materializing epilogue.
     const std::map<std::string, std::string> tree_defines = {{"TOPK_TREE", "1"}};
-    const std::map<std::string, std::string> tree_root_defines = {{"TOPK_TREE", "1"}, {"TOPK_TREE_ROOT", "1"}};
+    std::map<std::string, std::string> tree_compute_defines = tree_defines;
+    std::map<std::string, std::string> tree_root_compute_defines = {{"TOPK_TREE", "1"}, {"TOPK_TREE_ROOT", "1"}};
+    // Sequential (stable) tie-breaking, compute kernels only (see the
+    // row-parallel factory). Part of the program hash via attrs.stable.
+    if (operation_attributes.stable) {
+        tree_compute_defines["TOPK_XL_STABLE_TIES"] = "1";
+        tree_root_compute_defines["TOPK_XL_STABLE_TIES"] = "1";
+    }
 
     // Leaf reader: the row-parallel reader plus a per-core slice offset
     // (TOPK_TREE enables the extra slice_offset_bytes runtime arg).
@@ -890,7 +902,7 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
                                     .fp32_dest_acc_en = true,
                                     .dst_full_sync_en = true,
                                     .compile_args = compute_node_compile_args,
-                                    .defines = tree_defines});
+                                    .defines = tree_compute_defines});
 
     const std::vector<uint32_t> compute_root_compile_args = {cb_in, cb_indices_out, cb_recv, llk_k};
     auto compute_root_kernel = tt::tt_metal::CreateKernel(
@@ -901,7 +913,7 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
             .fp32_dest_acc_en = true,
             .dst_full_sync_en = true,
             .compile_args = compute_root_compile_args,
-            .defines = tree_root_defines});
+            .defines = tree_root_compute_defines});
 
     std::vector<uint32_t> writer_compile_args = {
         cb_ship_values,
