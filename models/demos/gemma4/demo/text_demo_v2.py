@@ -236,10 +236,12 @@ def _device_params():
         # CCL all_gather allocates semaphores in L1_SMALL when this is > 0.
         "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
     }
-    if is_blackhole():
-        params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", 256_000_000))
-    else:
-        params["trace_region_size"] = 30_000_000
+    # Wormhole has 12 GB/ASIC vs Blackhole's 32 GB, so the trace budget is much
+    # tighter, but 30 MB is not enough for the 31B/26B decode+prefill traces on
+    # T3K (WH-T3K nightly EngineCore OOM). Honour GEMMA4_TRACE_REGION_SIZE on
+    # both arches; only the default differs.
+    default_trace_region = 256_000_000 if is_blackhole() else 90_000_000
+    params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
 
     pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
     if pkt_env is None:

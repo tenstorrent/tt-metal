@@ -121,6 +121,14 @@ _QB2 = "P150x4"
 _QB2_ALIASES = frozenset({"P150x4", "P300x2", "P300X2"})
 _CHUNK = GEMMA4_DEFAULT_PREFILL_CHUNK
 
+# SKU names ``determine_device_name`` returns, split by architecture. A policy
+# entry measured on one arch must never be reused on the other: Wormhole carries
+# 12 GB per ASIC against Blackhole's 32 GB, so a Blackhole entry's DRAM headroom
+# (e.g. QB2 "unbounded KV through 128k") silently OOMs a WH board. See
+# ``get_gemma4_long_context_policy`` for how the fallback is gated.
+_WH_DEVICES = frozenset({"N150", "N300", "N150x4", "T3K", "TG"})
+_BH_DEVICES = frozenset({"P100", "P150", "P300", "P150x4", "P150x8", "P300x2", "P300X2", "BHGLX"})
+
 GEMMA4_LONG_CONTEXT_POLICY = {
     # Dense 31B — measured on QB2 (isl_sweep_logs + llm.yaml max_context=49152 serve).
     "31B": {
@@ -156,13 +164,17 @@ GEMMA4_LONG_CONTEXT_POLICY = {
         # full-length KV + full-ISL prefill scratch OOM at max_model_len=32768
         # (vLLM nightly run 30291376571: banks ~full, chunk=32768). Keep multi-
         # chunk=2048 and auto-bound earlier than BH; serve ≤16k until hybrid KV.
+        # Validated on a real WH T3K on this branch: 4k (TTFT ~8.5 s, 15.7 tok/s),
+        # 32k bounded+chunk2048 (TTFT ~55 s, 14.8 tok/s) and 128k (TTFT ~188 s,
+        # 12.9 tok/s) all PASS. The inferred cutovers held, so this is promoted
+        # from "inferred" to "measured".
         "T3K": {
             "unbounded_isl_max": 16384,
             "bounded_isl_min": 32768,
             "chunked_bounded_isl_min": 32768,
             "prefill_chunk": 2048,
             "prefill_chunk_by_isl": [],
-            "source": "inferred",
+            "source": "measured",
         },
     },
     # Dense 12B — HF max_pos=256k. QB2: unbounded 64k+128k PASSED; unbounded 256k OOM.
@@ -193,6 +205,28 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk": _CHUNK,
             "source": "measured",
         },
+        # WH T3K (1x8, ~96 GB): measured on this branch — bounded + multi-chunk
+        # (2048) reaches the full HF 256k ISL (261944 prompt tokens, TTFT ~468 s,
+        # 14.3 tok/s). 4k unbounded / 32k / 128k / 256k all PASS and coherent.
+        # Unbounded headroom is far below BH, so bound from 16k.
+        "T3K": {
+            "unbounded_isl_max": 8192,
+            "bounded_isl_min": 16384,
+            "chunked_bounded_isl_min": 16384,
+            "prefill_chunk": 2048,
+            "source": "measured",
+        },
+        # WH N300 (1x2, 24 GB): the only Gemma4 variant that fits a single WH
+        # card. Measured — 4k unbounded PASS; 32k unbounded OOMs (DRAM); bounded
+        # + chunk 2048 PASSES 32k / 64k / 128k; 256k OOMs on KV allocation.
+        # Serve at most 128k here.
+        "N300": {
+            "unbounded_isl_max": 8192,
+            "bounded_isl_min": 16384,
+            "chunked_bounded_isl_min": 16384,
+            "prefill_chunk": 2048,
+            "source": "measured",
+        },
     },
     # MoE 26B-A4B — HF max_pos=256k. QB2: unbounded 64k PASSED (after instruct-clip
     # trim fix); 128k allocated/ran (no OOM, prior 1800s timeout); unbounded 256k OOM.
@@ -217,6 +251,18 @@ GEMMA4_LONG_CONTEXT_POLICY = {
             "prefill_chunk_by_isl": [
                 {"isl_min": 131072, "chunk": 2048, "require_bounded": True},
             ],
+            "source": "measured",
+        },
+        # WH T3K (1x8): measured — bounded + chunk 2048 PASSES 4k / 32k / 128k
+        # and stays coherent. Functional ceiling is 128k, but MoE prefill on
+        # Wormhole is far slower than the dense 31B (TTFT ~449 s @32k and
+        # ~1506 s @128k vs 31B's ~55 s @32k), so serve specs should stay at
+        # 32k — this table only bounds what fits, not what is fast.
+        "T3K": {
+            "unbounded_isl_max": 8192,
+            "bounded_isl_min": 16384,
+            "chunked_bounded_isl_min": 16384,
+            "prefill_chunk": 2048,
             "source": "measured",
         },
     },
@@ -276,6 +322,20 @@ GEMMA4_LONG_CONTEXT_POLICY = {
     },
 }
 
+# Wormhole board with no measured (model, device) entry. Deliberately
+# conservative: bound the sliding KV early and keep the prefill chunk small,
+# because WH carries 12 GB per ASIC (N300 1x2 = 24 GB, T3K 1x8 = 96 GB) against
+# Blackhole QB2's 128 GB / LoudBox's 256 GB. ``source`` starts with "inferred"
+# so ``resolve_gemma4_prefill_chunk_size`` still honours ``prefill_chunk``
+# instead of degrading to a single full-length chunk.
+_WH_DEFAULT_LONG_CONTEXT_POLICY = {
+    "unbounded_isl_max": 8192,
+    "bounded_isl_min": 16384,
+    "chunked_bounded_isl_min": 16384,
+    "prefill_chunk": 2048,
+    "source": "inferred_wormhole_default",
+}
+
 # Unknown model: do not force 31B's aggressive bounded cutover.
 _DEFAULT_LONG_CONTEXT_POLICY = {
     "unbounded_isl_max": 131072,
@@ -316,14 +376,43 @@ def _device_name(mesh_device) -> str | None:
         return None
 
 
+def _host_is_wormhole() -> bool:
+    """True when the running host is Wormhole. Best-effort / never raises.
+
+    Used only to disambiguate the historical ``MESH_DEVICE=N150`` tag, which
+    older Blackhole sweeps used for a single P150. Unknown arch behaves as
+    before (Blackhole), so this cannot change Blackhole resolution.
+    """
+    try:
+        import ttnn
+
+        return "wormhole" in str(ttnn.get_arch_name()).lower()
+    except Exception:
+        return False
+
+
+def _device_arch_family(device: str | None) -> str | None:
+    """``"wh"`` / ``"bh"`` for a known SKU name, else ``None``."""
+    if device is None:
+        return None
+    if device in _WH_DEVICES:
+        return "wh"
+    if device in _BH_DEVICES:
+        return "bh"
+    return None
+
+
 def _canonical_device_name(device: str | None) -> str | None:
     """Map device aliases onto canonical policy keys (QB2 / single P150)."""
     if device is None:
         return None
     if device in _QB2_ALIASES:
         return _QB2
-    # Historical WH tag; this host is Blackhole P150.
-    if device in ("N150", "n150"):
+    # Historical Blackhole sweeps tagged the single P150 as "N150" via
+    # MESH_DEVICE. Only honour that alias on a Blackhole host — on Wormhole,
+    # "N150" is a real 1x1 WH board (determine_device_name returns it) and must
+    # not inherit Blackhole DRAM headroom.
+    if device in ("N150", "n150") and not _host_is_wormhole():
         return "P150"
     return device
 
@@ -335,14 +424,27 @@ def get_gemma4_long_context_policy(mesh_device=None, model_name_or_path=None) ->
     # resolution (before mesh open) still picks the right board entry.
     device = _canonical_device_name(_device_name(mesh_device) or os.environ.get("MESH_DEVICE")) or _QB2
     by_model = GEMMA4_LONG_CONTEXT_POLICY.get(model_key)
+    family = _device_arch_family(device)
     if by_model is not None:
         if device in by_model:
             return dict(by_model[device])
-        # Fall back to QB2 entry for this model if present.
-        if _QB2 in by_model:
+        # Fall back to the QB2 entry for this model, but only on Blackhole.
+        # Reusing a Blackhole entry on Wormhole hands a 24 GB N300 / 96 GB T3K
+        # the 128 GB QB2 headroom (unbounded KV through 128k) and OOMs on
+        # allocation, so WH takes the conservative WH default instead.
+        if _QB2 in by_model and family != "wh":
             policy = dict(by_model[_QB2])
             policy["source"] = f"{policy.get('source', 'inferred')}_device_fallback"
             return policy
+    if family == "wh":
+        policy = dict(_WH_DEFAULT_LONG_CONTEXT_POLICY)
+        logger.warning(
+            f"No measured Gemma4 long-context policy for model={model_key} on {device}; "
+            f"using conservative Wormhole defaults (bounded_isl_min={policy['bounded_isl_min']}, "
+            f"prefill_chunk={policy['prefill_chunk']}). Set GEMMA4_BOUNDED_SLIDING / "
+            f"GEMMA4_GEN_PREFILL_CHUNK to override."
+        )
+        return policy
     policy = dict(_DEFAULT_LONG_CONTEXT_POLICY)
     if model_key == "unknown":
         logger.warning(

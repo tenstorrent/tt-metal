@@ -1011,9 +1011,13 @@ class ChunkedPrefillPageTableGuardMixin:
         pad_w = getattr(model, "_DECODE_TOKEN_FEEDBACK_WIDTH", None)
         if pad_w is None:
             return None
-        # Gemma4ForCausalLM may not have run Gemma4Generator.__init__; use getattr.
-        prev_batch = getattr(self, "_prev_decode_batch", None)
-        sampling_trace_key = (True, prev_batch) if prev_batch is not None else None
+        # ``_prev_decode_batch`` is only assigned once a decode step has run
+        # (see ``decode_forward`` / Gemma4Generator.__init__), but vLLM's decode
+        # *warmup* reaches this buffer first — on a TP mesh with on-device
+        # sampling that raised AttributeError and killed EngineCore before the
+        # server came up. Match the defensive getattr used at the other read sites.
+        prev_decode_batch = getattr(self, "_prev_decode_batch", None)
+        sampling_trace_key = (True, prev_decode_batch) if prev_decode_batch is not None else None
         if sampling_trace_key is None or not self.trace_inputs_decode[sampling_trace_key]:
             return None
         feedback = self._decode_token_feedback_buffer(model, self.trace_inputs_decode[sampling_trace_key][model_id])
