@@ -407,7 +407,6 @@ class TraceCompiler:
 
     def _release_alias_workspaces(self) -> list[BaseException]:
         failures: list[BaseException] = []
-        for alias in self._aliases.values():
             if alias.workspace is None:
                 continue
             alias_failures = best_effort_deallocate_owned_tensors(
@@ -420,8 +419,6 @@ class TraceCompiler:
         return failures
 
     def _release_trace(self, record: TraceRecord) -> list[BaseException]:
-        artifact = record.artifact
-        if artifact is None:
             return []
         if not artifact.trace_released:
             try:

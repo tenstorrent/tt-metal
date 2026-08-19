@@ -158,6 +158,11 @@ void kernel_main() {
             span.set(group, band0 + band);
             const uint32_t k_tile0 = span.k_tile_start();
             const uint32_t valid_w = span.k_tiles();  // == KC for interior bands, < KC for a partial last band
+            // The reader/compute do no K/output work for cells wholly past the runtime prefix.
+            // Their q-mcast bookkeeping is completed independently before this point.
+            if (valid_w == 0) {
+                continue;
+            }
             // block-pool: this band's slice starts at block-column k_tile0/block_tiles, width valid_blocks.
             const uint32_t col_off_blocks = block_pool ? (k_tile0 / block_tiles) : 0;
             const uint32_t valid_blocks = block_pool ? (valid_w / block_tiles) : 0;  // == blocks_per_unit (no partial)

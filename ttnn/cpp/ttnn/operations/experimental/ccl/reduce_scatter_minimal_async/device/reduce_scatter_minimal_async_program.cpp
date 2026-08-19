@@ -847,6 +847,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                         output_tensor.buffer()->address(),                           // output_tensor_address
                         virtual_core.x,                                              // this core.x
                         virtual_core.y,                                              // this core.y
+                        opposite_core_coord.x,                                       // opposite direction core.x
+                        opposite_core_coord.y,                                       // opposite direction core.y
                         semaphore.at(dir).address(),                                 // out_ready_semaphore for this dir
                         semaphore.at(num_directions_per_link).address(),             // batch_ready_semaphore
                         barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
@@ -994,28 +996,22 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 }
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                if (normalized_dim == 0) {
-                    worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
-                    worker_writer_sender_runtime_args[1] = output.buffer()->address();
-                    worker_writer_sender_runtime_args[4] = semaphore.at(dir).address();
-                    worker_writer_sender_runtime_args[5] = semaphore.at(num_directions_per_link).address();
-                    if (barrier_semaphore.has_value()) {
-                        worker_writer_sender_runtime_args[7] = barrier_semaphore.value().address();
-                    }
-                } else {
-                    worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
-                    worker_writer_sender_runtime_args[1] = output.buffer()->address();
-                    worker_writer_sender_runtime_args[6] = semaphore.at(dir).address();
-                    worker_writer_sender_runtime_args[7] = semaphore.at(num_directions_per_link).address();
-                    if (barrier_semaphore.has_value()) {
-                        worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
-                    }
-                    if (penult_intermediate.has_value()) {
-                        // Index 16 — see the writer RT arg list in
-                        // build_ring_reduce_scatter_minimal_async_program_artifacts; the mux/fabric
-                        // connection args are appended after it, so the position is fixed.
-                        worker_writer_sender_runtime_args[16] = penult_intermediate->buffer()->address();
-                    }
+                // Both layouts now carry the opposite-direction core coords at indices 4/5, so the
+                // dim-0 and non-dim-0 writer arg lists agree up to index 15.
+                worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
+                worker_writer_sender_runtime_args[1] = output.buffer()->address();
+                worker_writer_sender_runtime_args[6] = semaphore.at(dir).address();
+                worker_writer_sender_runtime_args[7] = semaphore.at(num_directions_per_link).address();
+                if (barrier_semaphore.has_value()) {
+                    worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
+                }
+                if (penult_intermediate.has_value()) {
+                    // Index 16 — see the writer RT arg list in
+                    // build_ring_reduce_scatter_minimal_async_program_artifacts; the mux/fabric
+                    // connection args are appended after it, so the position is fixed. Only the
+                    // non-dim-0 layout has this arg, and penult_intermediate is only set there
+                    // (reduce_scatter_use_contiguous_interm returns false for scatter dim 0).
+                    worker_writer_sender_runtime_args[16] = penult_intermediate->buffer()->address();
                 }
             }
         }

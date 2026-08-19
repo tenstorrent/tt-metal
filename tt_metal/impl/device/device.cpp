@@ -547,7 +547,7 @@ void Device::configure_fabric() {
                 hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
         }
     }
-    log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
+    log_debug(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }
 
 bool Device::initialize(
@@ -912,12 +912,6 @@ void Device::disable_and_clear_program_cache() {
     program_cache_.clear();
 }
 std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
-
-// NOLINTNEXTLINE(readability-make-member-function-const)
-void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
-
-// NOLINTNEXTLINE(readability-make-member-function-const)
-void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
     if (cq_id >= this->command_queues_.size() || !this->command_queues_[cq_id]) {

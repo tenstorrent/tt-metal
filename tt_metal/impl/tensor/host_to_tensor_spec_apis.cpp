@@ -6,14 +6,14 @@
 #include <limits>
 #include <type_traits>
 
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor_apis_with_pad_values.hpp>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/host_buffer.hpp>
 
 #include <tt_stl/span.hpp>
@@ -38,7 +38,7 @@ bool is_bfp_dtype(DataType dtype) { return dtype == DataType::BFLOAT8_B || dtype
 
 bool is_integral_dtype(DataType dtype) {
     return dtype == DataType::UINT8 || dtype == DataType::UINT16 || dtype == DataType::UINT32 ||
-           dtype == DataType::INT32;
+           dtype == DataType::INT32 || dtype == DataType::INT8;
 }
 
 template <typename DestInt, typename PadT>
@@ -65,6 +65,7 @@ void validate_pad_for_integral_dest(PadT pad_value, DataType dest_dtype) {
     }
     switch (dest_dtype) {
         case DataType::UINT8: validate_float_pad_against_integral<uint8_t>(pad_value); break;
+        case DataType::INT8: validate_float_pad_against_integral<int8_t>(pad_value); break;
         case DataType::UINT16: validate_float_pad_against_integral<uint16_t>(pad_value); break;
         case DataType::UINT32: validate_float_pad_against_integral<uint32_t>(pad_value); break;
         case DataType::INT32: validate_float_pad_against_integral<int32_t>(pad_value); break;
@@ -179,6 +180,7 @@ template HostTensor host_tensor_to_tensor_spec_with_pad_value<int32_t>(const Hos
 template HostTensor host_tensor_to_tensor_spec_with_pad_value<uint32_t>(const HostTensor&, const TensorSpec&, uint32_t);
 template HostTensor host_tensor_to_tensor_spec_with_pad_value<uint16_t>(const HostTensor&, const TensorSpec&, uint16_t);
 template HostTensor host_tensor_to_tensor_spec_with_pad_value<uint8_t>(const HostTensor&, const TensorSpec&, uint8_t);
+template HostTensor host_tensor_to_tensor_spec_with_pad_value<int8_t>(const HostTensor&, const TensorSpec&, int8_t);
 
 template HostTensor to_tensor_spec<float>(const HostTensor&, const TensorSpec&);
 template HostTensor to_tensor_spec<bfloat16>(const HostTensor&, const TensorSpec&);
@@ -186,5 +188,6 @@ template HostTensor to_tensor_spec<int32_t>(const HostTensor&, const TensorSpec&
 template HostTensor to_tensor_spec<uint32_t>(const HostTensor&, const TensorSpec&);
 template HostTensor to_tensor_spec<uint16_t>(const HostTensor&, const TensorSpec&);
 template HostTensor to_tensor_spec<uint8_t>(const HostTensor&, const TensorSpec&);
+template HostTensor to_tensor_spec<int8_t>(const HostTensor&, const TensorSpec&);
 
 }  // namespace tt::tt_metal

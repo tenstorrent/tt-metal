@@ -7,7 +7,11 @@ import os
 import pytest
 
 import ttnn
-from models.tt_dit.utils.test import line_params_req_exact_devices, ring_params_req_exact_devices
+from models.tt_dit.utils.test import (
+    line_params_req_exact_devices,
+    ring_params_8k_req_exact_devices,
+    ring_params_req_exact_devices,
+)
 
 _line = line_params_req_exact_devices
 _ring = ring_params_req_exact_devices
@@ -90,6 +94,9 @@ LTX_ONE_STAGE_MESH_PARAMS_DL = [
     for p in LTX_PIPELINE_MESH_PARAMS_DL
 ]
 
+# Two-stages (Pro) drives the same audio vocoder, so it needs the same pool for the same reason.
+LTX_TWO_STAGES_MESH_PARAMS_DL = LTX_ONE_STAGE_MESH_PARAMS_DL
+
 
 # ---------------------------------------------------------------------------
 # Distilled AV pipeline mesh params. Same geometry as the pipeline configs, but the audio
@@ -111,7 +118,8 @@ LTX_ONE_STAGE_MESH_PARAMS_DL = [
 _line_l1small = {**_line, "l1_small_size": 32768}
 _ring_worker_l1 = {"worker_l1_size": 1344544, **_ring}
 _line_trace = {**_line, "trace_region_size": 500_000_000, "l1_small_size": 32768}
-_ring_trace = {**_ring, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+# fabric_router_config (8 KB payload): the strided all-gather packs up to 4 bf16 tiles per fabric packet
+_ring_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 500_000_000, "l1_small_size": 32768}
 
 LTX_DISTILLED_MESH_PARAMS_DL = [
     _with_dynamic_load(_2x2sp0tp1nl2_line_is_fsdp1, False),

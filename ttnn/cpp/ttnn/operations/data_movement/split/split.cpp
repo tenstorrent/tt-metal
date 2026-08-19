@@ -26,24 +26,30 @@ std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_ten
 }
 
 std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    const auto& shape = input_tensor.padded_shape();
-    const bool pre_post_reshape = shape[0] > 1;
+    // Use the (logical, padded) reshape overload so TILE padding is preserved across the
+    // batch collapse/expand.
+    const auto& logical = input_tensor.logical_shape();
+    const auto& padded = input_tensor.padded_shape();
+    const bool pre_post_reshape = logical[0] > 1;
 
     if (!pre_post_reshape) {
         return impl_split_last_dim_two_chunks_tiled(input_tensor, mem_config);
     }
 
-    const int Y = shape[2], X = shape[3];
-    const Tensor& reshaped_tensor =
-        ttnn::reshape_on_device(input_tensor, ttsl::SmallVector<int32_t>{1, -1, Y, X}, mem_config);
+    const uint32_t collapsed = logical[0] * logical[1];
+    const ttnn::Shape logical_collapsed({1u, collapsed, logical[2], logical[3]});
+    const ttnn::Shape padded_collapsed({1u, collapsed, padded[2], padded[3]});
+    const Tensor reshaped_tensor =
+        ttnn::reshape_on_device(input_tensor, logical_collapsed, padded_collapsed, mem_config);
 
     auto part_reshaped = impl_split_last_dim_two_chunks_tiled(reshaped_tensor, mem_config);
 
     std::vector<Tensor> results;
     results.reserve(part_reshaped.size());
+    const ttnn::Shape logical_restored({logical[0], logical[1], logical[2], logical[3] / 2});
+    const ttnn::Shape padded_restored({padded[0], padded[1], padded[2], padded[3] / 2});
     for (auto& part : part_reshaped) {
-        results.emplace_back(
-            ttnn::reshape_on_device(part, ttsl::SmallVector<int32_t>{-1, (int32_t)shape[1], Y, X / 2}, mem_config));
+        results.emplace_back(ttnn::reshape_on_device(part, logical_restored, padded_restored, mem_config));
     }
 
     return results;
@@ -321,6 +327,7 @@ std::vector<ttnn::Tensor> split(
     //   - input is TILE layout, rank >= 2
     //   - at least 2 tiles in each of the last two dims
     //   - padded tile count in the split dim is divisible by num_chunks
+    //   - logical last dim is tile-aligned (otherwise padded/logical split boundaries diverge)
     //   - it all fits the core grid: z_4d <= grid_dim_x and num_chunks <= grid_dim_y
     //   - shape4d[0] == 1 for N>2 (the N==2 path collapses batch via reshape instead)
     // Sharded input/output are handled natively on both paths (no de-shard step).
@@ -358,11 +365,15 @@ std::vector<ttnn::Tensor> split(
     // Guard against grid_dim_y/num_chunks == 0 (invalid CoreRange in program factory).
     bool chunks_fit_in_y_grid = (num_chunks <= grid_dim_y);
 
+    // TILE kernel splits on padded boundaries; require logical last-dim tile alignment so those
+    // match the caller's chunk widths.
+    bool logical_last_dim_tile_aligned = (input_shape[-1] % tt::constants::TILE_WIDTH == 0);
+
     bool can_use_tile_kernel = is_equal_n_way_split && normalized_dim == static_cast<int64_t>(input_shape.rank()) - 1 &&
                                input_tensor.layout() == Layout::TILE && input_shape.rank() >= 2 && fits_in_core_grid &&
                                input_shape[-2] / tt::constants::TILE_HEIGHT >= 2 &&
                                input_shape[-1] / tt::constants::TILE_WIDTH >= 2 && tiles_divisible_by_chunks &&
-                               batch_ok_for_n_gt2 && chunks_fit_in_y_grid;
+                               batch_ok_for_n_gt2 && chunks_fit_in_y_grid && logical_last_dim_tile_aligned;
 
     if (can_use_tile_kernel) {
         ttnn::Tensor input_tensor_4d;
@@ -383,7 +394,12 @@ std::vector<ttnn::Tensor> split(
         results.reserve(num_chunks);
         for (const auto& t : outputs_4d) {
             ttsl::SmallVector<uint32_t> final_shape(input_shape.cbegin(), input_shape.cend());
-            final_shape.back() = t.logical_shape()[-1];
+            final_shape.back() /= num_chunks;
+            TT_FATAL(
+                final_shape.back() == t.logical_shape()[-1],
+                "Split kernel output width ({}) does not match expected logical chunk width ({})",
+                t.logical_shape()[-1],
+                final_shape.back());
             results.emplace_back(ttnn::view(t, ttnn::Shape(final_shape)));
         }
     } else {
