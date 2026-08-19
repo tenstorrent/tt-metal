@@ -768,8 +768,30 @@ def cmd_optimize(args) -> int:
         # exported either by hand still wins.
         if getattr(args, "persist", False):
             _slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", (run_demo.name or "model")).strip("_") or "model"
-            _persist_dir = Path.home() / ".perf_mcp" / _slug
+            # IN THE REPO, AND IN THE REAL ONE. This lived in ~/.perf_mcp, which is durable but
+            # sits apart from everything else a run produces -- the archive, the profiles, the
+            # reports are all under the repo, and the record of what was tried was somewhere else
+            # entirely. `.state/` is gitignored beside `runs/`, so it is durable AND does not
+            # dirty a tracked tree, which is what kept this out of the model directory.
+            #
+            # repo_root, NEVER run_root: run_root is the throwaway worktree under /tmp once
+            # isolation is set up, and putting the run's memory there is the bug --persist exists
+            # to fix. The whole point is a home the worktree's deletion cannot reach.
+            _persist_dir = repo_root / "models" / "experimental" / "perf_automation" / ".state" / _slug
             _persist_dir.mkdir(parents=True, exist_ok=True)
+            # CARRY FORWARD what the old location already learned, once, rather than starting a
+            # model over because its memory moved. Copied and not moved: an older tool version
+            # pointed at ~/.perf_mcp still finds its state where it left it.
+            _legacy = Path.home() / ".perf_mcp" / _slug
+            try:
+                if _legacy.is_dir() and not any(_persist_dir.iterdir()):
+                    import shutil as _shutil
+
+                    for _f in _legacy.iterdir():
+                        (_shutil.copytree if _f.is_dir() else _shutil.copy2)(_f, _persist_dir / _f.name)
+                    print(f"  [optimize/cc] --persist: carried {_slug}'s existing memory over from {_legacy}")
+            except Exception as _exc:  # noqa: BLE001 -- a failed carry-forward is a fresh start, not a failed run
+                print(f"  [optimize/cc] --persist: WARN could not carry over {_legacy}: {_exc}")
             os.environ.setdefault("PERF_MCP_STATE_DIR", str(_persist_dir))
             os.environ.setdefault("PERF_MCP_LEDGER_DIR", str(_persist_dir))
             print(f"  [optimize/cc] --persist: run memory in {_persist_dir} (survives reboots; /tmp does not)")

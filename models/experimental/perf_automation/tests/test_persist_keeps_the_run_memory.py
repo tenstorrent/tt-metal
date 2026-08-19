@@ -77,9 +77,16 @@ def test_the_help_says_what_survives_and_what_does_not():
 
 
 def _persist_block() -> str:
+    """The whole --persist branch, bounded by the NEXT branch rather than by a character count.
+
+    This sliced a fixed 1200-character window, so any comment added inside the branch pushed the
+    code being asserted out of view and three tests failed on an unrelated edit. That is the fourth
+    character-window assertion in this suite to break that way; anchor on structure.
+    """
     src = OPTC.read_text()
-    i = src.index('getattr(args, "persist"')
-    return src[max(0, i - 200) : i + 1200]
+    i = src.index('if getattr(args, "persist", False):')
+    j = src.index('if getattr(args, "fresh", False):', i)
+    return src[i:j]
 
 
 def test_it_redirects_the_state_dir():
@@ -105,7 +112,7 @@ def test_the_path_is_keyed_per_model():
     """One shared directory would let two models read each other's attempt history, which is how a
     closed rung on one model silently closes it on another."""
     blk = _persist_block()
-    assert "_slug" in blk and ".perf_mcp" in blk
+    assert "_slug" in blk and ".state" in blk
 
 
 def test_the_directory_is_created():

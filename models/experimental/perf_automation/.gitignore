@@ -4,6 +4,10 @@
 # run artifacts (large; per-run)
 runs/
 .cache/
+# --persist run memory: ledger, baselines, caches, agent transcripts, the live report.
+# In the repo so everything a run produces is in one place, and ignored so a fourteen-hour
+# run does not leave the working tree dirty (which blocks the NEXT run's isolation check).
+.state/
 # python bytecode
 __pycache__/
 *.pyc
