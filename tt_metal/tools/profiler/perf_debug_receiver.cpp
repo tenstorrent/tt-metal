@@ -151,6 +151,7 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     }
     if (no_decode_) {
         s.sock->pop(np, true);
+        s.last_commit_tsc = tsc_now();
         s.pages += np;
         s.passes++;
         return true;

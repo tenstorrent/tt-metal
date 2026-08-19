@@ -941,9 +941,15 @@ void kernel_main() {
     // never fires in normal operation -- it exists purely to convert "wait forever" into "lose a frame".
     constexpr uint64_t kCreditWaitCycles = 67500000ull;
 
-    // Packed frame geometry, derived from the staged control vector exactly as the host re-derives it
-    // (profiler_common.h), and the length-word patch that publishes it. Non-volatile loads on purpose,
-    // same argument as process_batch: staging is a landed, barrier-waited snapshot.
+    // Above this payload the frame ships RAW: packing costs ~10 extra NoC write issues (~0.35 us,
+    // measured 6.88 vs ~4.5 us per 7-frame push), worth ~3.5 KB of transfer at the mover's ~10 GB/s --
+    // so below ~2/3 fill packing wins on bytes, above it the single burst wins on issues, and the
+    // mover's worst-case (full-span) cost stays exactly the raw path's.
+    constexpr uint32_t kPackMaxPayload = kCtrlWords + (kLiveWords * 2u) / 3u;
+
+    // Frame geometry, derived from the staged control vector exactly as the host re-derives it
+    // (profiler_common.h), and the header patch that publishes the chosen layout. Non-volatile loads
+    // on purpose, same argument as process_batch: staging is a landed, barrier-waited snapshot.
     auto pack_frame_words = [&](uint32_t slot) -> uint32_t {
         const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
         uint32_t off = kPrefix + kCtrlWords;
@@ -955,7 +961,14 @@ void kernel_main() {
                 off += kernel_profiler::spsc_span_pack_pad(tail - run, off) + run;
             }
         }
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot)[1] = off - kPrefix;
+        volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
+        if (off - kPrefix > kPackMaxPayload) {
+            pfx[0] = kernel_profiler::spsc_span_w0() | kernel_profiler::SPSC_SPAN_RAW_FLAG;
+            pfx[1] = kSpanWords;
+            return kSlotWords;
+        }
+        pfx[0] = kernel_profiler::spsc_span_w0();
+        pfx[1] = off - kPrefix;
         return kernel_profiler::spsc_span_frame_words(off - kPrefix);
     };
 
@@ -1023,6 +1036,10 @@ void kernel_main() {
         for (uint32_t f = 0; f < count; f++) {
             const uint32_t slot = kStageBase + (start + f) * kSlotBytes;
             const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
+            if (reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) {
+                put(slot, kSlotBytes);
+                continue;
+            }
             put(slot, (kPrefix + kCtrlWords) * 4u);
             uint32_t off = kPrefix + kCtrlWords;
             for (uint32_t r = 0; r < kNumRisc; r++) {

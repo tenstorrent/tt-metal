@@ -347,6 +347,13 @@ constexpr std::uint32_t spsc_span_pack_pad(std::uint32_t start_counter, std::uin
 
 inline std::uint32_t spsc_span_w0() { return SPSC_SPAN_PACKET_TYPE << SPSC_SPAN_TYPE_SHIFT; }
 
+// Layout flag in w0's reserved-zero low bits: set = the payload is the RAW span (control vector +
+// five whole rings at fixed offsets, ring wrap NOT resolved) instead of packed live runs. The drainer
+// ships whichever costs its egress less -- packing trades bytes for NoC write issues (~10 extra per
+// frame), so above the kernel's fill threshold raw's single burst wins and the flag rides along so
+// the host walks the right geometry.
+constexpr static std::uint32_t SPSC_SPAN_RAW_FLAG = 1u;
+
 // ---- Packing for a DRAINER-AUTHORED marker (DRISC self-profiling) ----------------------------------
 //
 // The drain kernel produces its own zones, so it needs the same 2-word packing kernel_profiler.hpp's ppfmt

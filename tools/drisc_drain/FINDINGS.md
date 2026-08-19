@@ -6020,3 +6020,25 @@ and 0 stalls. Fits sweep-collision contention: which ops a filler's 10.5 KB span
 with sweep phase per run, injecting per-op jitter without bias. The ~1% cross-median residual above
 pd's within-arm floor is the long-op-amortized zone-scope cost. Honest footprint statement for real
 models: medians unbiased to ~1.5%, per-op jitter p90 ~5.5% vs classic's ~2%.
+
+## §N+63 — Raw fallback: per-frame cheapest-encoding selector; mover ceiling 45 GB/s at max load (bh-18, 2026-08-19)
+
+The packed gather's issue cost was the mover's problem at high fill (N+58: 6.98 us/push, ~10 GB/s/mover
+ceiling; small writes backpressure the command buffer, and the init-state hoist proved it is issue
+count, not setup). Fix: one compare per frame in the drainer -- payload > ~2/3 of live capacity ships
+the RAW span as the old single burst, flagged by SPSC_SPAN_RAW_FLAG in w0's reserved bits (the exact
+DEFLATE stored-block shape). The host decode branches per frame; the raw branch is the pre-packing
+circular walk resurrected verbatim.
+
+Measured:
+  - Judged delay-15 (raw-dominant): exact counts (60.35M records, 0 bad frames/anomalies through the
+    raw branch), stalls 352,709 (baseline 352,621), wire 546 MB/socket, decode 88.4 ms -- the raw
+    baseline restored where raw is optimal.
+  - Mover at high fill: noc-chunk 1.24-1.55 us/push -- 5x better than packed (6.98) and well under the
+    prior raw estimate (~4.5): big posted bursts issue in ~1.3 us and the transfer hides behind them;
+    packed's cost was cmd-buffer backpressure from ~77 small writes per push.
+  - Egress ceiling (SHIP_REPEAT=4 + NO_DECODE, wall): 45.1 GB/s aggregate -- ~3x the device's 15.9 GB/s
+    max offer. The mover max-load margin concern is closed.
+  - 2x2 (packed path) exact; ops-CSV pytest passed. Both decode branches now gate-covered every run.
+Low fill keeps the packed 3x (N+58 delay-150); high fill keeps raw's burst economics; the selector is
+one compare and one reserved bit.

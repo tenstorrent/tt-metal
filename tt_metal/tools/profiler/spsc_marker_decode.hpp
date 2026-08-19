@@ -8,7 +8,10 @@
 // The wire carries only whole variable-length BULK_SPAN frames (layout and geometry rules in
 // profiler_common.h): a 16-word prefix whose word 1 is the payload length, the worker's 64-word control
 // vector verbatim, then each RISC's live ring window packed flat -- congruence-padded, wrap resolved
-// device-side. Inside each window is a packet run (spsc_packet.h): ZONE_START/END/TOTAL markers
+// device-side. Frames with SPSC_SPAN_RAW_FLAG in word 0 instead carry the whole raw span (five full
+// rings at fixed offsets, windows circular) -- the drainer's high-fill fallback, where packing would
+// cost write issues to save almost nothing. Inside each window is a packet run (spsc_packet.h):
+// ZONE_START/END/TOTAL markers
 // (2 words), STICKY_TIMER (1 word, per-lane wall-clock high half), STICKY_PROG (2 words, per-lane
 // runtime host-id), and DATA/EVENT (2 + size words, self-describing). The producer publishes its tail
 // only on packet boundaries, so a window never ends mid-packet.
@@ -54,7 +57,11 @@ namespace tt::tt_metal::profiler {
 // Worker per-RISC SPSC ring depth (words) and RISC count -- MUST match the producer (kernel_profiler.hpp
 // RING_CAPACITY, = kernel_profiler::PROFILER_L1_VECTOR_SIZE) so run clamps agree with the drainer's.
 inline constexpr uint32_t kSpscRingCap = 512;
+inline constexpr uint32_t kSpscRingMask = kSpscRingCap - 1;
 inline constexpr uint32_t kSpscNRiscDecode = 5;
+
+// Largest PP_DATA payload the 7-bit size field can express; bounds the raw-layout unwrap scratch.
+inline constexpr uint32_t kSpscMaxDataWords = 127;
 
 // Worst case: five full rings, each behind a maximal congruence pad. Larger than the raw 2,640-word span
 // the drainer stages, so this bounds the bounce buffer and frame validation, not any device layout.
@@ -139,6 +146,7 @@ inline uint32_t spsc_decode_frame(
         return 0;
     }
     const uint32_t core = xy_it->second;
+    const bool raw = (frame[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) != 0;
     uint32_t off = kernel_profiler::SPSC_SPAN_PREFIX_WORDS + kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE;
     for (uint32_t r = 0; r < kSpscNRiscDecode; r++) {
         const uint32_t lane = core * kSpscNRiscDecode + r;
@@ -150,7 +158,7 @@ inline uint32_t spsc_decode_frame(
         }
         const uint32_t start = tail - extent;
         const uint32_t* p = nullptr;
-        if (extent != 0) {
+        if (!raw && extent != 0) {
             off += kernel_profiler::spsc_span_pack_pad(start, off);
             p = frame + off;
             off += extent;
@@ -179,16 +187,93 @@ inline uint32_t spsc_decode_frame(
             st.anomalies++;
             continue;
         }
-        p += extent - run;
         st.live_words += run;
+        uint32_t th = st.timer_hi[lane];
+        uint32_t pg = st.prog[lane];
+        if (raw) {
+            const uint32_t* ring = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS +
+                                   kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE + r * kSpscRingCap;
+            const uint32_t hm = head & kSpscRingMask;
+            for (uint32_t o = 0; o < run; o += 16) {
+                spsc_prefetch(ring + ((hm + o) & kSpscRingMask));
+            }
+            uint32_t i = 0;
+            while (i < run) {
+#if defined(__AVX2__)
+                if constexpr (!std::is_same_v<std::decay_t<EmitZones8>, SpscNoZones8>) {
+                    const uint32_t idx = (hm + i) & kSpscRingMask;
+                    if (i + 16 <= run && idx + 16 <= kSpscRingCap) {
+                        const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ring + idx));
+                        const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ring + idx + 8));
+                        const __m256i even = _mm256_castps_si256(_mm256_shuffle_ps(
+                            _mm256_castsi256_ps(v0), _mm256_castsi256_ps(v1), _MM_SHUFFLE(2, 0, 2, 0)));
+                        const __m256i odd = _mm256_castps_si256(_mm256_shuffle_ps(
+                            _mm256_castsi256_ps(v0), _mm256_castsi256_ps(v1), _MM_SHUFFLE(3, 1, 3, 1)));
+                        const __m256i w0s = _mm256_permute4x64_epi64(even, _MM_SHUFFLE(3, 1, 2, 0));
+                        const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
+                        if (_mm256_movemask_epi8(_mm256_cmpgt_epi32(types, _mm256_set1_epi32(1))) == 0) {
+                            const __m256i w1s = _mm256_permute4x64_epi64(odd, _MM_SHUFFLE(3, 1, 2, 0));
+                            emit_zones8(lane, th, pg, w0s, w1s);
+                            i += 16;
+                            continue;
+                        }
+                    }
+                }
+#endif
+                const uint32_t w0 = ring[(hm + i) & kSpscRingMask];
+                const uint32_t t = pp_type(w0);
+                if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
+                    if (i + 2 > run) {
+                        st.anomalies++;
+                        break;
+                    }
+                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    const uint64_t ts = (t == PP_ZONE_TOTAL) ? w1 : pp_full_ts(th, w1);
+                    emit(lane, t, pp_low27(w0) & 0xFFFFu, ts, pg);
+                    i += 2;
+                } else if (t == PP_STICKY_TIMER) {
+                    th = pp_timer_hi(w0);
+                    i += 1;
+                } else if (t == PP_STICKY_PROG) {
+                    if (i + 2 > run) {
+                        st.anomalies++;
+                        break;
+                    }
+                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    if (w1 != pg) {
+                        pg = w1;
+                        emit_prog(lane, pg);
+                    }
+                    i += 2;
+                } else if (t == PP_DATA || t == PP_EVENT) {
+                    const uint32_t n = pp_data_size(w0);
+                    if (i + 2 + n > run) {
+                        st.anomalies++;
+                        break;
+                    }
+                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    uint32_t payload[kSpscMaxDataWords];
+                    for (uint32_t k = 0; k < n; k++) {
+                        payload[k] = ring[(hm + i + 2 + k) & kSpscRingMask];
+                    }
+                    emit_data(lane, t, pp_data_id(w0), pp_full_ts(th, w1), pg, payload, n);
+                    i += 2 + n;
+                } else {
+                    st.anomalies++;
+                    break;
+                }
+            }
+            st.timer_hi[lane] = th;
+            st.prog[lane] = pg;
+            continue;
+        }
+        p += extent - run;
         // Just-in-time prefetch of this lane's live window: small bursts consumed immediately fit the
         // core's fill-buffer budget -- issuing whole frames ahead was measured 30-40% SLOWER (the bulk
         // cold-line prefetches starve the walk's own demand loads).
         for (uint32_t o = 0; o < run; o += 16) {
             spsc_prefetch(p + o);
         }
-        uint32_t th = st.timer_hi[lane];
-        uint32_t pg = st.prog[lane];
         uint32_t i = 0;
         while (i < run) {
 #if defined(__AVX2__)
@@ -251,6 +336,9 @@ inline uint32_t spsc_decode_frame(
         }
         st.timer_hi[lane] = th;
         st.prog[lane] = pg;
+    }
+    if (raw) {
+        return kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE + kSpscNRiscDecode * kSpscRingCap;
     }
     return off - kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
 }
