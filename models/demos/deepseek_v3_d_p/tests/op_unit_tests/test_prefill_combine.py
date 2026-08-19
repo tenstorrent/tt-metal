@@ -85,7 +85,7 @@ def run_combine(
 
     signpost(
         f"Combine {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {emb_dim=} "
-        f"{num_routed_experts=} {num_experts_per_tok=} {use_predictable_data=} {topology=}"
+        f"{num_routed_experts=} {num_experts_per_tok=} {use_predictable_data=} {num_links=} {topology=}"
     )
 
     # Compute configuration
@@ -592,7 +592,7 @@ def _unsupported_externaly_owned_param_combos(**params):
     _all_externally_owned_test_cases(),
     indirect=["mesh_device", "device_params"],
 )
-def test_ttnn_combine_production_call_sites(
+def test_externally_owned_cases(
     mesh_device,
     topology,
     seq_len_per_chip,
