@@ -18,8 +18,9 @@ and ``allocate_kv_cache`` are inherited but would size the KV cache to ``params.
 is wrong for 24-of-93; they are overridden to fail loudly rather than mislead.
 
 MoE scope (issue #51336): the latent-MoE structure -- routed experts at the reduced 3584 hidden,
-896 experts / top-16, a latent RMSNorm, and one shared expert at 6144. Two deliberate limits:
-  * the device path runs **SiLU**, not the checkpoint's SiTU-GLU, until the kernel in #51335 lands;
+896 experts / top-16, a latent RMSNorm, and one shared expert at 6144. The routed experts run the
+checkpoint's **SiTU-GLU** on device (#51351); the shared expert and the dense FFN still run SiLU,
+having no SiTU kernel at their widths. One deliberate limit remains:
   * only the **gate** uses real checkpoint weights. Experts, shared expert and the latent
     projections use seeded random weights, because everything routed is MXFP4 and no dequantizer
     exists yet. Device PCC is therefore TT-vs-torch on identical seeded weights.
