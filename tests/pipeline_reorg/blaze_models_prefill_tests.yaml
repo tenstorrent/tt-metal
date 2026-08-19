@@ -523,9 +523,10 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      # Measured 4.7 min at two_iters on a galaxy; ten_iters adds ~8x13.4s -> ~6.5 min. 18 min is ~2.7x
-      # headroom. Was 40, but the (team, sku) time budget is a SUM and the traced twin needs room too.
-      timeout: 18
+      # Raised 18 -> 40 so the perf gate can actually report: at 18 min the leg was killed
+      # mid-run (Status: TIMEOUT) before the per-chunk table was logged, so the run produced
+      # no measurement at all. Investigation branch only -- see Kimi_no_trace_fail_ci.MD.
+      timeout: 40
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1

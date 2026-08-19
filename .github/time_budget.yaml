@@ -385,7 +385,7 @@ models:
     wh_galaxy_perf: 145
     bh_galaxy: 470
     bh_sc1: 488
-    bh_sc1_high_power: 166
+    bh_sc1_high_power: 188  # +22 for the Chunked Kimi no-trace leg raised 18 -> 40 min
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
