@@ -12,9 +12,6 @@
 #include <cstdlib>
 
 #include "impl/context/metal_context.hpp"
-#if defined(TT_METAL_USE_EMULE)
-#include "tt_metal/impl/emulation/emule_virtual_ranks.hpp"
-#endif
 #include "tt_metal/hw/inc/hostdev/socket.h"
 
 namespace tt::tt_metal::distributed {
@@ -110,15 +107,7 @@ void execute_with_timeout(OperationType&& operation, Args&&... args) {
     std::atomic<bool> failed{false};
     std::exception_ptr exception_ptr{nullptr};
 
-#if defined(TT_METAL_USE_EMULE)
-    // This thread runs the operation on behalf of the calling rank, and an emule virtual rank is
-    // thread-local: without adopting it the operation speaks as rank 0 and addresses the wrong peer.
-    const uint32_t parent_virtual_rank = tt::tt_metal::emule::current_virtual_rank();
-#endif
     std::thread thread([&]() {
-#if defined(TT_METAL_USE_EMULE)
-        tt::tt_metal::emule::set_current_virtual_rank(parent_virtual_rank);
-#endif
         try {
             operation(std::forward<Args>(args)...);
             completed = true;
