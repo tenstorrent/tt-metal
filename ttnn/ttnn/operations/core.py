@@ -337,6 +337,8 @@ def from_torch(
         # float32 as an intermediate type is not used due to limited amount of L1 memory.
         tensor = torch.from_numpy(tensor)
 
+    tensor = ttnn.torch_tracer.unwrap_traced_tensor(tensor)
+
     # FP8_E4M3 host-side construction is narrowed to float32 input only. The FLOAT32 -> FP8_E4M3
     # path is wired up in transform_buffers via static_cast<float8_e4m3>; other source dtypes
     # either fail at the dlpack importer (torch.float8_e4m3fn, code 10 not yet handled) or hit

@@ -51,6 +51,15 @@ def test_nn_parameter_in_module_init_under_tracer():
         assert gate.weight.grad_fn is None
 
 
+@pytest.mark.requires_fast_runtime_mode_off
+def test_from_torch_accepts_transformed_traced_tensor():
+    with trace():
+        torch_tensor = torch.arange(6, dtype=torch.float32).reshape(2, 3).permute(1, 0)
+        ttnn_tensor = ttnn.from_torch(torch_tensor)
+
+    assert torch.equal(ttnn.to_torch(ttnn_tensor), torch.tensor([[0.0, 3.0], [1.0, 4.0], [2.0, 5.0]]))
+
+
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.requires_fast_runtime_mode_off
 def test_reshape():
