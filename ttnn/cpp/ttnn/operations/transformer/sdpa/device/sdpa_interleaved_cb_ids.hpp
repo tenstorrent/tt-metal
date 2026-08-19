@@ -38,6 +38,7 @@ struct CBIds {
     uint32_t windowed_cu_reader = inactive;  // windowed narrowing only: the reader's own cu_window copy
     uint32_t windowed_k_range = inactive;    // windowed narrowing only: per-Q-chunk {k_lo, k_hi}, reader -> compute
     uint32_t gather_stage = inactive;        // neighborhood_gather only: reader's 1-stick row-major staging scratch
+    uint32_t gna_kv_region = inactive;       // GNA region-reuse only: region K/V-union resident in L1 (reader->compute)
 
     std::vector<uint32_t> reader_compile_time_args() const {
         return {
@@ -51,7 +52,8 @@ struct CBIds {
             chunk_start_idx_writer,
             windowed_cu_reader,
             windowed_k_range,
-            gather_stage};
+            gather_stage,
+            gna_kv_region};
     }
 
     std::vector<uint32_t> writer_compile_time_args() const {
@@ -85,7 +87,8 @@ struct CBIds {
             sum_A,
             sum_B,
             exp_max_diff,
-            windowed_k_range};
+            windowed_k_range,
+            gna_kv_region};
     }
 };
 

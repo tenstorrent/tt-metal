@@ -855,6 +855,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             geo.ext_w,
             idx_sum,
             mask_sum);
+        // Iteration 2: allocate the resident region K/V CB (region=1 block for now -> per-block box). Reader
+        // (iter 3) fills it once; compute reuses it. K then V seqtiles, sized from box_vol.
+        const uint32_t gna_kv_seqtiles = (geo.box_vol + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+        cb_ids.gna_kv_region = allocate_tile_cb(gna_kv_seqtiles * (DHt + vDHt), k_tile_size, k_df);
+        log_info(tt::LogOp, "[GNA-geom] cb_gna_kv_region {} tiles", gna_kv_seqtiles * (DHt + vDHt));
     }
     if (is_windowed) {
         // The reader->compute k-range ctrl CB carries each Q chunk's {k_lo, k_hi} and is needed in both
