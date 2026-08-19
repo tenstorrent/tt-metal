@@ -79,7 +79,9 @@ public:
     RunOutcome run_persistent();     // initial launch
     // Resume the SAME parked fibers one quantum; Completed here tears the registry down.
     RunOutcome pump();
-    // Across a HostWait gap the tier-2 watchdog stays up on TT_EMULE_HOST_WAIT_WATCHDOG_SEC, clocked at the park.
+    // True when a fresh peer-fed socket poll waiter is present.
+    bool has_peer_fed_waiter() const;
+    // Across a suspended gap the tier-2 watchdog stays up on TT_EMULE_HOST_WAIT_WATCHDOG_SEC, clocked at the park.
 
     // No-progress pumps before pump() escalates (TT_EMULE_HOST_WAIT_STALL_LIMIT, 8192); the drain sizes above it.
     static uint64_t host_wait_stall_limit();
