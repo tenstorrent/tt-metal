@@ -144,14 +144,14 @@ inline void llk_unpack_tilizeA_B_init(
     llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(operandA_id);
     llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
 
-    // [#48552] Reprogram operandB (the reduce scaler / srcB) buffer descriptor. main DROPPED this block when
-    // this file was reverted; without it operandB keeps the stale/default full-tile dims from
-    // llk_unpack_hw_configure and its UNPACR reads resolve to a bad L1 address (maxpool/halo padding path ->
-    // MEM_READ_NO_RESPONSE / hang). Ported from bbradel-52085_resnet_qsr per LLK-team (Ana Mokan) guidance.
-    // Uses _configure_buf_desc_table_ (no validate) so it does not itself trip validate_buffer_desc. NOTE:
-    // llk_unpack_hw_configure still programs operandB with z_dim=4 / y_dim!=16 and trips the
-    // "y_dim must be 16 when z_dim is 4" assert (ckernel_trisc_common.h:146) BEFORE this overwrite, so that
-    // assert is disabled on the Quasar reduce path (see ckernel_trisc_common.h).
+    // [#48552] Reprogram operandB (the reduce scaler / srcB) buffer descriptor with FULL-tile dims (y_dim=16),
+    // overriding the geometry llk_unpack_program_bfd<Unp1> derived from the scaler's tensor_shape. For a
+    // partial-face scaler that geometry is z_dim=4 / y_dim!=16, which the HW rejects at UNPACR (0x0602
+    // ILLEGAL_TILE_SIZE) -- the same case the ckernel_trisc_common.h:146 assert covers (disabled on this
+    // path). Uses _configure_buf_desc_table_ (no validate). CRITICAL: write to the SAME BD-table entry the
+    // strided init and the unpacker use -- bfd_current<Unp1>(), the id llk_unpack_program_bfd<Unp1> just
+    // allocated -- NOT operandB_id. (The old scheme indexed the BD table by operand id; the BFD-partition
+    // refactor made these differ, so targeting operandB_id wrote the wrong entry and left the illegal BD live.)
     const ckernel::TensorShape tensor_shape_B = get_operand_tensor_shape(operandB_id);
     buffer_descriptor_u bd_val_b = {0};
     bd_val_b.f.l1_addr_16B = get_local_dfb_interface(operandB_id).tc_slots[0].base_addr;
@@ -162,7 +162,8 @@ inline void llk_unpack_tilizeA_B_init(
         (tensor_shape_B.num_faces_r_dim == tensor_shape_B.num_faces_c_dim)
             ? tensor_shape_B.total_num_faces()
             : ckernel::trisc::compute_square_of_min(tensor_shape_B.num_faces_r_dim, tensor_shape_B.num_faces_c_dim);
-    ckernel::trisc::_configure_buf_desc_table_(operandB_id, bd_val_b);
+    ckernel::trisc::_configure_buf_desc_table_(
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(), bd_val_b);
 
 #if defined(REDUCE_OP)
     _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(
