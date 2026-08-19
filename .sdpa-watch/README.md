@@ -138,6 +138,29 @@ Tip: to immediately re-analyze with the new hint, drop that pipeline from the ca
 jq 'del(."new-workflow.yaml")' ~/.sdpa-watch/state.json > /tmp/s && mv /tmp/s ~/.sdpa-watch/state.json
 ```
 
+### Pin a pipeline to scheduled runs only
+
+Manual `workflow_dispatch` re-runs interleave with a nightly's schedule, and a
+green manual run (often a job subset, or on the same sha) flips the digest ✅
+while the scheduled nightly still fails — seen on L2 2026-08-15: dispatch
+#9053 success on the SAME sha as scheduled #9056 failure. To make the watcher
+consider only one trigger event for a workflow, add it to `PIPELINE_EVENT` in
+`config.sh`:
+
+```bash
+declare -A PIPELINE_EVENT=(
+  ["tt-metal-l2-nightly.yaml"]="schedule"
+)
+```
+
+Related hardening in `watch.sh` (2026-08-19): run selection fetches a 10-run
+window and picks the newest `created_at` instead of trusting item [0] of a
+`per_page=1` response, and a monotonic `run_number` guard rejects "latest"
+runs older than the cached one — GitHub's list endpoint intermittently serves
+stale pages from a lagging replica (it returned May's run #6154 as L2's
+"latest" and cached it as current state). On a stale page the tick reuses the
+cached summary and retries next tick.
+
 ### Change cron cadence
 
 ```bash
