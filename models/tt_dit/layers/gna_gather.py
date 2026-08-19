@@ -61,6 +61,54 @@ def box_gather_indices(grid, block, kernel):
     return idx, (t0 if nb == 1 else None)  # (origins vary; kept per-block internally)
 
 
+def box_gather_indices_unclamped(grid, block, kernel):
+    """[num_blocks, box_vol] int64: like box_gather_indices but the box origin is NOT clamped (= block origin
+    - k//2), so every block uses the SAME box-relative layout and out-of-grid cells are SENTINEL. This lets the
+    device build the per-batch mask cheaply as fixed_window[vol,box] AND valid[nb,box] (valid = idx != SENTINEL),
+    at the cost of edge queries using the drop-out-of-grid window instead of the shifted one (accuracy check in
+    test)."""
+    T, H, W = grid
+    bt, bh, bw = block
+    Tb, Hb, Wb = T // bt, H // bh, W // bw
+    ext_t, ext_h, ext_w = box_dims(block, kernel, grid)
+    kt, kh, kw = kernel
+    half_t, half_h, half_w = min(kt, T) // 2, min(kh, H) // 2, min(kw, W) // 2
+    nb = Tb * Hb * Wb
+    idx = torch.full((nb, ext_t * ext_h * ext_w), SENTINEL, dtype=torch.int64)
+    for b in range(nb):
+        bti, bhi, bwi = b // (Hb * Wb), (b // Wb) % Hb, b % Wb
+        t0, h0, w0 = bti * bt - half_t, bhi * bh - half_h, bwi * bw - half_w  # UNclamped
+        c = 0
+        for jt in range(ext_t):
+            for jh in range(ext_h):
+                for jw in range(ext_w):
+                    t, h, w = t0 + jt, h0 + jh, w0 + jw
+                    idx[b, c] = ((w * H + h) * T + t) if (0 <= t < T and 0 <= h < H and 0 <= w < W) else SENTINEL
+                    c += 1
+    return idx
+
+
+def fixed_window_mask(block, kernel):
+    """[vol, box_vol] bool, uniform across blocks (unclamped box): query wid attends box cell iff the cell's
+    box-relative coord is in wid's +-k//2 window. Box origin = block origin - k//2, so query wid=(dt,dh,dw) has
+    its window at box-relative [dt, dt+kt) x [dh, dh+kh) x [dw, dw+kw). Combine with per-block valid (not-sentinel)
+    to get the full mask."""
+    bt, bh, bw = block
+    kt, kh, kw = kernel
+    ext_t, ext_h, ext_w = bt + kt - 1, bh + kh - 1, bw + kw - 1
+    vol = bt * bh * bw
+    m = torch.zeros(vol, ext_t * ext_h * ext_w, dtype=torch.bool)
+    for wid in range(vol):
+        dt, dh, dw = wid // (bh * bw), (wid // bw) % bh, wid % bw
+        c = 0
+        for jt in range(ext_t):
+            for jh in range(ext_h):
+                for jw in range(ext_w):
+                    m[wid, c] = (dt <= jt < dt + kt) and (dh <= jh < dh + kh) and (dw <= jw < dw + kw)
+                    c += 1
+    return m
+
+
 def window_mask(grid, block, kernel):
     """[num_blocks, vol, box_vol] bool: query (in block) attends box cell iff within its +-k//2 window. Depends
     on the block's clamped box origin, so it's per-block (edge blocks differ). vol = bt*bh*bw."""
