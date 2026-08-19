@@ -1165,8 +1165,8 @@ def test_copy_tilized_interleaved_to_nd_sharded_dtype_conversion(
             [2, 1, 32, 64],
             ttnn.CoreRangeSet(
                 {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(6, 0)),
                 }
             ),
         ),
