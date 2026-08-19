@@ -159,22 +159,28 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     const uint64_t pos0 = pos;
     const uint32_t dev = s.dev;
     const bool sink = !stall_only_;
+    // Pass-local stats, folded into the stream once per pass: the NT ring stores go through casted
+    // pointers, so per-record updates against Stream fields cannot stay in registers (the compiler must
+    // assume aliasing) -- measured at ~20% of the decode profile as a load-add-store per marker.
+    uint64_t zone_markers = 0, stall_zones = 0, order_regressions = 0;
+    uint64_t min_ts = s.min_zone_ts, max_ts = s.max_zone_ts;
+    uint64_t* const last_ts = s.last_zone_ts.data();
 
     auto emit = [&](uint32_t lane, uint32_t type, uint32_t hash, uint64_t ts, uint32_t prog) {
         PerfDebugRecType rt = PerfDebugRecType::ZoneTotal;
         if (type != PP_ZONE_TOTAL) {
             rt = type == PP_ZONE_START ? PerfDebugRecType::ZoneStart : PerfDebugRecType::ZoneEnd;
-            s.zone_markers++;
-            s.stall_zones += (hash == 0x7FFFu && type == PP_ZONE_START) ? 1 : 0;
-            if (ts < s.last_zone_ts[lane]) {
-                s.order_regressions++;
+            zone_markers++;
+            stall_zones += (hash == 0x7FFFu && type == PP_ZONE_START) ? 1 : 0;
+            if (ts < last_ts[lane]) {
+                order_regressions++;
             } else {
-                s.last_zone_ts[lane] = ts;
+                last_ts[lane] = ts;
             }
-            if (s.min_zone_ts == 0) {
-                s.min_zone_ts = ts;
+            if (min_ts == 0) {
+                min_ts = ts;
             }
-            s.max_zone_ts = ts;
+            max_ts = ts;
         }
         if (sink) {
             w.emit_store(pos++, PerfDebugRec{ts, {hash, lane, dev, rt}, prog});
@@ -233,6 +239,11 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         w.emit_commit(pos);
         s.records += pos - pos0;
     }
+    s.zone_markers += zone_markers;
+    s.stall_zones += stall_zones;
+    s.order_regressions += order_regressions;
+    s.min_zone_ts = min_ts;
+    s.max_zone_ts = max_ts;
     s.decode_ticks += tsc_now() - t0;
     s.sock->pop(npages, true);
     if (pos != pos0) {
