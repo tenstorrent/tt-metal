@@ -71,6 +71,10 @@ GU_CHUNKS = _env_int("GU_CHUNKS", 3)
 #: Stage x before issuing the writer's W_up stream.
 XPRIO = _env_bool("XPRIO", True)
 
+#: Emit fine-grained device-profiler zones. Off for ordinary latency sweeps because each zone
+#: writes profiler records on the kernel critical path.
+STAGE_PROFILE = _env_bool("STAGE_PROFILE", False)
+
 #: How many rounds' senders an h receiver acks in one reserve. THE round-cost lever; clamped to
 #: DEPTH_H - 1 below.
 HACK_AHEAD = _env_int("HACK_AHEAD", 2)
