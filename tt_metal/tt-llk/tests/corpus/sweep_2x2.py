@@ -192,7 +192,8 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-const-residency "
     "-mno-tt-tensix-optimize-counted-row-formation "
     "-mno-tt-tensix-optimize-crosscall-hoist "
-    "-mno-tt-tensix-optimize-crossloop-hoist"
+    "-mno-tt-tensix-optimize-crossloop-hoist "
+    "-mno-tt-tensix-optimize-init-hoist"
 )
 ON_FLAGS = (
     "-mtt-tensix-optimize-latency-schedule "
@@ -282,7 +283,24 @@ ON_FLAGS = (
     # word count 68 -> 58 = hand parity; exp corr CRAQ 5630 -> 5589
     # sim-cycles bit-exact PASS on the pinned BH sim.  MERGE-ORDER:
     # lands only with the pin cycle whose toolchain accepts the flag.
-    "-mtt-tensix-optimize-crossloop-hoist"
+    "-mtt-tensix-optimize-crossloop-hoist "
+    # Lane CA (pin 13): D2 cross-call invariant-init hoist — the noinline
+    # per-tile callee's idempotent formation init prefix (descriptor
+    # program + owned SETC16 + all-lanes enable, 17 issue slots on the
+    # minmax shape) programs once in the caller's tile-block loop
+    # preheader (stage 2 under the owned-row value-equality proof).
+    # Fire witness (dump-proven, laneCA-evidence-20260819): the minmax
+    # perf/corr TUs — dump line: Macro-planner init-hoist: stage=2 init
+    # contract hoisted to caller loop preheader; the callee is pure payload.
+    # Lane CA also completes the drain-schedule flag with loop-backedge
+    # elision + exit compensation (where in-body 3-NOP tail x 4 trips ->
+    # one exit block; witness dump line: loop-backedge drain elided, on
+    # the where TUs).  Measured (this lane, 3 fresh procs, BH p150): minmax
+    # TILE_LOOP/tile 18.727 -> 16.72 = -5.1% vs hand 17.628 (WIN);
+    # where TTNN_WHERE_BODY 167.5 -> 154.5 = -2.9% vs hand 159.17 (WIN).
+    # ON inventory: exactly 9 corpus math.elfs (6 ternary/where + 3
+    # binary/minmax), CRAQ 6/6 on the changed corr nodes.
+    "-mtt-tensix-optimize-init-hoist"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
