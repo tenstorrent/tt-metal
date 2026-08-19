@@ -142,12 +142,29 @@ Batched silicon execution (laneBU, weekly-20260820 forensics):
     a >=5x reduction of the silicon phase with identical evidence.  Knob
     silicon legs (weekly, 200 legs) stay on the serial path this increment.
 
+Batch robustness (laneCH, storm-first-silicon lesson):
+  * a FAILED group producer session no longer poisons its group: pytest
+    keeps compiling after a failure, so the group tree is hashed anyway
+    and only the legs whose classify ELF sets are incomplete in it are
+    withheld (their own rc-96 evidence, fail-closed when unprovable);
+    every leg whose variants all compiled still runs and books cells
+    (previously the pin-12 counted-row ICE failed 2/117 compiles and all
+    33 rows of the group were withheld);
+  * the classify phase batches too: pending (row, selector, leg) compiles
+    group by flag set into chunk producer sessions (>=1 per worker, <=16
+    nodes each, sequential inside) with per-node outcome + artefact-file
+    attribution from the in-tree pytest plugin; per-leg evidence is
+    byte-compatible with the solo path, unprovable legs fall back to solo
+    compiles, and SWEEP_CLASSIFY_WORKERS=1 keeps the legacy sequential
+    per-leg path.
+
 Typical one-command full sweep:
   python3 tt_metal/tt-llk/tests/corpus/sweep_2x2.py \
     --evidence-root ~/sfpi-uplift/sweep-2x2/evidence-$(date +%Y%m%d) \
     --sim-bh <libttsim-bh> --sim-wh <libttsim-wh> --allow-hardware \
     --baseline tt_metal/tt-llk/tests/corpus/sfpu_device_baseline_p150_v1.tsv
 """
+
 from __future__ import annotations
 
 import argparse
@@ -958,28 +975,53 @@ class Sweep:
         text = log.read_text(errors="replace")
         return bool(re.search(r"\b[1-9]\d* passed\b", text))
 
+    def _hash_one_elf(self, build_root, elf):
+        """(relpath, .text sha256, elf sha256) for one kernel ELF."""
+        rel = elf.relative_to(build_root)
+        text = subprocess.run(
+            [
+                str(self.objcopy),
+                "-O",
+                "binary",
+                "--only-section=.text",
+                str(elf),
+                "/dev/stdout",
+            ],
+            capture_output=True,
+        ).stdout
+        return (str(rel), hashlib.sha256(text).hexdigest(), sha256(elf))
+
+    @staticmethod
+    def _write_hash_file(entries, out_file):
+        with open(out_file, "w") as f:
+            for rel, t, e in entries:
+                f.write(f"{rel}\ttext:{t}\telf:{e}\n")
+
     def _hash_build(self, rt, out_file):
         """Hash .text and full bytes of every kernel ELF under one RUNNER_TEMP."""
         entries = []
         for elf in sorted((rt / "tt-llk-build").rglob("*.elf")):
             if "shared" in elf.parts:
                 continue  # brisc bootrom is flag-independent scaffolding
-            rel = elf.relative_to(rt / "tt-llk-build")
-            text = subprocess.run(
-                [
-                    str(self.objcopy),
-                    "-O",
-                    "binary",
-                    "--only-section=.text",
-                    str(elf),
-                    "/dev/stdout",
-                ],
-                capture_output=True,
-            ).stdout
-            entries.append((str(rel), hashlib.sha256(text).hexdigest(), sha256(elf)))
-        with open(out_file, "w") as f:
-            for rel, t, e in entries:
-                f.write(f"{rel}\ttext:{t}\telf:{e}\n")
+            entries.append(self._hash_one_elf(rt / "tt-llk-build", elf))
+        self._write_hash_file(entries, out_file)
+        return entries
+
+    def _hash_build_subset(self, rt, rel_files, out_file):
+        """_hash_build restricted to the given artefact FILES (relative to
+        the build root) — one node's slice of a shared classify chunk
+        build, exactly the file format the solo path writes.  File (not
+        directory) granularity: sibling variants of two nodes share parent
+        dirs, so any dir-level subset would swallow foreign ELFs."""
+        entries = []
+        build = rt / "tt-llk-build"
+        for rel in sorted(rel_files):
+            if not rel.endswith(".elf") or "shared" in pathlib.PurePath(rel).parts:
+                continue
+            elf = build / rel
+            if elf.is_file():
+                entries.append(self._hash_one_elf(build, elf))
+        self._write_hash_file(entries, out_file)
         return entries
 
     def _archive_build(self, rt, dest):
@@ -995,56 +1037,60 @@ class Sweep:
                 out.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, out)
 
-    # ---------------- phase: classify ----------------
-    def classify(
-        self, row, sel, legs=(("off", OFF_FLAGS), ("on", ON_FLAGS)), tag="classify"
-    ):
-        node = row["nodes"][sel]
-        work = self.ev / row["op"] / tag / sel
-        verdict_file = work / "verdict.json"
-        if verdict_file.is_file() and not self.a.force:
-            verdict = json.loads(verdict_file.read_text())
-            # Hash-matched resume: a cached classification is only valid for
-            # the compiler AND source tree that produced it.  Verdicts from
-            # another cc1plus or tt-metal head (or the pre-keying schema)
-            # are recompiled — kernel-source changes must re-derive hashes.
+    def _archive_variant_files(self, rt, rel_files, dest):
+        """_archive_build restricted to the given artefact files — one
+        node's slice of a shared classify chunk build."""
+        dest.mkdir(parents=True, exist_ok=True)
+        build = rt / "tt-llk-build"
+        for rel in sorted(rel_files):
+            path = build / rel
             if (
-                verdict.get("cc1plus_sha256") == self.info["cc1plus_sha256"]
-                and verdict.get("tt_metal_head") == self.info["tt_metal_head"]
-                and (
-                    verdict.get("status") != "OK" or "macro_scan" in verdict
-                )  # pre-enforcement-layer verdicts lack the scan: re-derive
+                path.is_file()
+                and (path.suffix == ".elf" or path.name == "build.h")
+                and "shared" not in path.parts
             ):
-                return verdict
-        work.mkdir(parents=True, exist_ok=True)
-        (work / "node.txt").write_text(node + "\n")
-        hashes = {}
-        for leg, flags in legs:
-            rt = work / f"rt-{leg}"
-            shutil.rmtree(rt, ignore_errors=True)
-            rt.mkdir(parents=True)
-            (work / f"flags-{leg}.txt").write_text(flags + "\n")
-            rc = self._pytest(
-                node,
-                ["--compile-producer"],
-                self._env("bh", rt, flags, extra=row_env(row, sel)),
-                work / f"compile-{leg}.log",
-            )
-            if rc != 0 or not self._passed(work / f"compile-{leg}.log"):
-                verdict = {
-                    "selector": sel,
-                    "status": "COMPILE_FAIL",
-                    "leg": leg,
-                    "cc1plus_sha256": self.info["cc1plus_sha256"],
-                    "tt_metal_head": self.info["tt_metal_head"],
-                }
-                verdict_file.write_text(json.dumps(verdict, indent=2) + "\n")
-                self.reds.append(f"{row['op']}/{sel}: compile {leg} failed")
-                return verdict
-            hashes[leg] = self._hash_build(rt, work / f"hashes-{leg}.txt")
-            self._archive_build(rt, work / f"elf-{leg}")
-            shutil.rmtree(rt, ignore_errors=True)
-        legnames = [leg for leg, _ in legs]
+                out = dest / rel
+                out.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, out)
+
+    # ---------------- phase: classify ----------------
+    def _classify_cached(self, work):
+        """The (row,sel) verdict from a previous run, iff hash-keyed valid.
+
+        Hash-matched resume: a cached classification is only valid for
+        the compiler AND source tree that produced it.  Verdicts from
+        another cc1plus or tt-metal head (or the pre-keying schema)
+        are recompiled — kernel-source changes must re-derive hashes."""
+        verdict_file = work / "verdict.json"
+        if not verdict_file.is_file() or self.a.force:
+            return None
+        verdict = json.loads(verdict_file.read_text())
+        if (
+            verdict.get("cc1plus_sha256") == self.info["cc1plus_sha256"]
+            and verdict.get("tt_metal_head") == self.info["tt_metal_head"]
+            and (
+                verdict.get("status") != "OK" or "macro_scan" in verdict
+            )  # pre-enforcement-layer verdicts lack the scan: re-derive
+        ):
+            return verdict
+        return None
+
+    def _classify_compile_fail(self, row, sel, work, leg):
+        """Shared COMPILE_FAIL verdict (legacy + batched classify paths)."""
+        verdict = {
+            "selector": sel,
+            "status": "COMPILE_FAIL",
+            "leg": leg,
+            "cc1plus_sha256": self.info["cc1plus_sha256"],
+            "tt_metal_head": self.info["tt_metal_head"],
+        }
+        (work / "verdict.json").write_text(json.dumps(verdict, indent=2) + "\n")
+        self.reds.append(f"{row['op']}/{sel}: compile {leg} failed")
+        return verdict
+
+    def _classify_verdict(self, sel, work, legnames, hashes):
+        """Shared verdict tail (legacy + batched classify paths): the
+        OFF-vs-ON hash-set comparison, macro-launch scan, and hash keys."""
         if len(legnames) == 1:
             verdict = {
                 "selector": sel,
@@ -1070,8 +1116,298 @@ class Sweep:
         verdict["macro_scan"] = self._macro_scan(work, legnames)
         verdict["cc1plus_sha256"] = self.info["cc1plus_sha256"]
         verdict["tt_metal_head"] = self.info["tt_metal_head"]
-        verdict_file.write_text(json.dumps(verdict, indent=2) + "\n")
+        (work / "verdict.json").write_text(json.dumps(verdict, indent=2) + "\n")
         return verdict
+
+    def classify(
+        self, row, sel, legs=(("off", OFF_FLAGS), ("on", ON_FLAGS)), tag="classify"
+    ):
+        node = row["nodes"][sel]
+        work = self.ev / row["op"] / tag / sel
+        cached = self._classify_cached(work)
+        if cached is not None:
+            return cached
+        work.mkdir(parents=True, exist_ok=True)
+        (work / "node.txt").write_text(node + "\n")
+        hashes = {}
+        for leg, flags in legs:
+            rt = work / f"rt-{leg}"
+            shutil.rmtree(rt, ignore_errors=True)
+            rt.mkdir(parents=True)
+            (work / f"flags-{leg}.txt").write_text(flags + "\n")
+            rc = self._pytest(
+                node,
+                ["--compile-producer"],
+                self._env("bh", rt, flags, extra=row_env(row, sel)),
+                work / f"compile-{leg}.log",
+            )
+            if rc != 0 or not self._passed(work / f"compile-{leg}.log"):
+                return self._classify_compile_fail(row, sel, work, leg)
+            hashes[leg] = self._hash_build(rt, work / f"hashes-{leg}.txt")
+            self._archive_build(rt, work / f"elf-{leg}")
+            shutil.rmtree(rt, ignore_errors=True)
+        return self._classify_verdict(sel, work, [leg for leg, _ in legs], hashes)
+
+    # ------------- batched classify producer sessions (laneCH) -------------
+    # The classify phase previously paid one pytest producer session per
+    # (row, selector, leg) — the 6-way prewarm pool ran those solo sessions
+    # concurrently but each still paid full collection overhead.  These
+    # methods batch the PENDING legs into per-(flags, extra_env) chunk
+    # sessions the way the batched silicon executor batches device legs,
+    # with per-node ELF attribution from the in-tree corpus pytest plugin
+    # (artefact-FILE diff around each test — dir-level diffs mis-attribute
+    # sibling variants under one sources/<file>/ dir; sequential only — never
+    # xdist, concurrent workers would pollute the diff).  Every per-leg
+    # evidence file (node.txt, flags-*.txt, hashes-*.txt, elf-*/,
+    # verdict.json) is byte-compatible with the legacy solo path; anything
+    # a chunk cannot PROVE (node deselected, no outcome, no created files,
+    # session died) falls back to the legacy solo classify in the
+    # sequential row loop — fail-open to legacy, never to a guessed
+    # verdict.  SWEEP_CLASSIFY_WORKERS=1 disables all of it.
+
+    _CLASSIFY_CHUNK_NODES = 16  # blast-radius / timeout bound per session
+
+    def _classify_chunk_session(self, cdir, jobs, flags, extra_env):
+        """ONE --compile-producer pytest session for MANY classify legs
+        sharing (flags, extra_env).  Returns the parsed plugin report
+        payload (possibly {}) — outcomes are per NODE, never a session
+        verdict (the group-poisoning lesson applies here too)."""
+        rt = cdir / "rt"
+        shutil.rmtree(cdir, ignore_errors=True)
+        rt.mkdir(parents=True)
+        nodes = []
+        for j in jobs:
+            if j["node"] not in nodes:
+                nodes.append(j["node"])
+        (cdir / "nodes.txt").write_text("\n".join(nodes) + "\n")
+        (cdir / "flags.txt").write_text(flags + "\n")
+        env = self._env("bh", rt, flags, extra=dict(extra_env))
+        env["SFPU_CORPUS_PYTEST_REPORT"] = str(cdir / "report.json")
+        env["SFPU_CORPUS_VARIANT_MAP"] = "1"
+        env["PYTHONPATH"] = f"{HERE}:{env.get('PYTHONPATH', '')}"
+        rc = 0
+        with open(cdir / "session.log", "w") as f:
+            try:
+                rc = subprocess.run(
+                    [
+                        str(self.python),
+                        "-m",
+                        "pytest",
+                        "-q",
+                        "-p",
+                        "sfpu_corpus_pytest_plugin",
+                        "--compile-producer",
+                        *nodes,
+                    ],
+                    cwd=PYDIR,
+                    env=env,
+                    stdout=f,
+                    stderr=subprocess.STDOUT,
+                    timeout=900 + 300 * len(nodes),
+                ).returncode
+            except subprocess.TimeoutExpired:
+                rc = 124
+                f.write("\nCLASSIFY CHUNK SESSION TIMED OUT\n")
+        (cdir / "rc.txt").write_text(f"{rc}\n")
+        rj = cdir / "report.json"
+        if rj.is_file():
+            try:
+                return json.loads(rj.read_text())
+            except ValueError:
+                pass
+        return {}
+
+    def _extract_classify_leg(self, cdir, job, report):
+        """Attribute one leg's outcome out of a chunk session, writing the
+        same per-leg evidence files the solo path writes.  Returns
+        ('ok', entries) | ('compile_fail',) | ('fallback', reason)."""
+        node, leg = job["node"], job["leg"]
+        phases = (report.get("reports") or {}).get(node) or {}
+        vfiles = (report.get("variant_files") or {}).get(node) or []
+        passed = (
+            bool(phases)
+            and "call" in phases
+            and all(p.get("outcome") == "passed" for p in phases.values())
+        )
+        work = job["work"]
+        work.mkdir(parents=True, exist_ok=True)
+        (work / "node.txt").write_text(node + "\n")
+        log = work / f"compile-{leg}.log"
+        if node in (report.get("deselected") or []):
+            log.write_text(
+                f"batched classify chunk {cdir}: node DESELECTED (runtime-"
+                "only variant collapse against another chunk node) — solo "
+                "compile fallback\n"
+            )
+            return ("fallback", "deselected in chunk (runtime-only collapse)")
+        if not phases:
+            log.write_text(
+                f"batched classify chunk {cdir}: node produced no outcome "
+                "(session died before it ran?) — solo compile fallback\n"
+            )
+            return ("fallback", "no outcome in chunk session")
+        if not passed:
+            (work / f"flags-{leg}.txt").write_text(job["flags"] + "\n")
+            log.write_text(
+                f"batched classify chunk {cdir}: compile FAILED for this "
+                f"node\nphases: {json.dumps(phases, sort_keys=True)}\n"
+                f"(full session output: {cdir}/session.log)\n"
+            )
+            return ("compile_fail",)
+        if not vfiles:
+            log.write_text(
+                f"batched classify chunk {cdir}: node passed but created no "
+                "artefact files (variant shared with an earlier chunk "
+                "node?) — solo compile fallback\n"
+            )
+            return ("fallback", "passed but no attributable artefact files")
+        (work / f"flags-{leg}.txt").write_text(job["flags"] + "\n")
+        entries = self._hash_build_subset(
+            cdir / "rt", vfiles, work / f"hashes-{leg}.txt"
+        )
+        if not entries:
+            (work / f"hashes-{leg}.txt").unlink(missing_ok=True)
+            return ("fallback", "attributed artefact files contained no ELFs")
+        shutil.rmtree(work / f"elf-{leg}", ignore_errors=True)
+        self._archive_variant_files(cdir / "rt", vfiles, work / f"elf-{leg}")
+        log.write_text(
+            f"batched classify chunk {cdir}: 1 passed (chunk session; full "
+            f"output in {cdir}/session.log)\n"
+            f"artefact files: {', '.join(vfiles)}\n"
+        )
+        return ("ok", entries)
+
+    def _batched_classify(self, pending):
+        """Prewarm the classify caches with BATCHED producer sessions.
+
+        pending: [(row, sel, legs_spec_or_None)].  Verdict-cached selectors
+        are skipped (the row loop replays them); the rest compile in
+        chunked sessions and their verdicts are written here, so the
+        sequential row loop resumes every one hash-matched from cache."""
+        jobs_by_rowsel = {}
+        legjobs = []
+        for row, sel, p_legs in pending:
+            legs = p_legs or (("off", OFF_FLAGS), ("on", ON_FLAGS))
+            work = self.ev / row["op"] / "classify" / sel
+            if self._classify_cached(work) is not None:
+                continue
+            jobs_by_rowsel[(row["op"], sel)] = {
+                "row": row,
+                "sel": sel,
+                "legs": legs,
+                "status": {},
+            }
+            for leg, flags in legs:
+                legjobs.append(
+                    {
+                        "row": row,
+                        "sel": sel,
+                        "leg": leg,
+                        "flags": flags,
+                        "node": row["nodes"][sel],
+                        "extra_env": row_env(row, sel),
+                        "work": work,
+                    }
+                )
+        if not legjobs:
+            print("batched classify: every pending verdict already cached")
+            return
+        groups = {}
+        for j in legjobs:
+            key = (j["flags"], tuple(sorted(j["extra_env"].items())))
+            groups.setdefault(key, []).append(j)
+        broot = self.ev / "classify-batches"
+        broot.mkdir(parents=True, exist_ok=True)
+        chunks = []
+        gkeys = sorted(groups)
+        for i, key in enumerate(gkeys):
+            gjobs = sorted(groups[key], key=lambda j: (j["node"], j["sel"], j["leg"]))
+            gname = (
+                f"g{i}-"
+                + hashlib.sha256((key[0] + repr(key[1])).encode()).hexdigest()[:8]
+            )
+            nodes = []
+            for j in gjobs:
+                if j["node"] not in nodes:
+                    nodes.append(j["node"])
+            nchunks = min(
+                len(nodes),
+                max(
+                    self.a.classify_workers,
+                    -(-len(nodes) // self._CLASSIFY_CHUNK_NODES),
+                ),
+            )
+            for c in range(nchunks):
+                cnodes = {n for x, n in enumerate(nodes) if x % nchunks == c}
+                cjobs = [j for j in gjobs if j["node"] in cnodes]
+                chunks.append((broot / gname / f"c{c}", cjobs, key[0], key[1]))
+        print(
+            f"batched classify plan: {len(jobs_by_rowsel)} verdict(s) "
+            f"pending ({len(pending) - len(jobs_by_rowsel)} cached), "
+            f"{len(legjobs)} compile leg(s) across {len(gkeys)} group(s) in "
+            f"{len(chunks)} chunk session(s) x {self.a.classify_workers} "
+            "worker(s)"
+        )
+
+        def run_chunk(spec):
+            cdir, cjobs, flags, extra_env = spec
+            self.verify_toolchain("classify")
+            report = self._classify_chunk_session(cdir, cjobs, flags, extra_env)
+            out = [(j, self._extract_classify_leg(cdir, j, report)) for j in cjobs]
+            # per-leg ELFs are archived under the classify work dirs above;
+            # the shared chunk tree is disk we no longer need
+            shutil.rmtree(cdir / "rt", ignore_errors=True)
+            return out
+
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.a.classify_workers
+        ) as pool:
+            futs = {pool.submit(run_chunk, spec): spec for spec in chunks}
+            for fut in concurrent.futures.as_completed(futs):
+                try:
+                    results.extend(fut.result())
+                except Exception as exc:  # deferred: the row loop compiles solo
+                    print(
+                        f"classify chunk {futs[fut][0]} exception "
+                        f"(deferred to legacy solo): {exc}"
+                    )
+        for job, status in results:
+            jobs_by_rowsel[(job["row"]["op"], job["sel"])]["status"][
+                job["leg"]
+            ] = status
+        done = fell_back = failed = 0
+        for entry in jobs_by_rowsel.values():
+            row, sel = entry["row"], entry["sel"]
+            work = self.ev / row["op"] / "classify" / sel
+            legnames = [leg for leg, _ in entry["legs"]]
+            hashes, verdict_done, fallback = {}, False, None
+            for leg in legnames:
+                st = entry["status"].get(leg) or ("fallback", "chunk never ran")
+                if st[0] == "compile_fail":
+                    # legacy order: the FIRST failing leg names the verdict
+                    self._classify_compile_fail(row, sel, work, leg)
+                    failed += 1
+                    verdict_done = True
+                    break
+                if st[0] == "fallback":
+                    fallback = st[1]
+                    break
+                hashes[leg] = st[1]
+            if verdict_done:
+                continue
+            if fallback is not None:
+                fell_back += 1
+                print(
+                    f"batched classify: {row['op']}/{sel} -> legacy solo ({fallback})"
+                )
+                continue
+            self._classify_verdict(sel, work, legnames, hashes)
+            done += 1
+        print(
+            f"batched classify: {done} verdict(s) assembled, {failed} "
+            f"COMPILE_FAIL, {fell_back} deferred to the legacy solo path"
+        )
 
     def _scan_leg_disasm(self, work, leg):
         """Sum the macro-launch census over every archived math.elf of a
@@ -1761,7 +2097,13 @@ exit $RC
         exact (cc1plus, arch, flags, tt-metal head, farm path) matches and
         it covers every leg's classify relpaths; otherwise one
         --compile-producer session (parallel when xdist is available).
-        Returns {'rt', 'manifest'} or None on compile failure."""
+
+        Returns {'rt', 'manifest', 'seeded', 'producer_rc'}.  A non-zero
+        producer_rc NEVER discards the build tree: pytest without -x keeps
+        compiling the other variants after a failure, so the manifest still
+        names every ELF that DID build — the caller attributes the failure
+        to the specific legs whose ELFs are missing (storm-first-silicon
+        all-withheld lesson: one ICE variant must not poison its group)."""
         rt = gdir / "rt"
         nodes = sorted({j["node"] for j in jobs})
         needed = set()
@@ -1801,6 +2143,7 @@ exit $RC
                     )
         except Exception as exc:  # seeding is opportunistic, never load-bearing
             print(f"batched: store seeding unavailable ({exc}); compiling")
+        producer_rc = 0
         if not seeded:
             shutil.rmtree(rt, ignore_errors=True)
             rt.mkdir(parents=True)
@@ -1810,22 +2153,67 @@ exit $RC
             cmd += nodes
             log = gdir / "producer.log"
             with open(log, "w") as f:
-                rc = subprocess.run(
-                    cmd,
-                    cwd=PYDIR,
-                    env=self._env("bh", rt, flags, extra=dict(extra_env)),
-                    stdout=f,
-                    stderr=subprocess.STDOUT,
-                    timeout=900 + 90 * len(nodes),
-                ).returncode
-            if rc != 0:
-                return None
+                try:
+                    producer_rc = subprocess.run(
+                        cmd,
+                        cwd=PYDIR,
+                        env=self._env("bh", rt, flags, extra=dict(extra_env)),
+                        stdout=f,
+                        stderr=subprocess.STDOUT,
+                        timeout=900 + 90 * len(nodes),
+                    ).returncode
+                except subprocess.TimeoutExpired:
+                    producer_rc = 124
+                    f.write("\nGROUP PRODUCER SESSION TIMED OUT\n")
+            if producer_rc != 0:
+                print(
+                    f"batched: group producer session FAILED rc={producer_rc} "
+                    f"({log}); hashing the tree anyway — only legs whose "
+                    "variants are missing will be withheld"
+                )
         entries = self._hash_build(rt, gdir / "TEXT_HASHES-group.txt")
         return {
             "rt": rt,
             "manifest": {rel: (t, e) for rel, t, e in entries},
             "seeded": seeded,
+            "producer_rc": producer_rc,
         }
+
+    def _producer_coverage(self, gjobs, gctx, gdir):
+        """Per-leg failure attribution after a FAILED group producer
+        session: a leg proceeds iff EVERY classify relpath it needs is
+        present in the group build manifest (its variant provably
+        compiled); a leg with missing ELFs — or with no classify map to
+        prove coverage — fails CLOSED with its OWN per-leg evidence.  The
+        whole group is never failed as a unit (storm-first-silicon lesson:
+        the pin-12 counted-row ICE failed 2/117 producer compiles and the
+        old rc-gate withheld all 33 rows).  Returns the runnable subset."""
+        ok = []
+        rc = gctx["producer_rc"]
+        for j in gjobs:
+            entries = self._classify_entries(j["row"], j["sel"], j["leg"])
+            if entries is None:
+                self._write_failed_leg(
+                    j,
+                    96,
+                    f"group producer session failed (rc={rc}) and this leg "
+                    "has no classify hash file to prove its variant "
+                    f"compiled — failing closed (see {gdir}/producer.log)",
+                )
+                continue
+            missing = [rel for rel, _, _ in entries if rel not in gctx["manifest"]]
+            if missing:
+                self._write_failed_leg(
+                    j,
+                    96,
+                    "this leg's variant did not compile in the group "
+                    f"producer session (rc={rc}; {len(missing)} of "
+                    f"{len(entries)} ELFs missing, first: {missing[0]}; "
+                    f"see {gdir}/producer.log)",
+                )
+                continue
+            ok.append(j)
+        return ok
 
     def _archive_group_subset(self, rt, rels, dest):
         """Per-leg ELF archive: the leg's classify relpaths (plus their
@@ -2115,14 +2503,22 @@ exit $RC
             gdir = broot / gnames[key]
             gdir.mkdir(parents=True, exist_ok=True)
             gctx = self._group_build(gdir, key[0], key[1], groups[key])
-            if gctx is None:
-                for j in groups[key]:
-                    self._write_failed_leg(
-                        j,
-                        96,
-                        f"group producer compile failed (see {gdir}/producer.log)",
-                    )
-                continue
+            if gctx["producer_rc"] != 0:
+                # Per-leg attribution, never a group verdict: only the legs
+                # whose variants provably failed to compile are withheld;
+                # every leg whose classify ELF set is fully present in the
+                # group build still runs and books its cells.
+                survivors = self._producer_coverage(groups[key], gctx, gdir)
+                print(
+                    f"batched: group {gnames[key]} producer failed "
+                    f"(rc={gctx['producer_rc']}): "
+                    f"{len(groups[key]) - len(survivors)} leg(s) withheld "
+                    f"individually, {len(survivors)} leg(s) verified "
+                    "compiled and proceeding"
+                )
+                groups[key] = survivors
+                if not survivors:
+                    continue
             gctxs[key] = gctx
         # 2. correctness sessions (one per group, before ANY perf session)
         for key in gkeys:
@@ -2938,13 +3334,17 @@ exit $RC
         # keyed hash-matched resume path).
         prelim = []  # ordered: ("row", row, classifications, attribution)
         if "classify" in phases and getattr(self.a, "classify_workers", 1) > 1:
-            # Parallel classify prewarm (owner order 2026-08-19): every
-            # (row, selector) classify is independent — its work dir, rt
-            # roots, logs, and verdict file are disjoint — so compile them
-            # concurrently here; the sequential row loop below then resumes
-            # every verdict hash-matched from cache.  Errors surface in the
-            # loop exactly as before (the prewarm ignores them on purpose:
-            # the cached COMPILE_FAIL verdict replays identically).
+            # Batched classify prewarm (owner order 2026-08-19; laneCH
+            # session batching): every (row, selector) classify is
+            # independent — its work dir, logs, and verdict file are
+            # disjoint — so compile the pending ones here in BATCHED
+            # producer sessions (chunked per flag set, per-node outcome
+            # attribution via the in-tree pytest plugin); the sequential
+            # row loop below then resumes every verdict hash-matched from
+            # cache.  Errors surface in the loop exactly as before: a
+            # cached COMPILE_FAIL verdict replays identically, and any leg
+            # the batch could not prove falls back to the legacy solo
+            # compile inside classify().
             self.verify_toolchain("classify")
             prewarm = []
             for row in self.rows:
@@ -2958,22 +3358,7 @@ exit $RC
                 for sel in SELECTORS:
                     if row["nodes"][sel]:
                         prewarm.append((row, sel, p_legs))
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=self.a.classify_workers
-            ) as pool:
-                futs = [
-                    (
-                        pool.submit(self.classify, row, sel, legs=p_legs)
-                        if p_legs
-                        else pool.submit(self.classify, row, sel)
-                    )
-                    for row, sel, p_legs in prewarm
-                ]
-                for fut in concurrent.futures.as_completed(futs):
-                    try:
-                        fut.result()
-                    except Exception as exc:  # surfaced by the loop's rerun
-                        print(f"classify prewarm exception (deferred): {exc}")
+            self._batched_classify(prewarm)
         for row in self.rows:
             if row["kind"] == "skip":
                 skips.append(
@@ -3213,10 +3598,13 @@ def main():
         "--classify-workers",
         type=int,
         default=int(os.environ.get("SWEEP_CLASSIFY_WORKERS", "6")),
-        help="concurrent classify (row,selector) compile sessions in the "
-        "prewarm pool (work dirs are disjoint per (row,selector); verdicts "
-        "are hash-keyed so the sequential loop replays them from cache). "
-        "1 disables the prewarm (legacy sequential classify).",
+        help="concurrent classify chunk sessions in the prewarm pool "
+        "(pending (row,selector) legs are BATCHED into per-flag-set "
+        "producer sessions with per-node outcome/ELF attribution; work "
+        "dirs are disjoint per (row,selector) and verdicts are hash-keyed "
+        "so the sequential loop replays them from cache; unprovable legs "
+        "fall back to solo compiles there). 1 disables the prewarm "
+        "(legacy sequential per-leg classify).",
     )
     ap.add_argument(
         "--force",
