@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// RMSNorm over each row:
+//
+//     out[h, w] = x[h, w] / sqrt(mean(x[h, :]^2) + eps) * weight[w]
+//
+// No new library work: the square is an ordinary SFPU multiply of a block by itself, the
+// mean is a reduction along Cols, and the two rescalings are broadcasts along DIFFERENT
+// axes -- Cols for the per-row reciprocal RMS, Rows for the per-feature weight. That pair
+// is the point of this kernel: attention only ever broadcast along Cols.
+//
+// The epsilon is added with a scalar broadcast onto the Ht x 1 mean vector, which is the
+// case the axis has to be DECLARED for: against a Shape<Ht, 1> block, both Axis::Both and
+// Axis::Rows want a Shape<1, 1> vector, so no shape could tell them apart.
+//
+// Compile-time args:
+//   0        rows in tiles
+//   1        cols in tiles
+//   2..      TensorAccessorArgs for x, weight, then out
+//
+// Runtime args (identical on all three kernels):
+//   0..2     x, weight, out base addresses
+//   3        eps as a packed bfloat16 pair
+
+#include <tt/unified/core>
+
+namespace u = tt::unified;
+
+constexpr uint32_t kCbX = 0;
+constexpr uint32_t kCbW = 1;
+constexpr uint32_t kCbEps = 2;
+constexpr uint32_t kCbInvN = 3;  // 1/N for the mean
+constexpr uint32_t kCbSq = 4;
+constexpr uint32_t kCbMean = 5;
+constexpr uint32_t kCbRsqrt = 6;
+constexpr uint32_t kCbNormed = 7;
+constexpr uint32_t kCbOut = 16;
+
+void kernel_main() {
+    constexpr uint32_t ht = get_compile_time_arg_val(0);
+    constexpr uint32_t wt = get_compile_time_arg_val(1);
+
+    constexpr auto x_args = TensorAccessorArgs<2>();
+    constexpr auto w_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+    constexpr auto out_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+
+    const uint32_t x_addr = get_arg_val<uint32_t>(0);
+    const uint32_t w_addr = get_arg_val<uint32_t>(1);
+    const uint32_t out_addr = get_arg_val<uint32_t>(2);
+    const uint32_t eps_bits = get_arg_val<uint32_t>(3);
+
+    constexpr auto kAxis = u::Axis::Cols;  // each row is normalised independently
+
+    using X = u::Shape<ht, wt>;
+    using Vec = u::reduce_shape<X, kAxis>;  // Ht x 1, one RMS per row
+    using W = u::Shape<1, wt>;              // one weight per feature column
+    using One = u::Shape<1, 1>;
+
+    u::compute_init(kCbX, kCbOut);
+
+    u::Storage<X> x_storage(kCbX);
+    u::Storage<W> w_storage(kCbW);
+    u::Storage<One> eps_storage(kCbEps);
+    u::Storage<One> inv_n_storage(kCbInvN);
+    u::Storage<X> sq_storage(kCbSq);
+    u::Storage<Vec> mean_storage(kCbMean);
+    u::Storage<Vec> rsqrt_storage(kCbRsqrt);
+    u::Storage<X> normed_storage(kCbNormed);
+    u::Storage<X> out_storage(kCbOut);
+
+    const auto x_acc = TensorAccessor(x_args, x_addr);
+    const auto w_acc = TensorAccessor(w_args, w_addr);
+    const auto out = TensorAccessor(out_args, out_addr);
+
+    // A mean divides by the number of ELEMENTS folded into one output, which for a Cols
+    // collapse is wt * 32. Feeding a reduce_mean a scaler of 1 makes it a sum, silently.
+    const uint32_t inv_n_bits = u::bf16_pair(1.0f / static_cast<float>(u::ReduceGeometry<X>::elements(kAxis)));
+
+    // Both are kernel-scope residents: every reduce_tile re-reads the scaler, and the
+    // epsilon is read by every tile of the broadcast below.
+    u::ComputeBlock inv_n = u::fill_reduce_scaler<1>(inv_n_storage, inv_n_bits);
+    u::ComputeBlock eps = u::fill_reduce_scaler<1>(eps_storage, eps_bits);
+
+    u::ComputeBlock x = u::noc_load<1>(x_storage, x_acc, 0).wait();
+    u::ComputeBlock w = u::noc_load<1>(w_storage, w_acc, 0).wait();
+
+    // x^2, as an ordinary two-leaf SFPU tree whose leaves happen to be the same buffer.
+    u::ComputeBlock sq = sq_storage.store(x * x);
+
+    u::ComputeBlock mean = mean_storage.store(u::reduce_mean<kAxis>(sq, inv_n));
+
+    // (mean + eps)^-1/2, the reciprocal square root riding the broadcast's epilogue so the
+    // epsilon and the rsqrt are one pass.
+    u::ComputeBlock inv_rms = rsqrt_storage.store((mean + u::bcast<u::Axis::Both>(eps)).rsqrt());
+
+    // Cols: one value per ROW, replicated across that row's columns.
+    u::ComputeBlock normed = normed_storage.store(x * u::bcast<kAxis>(inv_rms));
+
+    // Rows: one value per COLUMN, replicated down the rows. The other axis, in the same
+    // kernel, which is what makes this more than a second reduction test.
+    u::noc_store<0>(out_storage.store(normed * u::bcast<u::Axis::Rows>(w)), out, 0);
+}
