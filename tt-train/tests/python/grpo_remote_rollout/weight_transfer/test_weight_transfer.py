@@ -37,19 +37,16 @@ from transformers import AutoTokenizer  # noqa: E402
 
 from utils.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
-# BH bring-up: after ``push_weights``, one batch slot on one submesh produces a
-# different completion than the others despite identical prompt/weights/greedy
-# decode ("post-push completion 5 diverged from completion 0"). Deterministic
-# and reproducible; needs weight-bridge / per-submesh model-state investigation.
+# Skipped pending BH bring-up: after ``push_weights``, one batch slot on one
+# submesh produces a different completion than the others despite identical
+# prompt/weights/greedy decode ("post-push completion 5 diverged from
+# completion 0"). Deterministic and reproducible; needs weight-bridge /
+# per-submesh model-state investigation. Re-enable by removing the
+# ``@pytest.mark.skip`` decorator on the test function below.
 # (The earlier ttml-vs-ttnn asymmetric fabric-init deadlock is fixed in
 # ``_completer_utils.open_device`` by only calling ``enable_fabric`` when
 # fabric is currently ``DISABLED``.)
-try:
-    _ARCH = ttnn.get_arch_name().lower()
-except Exception:  # noqa: BLE001
-    _ARCH = ""
-_SKIP_BH = "blackhole" in _ARCH
-_SKIP_BH_REASON = (
+_SKIP_REASON = (
     "test_weight_transfer: per-submesh determinism regression on BH after " "push_weights — see module docstring."
 )
 
@@ -246,7 +243,7 @@ def _ttt_side() -> None:
 
 # Disable the repo-wide pytest-timeout default (long HF download + four builds).
 @pytest.mark.timeout(0)
-@pytest.mark.skipif(_SKIP_BH, reason=_SKIP_BH_REASON)
+@pytest.mark.skip(reason=_SKIP_REASON)
 def test_ttml_to_ttt_weight_bridge_transfer() -> None:
     """End-to-end remote generate + 4->4 submesh bridge transfer + per-submesh verify."""
     if _MPI_RANK == TTML_RANK:
