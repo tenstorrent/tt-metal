@@ -104,6 +104,8 @@ it is classified differently on different systems.
 | Qwen2.5-7B | WH N300 |
 | Qwen2.5-72B | WH LLMBox |
 | Qwen2.5-VL-32B | WH LLMBox, BH QuietBox 2 |
+| Qwen3-0.6B | WH N150, BH P150 |
+| Qwen3-1.7B | WH N150, BH P150 |
 | Gemma-4-E2B | WH N150, BH P150 |
 | Gemma-4-E4B | BH P300, BH QuietBox 2 |
 | Mamba-2.8B | WH N150 |

@@ -10,6 +10,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
+from models.common.sampling.tt_sampling import TOPK_MAX_WIDTH, TTSampling
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
@@ -152,9 +153,16 @@ class Transformer(LightweightModule):
         )
 
         # Initialize on-device sampling if supported
-        # Sampling on device is supported only if each device has maximum logits size of 64*1024
-        sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
-        self._supports_on_device_sampling = prefetcher is None and self.args.vocab_size // sampling_splits <= 64 * 1024
+        # Sampling on device is supported only if each device holds at most TOPK_MAX_WIDTH logits.
+        # On a single device TTSampling cuts the padded vocab into as many same-device chunks as
+        # needed (power-of-two, each <= TOPK_MAX_WIDTH), so any vocab it can cut tile-aligned is
+        # supported (#53064); anything it cannot falls back to host sampling.
+        padded_vocab_size = getattr(self.args, "padded_vocab_size", None) or self.args.vocab_size
+        if list(self.mesh_device.shape) != [1, 1]:
+            vocab_fits_on_device = padded_vocab_size // self.args.num_devices <= TOPK_MAX_WIDTH
+        else:
+            vocab_fits_on_device = TTSampling.num_single_device_vocab_splits(padded_vocab_size) is not None
+        self._supports_on_device_sampling = prefetcher is None and vocab_fits_on_device
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
                 args=args,
