@@ -710,6 +710,20 @@ def _extract_hardware_and_mesh(machine_info):
     if mesh_config is None and machine_info:
         mesh_shape_value = machine_info.get("mesh_device_shape")
         mesh_shape = _normalize_mesh_shape(mesh_shape_value)
+        if not mesh_shape:
+            # Shape absent or unusable, but the record may still say HOW MANY devices it ran on.
+            # Without this a 1-device and an 8-device execution of the same op keep the very hash
+            # collision this change exists to remove. The count is recorded as a count -- NOT turned
+            # into a shape -- because 8 devices could be [1, 8], [2, 4], [4, 2] or [8, 1] and picking
+            # one would assert a topology the trace never stated.
+            device_count = _normalize_device_count(machine_info.get("device_count"))
+            if device_count:
+                mesh_config = {
+                    "mesh_shape": None,
+                    "device_count": device_count,
+                    "placement_type": None,
+                    "shard_dim": None,
+                }
         if mesh_shape:
             mesh_config = {
                 "mesh_shape": mesh_shape,
@@ -718,6 +732,22 @@ def _extract_hardware_and_mesh(machine_info):
             }
 
     return hardware, mesh_config
+
+
+def _normalize_device_count(device_count_value):
+    """Return a positive device count as an int, or None if absent/unusable.
+
+    Separate from _normalize_mesh_shape because a count is a weaker statement than a shape: it
+    distinguishes a 1-device execution from an 8-device one without claiming which topology the
+    8 devices formed.
+    """
+    if device_count_value is None:
+        return None
+    try:
+        count = int(device_count_value)
+    except (TypeError, ValueError):
+        return None
+    return count if count > 0 else None
 
 
 def _normalize_mesh_shape(mesh_shape_value):
