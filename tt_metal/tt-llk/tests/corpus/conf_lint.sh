@@ -43,6 +43,11 @@
 #       node built at the pinned toolchain with the full ON set + dump flag,
 #       missing line = RED 'fire witness stale on the union') is
 #       witness_preflight.py, run by the nightly wrapper's preflight.
+#   R10 (wave-9 quarantine, sfpi 4adac11aac1 HANDOFF item 13) the OPTIONAL
+#       _QUARANTINED_FIRE_WITNESSES table (same row format) preserves the
+#       witnesses of quarantined flags; its flags must NOT be in the ON
+#       set and must not also carry a reviewed-table row — the inverse
+#       coherence of R9, so a quarantined flag cannot silently return.
 #
 # Usage: conf_lint.sh [<sweep_2x2.conf> <baseline.tsv> [<manifest.tsv> <ops.tsv>]]
 #   Defaults: the checked-in conf beside this script, the baseline for
@@ -305,8 +310,66 @@ $R9_TABLE
 EOF_R9
 fi
 
+# ---- R10: quarantined fire-witness table (wave-9, sfpi 4adac11aac1) ----
+# The OPTIONAL _QUARANTINED_FIRE_WITNESSES table preserves the fire
+# witnesses of flags placed under quarantine (never exercised, never
+# promoted, no silicon) without deleting evidence.  witness_preflight.py
+# reads only the REVIEWED table, so quarantined rows are never compiled.
+# If the table is present it must: be assigned exactly once, terminate
+# with a lone closing quote, parse with R9's 4-field row format, name
+# only -mtt-tensix-* flags with -fdump-{rtl,tree}-rvtt_* dump flags, and
+# — the INVERSE of R9's membership rule — name NO flag that is in
+# sweep_2x2.py's reviewed ON set (a quarantined flag reappearing in the
+# union without a reviewed row move back to _REVIEWED_FIRE_WITNESSES is
+# a silent promotion) and NO flag that also has a reviewed-table row.
+R10_ASSIGN=$(grep -c '^_QUARANTINED_FIRE_WITNESSES="' "$CONF")
+if [ "$R10_ASSIGN" -gt 1 ]; then
+  fail R10 "conf assigns _QUARANTINED_FIRE_WITNESSES more than once (found $R10_ASSIGN)"
+elif [ "$R10_ASSIGN" -eq 1 ]; then
+  R10_TABLE=$(awk '/^_QUARANTINED_FIRE_WITNESSES="/{f=1;next} f&&/^"[[:space:]]*$/{f=0;done=1;next} f' "$CONF")
+  R10_CLOSED=$(awk '/^_QUARANTINED_FIRE_WITNESSES="/{f=1;next} f&&/^"[[:space:]]*$/{f=0;done=1} END{print done?1:0}' "$CONF")
+  if [ "$R10_CLOSED" != 1 ]; then
+    fail R10 "_QUARANTINED_FIRE_WITNESSES table is not terminated by a lone closing quote line"
+  fi
+  if [ -z "${ON_BLOCK:-}" ]; then
+    ON_BLOCK=$(awk '/^ON_FLAGS = \(/{f=1;next} f&&/^\)/{f=0} f' "$SWEEP_PY")
+  fi
+  R10_SEEN=""
+  while IFS= read -r qline; do
+    qtrim=$(printf '%s' "$qline" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    [ -z "$qtrim" ] && continue
+    case "$qtrim" in \#*) continue;; esac
+    qf1=$(printf '%s' "$qtrim" | awk -F'|' '{print $1}')
+    qf2=$(printf '%s' "$qtrim" | awk -F'|' '{print $2}')
+    qf3=$(printf '%s' "$qtrim" | awk -F'|' '{print $3}')
+    qf4=$(printf '%s' "$qtrim" | awk -F'|' '{print $4}')
+    qnf=$(printf '%s' "$qtrim" | awk -F'|' '{print NF}')
+    if [ "$qnf" -ne 4 ] || [ -z "$qf1" ] || [ -z "$qf2" ] || [ -z "$qf3" ] || [ -z "$qf4" ]; then
+      fail R10 "quarantined witness row needs exactly 4 non-empty '|' fields (flag|pytest-node|dump-flag|required-line): $qtrim"
+      continue
+    fi
+    if ! printf '%s' "$qf1" | grep -qE '^-mtt-tensix-[a-z0-9-]+$'; then
+      fail R10 "quarantined witness row names a non -mtt-tensix- flag: $qf1"
+    elif printf '%s\n' "$ON_BLOCK" | grep -qE -- "\"${qf1}[\" ]"; then
+      fail R10 "QUARANTINED flag $qf1 is in sweep_2x2.py's reviewed ON set — quarantine violated (lifting requires a reviewed commit moving the row back to _REVIEWED_FIRE_WITNESSES with the ON-set line)"
+    fi
+    if printf '%s\n' "${R9_TABLE:-}" | grep -qE -- "^${qf1}\|"; then
+      fail R10 "flag $qf1 appears in BOTH _REVIEWED_FIRE_WITNESSES and _QUARANTINED_FIRE_WITNESSES — a flag is reviewed or quarantined, never both"
+    fi
+    if ! printf '%s' "$qf3" | grep -qE '^-fdump-(rtl|tree)-rvtt_[a-z_]+$'; then
+      fail R10 "quarantined witness row's dump flag is not -fdump-{rtl,tree}-rvtt_*: $qf3"
+    fi
+    if printf '%s\n' "$R10_SEEN" | grep -qxF -- "$qtrim"; then
+      fail R10 "exact duplicate quarantined witness row: $qtrim"
+    fi
+    R10_SEEN=$(printf '%s\n%s' "$R10_SEEN" "$qtrim")
+  done <<EOF_R10
+$R10_TABLE
+EOF_R10
+fi
+
 if [ "$RED" -eq 0 ]; then
-  echo "conf-lint: GREEN — pin values ↔ conf prose ↔ PIN HISTORY (CURRENT) ↔ baseline header all agree (cc1plus ${CC1:0:12}…, driver ${DRV:0:12}…, sim bh ${SBH:0:12}…, sim wh ${SWH:0:12}…); LLK trees pristine vs the reviewed upstream base (R7); every measured corpus row is wired into the sweep (R8); fire-witness table well-formed and ON-set-coherent (R9 — compile half in witness_preflight.py)"
+  echo "conf-lint: GREEN — pin values ↔ conf prose ↔ PIN HISTORY (CURRENT) ↔ baseline header all agree (cc1plus ${CC1:0:12}…, driver ${DRV:0:12}…, sim bh ${SBH:0:12}…, sim wh ${SWH:0:12}…); LLK trees pristine vs the reviewed upstream base (R7); every measured corpus row is wired into the sweep (R8); fire-witness table well-formed and ON-set-coherent (R9 — compile half in witness_preflight.py); quarantined-witness table coherent with the ON set (R10)"
   exit 0
 fi
 echo "conf-lint: FAILED — the pin audit trail disagrees with itself; fix the prose/header IN THE SAME COMMIT as any pin change (see rules in this script's header)"

@@ -181,8 +181,38 @@ awk '1; /^-mtt-tensix-optimize-ccmask\|/ && !d {print; d=1}' "$TMP/ok.conf" > "$
 check "R9 duplicate witness row refuses RED" 1 $?
 grep -q "duplicate witness" "$TMP/out15.log" || { echo "SELFTEST FAIL: dup-row RED lacks the duplicate diagnosis"; overall=1; }
 
+# R10 fixtures (wave-9 quarantine): the quarantined table is optional; when
+# present its flags must NOT be in the real sweep_2x2.py ON set and must not
+# duplicate a reviewed-table row.  crosscall-hoist is a real quarantined
+# (non-ON-set) flag; ccmask is a real ON-set flag.
+add_quarantine() { # add_quarantine <src> <dst> <flag>
+  cp "$1" "$2"
+  cat >> "$2" <<EOF
+_QUARANTINED_FIRE_WITNESSES="
+$3|perf_fixture.py::node[q]|-fdump-tree-rvtt_crosscall|hoisted 6 contract materializations
+"
+EOF
+}
+
+# 16. (R10) quarantined table whose flag is outside the ON set -> GREEN
+add_quarantine "$TMP/ok.conf" "$TMP/q-ok.conf" "-mtt-tensix-optimize-crosscall-hoist"
+"$LINT" "$TMP/q-ok.conf" "$TMP/ok.tsv" > "$TMP/out16.log" 2>&1
+check "R10 quarantined non-ON-set flag lints GREEN" 0 $?
+
+# 17. (R10) quarantined flag that IS in the reviewed ON set -> RED naming R10
+add_quarantine "$TMP/ok.conf" "$TMP/q-viol.conf" "-mtt-tensix-optimize-ccmask"
+"$LINT" "$TMP/q-viol.conf" "$TMP/ok.tsv" > "$TMP/out17.log" 2>&1
+check "R10 quarantined flag in the ON set refuses RED" 1 $?
+grep -q "\[R10\]" "$TMP/out17.log" || { echo "SELFTEST FAIL: quarantine-violation RED lacks the R10 tag"; overall=1; }
+grep -q "quarantine violated" "$TMP/out17.log" || { echo "SELFTEST FAIL: quarantine-violation RED lacks the violation diagnosis"; overall=1; }
+
+# 18. (R10) flag carrying rows in BOTH tables -> RED (ccmask is in the
+# fixture reviewed table; quarantining it also trips the ON-set rule, so
+# assert the both-tables diagnosis specifically)
+grep -q "appears in BOTH" "$TMP/out17.log" || { echo "SELFTEST FAIL: both-tables RED lacks the dual-listing diagnosis"; overall=1; }
+
 if [ "$overall" -eq 0 ]; then
-  echo "conf-lint self-test: ALL GREEN (coherent->GREEN, stale-prose->RED, stale-(CURRENT)->RED, dup-(CURRENT)->RED, stale-anchor->RED, no-anchor->RED, bad-sim-pin->RED, shipping-state->GREEN, bogus-llk-base->RED, R8-wired->GREEN, R8-unwired->RED, R9 missing/malformed/non-ON/dup->RED)"
+  echo "conf-lint self-test: ALL GREEN (coherent->GREEN, stale-prose->RED, stale-(CURRENT)->RED, dup-(CURRENT)->RED, stale-anchor->RED, no-anchor->RED, bad-sim-pin->RED, shipping-state->GREEN, bogus-llk-base->RED, R8-wired->GREEN, R8-unwired->RED, R9 missing/malformed/non-ON/dup->RED, R10 quarantine ok->GREEN / ON-set-violation+both-tables->RED)"
 else
   echo "conf-lint self-test: FAILED"
 fi

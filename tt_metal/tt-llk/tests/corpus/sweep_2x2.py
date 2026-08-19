@@ -260,48 +260,32 @@ ON_FLAGS = (
     # record, 7 clones, body issue census 234 -> 218; dg fire twins in
     # sfpi-gcc counted-row-formation-*).  MERGE-ORDER: this line lands
     # only with the pin cycle whose toolchain accepts the flag.
-    "-mtt-tensix-optimize-counted-row-formation "
-    # Lane BQ (next pin): cross-call prefix hoist -- the noinline
-    # callee's call-invariant pinned-LREG coefficient prefix moves to
-    # every proven caller's tile-loop preheader (BI's increment (a)).
-    # Fire witness: sigmoid-tree (both perf and correctness TUs),
-    # dump-proven "hoisted 6 contract materializations" + disasm: the
-    # 12 coefficient SFPLOADI leave the callee for the caller's
-    # preheader; with replay-exec-record the per-tile dead prefix is
-    # 17 -> 4 pushes.  Pre-registered prediction (laneBQ evidence
-    # PREDICTION.md): sigmoid-tree sem_on 27.7-27.8 = parity vs hand.
-    "-mtt-tensix-optimize-crosscall-hoist "
-    # Lane CD (next pin): cross-loop hoist -- loop-invariant SFPU
-    # immediate materializations (and the programmable-constant
-    # programming points) lift across ENCLOSING loops whose bodies
-    # deliver only audited-inert words (raw .ttinsn constants,
-    # instruction-FIFO stores incl. PHI-joined compositions, MOPs with
-    # a proven TU template census); every unaudited class refuses by
-    # name (crossloop-*).  Fire witness: the exp perf node's
-    # MATH_ISOLATE math.elf -- "crossloop-hoist: hoisted across loop"
-    # x12 (4 loads x 3 loop levels) + "placement lifted from entry bb"
-    # (prgm-const L14 programming once per kernel); per-tile Tensix
-    # word count 68 -> 58 = hand parity; exp corr CRAQ 5630 -> 5589
-    # sim-cycles bit-exact PASS on the pinned BH sim.  MERGE-ORDER:
-    # lands only with the pin cycle whose toolchain accepts the flag.
-    "-mtt-tensix-optimize-crossloop-hoist "
-    # Lane CA (pin 13): D2 cross-call invariant-init hoist — the noinline
-    # per-tile callee's idempotent formation init prefix (descriptor
-    # program + owned SETC16 + all-lanes enable, 17 issue slots on the
-    # minmax shape) programs once in the caller's tile-block loop
-    # preheader (stage 2 under the owned-row value-equality proof).
-    # Fire witness (dump-proven, laneCA-evidence-20260819): the minmax
-    # perf/corr TUs — dump line: Macro-planner init-hoist: stage=2 init
-    # contract hoisted to caller loop preheader; the callee is pure payload.
-    # Lane CA also completes the drain-schedule flag with loop-backedge
-    # elision + exit compensation (where in-body 3-NOP tail x 4 trips ->
-    # one exit block; witness dump line: loop-backedge drain elided, on
-    # the where TUs).  Measured (this lane, 3 fresh procs, BH p150): minmax
-    # TILE_LOOP/tile 18.727 -> 16.72 = -5.1% vs hand 17.628 (WIN);
-    # where TTNN_WHERE_BODY 167.5 -> 154.5 = -2.9% vs hand 159.17 (WIN).
-    # ON inventory: exactly 9 corpus math.elfs (6 ternary/where + 3
-    # binary/minmax), CRAQ 6/6 on the changed corr nodes.
-    "-mtt-tensix-optimize-init-hoist"
+    "-mtt-tensix-optimize-counted-row-formation"
+    # QUARANTINED (wave-9 verdict 2026-08-19 — sfpi repo commit
+    # 4adac11aac1, docs/handoff-20260817/HANDOFF.md item 13, REQUIRED
+    # clause): the three census-dependent flags are OUT of the ON set
+    # and are never exercised — not here, not as attribution knobs, no
+    # silicon — until the census fix lands:
+    #   -mtt-tensix-optimize-crosscall-hoist   (lane BQ, pin 12)
+    #   -mtt-tensix-optimize-crossloop-hoist   (lane CD, pin 13)
+    #   -mtt-tensix-optimize-init-hoist        (lane CA, pin 13)
+    # The shared TU-census rooting hole (wave-8 CONFIRMED wrong-code
+    # capable: entry functions rooted only from outside the TU unroot
+    # the census, the TU is skipped as "unreachable", and MOP template
+    # stores become invisible to the MOP-safety audit) is UNFIXED, and
+    # both new consumers (crossloop-hoist, init-hoist) consult the same
+    # census; init-hoist additionally SEGFAULTS the compiler on any TU
+    # whose census is non-trivially rooted, so it has never executed
+    # with a functioning census.  LIFT CONDITIONS (all three, per the
+    # verdict): the census roots externally-visible/entry symbols or
+    # fails closed; the init-hoist ICE is fixed; the zero-trip prose
+    # matches behavior — lane CG's census-rooting fix (in gating,
+    # rides pin 14).  The pin-13 fire witnesses are PRESERVED (not
+    # deleted) in sweep_2x2.conf's _QUARANTINED_FIRE_WITNESSES table,
+    # and the lanes' measured evidence stays in the lane evidence dirs
+    # (laneBQ/laneCD/laneCA) and the pin-13 REVIEW_RECORD.  Review
+    # record for THIS change:
+    # review_records/REVIEW_RECORD-conf-quarantine-census-wave9.md.
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
@@ -334,8 +318,11 @@ KNOBS = {
     "const-remat": "-mtt-tensix-optimize-const-remat",
     "const-residency": "-mtt-tensix-optimize-const-residency",
     "counted-row-formation": "-mtt-tensix-optimize-counted-row-formation",
-    "crosscall-hoist": "-mtt-tensix-optimize-crosscall-hoist",
-    "crossloop-hoist": "-mtt-tensix-optimize-crossloop-hoist",
+    # crosscall-hoist / crossloop-hoist knob entries REMOVED with the
+    # wave-9 quarantine (see the ON_FLAGS QUARANTINE block above): a
+    # knob-attribution leg compiles OFF + the single positive knob,
+    # which would exercise a quarantined flag.  They return with the
+    # flags when lane CG's census fix lifts the quarantine at pin 14.
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
