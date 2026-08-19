@@ -35,12 +35,12 @@ import sys
 
 import pandas as pd
 
-# Invocations that precede the measured one in test_prefill_layer_perf: the eager
-# compile pass, the capture, and GEMMA4_PERF_WARMUP_ITERS warm replays (default 5).
-# Override with the env var if you changed it. Only the LAST invocation is the measured
-# one, so this analyzer keeps just that; when a report was produced with signposts,
-# prefer tt-perf-report, which slices the region properly.
-WARMUP_INVOCATIONS = 2 + int(__import__("os").environ.get("GEMMA4_PERF_WARMUP_ITERS", "5"))
+# Invocations that precede the measured one in test_prefill_layer_perf_chunk_n: the eager
+# compile pass, the capture, and 5 warm replays (the test's warmup_iters param default).
+# Change both together. Only the LAST invocation is the measured one, so this
+# analyzer keeps just that; when a report was produced with signposts, prefer
+# tt-perf-report, which slices the region properly.
+WARMUP_INVOCATIONS = 2 + 5
 # Gemma4-31B layer mix, for the whole-model extrapolation.
 N_SLIDING, N_GLOBAL = 50, 10
 
