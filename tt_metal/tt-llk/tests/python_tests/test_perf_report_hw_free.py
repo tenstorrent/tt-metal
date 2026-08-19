@@ -24,6 +24,7 @@ from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
 from helpers.perf.core import (
     PerfConfig,
     PerfReport,
+    _ci_provenance,
     combine_perf_reports,
     postprocess_tile_loop,
 )
@@ -294,12 +295,17 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
         }
     ).to_csv(workers / "perf_x.gw0.csv", index=False)
 
+    monkeypatch.setenv("PERF_RUN_TAG", "testrun-wormhole-0")
+
     combine_perf_reports()
 
-    # CSV still produced...
-    assert (root / "perf_data" / "perf_x" / "perf_x.csv").exists()
+    run_dir = root / "perf_data" / "runs" / "testrun-wormhole-0"
+    # CSV still produced, inside this run's own directory...
+    assert (run_dir / "perf_x" / "perf_x.csv").exists()
+    # ...reachable through the stable `latest` path...
+    assert (root / "perf_data" / "latest" / "perf_x" / "perf_x.csv").exists()
     # ...and a run-level Parquet batch alongside it.
-    parquet = root / "perf_data" / "testrun.parquet"
+    parquet = run_dir / "testrun.parquet"
     assert parquet.exists()
     table = pq.read_table(parquet)
     assert table.schema.names == [c.name for c in DB_SCHEMA]
@@ -308,3 +314,103 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     assert set(df["arch"]) == {"wormhole"}
     assert set(df["commit_sha"]) == {"testsha"}
     assert set(df["pipeline"]) == {"nightly"}
+
+
+def _seed_worker_csv(workers, base, mean):
+    """One raw per-worker CSV, the `.gw*` pattern combine_perf_reports globs for."""
+    pd.DataFrame(
+        {
+            "marker": ["INIT", "TILE_LOOP"],
+            "tile_cnt": [4, 4],
+            "loop_factor": [1, 1],
+            stat_column("MATH_ISOLATE", MEAN): [mean, mean * 2],
+        }
+    ).to_csv(workers / f"{base}.gw0.csv", index=False)
+
+
+def _perf_run(tmp_path, monkeypatch, tag, bases, mean=10.0):
+    """Run combine_perf_reports once under `tag`, for the given test bases."""
+    workers = tmp_path / f"workers-{tag}"
+    workers.mkdir()
+    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", workers)
+    monkeypatch.setenv("PERF_RUN_TAG", tag)
+    for base in bases:
+        _seed_worker_csv(workers, base, mean)
+    combine_perf_reports()
+
+
+def test_second_run_does_not_mix_into_the_first(tmp_path, monkeypatch):
+    # The bug this layout exists to prevent: run 2 is narrower than run 1, so a
+    # shared output directory kept run 1's perf_b/ alongside run 2's perf_a/ and
+    # the tree read as one complete run.
+    root = tmp_path / "root"
+    monkeypatch.setattr(TestConfig, "LLK_ROOT", root)
+
+    _perf_run(tmp_path, monkeypatch, "run-1", ["perf_a", "perf_b"])
+    _perf_run(tmp_path, monkeypatch, "run-2", ["perf_a"])
+
+    runs = root / "perf_data" / "runs"
+    # Run 1 is intact -- history is preserved, not overwritten.
+    assert (runs / "run-1" / "perf_a" / "perf_a.csv").exists()
+    assert (runs / "run-1" / "perf_b" / "perf_b.csv").exists()
+    # Run 2 holds only what run 2 measured. No perf_b leaking in from run 1.
+    assert (runs / "run-2" / "perf_a" / "perf_a.csv").exists()
+    assert not (runs / "run-2" / "perf_b").exists()
+
+
+def test_latest_follows_the_most_recent_run(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    monkeypatch.setattr(TestConfig, "LLK_ROOT", root)
+
+    _perf_run(tmp_path, monkeypatch, "run-1", ["perf_a"], mean=10.0)
+    _perf_run(tmp_path, monkeypatch, "run-2", ["perf_a"], mean=99.0)
+
+    latest = root / "perf_data" / "latest"
+    assert latest.is_symlink()
+    frame = pd.read_csv(latest / "perf_a" / "perf_a.csv")
+    assert frame[stat_column("MATH_ISOLATE", MEAN)].min() == 99.0
+
+
+def test_run_history_is_pruned_to_the_keep_limit(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    monkeypatch.setattr(TestConfig, "LLK_ROOT", root)
+    monkeypatch.setenv("PERF_KEEP_RUNS", "2")
+
+    for i in range(4):
+        _perf_run(tmp_path, monkeypatch, f"run-{i}", ["perf_a"])
+
+    kept = {d.name for d in (root / "perf_data" / "runs").iterdir() if d.is_dir()}
+    assert len(kept) == 2
+    assert "run-3" in kept  # the newest always survives
+
+
+def test_local_run_id_is_unique_per_run(tmp_path, monkeypatch):
+    # Off CI run_id used to be the constant "local", so two local runs of one
+    # commit published colliding ROW_KEYs.
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.delenv("PERF_RUN_TAG", raising=False)
+    first = TestConfig.perf_run_tag()
+
+    monkeypatch.delenv("PERF_RUN_TAG", raising=False)
+    monkeypatch.setenv("PERF_RUN_TAG", "second-tag")
+
+    assert first.startswith("local-")
+    assert TestConfig.perf_run_tag() == "second-tag"
+
+
+def test_run_tag_is_stable_within_a_process(tmp_path, monkeypatch):
+    # xdist workers inherit the environment; the tag must not be re-minted per
+    # call, or one run would scatter across several directories.
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.delenv("PERF_RUN_TAG", raising=False)
+
+    assert TestConfig.perf_run_tag() == TestConfig.perf_run_tag()
+
+
+def test_ci_run_id_still_wins_for_provenance(monkeypatch):
+    # All shards of one workflow must share run_id: it is a ROW_KEY column and
+    # the data team's notion of a run spans shards.
+    monkeypatch.setenv("GITHUB_RUN_ID", "999")
+    monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
+
+    assert _ci_provenance()["run_id"] == "999"

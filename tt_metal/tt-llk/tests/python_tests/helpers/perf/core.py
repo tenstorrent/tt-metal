@@ -5,6 +5,7 @@
 import glob
 import os
 import re
+import shutil
 from dataclasses import fields
 from datetime import datetime, timezone
 from functools import reduce
@@ -444,11 +445,65 @@ def _ci_provenance() -> dict:
     return {
         "commit_sha": os.environ.get("GITHUB_SHA", "unknown"),
         "arch": os.environ.get("CHIP_ARCH", "unknown"),
-        "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+        # Off CI this used to be the constant "local", so two local runs of the
+        # same commit published colliding ROW_KEYs (test_name, commit_sha, arch,
+        # run_id). The run tag is already unique per invocation; reuse it. In CI
+        # GITHUB_RUN_ID still wins, so all shards of a workflow share one run_id.
+        "run_id": os.environ.get("GITHUB_RUN_ID") or TestConfig.perf_run_tag(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "pipeline": "PR" if event == "pull_request" else "nightly",
         "pr_number": os.environ.get("PR_NUMBER") or None,
     }
+
+
+def _refresh_latest(run_dir: Path) -> None:
+    """Point ``perf_data/latest`` at this run, so callers keep a stable path.
+
+    Best-effort: a report that exists but is not linked is still a usable report.
+    """
+    link = run_dir.parent.parent / "latest"
+    try:
+        if link.is_symlink():
+            link.unlink()
+        elif link.exists():
+            # A real directory here is somebody's data, not our link. Leave it.
+            logger.warning(f"perf_data/latest exists and is not a symlink: {link}")
+            return
+        link.symlink_to(Path("runs") / run_dir.name, target_is_directory=True)
+    except OSError as exc:  # noqa: BLE001 — the link is a convenience, not the report
+        logger.warning(f"perf_data/latest not updated: {exc}")
+
+
+def _keep_runs() -> int:
+    """How many run directories to retain locally (``PERF_KEEP_RUNS``, default 10).
+
+    The archive is the published Parquet, not this directory, so local history is
+    a debugging convenience and wants a bound. 0 or less disables pruning.
+    """
+    try:
+        return int(os.environ.get("PERF_KEEP_RUNS", "10"))
+    except ValueError:
+        return 10
+
+
+def _prune_runs(runs_dir: Path, keep: int) -> None:
+    """Keep the newest ``keep`` run directories. History is bounded, not endless.
+
+    ``keep <= 0`` disables pruning. The current run is the newest, so it always
+    survives for any keep >= 1.
+    """
+    if keep <= 0:
+        return
+    try:
+        run_dirs = sorted(
+            (d for d in runs_dir.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return
+    for stale in run_dirs[keep:]:
+        shutil.rmtree(stale, ignore_errors=True)
 
 
 def _write_run_parquet(raw_csv_paths, out_dir) -> None:
@@ -487,15 +542,21 @@ def combine_perf_reports():
     - One for regular files (without .post.csv)
     - One for post files (with .post.csv)
 
+    Output goes to this run's own directory, ``perf_data/runs/<tag>/``, and
+    ``perf_data/latest`` is pointed at it. Writing every run into one shared
+    directory used to overwrite the previous run's reports and — worse — a
+    narrower second run left the first run's test directories untouched, so the
+    tree read as complete while holding a blend of two runs.
+
     Also publishes the run's raw combined CSVs as one Parquet batch
-    (perf_data/<run_id>.parquet) so a run emits both CSV and Parquet.
+    (runs/<tag>/<run_id>.parquet) so a run emits both CSV and Parquet.
     """
 
     unique_module_names = get_unique_base_names(TestConfig.PERF_DATA_DIR)
     if not unique_module_names:
         return
 
-    output_dir = TestConfig.LLK_ROOT / "perf_data"
+    output_dir = TestConfig.perf_run_dir()
 
     if not output_dir.exists():
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -597,6 +658,8 @@ def combine_perf_reports():
             Path(file).unlink()
 
     _write_run_parquet(raw_outputs, output_dir)
+    _refresh_latest(output_dir)
+    _prune_runs(output_dir.parent, _keep_runs())
 
 
 class PerfConfig(TestConfig):

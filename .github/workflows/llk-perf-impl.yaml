@@ -123,6 +123,12 @@ jobs:
       - name: Run tests
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
+        env:
+          # Names this shard's report directory, perf_data/runs/<tag>. Must be
+          # unique per job: pytest-split divides by test item, not by module, so
+          # the same module's variants land in several shards and their reports
+          # would collide the moment the artefacts are unzipped together.
+          PERF_RUN_TAG: ${{ github.run_id }}-${{ env.CHIP_ARCH }}-${{ strategy.job-index }}
         run: |
           ${{ matrix.test-group.cmd }}
 
@@ -136,8 +142,10 @@ jobs:
           PIPELINE: ${{ github.event_name == 'schedule' && 'nightly' || 'PR' }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          # This run only. publish_run globs **/*.csv, so pointing it at
+          # perf_data would sweep every retained run into one batch.
           python3 -m helpers.perf.publish_run \
-            --csv-dir ../../perf_data \
+            --csv-dir ../../perf_data/latest \
             --out ../../perf_data/run-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.parquet \
             --arch ${{ env.CHIP_ARCH }}
 
@@ -146,7 +154,10 @@ jobs:
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         run: |
-          zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip perf_data/
+          # runs/ and the Parquet, but not the `latest` symlink: zip follows
+          # symlinks, so including it would store a second copy of every report.
+          zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip \
+            perf_data/runs/ perf_data/*.parquet
           echo "Performance data zipped successfully"
 
       - name: Upload performance data
