@@ -40,26 +40,26 @@ void kernel_main() {
     DataflowBuffer dfb_sin_interm(sin_interm_dfb_id);
     DataflowBuffer dfb_out(out_dfb_id);
 
-    trans_mat_dfb_id.wait_front(onetile);
+    dfb_trans_mat.wait_front(onetile);
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_dfb_id, trans_mat_dfb_id, rotated_in_interm_dfb_id);
     matmul_init(in_dfb_id, trans_mat_dfb_id);
     compute_kernel_hw_startup(rotated_in_interm_dfb_id, sin_dfb_id, sin_interm_dfb_id);
 
     for (uint32_t batch_idx = 0; batch_idx < batch_per_core; ++batch_idx) {
-        sin_dfb_id.reserve_back(onetile);
-        cos_dfb_id.reserve_back(onetile);
-        sin_dfb_id.push_back(onetile);
-        cos_dfb_id.push_back(onetile);
+        dfb_sin.reserve_back(onetile);
+        dfb_cos.reserve_back(onetile);
+        dfb_sin.push_back(onetile);
+        dfb_cos.push_back(onetile);
 
         for (uint32_t ht = 0; ht < heads_per_batch_t; ++ht) {
-            rotated_in_interm_dfb_id.reserve_back(onetile);
-            sin_interm_dfb_id.reserve_back(onetile);
-            cos_interm_dfb_id.reserve_back(onetile);
-            out_dfb_id.reserve_back(onetile);
+            dfb_rotated_in_interm.reserve_back(onetile);
+            dfb_sin_interm.reserve_back(onetile);
+            dfb_cos_interm.reserve_back(onetile);
+            dfb_out.reserve_back(onetile);
 
-            in_dfb_id.reserve_back(onetile);
-            in_dfb_id.push_back(onetile);
-            in_dfb_id.wait_front(onetile);
+            dfb_in.reserve_back(onetile);
+            dfb_in.push_back(onetile);
+            dfb_in.wait_front(onetile);
 
             reconfig_data_format(in_dfb_id, trans_mat_dfb_id);
             pack_reconfig_data_format(rotated_in_interm_dfb_id);
@@ -70,7 +70,7 @@ void kernel_main() {
             tile_regs_wait();
             pack_tile(0, rotated_in_interm_dfb_id);
             tile_regs_release();
-            rotated_in_interm_dfb_id.push_back(onetile);
+            dfb_rotated_in_interm.push_back(onetile);
 
             ckl::mul<
                 ckl::input(rotated_in_interm_dfb_id),
@@ -84,7 +84,7 @@ void kernel_main() {
                 ckl::IterationShape::one_tile());
         }
 
-        sin_dfb_id.pop_front(onetile);
-        cos_dfb_id.pop_front(onetile);
+        dfb_sin.pop_front(onetile);
+        dfb_cos.pop_front(onetile);
     }
 }
