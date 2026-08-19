@@ -443,7 +443,7 @@ static uint32_t dfb_side_block_entries(
 // Reject a block too big for one NoC packet: it would split into several, each acking separately, and
 // the ISR would fire early. Only applies to a side that batches.
 static void validate_implicit_burst_fits_one_packet(const DataflowBufferImpl& dfb) {
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+    if (!MetalContext::instance(dfb.get_context_id()).hal().has_tile_counter_registers()) {
         return;
     }
     const DataflowBufferConfig& config = dfb.config;
