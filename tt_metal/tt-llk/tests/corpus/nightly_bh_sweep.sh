@@ -81,7 +81,10 @@ fi
 # toolchain before any 2x2 phase runs — `--require-executed-mapped` turns a
 # single non-PASS mapped row into a nonzero exit (RED).  The gate is
 # compile-mode only (no simulator, no device), so it is safe to run before the
-# flocked phases.  SKIP-with-reason when the env preconditions are absent
+# flocked phases.  CRAQ IS DEBUG-ONLY (owner ruling 2026-08-19): the
+# measurement path gates correctness on the DEVICE GOLDEN legs; set
+# SWEEP_PHASES=classify,craq,silicon,report to re-enable CRAQ for
+# debugging a sim-vs-silicon divergence.  SKIP-with-reason when the env preconditions are absent
 # (recorded in the report, never silent); a completed PASS gate for the same
 # SWEEP_DATE is reused (idempotent resume, matching the per-row discipline).
 # A --dry-run wrapper invocation prints the real gate command and proves the
@@ -141,6 +144,7 @@ python3 "$HERE/sweep_2x2.py" \
   --compiler-sha "$PINNED_COMPILER_SHA256" \
   --sim-bh "$SIM_BH" --sim-wh "$SIM_WH" \
   --sim-bh-sha "$PINNED_SIM_BH_SHA256" --sim-wh-sha "$PINNED_SIM_WH_SHA256" \
+  --phases "${SWEEP_PHASES:-classify,silicon,report}" \
   --allow-hardware \
   --baseline "$BASELINE" \
   --max-drift-pct "$MAX_DRIFT_PCT" \

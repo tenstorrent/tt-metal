@@ -69,6 +69,7 @@ python3 "$HERE/sweep_2x2.py" \
   --compiler-sha "$PINNED_COMPILER_SHA256" \
   --sim-bh "$SIM_BH" --sim-wh "$SIM_WH" \
   --sim-bh-sha "$PINNED_SIM_BH_SHA256" --sim-wh-sha "$PINNED_SIM_WH_SHA256" \
+  --phases "${SWEEP_PHASES:-classify,silicon,report}" \
   --allow-hardware \
   --baseline "$BASELINE" \
   --max-drift-pct "$MAX_DRIFT_PCT" \
