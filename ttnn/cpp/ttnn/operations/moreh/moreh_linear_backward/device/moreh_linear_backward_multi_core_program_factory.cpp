@@ -218,7 +218,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
     // output_grad is. The legacy default is UnpackToSrc, which is legal for any format, so
     // transcribing the whole legacy row reproduces the legacy unpack vector byte-for-byte in every
     // configuration.
-    ComputeUnpackModes unpack_modes = {
+    ComputeUnpackModes dfb_unpack_modes = {
         {IN0_DFB, UnpackMode::UnpackToSrc},
         {SCALER_DFB, UnpackMode::UnpackToSrc},
         {MASK_H_W_DFB, UnpackMode::UnpackToSrc},
@@ -226,9 +226,14 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
         {INTERMED1_DFB, UnpackMode::UnpackToSrc},
     };
     if (fp32_dest_acc_en) {
-        unpack_modes[INTERMED1_DFB] = UnpackMode::UnpackToDest;  // legacy: c_25 = UnpackToDestFp32
+        dfb_unpack_modes[INTERMED1_DFB] = UnpackMode::UnpackToDest;  // legacy: c_25 = UnpackToDestFp32
     }
-    std::get<ComputeGen1Config>(compute_hw).unpack_modes = std::move(unpack_modes);
+    // Assign through the generation-neutral accessor rather than std::get<ComputeGen1Config>: the
+    // helper above returns whichever alternative matches `arch`, so naming Gen1 here would throw
+    // std::bad_variant_access on Quasar. (The local is named dfb_unpack_modes so it does not shadow
+    // the accessor.)
+    // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+    unpack_modes(compute_hw) = std::move(dfb_unpack_modes);
 
     // Two KernelSpecs of the same source over the two disjoint core groups, differing only in the
     // per-group compile-time count — the Metal 2.0 form of the legacy two-kernel-descriptor work
@@ -292,8 +297,10 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
                     },
                 },
             // The kernel reads no compile-time argument; this per-group count is passed twice, and
-            // the compile-time copy goes unread. Kept because it is what distinguishes the two
-            // per-group specs, and because dropping it is an owner decision, not a port change.
+            // the compile-time copy goes unread. The distinct unique_ids already tell the two specs
+            // apart; what this differing compile-time arg preserves is that the JIT builds the
+            // source twice, once per group, as the legacy two-descriptor split did. Kept for that
+            // reason, and because dropping it is an owner decision, not a port change.
             .compile_time_args = {{"units_per_core", units_per_core}},
             .runtime_arg_schema = {.runtime_arg_names = {"batch_num", "Ht", "Wt_per_core", "do_mask_h", "do_mask_w"}},
             .hw_config = compute_hw,
