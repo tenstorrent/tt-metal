@@ -3,14 +3,20 @@
 
 #include "indexed_fused_update_cache_device_operation.hpp"
 
+#include <cstdint>
 #include <limits>
 #include <variant>
+
+#include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim::indexed_fused_update_cache {
 
 namespace {
+
+constexpr uint32_t max_update_rows = 256;
+constexpr uint32_t max_positions_page_bytes = max_update_rows * sizeof(int32_t);
 
 void validate_device_tensor(const Tensor& tensor, const char* name) {
     TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} must be on device", name);
@@ -23,6 +29,15 @@ void validate_device_tensor(const Tensor& tensor, const char* name) {
     }
 }
 
+void validate_default_tile(const Tensor& tensor, const char* name) {
+    const auto& tile = tensor.tensor_spec().tile();
+    TT_FATAL(
+        tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
+            !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
+        "{} must use the default non-transposed 32x32 tile",
+        name);
+}
+
 void validate_cache_input_pair(
     const Tensor& cache, const Tensor& input, const char* cache_name, const char* input_name) {
     validate_device_tensor(cache, cache_name);
@@ -30,6 +45,8 @@ void validate_cache_input_pair(
     TT_FATAL(cache.device() == input.device(), "{} and {} must be on the same device", cache_name, input_name);
     TT_FATAL(cache.layout() == Layout::TILE, "{} must use TILE layout", cache_name);
     TT_FATAL(input.layout() == Layout::TILE, "{} must use TILE layout", input_name);
+    validate_default_tile(cache, cache_name);
+    validate_default_tile(input, input_name);
     TT_FATAL(cache.dtype() == DataType::BFLOAT16, "{} must use BFLOAT16", cache_name);
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "{} must use BFLOAT16", input_name);
     TT_FATAL(
@@ -64,7 +81,7 @@ void validate_cache_input_pair(
         "{} cache page rows and head dimension must not require tile padding",
         cache_name);
     TT_FATAL(input.logical_shape()[2] > 0, "{} must contain at least one source row", input_name);
-    TT_FATAL(input.logical_shape()[2] <= 256, "{} supports at most 256 source rows", input_name);
+    TT_FATAL(input.logical_shape()[2] <= max_update_rows, "{} supports at most 256 source rows", input_name);
 }
 
 }  // namespace
@@ -110,7 +127,12 @@ void IndexedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         positions.logical_shape()[1] >= args.input_tensor1.logical_shape()[2],
         "physical_update_idxs_tensor has fewer entries than the packed input has rows");
     TT_FATAL(
+        positions.logical_shape()[1] <= max_update_rows, "physical_update_idxs_tensor supports at most 256 entries");
+    TT_FATAL(
         positions.buffer()->num_dev_pages() == 1, "physical_update_idxs_tensor must fit in one row-major device page");
+    TT_FATAL(
+        positions.buffer()->aligned_page_size() <= max_positions_page_bytes,
+        "physical_update_idxs_tensor aligned page size must not exceed 1024 bytes");
 
     const uint64_t total_cache_rows =
         static_cast<uint64_t>(args.cache_tensor1.logical_shape()[0]) * args.cache_tensor1.logical_shape()[2];
