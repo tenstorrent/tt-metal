@@ -18,9 +18,8 @@ Usage:
         --ref-audio /path/to/reference.wav \\
         --ref-text "Reference audio transcript" \\
         --output /tmp/ttnn_tts_output.wav \\
-        --seed 42
-
-    Trace + KV cache + 2CQ are always on.
+        --seed 42 \\
+        --use-2cq
 """
 
 import argparse
@@ -72,11 +71,13 @@ def run_full_ttnn_tts(
     language: str = "english",
     greedy: bool = False,
     repetition_penalty: float = 1.0,
+    use_kv_cache: bool = True,
+    use_trace: bool = True,
+    use_2cq: bool = False,
     seed: Optional[int] = None,
     ref_cache: str = None,
     trim_frames: int = 4,
     load_cpu_inputs: str = None,
-    pre_measurement_warmup: bool = False,
     hf_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
 ):
     """Run full TTNN TTS pipeline (CLI orchestrator)."""
@@ -88,7 +89,7 @@ def run_full_ttnn_tts(
     print(f"Reference: {ref_audio}")
     print(f"Max tokens: {max_new_tokens}")
     print(f"Decoding: {'greedy' if greedy else f'sampling (temp=0.9, top_k=50, rep_penalty={repetition_penalty})'}")
-    print(f"KV cache: enabled")
+    print(f"KV cache: {'enabled' if use_kv_cache else 'disabled'}")
     if seed is not None:
         print(f"RNG seed: {seed} (torch.manual_seed before codec generation)")
     else:
@@ -108,11 +109,18 @@ def run_full_ttnn_tts(
 
     tokenizer = AutoTokenizer.from_pretrained(hf_id, trust_remote_code=True)
 
-    # MESH_DEVICE: N150=(1,1), N300=(1,2) TP=2, T3K=(1,8). Unset → single-chip open_device.
-    _ncq = 2
+    # Open device with explicit trace region.
+    # MESH_DEVICE env var follows the tt_transformers convention (see
+    # models/tt_transformers/conftest.py): N150=(1,1), N300=(1,2), T3K=(1,8).
+    # When set, open via open_mesh_device so tt-metal selects the matching
+    # core descriptor (N150 gives the 8x8 worker grid the sharded TTS layouts
+    # require). Unset → legacy single-chip open_device path.
+    _ncq = 2 if use_2cq else 1
     _mesh_shape = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"))
     if _mesh_shape is not None:
         print(f"\nOpening TT mesh device {_mesh_shape} (MESH_DEVICE={os.environ['MESH_DEVICE']})...")
+        # Multi-chip meshes need fabric initialized before open for CCL (all_reduce / all_gather).
+        # Skip for (1,1) — single chip needs no fabric and FABRIC_1D init would be wasted.
         if _mesh_shape != (1, 1):
             ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
         device = ttnn.open_mesh_device(
@@ -235,8 +243,10 @@ def run_full_ttnn_tts(
             tts_pad_embed=tts_pad_embed,
             code_pred_embeds=code_pred_embeds,
             config=config,
+            use_kv_cache=use_kv_cache,
+            use_trace=use_trace,
+            use_2cq=use_2cq,
             streaming_decoder=streaming_decoder,
-            pre_measurement_warmup=pre_measurement_warmup,
         )
         timings["generation"] = time.time() - gen_start
         timings["warmup"] = compile_timings["warmup"]
@@ -295,7 +305,7 @@ def run_full_ttnn_tts(
         print(f"{'Decode audio':<30} {timings['decode']*1000:>10.1f}   Reference (Speech Tok Dec)")
         print("-" * 70)
         print(f"{'Inference time (no compile)':<30} {inference_time*1000:>10.1f}   speaker+ICL+prefill+decode")
-        print(f"{'2 CQ (H2D / trace overlap)':<30} {'yes':>10}   device queues")
+        print(f"{'2 CQ (H2D / trace overlap)':<30} {('yes' if use_2cq else 'no'):>10}   device queues")
         if timings.get("avg_decode_ms", 0) > 0:
             print(f"{'Avg decode (all steps)':<30} {timings['avg_decode_ms']:>10.1f}   ms/frame (fair vs other runs)")
         if timings.get("steady_avg_decode_ms", 0) > 0:
@@ -305,8 +315,6 @@ def run_full_ttnn_tts(
             print(
                 f"{'Steady throughput':<30} {timings['steady_frames_per_sec']:>10.2f}   frames/sec (matches line above)"
             )
-            _rtf = timings["steady_avg_decode_ms"] / 80.0
-            print(f"{'RTF vs 80 ms/frame':<30} {_rtf:>10.2f}   (12 Hz codec; <1 is faster than real-time)")
         print(
             "  Note: Total generation ms scales with EOS frame count when sampling; compare steady ms/sec across runs."
         )
@@ -318,14 +326,13 @@ def run_full_ttnn_tts(
         print(f"Total wall time: {total_time:.2f}s")
         print("=" * 80)
 
-        _steady = float(compile_timings.get("steady_avg_decode_ms", 0.0))
         result = {
             "prefill_ms": float(compile_timings.get("prefill_ms", 0.0)),
-            "steady_ms_per_frame": _steady,
+            "steady_ms_per_frame": float(compile_timings.get("steady_avg_decode_ms", 0.0)),
             "steady_frames_per_sec": float(compile_timings.get("steady_frames_per_sec", 0.0)),
-            "rtf": (_steady / 80.0) if _steady else 0.0,
             "num_frames": int(num_frames),
             "output_wav": output_path,
+            "arch": device.arch().name,
         }
     finally:
         if _mesh_shape is not None:
@@ -384,13 +391,13 @@ def main():
             "jim_reference.wav, falls back to jim_reference.txt next to it."
         ),
     )
+    parser.add_argument("--output", type=str, default="/tmp/ttnn_tts_output.wav", help="Output path")
     parser.add_argument(
         "--hf-id",
         type=str,
         default="Qwen/Qwen3-TTS-12Hz-1.7B-Base",
         help="HuggingFace repo (1.7B default, or Qwen/Qwen3-TTS-12Hz-0.6B-Base)",
     )
-    parser.add_argument("--output", type=str, default="/tmp/ttnn_tts_output.wav", help="Output path")
     parser.add_argument("--max-tokens", type=int, default=256, help="Max tokens to generate")
     parser.add_argument("--device-id", type=int, default=0, help="TT device ID")
     parser.add_argument("--language", type=str, default="english", help="Language")
@@ -408,6 +415,13 @@ def main():
         type=int,
         default=4,
         help="Codec frames to trim from start (removes reference echo, default: 4)",
+    )
+    parser.add_argument("--no-kv-cache", action="store_true", help="Disable KV cache (slower)")
+    parser.add_argument("--no-trace", action="store_true", help="Disable trace (use non-traced KV cache decode)")
+    parser.add_argument(
+        "--use-2cq",
+        action="store_true",
+        help="Two command queues: H2D on CQ1 overlapped with Metal trace on CQ0",
     )
     parser.add_argument(
         "--seed",
@@ -442,32 +456,15 @@ def main():
         language=args.language,
         greedy=args.greedy,
         repetition_penalty=args.repetition_penalty,
+        use_kv_cache=not args.no_kv_cache,
+        use_trace=not args.no_trace,
+        use_2cq=args.use_2cq,
         seed=args.seed,
         ref_cache=args.ref_cache,
         trim_frames=args.trim_frames,
         load_cpu_inputs=args.load_cpu_inputs,
         hf_id=args.hf_id,
     )
-
-
-def test_demo():
-    """Pytest entrypoint for CI demo pipeline."""
-    from pathlib import Path
-
-    repo_root = Path(__file__).resolve().parents[4]
-    ref_audio = str(repo_root / "models" / "demos" / "qwen3_tts" / "demo" / "jim_reference.wav")
-    ref_text = "Jason, can we take a look at the review slides"
-    result = run_full_ttnn_tts(
-        text=(
-            "Good morning. Today is a beautiful day for a walk in the park, "
-            "with bright sun and a gentle breeze through the trees."
-        ),
-        ref_audio=ref_audio,
-        ref_text=ref_text,
-        output_path="/tmp/qwen3_tts_demo_ci.wav",
-        seed=42,
-    )
-    assert isinstance(result, dict), f"run_full_ttnn_tts must return a dict; got {type(result)}"
 
 
 if __name__ == "__main__":
