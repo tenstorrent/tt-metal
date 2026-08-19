@@ -5725,3 +5725,40 @@ because these runs followed an earlier ResNet run that had already refilled the 
 run after a host reboot the tax is much larger, since `/home` is not persistent on this box and both caches are
 empty (measured: `~/.cache/huggingface` = 56K, two months stale). **Discard rep 1 regardless**; it is cheap
 insurance and its size is not predictable.
+
+## §N+51 — Receiver v2 (zero-copy decode into per-stream rings) is lossless and count-exact; the delay-15 stall floor is DEVICE-side (bh-18, 2026-08-19)
+
+The host receiver was reimplemented (commits 433ab8ce367..b89c0d5491c): per-socket threads fuse poll +
+in-place decode straight off the D2H FIFO (`peek`/`pop`, no staging copy) + decode-paced acks; records are
+emitted directly into per-stream BroadcastRings (direct-emit reserve/store/commit, NT 16 B slot stores);
+one consumer thread per registered callback; the drain kernel sweeps-to-empty on stop=1; a teardown
+completeness verifier compares every worker lane's tail against the receiver's consumed mirror.
+
+**Losslessness is now verified per run, to the marker.** At gx12 gy10 iters10k, delivered zones equal
+offered + stall-zone pairs + FW wrappers exactly (e.g. 60,362,777 = 60,000,000 + 362,177 + 600), and the
+decoded stall-zone count independently matches the L1 stall counters to the digit. COMPLETENESS reports
+600/600 lanes, 0 words stranded on every clean run; `WRITER_DIE_AFTER` (host killed mid-stream) leaves no
+wedge and the verifier reports the stranded capture loudly (600 lanes, 43.7M words).
+
+**The stall series that locates the floor** (gx12 gy10 iters10k delay15, L1 counters):
+
+| host configuration | producer stalls |
+|---|---|
+| old receiver (memcpy-rate acks, ~26.7M records discarded host-side) | 352,442 |
+| receiver v2 (decode-paced acks, lossless) | 361,279–361,443 |
+| NO_DECODE (pop+ack only through the receiver) | 291,265 |
+| bare `discard_pending_pages()` loop (no receiver machinery at all) | **289,657** |
+
+Two independent maximal-ack hosts agree at ~290k, so that is a device-side floor: in those runs mover
+credit-waits are 0.1 us and filler ring-room waits ~15 us — nothing downstream is pushing back — yet all
+120 cores stall. The mechanism is the filler scan cadence itself: at delay 15 a core's 512-word ring
+refills on the same timescale its filler revisits it among 30 cores. Consistent with that mechanism,
+stalls RISE to 380,605 at delay 50 (lower span fill = more device sweep bytes per marker). Zero stalls at
+delay 15 full grid therefore needs device-side changes (scan rate, ring depth, more fillers), not host ones.
+
+The lossless receiver adds ~70k stalls over the floor because acks pace at decode speed: decode sustains
+5.6–5.8 GB/s aggregate (SUSTAINED busy, 307–319 Mzones/s; 7.46 GB/s at delay 50) against ~7.4 GB/s offered.
+Decode optimization rounds: NT slot stores + live-window prefetch were real (5.31 -> 5.81 GB/s); hoisting
+the per-record stats out of the aliased Stream fields (perf attributed ~20% to a per-marker load-add-store
+forced by the NT stores' pointer casts) measured within run-to-run noise — the remaining decode time is
+cold-line latency on the DMA-fresh wire.
