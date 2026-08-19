@@ -74,11 +74,9 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>     // RoutingDirection
 #include <tt-metalium/distributed_context.hpp>
 
-#include "tt_emule/chip_store.hpp"
 #include "tt_emule/device.hpp"
 #include "tt_emule/dfb_sync_state.hpp"
 #include "tt_emule/l1_pool.hpp"
-#include "tt_emule/rank_state.hpp"
 #include "emule_virtual_ranks.hpp"
 #include "tt_emule/kernel_patcher.hpp"  // tt::emule::patch_kernel_source (the extracted JIT patch pass)
 #include "tt_emule/tile_counter.hpp"
@@ -2165,161 +2163,18 @@ static std::mutex g_fabric_route_mutex;
 // (src_chip << 3 | dir) -> ordered chips at distance 1,2,... in that direction (cached; topology is static).
 static std::unordered_map<uint32_t, std::vector<uint32_t>> g_fabric_walk_cache;
 
-// ---------------------------------------------------------------------------
-// Global chip registry: emule chip ids that stay valid when a peer RANK owns the chip.
-// ---------------------------------------------------------------------------
-// Multi-rank hands each rank only its own chips (TT_VISIBLE_DEVICES, then the cluster descriptor
-// renumbers them 0..N-1), so a peer chip has no local ChipId and
-// get_physical_chip_id_from_fabric_node_id TT_FATALs for its node. Emule chip ids never leave this
-// process — a delivery is a direct write, not a message — so the id space can simply be EXTENDED:
-// local chips keep their existing ChipId (single-rank behaviour is byte-identical) and each peer
-// gets a synthetic id above the local maximum. Each entry carries the globally stable AsicID, which
-// is the same value chip_store names the chip's shared segment with, so this table is also what
-// turns a route into an attachable peer segment. See tt-emule docs/fabric-ccl-emulation.md.
-struct EmuleGlobalChip {
-    uint64_t asic_id = 0;   // == cluster unique_chip_id; the chip_store segment key
-    int owner_rank = -1;    // MPI rank that owns the chip, -1 if unknown
-    bool local = false;     // owned by this rank (then the emule id IS the local ChipId)
-};
-static std::mutex g_gchip_mu;
-static std::vector<EmuleGlobalChip> g_gchips;                          // indexed by emule chip id
-static std::unordered_map<uint64_t, uint32_t> g_asic_to_gchip;         // AsicID -> emule chip id
-static std::map<tt::tt_fabric::FabricNodeId, uint32_t> g_node_to_gchip;
-static std::unordered_map<uint32_t, tt::tt_fabric::FabricNodeId> g_gchip_to_node;
-static bool g_gchip_built = false;
-
-// TopologyMapper is globally complete: each rank fills its own chips then
-// broadcast_chip_info_to_hosts exchanges the rest, so get_asic_id_from_fabric_node_id answers for a
-// node this rank does not own. That is the whole reason no extra collective is needed here.
-static void __emule_build_gchip_registry(tt::tt_fabric::ControlPlane& cp) {
-    // A build that produced nothing is NOT final: the first lookup can land before the control plane
-    // is populated, and latching that would leave the registry permanently empty.
-    if (g_gchip_built && !g_gchips.empty()) {
-        return;
-    }
-    g_gchip_built = true;
-    uint32_t next_synthetic = 0;
-    try {
-        const auto& tm = cp.get_topology_mapper();
-        // EVERY mesh in the graph, not get_user_physical_mesh_ids(): that one is derived from this
-        // rank's own logical-to-physical map, so under a rank-per-mesh topology it returns only the
-        // local mesh and every peer would stay unnameable.
-        const auto all_meshes = cp.get_mesh_graph().get_mesh_ids();
-        for (auto mesh_id : all_meshes) {
-            // Straight off the mesh GRAPH: it is the same file in every rank, so it describes foreign
-            // meshes too, whereas anything routed through this rank's physical bindings stops at its
-            // own submesh -- the exact truncation this registry exists to undo.
-            uint32_t n = 0;
-            try {
-                n = static_cast<uint32_t>(cp.get_mesh_graph().get_mesh_shape(mesh_id).mesh_size());
-            } catch (...) {
-                continue;
-            }
-            for (uint32_t c = 0; c < n; ++c) {
-                const tt::tt_fabric::FabricNodeId node(mesh_id, c);
-                uint64_t asic = 0;
-                try {
-                    asic = *tm.get_asic_id_from_fabric_node_id(node);
-                } catch (...) {
-                    continue;  // node not in the mapping at all — nothing nameable here
-                }
-                int local_chip = -1;
-                try {
-                    local_chip = static_cast<int>(cp.get_physical_chip_id_from_fabric_node_id(node));
-                } catch (...) {
-                    local_chip = -1;  // owned by a peer rank
-                }
-                uint32_t id;
-                if (local_chip >= 0) {
-                    id = static_cast<uint32_t>(local_chip);
-                    next_synthetic = std::max(next_synthetic, id + 1);
-                } else {
-                    id = 0xFFFFFFFFu;  // assigned below, after every local id is known
-                }
-                if (id != 0xFFFFFFFFu) {
-                    if (g_gchips.size() <= id) {
-                        g_gchips.resize(id + 1);
-                    }
-                    g_gchips[id] = EmuleGlobalChip{asic, -1, true};
-                    g_asic_to_gchip[asic] = id;
-                    g_node_to_gchip[node] = id;
-                    g_gchip_to_node.emplace(id, node);
-                }
-            }
-        }
-        // Second pass for peers: their synthetic ids must not collide with any local ChipId, which is
-        // only known once every local chip above has been seen.
-        for (auto mesh_id : all_meshes) {
-            uint32_t n = 0;
-            try {
-                n = static_cast<uint32_t>(cp.get_mesh_graph().get_mesh_shape(mesh_id).mesh_size());
-            } catch (...) {
-                continue;
-            }
-            for (uint32_t c = 0; c < n; ++c) {
-                const tt::tt_fabric::FabricNodeId node(mesh_id, c);
-                if (g_node_to_gchip.count(node)) {
-                    continue;
-                }
-                uint64_t asic = 0;
-                try {
-                    asic = *tm.get_asic_id_from_fabric_node_id(node);
-                } catch (...) {
-                    continue;
-                }
-                int owner = -1;
-                try {
-                    const auto host_rank = tm.get_host_rank_for_chip(mesh_id, static_cast<ChipId>(c));
-                    if (host_rank.has_value()) {
-                        owner = tm.get_mpi_rank_for_mesh_host_rank(mesh_id, *host_rank);
-                    }
-                } catch (...) {
-                    owner = -1;
-                }
-                const uint32_t id = next_synthetic++;
-                if (g_gchips.size() <= id) {
-                    g_gchips.resize(id + 1);
-                }
-                g_gchips[id] = EmuleGlobalChip{asic, owner, false};
-                g_asic_to_gchip[asic] = id;
-                g_node_to_gchip[node] = id;
-                g_gchip_to_node.emplace(id, node);
-            }
-        }
-    } catch (...) {
-        // No control plane / no fabric: single-rank runs never need this table.
-    }
-}
-
-// emule chip id for a fabric node, valid whether or not this rank owns it. -1 when unnameable.
+// Chip id for a fabric node, or -1 when the control plane cannot name it.
 static int __emule_gchip_of_node(tt::tt_fabric::ControlPlane& cp, const tt::tt_fabric::FabricNodeId& node) {
-    // Multi-rank consults the registry FIRST. The control-plane lookup raises for every peer node,
-    // and this sits on the teleport's hot path: letting it raise first cost a million thrown
-    // exceptions (each formatting and logging a TT_FATAL) in one socket run. The registry holds local
-    // chips too, so it is a complete answer, not a fallback. Single-rank keeps the original order so
-    // its behaviour is untouched.
-    if (tt_emule::chip_store_job_is_multi_rank()) {
-        std::lock_guard<std::mutex> lk(g_gchip_mu);
-        __emule_build_gchip_registry(cp);
-        auto it = g_node_to_gchip.find(node);
-        if (it != g_node_to_gchip.end()) {
-            return static_cast<int>(it->second);
-        }
-    }
     try {
-        return static_cast<int>(cp.get_physical_chip_id_from_fabric_node_id(node));  // local fast path
+        return static_cast<int>(cp.get_physical_chip_id_from_fabric_node_id(node));
     } catch (...) {
-        // fall through to the global registry
+        return -1;
     }
-    std::lock_guard<std::mutex> lk(g_gchip_mu);
-    __emule_build_gchip_registry(cp);
-    auto it = g_node_to_gchip.find(node);
-    return (it == g_node_to_gchip.end()) ? -1 : static_cast<int>(it->second);
 }
 
-// Chip id for a fabric node, valid across ranks; -1 when unnameable. Exported because the fabric
-// host path records connections whose DESTINATION may sit on a mesh this rank does not own, where
-// the control plane's own lookup raises. See tt-emule docs/multi-rank-emulation.md.
+// Chip id for a fabric node, or -1. Exported because the fabric host path records connections whose
+// DESTINATION may sit on another mesh, where the control plane's own lookup raises rather than
+// answering; the caller wants a value it can test.
 extern "C" int __emule_gchip_for_node(uint32_t mesh_id, uint32_t chip_id) {
     try {
         auto& cp = MetalContext::instance().get_control_plane();
@@ -2330,33 +2185,9 @@ extern "C" int __emule_gchip_for_node(uint32_t mesh_id, uint32_t chip_id) {
     }
 }
 
-// The registry entry for an emule chip id, or nullptr when the id is not a known peer.
-static const EmuleGlobalChip* __emule_gchip_info(uint32_t chip) {
-    std::lock_guard<std::mutex> lk(g_gchip_mu);
-    if (chip >= g_gchips.size()) {
-        return nullptr;
-    }
-    const EmuleGlobalChip& e = g_gchips[chip];
-    return (e.asic_id == 0) ? nullptr : &e;
-}
-
-// Fabric node for an emule chip id. The registry is consulted FIRST for peer ids: under emulation
-// get_fabric_node_id_from_physical_chip_id answers any unmapped chip with a synthetic
-// FabricNodeId(MeshId{0}, chip) stub (control_plane.cpp:1254), which for a synthetic peer id is a
-// plausible-looking wrong answer rather than an error.
+// Fabric node for an emule chip id; false when the control plane cannot name it.
 static bool __emule_node_of_gchip(
     tt::tt_fabric::ControlPlane& cp, uint32_t chip, tt::tt_fabric::FabricNodeId& out) {
-    {
-        std::lock_guard<std::mutex> lk(g_gchip_mu);
-        auto it = g_gchip_to_node.find(chip);
-        if (it != g_gchip_to_node.end()) {
-            out = it->second;
-            return true;
-        }
-        if (chip < g_gchips.size() && !g_gchips[chip].local && g_gchips[chip].asic_id != 0) {
-            return false;  // a known peer with no node — do not fall through to the stub
-        }
-    }
     try {
         out = cp.get_fabric_node_id_from_physical_chip_id(static_cast<ChipId>(chip));
         return true;
@@ -2416,33 +2247,6 @@ static const std::vector<uint32_t>& __emule_fabric_walk(uint32_t src, tt::tt_fab
 // its semaphore wait. See tt-emule docs/fabric-ccl-emulation.md.
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Peer-owned chips: resolve into another RANK's shared L1 segment.
-// ---------------------------------------------------------------------------
-// A chip owned by a peer rank has no SWEmuleChip here and so no entry in g_core_map_cache. It does
-// have a chip_store segment, named by the globally stable AsicID the gchip registry carries, and the
-// slot layout is derived from the SoC descriptor alone — so an identically-harvested peer chip has
-// the SAME core->slot map as ours. That makes the resolve pure arithmetic on the attached segment:
-//   base + slot * SLOT_SIZE + (addr & L1_SLOT_MASK)
-// which is exactly what Core::l1_ptr does for a WORKER. Only WORKER cores are reachable this way;
-// DRAM lives in per-channel private mmaps that are not part of the shared segment.
-// See tt-emule docs/fabric-ccl-emulation.md.
-static std::mutex g_peer_seg_mu;
-static std::unordered_map<uint32_t, uint8_t*> g_peer_seg;  // emule chip id -> attached segment base
-
-// Cross-rank writes resolved in the packet currently being delivered, published only once its stores
-// are complete. Per-fiber-worker, so concurrent deliveries cannot mix their tallies.
-static thread_local uint32_t t_peer_writes = 0;
-
-// ---------------------------------------------------------------------------
-// Cross-rank quiescence: shared rank state, no collective on the hot path.
-// ---------------------------------------------------------------------------
-// A cross-rank delivery makes the destination WORD correct immediately, but the parked fiber that
-// is waiting on it never re-evaluates: the wake in __emule_fabric_deliver is a host pointer into
-// THIS process's scheduler, and the waiter belongs to another one. A rank also cannot decide locally
-// whether its stall is peer-fed — every worker L1 is a legal fabric destination, so any classifier
-// degenerates to "any waiter". The decision is therefore global, but it does not need a collective:
-// the state lives in shared memory alongside the chip L1. See tt-emule docs/multi-rank-emulation.md.
 static bool emule_peer_may_still_deliver();
 static void emule_install_peer_probes();
 
@@ -2517,27 +2321,6 @@ static bool virtual_rank_run_live() {
     return v.k.load(std::memory_order_acquire) > 1 && v.joined.load(std::memory_order_acquire) != 0;
 }
 
-static tt_emule::RankState& emule_rank_state() {
-    static tt_emule::RankState rs = [] {
-        using tt::tt_metal::distributed::multihost::DistributedContext;
-        if (!tt_emule::chip_store_shared() || !DistributedContext::is_initialized()) {
-            return tt_emule::RankState(nullptr, 0, 0);
-        }
-        const auto& ctx = DistributedContext::get_current_world();
-        const auto world = static_cast<uint32_t>(*ctx->size());
-        if (world <= 1) {
-            return tt_emule::RankState(nullptr, 0, 0);  // single rank: no peer can ever deliver here
-        }
-        tt_emule::RankState s = tt_emule::rank_state_attach(world, static_cast<uint32_t>(*ctx->rank()));
-        if (s.valid()) {
-            s.join();
-            emule_install_peer_probes();
-        }
-        return s;
-    }();
-    return rs;
-}
-
 // Installed ONLY from a multi-rank path — the shm one above and the in-process one in
 // virtual_rank_note_dispatch — so single-rank the scheduler's quiescence branch is byte-identical to
 // its pre-multi-rank form (an empty std::function it never calls). Idempotent: both paths can be
@@ -2546,153 +2329,14 @@ static void emule_install_peer_probes() {
     static std::once_flag once;
     std::call_once(once, [] {
         tt::tt_metal::emule_fiber::set_peer_progress_probe(&emule_peer_may_still_deliver);
-        tt::tt_metal::emule_fiber::set_peer_liveness_probe([] {
-            // Ahead of emule_rank_state(): this probe runs on the watchdog thread, and the in-process
-            // answer needs no rank identity, which that thread does not have.
-            if (virtual_rank_peer_absent()) {
-                return true;
-            }
-            auto& r = emule_rank_state();
-            return r.valid() && r.any_peer_unfinished();
-        });
+        tt::tt_metal::emule_fiber::set_peer_liveness_probe([] { return virtual_rank_peer_absent(); });
     });
 }
 
-// Latched once the spin below has independently confirmed a global fixed point. Without it the loop
-// livelocks: each rank clears its flag to run, so the two never observe each other parked at the same
-// instant, the probe keeps answering "a peer might still deliver", and a genuine deadlock is never
-// reported. The latch makes the next quiescence authoritative.
-static std::atomic<bool> g_peer_fixed_point_confirmed{false};
-
-// Called from the scheduler at local quiescence. Publishing BEFORE testing is what makes the answer
-// meaningful: until this rank's own slot says parked, the fixed point can never hold.
-static bool emule_peer_may_still_deliver() {
-    // In-process ranks share this scheduler, so "a peer may still deliver" reduces to "a peer has
-    // not registered its half yet" — once every rank's fibers are in the registry a stall is a
-    // genuine one and the engine's own detection must have it back.
-    if (virtual_rank_peer_absent()) {
-        return true;
-    }
-    auto& rs = emule_rank_state();
-    if (!rs.valid()) {
-        return false;
-    }
-    if (rs.any_faulted()) {
-        return false;  // a peer threw; waiting for it would hang this rank too
-    }
-    if (g_peer_fixed_point_confirmed.load(std::memory_order_acquire)) {
-        return false;  // already established that nothing is coming — let the engine report it
-    }
-    rs.publish_quiesced(true);
-    return !rs.global_fixed_point();
-}
-
-// Block until something changes the answer: a peer delivered (our parked snapshot is now stale), or
-// every rank agreed there is nothing left, or someone faulted. Deliveries are shared-memory stores,
-// so this is a spin with a yield rather than a wait primitive — there is nothing to be signalled by.
-// Returns true only when a DELIVERY arrived, which is the sole reason to un-publish our quiescence:
-// clearing it on the other exits would let two stuck ranks alternate between "parked" and "running"
-// and never observe each other parked at the same instant, so the fixed point could never be reached.
-static bool emule_peer_wait_for_change() {
-    auto& rs = emule_rank_state();
-    if (!rs.valid()) {
-        return false;
-    }
-    // Bounded so a lost delivery surfaces as the engine's deadlock diagnostic instead of a silent
-    // hang; the pump that follows re-tests and lets the real report fire.
-    static const uint64_t spins = [] {
-        const char* v = std::getenv("TT_EMULE_PEER_WAIT_SPINS");
-        return (v != nullptr && *v != '\0') ? std::strtoull(v, nullptr, 10) : 200'000'000ull;
-    }();
-    for (uint64_t i = 0; i < spins; ++i) {
-        if (!rs.quiesced_snapshot_is_current()) {
-            return true;  // a peer wrote into us; re-poll with fresh eyes
-        }
-        if (rs.any_faulted()) {
-            return false;
-        }
-        if (rs.global_fixed_point()) {
-            // Observed while THIS rank is parked, so it is a real reading rather than a gap between
-            // two ranks' cycles. Latch it: the next quiescence must report a deadlock, not re-park.
-            g_peer_fixed_point_confirmed.store(true, std::memory_order_release);
-            return false;
-        }
-        if ((i & 0xFF) == 0) {
-            std::this_thread::yield();
-        }
-    }
-    // Spin exhausted with no answer. Do NOT leave this rank advertising itself as parked while it
-    // goes on to run: a peer reading that stale flag would see a fixed point that does not exist and
-    // report a deadlock against a rank that is still working.
-    // Report the whole array once: a stuck pair is otherwise invisible, and this names the rank that
-    // is holding the fixed point open.
-    static bool dumped = false;
-    if (!dumped) {
-        dumped = true;
-        rs.dump("PeerWait spin exhausted");
-    }
-    return false;
-}
-
-static uint8_t* __emule_fabric_resolve_peer(uint32_t dst_chip, uint64_t noc_addr) {
-    if (!tt_emule::chip_store_shared()) {
-        return nullptr;  // no shared backing: a peer chip is simply unreachable
-    }
-    const EmuleGlobalChip* info = __emule_gchip_info(dst_chip);
-    if (info == nullptr || info->local) {
-        return nullptr;
-    }
-    // Any local chip supplies the geometry: same board, same arch, same harvesting. The mask is part
-    // of the segment name, so a heterogeneous peer fails to attach rather than aliasing silently.
-    auto* local = get_sw_emulated_chip(static_cast<tt::ChipId>(__emule_self->chip_id));
-    if (local == nullptr) {
-        return nullptr;
-    }
-    const uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
-    const uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
-    const size_t slot = local->slot_of(tt_xy_pair(noc_x, noc_y));
-    if (slot == SIZE_MAX) {
-        return nullptr;  // not a Tensix core — no pool slot, hence not in the shared segment
-    }
-
-    uint8_t* base = nullptr;
-    {
-        std::lock_guard<std::mutex> lk(g_peer_seg_mu);
-        auto it = g_peer_seg.find(dst_chip);
-        if (it != g_peer_seg.end()) {
-            base = it->second;
-        } else {
-            const size_t bytes = local->num_pool_slots() * tt_emule::L1Pool::SLOT_SIZE;
-            base = static_cast<uint8_t*>(tt_emule::chip_store_attach_peer(
-                info->asic_id, local->shm_harvest_mask(), bytes, tt_emule::L1Pool::SLOT_SIZE));
-            // Cache SUCCESSES only. A miss usually means the owning rank has not opened its devices
-            // yet — ranks are not lock-stepped through device open — and caching that would drop
-            // every later delivery to the chip for the rest of the run. Retrying costs one failing
-            // shm_open. Warn once so a permanent miss is still visible.
-            if (base != nullptr) {
-                g_peer_seg[dst_chip] = base;
-            } else {
-                static std::set<uint32_t> warned;
-                if (warned.insert(dst_chip).second) {
-                    std::fprintf(stderr,
-                                 "[EMULE_FABRIC] WARNING: no shared segment yet for peer chip=%u (asic=0x%llx, "
-                                 "rank=%d); will retry. A persistent miss drops deliveries to it.\n",
-                                 dst_chip, static_cast<unsigned long long>(info->asic_id), info->owner_rank);
-                }
-            }
-        }
-    }
-    if (base == nullptr) {
-        return nullptr;
-    }
-    // Only TALLIED here — publishing happens in __emule_fabric_deliver once the stores are done.
-    // The counter must never lead the data: a peer that saw it move without the bytes behind it
-    // would re-poll, find nothing, and re-park, which is precisely the lost wakeup this exists to
-    // prevent. See tt-emule docs/multi-rank-emulation.md.
-    ++t_peer_writes;
-    return base + slot * tt_emule::L1Pool::SLOT_SIZE +
-           (static_cast<uint32_t>(noc_addr & NOC_LOCAL_MASK) & L1_SLOT_MASK);
-}
+// Called from the scheduler at local quiescence. The ranks share this scheduler, so "a peer may
+// still deliver" reduces to "a peer has not registered its half yet" — once every rank's fibers are
+// in the registry a stall is genuine and the engine's own detection must have it back.
+static bool emule_peer_may_still_deliver() { return virtual_rank_peer_absent(); }
 
 // Resolve (noc_addr) -> host pointer on an arbitrary chip, mirroring __emule_resolve_noc_addr but
 // against the destination chip's cached core map (already built by that chip's launch).
@@ -2702,11 +2346,6 @@ extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t no
     static const bool rdbg = std::getenv("EMULE_FABRIC_DEBUG") != nullptr;
     auto it = g_core_map_cache.find(dst_chip);
     if (it == g_core_map_cache.end() || !it->second) {
-        // No local core map. Under multi-rank that is the NORMAL case for a chip a peer rank owns, so
-        // try the peer's shared segment before treating it as a drop.
-        if (uint8_t* peer = __emule_fabric_resolve_peer(dst_chip, noc_addr)) {
-            return peer;
-        }
         // Returning nullptr DROPS the delivery: the peer's semaphore never moves and the only symptom
         // is a quiescent deadlock elsewhere. Report it once per chip even without EMULE_FABRIC_DEBUG.
         static std::set<uint32_t> warned;
@@ -2897,57 +2536,6 @@ static inline uint64_t __emule_chan_key(uint32_t src, uint32_t chan) {
 }
 
 // Seed g_ring_adj with the WHOLE physical ring, including edges that leave this rank.
-// ------------------------------------------------------------------------------------
-// Accumulating adjacency from __emule_fabric_record_conn alone makes it rank-local: that hook fires
-// only for connections this rank opens, so a ring walk dead-ends at the rank boundary and a CCL
-// delivers to a TRUNCATED target set — silently, with no drop and no unresolved route, which is what
-// a partially-correct all-gather looks like. The descriptor has what is missing: a link whose far
-// side is not visible is recorded against the peer's UNIQUE id, which the gchip registry maps to a
-// chip id. See tt-emule docs/multi-rank-emulation.md §3.
-static bool g_ring_adj_seeded = false;
-static void __emule_seed_global_ring_adj() {  // pre: g_conn_route_mu held
-    if (g_ring_adj_seeded || !tt_emule::chip_store_job_is_multi_rank()) {
-        return;
-    }
-    g_ring_adj_seeded = true;
-    try {
-        auto& cluster = MetalContext::instance().get_cluster();
-        auto& cp = MetalContext::instance().get_control_plane();
-        {
-            std::lock_guard<std::mutex> lk(g_gchip_mu);
-            __emule_build_gchip_registry(cp);
-        }
-        const auto* desc = cluster.get_cluster_desc();
-        if (desc == nullptr) {
-            return;
-        }
-        for (auto chip : desc->get_all_chips()) {
-            const auto local = static_cast<uint32_t>(chip);
-            for (auto nb : cluster.get_ethernet_connected_device_ids(chip)) {  // both sides visible
-                g_ring_adj[local].insert(static_cast<uint32_t>(nb));
-                g_ring_adj[static_cast<uint32_t>(nb)].insert(local);
-            }
-        }
-        // Edges that leave this rank: keyed by the far side's unique id, so they survive the
-        // visible-device slicing that hides the chip itself.
-        for (const auto& [chip, by_chan] : desc->get_ethernet_connections_to_remote_devices()) {
-            const auto local = static_cast<uint32_t>(chip);
-            for (const auto& [chan, remote] : by_chan) {
-                (void)chan;
-                const uint64_t peer_uid = std::get<0>(remote);
-                std::lock_guard<std::mutex> lk(g_gchip_mu);
-                auto it = g_asic_to_gchip.find(peer_uid);
-                if (it != g_asic_to_gchip.end()) {
-                    g_ring_adj[local].insert(it->second);
-                    g_ring_adj[it->second].insert(local);
-                }
-            }
-        }
-    } catch (...) {
-        // No cluster/control plane yet — the per-connection accumulation still applies.
-    }
-}
-
 extern "C" void __emule_fabric_record_conn(
     uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t dst, uint32_t chan) {
     // The caller (fabric.cpp) passes the connection's FINAL destination chip. On silicon a fabric
@@ -2978,7 +2566,6 @@ extern "C" void __emule_fabric_record_conn(
     g_mux_dir[__emule_worker_key(src, wx, wy)] = dir;
     g_chan_dir[__emule_chan_key(src, chan)] = dir;
     // Accumulate the undirected ring edge (persistent; unaffected by the per-op reset above).
-    __emule_seed_global_ring_adj();  // multi-rank only; adds the edges this rank never opens
     g_ring_adj[src].insert(neighbor);
     g_ring_adj[neighbor].insert(src);
     auto& v = g_conn_route[src];
@@ -3265,27 +2852,7 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
 
 // Apply the terminal NOC command of a fabric send to ONE destination chip's L1 (the per-target delivery,
 // looped over by the teleport for multicast).
-static void __emule_fabric_deliver_ops(
-    uint32_t dst_chip, const uint8_t* h, const void* payload, uint32_t size, uint8_t noc_send_type, bool dbg);
-
-// Publishes any cross-rank writes this packet made, AFTER the terminal op's stores and their release
-// fence. A peer decides global quiescence from these counters, so one that moved before its data
-// would let the peer conclude "nothing new" and stay parked. See tt-emule docs/multi-rank-emulation.md.
 static void __emule_fabric_deliver(
-    uint32_t dst_chip, const uint8_t* h, const void* payload, uint32_t size, uint8_t noc_send_type, bool dbg) {
-    t_peer_writes = 0;
-    __emule_fabric_deliver_ops(dst_chip, h, payload, size, noc_send_type, dbg);
-    if (t_peer_writes != 0) {
-        std::atomic_thread_fence(std::memory_order_release);
-        auto& rs = emule_rank_state();
-        for (uint32_t i = 0; i < t_peer_writes; ++i) {
-            rs.note_delivery();
-        }
-        t_peer_writes = 0;
-    }
-}
-
-static void __emule_fabric_deliver_ops(
     uint32_t dst_chip, const uint8_t* h, const void* payload, uint32_t size, uint8_t noc_send_type, bool dbg) {
     const uint64_t noc_address = *reinterpret_cast<const uint64_t*>(h + 0);
     switch (noc_send_type) {
@@ -4547,13 +4114,6 @@ void run_mesh_dispatch() {
             // over — so that is the one exit that must NOT tell peers this rank is finished.
             if (armed) {
                 clear_host_interleaved_state();
-                // A rank that finished stops delivering forever, just as a faulted one does. Without
-                // this a peer sits in PeerWait on a rank that has already left, and the fixed point it
-                // is waiting for can never be reached.
-                emule_rank_state().note_done();
-            }
-            if (std::uncaught_exceptions() > 0) {
-                emule_rank_state().note_faulted();
             }
         }
     } cleanup;
@@ -4562,28 +4122,15 @@ void run_mesh_dispatch() {
     // core_map/bridge_dram, so cross-chip NOC resolution stays correct. run_persistent (vs
     // run_until_idle) lets a host-interleaved socket program quiesce back to the host mid-run. On a
     // throw the RAII Cleanup above frees the kept state during unwind.
-    // Force the rank state up before the run: it is what installs the scheduler's peer probe, and
-    // without it a quiescence could never be classified as a PeerWait in the first place.
-    emule_rank_state().begin_dispatch();
     virtual_rank_note_dispatch();
-    g_peer_fixed_point_confirmed.store(false, std::memory_order_release);
     tt::tt_metal::emule_fiber::RunOutcome oc =
         tt::tt_metal::emule_fiber::FiberScheduler::instance().run_persistent();
-    // A PeerWait is resolved by another RANK, not by our host, so it is absorbed here rather than
-    // returned: this rank has nothing to do but wait and re-poll. The loop ends when the peer acts
-    // (pump makes progress), when every rank agrees there is nothing left (the probe goes false and
-    // the engine reports the deadlock with its usual diagnostic), or on a fault.
+    // A PeerWait is resolved by another RANK, so it is absorbed here rather than returned: this rank
+    // has nothing to do but yield the dispatch mutex the peer needs to register its half, then
+    // re-poll. The loop ends when the peer joins, or when the probe goes false and the engine
+    // reports the deadlock with its usual diagnostic.
     while (oc == tt::tt_metal::emule_fiber::RunOutcome::PeerWait) {
-        if (virtual_rank_peer_absent()) {
-            // In-process: the peer needs the dispatch mutex to register its half of the socket, and
-            // waiting on shared rank state would be waiting for a process that does not exist.
-            virtual_rank_yield_for_peer();
-        } else if (emule_peer_wait_for_change()) {
-            g_peer_fixed_point_confirmed.store(false, std::memory_order_release);  // work arrived
-        }
-        // Cleared on EVERY path, not just after a delivery: pump() is about to release the parked
-        // fibers, and a rank that is running must never still advertise itself as parked.
-        emule_rank_state().publish_quiesced(false);
+        virtual_rank_yield_for_peer();
         oc = tt::tt_metal::emule_fiber::FiberScheduler::instance().pump();
     }
     if (oc == tt::tt_metal::emule_fiber::RunOutcome::HostWait) {

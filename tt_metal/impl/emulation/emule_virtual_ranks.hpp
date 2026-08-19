@@ -12,7 +12,7 @@ class MeshDevice;
 }
 
 // In-process virtual ranks: K host "ranks" as threads of one process, so blaze reaches its K>1 code
-// path (and therefore real d2d sockets) with no MPI. See tt-emule docs/multi-rank-emulation.md §8.
+// path (and therefore real d2d sockets) with no MPI. See tt-emule docs/multi-rank-emulation.md §2.
 
 namespace tt::tt_metal::emule {
 

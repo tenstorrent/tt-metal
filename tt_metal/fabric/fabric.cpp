@@ -100,8 +100,7 @@ std::unordered_map<MeshId, MeshShape> get_physical_mesh_shapes() {
 // See tt-emule docs/fabric-ccl-emulation.md.
 extern "C" void __emule_fabric_record_conn(
     uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor, uint32_t chan);
-// Node -> emule chip id, valid for a node on a mesh this rank does not own (where the control
-// plane's own lookup raises). See tt-emule docs/multi-rank-emulation.md.
+// Node -> emule chip id, answering -1 rather than raising for a node the control plane cannot name.
 extern "C" int __emule_gchip_for_node(uint32_t mesh_id, uint32_t chip_id);
 #endif
 
@@ -228,8 +227,8 @@ void append_fabric_connection_rt_args(
 #if defined(TT_METAL_USE_EMULE)
         // Record (src_chip, worker_core, forwarding_direction, neighbor_chip) for the emule teleport's 1D
         // dst resolution. Called per connection in fwd-then-bwd order (matches the kernel's read order).
-        // Resolved through emule's registry, not the control plane: under multi-rank the DESTINATION
-        // is routinely a node on a peer rank's mesh, which has no local physical chip id.
+        // Resolved through the -1-returning wrapper: the destination may sit on another mesh, where
+        // the control plane's own lookup raises instead of answering.
         const int emule_src = __emule_gchip_for_node(*src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
         const int emule_dst = __emule_gchip_for_node(*dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
         TT_FATAL(
