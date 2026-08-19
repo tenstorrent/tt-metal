@@ -39,7 +39,6 @@ void kernel_main() {
                                                                        : compute_kernel_lib::DEST_AUTO_LIMIT);
 
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(dfb_id_in0);
 
     constexpr uint32_t dfb_id_in2 = tt::CBIndex::c_2;
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
@@ -50,6 +49,8 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
+
+    const uint32_t tile_bytes = dfb_in0.get_tile_size();
 
     uint32_t w = curr_col_in_batch;
 

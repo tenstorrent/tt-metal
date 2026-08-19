@@ -29,11 +29,16 @@ def _build_failure_body(
     telemetry_summary: str,
     test_output: str,
     attachment_names: list[str] | None = None,
+    restart_count: int = 0,
 ) -> str:
     """Build the shared failure detail block used by both a new ticket's
     description and a recurring-failure comment, so the two never drift."""
     fail_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     log_tail = test_output[-4096:]
+
+    reboot_line = ""
+    if restart_count > 0:
+        reboot_line = f"*Reboot recovery:* failure persisted after {restart_count} reboot(s)\n"
 
     telemetry_section = ""
     if telemetry_summary:
@@ -49,6 +54,7 @@ def _build_failure_body(
         f"*Date:* {fail_date}\n"
         f"*Slurm Job ID:* {slurm_job_id}\n"
         f"*Exit Code:* {exit_code}\n"
+        f"{reboot_line}"
         f"*TT-SMI Version:* {versions['tt_smi']}\n"
         f"*TT-KMD Version:* {versions['tt_kmd']}\n"
         f"*Firmware Version:* {versions['fw_bundle']}\n"
@@ -204,6 +210,7 @@ def create_jira_ticket(
     versions: dict[str, str],
     telemetry_summary: str = "",
     attachment_names: list[str] | None = None,
+    restart_count: int = 0,
 ) -> str | None:
     """Create a JIRA ticket for a failed health check. Returns ticket key or None."""
 
@@ -215,6 +222,7 @@ def create_jira_ticket(
         telemetry_summary=telemetry_summary,
         test_output=test_output,
         attachment_names=attachment_names,
+        restart_count=restart_count,
     )
 
     payload = {

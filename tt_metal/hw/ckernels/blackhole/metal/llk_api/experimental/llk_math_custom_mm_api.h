@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "../../../../../third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_custom_mm.h"
+#include "experimental/llk_math_custom_mm.h"
 #include "llk_math_common_api.h"
 
 /*************************************************************************
