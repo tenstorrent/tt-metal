@@ -5,6 +5,7 @@
 #include "tools/profiler/perf_debug_receiver.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <sys/prctl.h>
 #include <x86intrin.h>
@@ -80,6 +81,11 @@ struct IdleBackoff {
 PerfDebugReceiver::PerfDebugReceiver(ReceiverConfig config, std::vector<ReceiverDeviceConfig> devices) :
     cfg_(std::move(config)), devices_(std::move(devices)) {
     TT_FATAL(devices_.size() <= kPerfDebugMaxDevices, "record dev field holds {} devices", kPerfDebugMaxDevices);
+    // The scalar decode packs meta through the bit-field; the AVX2 path packs it by hand, so pin the layout.
+    const PerfDebugRecMeta meta_probe{0x1234, 5, 2, PerfDebugRecType::ZoneEnd};
+    TT_FATAL(
+        std::bit_cast<uint32_t>(meta_probe) == (0x1234u | (5u << 16) | (2u << 26) | (2u << 29)),
+        "PerfDebugRecMeta bit-field layout does not match the vectorized packer");
     no_decode_ = env_flag("TT_METAL_PERF_DEBUG_NO_DECODE");
     read_only_ = env_flag("TT_METAL_PERF_DEBUG_READ_ONLY");
     stall_only_ = env_flag("TT_METAL_PERF_DEBUG_STALL_ONLY");
@@ -237,6 +243,59 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         }
     };
 
+#if defined(__AVX2__)
+    auto emit_zones8 = [&](uint32_t lane, uint32_t th, uint32_t prog, __m256i w0s, __m256i w1s) {
+        zone_markers += 8;
+        stall_zones += static_cast<uint32_t>(__builtin_popcount(static_cast<uint32_t>(
+            _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(w0s, _mm256_set1_epi32(0x7FFF)))))));
+        const __m256i th64 = _mm256_set1_epi64x(static_cast<int64_t>(static_cast<uint64_t>(th) << 32));
+        const __m256i ts_a = _mm256_or_si256(th64, _mm256_cvtepu32_epi64(_mm256_castsi256_si128(w1s)));
+        const __m256i ts_b = _mm256_or_si256(th64, _mm256_cvtepu32_epi64(_mm256_extracti128_si256(w1s, 1)));
+        const uint64_t t3 = static_cast<uint64_t>(_mm256_extract_epi64(ts_a, 3));
+        const uint64_t t7 = static_cast<uint64_t>(_mm256_extract_epi64(ts_b, 3));
+        // Order invariant: compare each ts against its predecessor ([prev, t0..t2], [t3, t4..t6]).
+        __m256i prev_a = _mm256_permute4x64_epi64(ts_a, _MM_SHUFFLE(2, 1, 0, 0));
+        prev_a = _mm256_blend_epi32(prev_a, _mm256_set1_epi64x(static_cast<int64_t>(last_ts[lane])), 0x03);
+        __m256i prev_b = _mm256_permute4x64_epi64(ts_b, _MM_SHUFFLE(2, 1, 0, 0));
+        prev_b = _mm256_blend_epi32(prev_b, _mm256_set1_epi64x(static_cast<int64_t>(t3)), 0x03);
+        const int viol = _mm256_movemask_pd(_mm256_castsi256_pd(_mm256_cmpgt_epi64(prev_a, ts_a))) |
+                         (_mm256_movemask_pd(_mm256_castsi256_pd(_mm256_cmpgt_epi64(prev_b, ts_b))) << 4);
+        order_regressions += static_cast<uint32_t>(__builtin_popcount(static_cast<uint32_t>(viol)));
+        last_ts[lane] = t7;
+        if (min_ts == 0) {
+            min_ts = static_cast<uint64_t>(_mm256_extract_epi64(ts_a, 0));
+        }
+        max_ts = t7;
+        if (!sink) {
+            return;
+        }
+        // meta = hash | type bit (wire bit 27 -> record bit 29) | lane | dev | ZoneStart base.
+        const uint32_t meta_base = (lane << 16) | (dev << 26) | (1u << 29);
+        const __m256i meta = _mm256_or_si256(
+            _mm256_or_si256(
+                _mm256_and_si256(w0s, _mm256_set1_epi32(0xFFFF)),
+                _mm256_slli_epi32(_mm256_and_si256(w0s, _mm256_set1_epi32(0x08000000)), 2)),
+            _mm256_set1_epi32(static_cast<int>(meta_base)));
+        const __m256i prog64 = _mm256_set1_epi64x(static_cast<int64_t>(static_cast<uint64_t>(prog) << 32));
+        const __m256i mp_a = _mm256_or_si256(prog64, _mm256_cvtepu32_epi64(_mm256_castsi256_si128(meta)));
+        const __m256i mp_b = _mm256_or_si256(prog64, _mm256_cvtepu32_epi64(_mm256_extracti128_si256(meta, 1)));
+        const __m256i r02 = _mm256_unpacklo_epi64(ts_a, mp_a);
+        const __m256i r13 = _mm256_unpackhi_epi64(ts_a, mp_a);
+        const __m256i r46 = _mm256_unpacklo_epi64(ts_b, mp_b);
+        const __m256i r57 = _mm256_unpackhi_epi64(ts_b, mp_b);
+        auto slot = [&](uint64_t p) { return reinterpret_cast<__m128i*>(w.emit_slot_ptr(p)); };
+        _mm_stream_si128(slot(pos + 0), _mm256_castsi256_si128(r02));
+        _mm_stream_si128(slot(pos + 1), _mm256_castsi256_si128(r13));
+        _mm_stream_si128(slot(pos + 2), _mm256_extracti128_si256(r02, 1));
+        _mm_stream_si128(slot(pos + 3), _mm256_extracti128_si256(r13, 1));
+        _mm_stream_si128(slot(pos + 4), _mm256_castsi256_si128(r46));
+        _mm_stream_si128(slot(pos + 5), _mm256_castsi256_si128(r57));
+        _mm_stream_si128(slot(pos + 6), _mm256_extracti128_si256(r46, 1));
+        _mm_stream_si128(slot(pos + 7), _mm256_extracti128_si256(r57, 1));
+        pos += 8;
+    };
+#endif
+
     const uint64_t t0 = tsc_now();
     alignas(64) uint32_t bounce[profiler::kSpscFrameWords];
     for (uint32_t f = 0; f < nframes; f++) {
@@ -263,7 +322,11 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         if (sink) {
             w.emit_reserve(pos + profiler::kSpscFrameWords);
         }
+#if defined(__AVX2__)
+        profiler::spsc_decode_frame(s.decode, frame, emit, emit_data, profiler::SpscIgnoreProg{}, emit_zones8);
+#else
         profiler::spsc_decode_frame(s.decode, frame, emit, emit_data);
+#endif
         if ((f + 1) % kAckBatchFrames == 0) {
             s.sock->pop(kAckBatchFrames * profiler::kSpscFramePages, true);
         }

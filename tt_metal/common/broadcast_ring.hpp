@@ -154,6 +154,12 @@ public:
         }
 
         /**
+         * @brief Address of the slot at @p pos, for direct-emit bulk stores built outside the ring
+         *        (same reserve/commit contract and the same non-temporal caveats as emit_store).
+         */
+        [[nodiscard]] void* emit_slot_ptr(uint64_t pos) noexcept { return &view_.slot_at(pos); }
+
+        /**
          * @brief Direct emit, step 3: publish items [position(), pos) and settle the claim to the
          *        committed position. Does not wake readers; see wake_readers().
          */
