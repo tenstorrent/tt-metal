@@ -547,21 +547,54 @@ info "Container build finished in $(( (SECONDS - start_ts) / 60 ))m $(( (SECONDS
 # ----------------------------------------------------------------------------
 # Optional last mile: put the tree on the real (slow) shared filesystem
 # ----------------------------------------------------------------------------
-# Two things make this materially faster and safer than a plain in-place rsync.
+# Two things make this safer and more deterministic than a plain in-place rsync,
+# and (for the fan-out) genuinely faster.
 #
 # (1) ATOMIC SWAP (default; --sync-in-place opts out)
 #     We never rsync over the live tree. We build a complete copy at
 #     "${SYNC_TO}.new" and then rename it into place. Two independent reasons:
 #
-#     * Performance. rsync into an existing tree where essentially every file
-#       differs -- which is exactly what a fresh rebuild produces, since content
-#       and mtimes all change -- costs a per-file quick-check stat plus a
-#       write-to-temp-then-rename dance to replace the file safely. That is
-#       strictly more round trips per file than a straight CREATE into an empty
-#       directory, and on a latency-bound mount that overhead compounds across
-#       thousands of files. Measured live: 42m59s into an empty destination, then
-#       95m45s into a populated one. Writing into a guaranteed-fresh .new
-#       directory restores the empty-destination case on *every* run.
+#     * Determinism, plus a performance effect we have NOT cleanly isolated.
+#       Writing into a guaranteed-empty .new directory makes every run behave
+#       like a first-ever copy: an exact mirror of the source, with no residue
+#       from previous syncs and no dependence on what was already there.
+#
+#       Be careful with the performance story. An earlier version of this comment
+#       (and of the commit message that introduced it) claimed that overwriting
+#       an existing file pays a write-to-temp-then-rename cost that a brand-new
+#       file avoids. That is wrong. Without --inplace, rsync ALWAYS stages a
+#       transfer into a temp file (".<name>.XXXXXX" in the destination directory)
+#       and renames it into place, whether or not the destination file already
+#       existed -- that is its default safety mechanism, and --inplace is the
+#       opt-in flag that skips it. So temp+rename cannot distinguish the two
+#       cases. Note also that --whole-file is already the default for
+#       local-to-local transfers, so rsync does not read existing destination
+#       files back to checksum them either.
+#
+#       What genuinely differs with a populated destination is smaller: (a) the
+#       generator's lstat returns attributes instead of ENOENT, and the quick
+#       check that follows is a local comparison of data already fetched, not an
+#       extra round trip; (b) the final rename replaces an existing directory
+#       entry, so the server must also drop the old inode's link count and free
+#       its blocks -- real work that a rename into an unused name skips; (c)
+#       mutating already-populated directories churns more metadata and
+#       invalidates the client's directory/attribute cache more often, which can
+#       turn lookups that would have been cache hits into round trips. All real
+#       on a latency-bound mount; none obviously a 2x effect.
+#
+#       The live numbers (42m59s into an empty destination, 95m45s into a
+#       populated one) are NOT a controlled experiment: n=1 each, different times
+#       of night, and independently observed higher cluster load on the second.
+#       The second run also copied strictly LESS data (it had the .cpmcache
+#       exclude), which cuts against a purely mechanical explanation. Treat
+#       "fresh destination is faster" as plausible and directionally supported,
+#       not established; the correctness argument below is what actually carries
+#       this design. To settle the perf question, A/B both modes back-to-back in
+#       one load window and diff `nfsstat -c` RPC counts around each.
+#
+#       Honest accounting: the swap is not free. It trades overwrite cost for an
+#       `rm -rf` of the old tree -- thousands of NFS unlinks -- but moves that
+#       cost AFTER the new tree is live, so it never delays usability.
 #
 #     * Correctness. Another node reading ${SYNC_TO} while a plain rsync is
 #       mid-flight sees a half-written, unusable tree. rename(2) is atomic, so a
@@ -597,8 +630,9 @@ if [[ -n "${SYNC_TO}" ]]; then
   if (( SYNC_IN_PLACE )); then
     SYNC_DEST="${SYNC_TO}"
     warn "--sync-in-place: writing directly over '${SYNC_TO}'. Concurrent readers on other \
-nodes may observe a partially written tree, and overwriting a populated destination measured \
-~2.2x slower than writing a fresh one on this filesystem."
+nodes may observe a partially written tree. This path may also be slower than the fresh-copy \
+default when the destination is already populated, but that effect is not cleanly measured -- \
+see the comment above the sync step."
   else
     SYNC_DEST="${SYNC_TO}.new"
     SYNC_OLD="${SYNC_TO}.old"
