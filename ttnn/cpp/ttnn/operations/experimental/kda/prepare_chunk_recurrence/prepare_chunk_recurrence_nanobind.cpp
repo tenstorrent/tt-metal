@@ -39,7 +39,8 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
-                Compute-kernel configuration.
+                Compute-kernel configuration. Defaults to HiFi4 with approximate
+                math and FP32 destination accumulation.
             output_bf16_mask (int): Bit mask selecting BFLOAT16 storage for outputs.
                 Bits 0, 1, 2, 4, and 5 are supported; unselected outputs use FLOAT32.
                 Defaults to 0.
