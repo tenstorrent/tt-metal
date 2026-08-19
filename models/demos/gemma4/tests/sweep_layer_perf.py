@@ -100,10 +100,15 @@ TEST_NAME = "test_prefill_layer_perf_chunk_n"
 PROFILER_REPORTS = Path("generated/profiler/reports")
 DEFAULT_OUT_ROOT = Path("generated/gemma4_layer_perf")
 
-# 256k in 4096-token chunks, matching PERF_CONTEXT_LEN / LONG_CONTEXT_CHUNK in the test.
-CHUNK = 4096
-CONTEXT_LEN = int(os.environ.get("GEMMA4_PERF_CONTEXT_LEN", 262144))
+# Must match PERF_CONTEXT_LEN / LONG_CONTEXT_CHUNK in the test, which are constants there.
+# The chunk is tied to CP (window 1024 * CP 8) on the 8x4 mesh this sweep targets.
+CHUNK = 8192
+CONTEXT_LEN = 262144
 N_CHUNKS = CONTEXT_LEN // CHUNK
+# Match the test's warmup_iters / token_source params; both appear in the node id, so
+# neither is optional.
+WARMUP_ITERS = 5
+TOKEN_SOURCE = "text"
 
 # 31B's layer mix, for the whole-model extrapolation.
 N_GLOBAL, N_SLIDING = 10, 50
@@ -161,7 +166,18 @@ def signposts(tag, chunk_idx):
 
 
 def node_id(chunk_param, type_param, mesh):
-    return f"{TEST_FILE}::{TEST_NAME}[blackhole-{chunk_param}-{type_param}-{mesh}]"
+    """The test's pytest node id for one cell.
+
+    pytest orders parametrize ids bottom-decorator-first, with the arch prepended by
+    conftest. The test stacks chunk_idx (bottom), layer_type, chunk_size, context_len,
+    warmup_iters, token_source, then mesh (top), so this suffix has to track that order --
+    and the values have to match the test's params, which is what CHUNK / CONTEXT_LEN /
+    WARMUP_ITERS / TOKEN_SOURCE above are for.
+    """
+    return (
+        f"{TEST_FILE}::{TEST_NAME}[blackhole-{chunk_param}-{type_param}-sz{CHUNK}"
+        f"-ctx_{CONTEXT_LEN // 1024}k-warm{WARMUP_ITERS}-{TOKEN_SOURCE}-{mesh}]"
+    )
 
 
 def new_report_dirs(before):
@@ -212,22 +228,32 @@ def run_pytest(cmd, env, log_path, watch_reports):
 def run_timings(chunk_idxs, args, out_root, env_base):
     """One unprofiled run over every requested chunk, in order.
 
-    Contiguous from 0 means the test's cache fill costs nothing extra and every measured
-    chunk attends over a prefix this same run wrote.
+    The whole curve goes through the ``chunkall`` param, which walks every depth inside a
+    single model load and lets each measured chunk attend over a prefix that same run
+    wrote. A subset has no such param, so it becomes one node id per chunk -- correct, but
+    it pays a model load and a cache fill per chunk.
     """
     phase_dir = out_root / "timings"
     meta_path = phase_dir / "meta.json"
     log_path = phase_dir / "pytest.log"
 
     env = dict(env_base)
-    env["GEMMA4_PERF_CHUNKS"] = ",".join(str(c) for c in chunk_idxs)
     # The unprofiled pass is the reference, so it pays for the exact prefix.
     env["GEMMA4_PERF_KV_FILL"] = "replay"
     # No profiler: TT_METAL_DEVICE_PROFILER is deliberately absent so replays stay cheap.
     env.pop("TT_METAL_DEVICE_PROFILER", None)
 
-    cmd = [sys.executable, "-m", "pytest", node_id("chunkall", "both", args.mesh), "-sv", "--timeout=0"]
-    label = f"timings: {len(chunk_idxs)} chunks ({chunk_idxs[0]}..{chunk_idxs[-1]}), both layer types, unprofiled"
+    whole_curve = chunk_idxs == list(range(N_CHUNKS))
+    targets = (
+        [node_id("chunkall", "both", args.mesh)]
+        if whole_curve
+        else [node_id(f"chunk{c}", "both", args.mesh) for c in chunk_idxs]
+    )
+    cmd = [sys.executable, "-m", "pytest", *targets, "-sv", "--timeout=0"]
+    label = (
+        f"timings: {len(chunk_idxs)} chunks ({chunk_idxs[0]}..{chunk_idxs[-1]}), both layer types, unprofiled"
+        f"{'' if whole_curve else f' -- {len(targets)} separate model loads'}"
+    )
 
     if meta_path.exists() and not args.force:
         existing = json.loads(meta_path.read_text())
@@ -235,7 +261,7 @@ def run_timings(chunk_idxs, args, out_root, env_base):
             print(f"  [skip] {label} — already complete (--force to redo)")
             return existing
     if args.dry_run:
-        print(f"  [dry-run] {label}\n    {' '.join(cmd)}\n    GEMMA4_PERF_CHUNKS={env['GEMMA4_PERF_CHUNKS']}")
+        print(f"  [dry-run] {label}\n    {' '.join(cmd)}")
         return {"status": "dry-run", "cmd": cmd}
 
     print(f"  [run ] {label}")
@@ -244,7 +270,7 @@ def run_timings(chunk_idxs, args, out_root, env_base):
     record = {
         "phase": "timings",
         "cmd": cmd,
-        "env_overrides": {"GEMMA4_PERF_CHUNKS": env["GEMMA4_PERF_CHUNKS"], "GEMMA4_PERF_KV_FILL": "replay"},
+        "env_overrides": {"GEMMA4_PERF_KV_FILL": "replay"},
         "chunks": chunk_idxs,
         "results": {f"{tag}/chunk{idx}": fields for (tag, idx), fields in results.items()},
         **outcome,
@@ -275,7 +301,6 @@ def run_profile_chunk(chunk_idx, args, out_root, env_base):
     # cost 126 extra profiled replays. Cross-check a profiled cell against the
     # replay-filled timing for the same chunk in summary.csv.
     env["GEMMA4_PERF_KV_FILL"] = "random"
-    env["GEMMA4_PERF_WARMUP_ITERS"] = str(args.profile_warmup)
 
     cmd = [
         sys.executable,
@@ -306,11 +331,7 @@ def run_profile_chunk(chunk_idx, args, out_root, env_base):
         "phase": "profile",
         "chunk_idx": chunk_idx,
         "cmd": cmd,
-        "env_overrides": {
-            "GEMMA4_PERF_KV_FILL": "random",
-            "GEMMA4_PERF_WARMUP_ITERS": str(args.profile_warmup),
-            **TRACY_ENV,
-        },
+        "env_overrides": {"GEMMA4_PERF_KV_FILL": "random", **TRACY_ENV},
         "results": {f"{tag}/chunk{idx}": fields for (tag, idx), fields in results.items()},
         **outcome,
     }
@@ -545,7 +566,7 @@ Re-run one cell — the chunk index is a pytest param, so it is addressable dire
 ```
 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \\
   python -m tracy -p -r -v -m pytest \\
-  '{test_file}::{test_name}[blackhole-chunk7-global-4x8]' -sv
+  '{test_file}::{test_name}[blackhole-chunk7-global-8x4]' -sv
 ```
 
 ## Reading the numbers
@@ -599,14 +620,7 @@ def main():
         help="'timings' is the fast unprofiled depth curve, 'profile' the per-chunk per-op "
         "breakdowns, 'both' (default) runs the curve first",
     )
-    parser.add_argument(
-        "--profile-warmup",
-        type=int,
-        default=2,
-        help="warm replays per cell in the profiled phase (default 2; the profiler records "
-        "every replay, so this is kept below the unprofiled default of 5)",
-    )
-    parser.add_argument("--mesh", default="4x8", help="mesh id in the pytest node id (default 4x8)")
+    parser.add_argument("--mesh", default="8x4", help="mesh id in the pytest node id (default 8x4)")
     parser.add_argument("--out-root", default=str(DEFAULT_OUT_ROOT), help=f"default {DEFAULT_OUT_ROOT}")
     parser.add_argument(
         "--run-id",
