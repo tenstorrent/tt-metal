@@ -775,7 +775,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
     },
     "perf_eltwise_unary_sfpu_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "approx_mode",
             "data_copy_type",
@@ -791,12 +791,14 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.register_B",
             "formats.sfpu_math",
             "implied_math_format",
+            "input_format",
             "loop_factor",
             "marker",
             "mathop",
             "num_faces",
             "num_faces_A",
             "num_faces_B",
+            "output_format",
             "tile_cnt",
             "unpack_to_dest",
             "unpacker_engine_sel",
