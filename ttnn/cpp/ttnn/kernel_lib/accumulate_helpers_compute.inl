@@ -103,6 +103,56 @@ ALWI void BlockAccumulate::run_seeded(uint32_t cb_seed, uint32_t num_tiles) {
     cb_push_back(cb_out_, granularity_);
 }
 
+ALWI void sum_blocks(uint32_t cb_in, uint32_t cb_out, uint32_t num_blocks, uint32_t block_num_tiles) {
+    cb_wait_front(cb_in, num_blocks * block_num_tiles);
+    cb_reserve_back(cb_out, block_num_tiles);
+
+    // Odd block count: block 0 seeds DST via copy_tile and the PAIR loop starts at block 1, so
+    // every add_tiles below has a real partner block. Even count: pairs start at block 0 and
+    // accumulate onto DST's zero start (see the banner's DST-zero invariant).
+    const bool seed_first_block = (num_blocks % 2) != 0;
+    const uint32_t first_pair_block = seed_first_block ? 1 : 0;
+
+    if (!seed_first_block) {
+        add_tiles_init(cb_in, cb_in, true);
+    }
+
+    uint32_t tiles_done = 0;
+    while (tiles_done < block_num_tiles) {
+        const uint32_t n =
+            (block_num_tiles - tiles_done) < DEST_AUTO_LIMIT ? (block_num_tiles - tiles_done) : DEST_AUTO_LIMIT;
+        tile_regs_acquire();
+        if (seed_first_block) {
+            copy_tile_init(cb_in);
+            for (uint32_t i = 0; i < n; ++i) {
+                copy_tile(cb_in, tiles_done + i, i);
+            }
+            // copy_tile_init reprogrammed the unpacker, so re-establish the add per chunk.
+            add_tiles_init(cb_in, cb_in, true);
+        }
+        for (uint32_t block = first_pair_block; block < num_blocks; block += 2) {
+            for (uint32_t i = 0; i < n; ++i) {
+                add_tiles(
+                    cb_in,
+                    cb_in,
+                    block * block_num_tiles + tiles_done + i,
+                    (block + 1) * block_num_tiles + tiles_done + i,
+                    i);
+            }
+        }
+        tile_regs_commit();
+
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; ++i) {
+            // In-order pack mode: the output index would be ignored (see run_chunked's note).
+            pack_tile(i, cb_out);
+        }
+        tile_regs_release();
+        tiles_done += n;
+    }
+    cb_push_back(cb_out, block_num_tiles);
+}
+
 ALWI void BlockAccumulate::run_chunked(uint32_t num_tiles, uint32_t out_capacity) {
     cb_wait_front(cb_a_, granularity_);
     cb_wait_front(cb_b_, granularity_);

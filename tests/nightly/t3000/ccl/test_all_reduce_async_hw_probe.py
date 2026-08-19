@@ -17,7 +17,6 @@ import ttnn
 from tests.nightly.tg.ccl.test_all_reduce_async import run_all_reduce_with_mesh_tensor_along_row
 
 
-@pytest.mark.parametrize("num_devices_per_line", [4])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("per_chip_output_shape", [([1, 1, 32, 256]), ([1, 1, 64, 512])])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
@@ -25,7 +24,16 @@ from tests.nightly.tg.ccl.test_all_reduce_async import run_all_reduce_with_mesh_
 @pytest.mark.parametrize("buffer_type", [ttnn.BufferType.DRAM])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("num_iters", [2])  # >1 so the program-cache-hit path is exercised too
-@pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4_line")], indirect=True)
+# NOTE: a (1, 3) line would give an ODD block count in the reduction kernel (num_blocks = ring
+# size) — the path whose pre-migration branch was an empty "TODO: Future support" — but a 3-chip
+# submesh of a ring-wired 4-chip box cannot complete fabric router init (the boundary router
+# handshakes through the excluded chip), so the odd path stays covered by construction only: it is
+# the same copy_tile-seed idiom as BlockAccumulate::run_seeded, which is silicon-verified.
+@pytest.mark.parametrize(
+    "num_devices_per_line, mesh_device",
+    [pytest.param(4, (1, 4), id="1x4_line")],
+    indirect=["mesh_device"],
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_reduce_async_hw_line(
     mesh_device,
