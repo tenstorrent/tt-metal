@@ -51,6 +51,15 @@ StreamPlacementInputs express_full_placement() {
         .tensix_relay_present = false};
 }
 
+// The shape a 2D mesh with VC2 and no intermesh actually builds: VC2 present, VC1 entirely absent.
+StreamPlacementInputs vc2_without_vc1_placement() {
+    return StreamPlacementInputs{
+        .max_sender_counts = {4, 0, 1},
+        .max_receiver_counts = {1, 0, 1},
+        .vc2_present = true,
+        .tensix_relay_present = false};
+}
+
 StreamPlacementInputs express_vc1_absent_placement() {
     return StreamPlacementInputs{
         .max_sender_counts = {5, 0, 0},
@@ -92,18 +101,45 @@ TEST(StreamAssignmentTest, Legacy2DFitsAndPlacesDeterministically) {
 TEST(StreamAssignmentTest, ExpressFullFitsWithVc1OnCounters) {
     CreditTransportPlan plan{};
     plan.vc1_uses_counters = true;
+    plan.vc2_uses_counters = true;
     const auto a = make_stream_assignment(stream_requirements(express_full_placement(), plan));
-    // 2 receivers + 5 acked + 5 completed + 8 downstream + 9 sender-free = 29, under the pinned
-    // region, with the VC2 sender/receiver live on their pinned ids.
-    EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 1, 3), 28u);
+    // 3 receivers (VC1 and VC2 both have one, so VC2's lands on channel 2) + 5 acked + 5 completed
+    // + 8 downstream + 9 sender-free = 30, exactly filling the region below the pinned pair, with
+    // the VC2 sender/receiver live on their pinned ids. No margin left here.
+    EXPECT_EQ(a.id(StreamRole::RECEIVER_PKTS_SENT, 2, 0), 2u);
+    EXPECT_EQ(a.id(StreamRole::SENDER_FREE_SLOTS, 1, 3), 29u);
     EXPECT_FALSE(a.has(StreamRole::SENDER_PKTS_COMPLETED, 1, 0));
     EXPECT_FALSE(a.has(StreamRole::SENDER_PKTS_ACKED, 1, 0));
+}
+
+TEST(StreamAssignmentTest, Vc2ReceiverTakesChannelOneWhenVc1IsAbsent) {
+    // The kernel densifies VC2's receiver onto channel 1 when VC1 has none, and indexes
+    // to_receiver_packets_sent_streams by channel. Keying this role by VC instead left channel 1
+    // unassigned in exactly this shape, so the sending router incremented the out-of-range sentinel
+    // and the receiver polled it forever with the packets already across the link.
+    CreditTransportPlan plan{};
+    plan.vc2_uses_counters = true;
+    const auto a = make_stream_assignment(stream_requirements(vc2_without_vc1_placement(), plan));
+    EXPECT_TRUE(a.has(StreamRole::RECEIVER_PKTS_SENT, 1, 0));
+    EXPECT_LT(a.id(StreamRole::RECEIVER_PKTS_SENT, 1, 0), k_unused_stream_id);
+    // Channel 2 stays empty: only VC0 and VC2 have receivers, so they occupy channels 0 and 1.
+    EXPECT_FALSE(a.has(StreamRole::RECEIVER_PKTS_SENT, 2, 0));
 }
 
 TEST(StreamAssignmentTest, ExpressFullWithVc1OnRegistersOverruns) {
     // The maximal express configuration with VC1 on registers needs 33: the counters decision is
     // load-bearing, and the overrun now reads as a legible message instead of a late take_spare.
-    EXPECT_ANY_THROW(make_stream_assignment(stream_requirements(express_full_placement(), CreditTransportPlan{})));
+    // VC2 stays on counters so the register budget is what fails here, not the VC2 transport guard.
+    CreditTransportPlan plan{};
+    plan.vc2_uses_counters = true;
+    EXPECT_ANY_THROW(make_stream_assignment(stream_requirements(express_full_placement(), plan)));
+}
+
+TEST(StreamAssignmentTest, Vc2OnRegistersIsRefused) {
+    // VC2's sender is flat position 9, one past the completed table's declared extent, so it has no
+    // completion register. A plan that puts it on registers must fail here rather than silently
+    // handing its sender a sentinel to poll while the receiver acks through counters.
+    EXPECT_ANY_THROW(stream_requirements(express_full_placement(), CreditTransportPlan{}));
 }
 
 TEST(StreamAssignmentTest, BoundaryOnRegistersStatesFullNeedAndHitsTheBudgetWall) {
@@ -170,6 +206,7 @@ TEST(StreamAssignmentTest, Vc0OnCountersNeedsNoAcks) {
 TEST(StreamAssignmentTest, PinnedIdThirtyHasAtMostOneLiveConsumer) {
     CreditTransportPlan plan{};
     plan.vc1_uses_counters = true;
+    plan.vc2_uses_counters = true;
     auto need = stream_requirements(express_full_placement(), plan);  // vc2_present == true
     need.tensix_relay_present = true;
     EXPECT_ANY_THROW(make_stream_assignment(need));
@@ -178,10 +215,11 @@ TEST(StreamAssignmentTest, PinnedIdThirtyHasAtMostOneLiveConsumer) {
 TEST(StreamAssignmentTest, EmittedNameSetIsExactlyTheKernelSet) {
     const auto a = make_stream_assignment(stream_requirements(legacy_2d_placement(), CreditTransportPlan{}));
     const auto names = emitted_names(a);
-    // 2 receiver + 5 acked + 9 completed + 8 downstream + 10 sender-free + 2 pinned + 2 scratch,
+    // 3 receiver + 5 acked + 9 completed + 8 downstream + 10 sender-free + 2 pinned + 2 scratch,
     // derived from the declared extents rather than pinned as a count.
     EXPECT_EQ(names.size(), num_stream_register_names);
     EXPECT_TRUE(names.contains("TO_RECEIVER_0_PKTS_SENT_ID"));
+    EXPECT_TRUE(names.contains("TO_RECEIVER_2_PKTS_SENT_ID"));
     EXPECT_TRUE(names.contains("TO_SENDER_8_PKTS_COMPLETED_ID"));
     EXPECT_TRUE(names.contains("SENDER_CHANNEL_9_FREE_SLOTS_STREAM_ID"));
     EXPECT_TRUE(names.contains("VC2_RECEIVER_FREE_SLOTS_STREAM_ID"));

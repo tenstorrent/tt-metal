@@ -16,19 +16,15 @@
 
 namespace tt::tt_fabric {
 
-// Source-rooted reverse trees for indexed multicast.
+// Source-rooted reverse trees for indexed multicast: T(root) is the union over every destination of
+// the canonical route from root along one axis. Where that union is an arborescence, a worker can
+// encode a multicast by walking the edge list once from the leaves inward, setting a parent's output
+// when its subtree holds a requested target.
 //
-// T(root) is the union over every destination of R(root, dst) along one axis: a representation of the
-// canonical routes, not a new policy. Where that union is an arborescence, a worker can encode a
-// multicast by walking the edge list once from the leaves inward, setting a parent's output exactly
-// when the parent's subtree holds a requested target. That requires each row to have a single parent,
-// which is what the gate below establishes.
-//
-// Machine-free: the declared topology comes from MeshGraph and the canonical next hop from
-// ExpressRingTopology, so a fixture can be checked without a cluster.
+// Topology comes from MeshGraph and canonical next hops from ExpressRingTopology, so a fixture can be
+// checked without a cluster.
 
-// Host form of one edge, oriented child -> parent, carrying the command the parent issues to reach
-// the child. The packed 16-bit device descriptor is a later artifact.
+// One edge, oriented child -> parent, carrying the command the parent issues to reach the child.
 struct McastTreeEdge {
     int child = 0;
     int parent = 0;
@@ -39,14 +35,14 @@ struct McastReverseTree {
     int root = 0;
     int axis_dim = 0;
     int axis_len = 0;
-    // Serialized descendants-before-ancestors: an edge appears only after every edge in its child's
-    // subtree, which is what makes the worker's single reverse pass correct.
+    // Ordered descendants-before-ancestors: an edge appears only after every edge in its child's
+    // subtree, which is what the worker's single reverse pass requires.
     std::vector<McastTreeEdge> edges;
 };
 
 // The tree rooted at `root`, or nullopt with `failure` set when the canonical routes out of that root
-// are not an arborescence. That is a property of the topology and its route policy, not a bad
-// argument, so it is reported rather than thrown.
+// are not an arborescence. That is a topology property rather than a bad argument, so it is reported
+// rather than thrown.
 std::optional<McastReverseTree> build_mcast_reverse_tree(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
@@ -54,8 +50,8 @@ std::optional<McastReverseTree> build_mcast_reverse_tree(
     int root,
     std::string* failure = nullptr);
 
-// Mesh-wide gate: every root on the axis must yield an arborescence. V1 runs one encoder, so a single
-// failing root rejects the mesh rather than selecting a different representation for it.
+// Mesh-wide gate: every root on the axis must yield an arborescence. Only one encoder exists, so a
+// single failing root rejects the mesh.
 struct ArborescenceGateResult {
     bool passed = false;
     int failing_root = -1;                // -1 when passed
@@ -69,19 +65,15 @@ ArborescenceGateResult run_mcast_arborescence_gate(
 // The one-hot IndexedMeshRoutingFields::ACTION_* bit a hop in this direction asks a router to take.
 std::uint8_t mcast_action_bit(RoutingDirection direction);
 
-// Packed device descriptor. The Y bound of 64 is what fixes the two 6-bit row fields:
+// Packed device descriptor. The 64-row bound fixes the two 6-bit row fields:
 //
 //   bits  0..5   child
 //   bits  6..11  parent
 //   bits 12..13  parent_output, the axis 2-bit code (Y: N/S/Z, X: E/W) the parent issues
 //   bits 14..15  reserved, zero
-//
-// parent_output reuses the existing IndexedMeshRoutingFields 2-bit vector encodings, so a descriptor
-// and a unicast vector name a direction the same way.
 inline constexpr int MCAST_TREE_MAX_AXIS_LEN = 64;
 
-// Host spelling of the accessors that live with the device decode in fabric_common.h, not a second
-// copy of the layout.
+// Host spelling of the accessors that live with the device decode in fabric_common.h.
 constexpr int mcast_tree_edge_child(std::uint16_t packed) { return IndexedMeshRoutingFields::mcast_edge_child(packed); }
 constexpr int mcast_tree_edge_parent(std::uint16_t packed) {
     return IndexedMeshRoutingFields::mcast_edge_parent(packed);
@@ -90,32 +82,26 @@ constexpr std::uint8_t mcast_tree_edge_output(std::uint16_t packed) {
     return IndexedMeshRoutingFields::mcast_edge_output(packed);
 }
 
-// Serializes the edge list for the device, enforcing the packing obligations: the axis bound, a
-// direction representable on this axis, and descendants-before-ancestors order. A wrong order does
-// not fail on device, it silently drops branches from the encoded map, so it is rejected here.
+// Serializes the edge list for the device, checking the axis bound, that each direction is
+// representable on its axis, and descendants-before-ancestors order. A wrong order silently drops
+// branches on device rather than failing, so it is rejected here.
 std::optional<std::vector<std::uint16_t>> pack_mcast_reverse_tree(
     const McastReverseTree& tree, std::string* failure = nullptr);
 
-// The encode pass, host side: one action byte per row, holding the OR of the outputs that row
-// must drive to reach every requested target. Walks the edge list once from the leaves inward, taking
-// an edge exactly when its child subtree still holds something needed, so the result is
-// union(R(root, target)) over the requested targets.
+// Host reference for the worker's encode pass: one action byte per row, holding the OR of the outputs
+// that row must drive to reach every requested target. The device version differs only in using fixed
+// uint32_t bitmaps rather than vectors.
 //
-// `targets` is indexed by row; an entry for the root is never reached, since no edge enters the root.
-// LOCAL_DELIVER is not set here: it cannot be derived from the expanded `needed` set, because a row
-// can be needed purely as a transit parent.
-//
-// Host reference for the worker loop; the device version differs only in using fixed uint32_t bitmaps
-// rather than vectors.
+// `targets` is indexed by row. LOCAL_DELIVER is not set here, since a row can be needed purely as a
+// transit parent.
 std::vector<std::uint8_t> encode_mcast_axis_actions(const McastReverseTree& tree, const std::vector<bool>& targets);
 
-// The directions a same-mesh multicast leaves its source on: the set eth bits of the canonical root
-// action, as routing directions. Runs the same encoder the worker runs, over trees embedded as the
-// device sees them, so a host opening one connection per returned direction opens exactly the set the
-// worker injects on.
+// The directions a same-mesh multicast leaves its source on, from the eth bits of the root action.
+// Runs the same encoder the worker runs, so a host opening one connection per returned direction opens
+// exactly the set the worker injects on.
 //
-// More than one is ordinary under express routing: a single northward range can leave on both N and
-// Z. Empty means a local-only range, which is legal and delivers at the source alone.
+// More than one is ordinary under express routing, e.g. a northward range leaving on both N and Z.
+// Empty means a legal local-only range that delivers at the source alone.
 std::vector<RoutingDirection> mcast_root_output_directions(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
@@ -129,16 +115,14 @@ std::vector<RoutingDirection> mcast_root_output_directions(
     int w_hops,
     std::string* failure = nullptr);
 
-// Writes this chip's two trees -- T(my_y) on the Y axis and T(my_x) on the X axis -- into its indexed
-// vector table at the offsets the device loader reads. The unicast vectors are mesh-identical and
-// generated once; these differ per chip and are written per chip over the same buffer.
+// Writes this chip's two trees -- T(my_y) and T(my_x) -- into its indexed vector table at the offsets
+// the device loader reads. Unlike the mesh-identical unicast vectors, these are written per chip.
 //
-// This doubles as the mesh-wide gate: every root on an axis is some chip's own root, so refusing to
-// embed a non-arborescent tree here rejects exactly the meshes the gate would reject, at O(axis^2)
-// per chip instead of re-running the full O(axis^3) sweep for each one.
+// This also serves as the mesh-wide gate, since every root on an axis is some chip's own root: refusing
+// a non-arborescent tree here rejects exactly the meshes the full sweep would, at O(axis^2) per chip.
 //
 // Returns false with `failure` set on a non-arborescent root, an axis past the packing bound, or a
-// shape whose hybrid layout does not fit the slot, which is anything past [64,4].
+// shape whose hybrid layout does not fit the slot.
 bool embed_mcast_reverse_trees(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,

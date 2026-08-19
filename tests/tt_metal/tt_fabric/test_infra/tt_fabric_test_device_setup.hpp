@@ -35,7 +35,10 @@ using FabricMuxConfig = tt::tt_fabric::FabricMuxConfig;
 
 namespace tt::tt_fabric::fabric_tests {
 
-inline constexpr std::size_t MAX_MCAST_INJECTIONS = 4;
+// Ceiling on the copies a multicast root injects: the codec names at most one output edge each of
+// E/W/N/S/Z. Kernels clamp their own copy to the connection array size; builds without Z links size
+// for four and also never produce a fifth direction.
+inline constexpr std::size_t MAX_MCAST_INJECTIONS = 5;
 
 // ConnectionKey identifies a unique physical fabric connection from this src device.
 // (direction, link_idx) maps 1:1 to a specific eth channel (eth_chan); we store eth_chan
