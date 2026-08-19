@@ -370,9 +370,13 @@ def test_llama_model_inference(
                 # tt_out_tok is a tuple of (tt_out_tok, tt_log_probs)
                 tt_out_tok_device0 = ttnn.get_device_tensors(tt_out_tok[0])[0]
                 tt_out_tok_cpu = tt_out_tok_device0.cpu(blocking=True, cq_id=0)
-                tt_out_tok = ttnn.to_torch(
-                    tt_out_tok_cpu,
-                ).view(32, 1)
+                tt_out_tok = (
+                    ttnn.to_torch(
+                        tt_out_tok_cpu,
+                    )
+                    .view(32, 1)
+                    .long()
+                )
 
                 all_outputs.append(tt_out_tok.squeeze(1).tolist()[0])  # Update generated token to list of TT outputs
                 tt_decode_input = embd(tt_out_tok)
