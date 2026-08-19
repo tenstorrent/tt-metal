@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import json
 import argparse
+import json
 
 from models.tt_transformers.tt.model_config import parse_optimizations
 
