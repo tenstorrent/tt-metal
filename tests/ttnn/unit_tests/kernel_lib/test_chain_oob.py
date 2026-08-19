@@ -68,7 +68,7 @@ def test_dst_overflow_halfsync_bf16(device, expect_error):
     """D8 is not < 8 (half-sync bf16 limit) -> the per-element static_assert must fire."""
     with expect_error(Exception, DST_OVERFLOW_MSG):
         _run_identity_copy(device, slot=8, num_tiles=4, fp32_dest_acc_en=False, dst_full_sync_en=False)
-    logger.info("D8 over half-sync bf16 limit correctly rejected at compile time")
+    logger.debug("D8 over half-sync bf16 limit correctly rejected at compile time")
 
 
 # =============================================================================
@@ -85,7 +85,7 @@ def test_dst_slot5_overflow_fp32(device, expect_error):
     """Same slot under fp32_dest_acc (limit 4): 5 is not < 4 -> must fail to compile."""
     with expect_error(Exception, DST_OVERFLOW_MSG):
         _run_identity_copy(device, slot=5, num_tiles=4, fp32_dest_acc_en=True, dst_full_sync_en=False)
-    logger.info("fp32: slot=5 over fp32 half-sync limit (4) correctly rejected")
+    logger.debug("fp32: slot=5 over fp32 half-sync limit (4) correctly rejected")
 
 
 # =============================================================================

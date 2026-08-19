@@ -14,11 +14,29 @@ import torch
 import pytest
 import ttnn
 from loguru import logger
-from tests.ttnn.utils_for_testing import comp_pcc
+from tests.ttnn.utils_for_testing import comp_pcc, comp_ulp
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
 
 KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/block_exp.cpp"
 FIXED_BLOCK_TAIL_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/block_exp_chunked_fixed_tail.cpp"
+
+# Accuracy bound for the Exp<> (Approx::Exact) chains below, in bf16 ULPs of the float32
+# golden. PCC is scale-invariant, so it cannot catch a systematic accuracy loss on its own.
+EXP_ULP_THRESHOLD = 2
+
+
+def _assert_matches_golden(golden, actual, label):
+    """Correlation (PCC) plus accuracy (ULP) against the float32 exp golden.
+
+    The device result is bf16, so the ULP error is measured in bf16 ULPs: comp_ulp keeps the
+    float32 golden as the higher-precision reference and sizes one ULP from its bf16 cast.
+    """
+    pcc_ok, msg = comp_pcc(golden, actual, lib.pcc_threshold([ttnn.bfloat16]))
+    logger.debug(f"{label} | {msg}")
+    assert pcc_ok, msg
+    ulp_ok, ulp_msg = comp_ulp(golden, actual.to(torch.bfloat16), EXP_ULP_THRESHOLD)
+    logger.debug(f"{label} | {ulp_msg}")
+    assert ulp_ok, ulp_msg
 
 
 def _build(device, n, block_size):
@@ -53,15 +71,13 @@ def test_blocking_correctness_and_equivalence(device):
     for block_size in (1, 2, 4, 8):
         torch_in, out = _run_once(device, n, block_size)
         golden = torch.exp(torch_in)
-        pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
-        logger.info(f"blocking correctness block_size={block_size} | {msg}")
-        assert pcc_ok, msg
+        _assert_matches_golden(golden, out, f"blocking correctness block_size={block_size}")
         results[block_size] = out
 
     base = results[1]
     for bs, out in results.items():
         max_diff = (out - base).abs().max().item()
-        logger.info(f"blocking identical: block_size={bs} vs 1 -> max abs diff {max_diff}")
+        logger.debug(f"blocking identical: block_size={bs} vs 1 -> max abs diff {max_diff}")
         assert torch.equal(out, base), f"block_size={bs} diverged from block_size=1 (max diff {max_diff})"
 
 
@@ -92,9 +108,7 @@ def test_fixed_block_tail_executes_only_valid_tiles(device, n):
     valid_columns = 32 * n
     actual = ttnn.to_torch(output).to(torch.float32)[..., :valid_columns]
     golden = torch.exp(torch_in.to(torch.float32)[..., :valid_columns])
-    pcc_ok, msg = comp_pcc(golden, actual, lib.pcc_threshold([dt]))
-    logger.info(f"padded PerBlockSize tail n={n}, physical_n={physical_n} | {msg}")
-    assert pcc_ok, msg
+    _assert_matches_golden(golden, actual, f"padded PerBlockSize tail n={n}, physical_n={physical_n}")
 
 
 @pytest.mark.parametrize("Ht,Wt", [(2, 3), (2, 9)])
@@ -123,9 +137,7 @@ def test_fixed_block_tail_is_synchronized_per_row(device, Ht, Wt):
     valid_columns = 32 * Wt
     actual = ttnn.to_torch(output).to(torch.float32)[..., :valid_columns]
     golden = torch.exp(torch_in.to(torch.float32)[..., :valid_columns])
-    pcc_ok, msg = comp_pcc(golden, actual, lib.pcc_threshold([dt]))
-    logger.info(f"row-blocked tail Ht={Ht}, Wt={Wt}, physical_Wt={physical_Wt} | {msg}")
-    assert pcc_ok, msg
+    _assert_matches_golden(golden, actual, f"row-blocked tail Ht={Ht}, Wt={Wt}, physical_Wt={physical_Wt}")
 
 
 @pytest.mark.parametrize("Ht,Wt", [(2, 3), (2, 9)])
@@ -153,6 +165,4 @@ def test_clamped_block_tail_synchronizes_only_valid_tiles(device, Ht, Wt):
     output = ttnn.generic_op([tt_in, tt_out], program)
     actual = ttnn.to_torch(output).to(torch.float32)
     golden = torch.exp(torch_in.to(torch.float32))
-    pcc_ok, msg = comp_pcc(golden, actual, lib.pcc_threshold([dt]))
-    logger.info(f"clamped PerBlockSize tail Ht={Ht}, Wt={Wt} | {msg}")
-    assert pcc_ok, msg
+    _assert_matches_golden(golden, actual, f"clamped PerBlockSize tail Ht={Ht}, Wt={Wt}")

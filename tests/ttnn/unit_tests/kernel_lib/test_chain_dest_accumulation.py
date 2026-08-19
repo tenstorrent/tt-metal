@@ -88,7 +88,7 @@ def test_dest_accumulation_modes_and_lifecycle_equivalence(device, whole_shape):
                 whole_shape,
             )
             pcc_ok, message = comp_pcc(golden, out, threshold)
-            logger.info(
+            logger.debug(
                 f"DEST accumulation block={block_size}, caller_managed={caller_managed}, "
                 f"whole_shape={whole_shape} | {message}"
             )
@@ -133,7 +133,7 @@ def test_l1_accumulation_managed_and_caller_managed_are_equivalent(device):
     for caller_managed in (False, True):
         out = _run_l1_configuration(device, tt_in, caller_managed)
         pcc_ok, message = comp_pcc(golden, out, 0.999)
-        logger.info(f"L1 accumulation caller_managed={caller_managed} | {message}")
+        logger.debug(f"L1 accumulation caller_managed={caller_managed} | {message}")
         assert pcc_ok, message
         outputs[caller_managed] = out
 

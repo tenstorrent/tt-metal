@@ -62,7 +62,7 @@ def test_dest_reuse_matrix(device, reuse, op):
     golden = fn(dest, c) if reuse == 0 else fn(c, dest)  # SRCA: DEST op C ; SRCB: C op DEST
     out = ttnn.to_torch(output).to(torch.float32)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.info(f"DestReuse {_REUSE[reuse]} {_OP[op][0]} | {msg}")
+    logger.debug(f"DestReuse {_REUSE[reuse]} {_OP[op][0]} | {msg}")
     assert pcc_ok, f"{_REUSE[reuse]} {_OP[op][0]}: {msg}"
 
 
@@ -97,7 +97,7 @@ def test_ternary_where(device):
     golden = torch.where(cond_f != 0, ta.to(torch.float32), tb.to(torch.float32))
     out = ttnn.to_torch(output).to(torch.float32)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.info(f"Where ternary | {msg}")
+    logger.debug(f"Where ternary | {msg}")
     assert pcc_ok, msg
 
 
@@ -173,5 +173,5 @@ def test_unary_bcast(device, dim):
 
     out = ttnn.to_torch(output).to(torch.float32)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.info(f"UnaryBcast dim={dim} | {msg}")
+    logger.debug(f"UnaryBcast dim={dim} | {msg}")
     assert pcc_ok, msg

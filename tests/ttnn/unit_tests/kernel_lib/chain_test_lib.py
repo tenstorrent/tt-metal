@@ -18,6 +18,8 @@ import torch
 import ttnn
 
 # Tile size in bytes per dtype (tt_metal/api/tt-metalium/tt_backend_api_types.hpp).
+# bfloat8_b is a block-float format: 32*32 one-byte mantissas plus 16 shared-exponent
+# bytes per 16x16 face -> 1024 + 4*16 = 1088.
 DTYPE_TILE_BYTES = {
     ttnn.bfloat16: 2048,
     ttnn.float32: 4096,
@@ -121,7 +123,7 @@ def build_reader_asym_kernel(input_tensors, counts, core_grid):
 def build_compute_kernel_rt(
     kernel_source, compile_time_args, runtime_args, core_grid, fp32_dest_acc_en=False, dst_full_sync_en=False
 ):
-    """Compute kernel with both compile-time AND runtime args (e.g. a TileOffset base)."""
+    """Compute kernel with both compile-time AND runtime args (e.g. a TileAddressing base)."""
     rt = ttnn.RuntimeArgs()
     rt[0][0] = list(runtime_args)
     return ttnn.KernelDescriptor(

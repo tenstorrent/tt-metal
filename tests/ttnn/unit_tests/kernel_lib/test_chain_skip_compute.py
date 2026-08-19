@@ -47,7 +47,7 @@ def test_skip_compute_ordinary_walk_preserves_handshake(device, n):
     output = ttnn.to_torch(ttnn.generic_op([tt_in, tt_out], program)).to(torch.float32)
     golden = torch.exp(torch_in.to(torch.float32))
     matches, message = comp_pcc(golden, output, 0.99)
-    logger.info(f"skip ordinary n={n} | completed without deadlock | {message}")
+    logger.debug(f"skip ordinary n={n} | completed without deadlock | {message}")
     assert not matches, f"Skip output matched exp(x) ({message}); compute was not elided"
 
 
@@ -100,7 +100,7 @@ def test_skip_compute_dest_accumulation_preserves_handshake(device, whole_shape,
     reduced = (a_tiles + b_tiles).sum(dim=1)
     golden = reduced.sum(dim=0) if whole_shape else torch.cat([reduced[i] for i in range(num_outputs)], dim=-1)
     matches, message = comp_pcc(golden, output, 0.99)
-    logger.info(
+    logger.debug(
         f"skip DEST whole_shape={whole_shape}, block={block_size}, caller_managed={caller_managed} | "
         f"completed without deadlock | {message}"
     )
@@ -139,5 +139,5 @@ def test_skip_compute_l1_accumulation_preserves_handshake(device, caller_managed
     output = ttnn.to_torch(ttnn.generic_op([tt_in, tt_out], program)).to(torch.float32)
     golden = torch_in.to(torch.float32).reshape(1, 1, 32, n, 32).sum(dim=3)
     matches, message = comp_pcc(golden, output, 0.99)
-    logger.info(f"skip L1 caller_managed={caller_managed} | completed without deadlock | {message}")
+    logger.debug(f"skip L1 caller_managed={caller_managed} | completed without deadlock | {message}")
     assert not matches, f"Skip output matched the L1 accumulation ({message}); compute was not elided"

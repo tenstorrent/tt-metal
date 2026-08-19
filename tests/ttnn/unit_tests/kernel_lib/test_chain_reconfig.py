@@ -30,7 +30,7 @@ def _assert_each_tile(golden, actual, threshold, label):
         tile_slice = slice(32 * tile, 32 * (tile + 1))
         ok, message = comp_pcc(golden[..., tile_slice], actual[..., tile_slice], threshold)
         assert ok, f"{label}, tile={tile}: {message}"
-    logger.info(f"{label} | all {num_tiles} tiles passed independently")
+    logger.debug(f"{label} | all {num_tiles} tiles passed independently")
 
 
 # =============================================================================

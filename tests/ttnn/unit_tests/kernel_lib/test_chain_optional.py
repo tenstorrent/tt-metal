@@ -46,7 +46,7 @@ def test_optional_unary_gate(device):
         a, out = _run_optional_unary(device, enabled)
         golden = -a if enabled else a
         pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([ttnn.bfloat16]))
-        logger.info(f"Optional unary gate enabled={enabled} | {msg}")
+        logger.debug(f"Optional unary gate enabled={enabled} | {msg}")
         assert pcc_ok, f"gate enabled={enabled}: {msg}"
         outputs[enabled] = out
     assert torch.equal(outputs[True], -outputs[False])
@@ -119,5 +119,5 @@ def test_runtime_conditional(device, mode):
     }[mode]
     out = ttnn.to_torch(output).to(torch.float32)
     ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.info(f"runtime conditional mode={mode} | {msg}")
+    logger.debug(f"runtime conditional mode={mode} | {msg}")
     assert ok, msg

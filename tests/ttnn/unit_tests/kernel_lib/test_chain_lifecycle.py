@@ -58,7 +58,7 @@ def test_held_b_lifecycle(device, life, name):
     golden = torch_a.to(torch.float32) + torch_b.to(torch.float32).repeat(1, 1, 1, n)
     out = ttnn.to_torch(output).to(torch.float32)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.info(f"lifecycle={name} | no-hang + {msg}")
+    logger.debug(f"lifecycle={name} | no-hang + {msg}")
     assert pcc_ok, f"lifecycle {name}: {msg}"
 
 
@@ -95,7 +95,7 @@ def test_output_lifecycle(device, life, name):
     output = ttnn.generic_op([tt_in, tt_out], program)
     out = ttnn.to_torch(output).to(torch.float32)
     pcc_ok, msg = comp_pcc(torch_in.to(torch.float32), out, lib.pcc_threshold([dt]))
-    logger.info(f"output lifecycle={name} | no-hang + {msg}")
+    logger.debug(f"output lifecycle={name} | no-hang + {msg}")
     assert pcc_ok, f"output lifecycle {name}: {msg}"
 
 
@@ -135,7 +135,7 @@ def test_inplace_chain_lifecycle(device, life, name):
     output = ttnn.generic_op([tt_in, tt_out], program)
     out = ttnn.to_torch(output).to(torch.float32)
     pcc_ok, msg = comp_pcc(torch.exp(torch_in.to(torch.float32)), out, lib.pcc_threshold([dt]))
-    logger.info(f"in-place lifecycle={name} | no-hang + {msg}")
+    logger.debug(f"in-place lifecycle={name} | no-hang + {msg}")
     assert pcc_ok, f"in-place lifecycle {name}: {msg}"
 
 
@@ -192,5 +192,5 @@ def test_outer_stream_broadcast(device, Ht, Wt, fp32_dest_acc_en):
     b_v = torch_b.to(torch.float32).view(1, 1, 32, Ht, 1, 32)
     golden = (a_v + b_v).reshape(1, 1, 32, 32 * Ht * Wt)
     pcc_ok, msg = comp_pcc(golden, torch_out, 0.999)
-    logger.info(f"StreamedCol | Ht={Ht} Wt={Wt} fp32_dest_acc_en={fp32_dest_acc_en} | {msg}")
+    logger.debug(f"StreamedCol | Ht={Ht} Wt={Wt} fp32_dest_acc_en={fp32_dest_acc_en} | {msg}")
     assert pcc_ok, msg
