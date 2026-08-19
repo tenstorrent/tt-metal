@@ -496,6 +496,68 @@ def test_kimi_mla(
     )
 
 
+# Mistral-Small-4-119B: dense MLA, config hand-built from config.json (see
+# reference/mistral_small_4_119b_config.py). Random weights only — the checkpoint's fp8 scheme and
+# packed expert layout are not yet handled by the shared loader, so the adapter leaves
+# supports_pretrained off. seq5k stays under the model's 8192 original_max_position_embeddings, where
+# Mistral's position-dependent query scale (get_llama_4_attn_scale) is exactly 1.0 and therefore costs
+# nothing; seq25k crosses it and is the case that exposes ttMLA having no equivalent.
+# Mesh is (sp, tp), since run_model pins sp_axis=0 / tp_axis=1. 8x1 is the SP=8/TP=1 pipeline-stage
+# geometry; 8x4 is the whole-galaxy shape the long-seq matmul configs were tuned on.
+#
+# 8x1 must be run with an 8-chip carve, i.e. TT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7. Fabric only comes up
+# on the FULL system mesh: with all 32 chips visible, every proper submesh -- (8,1), (1,8), (4,4),
+# (1,4) -- fails fabric router sync under STRICT_INIT, RELAXED_INIT and DYNAMIC_RECONFIG alike, while
+# (8,4) opens. Restricting the visible set makes those 8 chips the full mesh and (8,1) opens.
+# See mistral4_bringup/probe_mesh_shapes.py.
+@pytest.mark.parametrize("mesh_device", [(8, 1), (8, 4)], ids=["8x1", "8x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+        },
+    ],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
+@pytest.mark.parametrize("scale_down_sl", [False], ids=["max_sl"])
+@pytest.mark.parametrize("seq_len", [5 * 1024, 25 * 1024], ids=["seq5k", "seq25k"])
+@pytest.mark.parametrize("skip_host_comparison", [False], ids=["check_pcc"])
+@pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
+@pytest.mark.parametrize("variant", ["mistral_small_4_119b"], indirect=True, ids=["mistral4"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole")
+@pytest.mark.timeout(0)
+def test_mistral4_mla(
+    use_pretrained,
+    request,
+    mesh_device,
+    seq_len,
+    skip_host_comparison,
+    scale_down_sl,
+    is_balanced,
+    is_ci_env,
+    is_ci_v2_env,
+    device_params,
+    variant,
+):
+    run_model(
+        variant,
+        use_pretrained,
+        request,
+        mesh_device,
+        seq_len,
+        skip_host_comparison,
+        scale_down_sl,
+        is_balanced,
+        is_ci_env,
+        is_ci_v2_env,
+        device_params,
+    )
+
+
 # ---------------------------------------------------------------------------------------------------
 # Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+ring_mla -> compare)
 # parametrized by where the prefix/reference come from. See test_mla_chunked_prefill below.

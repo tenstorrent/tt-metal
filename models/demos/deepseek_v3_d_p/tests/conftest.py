@@ -736,11 +736,18 @@ def model_path(variant) -> Path:
 
 
 @pytest.fixture
-def hf_config(model_path):
+def hf_config(variant, model_path):
     """
     Load HF config for testing.
     Returns None if model path doesn't exist (weights not available).
+
+    Normally this is AutoConfig on the checkpoint, which is the right source when the checkpoint's
+    config says what the TT stack expects. A variant that sets `config_builder_overrides_checkpoint`
+    is declaring that it does NOT, and routes here through its hand-built config instead so the
+    pretrained and random-weight paths agree on the schema.
     """
+    if variant.config_builder is not None and variant.config_builder_overrides_checkpoint:
+        return _resolve_config_only(variant.name)
     return _resolve_hf_config(str(model_path))
 
 
@@ -971,6 +978,18 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
                 "up_proj": layer_dequant["mlp.up_proj.weight"],
                 "down_proj": layer_dequant["mlp.down_proj.weight"],
             }
+        elif variant.packed_expert_checkpoint:
+            # Stacked experts (Mistral-Small-4: one `mlp.experts.gate_up_proj` of [n_experts, ...])
+            # cannot be addressed per expert, so the MoE entries stay empty and only attention is
+            # loaded. Left as None rather than skipped so an MoE consumer fails on the missing weights
+            # instead of silently reading a wrong layer. `e_score_correction_bias` is absent for a
+            # different reason: this is a plain softmax router, not DeepSeek's noaux_tc.
+            layer_dict["gate_weights"] = {
+                "weight": layer_dequant["mlp.gate.weight"],
+                "e_score_correction_bias": layer_dequant.get("mlp.gate.e_score_correction_bias"),
+            }
+            layer_dict["routed_expert_weights"] = None
+            layer_dict["shared_expert_weights"] = None
         else:
             layer_dict["gate_weights"] = {
                 "weight": layer_dequant["mlp.gate.weight"],

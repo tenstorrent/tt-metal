@@ -349,6 +349,66 @@ def _dequantize_pack_quantized_state_dict(
     return out
 
 
+def is_per_tensor_fp8(quantization_config: Any) -> bool:
+    """True for fp8 quantization with no weight block shape, i.e. one scale per weight tensor.
+
+    DeepSeek/GLM state ``weight_block_size: [128, 128]`` and carry a 2-D grid of scales; Mistral-Small-4
+    states ``weight_block_size: null`` and carries a single scalar per tensor. The two need different
+    dequantizers, and the block one hard-fails on a scalar scale (it requires equal ndim), so the
+    absence of a block size is the discriminator.
+    """
+    if not isinstance(quantization_config, dict):
+        return False
+    if quantization_config.get("quant_method") != "fp8":
+        return False
+    return not quantization_config.get("weight_block_size")
+
+
+def _dequantize_per_tensor_fp8_state_dict(
+    state_dict: Mapping[str, torch.Tensor],
+    *,
+    dtype: torch.dtype = torch.bfloat16,
+) -> dict[str, torch.Tensor]:
+    """Dequantize a (sub-)state_dict whose fp8 scales broadcast against their weights.
+
+    ``X_scale_inv`` anchors emit ``X``; the scale is applied by plain broadcasting, which covers both
+    shapes Mistral-Small-4 uses: a scalar ``()`` for the attention/dense projections and a per-expert
+    ``[n_experts, 1, 1]`` for the stacked ``mlp.experts.gate_up_proj`` / ``down_proj``. That is the whole
+    difference from the block scheme -- there are no partial blocks, so no padding or reshaping.
+
+    ``*_activation_scale`` companions are dropped: they describe a static *activation* quantization we
+    never perform (weights land in ``dtype`` and activations stay there), so nothing downstream consumes
+    them and passing them through would put unexpected keys in the module state dicts.
+    """
+    out: dict[str, torch.Tensor] = {}
+    n_dequantized = 0
+    for name in sorted(state_dict.keys()):
+        if name.endswith("_scale_inv"):
+            continue  # consumed alongside its anchor
+        if name.endswith("activation_scale"):
+            continue
+        tensor = state_dict[name]
+        if tensor is None:
+            raise ValueError(f"Expected tensor {name} to exist in state_dict but it was None")
+        scale = state_dict.get(f"{name}_scale_inv")
+        if scale is None:
+            out[name] = tensor.contiguous().clone()  # passthrough: preserve source dtype (norms, gates)
+            continue
+        try:
+            torch.broadcast_shapes(tuple(tensor.shape), tuple(scale.shape))
+        except RuntimeError as exc:
+            raise ValueError(
+                f"per-tensor fp8: scale for '{name}' does not broadcast against the weight "
+                f"(weight={tuple(tensor.shape)}, scale={tuple(scale.shape)}). A block-quantized "
+                "checkpoint reaching this path means quantization_config lost its weight_block_size."
+            ) from exc
+        out[name] = (tensor.float() * scale.float()).to(dtype).contiguous()
+        n_dequantized += 1
+    if n_dequantized:
+        logger.info(f"per-tensor fp8: dequantized {n_dequantized} weight tensor(s)")
+    return out
+
+
 def dequantize_state_dict(
     state_dict: Mapping[str, torch.Tensor],
     hf_config: Any,
@@ -356,13 +416,15 @@ def dequantize_state_dict(
 ) -> dict[str, torch.Tensor]:
     """Dequantize an HF (sub-)state_dict for the d_p pipeline.
 
-    Kimi K2.6's compressed-tensors pack-quantized INT4 weights are dequantized locally; every
-    other checkpoint (DeepSeek fp8 block-wise) is delegated unchanged to the shared deepseek_v3
-    dequantizer.
+    Kimi K2.6's compressed-tensors pack-quantized INT4 weights and Mistral-Small-4's per-tensor fp8 are
+    dequantized locally; every other checkpoint (DeepSeek fp8 block-wise) is delegated unchanged to the
+    shared deepseek_v3 dequantizer.
     """
     quant_cfg = _get_quantization_config_dict(hf_config)
     if is_pack_quantized_int4(quant_cfg):
         return _dequantize_pack_quantized_state_dict(state_dict, quant_cfg, dtype=dtype)
+    if is_per_tensor_fp8(quant_cfg):
+        return _dequantize_per_tensor_fp8_state_dict(state_dict, dtype=dtype)
     return _fp8_dequantize_state_dict(state_dict, hf_config, dtype)
 
 

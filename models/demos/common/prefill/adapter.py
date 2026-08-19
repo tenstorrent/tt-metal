@@ -227,6 +227,19 @@ class PrefillModelAdapter(ABC):
     # (typically as a lazily-importing property) — see the sparse-MLA adapters. It is the single
     # source the sparse-MLA CPU reference derives its ModelArgs from, so device + truth share dims.
     config_builder: Optional[Callable] = None
+    # Whether ``config_builder`` should also supply the config for PRETRAINED tests, which otherwise
+    # read AutoConfig straight off the checkpoint. Default False: for most variants the builder only
+    # exists because AutoConfig can't load the model_type at all, and the checkpoint's own config is
+    # the better source when it is loadable. Set True when the checkpoint config IS loadable but says
+    # something the TT stack would misread -- Mistral-Small-4 is the case this exists for; see its
+    # adapter for what silently breaks (a 2.2x softmax scale that PCC cannot catch).
+    config_builder_overrides_checkpoint: bool = False
+    # Whether the checkpoint stores routed experts STACKED (one `mlp.experts.gate_up_proj` tensor of
+    # shape [n_experts, ...]) instead of DeepSeek's per-expert `mlp.experts.{j}.gate_proj.weight`.
+    # The pretrained test fixture cannot assemble per-expert dicts from that layout, so it leaves the
+    # MoE entries empty and loads attention only -- enough for the MLA tests, not for the MoE ones.
+    # Splitting the packed tensor into gate/up is the work this flag is waiting on.
+    packed_expert_checkpoint: bool = False
     # Golden-trace on-disk layout: "single_file" (one safetensors/layer) or
     # "chunked_group_a_v1" (per-tensor dir of row-sharded shards). Tests dispatch on it.
     prefill_trace_layout: str = "single_file"
@@ -284,6 +297,8 @@ ADAPTER_PATHS = {
     "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
     # Kimi-K2.7: same architecture as K2.6, new checkpoint (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
+    # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
+    "mistral_small_4_119b": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4_119b:MistralSmall4119BAdapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
