@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.glm_5_1 import glm_decoder_layer_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
@@ -80,6 +81,7 @@ class PrefillBlockThresholds:
 
 DSV3_THRESHOLDS = PrefillBlockThresholds()
 KIMI_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.950)
+MISTRAL4_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.950)
 
 # Determinism: every iteration must be bit-identical to the iter-0 baseline (strict).
 DETERMINISM_PCC_THRESHOLD = 1.0
@@ -303,7 +305,8 @@ def run_model(
             position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
             attention_mask = get_4d_causal_mask(torch.ones(1, isl_total), causal_only=True).to(torch.bfloat16)
             ref_cache = DynamicCache()
-            # Bound to the layer's own signature, and reused below for the KVPE line.
+            # Bind the layer call and derive the reference KVPE through the shared helpers --
+            # decoder_layer_kwargs also builds rope in fp32, which matters at these sequence lengths.
             layer_kwargs = decoder_layer_kwargs(
                 hf_model.layers[layer_idx], hf_model, torch_input, attention_mask, position_ids, ref_cache
             )
@@ -1016,3 +1019,96 @@ def test_glm_prefill_block(
     _, pcc_msg = assert_with_pcc(ref.unsqueeze(0), tt_out, GLM_BLOCK_OUTPUT_PCC)
     logger.info(f"[glm block {layer_type}] block output PCC: {pcc_msg}")
     ttnn.synchronize_device(mesh_device)
+
+
+# Mistral Small 4 119B decoder block. Only `moe` is parametrized: first_k_dense_replace = 0, so there
+# are no dense layers in this model at all and layer 0 is already MoE (DeepSeek-V3 and GLM have 3
+# dense layers, Kimi 1). Gate mode is GPT_DEVICE, not DEVICE_FP32 -- Mistral routes with a softmax
+# affinity and the grouped-topk kernel implements only sigmoid/sqrtsoftplus; see the adapter
+# docstring for why GPT-OSS routing is the same rule. PCC runs use random weights: the reference is
+# `hf_model.layers[idx]` built from the SAME draw, so no checkpoint is needed.
+@pytest.mark.parametrize(
+    "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
+    [
+        ("random", False, 1024, 8),
+        ("abc_1k", True, 1024, 8),
+        ("prompt_5k", True, 5 * 1024, 8),
+    ],
+    ids=["smoke-random", "pcc-abc_1k", "pcc-prompt_5k"],
+)
+@pytest.mark.parametrize(
+    "layer_type, gate_fallback_mode",
+    [("moe", GateComputeMode.GPT_DEVICE)],
+    ids=["moe_gate_gpt_device"],
+)
+@pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["mistral_small4"], indirect=True, ids=["mistral4"])
+@pytest.mark.parametrize("determinism_check", [False], ids=["no_determinism"])
+@pytest.mark.parametrize("num_iterations", [1], ids=["iter1"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 bring-up targets Blackhole")
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
+def test_mistral4_prefill_block(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    is_balanced,
+    isl_total,
+    dispatch_buffer_capacity_factor,
+    layer_type,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    pcc_validation,
+    input_source,
+    tokenizer,
+    request,
+    is_ci_env,
+    is_ci_v2_env,
+    determinism_check,
+    num_iterations,
+    use_pretrained,
+):
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        is_balanced,
+        isl_total,
+        dispatch_buffer_capacity_factor,
+        layer_type,
+        gate_fallback_mode,
+        num_links,
+        topology,
+        pcc_validation,
+        input_source,
+        tokenizer,
+        request,
+        is_ci_env,
+        is_ci_v2_env,
+        determinism_check=determinism_check,
+        num_iterations=num_iterations,
+        thresholds=MISTRAL4_THRESHOLDS,
+        use_pretrained=use_pretrained,
+    )

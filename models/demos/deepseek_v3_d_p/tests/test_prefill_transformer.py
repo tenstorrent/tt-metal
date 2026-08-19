@@ -34,6 +34,7 @@ from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, resolve_has_indexer
@@ -1139,6 +1140,131 @@ def test_glm_prefill_transformer(
     topology = per_axis_topology(device_params["fabric_config"])
     # Full-transformer end-to-end validates against the GPU trace (variant.test_prefill_trace_default;
     # approach B) — MLA/DSA + MoE correctness live in their op-level tests.
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        is_balanced,
+        isl_total,
+        dispatch_buffer_capacity_factor,
+        num_layers,
+        n_routed_experts,
+        gate_fallback_mode,
+        num_links,
+        topology,
+        pcc_validation,
+        determinism_check,
+        num_iterations,
+        input_source,
+        use_pretrained,
+        return_kv_cache,
+        temperature,
+        weight_cache_path,
+        is_ci_env,
+        is_ci_v2_env,
+        tokenizer,
+        request,
+    )
+
+
+# Mistral Small 4 119B, full stack: embed -> [block x N] -> norm -> lm_head -> sample.
+# Random weights only: the TT state_dict is derived from the SAME HF model instance the reference
+# uses (`create_hf_model` -> `extract_tt_state_dict`), so no checkpoint is needed. n_routed_experts
+# stays at the real 128 (4 experts/chip on a 32-device mesh) rather than a reduced count, so the
+# routing distribution is the production one. GPT_DEVICE gate: Mistral's softmax top-4 rule, see the
+# adapter docstring.
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 bring-up targets Blackhole")
+@pytest.mark.parametrize("tokenizer", ["right"], indirect=True, ids=["right_pad"])
+@pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
+@pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
+@pytest.mark.parametrize(
+    "input_source, pcc_validation, use_pretrained",
+    [
+        ("random", False, False),
+        ("json_prompts", False, False),
+        # Real checkpoint: exercises the whole weight path -- per-tensor fp8 dequant, the
+        # stacked+fused expert split, the zero router bias -- and writes the TTNN cache.
+        # Loading is layer-by-layer, so host memory stays flat regardless of num_layers.
+        ("random", False, True),
+        ("json_prompts", False, True),
+    ],
+    ids=[
+        "smoke-random-random",
+        "smoke-json_prompts-random",
+        "smoke-random-pretrained",
+        "smoke-json_prompts-pretrained",
+    ],
+)
+@pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
+@pytest.mark.parametrize(
+    "isl_total, dispatch_buffer_capacity_factor",
+    [(SEQ_LEN_1K, 8), (SEQ_LEN_5K, 8)],
+    ids=["1k", "5k"],
+)
+@pytest.mark.parametrize(
+    "num_layers",
+    [
+        2,
+        5,
+        pytest.param(36, marks=pytest.mark.skipif(not is_galaxy(), reason="Full 36-layer model only on Galaxy")),
+    ],
+    ids=["2_layers", "5_layers", "36_layers"],
+)
+@pytest.mark.parametrize(
+    "n_routed_experts, gate_fallback_mode",
+    [(MistralSmall4Config.NUM_ROUTED_EXPERTS, GateComputeMode.GPT_DEVICE)],
+    ids=["e128_gpt_device"],
+)
+@pytest.mark.parametrize("determinism_check", [False], ids=["no_determinism"])
+@pytest.mark.parametrize("num_iterations", [1], ids=["iter1"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["mistral_small4"], indirect=True, ids=["mistral4"])
+@pytest.mark.timeout(0)
+def test_mistral4_prefill_transformer(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    is_balanced,
+    isl_total,
+    dispatch_buffer_capacity_factor,
+    num_layers,
+    n_routed_experts,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    pcc_validation,
+    determinism_check,
+    num_iterations,
+    input_source,
+    use_pretrained,
+    return_kv_cache,
+    temperature,
+    weight_cache_path,
+    is_ci_env,
+    is_ci_v2_env,
+    tokenizer,
+    request,
+):
     run_model(
         variant,
         config_only,
