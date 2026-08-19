@@ -567,6 +567,89 @@ def test_total_order_key_matches_the_isa_remap():
         )
 
 
+def test_dest_truncation_masks_match_the_mantissa_width_table():
+    """The 32 -> 16-bit Dest masks must be derived, not written twice.
+
+    Both goldens truncate a 32-bit operand on the way into a 16-bit Dest, and the mask used to be
+    an unnamed literal at each site. `dest_truncation_mask` derives it from
+    `_FORMAT_MANTISSA_BITS`; these are the values those literals had.
+    """
+    from helpers.sfpu_domains import dest_truncation_mask
+
+    assert dest_truncation_mask(DataFormat.Float16) == 0xFFFFE000
+    assert dest_truncation_mask(DataFormat.Float16_b) == 0xFFFF0000
+
+
+def test_exp_with_base_ceiling_is_currently_unreachable():
+    """ExpWithBase's `_APPROX_ACCURACY_MAX` entry is correct but never fires today.
+
+    The op sits in STANDARD_SWEEP_OPS, which drives ApproximationMode.No only, so the swept domain
+    is the range bound (high=160, exp argument 80) and the 32.0 ceiling is inert. The entry is kept
+    so that enrolling the op in BROAD_SWEEP_OPS cannot silently hand the approximation an argument
+    of 80 -- ten times the ~8 where its overshoot starts.
+
+    If this fails because ExpWithBase joined the broad profile, that is the good outcome: the
+    ceiling now fires, and what wants re-checking is the accurate path's own domain.
+    """
+    import test_sfpu_unary
+
+    assert MathOperation.ExpWithBase in test_sfpu_unary.STANDARD_SWEEP_OPS
+    assert MathOperation.ExpWithBase not in test_sfpu_unary.BROAD_SWEEP_OPS
+    accurate = for_op(
+        MathOperation.ExpWithBase,
+        DataFormat.Float32,
+        approx_mode=ApproximationMode.No,
+    ).spec_A
+    assert accurate.high == 160.0, (
+        "the accurate path's ceiling moved; it is measured green at 160 on a Wormhole n300 and "
+        "has no custom tolerance, so a change here wants a re-run"
+    )
+
+
+def test_hardtanh_golden_matches_the_hardtanh_kernel_chain():
+    """_hardtanh models a clamp, but its kernel is not one -- pin the agreement.
+
+    `SfpuType::hardtanh` dispatches to `_calculate_hardtanh_`, three adds with two clamps-at-zero
+    and bf16 constants, where Clamp dispatches to `_calculate_clamp_` with fp16 min/max. They
+    agree on the finite range and at every special this op is enrolled for, but by arithmetic
+    rather than by sharing code, so the golden's use of sfpu_clamp is only sound while that holds.
+    """
+    from helpers.golden_generators import UnarySFPUGolden, sfpu_total_order_key
+
+    def kernel_chain(x: float, low: float, high: float) -> float:
+        # val += p0; v_if (val < 0) val = 0; val += p1; v_if (val >= 0) val = 0; val += p2
+        p0, p1, p2 = -low, -(high - low), high
+        val = x + p0
+        if sfpu_total_order_key(val) < 0:
+            val = 0.0
+        val = val + p1
+        if sfpu_total_order_key(val) >= 0:
+            val = 0.0
+        return val + p2
+
+    golden = UnarySFPUGolden()
+    low, high = -1.0, 1.0
+    probes = [
+        -float("inf"),
+        -2.0,
+        -1.0,
+        -0.5,
+        0.0,
+        0.5,
+        1.0,
+        2.0,
+        float("inf"),
+        float("nan"),
+    ]
+    for x in probes:
+        want = kernel_chain(x, low, high)
+        got = float(golden._hardtanh(x, low, high))
+        assert got == want or (got != got and want != want), (
+            f"hardtanh({x}) golden gives {got} but the kernel chain gives {want}. The golden "
+            "models _calculate_clamp_; if the two have stopped agreeing, model the chain."
+        )
+
+
 def test_reduce_extremum_follows_the_total_order_on_floats_only():
     """Reduce MAX/MIN fold under the SFPU total order; Sum/Average stay IEEE; ints stay torch.
 

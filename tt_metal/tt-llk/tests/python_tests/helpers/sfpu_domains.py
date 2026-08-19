@@ -177,11 +177,17 @@ _E5M2_AND_FLOAT16 = (DataFormat.Float16, DataFormat.MxFp8R)
 # (16, 80] from the *accurate* path — with it the exponent-overflow region and all large-exp
 # saturation into Float16_b and Bfp8_b.
 #
-# NOT YET MEASURED: the accurate path over (16, 80] has not been isolated on hardware. Phase 1
-# (#52172) shipped high=80 for both modes, so this restores a shipped domain rather than
-# inventing one; it still wants an Exp/Exp2 broad sweep at ApproximationMode.No. If the
-# accurate path does drift, the fix is a mode-conditional custom_rtol, not a re-narrowed
-# registry entry.
+# MEASURED on a Wormhole n300: the full unary sweep drives Exp, Exp2 and ExpWithBase over these
+# widened domains at ApproximationMode.No -- the only mode the accurate path runs in -- and passes
+# with no custom tolerance and no xfail. If it ever drifts, the fix is a mode-conditional
+# custom_rtol, not a re-narrowed registry entry, since the entry serves both modes.
+#
+# ExpWithBase's entry below is correct but currently unreachable: the op is in STANDARD_SWEEP_OPS,
+# which drives ApproximationMode.No only, so the ceiling never fires and the swept domain is the
+# range bound (high=160, argument 80). Kept rather than deleted so that enrolling it in
+# BROAD_SWEEP_OPS cannot silently hand the approximation an argument of 80, which is ten times the
+# ~8 where the overshoot starts. test_sfpu_domains pins the unreachability so the entry cannot be
+# mistaken for active coverage.
 _APPROX_ACCURACY_MAX: Dict[MathOperation, float] = {
     MathOperation.Exp: 16.0,
     # exp2(x) = exp(x * ln2), so exp's argument ceiling of 16 lands at x = 16 / ln2 ~ 23.
@@ -864,17 +870,20 @@ def _apply_approx_ceiling(
     ceiling = _APPROX_ACCURACY_MAX.get(op)
     if ceiling is None:
         return
-    if result.spec_B is not None and _domain_of(result.spec_B) != _domain_of(
-        result.spec_A
-    ):
+    # Every operand, not just A and B. __post_init__ deep-copies C from B before this runs, so
+    # clipping only A and B leaves an OperandSpecs whose spec_for(Operand.C) disagrees with the
+    # other two -- inert while nothing reads C off an approx-clipped result, and wrong the moment
+    # something does.
+    others = [s for s in (result.spec_B, result.spec_C) if s is not None]
+    if any(_domain_of(s) != _domain_of(result.spec_A) for s in others):
         raise ValueError(
             f"MathOperation.{op.name} has an approximation-mode ceiling but distinct "
             f"per-operand domains. _APPROX_ACCURACY_MAX is written for the unary exp "
-            f"family; decide per operand before adding a binary op to it."
+            f"family; decide per operand before adding a multi-operand op to it."
         )
     _clip_high(result.spec_A, ceiling, op)
-    if result.spec_B is not None:
-        _clip_high(result.spec_B, ceiling, op)
+    for spec in others:
+        _clip_high(spec, ceiling, op)
 
 
 def for_op(
@@ -1338,6 +1347,17 @@ _DEFAULT_MANTISSA_BITS = 7
 # Stimuli are built as fp32 host-side, so a narrower format's width is subtracted from
 # fp32's to get the number of mantissa bits the datapath drops.
 _FLOAT32_MANTISSA_BITS = _FORMAT_MANTISSA_BITS[DataFormat.Float32]
+
+
+def dest_truncation_mask(dst_format: DataFormat) -> int:
+    """The bits a 32-bit datum keeps when it lands in a 16-bit *dst_format* Dest.
+
+    Derived from the mantissa-width table above rather than written as a literal, so a width
+    change moves the mask with it. Both goldens truncate the operand on the way in at
+    dest_acc=No; an FP16 Dest keeps three more mantissa bits than a BF16 one.
+    """
+    dropped = _FLOAT32_MANTISSA_BITS - _FORMAT_MANTISSA_BITS[dst_format]
+    return (0xFFFFFFFF << dropped) & 0xFFFFFFFF
 
 
 def format_ulp(fmt: DataFormat, magnitude: float = 1.0) -> float:
@@ -2066,7 +2086,9 @@ SPECIALS_READY_OPS.update(
         MathOperation.Clamp: "clamp(x, -1, 1) applied as the kernel applies it: `v_if (val < "
         "min)` then `v_if (val > max)`, both total-order compares, so a NaN falls through the "
         "first and lands on max.",
-        MathOperation.Hardtanh: "Same clamp as Clamp, same dispatch constants.",
+        MathOperation.Hardtanh: "clamp(x, -1, 1), but via `_calculate_hardtanh_` rather than "
+        "Clamp's `_calculate_clamp_` -- a different kernel with differently formatted constants "
+        "that happens to agree at every special here. The agreement is pinned host-side.",
         MathOperation.ReluMax: "_relu_max_body_: a total-order `> threshold` replaces a NaN "
         "with the threshold, and the relu clamp then sees a finite value.",
         MathOperation.Hardsigmoid: "x * (1/6) + 0.5 through the same _relu_max_body_ the "

@@ -126,7 +126,20 @@ _ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 #   Float16_b dominates because at |golden| ~ 72 a bfloat16 ULP is already 0.5 -- mostly output
 #   quantization, not the kernel. atol=0.6 covers x<=8 with 20% margin.
 BINARY_CUSTOM_TOLERANCES = {
-    MathOperation.SfpuElwpow: (None, 0.15),
+    # Listed per output format only to keep Bfp8_b out of it. pow's error is *relative* -- the
+    # measurement above is ~flat in the operands -- so unlike xlogy's absolute error it does not
+    # scale with the output format's precision, and the same rtol is the right shape for every
+    # float column. Measured: reverting ->Float16 to the 0.05 default fails all 15 of its pow
+    # variants on a Wormhole n300, so 0.15 is the op's requirement there too, not a loosening.
+    #
+    # Bfp8_b is the exception and is deliberately absent: its default rtol is 0.2, so an override
+    # of 0.15 would *tighten* it, and at 0.2 a lane that misses the tolerance can still be caught
+    # by the block-lattice fallback in passed_test. Falling through keeps both.
+    MathOperation.SfpuElwpow: {
+        DataFormat.Float32: (None, 0.15),
+        DataFormat.Float16_b: (None, 0.15),
+        DataFormat.Float16: (None, 0.15),
+    },
     # Keyed by *output format*, because the measurement above splits by nearly 5x: applying
     # Float16_b's atol to Float32 would accept five times the error that format was measured to
     # produce. Float16 is measured separately on a Wormhole n300 over x <= 8 and requires 0.0989
@@ -150,7 +163,7 @@ BINARY_CUSTOM_TOLERANCES = {
 # Reading the measurement: passed_test judges with torch.isclose(golden, res, rtol, atol), so the
 # bound is atol + rtol * |res| and the atol a format actually needs is max(|g - r| - rtol * |r|),
 # not max|g - r| -- which is why the raw figures above sit well above the atols they justify.
-_XLOGY_DEFAULT_TOLERANCE = (None, None)
+_UNLISTED_FORMAT_TOLERANCE = (None, None)
 
 
 def _custom_tolerances(mathop, output_format):
@@ -159,7 +172,7 @@ def _custom_tolerances(mathop, output_format):
     if entry is None:
         return (None, None)
     if isinstance(entry, dict):
-        return entry.get(output_format, _XLOGY_DEFAULT_TOLERANCE)
+        return entry.get(output_format, _UNLISTED_FORMAT_TOLERANCE)
     return entry
 
 
@@ -1383,20 +1396,6 @@ def _edge_pairs_for_class(mathop, formats, edge_class, dest_acc, specials=False)
         )
         if _classify_edge_pair(mathop, *pair) == edge_class
     ]
-
-
-def _build_edge_pair_src(mathop, formats, edge_class, dest_acc):
-    """Two-tile override: tile 0 holds operand A, tile 1 holds operand B, paired by index.
-
-    Only the pairs in *edge_class* are driven, so each class fails or passes on its own
-    evidence. Returns None when neither operand has an edge worth probing, or when this
-    class is empty for this op — both are the caller's cue to skip.
-    """
-    pairs = _edge_pairs_for_class(mathop, formats, edge_class, dest_acc)
-    if not pairs:
-        return None
-    dtype = torch.int32 if formats.input_format.is_integer() else torch.float32
-    return _build_paired_tile_override(pairs, dtype)
 
 
 # The ops this suite drives on an integer format. This sweep is float — its format axis is

@@ -49,7 +49,7 @@ from helpers.sfpu_dispatch_constants import (
     UNARY_COMP_THRESHOLD,
     UNARY_MAX_MIN_VALUE,
 )
-from helpers.sfpu_domains import nan_survives_to_l1
+from helpers.sfpu_domains import dest_truncation_mask, nan_survives_to_l1
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import (
     unpack_mxfp4,
@@ -169,6 +169,18 @@ def apply_l1_accumulation(
 
 
 BFP_BLOCK_ELEMENTS = 16
+
+
+def truncate_to_dest_width(
+    tensor: torch.Tensor, dst_format: DataFormat
+) -> torch.Tensor:
+    """*tensor*'s low mantissa bits dropped, as a 16-bit Dest drops them on the unpack.
+
+    One helper for both goldens, so a Dest-width change cannot update one call site and miss the
+    other. test_sfpu_domains pins the masks against sfpu_domains' mantissa-width table.
+    """
+    masked = tensor.contiguous().view(torch.int32) & dest_truncation_mask(dst_format)
+    return masked.view(torch.float32)
 
 
 def _bfp_zero_nonfinite_blocks(operand):
@@ -308,9 +320,13 @@ def sfpu_relu_max(value: float, threshold: float) -> float:
 def sfpu_clamp(value: float, low: float, high: float) -> float:
     """clamp under the SFPU's total order, in the kernel's order of operations.
 
-    The kernels apply the two bounds as separate predicated writes -- `v_if (val < min)` then
-    `v_if (val > max)` -- so a +NaN falls through the first and is caught by the second,
-    landing on *high*. Composing torch.clamp instead would keep IEEE semantics and return NaN.
+    `_calculate_clamp_` applies the bounds as `v_if (val < min)` then `v_elseif (val >= max)`,
+    both two-vector compares and so both on the total order, which sends a +NaN through the first
+    and onto *high* via the second. Composing torch.clamp instead would keep IEEE semantics and
+    return NaN.
+
+    The `>=` matters: tightening it to a strict `>` would change the answer at +NaN, and
+    _hardtanh's golden calls this too even though its kernel is a different one.
     """
     return sfpu_min(sfpu_max(value, low), high)
 
@@ -2486,12 +2502,14 @@ class UnarySFPUGolden:
 
         if self.dest_acc == DestAccumulation.No and input_format == DataFormat.Float32:
             # dst in 16-bit mode and 32-bit input: truncation may occur when unpacked to dst
-            if dst_format == DataFormat.Float16:
-                # truncate to float16
-                operand1 = (operand1.view(torch.int32) & 0xFFFFE000).view(torch.float32)
-            else:
-                # truncate to float16_b
-                operand1 = (operand1.view(torch.int32) & 0xFFFF0000).view(torch.float32)
+            operand1 = truncate_to_dest_width(
+                operand1,
+                (
+                    DataFormat.Float16
+                    if dst_format == DataFormat.Float16
+                    else DataFormat.Float16_b
+                ),
+            )
 
         # Not to_tensor(): its plain .to() canonicalises every NaN to a *negative* bfloat16
         # one, which would hand the op a sign the input never had -- and then the sign the
@@ -2943,8 +2961,16 @@ class UnarySFPUGolden:
         return sfpu_clamp(x, min_val, max_val)
 
     def _hardtanh(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
-        # hardtanh(x) = clamp(x, min, max); min/max fixed to the dispatch constants, and the
-        # same total-order clamp as _clamp.
+        # Modelled as a clamp because it *agrees* with one, not because it is one. The kernel is
+        # `_calculate_hardtanh_`, a different function from `_calculate_clamp_` with differently
+        # formatted constants (bf16 p0/p1/p2 = 1.0/-2.0/1.0 against clamp's fp16 min/max/offset):
+        # `val += p0; v_if (val < 0) val = 0; val += p1; v_if (val >= 0) val = 0; val += p2`.
+        #
+        # The two coincide on every special this op is enrolled for, and on the finite range they
+        # implement the same function, so sfpu_clamp is a faithful golden here. They agree by
+        # arithmetic rather than by construction, though, so the agreement is pinned in
+        # test_sfpu_domains rather than assumed -- see
+        # test_hardtanh_golden_matches_the_hardtanh_kernel_chain.
         return sfpu_clamp(x, min_val, max_val)
 
     def _elu(self, x):
@@ -3840,7 +3866,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         while every operand is finite, since both steps are sub-ULP on a finite value and
         decisive on a non-finite one.
 
-        Supply both to get what the hardware does (see _model_dest_and_pack): the SFPU evaluates
+        Supply both to get what the hardware does (modelled inline in __call__ below, the same two
+        steps UnarySFPUGolden applies): the SFPU evaluates
         in fp32 and stores to a Dest whose width *dest_acc* selects, and the packer substitutes a
         signed infinity for a NaN a 16-bit Dest cannot hold. Same contract UnarySFPUGolden and
         ScalarBinopGolden already model.
@@ -3937,14 +3964,9 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
         if model_dest and dest_acc == DestAccumulation.No and data_format.is_32_bit():
             # A 32-bit operand landing in a 16-bit Dest drops its low mantissa bits on the way
-            # in, before the op ever sees it. Mirrors UnarySFPUGolden.__call__; the mask follows
-            # dst_format because an FP16 Dest keeps three more mantissa bits than a BF16 one.
-            mask = 0xFFFFE000 if dst_format == DataFormat.Float16 else 0xFFFF0000
-            result = (
-                (result.contiguous().view(torch.int32) & mask)
-                .view(torch.float32)
-                .clone()
-            )
+            # in, before the op ever sees it. Same helper UnarySFPUGolden.__call__ uses, so the
+            # two cannot drift on the width.
+            result = truncate_to_dest_width(result, dst_format).clone()
 
         # Same layout as `result`, so it survives the untilize below unchanged.
         generated_nan = torch.zeros(result.numel(), dtype=torch.bool)

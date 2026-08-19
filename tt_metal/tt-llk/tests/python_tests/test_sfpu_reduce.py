@@ -715,12 +715,18 @@ _REDUCE_SPECIAL_CLASSES = {
 }
 
 
-def _build_reduce_specials_tile(edge_class, torch_format):
+def _build_reduce_specials_tile(edge_class, torch_format, mathop):
     """A 32x32 tile carrying *edge_class*'s specials, with the rest held at 1.0.
 
-    Injected down column 0 (and 1, for both_inf) rather than scattered, so a *single* reduced lane
-    carries the special and the other 31 stay finite. A scattered injection would poison every
-    lane and the variant could then only report "something in this tensor diverges".
+    Every special goes into reduced lane 0 and no other lane, so a failure names the class it was
+    filed under. A scattered injection would poison every lane and the variant could then only
+    report "something in this tensor diverges".
+
+    Which cells that is depends on the direction, hence *mathop*. ReduceColumn folds down each
+    column, so lane 0 is column 0 and a multi-value class stacks down it; ReduceRow folds across
+    each row, so lane 0 is row 0 and the same class lays out along it. Writing both -- `tile[0, i]`
+    and `tile[i, 0]` -- is what put a lone -inf in lane 1 for `both_inf`, duplicating the `neg_inf`
+    stimulus inside it under either direction.
     """
     tile = torch.full((TILE_DIM, TILE_DIM), 1.0, dtype=torch_format)
     if edge_class == "all_inf":
@@ -729,9 +735,11 @@ def _build_reduce_specials_tile(edge_class, torch_format):
     if edge_class == "signed_zero":
         tile.fill_(-0.0)
         return tile
-    for column, value in enumerate(_REDUCE_SPECIAL_CLASSES[edge_class]):
-        tile[0, column] = value
-        tile[column, 0] = value  # so row reduce sees it too, in row `column`
+    for index, value in enumerate(_REDUCE_SPECIAL_CLASSES[edge_class]):
+        if mathop == MathOperation.ReduceColumn:
+            tile[index, 0] = value
+        else:
+            tile[0, index] = value
     return tile
 
 
@@ -755,7 +763,7 @@ def _run_float_reduce_specials(mathop, reduce_pool, edge_class, formats, dest_ac
         BlocksCalculationAlgorithm.Standard,
     )
 
-    src_A = _build_reduce_specials_tile(edge_class, torch_format).flatten()
+    src_A = _build_reduce_specials_tile(edge_class, torch_format, mathop).flatten()
 
     dst_dim = (
         [32, tile_cnt * 32]
