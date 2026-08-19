@@ -12,6 +12,7 @@
 #include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
+#include "quasar_test_common.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -41,25 +42,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
 
-        tdma_descriptor_t tdma_desc_src_a;
-        tdma_desc_src_a.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_A[0]);
-        tdma_desc_src_a.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_A_src);
-        tdma_desc_src_a.buf_desc.f.lmt_addr_16B = 0;
-        tdma_desc_src_a.buf_desc.f.x_dim        = FACE_C_DIM;
-        tdma_desc_src_a.buf_desc.f.y_dim        = FACE_R_DIM;
-        tdma_desc_src_a.buf_desc.f.z_dim        = params.num_faces_A;
-        tdma_desc_src_a.buf_desc_id             = buf_desc_id_src_a;
-        tdma_desc_src_a.reg_data_format         = static_cast<DataFormat>(formats.unpack_A_dst);
-
-        tdma_descriptor_t tdma_desc_src_b;
-        tdma_desc_src_b.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_B[0]);
-        tdma_desc_src_b.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_B_src);
-        tdma_desc_src_b.buf_desc.f.lmt_addr_16B = 0;
-        tdma_desc_src_b.buf_desc.f.x_dim        = FACE_C_DIM;
-        tdma_desc_src_b.buf_desc.f.y_dim        = FACE_R_DIM;
-        tdma_desc_src_b.buf_desc.f.z_dim        = params.num_faces_B;
-        tdma_desc_src_b.buf_desc_id             = buf_desc_id_src_b;
-        tdma_desc_src_b.reg_data_format         = static_cast<DataFormat>(formats.unpack_B_dst);
+        const ckernel::TensorShape tensor_shape_A = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_A);
+        const ckernel::TensorShape tensor_shape_B = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_B);
+        tdma_descriptor_t tdma_desc_src_a =
+            ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, buf_desc_id_src_a, formats.unpack_A_dst);
+        tdma_descriptor_t tdma_desc_src_b =
+            ckernel::trisc::construct_tdma_desc(tensor_shape_B, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src, buf_desc_id_src_b, formats.unpack_B_dst);
 
         _configure_buf_desc_table_(tdma_desc_src_a.buf_desc_id, tdma_desc_src_a.buf_desc);
         _configure_buf_desc_table_(tdma_desc_src_b.buf_desc_id, tdma_desc_src_b.buf_desc);
@@ -203,30 +191,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        buffer_descriptor_u bd_unpack = {0};
-        tdma_descriptor_t td_unpack;
-        buffer_descriptor_u bd_pack = {0};
-        tdma_descriptor_t td_pack;
-
-        bd_unpack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_S[0]);
-        bd_unpack.f.format        = static_cast<std::uint8_t>(formats.unpack_S_src);
-        bd_unpack.f.x_dim         = PARAM_SRCS_XDIM;
-        bd_unpack.f.y_dim         = PARAM_SRCS_YDIM;
-        bd_unpack.f.z_dim         = PARAM_SRCS_ZDIM;
-        td_unpack.buf_desc        = bd_unpack;
-        td_unpack.buf_desc_id     = buf_desc_id_unpack;
-        td_unpack.reg_data_format = static_cast<DataFormat>(formats.unpack_S_dst);
+        const ckernel::TensorShape srcs_shape = tensor_shape_from_dimensions(PARAM_SRCS_YDIM, PARAM_SRCS_XDIM, PARAM_SRCS_ZDIM, PARAM_SRCS_ZDIM);
+        tdma_descriptor_t td_unpack =
+            ckernel::trisc::construct_tdma_desc(srcs_shape, L1_ADDRESS(params.buffer_S[0]), formats.unpack_S_src, buf_desc_id_unpack, formats.unpack_S_dst);
         _configure_buf_desc_table_(td_unpack.buf_desc_id, td_unpack.buf_desc);
         _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack.reg_data_format);
 
-        bd_pack.f.l1_addr_16B   = L1_ADDRESS(params.buffer_Res[0]);
-        bd_pack.f.format        = static_cast<std::uint8_t>(formats.pack_S_dst);
-        bd_pack.f.x_dim         = PARAM_SRCS_XDIM;
-        bd_pack.f.y_dim         = PARAM_SRCS_YDIM;
-        bd_pack.f.z_dim         = PARAM_SRCS_ZDIM;
-        td_pack.buf_desc        = bd_pack;
-        td_pack.buf_desc_id     = buf_desc_id_pack;
-        td_pack.reg_data_format = static_cast<DataFormat>(formats.pack_S_src);
+        tdma_descriptor_t td_pack =
+            ckernel::trisc::construct_tdma_desc(srcs_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_S_dst, buf_desc_id_pack, formats.pack_S_src);
         _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
         _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack.reg_data_format, ckernel::ReluConfig::none());
 
@@ -292,23 +264,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask because CFG state can persist across run types.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
-            cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+            set_up_zero_dest_dvalid_handshake_for_pack();
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        tdma_descriptor_t tdma_desc_dst;
-        tdma_desc_dst.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_C[0]);
-        tdma_desc_dst.buf_desc.f.lmt_addr_16B = 0;
-        tdma_desc_dst.buf_desc.f.format       = static_cast<std::uint8_t>(formats.pack_dst);
-        tdma_desc_dst.buf_desc.f.x_dim        = FACE_C_DIM;
-        tdma_desc_dst.buf_desc.f.y_dim        = FACE_R_DIM;
-        tdma_desc_dst.buf_desc.f.z_dim        = params.num_faces;
-        tdma_desc_dst.buf_desc_id             = buf_desc_id_dst;
-        tdma_desc_dst.reg_data_format         = static_cast<DataFormat>(formats.pack_src);
+        const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces);
+        tdma_descriptor_t tdma_desc_dst =
+            ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(params.buffer_C[0]), formats.pack_dst, buf_desc_id_dst, formats.pack_src);
 
         _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc_dst.reg_data_format, ckernel::ReluConfig::none());
