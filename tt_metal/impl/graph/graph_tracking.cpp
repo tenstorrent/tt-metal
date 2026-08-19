@@ -10,8 +10,32 @@
 
 namespace tt::tt_metal {
 
-thread_local std::vector<std::shared_ptr<IGraphProcessor>> GraphTracker::processors;
-thread_local std::shared_ptr<IGraphHooks> GraphTracker::hook;
+namespace {
+
+// Immortal per-thread storage for the tracker's processor stack and hook.
+//
+// Intentionally leaked. The tracker is consulted from ~Buffer and
+// ~ProgramImpl, which an embedder can reach during process teardown by
+// closing its device from a static destructor. glibc runs __call_tls_dtors()
+// before the __cxa_atexit list, so ordinary thread_local members would already
+// be destroyed by then and every subsequent deallocation would read freed
+// memory. A raw pointer has no destructor to run, so the pointee stays valid
+// until the process image goes away. Cost is one allocation per thread that
+// ever touches the tracker.
+std::vector<std::shared_ptr<IGraphProcessor>>& immortal_processors() {
+    static thread_local auto* storage = new std::vector<std::shared_ptr<IGraphProcessor>>();
+    return *storage;
+}
+
+std::shared_ptr<IGraphHooks>& immortal_hook() {
+    static thread_local auto* storage = new std::shared_ptr<IGraphHooks>();
+    return *storage;
+}
+
+}  // namespace
+
+thread_local std::vector<std::shared_ptr<IGraphProcessor>>& GraphTracker::processors = immortal_processors();
+thread_local std::shared_ptr<IGraphHooks>& GraphTracker::hook = immortal_hook();
 
 nlohmann::json IGraphProcessor::end_capture() { return nullptr; }
 

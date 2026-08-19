@@ -204,8 +204,20 @@ private:
     ~GraphTracker() = default;
 
     // Per-thread state. See the class-level threading contract above.
-    static thread_local std::vector<std::shared_ptr<IGraphProcessor>> processors;
-    static thread_local std::shared_ptr<IGraphHooks> hook;
+    //
+    // These are references to per-thread storage that is deliberately never
+    // freed (see graph_tracking.cpp). Buffers and circular buffers can be
+    // destroyed during process teardown: an embedder that closes its device
+    // from a static destructor reaches ~Buffer / ~ProgramImpl from inside
+    // __run_exit_handlers, which calls __call_tls_dtors() *first*. Plain
+    // thread_local members would already be destroyed at that point, and
+    // track_deallocate()/track_deallocate_cb() would then read a destroyed
+    // std::vector: ~vector frees the buffer but leaves begin/end stale and
+    // unequal, so empty() returns false and the loop dereferences freed
+    // shared_ptrs. Keeping the storage immortal makes these reads valid for
+    // the whole process lifetime.
+    static thread_local std::vector<std::shared_ptr<IGraphProcessor>>& processors;
+    static thread_local std::shared_ptr<IGraphHooks>& hook;
 
     std::mutex hooked_buffers_mutex;
     std::unordered_set<const Buffer*> hooked_buffers;
