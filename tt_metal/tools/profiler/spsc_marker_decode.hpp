@@ -54,7 +54,152 @@ namespace tt::tt_metal::profiler {
 // RING_CAPACITY, = kernel_profiler::PROFILER_L1_VECTOR_SIZE) so the BULKCORE sub-ring walk indexes
 // correctly.
 inline constexpr uint32_t kSpscRingCap = 512;
+inline constexpr uint32_t kSpscRingMask = kSpscRingCap - 1;
 inline constexpr uint32_t kSpscNRiscDecode = 5;
+static_assert((kSpscRingCap & kSpscRingMask) == 0);
+
+// Largest PP_DATA payload the 7-bit size field can express; bounds the unwrap scratch.
+inline constexpr uint32_t kSpscMaxDataWords = 127;
+
+inline constexpr uint32_t kSpscFrameWords = kernel_profiler::SPSC_SPAN_PREFIX_WORDS +
+                                            kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE +
+                                            kSpscNRiscDecode * kSpscRingCap;
+inline constexpr uint32_t kSpscFramePages = kSpscFrameWords * 4 / (kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4);
+static_assert(kSpscFrameWords == 2640 && kSpscFramePages == 165);
+
+// Decode state for one socket's frame stream. Written only by that socket's decode thread.
+struct SpanDecodeState {
+    std::vector<uint32_t> timer_hi;  // per lane: sticky wall-clock high half
+    std::vector<uint32_t> prog;      // per core: sticky runtime host-id (each core's BRISC emits its own)
+    std::vector<uint32_t> head;      // per lane: monotonic words-consumed mirror; head(N) == tail(N-1)
+    std::vector<uint8_t> seeded;
+    std::unordered_map<uint32_t, uint32_t> core_of_xy;  // packed (y<<16)|x -> dense core index
+    uint64_t live_words = 0;
+    uint64_t resync_events = 0;
+    uint64_t resync_words = 0;
+    uint64_t head_lag = 0;
+    uint64_t anomalies = 0;  // torn run / truncated run / undecodable word
+    uint64_t unknown_core_frames = 0;
+
+    void reset(uint32_t num_cores) {
+        timer_hi.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
+        prog.assign(num_cores, 0);
+        head.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
+        seeded.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
+    }
+};
+
+struct SpscIgnoreProg {
+    void operator()(uint32_t /*core*/, uint32_t /*prog*/) const {}
+};
+
+// Decode ONE whole BULK_SPAN frame in place. For each marker calls
+//   emit(lane, wire_type, hash16, full_ts, prog)     (ZONE_START/END; ZONE_TOTAL with full_ts = the sum)
+// and for each PP_DATA/PP_EVENT
+//   emit_data(lane, wire_type, id, full_ts, prog, payload_words, n)   (payload unwrapped, hi-word first)
+// and emit_prog(core, prog) whenever a core's sticky host-id changes.
+//
+// Head adoption: the mirror and the frame's own head field are both monotonic and can each run behind --
+// the mirror after a frame was lost upstream (device credit-timeout drop), the frame field when the
+// drainer's write-back lagged the snapshot -- so the larger one is always the truth. Adopting it makes an
+// upstream loss a counted resync instead of re-decoding overwritten ring words as markers.
+template <typename EmitMarker, typename EmitData, typename EmitProg = SpscIgnoreProg>
+inline void spsc_decode_frame(
+    SpanDecodeState& st,
+    const uint32_t* frame,
+    EmitMarker&& emit,
+    EmitData&& emit_data,
+    EmitProg&& emit_prog = SpscIgnoreProg{}) {
+    const uint32_t* ctrl = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
+    const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_CORE_XY]);
+    if (xy_it == st.core_of_xy.end()) {
+        st.unknown_core_frames++;
+        return;
+    }
+    const uint32_t core = xy_it->second;
+    uint32_t pg = st.prog[core];
+    const uint32_t* ring = ctrl + kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE;
+    for (uint32_t r = 0; r < kSpscNRiscDecode; r++, ring += kSpscRingCap) {
+        const uint32_t lane = core * kSpscNRiscDecode + r;
+        const uint32_t tail = ctrl[kernel_profiler::SPSC_RING_TAIL_0 + r];
+        const uint32_t frame_head = ctrl[kernel_profiler::SPSC_RING_HEAD_0 + r];
+        uint32_t head;
+        if (st.seeded[lane] == 0) {
+            st.seeded[lane] = 1;
+            head = frame_head;
+        } else {
+            head = st.head[lane];
+            const int32_t behind = static_cast<int32_t>(frame_head - head);
+            if (behind > 0) {
+                st.resync_events++;
+                st.resync_words += static_cast<uint32_t>(behind);
+                head = frame_head;
+            } else if (behind < 0) {
+                st.head_lag++;
+            }
+        }
+        uint32_t run = tail - head;
+        if (run > kSpscRingCap) {
+            st.anomalies++;
+            head = tail - kSpscRingCap;  // only the newest ring-full of words still exists
+            run = kSpscRingCap;
+        }
+        st.head[lane] = head + run;
+        if (run == 0) {
+            continue;
+        }
+        st.live_words += run;
+        const uint32_t hm = head & kSpscRingMask;
+        uint32_t th = st.timer_hi[lane];
+        uint32_t i = 0;
+        while (i < run) {
+            const uint32_t w0 = ring[(hm + i) & kSpscRingMask];
+            const uint32_t t = pp_type(w0);
+            if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
+                if (i + 2 > run) {
+                    st.anomalies++;
+                    break;
+                }
+                const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                const uint64_t ts = (t == PP_ZONE_TOTAL) ? w1 : pp_full_ts(th, w1);
+                emit(lane, t, pp_low27(w0) & 0xFFFFu, ts, pg);
+                i += 2;
+            } else if (t == PP_STICKY_TIMER) {
+                th = pp_timer_hi(w0);
+                i += 1;
+            } else if (t == PP_STICKY_PROG) {
+                if (i + 2 > run) {
+                    st.anomalies++;
+                    break;
+                }
+                const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                if (w1 != pg) {
+                    pg = w1;
+                    emit_prog(core, pg);
+                }
+                i += 2;
+            } else if (t == PP_DATA || t == PP_EVENT) {
+                const uint32_t n = pp_data_size(w0);
+                if (i + 2 + n > run) {
+                    st.anomalies++;
+                    break;
+                }
+                const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                uint32_t payload[kSpscMaxDataWords];
+                for (uint32_t k = 0; k < n; k++) {
+                    payload[k] = ring[(hm + i + 2 + k) & kSpscRingMask];
+                }
+                emit_data(lane, t, pp_data_id(w0), pp_full_ts(th, w1), pg, payload, n);
+                i += 2 + n;
+            } else {
+                st.anomalies++;
+                break;
+            }
+        }
+        st.timer_hi[lane] = th;
+    }
+    st.prog[core] = pg;
+}
 
 // Sticky/framing state carried ACROSS decode calls for one continuous stream (one D2HSocket / host ring).
 struct SpscDecodeState {
@@ -107,9 +252,6 @@ struct SpscIgnoreData {
         const uint32_t* /*payload*/,
         uint32_t /*n*/) const {}
 };
-
-// Largest PP_DATA payload the 7-bit size field can express; bounds the ring-unwrap scratch buffer.
-inline constexpr uint32_t kSpscMaxDataWords = 127;
 
 template <typename Emit, typename EmitData = SpscIgnoreData>
 inline void spsc_decode(

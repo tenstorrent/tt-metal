@@ -103,6 +103,37 @@ public:
         }
 
         /**
+         * @brief Current stream position: the count of items ever published. The start of a
+         *        direct-emit region (see emit_reserve/emit_store/emit_commit).
+         */
+        [[nodiscard]] uint64_t position() const noexcept { return head_cache_; }
+
+        /**
+         * @brief Direct emit, step 1: raise the claim to @p upto before storing items into
+         *        [position(), upto). May be called repeatedly with a growing bound while a region
+         *        is open (e.g. a worst-case bump per input chunk); @p upto must never decrease
+         *        within the region. Readers treat claimed-but-uncommitted slots as potentially
+         *        overwritten, so keep the over-claim small relative to capacity.
+         */
+        void emit_reserve(uint64_t upto) noexcept {
+            shared_state_->claim.store(upto, std::memory_order_relaxed);
+            std::atomic_thread_fence(std::memory_order_release);
+        }
+
+        /** @brief Direct emit, step 2: store one item at @p pos, which must be below the reserved bound. */
+        void emit_store(uint64_t pos, const T& item) noexcept { view_.slot_at(pos).store(item); }
+
+        /**
+         * @brief Direct emit, step 3: publish items [position(), pos) and settle the claim to the
+         *        committed position. Does not wake readers; see wake_readers().
+         */
+        void emit_commit(uint64_t pos) noexcept {
+            shared_state_->head.store(pos, std::memory_order_release);
+            shared_state_->claim.store(pos, std::memory_order_relaxed);
+            head_cache_ = pos;
+        }
+
+        /**
          * @brief Wakes readers blocked in Reader::wait().
          *
          * publish()/publish_batch() do not wake on their own; this must be called explicitly.

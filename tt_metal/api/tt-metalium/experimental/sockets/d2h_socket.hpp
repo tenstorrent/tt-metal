@@ -312,6 +312,36 @@ public:
     void read(void* data, uint32_t num_pages, bool notify_sender = true);
 
     /**
+     * @brief View into the FIFO's host memory returned by peek(): one span, or two when the
+     *        requested range wraps the FIFO end (`second` is then the FIFO base).
+     */
+    struct ReadView {
+        const uint32_t* first = nullptr;
+        uint32_t first_bytes = 0;
+        const uint32_t* second = nullptr;
+        uint32_t second_bytes = 0;
+    };
+
+    /**
+     * @brief Zero-copy read: returns spans into the FIFO's host memory instead of copying.
+     *
+     * Blocks until `num_pages` are available, so only request what pages_available() reported.
+     * The spans stay valid — the device cannot overwrite them — until the caller retires them
+     * with pop(): the device only reclaims FIFO space it has been notified of via `bytes_acked`.
+     * The read pointer advances only on pop(), so peeking again before pop() returns the same data.
+     *
+     * @throws TT_FATAL if page_size has not been set or num_pages exceeds FIFO capacity.
+     */
+    ReadView peek(uint32_t num_pages);
+
+    /**
+     * @brief Retires a prior peek(): advances the read pointer past `num_pages` and (optionally)
+     *        notifies the device that the space is reclaimable. Call with the same page count as
+     *        the peek(), after the caller has finished with the spans.
+     */
+    void pop(uint32_t num_pages, bool notify_sender = true);
+
+    /**
      * @brief Blocks until all sent data has been acknowledged.
      *
      * Waits until `bytes_acked` equals `bytes_sent`, indicating the host has
