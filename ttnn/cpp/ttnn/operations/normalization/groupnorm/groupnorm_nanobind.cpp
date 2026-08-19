@@ -64,7 +64,7 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                 output_layout (ttnn.Layout, optional): Defaults to `None`.
                 num_out_blocks (int, optional): For non-sharded (interleaved) inputs, splits the per-core output height (``block_h``, in tiles) into ``num_out_blocks`` chunks so each iteration uses less SRAM, at the cost of performance. Ignored for sharded inputs. Should only be set if needed to relieve SRAM pressure. Accepted explicit values are ``-1`` (use the built-in auto-heuristic) or a chunk count in range ``[1, block_h]``. Defaults to `None`, whose meaning depends on :attr:`core_grid` (non-sharded inputs only): when :attr:`core_grid` is also `None` (auto-selected), ``num_out_blocks`` is determined automatically using the same auto-heuristic as ``-1``, and passing an explicit ``num_out_blocks`` in that case is rejected. When :attr:`core_grid` is provided and ``num_out_blocks`` is `None` (default), ``num_out_blocks`` defaults to ``1`` (no chunking).
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the op. Defaults to `None`.
-                negative_mask (ttnn.Tensor, optional): Defaults to `None`. Can be used only in row-major sharded input/output tensors. Used to reduce the number of CB's used in the sharded version of the kernel by overlapping the CB's used for tilized input and output. (The kernel is in fact row major variant, but is internally tilizing RM into tilized inputs).
+                negative_mask (ttnn.Tensor, optional): Defaults to `None`. Can be used only in row-major sharded input/output tensors. Created with ttnn.create_group_norm_input_negative_mask. Used to reduce the number of CB's used in the sharded version of the kernel. When no tensor is passed the op synthesizes the mask in L1 if and only if the program would otherwise not fit in L1.
                 use_welford (bool, optional): Defaults to `False`. If `True`, the Welford's algorithm is used to compute the mean and variance. Welford cannot exclude the tile-padding rows, so if the per-sample ``H*W`` is not a multiple of the tile height this silently falls back to the two-pass path -- which handles that case correctly -- and :attr:`reciprocals` is ignored. The fallback is warned once per process.
                 reciprocals (ttnn.Tensor, optional): Defaults to `None`. FP32 tensor containing pre-computed reciprocal values. Only valid when ``use_welford`` is True. Must be sharded to L1 using the legacy ``ShardSpec`` representation, with the shard grid matching the compute :attr:`core_grid`. Interleaved tensors and ``NdShardSpec`` sharding are currently not supported for the :attr:`reciprocals` tensor.
 
@@ -152,9 +152,16 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
            int64_t num_cores_across_channel,
            DataType data_type,
            int64_t tile_height,
-           int64_t tile_width) {
+           int64_t tile_width,
+           int64_t rows_in_last_tile) {
             return create_group_norm_input_mask(
-                num_channel, num_groups, num_cores_across_channel, data_type, tile_height, tile_width);
+                num_channel,
+                num_groups,
+                num_cores_across_channel,
+                data_type,
+                tile_height,
+                tile_width,
+                rows_in_last_tile);
         },
         nb::arg("num_channel"),
         nb::arg("num_groups"),
@@ -162,9 +169,16 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         nb::arg("data_type") = DataType::BFLOAT16,
         nb::arg("tile_height") = 32,
         nb::arg("tile_width") = 32,
+        nb::arg("rows_in_last_tile") = 0,
         R"doc(
             C++ implementation of create_group_norm_input_mask.
             Returns a ttnn.Tensor of shape [1, num_groups, 32, 32*block_wt], dtype=ttnn.DataType.BFLOAT16.
+
+            rows_in_last_tile (= ``logical_hw % 32``) is for non-tile-aligned H*W. It appends a
+            second set of groups -- shape becomes [1, 2*num_groups, 32, 32*block_wt] -- identical
+            to the first but with rows >= rows_in_last_tile zeroed, which group_norm selects on
+            each batch's final row-tile. Leave at 0 for tile-aligned H*W; without it, group_norm
+            derives the second set with a device-side multiply+concat on every call.
         )doc");
     mod.def(
         "create_group_norm_input_negative_mask",

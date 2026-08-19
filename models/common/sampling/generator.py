@@ -36,7 +36,7 @@ def _mark_trace_buffers_corruptible(bucket, value):
         mark_corruptible(value)
 
 
-def _hash_request_seed_to_device_seed(seed: int, counter: int) -> int:
+def _hash_request_seed_to_device_seed(seed: int, counter: int, salt: int = 0) -> int:
     """Derive a stable per-token device seed from a request seed.
 
     The device sampling op accepts bounded positive seeds, while vLLM
@@ -44,8 +44,15 @@ def _hash_request_seed_to_device_seed(seed: int, counter: int) -> int:
     of batch slot. Hashing (request seed, token counter) gives each token
     a deterministic but well-mixed device seed without relying on mutable
     per-slot RNG state. The constants below are the SplitMix64 finalizer.
+
+    ``salt`` separates concurrent requests that carry the same request seed
+    (e.g. n>1 completions of one prompt with a fixed seed): without it every
+    such request derives the identical device seed at the identical token
+    position and the completions come out byte-identical (#53077). A request
+    with a unique seed always has salt 0, so its stream is unchanged.
     """
     value = (int(seed) & _UINT64_MASK) ^ ((int(counter) + 0x9E3779B97F4A7C15) & _UINT64_MASK)
+    value ^= (int(salt) * 0xD1B54A32D192ED03) & _UINT64_MASK
     value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & _UINT64_MASK
     value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & _UINT64_MASK
     value = (value ^ (value >> 31)) & _UINT64_MASK
@@ -680,6 +687,11 @@ class SeedManager:
         self.max_batch_size = max_batch_size
         self.seeds = [None for _ in range(max_batch_size)]
         self.seed_counters = [0 for _ in range(max_batch_size)]
+        # Disambiguates concurrent slots that carry the SAME explicit request
+        # seed (n>1 completions of one prompt with a fixed seed). A slot whose
+        # seed is unique among active slots always has salt 0, preserving the
+        # slot-independent reproducibility of single-sample seeded requests.
+        self.seed_salts = [0 for _ in range(max_batch_size)]
         # Pre-allocate RNG objects; actual request seeds are set via reset_seed().
         self.rngs = [random.Random(secrets.randbits(64)) for _ in range(max_batch_size)]
         self.tt_sampling = tt_sampling
@@ -717,9 +729,78 @@ class SeedManager:
         request_seed = self.seeds[slot]
         if request_seed is None:
             return self._next_device_seed_from_rng(self.rngs[slot])
-        device_seed = _hash_request_seed_to_device_seed(int(request_seed), self.seed_counters[slot])
+        device_seed = _hash_request_seed_to_device_seed(
+            int(request_seed), self.seed_counters[slot], self.seed_salts[slot]
+        )
         self.seed_counters[slot] += 1
         return device_seed
+
+    def _next_free_salt(self, slot: int, seed: int) -> int:
+        """Smallest salt not used by another active slot holding the same request seed.
+
+        The first slot to carry a given seed gets salt 0 (identical stream to
+        today), the second gets 1, and so on. Using the smallest free value --
+        rather than a running count -- avoids re-colliding with a surviving
+        duplicate after an earlier one finished and vacated its slot.
+        """
+        taken = {
+            self.seed_salts[other]
+            for other in range(self.max_batch_size)
+            if other != slot and self.seeds[other] == seed
+        }
+        salt = 0
+        while salt in taken:
+            salt += 1
+        return salt
+
+    def _set_slot_seed(self, slot: int, seed, *, keep_existing_salt: bool):
+        """Single writer for a slot's (seed, counter, salt, rng) state.
+
+        With ``keep_existing_salt`` (decode-path re-registration of a running
+        request), a slot that already holds the same request seed is left
+        untouched: salts are collision-free among live same-seed slots by
+        construction, and recomputing one mid-generation (the unconditional
+        re-registration on the first decode after any admission) would splice
+        the request onto a finished sibling's RNG stream. Without it (prefill
+        admission of a new request) the slot is fully reset, including a fresh
+        smallest-free salt, so a unique-seed request always lands on salt 0.
+        """
+        if keep_existing_salt and seed is not None and self.seeds[slot] == seed:
+            return
+        self.seeds[slot] = seed
+        self.seed_counters[slot] = 0
+        if seed is None:
+            self.seed_salts[slot] = 0
+            self.rngs[slot].seed(self._next_unseeded_rng_seed())
+        else:
+            self.seed_salts[slot] = self._next_free_salt(slot, seed)
+            self.rngs[slot].seed(int(seed))
+
+    def deactivate_slots_except(self, live_slots) -> None:
+        """Drop seed state of slots that are no longer live.
+
+        Nothing else clears a finished request's slot when condense has no
+        move to make (a request finishing at the tail of the batch leaves its
+        seed behind), so the ghost would keep counting toward _next_free_salt
+        and hand a later unique-seed request a salt > 0, breaking seeded
+        reproducibility. Callers pass the current live-slot set (decode
+        positions >= 0).
+        """
+        if not self._seed_active:
+            return
+        live = {int(slot) for slot in live_slots}
+        for slot in range(self.max_batch_size):
+            if slot not in live and self.seeds[slot] is not None:
+                self.seeds[slot] = None
+                self.seed_counters[slot] = 0
+                self.seed_salts[slot] = 0
+        self._seed_active = any(s is not None for s in self.seeds)
+        if not self._seed_active:
+            # Re-enter the unseeded three-state machine. The device still holds
+            # the seeded path's non-SKIP reinit values; without a fresh init+SKIP
+            # push, get_new_values early-returns and the device reinitializes
+            # every user's PRNG to the same stale seed on every token.
+            self._reseted = True
 
     def _seed_from_slot_params(self, seeds, slot: int):
         if seeds is None:
@@ -751,12 +832,7 @@ class SeedManager:
         for user in user_ids:
             slot = int(user)
             seed = self._seed_from_slot_params(seeds, slot)
-            self.seeds[slot] = seed
-            self.seed_counters[slot] = 0
-            if seed is None:
-                self.rngs[slot].seed(self._next_unseeded_rng_seed())
-            else:
-                self.rngs[slot].seed(int(seed))
+            self._set_slot_seed(slot, seed, keep_existing_salt=True)
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
 
@@ -836,12 +912,15 @@ class SeedManager:
         # Snapshot the state we're about to overwrite.
         old_seeds = list(self.seeds)
         old_counters = list(self.seed_counters)
+        old_salts = list(self.seed_salts)
         old_rngs = list(self.rngs)
         moved_sources = {old_slot for old_slot, _ in moves}
         moved_destinations = {new_slot for _, new_slot in moves}
         for old_slot, new_slot in moves:
             self.seeds[new_slot] = old_seeds[old_slot]
             self.seed_counters[new_slot] = old_counters[old_slot]
+            # The salt travels with the request so its stream survives the move.
+            self.seed_salts[new_slot] = old_salts[old_slot]
             # copy.copy preserves internal RNG state but creates an
             # independent object so the old slot reference does not alias
             # the new one.
@@ -851,7 +930,12 @@ class SeedManager:
         for old_slot in moved_sources - moved_destinations:
             self.seeds[old_slot] = None
             self.seed_counters[old_slot] = 0
+            self.seed_salts[old_slot] = 0
         self._seed_active = any(s is not None for s in self.seeds)
+        if not self._seed_active:
+            # Same re-arm as deactivate_slots_except: a remap that overwrites the
+            # last seeded slot must push init+SKIP or the device PRNG freezes.
+            self._reseted = True
 
     def reset_seed(self, seeds, user_ids):
         """Update RNG state for the given user slots after a prefill.
@@ -865,12 +949,7 @@ class SeedManager:
         for i, user in enumerate(user_ids):
             slot = int(user)
             seed = self._seed_from_slot_params(seeds, i)
-            self.seeds[slot] = seed
-            self.seed_counters[slot] = 0
-            if seed is None:
-                self.rngs[slot].seed(self._next_unseeded_rng_seed())
-            else:
-                self.rngs[slot].seed(int(seed))
+            self._set_slot_seed(slot, seed, keep_existing_salt=False)
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
 

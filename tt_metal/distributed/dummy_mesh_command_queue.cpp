@@ -62,7 +62,7 @@ void DummyMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> /*sub_de
 MeshEvent DummyMeshCommandQueue::enqueue_record_event_to_host_nolock(
     ttsl::Span<const SubDeviceId> /*sub_device_ids*/, const std::optional<MeshCoordinateRange>& device_range) {
     // Return dummy event for inactive rank
-    return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    return MeshEvent(0, *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
 void DummyMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& /*mesh_workload*/, bool /*blocking*/) {
@@ -72,7 +72,7 @@ void DummyMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& /*mesh_workload*
 MeshEvent DummyMeshCommandQueue::enqueue_record_event(
     ttsl::Span<const SubDeviceId> /*sub_device_ids*/, const std::optional<MeshCoordinateRange>& device_range) {
     // Return dummy event for inactive rank
-    return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    return MeshEvent(0, *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
 MeshEvent DummyMeshCommandQueue::enqueue_record_event_to_host(

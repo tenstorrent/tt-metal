@@ -36,6 +36,11 @@ class KimiK26Adapter(MLAPrefillAdapter):
     l1_small_size = 768
     routing_use_l1_small_for_semaphores = True
 
+    # The Kimi-K2.x DFlash drafter checkpoint ($DFLASH_HF_MODEL) targets THIS architecture: its
+    # num_target_layers=61 / hidden_size=7168 match, and it taps layer outputs (1, 12, 24, 35, 47, 58) of
+    # it. K2.7 is the same architecture and inherits this; no other model may enable PREFILL_DFLASH.
+    supports_dflash = True
+
     # --- test metadata (HF download coordinates + PCC thresholds) ---
     hf_repo_id = "moonshotai/Kimi-K2.6"
     env_var = "KIMI_K2_6_HF_MODEL"

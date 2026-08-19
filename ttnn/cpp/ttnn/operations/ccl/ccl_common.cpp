@@ -123,6 +123,48 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
 }
 
+bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
+    const auto& mesh_view = mesh_device.get_view();
+    const auto& mesh_shape = mesh_view.shape();
+    if (mesh_shape[axis] < 2) {
+        return true;  // no hops to compare
+    }
+
+    // Axis 0 runs down a column, axis 1 along a row.
+    std::optional<tt::tt_fabric::eth_chan_directions> axis_direction;
+    for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
+        const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
+                                     : mesh_view.get_fabric_node_ids_on_row(row_or_col);
+        for (size_t i = 1; i < nodes.size(); i++) {
+            const auto directions = tt::tt_fabric::get_neighbor_eth_directions(nodes[i - 1], nodes[i]);
+            if (directions.empty() || (axis_direction.has_value() && directions.front() != *axis_direction)) {
+                return false;
+            }
+            axis_direction = directions.front();
+        }
+    }
+    return true;
+}
+
+bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
+    const auto& mesh_view = mesh_device.get_view();
+    const auto& mesh_shape = mesh_view.shape();
+    // A 2-device axis would close on the link it already uses, so it stays open and never rings.
+    if (!tt::tt_fabric::is_genuine_torus_dim(mesh_shape[axis])) {
+        return false;
+    }
+
+    // Axis 0 runs down a column, axis 1 along a row.
+    for (uint32_t row_or_col = 0; row_or_col < mesh_shape[1 - axis]; row_or_col++) {
+        const auto nodes = axis == 0 ? mesh_view.get_fabric_node_ids_on_column(row_or_col)
+                                     : mesh_view.get_fabric_node_ids_on_row(row_or_col);
+        if (tt::tt_fabric::get_neighbor_eth_directions(nodes.back(), nodes.front()).empty()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 tt::tt_fabric::Topology get_axis_topology(
     const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis) {
     // Whether the fabric wraps this axis into a ring/torus.
@@ -140,9 +182,9 @@ tt::tt_fabric::Topology get_axis_topology(
         axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
     }
 
-    // Ring only if the fabric can wrap this axis AND the device set spans [0..size-1].
-    const bool axis_is_ring = axis_can_wrap && get_boundary_mode(tensor, tt::tt_fabric::Topology::Torus, axis) ==
-                                                   tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+    // The torus flags name a fabric axis. A view axis can be a permutation of it, so the flag alone
+    // says nothing about this axis: only a wired closing link makes it a ring.
+    const bool axis_is_ring = axis_can_wrap && is_axis_wrap_wired(*tensor.device(), axis);
     return axis_is_ring ? tt::tt_fabric::Topology::Ring : tt::tt_fabric::Topology::Linear;
 }
 
@@ -403,7 +445,7 @@ std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& ten
     return devices;
 }
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+WorkerCoreSelection try_choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
     IDevice* device,
@@ -411,12 +453,12 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     const CoreCoord core_grid_offset,
     const std::optional<CoreRangeSet>& sub_core_grid,
     CoreAllocationStrategy strategy) {
-    std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
-    auto available_cores = device->worker_cores(
+    const auto worker_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    auto available_cores = worker_cores;
     if (sub_core_grid.has_value()) {
         available_cores = available_cores.intersection(sub_core_grid.value());
     }
@@ -471,7 +513,38 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
             break;
         }
     }
-    return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
+
+    // The loops above shift each candidate by core_grid_offset without re-checking it, so an offset near the grid
+    // edge can push cores off the worker grid entirely (onto dispatch cores).
+    WorkerCoreSelection selection{
+        sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true), {}};
+    for (const auto& core : selection.cores) {
+        if (!worker_cores.contains(core)) {
+            selection.unplaceable_cores.push_back(core);
+        }
+    }
+    return selection;
+}
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreCoord core_grid_offset,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    CoreAllocationStrategy strategy) {
+    auto selection = try_choose_worker_cores(
+        num_links, num_workers_per_link, device, sub_device_id, core_grid_offset, sub_core_grid, strategy);
+    TT_FATAL(
+        selection.all_placeable(),
+        "Core grid offset {} pushed {} of the {} selected worker cores (first: {}) off the worker grid; kernels "
+        "cannot be placed there. Request fewer cores or use a smaller offset.",
+        core_grid_offset.str(),
+        selection.unplaceable_cores.size(),
+        selection.cores.size(),
+        selection.unplaceable_cores.front().str());
+    return {std::move(selection.core_range_set), std::move(selection.cores)};
 }
 
 std::vector<ttnn::Tensor> unpad_output_tensor(

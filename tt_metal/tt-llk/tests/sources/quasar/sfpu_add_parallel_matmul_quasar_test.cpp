@@ -16,12 +16,9 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-constexpr std::uint32_t buf_desc_id_src_a = 29;
-constexpr std::uint32_t buf_desc_id_src_b = 30;
-constexpr std::uint32_t buf_desc_id_dst   = 31;
-
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_unpack_matmul.h"
 #include "params.h"
 
@@ -34,31 +31,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
     set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
 
-    tdma_descriptor_t tdma_desc_src_a;
-    tdma_desc_src_a.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_A[0]);
-    tdma_desc_src_a.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_A_src);
-    tdma_desc_src_a.buf_desc.f.lmt_addr_16B = 0;
-    tdma_desc_src_a.buf_desc.f.x_dim        = FACE_C_DIM;
-    tdma_desc_src_a.buf_desc.f.y_dim        = FACE_R_DIM;
-    tdma_desc_src_a.buf_desc.f.z_dim        = params.num_faces_A;
-    tdma_desc_src_a.buf_desc_id             = buf_desc_id_src_a;
-    tdma_desc_src_a.reg_data_format         = static_cast<std::uint32_t>(formats.unpack_A_dst);
+    // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives
+    // UNPACR0/SrcA -- so operand A is recorded under Unp1 and operand B under Unp0 (matches product).
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
+        ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_A), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+        ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_B), L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
+    _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(
+        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
 
-    tdma_descriptor_t tdma_desc_src_b;
-    tdma_desc_src_b.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_B[0]);
-    tdma_desc_src_b.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_B_src);
-    tdma_desc_src_b.buf_desc.f.lmt_addr_16B = 0;
-    tdma_desc_src_b.buf_desc.f.x_dim        = FACE_C_DIM;
-    tdma_desc_src_b.buf_desc.f.y_dim        = FACE_R_DIM;
-    tdma_desc_src_b.buf_desc.f.z_dim        = params.num_faces_B;
-    tdma_desc_src_b.buf_desc_id             = buf_desc_id_src_b;
-    tdma_desc_src_b.reg_data_format         = static_cast<std::uint32_t>(formats.unpack_B_dst);
-
-    _configure_buf_desc_table_(tdma_desc_src_a.buf_desc_id, tdma_desc_src_a.buf_desc);
-    _configure_buf_desc_table_(tdma_desc_src_b.buf_desc_id, tdma_desc_src_b.buf_desc);
-    _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(tdma_desc_src_a, tdma_desc_src_b);
-
-    _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(buf_desc_id_src_a, buf_desc_id_src_b, params.CT_DIM, params.RT_DIM, params.KT_DIM);
+    _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+        params.CT_DIM,
+        params.RT_DIM,
+        params.KT_DIM);
 
     for (std::uint32_t j = 0; j < params.KT_DIM; j++)
     {
@@ -81,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false>(
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*EN_INT32_MATH_FORMAT*/>(
         static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
     _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(params.CT_DIM, params.RT_DIM);
 
@@ -114,6 +101,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const volatile FormatConfig& formats = params.formats;
 #endif
+
     const std::uint32_t num_tiles = params.TILE_CNT;
 
     // FormatConfig has no unpack_T_* fields, so T is unpacked with S's format. Callers must keep
@@ -143,6 +131,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_matmul.h"
 #include "params.h"
@@ -154,21 +143,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    tdma_descriptor_t tdma_desc_dst;
-    tdma_desc_dst.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_C[0]);
-    tdma_desc_dst.buf_desc.f.lmt_addr_16B = 0;
-    tdma_desc_dst.buf_desc.f.format       = static_cast<std::uint8_t>(formats.pack_dst);
-    tdma_desc_dst.buf_desc.f.x_dim        = FACE_C_DIM;
-    tdma_desc_dst.buf_desc.f.y_dim        = FACE_R_DIM;
-    tdma_desc_dst.buf_desc.f.z_dim        = params.num_faces;
-    tdma_desc_dst.buf_desc_id             = buf_desc_id_dst;
-    tdma_desc_dst.reg_data_format         = static_cast<std::uint8_t>(formats.pack_src);
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+        ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_C[0]), formats.pack_dst);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    _llk_pack_matmul_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), params.RT_DIM, params.CT_DIM, 1 /*num_subblocks_c_dim*/);
 
-    _configure_buf_desc_table_(tdma_desc_dst.buf_desc_id, tdma_desc_dst.buf_desc);
-    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc_dst, ckernel::ReluConfig::none());
-    _llk_pack_matmul_init_(buf_desc_id_dst, params.RT_DIM, params.CT_DIM, 1);
-
-    _llk_pack_matmul_(0, 0);
+    _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 

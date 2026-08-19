@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       models-to-run:
-        description: 'List of requested models as JSON array, for example: ["common_models", "functional_unet"]. Default is ''all'''
+        description: 'List of requested models as JSON array, for example: ["bge_m3"]. Default is ''all'''
         default: "all"
         type: string
       enable-ops-recording:
@@ -41,7 +41,7 @@ on:
         required: false
         type: string
         default: "all"
-        description: 'List of requested models as JSON array, for example: ["common_models", "functional_unet"]. Default is ''all'''
+        description: 'List of requested models as JSON array, for example: ["bge_m3"]. Default is ''all'''
       enable-ops-recording:
         required: false
         type: boolean
@@ -71,6 +71,7 @@ jobs:
 
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -84,6 +85,7 @@ jobs:
       tracy: ${{ inputs.enable-ops-recording || false }}
   single-card-ttnn-models-frequent-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     uses: ./.github/workflows/single-card-ttnn-models-frequent-tests-impl.yaml
     secrets: inherit
     with:

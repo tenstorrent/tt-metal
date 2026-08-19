@@ -37,7 +37,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/vector_aligned.hpp>
+#include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include "math.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>

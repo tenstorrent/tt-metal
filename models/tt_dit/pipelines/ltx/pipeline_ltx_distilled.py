@@ -43,6 +43,7 @@ class LTXDistilledPipeline(LTXPipeline):
     """Distilled 2-stage AV pipeline: half-res denoise → upsample → full-res refine."""
 
     HAS_UPSAMPLER = True
+    DEFERS_ENCODE_TRACE = True
 
     @staticmethod
     def _post_process_latent_tt(
@@ -598,11 +599,14 @@ class LTXDistilledPipeline(LTXPipeline):
         timings: list[tuple[str, float]] = []
 
         t0 = time.time()
-        # Only load the Gemma encoder (coresident-evicts DiT/VAE) on a cache miss.
-        cached = os.path.exists(self._device_embed_cache_path([prompt]))
+        # A served request encodes a prompt nothing has seen, so a cache hit would drop the encoder
+        # out of the reported total and out of the traced path it belongs in. dynamic_load keeps the
+        # cache: there the encoder is coresident-excluded from the DiT, so re-encoding every request
+        # would reload it and evict the captured model state.
+        cached = self.dynamic_load and os.path.exists(self._device_embed_cache_path([prompt]))
         if not cached:
             self.gemma_encoder_pair.ensure_loaded()
-        enc = self.encode_prompts([prompt])
+        enc = self.encode_prompts([prompt], use_cache=self.dynamic_load)
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         t_encode = time.time() - t0
         timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
@@ -728,4 +732,8 @@ class LTXDistilledPipeline(LTXPipeline):
             export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
         logger.info(f"Video export: {time.time() - t0:.1f}s")
         logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | Output: {output_path}")
+        # Every trace this pipeline takes is captured by now, so the encoder can start tracing: its
+        # capture is last and nothing left will reclaim its activation region.
+        if self._traced and not self.dynamic_load:
+            self.gemma_encoder_pair.open_trace_gate()
         return output_path

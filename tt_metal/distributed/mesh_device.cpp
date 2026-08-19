@@ -49,6 +49,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
+#include "distributed/trace_allocation_tracker.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
@@ -267,11 +268,84 @@ uint32_t MeshDeviceImpl::dram_size_per_channel() const {
 
 IDevice* MeshDeviceImpl::reference_device() const { return this->get_devices().at(0); }
 
-// NOLINTNEXTLINE(readability-make-member-function-const)
-void MeshDeviceImpl::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
+std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators() const {
+    this->validate_sub_device_manager_tracker();
+    std::vector<AllocatorImpl*> result;
+    std::unordered_set<AllocatorImpl*> seen;
+    const auto append_manager = [&result, &seen](const SubDeviceManager* manager) {
+        if (manager == nullptr) {
+            return;
+        }
+        for (const auto& allocator : manager->allocators()) {
+            if (allocator != nullptr && seen.insert(allocator.get()).second) {
+                result.push_back(allocator.get());
+            }
+        }
+    };
+
+    append_manager(sub_device_manager_tracker_->get_default_sub_device_manager());
+    append_manager(sub_device_manager_tracker_->get_active_sub_device_manager());
+    return result;
+}
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
-void MeshDeviceImpl::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
+void MeshDeviceImpl::register_active_trace(const MeshTraceId& trace_id) {
+    for (auto* allocator : this->trace_allocators()) {
+        allocator->register_active_trace(*trace_id);
+    }
+}
+
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void MeshDeviceImpl::unregister_active_trace(const MeshTraceId& trace_id) {
+    for (auto* allocator : this->trace_allocators()) {
+        allocator->unregister_active_trace(*trace_id);
+    }
+}
+
+std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids(const MeshTraceId& trace_id) const {
+    std::unordered_map<size_t, std::string> result;
+    for (auto* allocator : this->trace_allocators()) {
+        result.merge(allocator->get_unsafe_tracked_ids(*trace_id));
+    }
+    return result;
+}
+// NOLINTNEXTLINE(readability-make-member-function-const)
+void MeshDeviceImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
+    for (auto* allocator : this->trace_allocators()) {
+        allocator->remove_unsafe_tracked_id(buffer_unique_id);
+    }
+}
+std::vector<size_t> MeshDeviceImpl::drain_pending_traceback_ids() {
+    return AllocatorImpl::drain_pending_traceback_ids();
+}
+std::vector<size_t> MeshDeviceImpl::drain_retired_traceback_ids() {
+    return AllocatorImpl::drain_retired_traceback_ids();
+}
+void MeshDeviceImpl::push_corruptible_allocation_scope() {
+    AllocatorImpl::push_corruptible_allocation_scope(this->trace_allocators());
+}
+void MeshDeviceImpl::pop_corruptible_allocation_scope() { AllocatorImpl::pop_corruptible_allocation_scope(); }
+
+namespace trace_allocation_tracker {
+
+void register_active_trace(MeshDevice* device, const MeshTraceId& trace_id) {
+    device->impl().register_active_trace(trace_id);
+}
+void unregister_active_trace(MeshDevice* device, const MeshTraceId& trace_id) {
+    device->impl().unregister_active_trace(trace_id);
+}
+std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshDevice* device, const MeshTraceId& trace_id) {
+    return device->impl().get_unsafe_tracked_ids(trace_id);
+}
+void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id) {
+    device->impl().remove_unsafe_tracked_id(buffer_unique_id);
+}
+std::vector<size_t> drain_pending_traceback_ids() { return MeshDeviceImpl::drain_pending_traceback_ids(); }
+std::vector<size_t> drain_retired_traceback_ids() { return MeshDeviceImpl::drain_retired_traceback_ids(); }
+void push_corruptible_allocation_scope(MeshDevice* device) { device->impl().push_corruptible_allocation_scope(); }
+void pop_corruptible_allocation_scope(MeshDevice* device) { device->impl().pop_corruptible_allocation_scope(); }
+
+}  // namespace trace_allocation_tracker
 
 MeshDeviceImpl::MeshDeviceImpl(
     std::shared_ptr<ScopedDevices> mesh_handle,
@@ -1310,10 +1384,7 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
 
     tt::tt_metal::experimental::inspector::ReleaseTraceDebugEntries(trace_id);
 
-    // Only enable allocations once all captured traces are released
-    if (this->trace_buffers_size_ == 0) {
-        this->mark_allocations_safe();
-    }
+    this->unregister_active_trace(trace_id);
 }
 
 std::shared_ptr<MeshTraceBuffer> MeshDeviceImpl::get_mesh_trace(const MeshTraceId& trace_id) {
@@ -1334,8 +1405,6 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
         "CQ {} is already being used for tracing tid {}",
         (uint32_t)cq_id,
         *trace_id);
-    this->mark_allocations_safe();
-
     // Start tracking DRAM high water mark if trace_region_size is 0 (dynamic allocation mode)
     auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
     if (trace_region_size == 0) {
@@ -1357,8 +1426,10 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
 void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     TracyTTMetalEndMeshTrace(this->get_device_ids(), *trace_id);
 
-    // Ensure allocations are marked unsafe on any exit, including thrown exceptions
-    auto mark_unsafe_on_exit = ttsl::make_cleanup([this]() { this->mark_allocations_unsafe(); });
+    // Register the trace on any exit, including thrown exceptions, so subsequent allocations are treated
+    // conservatively until the trace is released.
+    auto register_trace_on_exit =
+        ttsl::make_cleanup([this, trace_id]() { this->register_active_trace(trace_id); });
 
     TT_FATAL(
         this->mesh_command_queues_[cq_id]->trace_id() == trace_id,
@@ -1674,10 +1745,17 @@ void MeshDeviceImpl::quiesce_internal() {
             submesh_ptr->quiesce_devices();
         }
     }
-    bool have_reset_launch_msg_state = false;
-    for (auto& command_queue : mesh_command_queues_) {
-        command_queue->wait_for_completion(!have_reset_launch_msg_state);
-        have_reset_launch_msg_state = true;
+    // The launch message ring buffer and the worker GO mailboxes are shared across hardware CQs, so exactly
+    // one CQ resets them. Pick the last CQ that has work outstanding: wait_for_completion finishes each CQ in
+    // turn, so by then no other CQ can still have workers in flight whose GO mailboxes would be reset.
+    size_t launch_msg_reset_cq = mesh_command_queues_.size();
+    for (size_t cq_id = 0; cq_id < mesh_command_queues_.size(); ++cq_id) {
+        if (mesh_command_queues_[cq_id]->in_use()) {
+            launch_msg_reset_cq = cq_id;
+        }
+    }
+    for (size_t cq_id = 0; cq_id < mesh_command_queues_.size(); ++cq_id) {
+        mesh_command_queues_[cq_id]->wait_for_completion(/*reset_launch_msg_state=*/cq_id == launch_msg_reset_cq);
     }
     for (auto& command_queue : mesh_command_queues_) {
         command_queue->finish_and_reset_in_use();
@@ -1838,6 +1916,22 @@ uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRan
     return pimpl_->get_noc_multicast_encoding(noc_index, cores);
 }
 SystemMemoryManager& MeshDevice::sysmem_manager() { return pimpl_->sysmem_manager(); }
+MeshTraceId MeshDevice::begin_mesh_trace(MeshCommandQueue& cq) {
+    TT_FATAL(cq.device() == this, "MeshCommandQueue belongs to a different MeshDevice");
+    return pimpl_->begin_mesh_trace(static_cast<uint8_t>(cq.id()));
+}
+void MeshDevice::begin_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id) {
+    TT_FATAL(cq.device() == this, "MeshCommandQueue belongs to a different MeshDevice");
+    pimpl_->begin_mesh_trace(static_cast<uint8_t>(cq.id()), trace_id);
+}
+void MeshDevice::end_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id) {
+    TT_FATAL(cq.device() == this, "MeshCommandQueue belongs to a different MeshDevice");
+    pimpl_->end_mesh_trace(static_cast<uint8_t>(cq.id()), trace_id);
+}
+void MeshDevice::replay_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id, bool blocking) {
+    TT_FATAL(cq.device() == this, "MeshCommandQueue belongs to a different MeshDevice");
+    pimpl_->replay_mesh_trace(static_cast<uint8_t>(cq.id()), trace_id, blocking);
+}
 MeshTraceId MeshDevice::begin_mesh_trace(uint8_t cq_id) { return pimpl_->begin_mesh_trace(cq_id); }
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     pimpl_->begin_mesh_trace(cq_id, trace_id);
