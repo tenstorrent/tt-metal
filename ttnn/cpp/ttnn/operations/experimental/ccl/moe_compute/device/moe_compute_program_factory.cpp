@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <numeric>
 #include <tuple>
 #include <utility>
@@ -315,6 +316,19 @@ MoEComputeMeshWorkloadFactory::create_at(
     // physical experts per device, replicated shared experts are counted per device
     uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
     uint32_t selected_experts_k = tilize_indices_shape[-1];
+
+    const uint64_t score_token_stride_64 =
+        args.score_input_organization == MoEScoreInputOrganization::ScalarPageK
+            ? static_cast<uint64_t>(selected_experts_k) * tilize_input_scores_aligned_page_size
+            : tilize_input_scores_aligned_page_size;
+    TT_FATAL(
+        score_token_stride_64 <= std::numeric_limits<uint32_t>::max(),
+        "moe_compute: routing-score token stride ({}) exceeds uint32_t",
+        score_token_stride_64);
+    const uint32_t score_token_stride = static_cast<uint32_t>(score_token_stride_64);
+    const uint32_t score_k_stride = args.score_input_organization == MoEScoreInputOrganization::ScalarPageK
+                                        ? tilize_input_scores_aligned_page_size
+                                        : sizeof(uint16_t);
 
     // Output/Combine input core dims, for core selection. These are top-level (lifted) so they
     // remain valid even when combine_params is nullopt (ComputeOnly mode).
@@ -868,7 +882,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"aligned_input_page_size", tilize_input_aligned_page_size},
         {"aligned_indices_page_size", tilize_indices_aligned_page_size},
         {"aligned_mapping_page_size", tilize_mapping_aligned_page_size},
-        {"aligned_scores_page_size", tilize_input_scores_aligned_page_size},
+        {"score_token_stride", score_token_stride},
+        {"score_k_stride", score_k_stride},
 
         // General info
         {"tokens", tokens},

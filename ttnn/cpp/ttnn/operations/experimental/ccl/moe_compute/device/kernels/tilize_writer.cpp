@@ -126,7 +126,8 @@ void kernel_main() {
     // Aligned page sizes
     constexpr uint32_t aligned_indices_page_size = get_named_compile_time_arg_val("aligned_indices_page_size");
     constexpr uint32_t aligned_mapping_page_size = get_named_compile_time_arg_val("aligned_mapping_page_size");
-    constexpr uint32_t aligned_scores_page_size = get_named_compile_time_arg_val("aligned_scores_page_size");
+    constexpr uint32_t score_token_stride = get_named_compile_time_arg_val("score_token_stride");
+    constexpr uint32_t score_k_stride = get_named_compile_time_arg_val("score_k_stride");
 
     // General info
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
@@ -342,7 +343,7 @@ void kernel_main() {
         }
 
         const uint16_t* token_indices = reinterpret_cast<const uint16_t*>(indices_base + t * aligned_indices_page_size);
-        const uint16_t* token_scores = reinterpret_cast<const uint16_t*>(scores_base + t * aligned_scores_page_size);
+        const uint32_t token_scores_base = scores_base + t * score_token_stride;
 
         // Track if this token is activated for any local expert
         uint32_t* brisc_activation_l1_ptr = nullptr;
@@ -369,7 +370,8 @@ void kernel_main() {
 
                     // Write k-index and score for this expert
                     brisc_activation_l1_ptr[1 + e] = k;
-                    brisc_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
+                    const uint16_t score = *reinterpret_cast<const uint16_t*>(token_scores_base + k * score_k_stride);
+                    brisc_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(score);
 
                     // Write to BRISC's e_t buffer (16B aligned entries)
                     const uint32_t brisc_e_t_offset =

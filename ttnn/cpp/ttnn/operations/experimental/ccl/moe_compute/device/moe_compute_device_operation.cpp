@@ -18,11 +18,237 @@
 
 #include <umd/device/types/arch.hpp>
 
+#include <limits>
+
 namespace ttnn::experimental::prim {
 namespace detail {
 
 constexpr auto TOKEN_SIZE = 32;  // This does not mean we only support 32 tokens, just hardcoding the shared buffer size
 constexpr auto DOUBLE_BUFFER_SIZE = 2;
+
+uint32_t get_total_tokens(const ttnn::Shape& input_shape) {
+    TT_FATAL(
+        input_shape.rank() >= 3 && input_shape.rank() <= 4,
+        "moe_compute: tilize_input_tensor must be rank 3 or 4 [...,tokens,hidden]; got {}",
+        input_shape);
+
+    const uint64_t hidden_size = input_shape[-1];
+    TT_FATAL(
+        hidden_size > 0, "moe_compute: tilize_input_tensor hidden dimension must be positive; got {}", input_shape);
+    const uint64_t volume = input_shape.volume();
+    TT_FATAL(
+        volume % hidden_size == 0,
+        "moe_compute: tilize_input_tensor volume {} is not divisible by hidden dimension {}; got {}",
+        volume,
+        hidden_size,
+        input_shape);
+    const uint64_t physical_rows = volume / hidden_size;
+    const uint64_t total_tokens = static_cast<uint64_t>(input_shape[0]) * input_shape[1];
+    TT_FATAL(
+        physical_rows == total_tokens,
+        "moe_compute: tilize_input_tensor {} has {} physical rows but dimensions 0*1 specify {} tokens; the "
+        "optional rank-4 dimension must be 1",
+        input_shape,
+        physical_rows,
+        total_tokens);
+    TT_FATAL(
+        total_tokens > 0 && total_tokens <= std::numeric_limits<uint32_t>::max(),
+        "moe_compute: total token count must fit uint32_t and be positive; got {}",
+        total_tokens);
+    return static_cast<uint32_t>(total_tokens);
+}
+
+MoEScoreInputOrganization derive_score_input_organization(
+    const ttnn::Shape& indices_shape, const ttnn::Shape& scores_shape) {
+    const auto indices_rank = indices_shape.rank();
+    const auto scores_rank = scores_shape.rank();
+    TT_FATAL(
+        indices_rank >= 2 && indices_rank <= 4,
+        "moe_compute: tilize_expert_indices_tensor must be rank 2, 3, or 4 with trailing [tokens,K]; got {}",
+        indices_shape);
+    TT_FATAL(
+        scores_rank >= 2 && scores_rank <= 5,
+        "moe_compute: tilize_expert_scores_tensor must be rank 2 through 5 and match indices exactly or add one "
+        "trailing 1; got {}",
+        scores_shape);
+
+    const bool scalar_page = scores_rank == indices_rank + 1;
+    TT_FATAL(
+        scores_rank == indices_rank || scalar_page,
+        "moe_compute: unsupported or ambiguous routing-score organization: scores must equal indices {} or add one "
+        "trailing singleton; got {}",
+        indices_shape,
+        scores_shape);
+    TT_FATAL(
+        !scalar_page || scores_shape[-1] == 1,
+        "moe_compute: ScalarPageK routing scores require one trailing singleton after K; got scores {} for indices "
+        "{}",
+        scores_shape,
+        indices_shape);
+    const auto organization =
+        scalar_page ? MoEScoreInputOrganization::ScalarPageK : MoEScoreInputOrganization::ContiguousK;
+    const uint32_t organization_trailing_dims = scalar_page ? 1 : 0;
+    const char* organization_name = scalar_page ? "ScalarPageK" : "ContiguousK";
+
+    TT_FATAL(
+        scores_shape[scores_rank - 2 - organization_trailing_dims] == indices_shape[-2],
+        "moe_compute: {} routing-score token dimension must match indices; got scores shape {} and indices shape {}",
+        organization_name,
+        scores_shape,
+        indices_shape);
+    TT_FATAL(
+        scores_shape[scores_rank - 1 - organization_trailing_dims] == indices_shape[-1],
+        "moe_compute: {} routing-score K dimension must match indices; got scores shape {} and indices shape {}",
+        organization_name,
+        scores_shape,
+        indices_shape);
+    for (uint32_t dim = 0; dim + 2 < indices_rank; ++dim) {
+        TT_FATAL(
+            scores_shape[dim] == indices_shape[dim],
+            "moe_compute: {} scores must match all indices dimensions before the optional trailing singleton; "
+            "scores {} and indices {} differ at dimension {}",
+            organization_name,
+            scores_shape,
+            indices_shape,
+            dim);
+    }
+    return organization;
+}
+
+void validate_device_row_major_tensor(
+    const ttnn::Tensor& tensor,
+    const char* tensor_name,
+    tt::tt_metal::DataType expected_dtype,
+    const char* expected_dtype_name) {
+    TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "moe_compute: {} must be a device tensor", tensor_name);
+    TT_FATAL(tensor.buffer() != nullptr, "moe_compute: {} must have an allocated device buffer", tensor_name);
+    TT_FATAL(
+        tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "moe_compute: {} must be ROW_MAJOR; got {}",
+        tensor_name,
+        tensor.layout());
+    TT_FATAL(
+        tensor.dtype() == expected_dtype,
+        "moe_compute: {} must be {}; got {}",
+        tensor_name,
+        expected_dtype_name,
+        tensor.dtype());
+}
+
+void validate_sparse_tensor_placement(
+    const ttnn::Tensor& tensor,
+    const char* tensor_name,
+    ttnn::MeshDevice* expected_device,
+    const CoreRangeSet& expected_drain_grid,
+    uint32_t expected_shard_height,
+    uint32_t expected_shard_width,
+    uint32_t element_size) {
+    TT_FATAL(tensor.device() == expected_device, "moe_compute: {} must share tilize_input_tensor's mesh", tensor_name);
+
+    const auto& memory_config = tensor.memory_config();
+    TT_FATAL(
+        memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        "moe_compute: {} must use HEIGHT_SHARDED memory layout; got {}",
+        tensor_name,
+        memory_config.memory_layout());
+    TT_FATAL(
+        memory_config.buffer_type() == tt::tt_metal::BufferType::L1,
+        "moe_compute: {} must reside in L1; got buffer type {}",
+        tensor_name,
+        memory_config.buffer_type());
+    TT_FATAL(memory_config.shard_spec().has_value(), "moe_compute: {} needs an explicit shard spec", tensor_name);
+
+    const auto& shard_spec = memory_config.shard_spec().value();
+    TT_FATAL(
+        shard_spec.grid.num_cores() == 1,
+        "moe_compute: {} must be height-sharded on one core; got {}",
+        tensor_name,
+        shard_spec.grid.num_cores());
+    TT_FATAL(
+        shard_spec.grid == expected_drain_grid,
+        "moe_compute: {} must be placed on the selected tilize drain core {}; got {}",
+        tensor_name,
+        expected_drain_grid,
+        shard_spec.grid);
+    TT_FATAL(
+        shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR,
+        "moe_compute: {} shard orientation must be ROW_MAJOR; got {}",
+        tensor_name,
+        shard_spec.orientation);
+    TT_FATAL(
+        shard_spec.shape[0] == expected_shard_height && shard_spec.shape[1] == expected_shard_width,
+        "moe_compute: {} shard shape must be [{}, {}]; got [{}, {}]",
+        tensor_name,
+        expected_shard_height,
+        expected_shard_width,
+        shard_spec.shape[0],
+        shard_spec.shape[1]);
+
+    const auto& buffer = *tensor.buffer();
+    const uint64_t expected_page_size = static_cast<uint64_t>(expected_shard_width) * element_size;
+    TT_FATAL(
+        expected_page_size <= std::numeric_limits<uint32_t>::max(),
+        "moe_compute: {} row byte size ({}) exceeds uint32_t",
+        tensor_name,
+        expected_page_size);
+    TT_FATAL(
+        buffer.num_pages() == expected_shard_height,
+        "moe_compute: {} needs {} row pages for shard [{},{}]; got {}",
+        tensor_name,
+        expected_shard_height,
+        expected_shard_height,
+        expected_shard_width,
+        buffer.num_pages());
+    TT_FATAL(
+        buffer.page_size() == expected_page_size,
+        "moe_compute: {} page size must be {} bytes for width {}; got {} (unsupported stride)",
+        tensor_name,
+        expected_page_size,
+        expected_shard_width,
+        buffer.page_size());
+    const uint64_t expected_aligned_page_size_64 =
+        tt::align(expected_page_size, static_cast<uint64_t>(tt::tt_metal::hal::get_l1_alignment()));
+    TT_FATAL(
+        expected_aligned_page_size_64 <= std::numeric_limits<uint32_t>::max(),
+        "moe_compute: {} aligned row stride ({}) exceeds uint32_t",
+        tensor_name,
+        expected_aligned_page_size_64);
+    const uint32_t expected_aligned_page_size = static_cast<uint32_t>(expected_aligned_page_size_64);
+    TT_FATAL(
+        buffer.aligned_page_size() == expected_aligned_page_size,
+        "moe_compute: {} aligned row stride must be {} bytes; got {} bytes",
+        tensor_name,
+        expected_aligned_page_size,
+        buffer.aligned_page_size());
+    const uint64_t expected_logical_size = static_cast<uint64_t>(expected_shard_height) * expected_page_size;
+    TT_FATAL(
+        expected_logical_size <= std::numeric_limits<uint32_t>::max(),
+        "moe_compute: {} logical buffer size ({}) exceeds uint32_t",
+        tensor_name,
+        expected_logical_size);
+    TT_FATAL(
+        buffer.size() == expected_logical_size,
+        "moe_compute: {} logical size must be {} bytes ({} rows of {}); got {} (unsupported padding/width)",
+        tensor_name,
+        expected_logical_size,
+        expected_shard_height,
+        expected_page_size,
+        buffer.size());
+
+    // Buffer::size() is logical bytes; L1 allocation consumes aligned_page_size() per row.
+    const uint64_t expected_physical_span = static_cast<uint64_t>(expected_shard_height) * expected_aligned_page_size;
+    TT_FATAL(
+        expected_physical_span <= std::numeric_limits<uint32_t>::max(),
+        "moe_compute: {} aligned physical span ({}) exceeds the 32-bit L1 address contract",
+        tensor_name,
+        expected_physical_span);
+    TT_FATAL(
+        buffer.aligned_size() == expected_physical_span,
+        "moe_compute: {} aligned span must be {} bytes; got {} (unsupported allocation/stride)",
+        tensor_name,
+        expected_physical_span,
+        buffer.aligned_size());
+}
 
 }  // namespace detail
 MoEComputeDeviceOperation::program_factory_t MoEComputeDeviceOperation::select_program_factory(
@@ -38,42 +264,91 @@ void MoEComputeDeviceOperation::validate_on_program_cache_hit(
 void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Tilize
-    TT_FATAL(
-        tensor_args.tilize_input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-        "Input tensor must be in row major layout");
-    TT_FATAL(
-        tensor_args.tilize_input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16, "Input tensor must be bfloat16");
-    TT_FATAL(
-        tensor_args.tilize_expert_indices_tensor.dtype() == tt::tt_metal::DataType::UINT16,
-        "Indices tensor must be uint16");
+    detail::validate_device_row_major_tensor(
+        tensor_args.tilize_input_tensor, "tilize_input_tensor", tt::tt_metal::DataType::BFLOAT16, "BFLOAT16");
+    detail::validate_device_row_major_tensor(
+        tensor_args.tilize_expert_indices_tensor,
+        "tilize_expert_indices_tensor",
+        tt::tt_metal::DataType::UINT16,
+        "UINT16");
+    detail::validate_device_row_major_tensor(
+        tensor_args.tilize_expert_scores_tensor,
+        "tilize_expert_scores_tensor",
+        tt::tt_metal::DataType::BFLOAT16,
+        "BFLOAT16");
 
-    // Input tensor rank guards. Exact ranks are enforced where every caller agrees; lenient
-    // minimum ranks are used for the token/index/score tensors, which legitimately arrive as
-    // rank-3 from some dispatch paths and rank-4 from others (the op only indexes [0]/[1]/[-1]).
+    // Input tensor rank and score-organization guards. Indices legitimately arrive as rank 2,
+    // 3, or 4. Scores must be either the exact same shape (ContiguousK) or that shape plus one
+    // trailing singleton dimension (ScalarPageK); matching relative shapes makes inference
+    // unambiguous even when K itself is one.
     const auto rank_of = [](const ttnn::Tensor& t) { return t.logical_shape().rank(); };
+    const auto& tilize_input_shape = tensor_args.tilize_input_tensor.logical_shape();
+    const auto& indices_shape = tensor_args.tilize_expert_indices_tensor.logical_shape();
+    const auto& scores_shape = tensor_args.tilize_expert_scores_tensor.logical_shape();
+    const uint32_t total_tokens = detail::get_total_tokens(tilize_input_shape);
+    const auto score_input_organization = detail::derive_score_input_organization(indices_shape, scores_shape);
     TT_FATAL(
-        rank_of(tensor_args.tilize_input_tensor) >= 3,
-        "tilize_input_tensor must be rank >= 3 ([..., tokens, hidden]); got rank {}",
-        rank_of(tensor_args.tilize_input_tensor));
+        score_input_organization == args.score_input_organization,
+        "moe_compute: derived routing-score organization ({}) does not match the cached operation attribute ({}); "
+        "this indicates an invalid program-cache key",
+        static_cast<uint32_t>(score_input_organization),
+        static_cast<uint32_t>(args.score_input_organization));
+
+    const uint32_t indices_tokens = indices_shape[-2];
+    const uint32_t selected_experts_k = indices_shape[-1];
     TT_FATAL(
-        rank_of(tensor_args.tilize_expert_indices_tensor) >= 2,
-        "tilize_expert_indices_tensor must be rank >= 2 ([..., tokens, K]); got rank {}",
-        rank_of(tensor_args.tilize_expert_indices_tensor));
+        indices_tokens > 0,
+        "moe_compute: tilize_expert_indices_tensor trailing token dimension must be positive; got shape {}",
+        indices_shape);
     TT_FATAL(
-        rank_of(tensor_args.tilize_expert_scores_tensor) >= 2,
-        "tilize_expert_scores_tensor must be rank >= 2 ([..., tokens, K]); got rank {}",
-        rank_of(tensor_args.tilize_expert_scores_tensor));
+        selected_experts_k > 0,
+        "moe_compute: tilize_expert_indices_tensor K must be positive; got shape {}",
+        indices_shape);
+    TT_FATAL(
+        indices_tokens == total_tokens,
+        "moe_compute: tilize_expert_indices_tensor trailing token dimension must match the activation token count; "
+        "got indices shape {} (tokens={}) and activation shape {} (tokens={})",
+        indices_shape,
+        indices_tokens,
+        tilize_input_shape,
+        total_tokens);
+    const uint64_t expected_sparse_volume = static_cast<uint64_t>(total_tokens) * selected_experts_k;
+    TT_FATAL(
+        indices_shape.volume() == expected_sparse_volume,
+        "moe_compute: tilize_expert_indices_tensor must contain exactly one K-wide row per activation token; got "
+        "shape {} (trailing tokens={}, volume={}) for activation shape {} (flattened tokens={}) and K={} "
+        "(expected volume={})",
+        indices_shape,
+        indices_tokens,
+        indices_shape.volume(),
+        tilize_input_shape,
+        total_tokens,
+        selected_experts_k,
+        expected_sparse_volume);
+    TT_FATAL(
+        scores_shape.volume() == expected_sparse_volume,
+        "moe_compute: routing scores must contain exactly tokens*K logical elements; got scores shape {} (volume={}) "
+        "and indices shape {} for tokens={} K={} (expected volume={})",
+        scores_shape,
+        scores_shape.volume(),
+        indices_shape,
+        total_tokens,
+        selected_experts_k,
+        expected_sparse_volume);
+
     TT_FATAL(
         rank_of(tensor_args.tilize_expert_mapping_tensor) == 2,
-        "tilize_expert_mapping_tensor must be rank 2 ([num_devices, experts]); got rank {}",
+        "moe_compute: tilize_expert_mapping_tensor must be rank 2 ([num_devices, experts]); got rank {}",
         rank_of(tensor_args.tilize_expert_mapping_tensor));
     TT_FATAL(
         rank_of(tensor_args.matmul_w0_w1_tensor) == 6,
-        "matmul_w0_w1_tensor must be rank 6 ([num_cores, L, E, groups_per_core, K, 4*TILE_SIZE]); got rank {}",
+        "moe_compute: matmul_w0_w1_tensor must be rank 6 ([num_cores, L, E, groups_per_core, K, "
+        "4*TILE_SIZE]); got rank {}",
         rank_of(tensor_args.matmul_w0_w1_tensor));
     TT_FATAL(
         rank_of(tensor_args.matmul_w2_tensor) == 6,
-        "matmul_w2_tensor must be rank 6 ([num_cores, L, E, groups_per_core, N, 4*TILE_SIZE]); got rank {}",
+        "moe_compute: matmul_w2_tensor must be rank 6 ([num_cores, L, E, groups_per_core, N, 4*TILE_SIZE]); got "
+        "rank {}",
         rank_of(tensor_args.matmul_w2_tensor));
 
     // When has_bias=True, dm0 derives per-expert byte strides using ceil((K+1)/W0W1_TXN)*W0W1_TXN and
@@ -108,8 +383,6 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     }
 
     // validate that 32 (token dim) * output_shard_width * output_shard_height >= total tokens
-    const auto& tilize_input_shape = tensor_args.tilize_input_tensor.logical_shape();
-    const auto total_tokens = tilize_input_shape[0] * tilize_input_shape[1];
     const auto combine_token_parallel_cores = args.num_token_parallel_cores;
     const auto combine_data_parallel_cores = args.num_data_parallel_cores;
 
@@ -204,17 +477,59 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         args.num_shared_experts_per_device,
         experts_per_device);
 
-    // Validate that dynamic core placement succeeds for this hidden size and combine grid.
-    // mux_core_range_set comes from combine_params when in Full mode; ComputeOnly uses an empty set.
+    // Validate that dynamic core placement succeeds and bind the sparse tensors to the selected
+    // drain core before any program is created. mux_core_range_set comes from combine_params when
+    // in Full mode; ComputeOnly uses an empty set.
     const CoreRangeSet validate_mux_cores =
         args.combine_params.has_value() ? args.combine_params->mux_core_range_set : CoreRangeSet{};
-    ttnn::operations::ccl::common::select_moe_compute_cores(
+    const auto core_selection = ttnn::operations::ccl::common::select_moe_compute_cores(
         mesh_device,
         combine_token_parallel_cores,
         combine_data_parallel_cores,
         hidden_size,
         validate_mux_cores,
         args.bh_ring_size);
+    TT_FATAL(
+        !core_selection.tilize_cores.empty(),
+        "moe_compute: core placement returned no tilize drain core for the requested configuration");
+    const CoreCoord drain_core = core_selection.tilize_cores.front();
+    const CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
+    TT_FATAL(
+        drain_core.x < worker_grid_size.x && drain_core.y < worker_grid_size.y,
+        "moe_compute: selected tilize drain core {} is outside worker grid {}",
+        drain_core,
+        worker_grid_size);
+    const CoreRangeSet drain_grid = CoreRangeSet({CoreRange(drain_core, drain_core)});
+
+    detail::validate_sparse_tensor_placement(
+        tensor_args.tilize_expert_indices_tensor,
+        "tilize_expert_indices_tensor",
+        mesh_device,
+        drain_grid,
+        total_tokens,
+        selected_experts_k,
+        sizeof(uint16_t));
+
+    const uint64_t score_shard_height_64 = args.score_input_organization == MoEScoreInputOrganization::ScalarPageK
+                                               ? static_cast<uint64_t>(total_tokens) * selected_experts_k
+                                               : total_tokens;
+    TT_FATAL(
+        score_shard_height_64 <= std::numeric_limits<uint32_t>::max(),
+        "moe_compute: routing-score shard height ({}) exceeds uint32_t for tokens={} K={} organization={}",
+        score_shard_height_64,
+        total_tokens,
+        selected_experts_k,
+        static_cast<uint32_t>(args.score_input_organization));
+    const uint32_t score_shard_width =
+        args.score_input_organization == MoEScoreInputOrganization::ScalarPageK ? 1u : selected_experts_k;
+    detail::validate_sparse_tensor_placement(
+        tensor_args.tilize_expert_scores_tensor,
+        "tilize_expert_scores_tensor",
+        mesh_device,
+        drain_grid,
+        static_cast<uint32_t>(score_shard_height_64),
+        score_shard_width,
+        sizeof(bfloat16));
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
@@ -226,9 +541,7 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     auto* mesh_device = tilize_input_tensor.device();
 
     uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
-    uint32_t total_tokens =
-        tilize_input_shape[0] *
-        tilize_input_shape[1];  // tokens_per_device from input, total tokens across all dispatch devices
+    const uint32_t total_tokens = detail::get_total_tokens(tilize_input_shape);
 
     const uint32_t hidden_size = tilize_input_shape[-1];
 
@@ -430,9 +743,12 @@ std::vector<ttnn::Tensor> moe_compute(
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
     const auto& indices_shape = tilize_expert_indices_tensor.tensor_spec().logical_shape();
+    const auto& scores_shape = tilize_expert_scores_tensor.tensor_spec().logical_shape();
+    const uint32_t total_tokens = ttnn::experimental::prim::detail::get_total_tokens(input_shape);
+    const auto score_input_organization =
+        ttnn::experimental::prim::detail::derive_score_input_organization(indices_shape, scores_shape);
     const uint32_t hidden_size = input_shape[-1];
     const uint32_t select_experts_k = indices_shape[-1];
-    const uint32_t total_tokens = input_shape[0] * input_shape[1];
 
     const auto& num_token_parallel_cores = output_height_shard_dim;
 
@@ -582,6 +898,7 @@ std::vector<ttnn::Tensor> moe_compute(
             .path = compute_only ? experimental::prim::MoEComputePath::ComputeOnly
                                  : (full_local ? experimental::prim::MoEComputePath::FullLocal
                                                : experimental::prim::MoEComputePath::FullCcl),
+            .score_input_organization = score_input_organization,
             .bh_ring_size = ring_n,
             .combine_params = combine_params,
             .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU)},

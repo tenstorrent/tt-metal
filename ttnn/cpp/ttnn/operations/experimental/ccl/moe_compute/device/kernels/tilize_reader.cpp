@@ -295,7 +295,8 @@ void kernel_main() {
     // Aligned page sizes
     constexpr uint32_t aligned_indices_page_size = get_named_compile_time_arg_val("aligned_indices_page_size");
     constexpr uint32_t aligned_mapping_page_size = get_named_compile_time_arg_val("aligned_mapping_page_size");
-    constexpr uint32_t aligned_scores_page_size = get_named_compile_time_arg_val("aligned_scores_page_size");
+    constexpr uint32_t score_token_stride = get_named_compile_time_arg_val("score_token_stride");
+    constexpr uint32_t score_k_stride = get_named_compile_time_arg_val("score_k_stride");
 
     // General info
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
@@ -487,7 +488,7 @@ void kernel_main() {
     if (!is_drain_tilize_core) {
         // Calculate the byte offset for this core's token range within the indices/scores buffers
         uint32_t token_byte_offset_indices = core_token_start * aligned_indices_page_size;
-        uint32_t token_byte_offset_scores = core_token_start * aligned_scores_page_size;
+        uint32_t token_byte_offset_scores = core_token_start * score_token_stride;
         uint32_t num_tokens_this_core = core_token_end - core_token_start;
 
         // Get local CB addresses (same relative address as drain core)
@@ -510,7 +511,7 @@ void kernel_main() {
             noc_obj.async_read(
                 UnicastEndpoint{},
                 CoreLocalMem<uint32_t>(local_scores_addr),
-                num_tokens_this_core * aligned_scores_page_size,
+                num_tokens_this_core * score_token_stride,
                 {.noc_x = drain_core_noc_x, .noc_y = drain_core_noc_y, .addr = local_scores_addr},
                 {});
         }
@@ -592,7 +593,7 @@ void kernel_main() {
         }
 
         const uint16_t* token_indices = reinterpret_cast<const uint16_t*>(indices_base + t * aligned_indices_page_size);
-        const uint16_t* token_scores = reinterpret_cast<const uint16_t*>(scores_base + t * aligned_scores_page_size);
+        const uint32_t token_scores_base = scores_base + t * score_token_stride;
 
         // Defer pointer calculation until we know token is activated
         uint32_t* expert_activation_l1_ptr = nullptr;
@@ -619,7 +620,8 @@ void kernel_main() {
 
                     // Write k-index and score for this expert
                     expert_activation_l1_ptr[1 + e] = k;
-                    expert_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
+                    const uint16_t score = *reinterpret_cast<const uint16_t*>(token_scores_base + k * score_k_stride);
+                    expert_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(score);
 
                     // Write to e_t buffer (16B aligned entries for NOC DMA compatibility)
                     const uint32_t e_t_offset =

@@ -84,8 +84,11 @@ void bind_moe_compute(nb::module_& mod) {
           dim and ``total_tokens`` from its first two dims.
         - ``tilize_expert_indices_tensor``: Per-token selected expert ids;
           ``select_experts_k`` is inferred from its last dim.
-        - ``tilize_expert_scores_tensor``: Per-token routing scores (gates) applied to
-          the expert outputs.
+        - ``tilize_expert_scores_tensor``: Per-token BF16 routing scores (gates), in
+          ROW_MAJOR layout. The organization is inferred without ambiguity from the
+          exact shapes: either the same ``[..., tokens, K]`` shape as expert indices
+          (contiguous K lanes in one row) or that shape plus a trailing singleton
+          dimension, ``[..., tokens, K, 1]`` (one aligned scalar page per K lane).
         - ``tilize_expert_mapping_tensor``: The expert → device mapping that tells the
           kernel which experts are resident locally.
 
@@ -300,6 +303,8 @@ void bind_get_moe_tilize_drain_core(nb::module_& mod) {
         Return the drain tilize core for moe_compute (``tilize_cores[0]``).
 
         Expert indices and scores tensors must be HEIGHT_SHARDED to this core in L1.
+        Indices use shard shape ``[tokens, K]``. Scores use ``[tokens, K]`` for
+        contiguous-K input or ``[tokens * K, 1]`` for scalar-page-K input.
         ``hidden_size`` must match the model hidden dimension because tilize core placement
         depends on ``hidden_tiles = hidden_size // 32``.
         Pass the same ``mux_core_range_set`` used by ``moe_compute`` when fabric mux cores are reserved.

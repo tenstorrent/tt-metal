@@ -27,6 +27,12 @@ namespace ttnn::experimental::prim {
 //   no global semaphores; op emits 5 tensors instead of 6 (matmul_output is the final output).
 enum class MoEComputePath : uint8_t { FullCcl = 0, FullLocal = 2, ComputeOnly = 1 };
 
+// Physical organization of the row-major routing-score tensor. This is derived
+// from the exact score/indices shapes at the public operation boundary; it is an
+// operation attribute so the program cache compiles separate, branch-free
+// kernels for the two addressing contracts.
+enum class MoEScoreInputOrganization : uint8_t { ContiguousK = 0, ScalarPageK = 1 };
+
 struct MoEComputeParams {
     // MoE compute attributes
     uint32_t layer_id = 0;
@@ -41,6 +47,8 @@ struct MoEComputeParams {
     uint32_t num_data_parallel_cores = 0;
 
     MoEComputePath path = MoEComputePath::FullCcl;
+
+    MoEScoreInputOrganization score_input_organization = MoEScoreInputOrganization::ContiguousK;
 
     // Ring size in matmul cores. On WH this is always 12 (DRAM banks), so keep the
     // field initializer at the WH-neutral default. On BH, invoke() resolves this to
@@ -65,7 +73,7 @@ struct MoEComputeParams {
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.reserve(11);
+        attrs.reserve(12);
         attrs.emplace_back("layer_id", layer_id);
         attrs.emplace_back("output_height_shard_dim", output_height_shard_dim);
         attrs.emplace_back("intermediate_size", intermediate_size);
@@ -74,6 +82,7 @@ struct MoEComputeParams {
         attrs.emplace_back("num_token_parallel_cores", num_token_parallel_cores);
         attrs.emplace_back("num_data_parallel_cores", num_data_parallel_cores);
         attrs.emplace_back("path", static_cast<uint32_t>(path));
+        attrs.emplace_back("score_input_organization", static_cast<uint32_t>(score_input_organization));
         attrs.emplace_back("bh_ring_size", bh_ring_size);
         attrs.emplace_back("combine_params", combine_params);
         attrs.emplace_back("activation_type", static_cast<uint32_t>(activation_type));
