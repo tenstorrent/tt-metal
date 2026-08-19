@@ -140,10 +140,32 @@ def mistral4_hf_config(max_seq: int = 8192):
         rope_interleave=True,
     )
 
-    # --- the two hoists ---
+    # The normalizations AND the invariant guards both live in the shared normalizer, so a config
+    # arriving via AutoConfig gets checked exactly as strictly as a hand-built one.
+    return normalize_mistral4_config(cfg, max_seq=max_seq)
+
+
+def normalize_mistral4_config(cfg, max_seq: int | None = None):
+    """Apply the post-construction fixups a `Mistral4Config` needs before the TT/reference paths
+    can use it. Mutates and returns `cfg`.
+
+    **This must be applied to a config loaded by `AutoConfig` too, not just to a hand-built one.**
+    There are two config paths in the test suite and they had silently diverged: `config_only` ->
+    `_resolve_config_only` -> the builder below (which applied all of this) versus `hf_config` ->
+    `_resolve_hf_config` -> `AutoConfig.from_pretrained` (which applied none of it). The chunked MLA
+    test reaches the second one via `pretrained_transformer_weights`, so it failed on the missing
+    `rope_theta` -- and would then have run with the YaRN mscale bug below, which does NOT crash and
+    just produces a wrong softmax temperature. Factored out here so both paths get the same config.
+
+    `max_seq` is optional because the runner/`run_model` overwrites `max_seq_len` anyway; pass it
+    when building fresh so the rope config is consistent from the start.
+    """
     # rope_parameters is populated by Mistral4Config.__post_init__ with the checkpoint's YaRN block.
-    cfg.rope_theta = float(cfg.rope_parameters["rope_theta"])
-    cfg.max_seq_len = max_seq
+    # transformers 5.x keeps rope_theta only in there; the rest of the code reads cfg.rope_theta.
+    if getattr(cfg, "rope_theta", None) is None:
+        cfg.rope_theta = float(cfg.rope_parameters["rope_theta"])
+    if max_seq is not None:
+        cfg.max_seq_len = max_seq
 
     # Mistral carries a full YaRN block (factor=128, mscale=1, mscale_all_dim=1) but applies NO
     # mscale amplitude anywhere: `Mistral4Attention.__init__` sets `self.scaling = qk_head_dim**-0.5`
@@ -160,17 +182,23 @@ def mistral4_hf_config(max_seq: int = 8192):
     # `*_scale_inv`, and the stacked expert tensors carry `[128,1,1]` (one scale per expert). The
     # shared dequantizer (deepseek_v3/utils/hf_model_utils.py) asserts `tensor.ndim == inv_scale.ndim`
     # and `len(block_shape) == tensor.ndim`, so it RAISES on both of Mistral's shapes rather than
-    # silently mis-scaling. Passing the honest value through keeps that a loud failure until the
-    # Mistral-specific dequant path exists.
-    cfg.quantization_config = {
-        "quant_method": "fp8",
-        "fmt": "e4m3",
-        "activation_scheme": "static",
-        "weight_block_size": None,
-    }
+    # silently mis-scaling. The honest value is passed through so the per-tensor path in
+    # utils/test_utils.py (`is_per_tensor_fp8`) is the one selected, and anything else still fails loud.
+    # Only when absent: a config loaded from the real checkpoint already carries the genuine block
+    # (with `modules_to_not_convert`, `dequantize`, ...), and overwriting it with this reconstruction
+    # would throw that away. Verified equivalent on the real checkpoint: `weight_block_size` is null
+    # there too.
+    if getattr(cfg, "quantization_config", None) is None:
+        cfg.quantization_config = {
+            "quant_method": "fp8",
+            "fmt": "e4m3",
+            "activation_scheme": "static",
+            "weight_block_size": None,
+        }
 
     # Guard the invariants the device path depends on, so a transformers change fails here loudly
     # rather than as a PCC drift 20 minutes into a galaxy run.
+    C = MistralSmall4Config
     assert cfg.qk_head_dim == C.QK_HEAD_DIM, f"qk_head_dim {cfg.qk_head_dim} != {C.QK_HEAD_DIM}"
     assert cfg.head_dim == C.HEAD_DIM, f"head_dim {cfg.head_dim} != {C.HEAD_DIM}"
     assert cfg.num_local_experts == C.NUM_ROUTED_EXPERTS  # attribute_map alias used by Mistral4NaiveMoe
