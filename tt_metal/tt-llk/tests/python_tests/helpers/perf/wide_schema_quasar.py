@@ -20,15 +20,18 @@ Imports no device libraries, so it loads without hardware.
 from .schema import MEAN, STD, stat_column
 from .wide_schema import Column
 
-# Same run-type timing grid as WH/BH: Quasar perf tests use the same PerfRunType
-# names, so the {mean, std} x base columns match.
+# Same PerfRunType timing grid as WH/BH, plus the 4-TRISC parallel FPU/SFPU
+# bases (#53072): L1_TO_L1[FPU], L1_TO_L1[SFPU], SFPU_ISOLATE.
 _TIMING_BASES = (
     "L1_TO_L1",
+    "L1_TO_L1[FPU]",
+    "L1_TO_L1[SFPU]",
     "UNPACK_ISOLATE",
     "MATH_ISOLATE",
     "PACK_ISOLATE",
     "L1_CONGESTION[UNPACK]",
     "L1_CONGESTION[PACK]",
+    "SFPU_ISOLATE",
 )
 _TIMING_COLUMNS = [
     Column(stat_column(base, kind), "float64", True, "timing")
@@ -121,3 +124,14 @@ DB_SCHEMA = [
 OUTPUT_SCHEMA = [c for c in DB_SCHEMA if c.origin == "test"]
 PROVENANCE = [c for c in DB_SCHEMA if c.origin == "ci"]
 MANDATORY = [c.name for c in DB_SCHEMA if not c.nullable]
+
+# Columns a Quasar test emits but the published table intentionally drops.
+# TEXT_SIZE(...) is per-stage ELF code size; not used by the gate. SFPU_ISOLATE
+# is 4-TRISC-only (#53072) and must not live on the WH/BH dropped set.
+DROPPED_COLUMNS = {
+    "TEXT_SIZE(L1_TO_L1)",
+    "TEXT_SIZE(MATH_ISOLATE)",
+    "TEXT_SIZE(PACK_ISOLATE)",
+    "TEXT_SIZE(UNPACK_ISOLATE)",
+    "TEXT_SIZE(SFPU_ISOLATE)",
+}

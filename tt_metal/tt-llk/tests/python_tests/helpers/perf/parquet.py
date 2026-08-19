@@ -81,6 +81,17 @@ def schema_for_arch(arch: ChipArchitecture) -> list:
     raise ValueError(f"Unsupported architecture: {arch!r}")
 
 
+def dropped_columns_for_arch(arch: ChipArchitecture) -> set:
+    """TEXT_SIZE(...) columns omitted from the published table for this arch."""
+    if arch == ChipArchitecture.QUASAR:
+        from .wide_schema_quasar import DROPPED_COLUMNS as QSR_DROPPED
+
+        return QSR_DROPPED
+    if arch in (ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE):
+        return DROPPED_COLUMNS
+    raise ValueError(f"Unsupported architecture: {arch!r}")
+
+
 _BOOL_MAP = {
     True: True,
     False: False,
@@ -278,7 +289,9 @@ def convert_csvs_to_parquet(
     conversion that writes anyway. Either way it returns the diagnostics: per
     test, the dropped columns and the coerced values.
     """
-    columns = schema_for_arch(ChipArchitecture.from_string(provenance.get("arch")))
+    arch = ChipArchitecture.from_string(provenance.get("arch"))
+    columns = schema_for_arch(arch)
+    dropped = dropped_columns_for_arch(arch)
     schema_by_name = {c.name: c for c in columns}
     frames = {}
     diagnostics = {"unknown_columns": {}, "coerced_values": {}}
@@ -286,9 +299,9 @@ def convert_csvs_to_parquet(
         name = _test_name_from_csv(path)
         df = pd.read_csv(path)
         # Drop columns the published table intentionally omits (see
-        # wide_schema.DROPPED_COLUMNS), before the unknown-column check so
-        # they are not flagged as accidental drift.
-        df = df.drop(columns=[c for c in DROPPED_COLUMNS if c in df.columns])
+        # DROPPED_COLUMNS on the arch schema), before the unknown-column check
+        # so they are not flagged as accidental drift.
+        df = df.drop(columns=[c for c in dropped if c in df.columns])
         unknown = sorted(set(df.columns) - set(schema_by_name))
         if unknown:
             diagnostics["unknown_columns"][name] = unknown

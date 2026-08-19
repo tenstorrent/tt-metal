@@ -17,10 +17,11 @@ from helpers.perf.parquet import (
     convert_csvs_to_parquet,
     schema_for_arch,
 )
+from helpers.perf.schema import MEAN, stat_column
 from helpers.perf.test_schemas import PERF_TEST_SCHEMAS_QSR
 from helpers.perf.wide_schema import DB_SCHEMA as WH_BH_SCHEMA
-from helpers.perf.wide_schema import DROPPED_COLUMNS
 from helpers.perf.wide_schema_quasar import DB_SCHEMA as QSR_SCHEMA
+from helpers.perf.wide_schema_quasar import DROPPED_COLUMNS as QSR_DROPPED_COLUMNS
 
 _QSR_PROV = dict(
     commit_sha="abc123",
@@ -69,6 +70,11 @@ def test_quasar_schema_is_not_wh_bh_schema():
     assert "face_c_dim" in qsr_only
     assert "unpacker_engine_sel" in qsr_only
     assert "implied_math_format" in qsr_only
+    assert "enable_2x_format" in qsr_only
+    assert "enable_direct_indexing" in qsr_only
+    assert stat_column("L1_TO_L1[FPU]", MEAN) in qsr_only
+    assert stat_column("L1_TO_L1[SFPU]", MEAN) in qsr_only
+    assert stat_column("SFPU_ISOLATE", MEAN) in qsr_only
     # WH/BH-only columns must not land in the Quasar published table.
     wh_only = {c.name for c in WH_BH_SCHEMA} - {c.name for c in QSR_SCHEMA}
     assert "clamp_negative" in wh_only
@@ -83,7 +89,7 @@ def test_arrow_schema_matches_quasar_db_schema():
 
 
 def test_catalog_columns_are_in_quasar_db_schema():
-    schema_names = {c.name for c in QSR_SCHEMA} | DROPPED_COLUMNS
+    schema_names = {c.name for c in QSR_SCHEMA} | QSR_DROPPED_COLUMNS
     missing = {}
     for test, entry in PERF_TEST_SCHEMAS_QSR.items():
         unknown = sorted(set(entry["columns"]) - schema_names)
@@ -156,3 +162,26 @@ def test_convert_drops_quasar_columns_on_wh_bh_schema(tmp_path):
     names = pq.read_table(tmp_path / "out.parquet").schema.names
     assert "face_c_dim" not in names
     assert names == [c.name for c in WH_BH_SCHEMA]
+
+
+def test_convert_drops_sfpu_isolate_text_size_on_quasar(tmp_path):
+    # TEXT_SIZE(SFPU_ISOLATE) is Quasar-dropped (#53072), not a published column.
+    df = pd.DataFrame(
+        {
+            "marker": ["INIT"],
+            "enable_2x_format": [True],
+            "implied_math_format": ["ImpliedMathFormat.Yes"],
+            "TEXT_SIZE(SFPU_ISOLATE)": [4096],
+            "tile_cnt": [8],
+        }
+    )
+    p = _write_csv(tmp_path, "perf_sfpu_exp_parallel_matmul_quasar.csv", df)
+
+    diag = convert_csvs_to_parquet([p], tmp_path / "out.parquet", **_QSR_PROV)
+
+    assert diag["unknown_columns"] == {}
+    names = pq.read_table(tmp_path / "out.parquet").schema.names
+    assert "TEXT_SIZE(SFPU_ISOLATE)" not in names
+    assert "enable_2x_format" in names
+    assert "implied_math_format" in names
+    assert names == [c.name for c in QSR_SCHEMA]
