@@ -1677,7 +1677,19 @@ def stage_roots(seq, model_root, model_id: str = "", perf_test=None) -> dict:
                 roots.add(cands[0].split(".", 1)[0])
         if len(roots) == 1:
             out[str(stage)] = roots.pop()
-    return out or _stage_roots_from_generated(secs, perf_test, model_root)
+    # MERGED, NOT SHORT-CIRCUITED. This was `out or _stage_roots_from_generated(...)`, so the
+    # fallback ran only when the count join found NOTHING. A PARTIAL count join therefore suppressed
+    # a complete one: run 10, 2026-08-19, published stage_roots={'encode': 'audio_tower'} -- one
+    # stage of three -- while the generated test named all three unambiguously. prefill and decode
+    # were then unmapped on a two-tower model, which is refused rather than guessed, so the two
+    # heaviest stages lost their memory ceiling entirely.
+    #
+    # The two joins answer per STAGE, not per model, and they cannot disagree here: a stage the count
+    # join established keeps that answer, and every stage it could not reach asks the other source.
+    _gen = _stage_roots_from_generated(secs, perf_test, model_root)
+    for _st, _root in (_gen or {}).items():
+        out.setdefault(str(_st), _root)
+    return out
 
 
 def _stage_roots_from_generated(secs: dict, perf_test, model_root=None) -> dict:

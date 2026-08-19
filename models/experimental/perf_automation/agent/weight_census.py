@@ -237,11 +237,12 @@ def _checkpoint_tensor_sections(model_id_or_dir):
     and stage_roots both key on -- one definition of "which tower", not a second one that can drift.
     """
     try:
-        pats = [str(model_id_or_dir)]
-        if not str(model_id_or_dir).endswith(".safetensors"):
+        _croot = _checkpoint_glob_root(model_id_or_dir)
+        pats = [str(_croot)]
+        if not str(_croot).endswith(".safetensors"):
             pats = [
-                str(Path(model_id_or_dir) / "*.safetensors"),
-                str(Path(model_id_or_dir) / "snapshots" / "*" / "*.safetensors"),
+                str(Path(_croot) / "*.safetensors"),
+                str(Path(_croot) / "snapshots" / "*" / "*.safetensors"),
             ]
         for f in sorted({f for p in pats for f in glob.glob(p)}):
             with open(f, "rb") as fh:
@@ -265,6 +266,37 @@ def _checkpoint_tensor_sections(model_id_or_dir):
         return
 
 
+def _checkpoint_glob_root(model_id_or_dir):
+    """The directory to look for .safetensors in, resolving a HUB ID to its cache snapshot.
+
+    Both readers below glob `<arg>/*.safetensors`. A hub id -- "mistralai/Voxtral-Mini-3B-2507" --
+    is a relative path that does not exist, so the glob found nothing and the reader returned empty:
+    not "I cannot read that", just no tensors, indistinguishable from a checkpoint with none. The
+    census's whole checkpoint-name vocabulary depends on these, so an id handed in silently cost the
+    per-tower split, and the ceiling fell back to apportioning by disk ratio.
+
+    Same defect shape as _model_id_for_facts handing a Path to a Source parser: a reader that
+    answers "nothing" for an argument it cannot use. Resolved here rather than at each call site, so
+    a caller with either form gets the same answer.
+    """
+    raw = str(model_id_or_dir or "")
+    if not raw:
+        return raw
+    if Path(raw).exists() or raw.endswith(".safetensors"):
+        return raw
+    # An unqualified "org/name" is a hub id; the weights are in the shared cache, never beside it.
+    if raw.count("/") == 1 and not raw.startswith((".", "/", "~")):
+        try:
+            from .checkpoint_sections import hf_cache_dir
+
+            snap = hf_cache_dir(raw)
+            if snap:
+                return str(snap)
+        except Exception:  # noqa: BLE001 -- unresolvable id: glob finds nothing, exactly as before
+            pass
+    return raw
+
+
 def checkpoint_numels(model_id_or_dir) -> set:
     """Element counts of every tensor in the model's checkpoint. Empty when it cannot be read.
 
@@ -285,11 +317,12 @@ def checkpoint_numels(model_id_or_dir) -> set:
     """
     out: set = set()
     try:
-        pats = [str(model_id_or_dir)]
-        if not str(model_id_or_dir).endswith(".safetensors"):
+        _croot = _checkpoint_glob_root(model_id_or_dir)
+        pats = [str(_croot)]
+        if not str(_croot).endswith(".safetensors"):
             pats = [
-                str(Path(model_id_or_dir) / "*.safetensors"),
-                str(Path(model_id_or_dir) / "snapshots" / "*" / "*.safetensors"),
+                str(Path(_croot) / "*.safetensors"),
+                str(Path(_croot) / "snapshots" / "*" / "*.safetensors"),
             ]
         files = sorted({f for p in pats for f in glob.glob(p)})
         for f in files:

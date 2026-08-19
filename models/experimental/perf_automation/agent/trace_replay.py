@@ -166,6 +166,45 @@ class _LegacyStage:
         self.trace_path = getattr(adapter, "trace_path", None)
 
 
+def _checkpoint_for_census(pipeline=None):
+    """Where this model's weights are, for the census's checkpoint-name vocabulary. None if unknown.
+
+    FOUND FROM THE PIPELINE ITSELF. The obvious source is an env var naming the model root, and the
+    harness does not export one -- checked against a live run's whole process tree: no
+    PERF_MCP_MODEL_ROOT anywhere in it. A fix resting on that would have been inert and looked
+    installed.
+
+    The object being measured knows where it lives: its class's module file sits inside the model's
+    own directory, and walking up from there reaches the root whose source names the hub repo. The
+    walk stops at a repository boundary so this can never wander up and scan a whole monorepo.
+    """
+    import os as _os
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    cands = []
+    root = (_os.environ.get("PERF_MCP_MODEL_ROOT") or _os.environ.get("TT_PERF_MODEL_ROOT") or "").strip()
+    if root:
+        cands.append(_Path(root))
+    _mod = _sys.modules.get(type(pipeline).__module__) if pipeline is not None else None
+    _f = getattr(_mod, "__file__", None) if _mod else None
+    if _f:
+        for _par in list(_Path(_f).resolve().parents)[:4]:
+            if (_par / ".git").exists():
+                break  # the repository root: everything above the model, and far too big to scan
+            cands.append(_par)
+    for _c in cands:
+        try:
+            from .stack_survey import model_id_from_source
+
+            _mid = str(model_id_from_source(_c) or "").strip()
+            if _mid:
+                return _mid
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
 def measure_adapter(adapter, device) -> float:
     """Trace-replay per-stage latency for WHATEVER the pipeline emitted. Traces every stage in
     adapter.stages; prints TRACE_STAGE_MS[<stage>] per stage and TRACE_PER_TOKEN_MS (the AR/decode
@@ -190,7 +229,21 @@ def measure_adapter(adapter, device) -> float:
         try:
             from .weight_census import census as _census, marker as _cmarker, sections_marker as _smarker
 
-            _c = _census(getattr(adapter, "_pipe", None) or adapter, scope="pipeline")
+            # WITH THE CHECKPOINT, so the split is recorded in the vocabulary stage_roots speaks.
+            #
+            # census() records a subtree's bytes under TWO names: the attribute it was reached
+            # through, and the checkpoint section it came from. Only the second can be looked up by
+            # a stage_roots entry -- and the checkpoint argument was never passed, so only the first
+            # existed. Run 10, 2026-08-19, published a complete device_section_bytes keyed
+            # enc_a / enc_b / lm_layers / lm_head / embed / kv / mlp / attn, with no `audio_tower`
+            # and no `language_model` in it. The measured split was present, correct, and unusable:
+            # every stage fell back to apportioning by the checkpoint's disk ratio, which is the
+            # single input the census exists to replace.
+            _c = _census(
+                getattr(adapter, "_pipe", None) or adapter,
+                scope="pipeline",
+                checkpoint=_checkpoint_for_census(getattr(adapter, "_pipe", None)),
+            )
             if _c.get("weight_bytes"):
                 print(_cmarker(_c), flush=True)
                 # The split, measured in the same walk. Printed beside the total rather than derived
