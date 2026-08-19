@@ -212,9 +212,17 @@ def test_down_proj_prefill_progcfg_1d_matches_sweep_winner():
 
 
 def test_prefill_matmul_lofi_env(monkeypatch):
+    """LoFi tall prefill is opt-in: off unless GEMMA4_PREFILL_MATMUL_LOFI=1.
+
+    Default-off is a correctness guardrail, not a preference -- see
+    ``prefill_matmul_lofi_enabled``. Do not relax this assertion.
+    """
     from models.demos.gemma4.tt.dram_sharded import _PREFILL_CUTOFF, prefill_matmul_lofi_enabled
 
     monkeypatch.delenv("GEMMA4_PREFILL_MATMUL_LOFI", raising=False)
+    assert not prefill_matmul_lofi_enabled(_PREFILL_CUTOFF)
+    assert not prefill_matmul_lofi_enabled(_PREFILL_CUTOFF * 2)
+    monkeypatch.setenv("GEMMA4_PREFILL_MATMUL_LOFI", "1")
     assert not prefill_matmul_lofi_enabled(_PREFILL_CUTOFF)
     assert prefill_matmul_lofi_enabled(_PREFILL_CUTOFF * 2)
     monkeypatch.setenv("GEMMA4_PREFILL_MATMUL_LOFI", "0")

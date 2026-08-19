@@ -37,12 +37,19 @@ _OPROJ_TUNED = os.environ.get("GEMMA4_OPROJ_TUNED", "0") != "0"
 def prefill_matmul_lofi_enabled(m: int) -> bool:
     """Use LoFi for tall auto DRAM-in0 prefills (above the tuned 1D band).
 
-    Isolate (``test_prefill_matmul_2048_isolate``, WH 1x8, gate_up 2048×5376×5376
-    bf16×bfp8): HiFi2 auto 2234 µs → LoFi 1851 µs (1.21x), PCC 0.999865 vs HiFi2.
-    Default ON; ``GEMMA4_PREFILL_MATMUL_LOFI=0`` opts out. Decode / short tuned
-    band keep HiFi2 (``interleaved_*_prefill_config``).
+    Opt-in via ``GEMMA4_PREFILL_MATMUL_LOFI=1``. Decode / short tuned band keep
+    HiFi2 (``interleaved_*_prefill_config``) either way.
+
+    LoFi here is NOT safe at long context, which is why it is off by default: on
+    31B/128K it makes decode degenerate into endlessly repeated "la's". The
+    single-layer PCC that originally gated it cannot see the error accumulating
+    through 60 layers x 64 prefill chunks into the KV cache of a 131072-token
+    context, so it read as safe at 2048. Disabling it restores generation
+    byte-identical to the pre-LoFi baseline. Do not restore the default-on
+    behaviour without a full 128K demo gate; a per-op or single-layer PCC number
+    is not sufficient evidence.
     """
-    if os.environ.get("GEMMA4_PREFILL_MATMUL_LOFI", "1").lower() in ("0", "false", "no"):
+    if os.environ.get("GEMMA4_PREFILL_MATMUL_LOFI", "0").lower() not in ("1", "true", "yes"):
         return False
     return int(m) > _PREFILL_CUTOFF
 
