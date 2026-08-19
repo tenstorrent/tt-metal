@@ -373,7 +373,7 @@ TEST_F(DevicePrintFixture, ConfigRegAluTestPrint) {
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = 1,
         .field_names = field_names_alu_config,
         .field_values = field_values_alu_config,
@@ -398,7 +398,7 @@ TEST_F(DevicePrintFixture, ConfigRegTileDescriptorTestPrint) {
 
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = 2,
         .field_names = field_names_unpack_tile_descriptor,
         .field_values = field_values_unpack_tile_descriptor,
@@ -422,7 +422,7 @@ TEST_F(DevicePrintFixture, ConfigRegUnpackTestPrint) {
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = 2,
         .field_names = field_names_unpack_config,
         .field_values = field_values_unpack_config,
@@ -458,7 +458,7 @@ TEST_F(DevicePrintFixture, ConfigRegPackTestPrint) {
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = num_of_registers,
         .field_names = field_names_pack_config,
         .field_values = field_values_pack_config,
@@ -479,7 +479,7 @@ TEST_F(DevicePrintFixture, ConfigRegReluTestPrint) {
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = 1,
         .field_names = field_names_relu_config,
         .field_values = field_values_relu_config,
@@ -500,7 +500,7 @@ TEST_F(DevicePrintFixture, ConfigRegDestRdCtrlTestPrint) {
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = 1,
         .field_names = field_names_dest_rd_ctrl,
         .field_values = field_values_dest_rd_ctrl,
@@ -523,7 +523,7 @@ TEST_F(DevicePrintFixture, ConfigRegPackEdgeOffsetTestPrint) {
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = num_of_registers,
         .field_names = field_names_pack_edge_offset,
         .field_values = field_values_pack_edge_offset,
@@ -546,7 +546,7 @@ TEST_F(DevicePrintFixture, ConfigRegPackCountersTestPrint) {
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
-        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/device_print/writer_config_reg.cpp",
         .num_of_registers = num_of_registers,
         .field_names = field_names_pack_counters,
         .field_values = field_values_pack_counters,
