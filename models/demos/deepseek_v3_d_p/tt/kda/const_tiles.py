@@ -13,26 +13,11 @@ _CHUNK_SIZE = 32
 
 def build_kda_const_tiles(
     device: ttnn.Device | ttnn.MeshDevice,
-) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-    """Build replicated eye, triangular, ones, and quadrant-mask tiles."""
+) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    """Build the replicated eye, lower-triangular, and ones tiles."""
     eye = torch.eye(_CHUNK_SIZE, dtype=torch.float32)
     tril = torch.tril(torch.ones(_CHUNK_SIZE, _CHUNK_SIZE, dtype=torch.float32))
     ones = torch.ones(_CHUNK_SIZE, _CHUNK_SIZE, dtype=torch.float32)
-
-    # Packing must match make_quadrant_masks in chunk_gated_delta_rule.cpp.
-    indices = torch.arange(_CHUNK_SIZE)
-    rows = indices.unsqueeze(1)
-    columns = indices.unsqueeze(0)
-    lower_rows = rows < _CHUNK_SIZE / 2
-    lower_columns = columns < _CHUNK_SIZE / 2
-    masks = torch.cat(
-        [
-            (lower_rows & lower_columns).float(),
-            (~lower_rows & ~lower_columns).float(),
-            (~lower_rows & lower_columns).float(),
-        ],
-        dim=1,
-    )
 
     def upload(tensor: torch.Tensor) -> ttnn.Tensor:
         return ttnn.from_torch(
@@ -43,4 +28,4 @@ def build_kda_const_tiles(
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
 
-    return upload(eye), upload(tril), upload(ones), upload(masks)
+    return upload(eye), upload(tril), upload(ones)
