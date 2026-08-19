@@ -460,8 +460,12 @@ def _write_run_parquet(raw_csv_paths, out_dir) -> None:
     Raw is the canonical stored form (matching the historical migration): the
     per-tile figures are derivable downstream (TILE_LOOP mean/std divided by
     ``loop_factor * tile_cnt``, both present as columns), so storing raw keeps the
-    table lossless without a redundant per-tile copy. Best-effort: Parquet is
-    additive here, so any failure is logged and never breaks the CSV report.
+    table lossless without a redundant per-tile copy.
+
+    Schema drift (unknown columns, or values that would coerce to NULL) raises
+    ``PerfSchemaError`` so the session fails instead of writing a lossy batch.
+    Other Parquet write failures (missing pyarrow, I/O) are logged and do not
+    break the CSV report, which is already on disk.
     """
     if not raw_csv_paths:
         return
@@ -470,17 +474,12 @@ def _write_run_parquet(raw_csv_paths, out_dir) -> None:
 
         prov = _ci_provenance()
         parquet_path = Path(out_dir) / f"{prov['run_id']}.parquet"
-        diagnostics = convert_csvs_to_parquet(
-            sorted(raw_csv_paths), parquet_path, strict=False, **prov
+        convert_csvs_to_parquet(
+            sorted(raw_csv_paths), parquet_path, strict=True, **prov
         )
-        unknown = diagnostics["unknown_columns"]
-        if unknown:
-            dropped = sum(len(v) for v in unknown.values())
-            detail = "; ".join(f"{t}={cols}" for t, cols in sorted(unknown.items()))
-            logger.error(
-                f"perf Parquet: {dropped} column(s) not in the schema were dropped ({detail})"
-            )
         logger.info(f"Wrote run Parquet batch: {parquet_path}")
+    except ValueError as exc:
+        raise PerfSchemaError(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — Parquet is additive; CSV is primary
         logger.warning(f"perf Parquet batch not written: {type(exc).__name__}: {exc}")
 
@@ -493,6 +492,7 @@ def combine_perf_reports():
 
     Also publishes the run's raw combined CSVs as one Parquet batch
     (perf_data/<run_id>.parquet) so a run emits both CSV and Parquet.
+    Unknown Parquet columns raise ``PerfSchemaError`` (CSV is already written).
     """
 
     unique_module_names = get_unique_base_names(TestConfig.PERF_DATA_DIR)

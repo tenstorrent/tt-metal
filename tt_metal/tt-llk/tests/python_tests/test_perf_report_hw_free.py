@@ -28,7 +28,14 @@ from helpers.perf.core import (
     combine_perf_reports,
     postprocess_tile_loop,
 )
-from helpers.perf.schema import MARKER, MEAN, STD, assert_unique_columns, stat_column
+from helpers.perf.schema import (
+    MARKER,
+    MEAN,
+    STD,
+    PerfSchemaError,
+    assert_unique_columns,
+    stat_column,
+)
 from helpers.perf.wide_schema import DB_SCHEMA, DROPPED_COLUMNS, OUTPUT_SCHEMA
 from helpers.profiler import Profiler, ProfilerData, _stats_l1_to_l1
 from helpers.test_config import BuildMode, TestConfig
@@ -433,3 +440,34 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     assert set(df["arch"]) == {"wormhole"}
     assert set(df["commit_sha"]) == {"testsha"}
     assert set(df["pipeline"]) == {"nightly"}
+
+
+def test_combine_perf_reports_raises_on_unknown_parquet_columns(tmp_path, monkeypatch):
+    # Schema drift must fail the session, not drop columns and continue. CSV is
+    # already written by the time Parquet conversion runs.
+    workers = tmp_path / "workers"
+    workers.mkdir()
+    root = tmp_path / "root"
+    monkeypatch.setattr(TestConfig, "PERF_DATA_DIR", workers)
+    monkeypatch.setattr(TestConfig, "LLK_ROOT", root)
+    monkeypatch.setenv("CHIP_ARCH", "wormhole")
+    monkeypatch.setenv("GITHUB_SHA", "testsha")
+    monkeypatch.setenv("GITHUB_RUN_ID", "testrun")
+
+    pd.DataFrame(
+        {
+            "marker": ["INIT", "TILE_LOOP"],
+            "tile_cnt": [4, 4],
+            "loop_factor": [1, 1],
+            stat_column("MATH_ISOLATE", MEAN): [10.0, 20.0],
+            "made_up_col": [1, 2],
+        }
+    ).to_csv(workers / "perf_x.gw0.csv", index=False)
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        PerfSchemaError, match="made_up_col"
+    ):
+        combine_perf_reports()
+
+    assert (root / "perf_data" / "perf_x" / "perf_x.csv").exists()
+    assert not (root / "perf_data" / "testrun.parquet").exists()
