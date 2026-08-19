@@ -234,6 +234,12 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
             return;
         }
         is_sender = (current_rank == sender_rank_val);
+#if defined(TT_METAL_USE_EMULE)
+        // Publish this rank's submesh before the descriptor handshake, so the peer can resolve our
+        // coordinates against the right chips. Registering here is enough: the handshake orders it
+        // ahead of every read. See tt-emule docs/multi-rank-emulation.md §8.
+        emule::register_virtual_rank_mesh(static_cast<uint32_t>(current_rank), device);
+#endif
     } else {
         if (!(local_mesh_binding[0] == config_.sender_mesh_id.value() ||
               local_mesh_binding[0] == config_.receiver_mesh_id.value())) {

@@ -128,6 +128,8 @@ from ttnn._ttnn.multi_device import (
     is_initialized as distributed_context_is_initialized,
     get_rank as distributed_context_get_rank,
     get_size as distributed_context_get_size,
+    # emule-only: in-process virtual ranks (absent on a non-emule build, hence the guarded import
+    # below rather than a name here).
     barrier as distributed_context_barrier,
     allgather_int as distributed_context_allgather_int,
     send_bytes as distributed_context_send_bytes,
@@ -140,6 +142,17 @@ from ttnn._ttnn.multi_device import (
     world_rank as distributed_context_world_rank,
     world_size as distributed_context_world_size,
 )
+
+# emule-only: in-process virtual ranks. Guarded because a non-emule build does not compile them.
+try:
+    from ttnn._ttnn.multi_device import (
+        emule_fault_virtual_ranks,
+        emule_install_virtual_ranks,
+        emule_set_virtual_rank,
+        emule_virtual_rank_count,
+    )
+except ImportError:  # pragma: no cover - non-emule builds
+    pass
 
 from ttnn._ttnn.events import (
     MeshEvent,

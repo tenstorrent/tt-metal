@@ -319,6 +319,16 @@ if(WITH_PYTHON_BINDINGS)
     if(TTNN_BUILD_TESTS)
         target_compile_definitions(ttnn PRIVATE TTNN_WITH_LAYER_COMPLETION_CONSUMER)
     endif()
+    if(TT_METAL_USE_EMULE)
+        # Lets the distributed bindings expose the emule-only in-process virtual ranks; without it
+        # the #if compiles them out and the Python import silently finds nothing.
+        #
+        # Deliberately NOT TT_METAL_USE_EMULE: that flag is a tt_metal BUILD flag that shared headers
+        # switch on (host_sanitizers.hpp flips `kEmuleAsanBuild`, which call sites use to `if constexpr`
+        # real sanitizer calls in or out). Defining it on one consumer target compiles those headers
+        # differently here than in ttnn_core/_ttnncpp — an ODR mismatch that crashed every op.
+        target_compile_definitions(ttnn PRIVATE TTNN_EMULE_VIRTUAL_RANKS=1)
+    endif()
     target_include_directories(
         ttnn
         PUBLIC

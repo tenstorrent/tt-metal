@@ -28,6 +28,59 @@
 
 namespace {
 
+#ifdef TT_METAL_USE_EMULE
+// Cross-queue co-scheduling for emule (OFF by default; set TT_EMULE_DEFER_MESH_DISPATCH=1).
+//
+// A d2d MeshSocket test enqueues the sender workload on md0's queue and the receiver workload on
+// md1's queue. Emule normally runs each enqueue to completion inside the enqueue call, so the
+// sender runs alone, parks waiting for credits the receiver has not been spawned to send, and the
+// engine reports a quiescent deadlock. On silicon this cannot happen: LaunchProgram(..., wait=false)
+// starts the kernels and returns, so both meshes are live at once.
+//
+// With this enabled a non-blocking enqueue REGISTERS its programs and defers the run to the next
+// fence, letting a peer queue's workload join the same scheduler generation. The fence is any
+// existing synchronization point (finish / read / wait_for_cores_idle), which is where silicon
+// would also have to wait.
+//
+// Deliberately not on by default: a workload that parks on a HOST-fed socket wait must run inside
+// its enqueue, because the host's pump_device() is a no-op until run_mesh_dispatch() has armed the
+// parked run — deferring it hangs the H2D/D2H credit loops, which have no timeout.
+bool emule_defer_enabled() {
+    static const bool enabled = [] {
+        const char* v = std::getenv("TT_EMULE_DEFER_MESH_DISPATCH");
+        return v != nullptr && v[0] != '\0' && v[0] != '0';
+    }();
+    return enabled;
+}
+
+// A deferred registration is pending a run. Process-wide, matching the runner's own defer state.
+std::atomic<bool>& emule_deferred_pending() {
+    static std::atomic<bool> pending{false};
+    return pending;
+}
+
+// Which queues already have a registration in the pending generation. Registering a program is not
+// side-effect-free: setup_core_state -> init_core_cb_sync calls Core::reset_cb_sync(), so a second
+// workload that lands on a core the pending generation already configured wipes that core's CB
+// geometry, and the first workload's kernel then finds a 0-page CB. Co-scheduling ACROSS queues is
+// the point here (sender on md0, receiver on md1 — disjoint devices, disjoint cores); batching two
+// workloads from the SAME queue is not, and is exactly the aliasing case. So allow one pending
+// registration per queue and flush before a second.
+std::set<const void*>& emule_pending_queues() {
+    static std::set<const void*> queues;
+    return queues;
+}
+
+// Run whatever has been registered but not yet run. Safe to call at any fence, including when
+// nothing is pending.
+void emule_flush_deferred() {
+    if (emule_deferred_pending().exchange(false)) {
+        emule_pending_queues().clear();
+        tt::tt_metal::emule::run_mesh_dispatch();
+    }
+}
+#endif
+
 bool logical_cores_intersect(
     const std::vector<std::vector<tt::tt_metal::CoreCoord>>& previous_cores,
     const std::vector<std::vector<tt::tt_metal::CoreCoord>>& current_cores) {
@@ -58,6 +111,10 @@ void drain_emule_run(tt::tt_metal::distributed::MeshDevice* mesh_device, tt::Tar
     if (target != tt::TargetDevice::Emule) {
         return;
     }
+    // A deferred cross-queue registration runs here: this is a fence, and every emule fence already
+    // funnels through this function (enqueue_mesh_workload deliberately does not call it, which is
+    // what lets a peer queue's workload join the pending generation first).
+    emule_flush_deferred();
     std::vector<int> device_ids;
     device_ids.reserve(mesh_device->get_devices().size());
     for (const auto& device : mesh_device->get_devices()) {
@@ -293,10 +350,25 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // parked receiver. Register all (deferred) sequentially (not the thread pool, to avoid a
         // fiber-registration race), then run once. See tt-emule docs/fiber-engine.md.
         // Excludes the socket feeders' pump_device(): a dispatch onto a parked run resumes it.
+        if (emule_defer_enabled() && !blocking && emule_pending_queues().count(this) > 0) {
+            // This queue already registered into the pending generation; running it now keeps that
+            // registration's core state intact (see emule_pending_queues).
+            emule_flush_deferred();
+        }
         tt::tt_metal::emule::MeshDispatchLock dispatch_lock;
         tt::tt_metal::emule::begin_mesh_dispatch();
         for (auto& [coord_range, program] : range_program_map) {
             dispatch_program(coord_range, program, /*blocking=*/false);  // register only (defer)
+        }
+        if (emule_defer_enabled() && !blocking) {
+            // Leave the programs registered so a peer queue's workload can join this generation;
+            // the run happens at the next fence (see emule_flush_deferred). A blocking enqueue must
+            // still run here — its caller is entitled to assume the work completed on return.
+            emule_deferred_pending().store(true);
+            emule_pending_queues().insert(this);
+            std::lock_guard<std::mutex> guard(logical_cores_mutex_);
+            logical_cores_for_previous_workload_.clear();
+            return;
         }
         tt::tt_metal::emule::run_mesh_dispatch();  // one concurrent run across all programs/chips
         // run_until_idle completed every program synchronously, so all cores are idle now; keep the
