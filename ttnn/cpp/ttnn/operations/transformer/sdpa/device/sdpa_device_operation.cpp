@@ -523,6 +523,39 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 TT_FATAL(w_full >= nbr[2], "neighborhood_w_shard W_full={} must be >= local W={}.", w_full, nbr[2]);
                 TT_FATAL(nbr[5] <= w_full, "neighborhood_3d kw={} must be <= W_full={}.", nbr[5], w_full);
             }
+            // GNA stride {st, sh, sw}: runs of `stride` queries share one window. Each stride must be in
+            // [1, kernel] -- past the kernel a group is wider than the window it shares, so some of its
+            // queries would not attend to themselves -- and must divide its axis so no trailing group
+            // elects a leader past the end. The W axis is measured in the span the window is clamped in,
+            // which is W_full under spatial-SP over W.
+            if (attrs.neighborhood_stride.has_value()) {
+                const auto& stride = attrs.neighborhood_stride.value();
+                const uint32_t w_span =
+                    attrs.neighborhood_w_shard.has_value() ? attrs.neighborhood_w_shard.value()[0] : nbr[2];
+                const std::array<uint32_t, 3> axis = {nbr[0], nbr[1], w_span};
+                const std::array<uint32_t, 3> kernel = {nbr[3], nbr[4], nbr[5]};
+                constexpr std::array<const char*, 3> axis_name = {"t", "h", "w"};
+                for (uint32_t i = 0; i < 3; ++i) {
+                    // An axis shorter than its kernel attends whole, so the effective kernel is the axis.
+                    const uint32_t k_eff = kernel[i] > axis[i] ? axis[i] : kernel[i];
+                    TT_FATAL(stride[i] >= 1, "neighborhood_stride {} must be >= 1, got {}.", axis_name[i], stride[i]);
+                    TT_FATAL(
+                        stride[i] <= k_eff,
+                        "neighborhood_stride {}={} must not exceed the effective kernel {}={} (axis length {}).",
+                        axis_name[i],
+                        stride[i],
+                        axis_name[i],
+                        k_eff,
+                        axis[i]);
+                    TT_FATAL(
+                        axis[i] % stride[i] == 0,
+                        "neighborhood_stride {}={} must divide the {} axis length {}.",
+                        axis_name[i],
+                        stride[i],
+                        axis_name[i],
+                        axis[i]);
+                }
+            }
             return;
         }
         TT_FATAL(tensors.cu_window_seqlens.has_value(), "Windowed SDPA requires cu_window_seqlens.");
@@ -600,6 +633,10 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     TT_FATAL(
         !attrs.neighborhood_gather || attrs.neighborhood_3d.has_value(),
         "neighborhood_gather requires neighborhood_3d to be set.");
+    // Likewise the GNA stride: it only means anything as a modifier of a 3D neighborhood.
+    TT_FATAL(
+        !attrs.neighborhood_stride.has_value() || attrs.neighborhood_3d.has_value(),
+        "neighborhood_stride requires neighborhood_3d to be set.");
     bool is_chunked_mode = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
 
     if (attrs.is_windowed) {
@@ -741,7 +778,8 @@ Tensor sdpa(
     const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard,
     bool neighborhood_gather,
     const std::optional<std::array<uint32_t, 3>>& neighborhood_block,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    const std::optional<std::array<uint32_t, 3>>& neighborhood_stride) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -761,6 +799,7 @@ Tensor sdpa(
             .neighborhood_w_shard = neighborhood_w_shard,
             .neighborhood_gather = neighborhood_gather,
             .neighborhood_block = neighborhood_block,
+            .neighborhood_stride = neighborhood_stride,
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         },

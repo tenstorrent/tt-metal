@@ -93,6 +93,11 @@ void kernel_main() {
     const uint32_t nb_bt = get_arg_val<uint32_t>(22);
     const uint32_t nb_bh = get_arg_val<uint32_t>(23);
     const uint32_t nb_bw = get_arg_val<uint32_t>(24);
+    // GNA query-group stride {st,sh,sw}; 1 is standard neighborhood attention. Appended after the block
+    // descriptor so the older slots keep their indices.
+    const uint32_t nb_st = get_arg_val<uint32_t>(25);
+    const uint32_t nb_sh = get_arg_val<uint32_t>(26);
+    const uint32_t nb_sw = get_arg_val<uint32_t>(27);
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
@@ -234,6 +239,9 @@ void kernel_main() {
                 nb_kt,
                 nb_kh,
                 nb_kw,
+                nb_st,
+                nb_sh,
+                nb_sw,
                 nb_W_full,
                 nb_w_origin,
                 nb_bt,
@@ -255,6 +263,9 @@ void kernel_main() {
                 nb_kt,
                 nb_kh,
                 nb_kw,
+                nb_st,
+                nb_sh,
+                nb_sw,
                 nb_W_full,
                 nb_w_origin);
 

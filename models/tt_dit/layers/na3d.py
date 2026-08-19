@@ -66,17 +66,23 @@ DEFAULT_SCORE_BUDGET = 2**22
 DEFAULT_CHUNK_BUDGET = 2**29
 
 
-def window_bounds(length: int, kernel: int) -> tuple[list[int], list[int]]:
+def window_bounds(length: int, kernel: int, stride: int = 1) -> tuple[list[int], list[int]]:
     """Per-index ``(start, end)`` of the attended window along one axis.
 
     Implements NATTEN's constant-size inward-shifted window: the start is the query index
     less half the kernel, clamped so the window never leaves ``[0, length)``. When the axis
     is shorter than the kernel every query attends to the whole axis.
+
+    ``stride`` is GNA's query-group size: runs of ``stride`` queries share the window of their
+    center-most member, biased right for even groups so the bias opposes the inward shift's.
+    ``stride=1`` is standard neighborhood attention, every query centered on its own window.
+    The C++ twin is ``nbr_shift_start`` in windowed_loop_geometry.hpp; they must agree exactly.
     """
     kernel = min(kernel, length)
     half = kernel // 2
     last_start = length - kernel
-    starts = [min(max(i - half, 0), last_start) for i in range(length)]
+    leaders = [min((i // stride) * stride + stride // 2, length - 1) for i in range(length)]
+    starts = [min(max(q - half, 0), last_start) for q in leaders]
     return starts, [s + kernel for s in starts]
 
 
@@ -110,9 +116,11 @@ AxisGeometry = tuple[tuple[int, ...], tuple[int, ...]]
 class TileGroup:
     """Query tiles that share one window geometry, and therefore one additive mask.
 
-    Grouping matters: with the inward-shift rule an axis has only three regimes (leading
-    clamp, interior slide, trailing clamp), so a full volume collapses to at most 27 distinct
-    masks in 3D no matter how many tiles there are.
+    Grouping matters: at stride 1 the inward-shift rule gives an axis only three regimes (leading
+    clamp, interior slide, trailing clamp), so a full volume collapses to at most 27 distinct masks
+    in 3D no matter how many tiles there are. Under a GNA stride the interior regime instead repeats
+    with period ``stride``, so the count depends on how the tiling lines up with the groups -- still
+    bounded and still correct, just no longer 27.
     """
 
     geometry: tuple[AxisGeometry, AxisGeometry, AxisGeometry]
@@ -128,6 +136,7 @@ class NA3DPlan:
     kernels: tuple[int, int, int]
     tile: tuple[int, int, int]
     groups: tuple[TileGroup, ...]
+    stride: tuple[int, int, int] = (1, 1, 1)
 
     @property
     def waste_factor(self) -> float:
@@ -146,10 +155,11 @@ def plan_na3d(
     kernel_size: tuple[int, int, int],
     *,
     budget: int = DEFAULT_SCORE_BUDGET,
+    stride: tuple[int, int, int] = (1, 1, 1),
 ) -> NA3DPlan:
     """Group the volume's query tiles by window geometry."""
     kernels = tuple(min(k, d) for k, d in zip(kernel_size, dims))
-    bounds = [window_bounds(d, k) for d, k in zip(dims, kernels)]
+    bounds = [window_bounds(d, k, s) for d, k, s in zip(dims, kernels, stride)]
     tile = _tile_lengths(dims, kernels, budget)
 
     # Per axis: for each tile, the key span it needs and its bounds relative to that span.
@@ -189,7 +199,7 @@ def plan_na3d(
                 n_keys=n_keys,
             )
         )
-    return NA3DPlan(dims=dims, kernels=kernels, tile=tile, groups=tuple(groups))
+    return NA3DPlan(dims=dims, kernels=kernels, tile=tile, groups=tuple(groups), stride=stride)
 
 
 def group_mask(group: TileGroup, *, dtype: torch.dtype, device: torch.device | str = "cpu") -> torch.Tensor:
@@ -220,11 +230,14 @@ def na3d_torch(
     *,
     scale: float | None = None,
     plan: NA3DPlan | None = None,
+    stride: tuple[int, int, int] = (1, 1, 1),
 ) -> torch.Tensor:
     """Host executor for a plan. ``q``/``k``/``v`` are ``(B, T, H, W, NH, HD)``.
 
     Pass ``scale=1.0`` when the caller has already scaled Q, which is what the DiffVAE
     blocks do — applying it again here would square the factor.
+
+    ``stride`` is ignored when an explicit ``plan`` is given; the plan already carries its own.
     """
     batch, t, h, w, heads, head_dim = q.shape
     if scale is None:
@@ -232,7 +245,7 @@ def na3d_torch(
     if scale != 1.0:
         q = q * scale
     if plan is None:
-        plan = plan_na3d((t, h, w), kernel_size)
+        plan = plan_na3d((t, h, w), kernel_size, stride=stride)
 
     out = torch.empty_like(v)
     for group in plan.groups:
@@ -839,10 +852,24 @@ def neighborhood_attention_3d_op_sp_w(
     return ttnn.permute(full, (0, 2, 3, 1, 4))  # (B, T, H, W, width)
 
 
-def _pick_block(t_full: int, h_full: int, w_local: int, kmax: int = 11):
+def _pick_block(t_full: int, h_full: int, w_local: int, kmax: int = 11, gna: bool = False):
     """Largest tile-legal (bt,bh,bw) block for this shard's (T, H, w_local): each dim divides its axis,
     block_vol is a multiple of 32 and in [128, 512]. Ties broken by the smallest neighborhood box. Returns
-    None if no legal block exists (caller falls back to the strided path). See box_model.py / Phase 0."""
+    None if no legal block exists (caller falls back to the strided path). See box_model.py / Phase 0.
+
+    ``gna`` picks for a GNA stride equal to the block instead. That inverts the objective: the box is then
+    the kernel on every axis no matter how the block is shaped, so the box term is constant and volume --
+    which sets the chunk count -- becomes the whole objective. It also caps each block dim at ``kmax``,
+    since a stride above its kernel is rejected host-side (the group would outgrow the window it shares).
+
+    This objective is purely a speed objective and it is not free. It optimizes toward block dims AT
+    ``kmax``, i.e. stride == kernel, which is the largest window displacement a group can have. MEASURED
+    at the 1080p stage-5 grid, block (11,4,8) vs stride-1 attention on the same inputs: PCC 0.51 on iid
+    Q/K/V, 0.72 at a spatial correlation length of 8 tokens; fused-sdpa 6.8x faster (181->27 ms), whole
+    block 1.95x. T carries almost all of the error (stride_t alone is PCC 0.72/0.85) because 11 == the
+    kernel; (1,2,2) holds 0.97. A network trained at stride 1 cannot absorb the picked block -- constrain
+    the stride, or leave GNA off, unless retraining.
+    """
 
     def divs(n):
         return [d for d in range(1, n + 1) if n % d == 0]
@@ -854,13 +881,15 @@ def _pick_block(t_full: int, h_full: int, w_local: int, kmax: int = 11):
                 vol = bt * bh * bw
                 if vol % 32 or not (128 <= vol <= 512):
                     continue
+                if gna and max(bt, bh, bw) > kmax:
+                    continue
                 box = (bt + kmax - 1) * (bh + kmax - 1) * (bw + kmax - 1)
                 # MEASURED (6s sweep, 2026-08-18): fused-sdpa cost tracks the BOX, not q_chunk/vol -- the
                 # box's outer-axis (W,H) extent sets how far apart the reader's k-segments are, so a small
                 # box beats a large-vol block even at 3x the chunk count (the block reorder is per-call, not
                 # per-chunk). Minimize box, tie-break LARGER vol (fewer chunks). (5,8,4) over (5,8,12): fused
                 # 10.2s->7.6s, 6s decode 25.0s->~22s. Old key (-vol, box) picked the slow large-vol block.
-                key = (box, -vol)
+                key = (-vol, box) if gna else (box, -vol)
                 if best is None or key < best[0]:
                     best = (key, (bt, bh, bw))
     return best[1] if best else None
@@ -879,6 +908,7 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     tp_axis: int | None = None,
     heads_presharded: bool = False,
     flat_seq: bool = False,
+    gna_stride: tuple[int, int, int] | None = None,
 ) -> ttnn.Tensor:
     """SP-over-W with SHARDED input AND output, for full-stage spatial parallelism.
 
@@ -952,9 +982,14 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     # v1 by reordering K/V to plain-strided -- an 18x costlier gather). The compact block box is what fixes
     # the fused-sdpa super-linearity. The per-device global-W origin rides the offset tensor, applied to the
     # op OUTER (T) axis in the kernel (windowed_loop_geometry.hpp). RoPE commutes with the permute.
+    # DIFFVAE_GNA=1 additionally sets the GNA stride to the Q block, which is the setting that collapses
+    # each chunk's box to a single shared window (perfectly block-sparse). The block picker then optimizes
+    # for that regime instead. This changes the ATTENTION, not just the schedule: queries inside a block
+    # share one window rather than each being centered, so expect a quality delta -- measure it.
+    _gna = os.environ.get("DIFFVAE_GNA") == "1"
     op_block = None
     if os.environ.get("DIFFVAE_BLOCK") == "1" and os.environ.get("DIFFVAE_SP_FUSED", "0") == "1":
-        _blk = _pick_block(t_full, h_full, w_local)
+        _blk = _pick_block(t_full, h_full, w_local, gna=_gna)
         if _blk is not None:
             op_block = (_blk[2], _blk[1], _blk[0])  # op-order (w_local, H, T) block dims = (bw, bh, bt)
 
@@ -968,6 +1003,20 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     # 1080p. W stays outermost so the SP all-gather still rebuilds the full W-outer sequence. This is
     # a pure host reorder: the op decodes coords from the grid arg, agnostic to which axis is which.
     t_inner = os.environ.get("DIFFVAE_SP_TINNER", "1") == "1"
+
+    # GNA stride in OP-axis order, matching how neighborhood_3d and op_block are permuted below. An
+    # explicit gna_stride (or DIFFVAE_GNA_STRIDE="st,sh,sw") is PHYSICAL (t,h,w) and permutes the same way
+    # the kernel does; DIFFVAE_GNA=1 instead takes the stride straight from the block, already op-order.
+    _stride_env = os.environ.get("DIFFVAE_GNA_STRIDE")
+    if gna_stride is None and _stride_env:
+        gna_stride = tuple(int(v) for v in _stride_env.split(","))
+    if gna_stride is not None:
+        _st, _sh, _sw = gna_stride
+        op_stride = (_sw, _sh, _st) if t_inner else (_sw, _st, _sh)
+    elif _gna and op_block is not None:
+        op_stride = op_block
+    else:
+        op_stride = None
 
     def to_seq_flat(x: ttnn.Tensor, w_: int) -> ttnn.Tensor:
         """(B, NH, S, HD) T-outer -> the same, W-outer. One permute; both reshapes are views."""
@@ -1094,6 +1143,8 @@ def neighborhood_attention_3d_op_sp_w_sharded(
             # Block-permuted Q: op-order block dims + the per-device W origin on the offset tensor (above).
             # No neighborhood_w_shard: the block path clamps each op axis with nb_T / nb_W directly.
             neighborhood_block=op_block,
+            # GNA: op-order stride. None => stride 1 on every axis, i.e. standard neighborhood attention.
+            neighborhood_stride=op_stride,
             scale=scale,
             windowed_q_token_offset=0,
             windowed_q_token_offset_tensor=off_tt,

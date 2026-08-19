@@ -826,6 +826,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Block-permuted Q descriptor {bt, bh, bw}; all-zero when strided (bt==0 selects the strided path in
     // the reader/mask). The block counts (Hb, Wb) are derived kernel-side from nb_H/bh, nb_W/bw.
     const std::array<uint32_t, 3> block = operation_attributes.neighborhood_block.value_or(std::array<uint32_t, 3>{});
+    // GNA query-group stride {st, sh, sw}. Defaults to {1,1,1} rather than zeros because the kernels
+    // divide by it to find a query's group; 1 is exactly standard neighborhood attention.
+    const std::array<uint32_t, 3> nbr_stride =
+        operation_attributes.neighborhood_stride.value_or(std::array<uint32_t, 3>{1, 1, 1});
     if (is_windowed) {
         // The reader->compute k-range ctrl CB carries each Q chunk's {k_lo, k_hi} and is needed in both
         // windowed sub-modes (block-diagonal and 3D-neighborhood); double-buffered so the reader can run a
@@ -1540,6 +1544,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(block[1]);
         reader_args.push_back(block[2]);
         reader_args.push_back(w_shard[1]);
+        // GNA stride tail, in the same order the writer gets at slots 25-27.
+        reader_args.push_back(nbr_stride[0]);
+        reader_args.push_back(nbr_stride[1]);
+        reader_args.push_back(nbr_stride[2]);
 
         reader_desc.emplace_runtime_args(core, reader_args);
 
@@ -1569,7 +1577,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
              w_shard[1],                                       // 21: w_origin (signed int32 bit-pattern)
              block[0],                                         // 22: block bt (0 => strided Q path)
              block[1],                                         // 23: block bh
-             block[2]});                                       // 24: block bw
+             block[2],                                         // 24: block bw
+             nbr_stride[0],                                    // 25: GNA stride st (1 => standard NA)
+             nbr_stride[1],                                    // 26: GNA stride sh
+             nbr_stride[2]});                                  // 27: GNA stride sw
 
         compute_desc.emplace_runtime_args(
             core,

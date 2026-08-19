@@ -148,3 +148,86 @@ def test_neighborhood_3d_w_shard(device, w_lo, w_hi):
     ).reshape(t_, h_, w_pad, head_dim)
     interior = out[:, :, halo : halo + (w_hi - w_lo), :]
     assert_quality(full[:, :, w_lo:w_hi, :], interior, pcc=0.99)
+
+
+# --- Generalized Neighborhood Attention (neighborhood_stride) ---------------------------------------
+# (dims, kernel, stride): each stride divides its axis and is <= its kernel. Mixed strides check that
+# the axes are independent; stride == kernel is the coarsest (block-sparse) setting.
+STRIDE_CASES = [
+    ((4, 4, 4), (3, 3, 3), (2, 2, 2)),
+    ((4, 4, 4), (3, 3, 3), (1, 2, 1)),
+    ((6, 4, 4), (3, 3, 3), (3, 1, 2)),
+    ((4, 4, 4), (3, 3, 3), (2, 1, 1)),
+    ((6, 3, 3), (3, 3, 3), (3, 3, 3)),
+]
+
+
+def _nbr_flat(device, q, k, v, dims, kernel, stride=None):
+    t_, h_, w_ = dims
+    s, head_dim = t_ * h_ * w_, q.shape[-1]
+
+    def to_tt(x):
+        return ttnn.from_torch(
+            x.reshape(1, 1, s, head_dim), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+
+    out = ttnn.transformer.scaled_dot_product_attention(
+        to_tt(q),
+        to_tt(k),
+        to_tt(v),
+        is_causal=False,
+        neighborhood_3d=(t_, h_, w_, *kernel),
+        neighborhood_stride=stride,
+    )
+    return ttnn.to_torch(out).reshape(s, head_dim)
+
+
+@pytest.mark.parametrize("dims,kernel,stride", STRIDE_CASES)
+def test_gna_stride_matches_na3d_torch(device, dims, kernel, stride):
+    """The op's GNA mode vs the host reference planned at the same stride."""
+    torch.manual_seed(0)
+    t_, h_, w_ = dims
+    s, head_dim = t_ * h_ * w_, 64
+    q, k, v = (torch.randn(1, t_, h_, w_, 1, head_dim) for _ in range(3))
+
+    ref = na3d_torch(q, k, v, kernel_size=kernel, stride=stride).reshape(s, head_dim)
+    got = _nbr_flat(device, q, k, v, dims, kernel, stride)
+    assert_quality(ref, got, pcc=0.99)
+
+
+@pytest.mark.parametrize("dims,kernel", CASES)
+def test_gna_stride_one_is_bit_identical_to_no_stride(device, dims, kernel):
+    """Stride (1,1,1) must be BIT-identical to omitting the argument, not merely within PCC.
+
+    gna_leader(q, 1) == q makes stride 1 the identity by construction, so any difference at all means
+    the stride plumbing perturbed the standard NA path -- the one regression that would affect every
+    existing caller. Exact equality is the only assertion that can catch a subtle drift here.
+    """
+    torch.manual_seed(0)
+    t_, h_, w_ = dims
+    q, k, v = (torch.randn(1, t_, h_, w_, 1, 64) for _ in range(3))
+
+    base = _nbr_flat(device, q, k, v, dims, kernel, None)
+    strided = _nbr_flat(device, q, k, v, dims, kernel, (1, 1, 1))
+    assert torch.equal(
+        base, strided
+    ), f"stride (1,1,1) diverged from the no-stride path: max|delta| = {(base - strided).abs().max()}"
+
+
+@pytest.mark.parametrize(
+    "stride,message",
+    # Matching the TT_FATAL text pins WHICH rule fired: a stride of 0 must not be caught by the
+    # divisibility check, or a future reordering of the validation could hide one rule behind another.
+    [
+        ((0, 1, 1), "must be >= 1"),
+        ((5, 1, 1), "must not exceed the effective kernel"),
+        ((3, 1, 1), "must divide the t axis length"),
+    ],
+)
+def test_gna_stride_invalid_is_rejected(device, expect_error, stride, message):
+    """Host validation must reject these rather than producing a silently wrong window."""
+    torch.manual_seed(0)
+    dims, kernel = (4, 4, 4), (3, 3, 3)
+    q, k, v = (torch.randn(1, 4, 4, 4, 1, 64) for _ in range(3))
+    with expect_error(RuntimeError, message):
+        _nbr_flat(device, q, k, v, dims, kernel, stride)

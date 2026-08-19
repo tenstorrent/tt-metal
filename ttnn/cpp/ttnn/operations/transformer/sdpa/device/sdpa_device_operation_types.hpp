@@ -52,6 +52,8 @@ struct SDPAParams {
     // within-block position. K/V stay strided -- only the Q coord decode changes. Zero-pad blocks only
     // (bt|T, bh|H, bw|W). Absent => strided Q (existing path).
     std::optional<std::array<uint32_t, 3>> neighborhood_block;
+    // GNA query-group stride {st,sh,sw}; nullopt and {1,1,1} both mean standard neighborhood attention.
+    std::optional<std::array<uint32_t, 3>> neighborhood_stride;
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;

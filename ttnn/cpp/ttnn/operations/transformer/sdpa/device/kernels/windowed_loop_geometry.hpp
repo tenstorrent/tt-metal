@@ -90,6 +90,39 @@ inline WindowedKChunkRange windowed_k_chunk_range(
 }
 
 /**
+ * GNA query-group leader along one axis. Stride ``s`` groups queries into runs of ``s`` that share a
+ * single window: the group elects its center-most member, biased right for even ``s`` (NATTEN's GNA
+ * default -- the right bias cancels the inward-shift's left bias). ``s == 1`` is the identity, so
+ * standard neighborhood attention is this path with no window sharing at all.
+ *
+ * Non-decreasing in ``q``, which is what lets the box narrowing below keep taking its lower bound from
+ * the chunk's first query and its upper bound from the last.
+ */
+inline uint32_t gna_leader(uint32_t q, uint32_t stride) { return (q / stride) * stride + (stride / 2); }
+
+/**
+ * Per-axis inward-shifted window start for the group ``q`` belongs to. Host validation requires the
+ * stride to divide the axis length, so the leader always lands in range; the clamp only guards a
+ * sharded axis whose validation was bypassed.
+ */
+inline uint32_t nbr_shift_start(uint32_t q, uint32_t len, uint32_t ker, uint32_t stride) {
+    if (ker > len) {
+        ker = len;
+    }
+    uint32_t lq = gna_leader(q, stride);
+    if (lq >= len) {
+        lq = len - 1;
+    }
+    const uint32_t half = ker / 2;
+    const uint32_t last = len - ker;
+    uint32_t start = lq < half ? 0u : lq - half;
+    if (start > last) {
+        start = last;
+    }
+    return start;
+}
+
+/**
  * 3D-neighborhood (NATTEN) K-chunk range, narrowed along the OUTER (T) axis only.
  *
  * The volume is flattened T-outer (k = t*H*W + h*W + w), so the T axis is the only one whose
@@ -113,6 +146,7 @@ inline WindowedKChunkRange neighborhood_t_k_chunk_range(
     uint32_t H,
     uint32_t W,
     uint32_t kt,
+    uint32_t st,
     uint32_t Sk_chunk_t,
     uint32_t k_num_chunks,
     uint32_t tile_height) {
@@ -134,17 +168,8 @@ inline WindowedKChunkRange neighborhood_t_k_chunk_range(
     // Inward-shifted window along T (mirrors nbr_axis_bounds in windowed_mask_gen.hpp): start is
     // non-decreasing in the query coord, so t0 comes from qt_min and t1 from qt_max.
     const uint32_t ker = kt > T ? T : kt;
-    const uint32_t half = ker / 2;
-    const uint32_t last = T - ker;
-    uint32_t t0 = qt_min < half ? 0u : qt_min - half;
-    if (t0 > last) {
-        t0 = last;
-    }
-    uint32_t start_max = qt_max < half ? 0u : qt_max - half;
-    if (start_max > last) {
-        start_max = last;
-    }
-    const uint32_t t1 = start_max + ker;
+    const uint32_t t0 = nbr_shift_start(qt_min, T, kt, st);
+    const uint32_t t1 = nbr_shift_start(qt_max, T, kt, st) + ker;
 
     const uint32_t chunk_toks = tile_height * Sk_chunk_t;
     uint32_t k_lo = (t0 * HW) / chunk_toks;
@@ -182,19 +207,6 @@ struct NeighborhoodBox {
     uint32_t w_hi;
 };
 
-inline uint32_t nbr_shift_start(uint32_t q, uint32_t len, uint32_t ker) {
-    if (ker > len) {
-        ker = len;
-    }
-    const uint32_t half = ker / 2;
-    const uint32_t last = len - ker;
-    uint32_t start = q < half ? 0u : q - half;
-    if (start > last) {
-        start = last;
-    }
-    return start;
-}
-
 inline NeighborhoodBox neighborhood_box(
     uint32_t q_chunk,
     uint32_t Sq_chunk_t,
@@ -206,6 +218,9 @@ inline NeighborhoodBox neighborhood_box(
     uint32_t kt,
     uint32_t kh,
     uint32_t kw,
+    uint32_t st,
+    uint32_t sh,
+    uint32_t sw,
     uint32_t tile_height) {
     const uint32_t HW = H * W;
     const uint32_t sites = T * HW;
@@ -221,8 +236,8 @@ inline NeighborhoodBox neighborhood_box(
     const uint32_t qt_min = q_lo / HW;
     const uint32_t qt_max = (q_hi - 1) / HW;
     const uint32_t ker_t = kt > T ? T : kt;
-    const uint32_t t0 = nbr_shift_start(qt_min, T, kt);
-    const uint32_t t1 = nbr_shift_start(qt_max, T, kt) + ker_t;
+    const uint32_t t0 = nbr_shift_start(qt_min, T, kt, st);
+    const uint32_t t1 = nbr_shift_start(qt_max, T, kt, st) + ker_t;
 
     uint32_t qh_min;
     uint32_t qh_max;
@@ -234,8 +249,8 @@ inline NeighborhoodBox neighborhood_box(
         qh_max = H - 1;
     }
     const uint32_t ker_h = kh > H ? H : kh;
-    const uint32_t h_lo = nbr_shift_start(qh_min, H, kh);
-    const uint32_t h_hi = nbr_shift_start(qh_max, H, kh) + ker_h;
+    const uint32_t h_lo = nbr_shift_start(qh_min, H, kh, sh);
+    const uint32_t h_hi = nbr_shift_start(qh_max, H, kh, sh) + ker_h;
 
     // W band: only when the whole chunk lies in ONE (t, h) row (row index = token / W); otherwise the
     // w coordinate wraps and can't be cheaply bounded, so keep the whole W axis (falls back to 5a).
@@ -245,8 +260,8 @@ inline NeighborhoodBox neighborhood_box(
         const uint32_t qw_min = q_lo % W;
         const uint32_t qw_max = (q_hi - 1) % W;
         const uint32_t ker_w = kw > W ? W : kw;
-        w_lo = nbr_shift_start(qw_min, W, kw);
-        w_hi = nbr_shift_start(qw_max, W, kw) + ker_w;
+        w_lo = nbr_shift_start(qw_min, W, kw, sw);
+        w_hi = nbr_shift_start(qw_max, W, kw, sw) + ker_w;
     }
     return {t0, t1, h_lo, h_hi, w_lo, w_hi};
 }
@@ -313,6 +328,9 @@ inline NeighborhoodBox neighborhood_box_block(
     uint32_t kt,
     uint32_t kh,
     uint32_t kw,
+    uint32_t st,
+    uint32_t sh,
+    uint32_t sw,
     uint32_t w_origin) {
     const BlockCoord b = block_index_of_chunk(qc, hb, wb);
     // w_origin is on the OUTER (T) axis: t_inner K/V make the sharded physical-W axis the op outer axis.
@@ -320,13 +338,15 @@ inline NeighborhoodBox neighborhood_box_block(
     const uint32_t h_lo = b.h * bh, h_hi = h_lo + bh - 1;
     const uint32_t w_lo = b.w * bw, w_hi = w_lo + bw - 1;
     const uint32_t ker_t = kt > T ? T : kt, ker_h = kh > H ? H : kh, ker_w = kw > W ? W : kw;
+    // Under GNA with stride == block extent the two corners share a leader, so each axis collapses to a
+    // single window and the box IS the window -- which is what makes the chunk perfectly block-sparse.
     return {
-        nbr_shift_start(t_lo, T, kt),
-        nbr_shift_start(t_hi, T, kt) + ker_t,
-        nbr_shift_start(h_lo, H, kh),
-        nbr_shift_start(h_hi, H, kh) + ker_h,
-        nbr_shift_start(w_lo, W, kw),
-        nbr_shift_start(w_hi, W, kw) + ker_w,
+        nbr_shift_start(t_lo, T, kt, st),
+        nbr_shift_start(t_hi, T, kt, st) + ker_t,
+        nbr_shift_start(h_lo, H, kh, sh),
+        nbr_shift_start(h_hi, H, kh, sh) + ker_h,
+        nbr_shift_start(w_lo, W, kw, sw),
+        nbr_shift_start(w_hi, W, kw, sw) + ker_w,
     };
 }
 
@@ -355,4 +375,21 @@ inline WindowedKChunkRange neighborhood_box_k_chunk_range(
         k_hi = k_lo + 1;
     }
     return {k_lo, k_hi};
+}
+
+/**
+ * Perfectly block-sparse test: does every query in this chunk share ONE window?
+ *
+ * The box is the union of the chunk's windows and each window has extent exactly ``ker`` per axis, so a
+ * box whose extent equals ``ker`` on all three axes can only be a single window that every query shares
+ * -- there is then nothing for a fine-grained mask to remove (only the packed tail past n_box). Exact,
+ * not conservative, and it subsumes both the GNA stride == block case and the degenerate ker >= len case.
+ *
+ * Writer-side only: it selects how the mask is filled, never which keys are gathered, so the reader's
+ * box is unaffected and the two kernels cannot disagree about the chunk's extent.
+ */
+inline bool neighborhood_box_is_single_window(
+    const NeighborhoodBox& box, uint32_t T, uint32_t H, uint32_t W, uint32_t kt, uint32_t kh, uint32_t kw) {
+    const uint32_t ker_t = kt > T ? T : kt, ker_h = kh > H ? H : kh, ker_w = kw > W ? W : kw;
+    return (box.t1 - box.t0) == ker_t && (box.h_hi - box.h_lo) == ker_h && (box.w_hi - box.w_lo) == ker_w;
 }

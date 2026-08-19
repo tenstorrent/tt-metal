@@ -483,3 +483,111 @@ def test_stage5_parity_sharded(mesh_device: ttnn.MeshDevice, device_params, subm
     tt_t = tt_timestep(timestep, mesh)
     tt_pixels = model.forward(tt_context, x_t, tt_t, grid)
     assert_quality(ref_pixels, tt_pixels, pcc=pcc)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=["mesh_device"])
+@pytest.mark.parametrize("sp_axis", [1], ids=["sp_cols"])
+@pytest.mark.parametrize(
+    "grid, stride, pcc",
+    # Stride 1 must clear the same bar as every other parity test. A real stride gets no threshold:
+    # it is a different attention from the one the reference computes, so the number is the finding.
+    #
+    # The stride has to divide every axis, which is what forces the second grid: stride_t = 11 is the
+    # only non-trivial T stride the shipped T = 121 = 11^2 admits, and it needs T > 11 to have any
+    # effect at all -- at T = 11 the 11-kernel already spans the axis and every query sees all of it,
+    # so the stride would measure as free. T = 22 is the smallest grid where it actually bites, and the
+    # stride-1 row at the same grid is the control the strided row is read against.
+    [
+        (Grid(batch=1, t=12, h=32, w=32), (1, 1, 1), 0.999),
+        (Grid(batch=1, t=12, h=32, w=32), (1, 2, 2), None),
+        (Grid(batch=1, t=12, h=32, w=32), (1, 4, 4), None),
+        (Grid(batch=1, t=22, h=32, w=32), (1, 1, 1), 0.999),
+        (Grid(batch=1, t=22, h=32, w=32), (11, 4, 8), None),
+    ],
+    ids=["t12_stride111", "t12_stride122", "t12_stride144", "t22_stride111", "t22_stride11_4_8"],
+)
+def test_stage5_gna_parity_w_sharded(*, mesh_device, device_params, sp_axis, grid, stride, pcc):
+    """Stage 5 on the PRODUCTION W-sharded backend against the ltx_core reference, per GNA stride.
+
+    The other parity tests here run the replicated or NA3DShard paths, and ``gna_stride`` is only
+    plumbed through ``op_sp_w_sharded`` -- so without this the shipped stage-5 configuration has no
+    upstream reference at all, at any stride.
+
+    Stride 1 is the regression guard: it must match the reference like every other arm, which proves
+    the stride plumbing left standard NA alone end-to-end and not merely per-op. Stride > 1 is a
+    measurement -- the reference is stride-1 attention, so its PCC IS the quality cost of GNA on a
+    network trained without it.
+    """
+    from models.tt_dit.parallel.manager import CCLManager
+
+    # A stride that never reaches the op yields the stride-1 result, which would read as "GNA is free"
+    # rather than as a plumbing failure. Observing the kwarg at the op boundary is the only check that
+    # cannot drift from na3d's own resolution logic.
+    seen: set[tuple[int, ...] | None] = set()
+    _sdpa = ttnn.transformer.scaled_dot_product_attention
+
+    def _probe(*args, **kwargs):
+        observed = kwargs.get("neighborhood_stride")
+        seen.add(tuple(observed) if observed is not None else None)
+        return _sdpa(*args, **kwargs)
+
+    ttnn.transformer.scaled_dot_product_attention = _probe
+
+    sp = int(list(mesh_device.shape)[sp_axis])
+    assert grid.w % sp == 0, f"W={grid.w} not divisible by sp={sp}"
+    for axis, (extent, s) in enumerate(zip((grid.t, grid.h, grid.w), stride)):
+        assert extent % s == 0, f"stride {s} on axis {axis} does not divide {extent}"
+
+    config = DiffVAEStage5Config(gna_stride=stride)
+    dtype = ttnn.bfloat16
+
+    reference = TorchStage5(config)
+    reference.eval()
+    randomize(reference, seed=1234)
+    state = checkpoint_state(reference)
+
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    model = DiffVAEStage5(
+        config,
+        mesh_device=mesh_device,
+        dtype=dtype,
+        ccl_manager=ccl_manager,
+        na3d_backend="op_sp_w_sharded",
+        sp_axis=sp_axis,
+    )
+    model.load_torch_state_dict(state)
+
+    context, x_t, timestep = make_inputs(config, grid, seed=99)
+    _, ref_pixels = reference.forward_diff_step(reference.build_buffer(context, x_t), timestep)
+
+    tt_context = ttnn.from_torch(
+        flat(context, config.context_channels).contiguous(),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+    )
+    tt_t = tt_timestep(timestep, mesh_device)
+    try:
+        tt_pixels = model.forward(tt_context, x_t, tt_t, grid)
+    finally:
+        ttnn.transformer.scaled_dot_product_attention = _sdpa
+
+    # The op receives the stride permuted into op-axis order (W outer, T inner), matching how the
+    # kernel is permuted alongside it.
+    st, sh, sw = stride
+    expected = None if stride == (1, 1, 1) else (sw, sh, st)
+    assert seen == {expected}, f"stride {stride} reached the op as {seen}, expected {{{expected}}}"
+
+    if pcc is not None:
+        assert_quality(ref_pixels, tt_pixels, pcc=pcc)
+        return
+    got = tt_pixels if isinstance(tt_pixels, torch.Tensor) else ttnn.to_torch(tt_pixels)
+    a = ref_pixels.flatten().to(torch.float64)
+    b = got.reshape(ref_pixels.shape).flatten().to(torch.float64)
+    a, b = a - a.mean(), b - b.mean()
+    measured = (a @ b / (a.norm() * b.norm())).item()
+    logger.info(f"[GNA] stride {stride}: end-to-end stage-5 pixel PCC vs ltx_core = {measured:.6f}")

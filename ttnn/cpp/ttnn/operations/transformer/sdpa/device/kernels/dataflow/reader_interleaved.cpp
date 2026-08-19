@@ -208,6 +208,11 @@ void kernel_main() {
     uint32_t nb_bh = 0;
     uint32_t nb_bw = 0;
     uint32_t nb_w_origin = 0;
+    // GNA query-group stride {st,sh,sw}. 1 is standard neighborhood attention; never 0, which would
+    // divide by zero in gna_leader.
+    uint32_t nb_st = 1;
+    uint32_t nb_sh = 1;
+    uint32_t nb_sw = 1;
     if constexpr (use_windowed_narrowing) {
         cu_window_seqlens_addr = get_arg_val<uint32_t>(argidx++);
         cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
@@ -223,6 +228,9 @@ void kernel_main() {
         nb_bh = get_arg_val<uint32_t>(argidx++);
         nb_bw = get_arg_val<uint32_t>(argidx++);
         nb_w_origin = get_arg_val<uint32_t>(argidx++);
+        nb_st = get_arg_val<uint32_t>(argidx++);
+        nb_sh = get_arg_val<uint32_t>(argidx++);
+        nb_sw = get_arg_val<uint32_t>(argidx++);
     }
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
@@ -473,6 +481,9 @@ void kernel_main() {
                             nb_kt,
                             nb_kh,
                             nb_kw,
+                            nb_st,
+                            nb_sh,
+                            nb_sw,
                             windowed_q_tok_offset);
                         const auto range = neighborhood_box_k_chunk_range(
                             nbr_box, nb_H, nb_W, Sk_chunk_t * tt::constants::TILE_HEIGHT, k_num_chunks);
@@ -488,6 +499,7 @@ void kernel_main() {
                             nb_H,
                             nb_W,
                             nb_kt,
+                            nb_st,
                             Sk_chunk_t,
                             k_num_chunks,
                             tt::constants::TILE_HEIGHT);
@@ -504,6 +516,9 @@ void kernel_main() {
                             nb_kt,
                             nb_kh,
                             nb_kw,
+                            nb_st,
+                            nb_sh,
+                            nb_sw,
                             tt::constants::TILE_HEIGHT);
                     }
                     ctrl_lo = 0;

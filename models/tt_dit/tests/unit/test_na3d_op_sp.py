@@ -289,6 +289,65 @@ def test_na3d_op_sp_w_sharded_matches_host(*, mesh_device, sp_axis, dims, kernel
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
 )
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("sp_axis", [1], ids=["sp_cols"])
+@pytest.mark.parametrize(
+    "dims, kernel, stride",
+    # Strides must divide their axis and stay <= the kernel. W is the sharded axis, so a stride on it
+    # also exercises the per-device W origin: each shard's group boundaries have to line up globally.
+    [
+        ((4, 4, 32), (3, 3, 3), (2, 2, 2)),
+        ((4, 4, 32), (3, 3, 3), (1, 1, 2)),
+        # stride_w == the 4-wide W shard: the group boundary lands exactly on the shard boundary, so a
+        # per-device origin that forgot to be global would snap to the wrong leader.
+        ((2, 8, 32), (3, 3, 5), (2, 2, 4)),
+    ],
+)
+def test_na3d_op_sp_w_sharded_gna_stride_matches_host(*, mesh_device, sp_axis, dims, kernel, stride):
+    """GNA on the production sharded path: the W-sharded executor at a stride vs the host reference
+    planned at the same stride. The stride is given in physical (t,h,w) and the executor permutes it
+    to op order alongside the kernel -- a mismatch there would show up as a wrong window, so this is
+    the test that pins the axis-order plumbing."""
+    from ...layers.na3d import neighborhood_attention_3d_op_sp_w_sharded
+
+    T, H, W = dims
+    heads, head_dim = 4, 64
+    sp = list(mesh_device.shape)[sp_axis]
+    if W % sp != 0:
+        pytest.skip(f"W={W} not divisible by sp={sp}")
+    if (W // sp) % stride[2] != 0:
+        pytest.skip(f"W shard {W // sp} not divisible by stride_w={stride[2]}")
+
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, T, H, W, heads, head_dim, dtype=torch.float32) for _ in range(3))
+    expected = na3d_torch(q, k, v, kernel, scale=1.0, stride=stride).reshape(1, T, H, W, heads * head_dim)
+
+    shard_axes = [None] * 6
+    shard_axes[3] = sp_axis
+    q_tt, k_tt, v_tt = (
+        from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=shard_axes)
+        for x in (q, k, v)
+    )
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    out = neighborhood_attention_3d_op_sp_w_sharded(
+        q_tt,
+        k_tt,
+        v_tt,
+        dims=dims,
+        kernel_size=kernel,
+        sp_axis=sp_axis,
+        ccl_manager=ccl_manager,
+        scale=1.0,
+        gna_stride=stride,
+    )
+
+    got = to_torch_replicated(out, mesh_axes=[None, None, None, sp_axis, None])
+    assert_quality(expected, got, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
 @pytest.mark.parametrize("dims, kernel", [((4, 4, 32), (3, 3, 3)), ((3, 2, 16), (3, 3, 3))])
 def test_na3d_op_sp_w_sharded_tp_matches_host(*, mesh_device, dims, kernel):
     """W-SP composed with TENSOR PARALLELISM OVER HEADS on the orthogonal mesh axis. q/k/v are

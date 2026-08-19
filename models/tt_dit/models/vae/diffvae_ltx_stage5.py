@@ -133,6 +133,10 @@ class DiffVAEStage5Config:
     dim: int = 256
     head_dim: int = 64
     kernel_size: tuple[int, int, int] = (11, 11, 11)
+    # Generalized Neighborhood Attention query-group stride, physical (t,h,w). (1,1,1) is the shipped
+    # architecture: standard neighborhood attention, every query centered on its own window. Anything
+    # larger shares one window across each group of queries, which the network was not trained for.
+    gna_stride: tuple[int, int, int] = (1, 1, 1)
     context_channels: int = 256
     mlp_hidden: int = 1024
     num_blocks: int = 8
@@ -819,6 +823,7 @@ class _NeighborhoodAttention3D(Module):
                 tp_axis=self.tp_axis,
                 heads_presharded=self.tp_proj,
                 flat_seq=flat_seq,
+                gna_stride=None if cfg.gna_stride == (1, 1, 1) else cfg.gna_stride,
             )
         else:
             out = neighborhood_attention_3d(

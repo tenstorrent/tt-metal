@@ -52,7 +52,14 @@ ttnn::Tensor scaled_dot_product_attention(
     /// Block-permuted Q (block-permute v1): {bt, bh, bw}. When set (with neighborhood_gather) a Q chunk is
     /// one (bt,bh,bw) block of the block-order sequence, so its box is that block dilated and each query's
     /// coord is decoded from its within-block position. K/V stay strided. Zero-pad blocks (bt|T,bh|H,bw|W).
-    const std::optional<std::array<uint32_t, 3>>& neighborhood_block = std::nullopt);
+    const std::optional<std::array<uint32_t, 3>>& neighborhood_block = std::nullopt,
+    /// Generalized Neighborhood Attention stride: {st, sh, sw}. Runs of `stride` queries along an axis are
+    /// grouped and share one window -- that of the group's center-most member, biased right for even
+    /// groups. {1,1,1} (the default, and nullopt) is standard neighborhood attention. Each stride must be
+    /// in [1, kernel] and divide its axis length. When the stride equals the Q block extent on every axis
+    /// the box collapses to a single window, making the chunk perfectly block-sparse and eliminating the
+    /// fine-grained mask. Requires neighborhood_3d.
+    const std::optional<std::array<uint32_t, 3>>& neighborhood_stride = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
