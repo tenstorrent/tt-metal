@@ -2674,6 +2674,25 @@ def _coverage_layers(
         _coverage_cache_put(repo_root, node, case, _cache_val)
         return _cov_dict, facts
     k, n_kinds = _config_layer_kinds(config_ref or model_name)
+    if k is None:
+        # THE CHECKPOINT COUNTS THE KINDS THE CONFIG WAS GUESSED FOR. _config_layer_kinds reads a
+        # per-layer pattern out of one of four attribute names and needs AutoConfig to load the
+        # model at all -- which it cannot for voxtral, whose model type this transformers does not
+        # know. Both fell through and the run ended here with "no_window: probe_failed".
+        #
+        # Two blocks are the same kind when they hold the same set of parameter names. That is
+        # visible in the checkpoint without a vocabulary, an import, or a device.
+        try:
+            from agent.checkpoint_sections import layer_kinds as _ck_kinds
+
+            k, n_kinds = _ck_kinds(_model_root_from_node(repo_root, node), model_name or config_ref)
+            if k is not None:
+                print(
+                    "  [optimize/cc] coverage (checkpoint fallback; k=0 probe empty, config silent): "
+                    "%d kind(s) -> TT_PERF_LAYERS=%d" % (n_kinds, min(k, 16))
+                )
+        except Exception:  # noqa: BLE001 -- no checkpoint is the old "probe_failed" path
+            k, n_kinds = None, 0
     if k is not None:
         _cov = min(k, 16)
         print(

@@ -286,6 +286,71 @@ def tower_geometry(snapshot) -> dict:
     return out
 
 
+def layer_kinds_from_keys(keys) -> tuple:
+    """(k, n_kinds): how many DISTINCT kinds of block the checkpoint contains, and how many layers
+    from the front you must take to see one of each. (None, 0) when it declares no repeated blocks.
+
+    COUNTED, NOT DECLARED. The config route reads a per-layer pattern out of one of four attribute
+    names -- hybrid_override_pattern, layer_types, layers_block_type, block_types -- and a model
+    using a fifth spelling, or one transformers cannot load at all, yields nothing. Voxtral is the
+    second case: AutoConfig raises on its model type, so that path returns (None, 0) and the caller
+    gives up with "no_window: probe_failed".
+
+    A checkpoint says it outright. Two blocks are the same KIND when they hold the same set of
+    parameter names, and different kinds when they do not -- an attention block has q_proj/k_proj,
+    a Mamba block has in_proj/conv1d, and no vocabulary is needed to see that they differ. Indices
+    come from the names too, so "the first k layers cover every kind" is a count.
+
+    Per stack, then the deepest answer across stacks: a window has to be representative of every
+    tower, not of the first one enumerated.
+    """
+    import re as _re
+
+    stacks: dict = {}
+    for name in keys or []:
+        m = _re.match(r"^(.*\.layers)\.(\d+)\.(.+)$", str(name))
+        if not m:
+            continue
+        stacks.setdefault(m.group(1), {}).setdefault(int(m.group(2)), set()).add(m.group(3))
+    best_k, best_n = None, 0
+    for _prefix, per_idx in stacks.items():
+        if len(per_idx) < 2:
+            continue
+        sigs = {i: frozenset(v) for i, v in per_idx.items()}
+        kinds = set(sigs.values())
+        seen: set = set()
+        k = None
+        for i in sorted(sigs):
+            seen.add(sigs[i])
+            if seen == kinds:
+                k = i + 1
+                break
+        if k is None:
+            continue
+        if best_k is None or k > best_k:
+            best_k = k
+        best_n = max(best_n, len(kinds))
+    return best_k, best_n
+
+
+def layer_kinds(root, model_id: str = "") -> tuple:
+    """layer_kinds_from_keys against this model's checkpoint. (None, 0) when unreadable."""
+    # THE RESULT DECIDES, NOT THE KEY COUNT. A model directory can hold keys that are not the model
+    # -- voxtral's ships 24 from its captured references and stubs -- so "the list is non-empty" is
+    # not "the weights are here", and testing it skipped the cache where the weights actually are.
+    # declared_sections above resolves the same way, on whether the ANSWER came out.
+    try:
+        got = layer_kinds_from_keys(checkpoint_keys(root))
+        if got[0]:
+            return got
+        snap = hf_cache_dir(model_id) if model_id else None
+        if snap is None:
+            return None, 0
+        return layer_kinds_from_keys(_index_keys(snap) or checkpoint_keys(snap))
+    except Exception:  # noqa: BLE001 -- an unreadable checkpoint declares nothing
+        return None, 0
+
+
 def declared_sections(root, model_id: str = "") -> dict:
     """{section: depth} straight from a model's weights. {} when nothing readable is present.
 
