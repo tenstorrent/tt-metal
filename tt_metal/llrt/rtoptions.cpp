@@ -92,33 +92,34 @@ enum class EnvVarID {
     // ========================================
     // HARDWARE CONFIGURATION
     // ========================================
-    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,     // Enable HW cache invalidation
-    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,     // Disable relaxed memory ordering
-    TT_METAL_ENABLE_GATHERING,                 // Enable instruction gathering
-    TT_METAL_FABRIC_BW_TELEMETRY,              // Enable fabric bandwidth telemetry
-    TT_METAL_FABRIC_TELEMETRY,                 // Enable fabric telemetry
-    TT_FABRIC_PROFILE_RX_CH_FWD,               // Enable fabric RX channel forwarding profiling
-    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
-    TT_METAL_FABRIC_TRIMMING_PROFILE,          // Path to channel trimming profile YAML for import
-    TT_METAL_FABRIC_TRIMMING_OVERRIDE,         // Path to channel trimming global override YAML
-    TT_METAL_ENABLE_FABRIC_VC2,                // Enable fabric VC2 (neighbour exchange)
-    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,  // Enable experimental VC1 inter-mesh pass-through
-    TT_METAL_FORCE_REINIT,                     // Force context reinitialization
-    TT_METAL_DISABLE_FABRIC_TWO_ERISC,         // Disable fabric 2-ERISC mode
-    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,     // Log kernel compilation commands
-    TT_METAL_SLOW_DISPATCH_MODE,               // Use slow dispatch mode
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,      // Skip Ethernet cores during retrain
-    TT_METAL_VALIDATE_PROGRAM_BINARIES,        // Validate kernel binary integrity
-    TT_METAL_DISABLE_DMA_OPS,                  // Disable DMA operations
-    RELIABILITY_MODE,                          // Fabric reliability mode (strict/relaxed)
-    TT_METAL_DISABLE_MULTI_AERISC,             // Disable multi-erisc mode (inverted logic, enabled by default)
-    TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
-    TT_METAL_FORCE_JIT_COMPILE,                // Force JIT compilation
-    TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
-    TT_METAL_DRAM_BACKED_CQ,                   // Store command queues in device DRAM
-    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,   // Simulator tensor preload bypasses FD CQ copies
+    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,              // Enable HW cache invalidation
+    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,              // Disable relaxed memory ordering
+    TT_METAL_ENABLE_GATHERING,                          // Enable instruction gathering
+    TT_METAL_FABRIC_BW_TELEMETRY,                       // Enable fabric bandwidth telemetry
+    TT_METAL_FABRIC_TELEMETRY,                          // Enable fabric telemetry
+    TT_FABRIC_PROFILE_RX_CH_FWD,                        // Enable fabric RX channel forwarding profiling
+    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,           // Enable channel trimming resource usage capture
+    TT_METAL_FABRIC_TRIMMING_PROFILE,                   // Path to channel trimming profile YAML for import
+    TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
+    TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
+    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
+    TT_METAL_FORCE_REINIT,                              // Force context reinitialization
+    TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
+    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
+    TT_METAL_SLOW_DISPATCH_MODE,                        // Use slow dispatch mode
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,               // Skip Ethernet cores during retrain
+    TT_METAL_VALIDATE_PROGRAM_BINARIES,                 // Validate kernel binary integrity
+    TT_METAL_DISABLE_DMA_OPS,                           // Disable DMA operations
+    RELIABILITY_MODE,                                   // Fabric reliability mode (strict/relaxed)
+    TT_METAL_DISABLE_MULTI_AERISC,                      // Disable multi-erisc mode (inverted logic, enabled by default)
+    TT_METAL_USE_MGD_2_0,                               // Use mesh graph descriptor 2.0
+    TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
+    TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
+    TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
+    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
-    TT_METAL_MEASURE_DFB_INIT_TIME,                     // Temporary DFB init rdcycle instrumentation (deprecate once device profiler covers this).
+    TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
+                                     // covers this).
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -145,6 +146,9 @@ enum class EnvVarID {
     TT_METAL_OPERATION_TIMEOUT_SECONDS,            // Operation timeout duration
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
     TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
+    TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS,           // NOC debug dump: background poll period (ms)
+    TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS,      // NOC debug dump: period between self-triggered full reads (ms)
+    TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS,        // NOC debug dump: mid-run watermark margin (ms)
     TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
     TT_METAL_DISPATCH_TELEMETRY_DISABLE,           // Dispatch telemetry
 
@@ -964,10 +968,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (no mid-run dumps)
         // Usage: export TT_METAL_PROFILER_MID_RUN_DUMP=1
         case EnvVarID::TT_METAL_PROFILER_MID_RUN_DUMP: {
-            // Only enable mid-run dumps if device profiler is also enabled
-            if (this->profiler_enabled && is_env_enabled(value)) {
-                this->profiler_mid_run_dump = true;
-            }
+            this->profiler_mid_run_dump = is_env_enabled(value);
             break;
         }
 
@@ -1000,6 +1001,46 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_PROFILER_ACCUMULATE: {
             if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_accumulate = true;
+            }
+            break;
+        }
+
+        // TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS
+        // How often the NOC debug dump background thread polls the device for stalled cores. Lower values unblock
+        // stalled cores sooner at the cost of more NoC/PCIe traffic.
+        // Default: 500
+        // Usage: export TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS=250
+        case EnvVarID::TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS: {
+            if (value) {
+                this->noc_debug_poll_interval = std::chrono::milliseconds(std::stoi(value));
+            }
+            break;
+        }
+
+        // TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS
+        // How often the NOC debug dump thread self-triggers a full read, then processes, reports and discharges. This
+        // bounds host memory and surfaces issues during a long run. Rounded up to a whole number of poll intervals.
+        // Set to 0 to disable the self-triggered full read (events are then only processed on a user read or at
+        // device close).
+        // Default: 4000
+        // Usage: export TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS=10000
+        case EnvVarID::TT_METAL_NOC_DEBUG_FULL_READ_INTERVAL_MS: {
+            if (value) {
+                this->noc_debug_full_read_interval = std::chrono::milliseconds(std::stoi(value));
+            }
+            break;
+        }
+
+        // TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS
+        // Bounded-lateness margin used when processing NOC debug events mid-run: events newer than
+        // (latest seen - margin) are held back so a momentarily-stalled core cannot have a cross-core violation
+        // judged before its earlier event arrives. MUST exceed TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS, which bounds the
+        // worst-case record-to-host latency; this is validated at debug-dump thread start.
+        // Default: 3000
+        // Usage: export TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS=5000
+        case EnvVarID::TT_METAL_NOC_DEBUG_WATERMARK_MARGIN_MS: {
+            if (value) {
+                this->noc_debug_watermark_margin = std::chrono::milliseconds(std::stoi(value));
             }
             break;
         }
