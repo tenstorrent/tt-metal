@@ -47,11 +47,18 @@
  *      @c copy_tile the seed into DST, then @c add_tiles_init(..., acc_to_dest=true) so the add
  *      accumulates onto it. @c run_seeded() owns that sequence.
  *
- * @par @warning DST IS NOT ZEROED BY tile_regs_acquire().
+ * @par The DST-zero invariant (acquire does not zero; RELEASE does).
  *   @c tile_regs_acquire() is @c llk_math_wait_for_dest_available() and nothing more — despite an
- *   in-tree comment claiming it "resets DST to 0". @c run_seeded() is safe because it SEEDS DST from
- *   a CB before accumulating rather than assuming a zero start. Any future pairwise/tree variant that
- *   wants @c acc_to_dest with no seed must zero DST explicitly; do not copy that assumption in.
+ *   in-tree comment claiming it "resets DST to 0". The zero comes from the OTHER end of the
+ *   lifecycle: @c tile_regs_release() is the pack-side @c llk_pack_dest_section_done, which
+ *   ZEROACCs the just-released DST region (CLR_ALL under SyncFull, CLR_HALF under SyncHalf, with
+ *   fp32 variants — same on Wormhole and Blackhole). So in the standard
+ *   acquire/commit/wait/release flow, DST IS zero at every acquire: boot state is zero and every
+ *   release re-zeroes what it hands back. Unseeded @c acc_to_dest accumulation from a zero start
+ *   (@c sum_blocks below, all_reduce's reduction, llama_reduce_scatter) is sound under that
+ *   invariant; @c run_seeded() copy_tile-seeds because the terminal step's third addend LIVES IN A
+ *   CB — it is data plumbing, not zero-safety. The invariant only breaks for code that bypasses
+ *   the standard release path.
  *
  * @par OWNERSHIP SPLIT (same discipline as the other helpers).
  *   Owned here: the CB wait/pop/reserve/push protocol at granularity, the @c tile_regs lifecycle, the
@@ -183,6 +190,32 @@ private:
     /// cannot coexist — hence tracking the mode here rather than handing out two armed objects.
     bool programmed_seeded_ = false;
 };
+
+/**
+ * @brief @c out = the sum of @c num_blocks equal-shaped tile blocks RESIDENT in one CB — the
+ *        all_reduce pattern, where the gathered per-device partials land as contiguous blocks of
+ *        one input CB and are summed into a single output block.
+ *
+ * Owns the CB protocol this shape actually has: waits the WHOLE input
+ * (num_blocks * block_num_tiles) up front, reserves/pushes one output block — and deliberately
+ * NEVER POPS the input, whose CB is a shell over the gathered data that the op keeps resident.
+ * Owns the DST-capacity chunking against @c DEST_AUTO_LIMIT (retiring the hand-rolled
+ * `max_dst_tiles = 8` it replaces, which ignored fp32 dest-accum), and the ODD block count: an odd
+ * count copy_tile-seeds DST with block 0 and accumulates the remaining PAIRS — replacing an empty
+ * "TODO: Future support" branch that paired blocks off the end of the CB for odd counts. An even
+ * count accumulates all pairs with @c acc_to_dest from DST's zero start (sound per the banner's
+ * DST-zero invariant) — bit-identical to the shipped even-count sequence.
+ *
+ * @pre Hardware startup (@c binary_op_init_common) has run — same ownership note as arm().
+ * @post @c add_tiles_init is left in acc_to_dest mode; a BlockAccumulate live in the same kernel
+ *       must @c rearm() before its next run().
+ *
+ * @param cb_in           CB holding the num_blocks gathered blocks (never popped here).
+ * @param cb_out          Destination CB for the single summed block.
+ * @param num_blocks      Blocks to sum (>= 1; 1 degenerates to a copy of block 0).
+ * @param block_num_tiles Tiles per block.
+ */
+ALWI void sum_blocks(uint32_t cb_in, uint32_t cb_out, uint32_t num_blocks, uint32_t block_num_tiles);
 
 }  // namespace compute_kernel_lib
 
