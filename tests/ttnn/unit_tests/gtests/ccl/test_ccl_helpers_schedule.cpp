@@ -468,3 +468,585 @@ TEST(CclRingSchedule, Ring4Step1Coincidence) {
         EXPECT_FALSE(f.reduce_output);
     }
 }
+
+// =============================================================================================
+// LINE schedule equivalence sweep.
+//
+// GOLDEN: the pre-migration line_reduce_scatter_minimal_async reader + writer loops, transcribed
+// verbatim from their last unmigrated revision (this branch's parent, 831a7c69301) — control flow,
+// tile-id arithmetic, and the chunks-per-sync wait/signal cadence only. CANDIDATE: LineSliceCursor
+// + LineChannelWalk + SyncCadence + SliceRowWalker/SequentialTileWalker + the S7 predicates,
+// composed exactly as the migrated kernels drive them.
+//
+// COMPARED per chunk: batch/phase/target/slice/channel indices, tile count, the reader's
+// out_ready-wait and fwd/bwd-wait flags, the writer's inc-after/tail-inc/fwd-bwd-inc flags, the
+// writer's per-packet split (contig_pages_advanced), and EVERY tile id emitted by the input /
+// intermediate / output walks.
+// =============================================================================================
+
+namespace {
+
+struct LineCfg {
+    uint32_t ring, chip;
+    bool is_forward, is_first_dev, do_final, sync_other;
+    uint32_t num_targets;
+    uint32_t B, C, gran, cps, contig;
+    uint32_t start, end;
+    uint32_t dim;
+    uint32_t slice_Wt, tensor_Wt, slice_Ht;
+    uint32_t in_num_pages, in_batch, in_chan, out_batch, out_chan;
+    uint32_t start_pages, start_row;
+};
+
+std::string line_cfg_str(const LineCfg& g) {
+    std::ostringstream os;
+    os << "ring=" << g.ring << " chip=" << g.chip << " fwd=" << g.is_forward << " first=" << g.is_first_dev
+       << " final=" << g.do_final << " sync=" << g.sync_other << " targets=" << g.num_targets << " dim=" << g.dim
+       << " B=" << g.B << " C=" << g.C << " gran=" << g.gran << " cps=" << g.cps << " contig=" << g.contig
+       << " start=" << g.start << " end=" << g.end;
+    return os.str();
+}
+
+struct LineEv {
+    // kind: 0 = reader chunk, 1 = writer chunk, 2 = writer tail-inc point, 3 = writer final chunk,
+    //       4 = reader final chunk
+    uint32_t kind, b, target, slice_idx, c;
+    uint32_t tiles;
+    bool waited, fwdbwd, inc_after, tail_inc;
+    std::vector<uint32_t> ids;      // reader: main ids; writer: packet-flattened interm/output ids
+    std::vector<uint32_t> ids2;     // reader: intermediate ids
+    std::vector<uint32_t> packets;  // writer phase 1: pages per packet
+
+    bool operator==(const LineEv& o) const {
+        return kind == o.kind && b == o.b && target == o.target && slice_idx == o.slice_idx && c == o.c &&
+               tiles == o.tiles && waited == o.waited && fwdbwd == o.fwdbwd && inc_after == o.inc_after &&
+               tail_inc == o.tail_inc && ids == o.ids && ids2 == o.ids2 && packets == o.packets;
+    }
+};
+
+std::string line_ev_str(const LineEv& e) {
+    std::ostringstream os;
+    os << "kind=" << e.kind << " b=" << e.b << " t=" << e.target << " slice=" << e.slice_idx << " c=" << e.c
+       << " tiles=" << e.tiles << " waited=" << e.waited << " fwdbwd=" << e.fwdbwd << " inc=" << e.inc_after
+       << " tail=" << e.tail_inc << " ids=[";
+    for (auto v : e.ids) {
+        os << v << ",";
+    }
+    os << "] ids2=[";
+    for (auto v : e.ids2) {
+        os << v << ",";
+    }
+    os << "] pkts=[";
+    for (auto v : e.packets) {
+        os << v << ",";
+    }
+    os << "]";
+    return os.str();
+}
+
+uint32_t line_slice_off(const LineCfg& g, uint32_t slice_idx) {
+    if (g.dim == 3) {
+        return slice_idx * g.slice_Wt;
+    }
+    if (g.dim == 2) {
+        return slice_idx * g.slice_Ht * g.slice_Wt;
+    }
+    return slice_idx * g.C * g.slice_Ht * g.slice_Wt;  // dim == 1
+}
+
+// ------------------------------ GOLDEN: pre-migration reader --------------------------------
+void line_reader_golden(const LineCfg& g, std::vector<LineEv>& out) {
+    out.clear();
+    const uint32_t interm_full = g.is_forward ? 0 : g.in_num_pages;
+    uint32_t chunk_count = 0;
+    uint32_t fwd_sync_cnt = 0;
+    uint32_t sem_target = 0;
+    (void)fwd_sync_cnt;
+    (void)sem_target;
+
+    for (uint32_t b = 0; b < g.B; ++b) {
+        int slice_idx = g.is_forward ? static_cast<int>(g.ring) - 1 : 0;
+        const uint32_t batch_offset = g.in_batch * b;
+
+        for (uint32_t iter = 0; iter < g.num_targets; ++iter) {
+            chunk_count = 0;
+            uint32_t input_start = line_slice_off(g, static_cast<uint32_t>(slice_idx)) + batch_offset;
+            uint32_t interm_start = input_start + interm_full;
+
+            for (uint32_t c = 0; c < g.C; ++c) {
+                uint32_t in_pages = g.start_pages, in_row = g.start_row;
+                uint32_t it_pages = g.start_pages, it_row = g.start_row;
+                uint32_t tiles_read = g.start;
+
+                while (tiles_read < g.end) {
+                    const uint32_t n = std::min(g.end - tiles_read, g.gran);
+                    LineEv ev{};
+                    ev.kind = 0;
+                    ev.b = b;
+                    ev.target = iter;
+                    ev.slice_idx = static_cast<uint32_t>(slice_idx);
+                    ev.c = c;
+                    ev.tiles = n;
+                    if (!g.is_first_dev) {
+                        // reader.cpp: wait when chunk_count % cps == 0, THEN chunk_count++.
+                        ev.waited = (chunk_count % g.cps == 0);
+                        ++chunk_count;
+                    }
+                    for (uint32_t j = 0; j < n; ++j) {
+                        ev.ids.push_back(input_start + in_row + in_pages);
+                        if (++in_pages == g.slice_Wt) {
+                            in_row += g.tensor_Wt;
+                            in_pages -= g.slice_Wt;
+                        }
+                        if (!g.is_first_dev) {
+                            ev.ids2.push_back(interm_start + it_row + it_pages);
+                            if (++it_pages == g.slice_Wt) {
+                                it_row += g.tensor_Wt;
+                                it_pages -= g.slice_Wt;
+                            }
+                        }
+                    }
+                    tiles_read += n;
+                    out.push_back(std::move(ev));
+                }
+                input_start += g.in_chan;
+                interm_start += g.in_chan;
+            }
+            slice_idx += g.is_forward ? -1 : 1;
+        }
+
+        if (g.do_final) {
+            chunk_count = 0;
+            const uint32_t my_off = line_slice_off(g, g.chip);
+            uint32_t input_start = my_off + batch_offset;
+            uint32_t interm_start = input_start + interm_full;
+            uint32_t output_start = b * g.out_batch;
+            const bool acc = g.sync_other && !g.is_forward;
+
+            uint32_t main_start = acc ? output_start : input_start;
+            const uint32_t main_stride = acc ? g.slice_Wt : g.tensor_Wt;
+            const uint32_t main_chan = acc ? g.out_chan : g.in_chan;
+            const uint32_t main_row0 = acc ? (g.start_row / g.tensor_Wt * g.slice_Wt) : g.start_row;
+
+            for (uint32_t c = 0; c < g.C; ++c) {
+                uint32_t pages = g.start_pages, row = main_row0;
+                uint32_t it_pages = g.start_pages, it_row = g.start_row;
+                uint32_t tiles_read = g.start;
+
+                while (tiles_read < g.end) {
+                    const uint32_t n = std::min(g.end - tiles_read, g.gran);
+                    LineEv ev{};
+                    ev.kind = 4;
+                    ev.b = b;
+                    ev.c = c;
+                    ev.tiles = n;
+                    ev.slice_idx = g.chip;
+                    ev.fwdbwd = acc;  // one fwd/bwd wait per chunk when accumulating
+                    ev.waited = (chunk_count % g.cps == 0);
+                    ++chunk_count;
+                    for (uint32_t j = 0; j < n; ++j) {
+                        ev.ids.push_back(main_start + row + pages);
+                        if (++pages == g.slice_Wt) {
+                            row += main_stride;
+                            pages -= g.slice_Wt;
+                        }
+                        ev.ids2.push_back(interm_start + it_row + it_pages);
+                        if (++it_pages == g.slice_Wt) {
+                            it_row += g.tensor_Wt;
+                            it_pages -= g.slice_Wt;
+                        }
+                    }
+                    tiles_read += n;
+                    out.push_back(std::move(ev));
+                }
+                main_start += main_chan;
+                interm_start += g.in_chan;
+            }
+        }
+    }
+}
+
+// ------------------------------ GOLDEN: pre-migration writer --------------------------------
+void line_writer_golden(const LineCfg& g, std::vector<LineEv>& out) {
+    out.clear();
+    const uint32_t interm_full = g.is_forward ? 0 : g.in_num_pages;
+
+    for (uint32_t b = 0; b < g.B; ++b) {
+        int slice_idx = g.is_forward ? static_cast<int>(g.ring) - 1 : 0;
+        const uint32_t batch_offset = g.in_batch * b;
+
+        for (uint32_t iter = 0; iter < g.num_targets; ++iter) {
+            uint32_t chunk_count = 0;
+            uint32_t interm_start = line_slice_off(g, static_cast<uint32_t>(slice_idx)) + batch_offset + interm_full;
+
+            for (uint32_t c = 0; c < g.C; ++c) {
+                uint32_t it_pages = g.start_pages, it_row = g.start_row;
+                uint32_t tiles_read = g.start;
+
+                while (tiles_read < g.end) {
+                    const uint32_t n = std::min(g.end - tiles_read, g.gran);
+                    LineEv ev{};
+                    ev.kind = 1;
+                    ev.b = b;
+                    ev.target = iter;
+                    ev.slice_idx = static_cast<uint32_t>(slice_idx);
+                    ev.c = c;
+                    ev.tiles = n;
+                    for (uint32_t j = 0; j < n; j += g.contig) {
+                        const uint32_t p = std::min(g.contig, n - j);
+                        ev.packets.push_back(p);
+                        for (uint32_t k = 0; k < p; ++k) {
+                            ev.ids.push_back(interm_start + it_row + it_pages);
+                            if (++it_pages == g.slice_Wt) {
+                                it_row += g.tensor_Wt;
+                                it_pages -= g.slice_Wt;
+                            }
+                        }
+                    }
+                    tiles_read += n;
+                    ++chunk_count;
+                    ev.inc_after = (chunk_count % g.cps == 0);
+                    out.push_back(std::move(ev));
+                }
+                interm_start += g.in_chan;
+            }
+
+            LineEv tail{};
+            tail.kind = 2;
+            tail.b = b;
+            tail.target = iter;
+            tail.slice_idx = static_cast<uint32_t>(slice_idx);
+            tail.tail_inc = (chunk_count % g.cps != 0);
+            out.push_back(std::move(tail));
+
+            slice_idx += g.is_forward ? -1 : 1;
+        }
+
+        if (g.do_final) {
+            uint32_t output_start = b * g.out_batch;
+            const bool hands_off = g.sync_other && g.is_forward;
+            for (uint32_t c = 0; c < g.C; ++c) {
+                uint32_t tiles_read = g.start;
+                while (tiles_read < g.end) {
+                    const uint32_t n = std::min(g.end - tiles_read, g.gran);
+                    LineEv ev{};
+                    ev.kind = 3;
+                    ev.b = b;
+                    ev.c = c;
+                    ev.tiles = n;
+                    ev.fwdbwd = hands_off;  // one fwd/bwd inc per chunk when handing off
+                    for (uint32_t j = 0; j < n; ++j) {
+                        ev.ids.push_back(output_start + tiles_read);
+                        ++tiles_read;
+                    }
+                    out.push_back(std::move(ev));
+                }
+                output_start += g.out_chan;
+            }
+        }
+    }
+}
+
+// ----------------------- CANDIDATE: the schedule pieces, kernel-shaped -----------------------
+void line_reader_candidate(const LineCfg& g, std::vector<LineEv>& out) {
+    out.clear();
+    const uint32_t interm_full = g.is_forward ? 0 : g.in_num_pages;
+    sched::LineChannelWalk walk(g.C, g.gran, g.start, g.end);
+    sched::SyncCadence cadence(g.cps);
+    sched::SliceRowWalker input_walker(g.slice_Wt, g.tensor_Wt);
+    sched::SliceRowWalker interm_walker(g.slice_Wt, g.tensor_Wt);
+    uint32_t sem_target = 0;
+    uint32_t fwd_sync_cnt = 0;
+    (void)sem_target;
+    (void)fwd_sync_cnt;
+
+    for (uint32_t b = 0; b < g.B; ++b) {
+        sched::LineSliceCursor cursor(g.is_forward, g.ring);
+        const uint32_t batch_offset = g.in_batch * b;
+
+        for (uint32_t iter = 0; iter < g.num_targets; ++iter) {
+            cadence.reset();
+            const uint32_t slice_offset = line_slice_off(g, cursor.slice()) + batch_offset;
+            input_walker.set_base(slice_offset);
+            interm_walker.set_base(slice_offset + interm_full);
+
+            walk.reset();
+            while (walk.next_channel()) {
+                input_walker.reset_offsets(g.start_pages, g.start_row);
+                interm_walker.reset_offsets(g.start_pages, g.start_row);
+                while (walk.next_chunk()) {
+                    const uint32_t n = walk.tiles_this_chunk();
+                    LineEv ev{};
+                    ev.kind = 0;
+                    ev.b = b;
+                    ev.target = iter;
+                    ev.slice_idx = cursor.slice();
+                    ev.c = walk.channel_idx();
+                    ev.tiles = n;
+                    if (!g.is_first_dev) {
+                        ev.waited = cadence.wait_due();
+                        if (ev.waited) {
+                            ++sem_target;
+                        }
+                        cadence.advance();
+                    }
+                    for (uint32_t j = 0; j < n; ++j) {
+                        ev.ids.push_back(input_walker.next());
+                        if (!g.is_first_dev) {
+                            ev.ids2.push_back(interm_walker.next());
+                        }
+                    }
+                    // A first-device reader never consumes the intermediate walker; keep it in
+                    // step anyway (harmless), matching a uniform kernel body.
+                    if (g.is_first_dev) {
+                        interm_walker.advance(n);
+                    }
+                    out.push_back(std::move(ev));
+                }
+                input_walker.bump_base(g.in_chan);
+                interm_walker.bump_base(g.in_chan);
+            }
+            cursor.advance();
+        }
+
+        if (g.do_final) {
+            cadence.reset();
+            const bool acc = sched::line_rs_accumulate_output(g.sync_other, g.is_forward);
+            const uint32_t my_offset = line_slice_off(g, g.chip) + batch_offset;
+
+            // The accumulate path reads the OUTPUT tensor: dense slice, stride slice_Wt, and the
+            // worker's start_row_offset re-based from input rows onto slice rows.
+            sched::SliceRowWalker main_walker(g.slice_Wt, acc ? g.slice_Wt : g.tensor_Wt);
+            main_walker.set_base(acc ? b * g.out_batch : my_offset);
+            const uint32_t main_row0 =
+                acc ? sched::rebase_row_offset(g.start_row, g.tensor_Wt, g.slice_Wt) : g.start_row;
+            const uint32_t main_chan = acc ? g.out_chan : g.in_chan;
+            interm_walker.set_base(my_offset + interm_full);
+
+            walk.reset();
+            while (walk.next_channel()) {
+                main_walker.reset_offsets(g.start_pages, main_row0);
+                interm_walker.reset_offsets(g.start_pages, g.start_row);
+                while (walk.next_chunk()) {
+                    const uint32_t n = walk.tiles_this_chunk();
+                    LineEv ev{};
+                    ev.kind = 4;
+                    ev.b = b;
+                    ev.c = walk.channel_idx();
+                    ev.tiles = n;
+                    ev.slice_idx = g.chip;
+                    ev.fwdbwd = acc;
+                    if (acc) {
+                        ++fwd_sync_cnt;
+                    }
+                    ev.waited = cadence.wait_due();
+                    if (ev.waited) {
+                        ++sem_target;
+                    }
+                    cadence.advance();
+                    for (uint32_t j = 0; j < n; ++j) {
+                        ev.ids.push_back(main_walker.next());
+                        ev.ids2.push_back(interm_walker.next());
+                    }
+                    out.push_back(std::move(ev));
+                }
+                main_walker.bump_base(main_chan);
+                interm_walker.bump_base(g.in_chan);
+            }
+        }
+    }
+}
+
+void line_writer_candidate(const LineCfg& g, std::vector<LineEv>& out) {
+    out.clear();
+    const uint32_t interm_full = g.is_forward ? 0 : g.in_num_pages;
+    sched::LineChannelWalk walk(g.C, g.gran, g.start, g.end);
+    sched::SyncCadence cadence(g.cps);
+    sched::SliceRowWalker interm_walker(g.slice_Wt, g.tensor_Wt);
+    sched::SequentialTileWalker output_walker;
+
+    for (uint32_t b = 0; b < g.B; ++b) {
+        sched::LineSliceCursor cursor(g.is_forward, g.ring);
+        const uint32_t batch_offset = g.in_batch * b;
+
+        for (uint32_t iter = 0; iter < g.num_targets; ++iter) {
+            cadence.reset();
+            interm_walker.set_base(line_slice_off(g, cursor.slice()) + batch_offset + interm_full);
+
+            walk.reset();
+            while (walk.next_channel()) {
+                interm_walker.reset_offsets(g.start_pages, g.start_row);
+                while (walk.next_chunk()) {
+                    const uint32_t n = walk.tiles_this_chunk();
+                    LineEv ev{};
+                    ev.kind = 1;
+                    ev.b = b;
+                    ev.target = iter;
+                    ev.slice_idx = cursor.slice();
+                    ev.c = walk.channel_idx();
+                    ev.tiles = n;
+                    for (uint32_t j = 0; j < n; j += g.contig) {
+                        const uint32_t p = std::min(g.contig, n - j);
+                        ev.packets.push_back(p);
+                        for (uint32_t k = 0; k < p; ++k) {
+                            ev.ids.push_back(interm_walker.next());
+                        }
+                    }
+                    cadence.advance();
+                    ev.inc_after = cadence.signal_due();
+                    out.push_back(std::move(ev));
+                }
+                interm_walker.bump_base(g.in_chan);
+            }
+
+            LineEv tail{};
+            tail.kind = 2;
+            tail.b = b;
+            tail.target = iter;
+            tail.slice_idx = cursor.slice();
+            tail.tail_inc = cadence.tail_due();
+            out.push_back(std::move(tail));
+
+            cursor.advance();
+        }
+
+        if (g.do_final) {
+            const bool hands_off = sched::line_rs_forward_hands_off(g.sync_other, g.is_forward);
+            output_walker.set_base(b * g.out_batch);
+            walk.reset();
+            while (walk.next_channel()) {
+                output_walker.reset_offsets(g.start);
+                while (walk.next_chunk()) {
+                    const uint32_t n = walk.tiles_this_chunk();
+                    LineEv ev{};
+                    ev.kind = 3;
+                    ev.b = b;
+                    ev.c = walk.channel_idx();
+                    ev.tiles = n;
+                    ev.fwdbwd = hands_off;
+                    for (uint32_t j = 0; j < n; ++j) {
+                        ev.ids.push_back(output_walker.next());
+                    }
+                    out.push_back(std::move(ev));
+                }
+                output_walker.bump_base(g.out_chan);
+            }
+        }
+    }
+}
+
+void run_line_sweep() {
+    std::vector<LineEv> gold, cand;
+    uint64_t configs = 0, events = 0;
+
+    for (uint32_t ring : {2u, 3u, 4u, 8u}) {
+        for (uint32_t chip = 0; chip < ring; ++chip) {
+            for (int fwd = 0; fwd <= 1; ++fwd) {
+                // Host-legal target counts for a line: forward walks ring-1..chip+1, backward
+                // 0..chip-1 — but the kernels take num_targets as a plain arg, so sweep the whole
+                // range (a superset of host-reachable configs).
+                for (uint32_t targets = 0; targets <= ring - 1; ++targets) {
+                    for (uint32_t dim : {1u, 3u}) {
+                        for (uint32_t gran : {2u, 4u}) {
+                            for (uint32_t cps : {1u, 2u, 3u}) {
+                                for (uint32_t contig : {1u, 2u}) {
+                                    for (int first = 0; first <= 1; ++first) {
+                                        for (int fin = 0; fin <= 1; ++fin) {
+                                            for (int sync = 0; sync <= 1; ++sync) {
+                                                for (uint32_t total : {0u, 5u, 8u, 13u}) {
+                                                    LineCfg g{};
+                                                    g.ring = ring;
+                                                    g.chip = chip;
+                                                    g.is_forward = fwd;
+                                                    g.is_first_dev = first;
+                                                    g.do_final = fin;
+                                                    g.sync_other = sync;
+                                                    g.num_targets = targets;
+                                                    g.B = 2;
+                                                    g.C = 2;
+                                                    g.gran = gran;
+                                                    g.cps = cps;
+                                                    g.contig = contig;
+                                                    g.start = 3;
+                                                    g.end = 3 + total;
+                                                    g.dim = dim;
+                                                    g.slice_Wt = 3;
+                                                    g.tensor_Wt = 3 * ring;
+                                                    g.slice_Ht = 2;
+                                                    g.in_num_pages = g.C * g.slice_Ht * g.tensor_Wt * g.B;
+                                                    g.in_batch = g.C * g.slice_Ht * g.tensor_Wt;
+                                                    g.in_chan = g.slice_Ht * g.tensor_Wt;
+                                                    g.out_batch = g.C * g.slice_Ht * g.slice_Wt;
+                                                    g.out_chan = g.slice_Ht * g.slice_Wt;
+                                                    g.start_pages = 1;
+                                                    g.start_row = g.tensor_Wt;
+
+                                                    line_reader_golden(g, gold);
+                                                    line_reader_candidate(g, cand);
+                                                    ASSERT_EQ(gold.size(), cand.size()) << "reader " << line_cfg_str(g);
+                                                    for (size_t k = 0; k < gold.size(); ++k) {
+                                                        ASSERT_TRUE(gold[k] == cand[k])
+                                                            << "reader " << line_cfg_str(g) << "\n  record " << k
+                                                            << "\n  gold: " << line_ev_str(gold[k])
+                                                            << "\n  cand: " << line_ev_str(cand[k]);
+                                                    }
+                                                    events += gold.size();
+
+                                                    line_writer_golden(g, gold);
+                                                    line_writer_candidate(g, cand);
+                                                    ASSERT_EQ(gold.size(), cand.size()) << "writer " << line_cfg_str(g);
+                                                    for (size_t k = 0; k < gold.size(); ++k) {
+                                                        ASSERT_TRUE(gold[k] == cand[k])
+                                                            << "writer " << line_cfg_str(g) << "\n  record " << k
+                                                            << "\n  gold: " << line_ev_str(gold[k])
+                                                            << "\n  cand: " << line_ev_str(cand[k]);
+                                                    }
+                                                    events += gold.size();
+                                                    ++configs;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ASSERT_GT(configs, 0u);
+    ASSERT_GT(events, 0u);
+}
+
+}  // namespace
+
+TEST(CclLineSchedule, GoldenEquivalenceSweep) { run_line_sweep(); }
+
+// The wait/signal cadence pairing invariant, standalone: for any (chunks, cps), the number of
+// reader waits equals the number of writer signals (loop signals + the tail signal).
+TEST(CclLineSchedule, SyncCadencePairing) {
+    for (uint32_t cps = 1; cps <= 5; ++cps) {
+        for (uint32_t chunks = 0; chunks <= 17; ++chunks) {
+            sched::SyncCadence reader(cps), writer(cps);
+            uint32_t waits = 0, signals = 0;
+            for (uint32_t k = 0; k < chunks; ++k) {
+                if (reader.wait_due()) {
+                    ++waits;
+                }
+                reader.advance();
+                writer.advance();
+                if (writer.signal_due()) {
+                    ++signals;
+                }
+                // At every prefix the reader may never have waited for more than was signalled,
+                // except for the one wait admitting the in-flight group.
+                ASSERT_LE(waits, signals + 1);
+            }
+            if (writer.tail_due()) {
+                ++signals;
+            }
+            ASSERT_EQ(waits, signals) << "cps=" << cps << " chunks=" << chunks;
+        }
+    }
+}
