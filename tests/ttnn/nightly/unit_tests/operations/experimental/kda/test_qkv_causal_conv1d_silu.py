@@ -39,15 +39,19 @@ class _ProductionCase:
 
 _PRODUCTION_PERF_MARGIN = 0.05
 
-# Calibrated 2026-08-18 on bh_loudbox host bh-lb-42, P150b firmware 19.5.0.0.
-# Seven real-time-profiler samples produced 92583-92681 ns, 50089-50210 ns,
-# and 55299-55348 ns respectively; the inline references are their medians.
-# The 5% symmetric margin covers the <1% observed spread plus board/thermal
-# variance while retaining a meaningful regression gate.
+# Recalibrated 2026-08-19 on Blackhole P150b device 0, firmware 19.5.0.0. The
+# previous references (92_606, 50_123, 55_324) were calibrated before the
+# hoisted unpack/init optimization, which made every shape 3.7-4.6% faster with
+# bit-identical outputs. Against a symmetric band that left each case only
+# 335-672 ns above its lower bound, so a further improvement would have failed
+# the gate for being too fast. Seven real-time-profiler samples of the current
+# implementation produced 88358-88443 ns, 47952-48257 ns, and 53230-53373 ns;
+# the inline references are their medians. The 5% symmetric margin now leaves
+# 2.2-4.4 us on both sides, against an observed spread of 85-305 ns.
 _PRODUCTION_CASES = (
-    _ProductionCase("single-block", widths=(512, 512, 512), expected_duration_ns=92_606),
-    _ProductionCase("multiple-blocks", widths=(1024, 1024, 1024), expected_duration_ns=50_123),
-    _ProductionCase("asymmetric-split", widths=(512, 256, 128), expected_duration_ns=55_324),
+    _ProductionCase("single-block", widths=(512, 512, 512), expected_duration_ns=88_383),
+    _ProductionCase("multiple-blocks", widths=(1024, 1024, 1024), expected_duration_ns=48_090),
+    _ProductionCase("asymmetric-split", widths=(512, 256, 128), expected_duration_ns=53_270),
 )
 
 
