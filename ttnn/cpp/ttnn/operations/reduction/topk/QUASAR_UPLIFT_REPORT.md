@@ -108,7 +108,7 @@ than hand-rolling an op-level equivalent." Inserting a dummy tile copy purely to
 hardware rule would change what the math unit does and cannot be validated from here, so it is an
 owner decision, not a mechanical guard.
 
-### Blocker 3: Quasar cannot transpose 32-bit tiles (low-level gap, already ticketed)
+### Blocker 3: Quasar cannot transpose 32-bit tiles (low-level gap, effectively untracked)
 
 The whole algorithm is built on `transpose_tile`, at
 [topk.cpp:40](ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp#L40) and
@@ -116,7 +116,7 @@ The whole algorithm is built on `transpose_tile`, at
 Quasar that call refuses any buffer whose unpacked format is `Float32` or `Int32`:
 [transpose.h:126-131](tt_metal/hw/inc/api/compute/transpose.h#L126-L131) and the matching check in
 `transpose_init` at
-[transpose.h:73-78](tt_metal/hw/inc/api/compute/transpose.h#L73-L78), both tagged `tt-llk#1559`.
+[transpose.h:73-78](tt_metal/hw/inc/api/compute/transpose.h#L73-L78).
 
 That rules out two of the op's three supported input types and one of its two index widths:
 
@@ -126,8 +126,52 @@ That rules out two of the op's three supported input types and one of its two in
 | 32-bit index output (`UINT32` / `INT32`, or any padded width above 65535) | Index buffers are 32-bit, so the transpose is refused. |
 
 Only `BFLOAT16` input with 16-bit indices survives, and `BFLOAT8_B` is separately excluded by
-blocker 4. This is not fixable inside the op; it belongs to the low-level kernel team under
-`tt-llk#1559`.
+blocker 4. This is not fixable inside the op; it belongs to the low-level kernel team.
+
+**Nothing in either issue tracker will surface this gap to a reader.** That is the finding, and it
+matters more than the gap itself.
+
+The nearest record is tenstorrent/tt-metal#45162, "[Quasar] Compute API List (Without SFPU)", the
+open status table for Quasar compute-API coverage. Its `transpose_init` row does carry the words
+"32-bit unpack-to-dest still asserts on Quasar", in the last free-text column. But that row's
+support column is a green tick, so:
+
+- The gap does not appear as a `❌` row, which is how anyone reads that table.
+- It does not reduce the headline coverage count. `transpose_init` is one of the 135 of 176 the issue
+  reports as supported.
+- Of the six rows that carry or inherit the assert, exactly one mentions it. Every one is ticked:
+
+  | Row in #45162 | Where the assert lives | Caveat in the table? |
+  |---|---|---|
+  | `transpose.h transpose_init` | [transpose.h:73-78](tt_metal/hw/inc/api/compute/transpose.h#L73-L78) | yes, free text |
+  | `transpose.h transpose_tile` | [transpose.h:126-131](tt_metal/hw/inc/api/compute/transpose.h#L126-L131) | **no** |
+  | `transpose.h transpose_block` | inherits, loops over `transpose_tile` | **no** |
+  | `transpose_wh.h transpose_wh_init` | [transpose_wh.h:77-81](tt_metal/hw/inc/api/compute/transpose_wh.h#L77-L81) | **no** |
+  | `transpose_wh.h transpose_wh_init_short` | inherits, delegates to `transpose_init` | **no** |
+  | `transpose_wh.h transpose_wh_tile` | inherits, delegates to `transpose_tile` | **no** |
+
+`transpose_tile` is the call this op makes in its inner loop, and its row says supported with no
+qualification at all.
+
+**The `tt-llk#1559` reference in the source comments is dead.** Four comments tag this gap with it:
+the two `transpose.h` sites above plus
+[transpose_wh.h:77](tt_metal/hw/inc/api/compute/transpose_wh.h#L77) and
+[transpose_wh.h:81](tt_metal/hw/inc/api/compute/transpose_wh.h#L81). Number 1559 does not resolve in
+`tenstorrent/tt-llk` as either an issue or a pull request, while 1558 and 1560 both do, so it is a
+gap in the numbering rather than a wrong repository. No equivalent number resolves in
+`tenstorrent/tt-metal` either (1559 there is an unrelated 2023 pull request), and no dedicated issue
+in either repository covers Quasar transpose or unpack-to-dest transpose.
+
+**So the recommendation is to file, not to repoint.** Pointing the four comments at #45162 would send
+a reader to a row marked supported, which is worse than sending them nowhere. What is needed is a
+dedicated issue for the gap, with the six rows above corrected to reference it. Both changes are
+outside this op directory and outside this uplift's scope, but they gate the routing for blocker 3:
+until one exists there is no owner to hand `FLOAT32` and 32-bit-index top-k on Quasar to.
+
+For context on the surrounding work: **tenstorrent/tt-llk#1426**, "[Quasar] Port Topk to Quasar", is
+open, and its first task, porting the Wormhole and Blackhole top-k to Quasar, is checked off and
+landed. That is consistent with what the code shows (see the §8.4 row below). Its remaining task is a
+performance investigation, not this gap.
 
 ### Blocker 4: two data formats the op selects do not exist on Quasar
 
@@ -228,7 +272,7 @@ build or run happened here.
 | §8.1 build skew | Cannot be assessed. The ahead-of-time kernel-compile target only covers Wormhole and Blackhole ([fake_kernels_target/CMakeLists.txt:53-63](tt_metal/jit_build/fake_kernels_target/CMakeLists.txt#L53-L63)), so Quasar kernel compilation only happens during a simulator run. One certain failure is already known: work item B. |
 | §8.2 hangs, including the historical double-count rows | Cannot be assessed without a run. If one of those three rows appears, report it as a regression; do not disable implicit sync. |
 | §8.3 stale `fifo_page_size` | Already clean. Both data-movement kernels read `get_entry_size()`. |
-| §8.4 unported low-level kernels | Applies. The bitonic top-k itself **is** ported for Quasar ([ckernel_sfpu_topk.h](tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_topk.h), all three stages, stable sort excluded by design). The gaps are `transpose_tile` for 32-bit data (blocker 3) and `copy_tile_to_dst_init_short_with_dt` (work item B). |
+| §8.4 unported low-level kernels | Applies. The bitonic top-k itself **is** ported for Quasar ([ckernel_sfpu_topk.h](tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_topk.h), all three stages, stable sort excluded by design). The gaps are `transpose_tile` for 32-bit data (blocker 3) and `copy_tile_to_dst_init_short_with_dt` (work item B), both recorded in tenstorrent/tt-metal#45162. The top-k port itself is tenstorrent/tt-llk#1426, whose porting task is done. |
 | §8.5 wait-then-pop and reserve-then-push traps | Applies, and is blocker 2. |
 | §11 NoC and multicast | Not applicable to the single-core path: no multicast, no semaphores, no directional NoC tricks. It **will** apply to the multi-core factory, which multicasts between local cores and one aggregating core. |
 
@@ -287,12 +331,21 @@ operation's init, and the format reconfiguration alone only touches a separate s
 The framework header states this at
 [reconfig_data_format.h:136-139](tt_metal/hw/inc/api/compute/reconfig_data_format.h#L136-L139).
 
-**Better home for this fix.** Eight other places in the tree call the same function, in
-`reduction/sampling`, `reduction/moe`, the DeepSeek prefill ops, a matmul collective kernel, and
-several `tt-train` kernels. Every one of them will hit this wall. The durable fix is a Quasar
-branch inside `tile_move_copy.h` so all callers share one mechanism, and that file is outside the
-op directory, which the recipe puts off limits for an op port. Routing: compute-API and low-level
-kernel owners.
+**This is the sanctioned replacement, not an invention.** tenstorrent/tt-metal#45162 carries a row
+for this function reading: "Still WH/BH-only. Replacement: `reconfig_data_format_srca` +
+`copy_tile_to_dst_init_short`. Yes, used in multiple TTNN ops", and an open checklist entry adding
+"call sites may still need migrating". Migrating `topk`'s four call sites is exactly that work. The
+second call is also what Quasar requires on its own terms, per the header note cited above, so the
+two justifications agree.
+
+**Whether the guard belongs here or in the framework.** Eight other places in the tree call the same
+function, in `reduction/sampling`, `reduction/moe`, the DeepSeek prefill ops, a matmul collective
+kernel, and several `tt-train` kernels. Every one of them will hit this wall. Per #45162 the
+migration is expected at the call sites, so an `ARCH_QUASAR` guard inside this op is in line with the
+plan of record and needs no framework change. Worth confirming with the compute-API owners that they
+still want per-call-site migration rather than a Quasar branch inside `tile_move_copy.h`, since a
+branch there would retire all nine sites at once. Either way the change to `tile_move_copy.h` would
+be outside this op directory, which the recipe puts off limits for an op port.
 
 ### C. Re-initialise the packer on every output-buffer change (compute kernel)
 
@@ -309,7 +362,9 @@ before `pack_tile`"
 ([reconfig_data_format.h:713-721](tt_metal/hw/inc/api/compute/reconfig_data_format.h#L713-L721),
 repeated at [reconfig_data_format.h:750-760](tt_metal/hw/inc/api/compute/reconfig_data_format.h#L750-L760)).
 `pack_init` exists on both generations
-([pack.h:34-37](tt_metal/hw/inc/api/compute/pack.h#L34-L37)).
+([pack.h:34-37](tt_metal/hw/inc/api/compute/pack.h#L34-L37)). tenstorrent/tt-metal#45162 records the
+same rule from the API side, on its `pack_reconfig_data_format` row, and notes that the issue behind
+it (tenstorrent/tt-metal#43271) is closed, so this is settled guidance rather than a moving target.
 
 The kernel switches output buffer at five places, each currently guarded only by a format
 reconfiguration:
@@ -380,6 +435,24 @@ pattern for an architecture that cannot run a configuration is a check in
 `validate_on_program_cache_miss`.
 
 ---
+
+## Deferred items, and who owns them
+
+Everything here is outside this op directory, so none of it belongs in an uplift diff for `topk`.
+Listed with the symptom, because that is what makes each one actionable.
+
+| Item | Symptom to quote | Existing issue | Owner |
+|---|---|---|---|
+| No Quasar mechanism to advance a buffer's ring position without moving data. `evil_set_read_ptr` / `evil_set_write_ptr` are Gen1-only. | `TEN-4746: llk_pop_tiles on a dfb with no unpack (UNPACR) since llk_wait_tiles`, and the write-side twin. | none found | Runtime, buffer API |
+| `copy_tile_to_dst_init_short_with_dt` is not declared on Quasar. Nine call sites across the tree. | Compute kernel fails to build for Quasar on an undeclared identifier. | tt-metal#45162, with the replacement named and call-site migration listed as open | Compute API, low-level kernel team |
+| Quasar refuses `transpose_tile` on `Float32` and `Int32` data. | `32-bit (unpack-to-dest) transpose not supported on Quasar` | **none usable.** tt-metal#45162 notes it in free text on one of six affected rows, all of which it marks supported, so it neither reads as a gap nor reduces the coverage count. Needs filing. | Low-level kernel team |
+| Four `TODO` comments tag that gap `tt-llk#1559`, which resolves in neither repository. | The four sites are listed in blocker 3. | none. Repoint at the issue filed above, not at tt-metal#45162, and correct that issue's six transpose rows. | Compute API owners |
+| No block-float support on Quasar, so a `BFLOAT8_B` input would need an MXFP path. | `DFB '<name>' has data format 'Bfp8_b' which is not supported on architecture QUASAR` | tt-llk#1354 covers enabling the MX formats, though not this op's use of them | Format and low-level kernel layers |
+| `TopKMultiCoreProgramFactory` needs its own Metal 2.0 pre-port audit and port. | It still returns `ProgramDescriptor` from `create_descriptor`. | none found | This op's owners, sequenced before any multi-core uplift |
+
+The top-k low-level work has its own issue, tenstorrent/tt-llk#1426, but nothing above belongs
+there: its porting task is complete and its remaining task is a performance question about using
+all four Tensix units.
 
 ## Out of scope, and why
 
@@ -454,19 +527,34 @@ Offered in the spirit the recipes invite, for whoever maintains them.
    `api/compute/reconfig_data_format.h`, and neither is discoverable from §7's one-line summary.
    §7 could point at those two notes by name.
 
-4. **`copy_tile_to_dst_init_short_with_dt` is listed in §8.4 as a low-level gap but has no
-   replacement given.** The replacement is two public calls that both exist on Quasar. Nine call
-   sites across the tree are waiting on it. Worth naming in the recipe, along with the fact that
-   the right place to fix it is the framework header rather than each op.
+4. **The recipe never points at the Quasar compute-API status record**, tenstorrent/tt-metal#45162.
+   §8.4 lists `copy_tile_to_dst_init_short_with_dt` as a low-level gap with no replacement given, yet
+   that issue names the exact replacement, marks call-site migration as open work, and does the same
+   for several other §8.1 and §8.4 rows. An auditor who does not know it exists re-derives from
+   headers what is already written down, as I did. One link in §8 would fix that.
 
-5. **Format support is stricter than §7 says.** §7 says "Quasar has Int32, not UInt32 (and no
+5. **Read that status table by row, not by tick.** Its support column is per API entry point, so a
+   limitation that applies to one data type sits in free text on a row marked supported, and does not
+   reduce the coverage percentage. Blocker 3 above is the worked example: six transpose rows carry or
+   inherit the same assert, one says so, all six are ticked. An auditor scanning for `❌` finds
+   nothing, and the tick is actively misleading rather than merely silent. If §8 gains the link from
+   note 4, it wants this caveat beside it, otherwise the link makes the next auditor more confident
+   and no better informed.
+
+6. **Issue numbers in kernel comments are not reliable.** Four `TODO` comments in
+   `api/compute/transpose*.h` cite `tt-llk#1559`, which resolves in neither `tenstorrent/tt-llk` nor
+   `tenstorrent/tt-metal`. I quoted it as a real ticket in an earlier draft of this report on the
+   strength of the comment alone. Worth a line in §13: these predate the tt-llk move into tt-metal
+   and should be checked before being repeated.
+
+7. **Format support is stricter than §7 says.** §7 says "Quasar has Int32, not UInt32 (and no
    uint16)". It is worth adding that `Int16` *is* available and is the intended 16-bit integer
    format, that the build step translates the host `Int16` value to the right hardware code, and
    that block-float formats are absent as well. The third point is the one that catches ops out,
    because it changes which tensor data types an op can accept rather than only which buffer
    format it names.
 
-6. **An honest note on what an audit without hardware can and cannot say.** §9 covers the parity
+8. **An honest note on what an audit without hardware can and cannot say.** §9 covers the parity
    side well. What it does not cover is that on Quasar the ahead-of-time kernel-compile target does
    not exist, so an auditor cannot even establish that the kernels compile. Everything about the
    Quasar side of a report like this one is read from headers, and the recipe could say so plainly
