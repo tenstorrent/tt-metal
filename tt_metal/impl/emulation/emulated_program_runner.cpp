@@ -55,6 +55,7 @@
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "jit_build/jit_build_utils.hpp"  // format_named_ct_arg_map (shared with the silicon JIT path)
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/device.hpp>
@@ -1030,6 +1031,14 @@ static std::function<void()> jit_compile_kernel(
                 f << "#define " << key << " " << value << "\n";
             }
         }
+        // KERNEL_COMPILE_TIME_ARG_MAP (read by api/compile_time_args.h) goes in the wrapper for the
+        // same reason the kernel defines above do -- emule shells out via std::system(), so it has
+        // the whole command as one argv string against MAX_ARG_STRLEN (128 KB), and this map alone
+        // can exceed that. Must precede every include so the consuming header sees it.
+        if (!named_compile_args.empty()) {
+            f << "#define KERNEL_COMPILE_TIME_ARG_MAP "
+              << tt::jit_build::utils::format_named_ct_arg_map(named_compile_args) << "\n";
+        }
         f << "#include \"jit_kernel_stubs.hpp\"\n";
         // Metal-2.0 `namespace args` (base).
         emit_metal2_namespaces(f, bindings, named_compile_args);
@@ -1064,21 +1073,8 @@ static std::function<void()> jit_compile_kernel(
     // rather than here, so they can be dynamically computed per-program.
     std::string define_flags = " -DTT_EMULE_USE_L1_POOL";
 
-    // 5b. Build -DKERNEL_COMPILE_TIME_ARG_MAP for named compile-time args
-    if (!named_compile_args.empty()) {
-        std::ostringstream ss;
-        ss << " \"-DKERNEL_COMPILE_TIME_ARG_MAP=";
-        bool first = true;
-        for (const auto& [name, value] : named_compile_args) {
-            if (!first) {
-                ss << ',';
-            }
-            ss << "{\\\"" << name << "\\\"," << value << "}";
-            first = false;
-        }
-        ss << "\"";
-        define_flags += ss.str();
-    }
+    // 5b. KERNEL_COMPILE_TIME_ARG_MAP is emitted as a #define at the top of wrapper.cpp (step 3),
+    // not as a -D flag here: it is far too large for one shell command. See that site.
 
     // 6. Compute the kernel's source directory for relative includes
     std::string kernel_dir = std::filesystem::path(abs_kernel).parent_path().string();
