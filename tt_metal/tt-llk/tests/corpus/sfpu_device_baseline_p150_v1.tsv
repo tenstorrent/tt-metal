@@ -49,7 +49,8 @@
 #      Its nightly 20260819 measured pin-9 cells; RED only on the new lb gate.
 #  10. 2911f0e680e4… — the pin-cycle-6 union; nightly 20260819b measured its cells,
 #      confirming 20260819c GREEN 80/80.
-#  11. 87688520648a… (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — the pin-cycle-7
+#  11. 87688520648a… — the pin-cycle-7 union; nightly 20260819d booked its cells.
+#  12. 352aee85ec92… (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — the pin-cycle-8
 #      overnight five-lane union (sfpi-gcc f433762fe5b: BD raw-boundary decode, BG
 #      ccmask/lreg-rename + exp restructure, BC prgm-const scan fix/TTREGION retirement,
 #      BF transp-involution/exec-while-record, BH WP12 mul_int formation).  Expected
