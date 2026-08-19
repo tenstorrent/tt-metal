@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -23,6 +25,15 @@ namespace {
 using namespace tt::tt_metal;
 using tt::DataFormat;
 namespace geo = geometry;
+
+bool stage_profile_enabled() {
+    const char* value = std::getenv("MOE_FUSED_SWIGLU_STAGE_PROFILE");
+    if (value == nullptr) {
+        return false;
+    }
+    const std::string_view setting(value);
+    return setting != "0" && setting != "false" && setting != "False" && setting != "off";
+}
 
 constexpr const char* KERNEL_ROOT =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels";
@@ -450,12 +461,19 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     }
     auto compute_ct = make_compute_ct(blocking, activations_are_row_major);
 
+    KernelDescriptor::Defines dataflow_defines{{"H_MCAST_POSTED", geo::H_MCAST_POSTED ? "1" : "0"}};
+    KernelDescriptor::Defines compute_defines;
+    if (stage_profile_enabled()) {
+        dataflow_defines.emplace_back("MOE_FUSED_SWIGLU_STAGE_PROFILE", "1");
+        compute_defines.emplace_back("MOE_FUSED_SWIGLU_STAGE_PROFILE", "1");
+    }
+
     KernelDescriptor reader_descriptor{
         .kernel_source = std::string(KERNEL_ROOT) + "/moe_fused_swiglu_reader.cpp",
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = all_cores,
         .compile_time_args = std::move(reader_ct),
-        .defines = {{"H_MCAST_POSTED", geo::H_MCAST_POSTED ? "1" : "0"}},
+        .defines = dataflow_defines,
         .config = ReaderConfigDescriptor{},
     };
     KernelDescriptor writer_descriptor{
@@ -463,7 +481,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = all_cores,
         .compile_time_args = std::move(writer_ct),
-        .defines = {{"H_MCAST_POSTED", geo::H_MCAST_POSTED ? "1" : "0"}},
+        .defines = std::move(dataflow_defines),
         .config = WriterConfigDescriptor{},
     };
 
@@ -473,6 +491,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         .source_type = KernelDescriptor::SourceType::FILE_PATH,
         .core_ranges = all_cores,
         .compile_time_args = std::move(compute_ct),
+        .defines = std::move(compute_defines),
         .config =
             ComputeConfigDescriptor{
                 .math_fidelity = compute_config.math_fidelity,

@@ -42,14 +42,17 @@
 #include "moe_fused_swiglu_common.hpp"    // the ONE definition of the mailbox word layout
 #include "moe_fused_swiglu_ct_args.hpp"   // the ONE definition of the compile-time arg order
 
-// Keep profiling source-compatible with the operation's existing permanent
-// zones without depending on kernel_lib's convenience wrapper.
+// Keep profiling source-compatible with the operation's detailed zones without depending on
+// kernel_lib's convenience wrapper. Ordinary profiler sweeps leave these off so stage-record
+// traffic does not alter the latency being measured.
+#ifdef MOE_FUSED_SWIGLU_STAGE_PROFILE
 #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+#else
+#define MaybeDeviceZoneScope(name)
+#endif
 
-// PER-STAGE ZONES — PERMANENT, always compiled. With the profiler off the macro emits no
-// instructions, so the shipped kernel is byte-identical to one with no zones. DO NOT DELETE THEM,
-// and give any new fast path its own zone. Budget: 8 records per M-block against a 125-per-core
-// cap, so a profiled run resolves per-stage time for m_blocks <= 15.
+// Set MOE_FUSED_SWIGLU_STAGE_PROFILE=1 before process start for detailed bottleneck runs. Budget:
+// 8 records per M-block against a 125-per-core cap, so a run resolves stages for m_blocks <= 15.
 
 // Compile-time block model. Every trip count and CB increment below is derived
 // from these; none is a literal.

@@ -39,9 +39,13 @@
 
 using namespace moe_fused_swiglu::compute;
 
+#ifdef MOE_FUSED_SWIGLU_STAGE_PROFILE
 #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+#else
+#define MaybeDeviceZoneScope(name)
+#endif
 
-// PER-STAGE ZONES — PERMANENT, always compiled, free with the profiler off. A compute TU does NOT
+// PER-STAGE ZONES — enabled explicitly for bottleneck runs. A compute TU does NOT
 // get the profiler through `dataflow_api.h` (it must not see the dataflow API at all), which is
 // exactly why `perf_instrumentation.hpp` exists. 6 records per M-block here.
 

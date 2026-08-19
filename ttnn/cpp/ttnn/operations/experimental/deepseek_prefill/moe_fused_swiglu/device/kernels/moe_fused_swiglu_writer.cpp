@@ -29,7 +29,11 @@
 #include "moe_fused_swiglu_common.hpp"    // the ONE definition of the mailbox word layout
 #include "moe_fused_swiglu_ct_args.hpp"   // the ONE definition of the compile-time arg order
 
+#ifdef MOE_FUSED_SWIGLU_STAGE_PROFILE
 #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
+#else
+#define MaybeDeviceZoneScope(name)
+#endif
 
 MOE_DECLARE_CT_ENUM(MOE_WRITER_CT_ARGS);
 
