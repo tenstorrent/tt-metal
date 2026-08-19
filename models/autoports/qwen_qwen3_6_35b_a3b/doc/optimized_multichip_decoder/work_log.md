@@ -490,6 +490,20 @@ Result: `10 passed, 4 deselected`. Filtered watcher scan:
 Fresh `$stage-review` subagent `01a01915-6a53-7af2-a299-e5d6432ebf9a` returned
 `clean-pass`.
 
+## Local Checkpoint
+
+Repo: `tt-metal`
+Branch: `vkovacevic/agentic-research/qb2-qwen36-35b-a3b`
+Pre-stage SHA: `c90c9c4336956c895f7481729f66e4a866b9d678`
+Reviewed optimized-multichip-decoder checkpoint:
+`5e501592f4404ba252b965d706ac202b3ab5e1cb`
+
+The checkpoint above contains the implementation, final default-path evidence,
+operation-topology audit, tt-perf-report tables, CSV/provenance artifacts,
+watcher evidence, and clean-pass stage-review record. The follow-up commit after
+that checkpoint is documentation-only and records this SHA trail; no push was
+performed.
+
 Residual risks noted by the reviewer:
 
 - Final no-Tracy screen timings show the one-link reproduction slightly faster
