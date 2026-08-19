@@ -5986,3 +5986,23 @@ Cost, measured:
 vs classic after the structural fix: same uniform +11% on kernel columns, first-to-last-start +2.8%
 mean -- confirming N+59's residual is the capture's zone-scope overhead (user: perf-debug zone scope is
 currently ~2x the device profiler's per-zone cost), not attribution.
+
+## §N+61 — ResNet-50 validation: perf-debug ops CSV vs classic, non-trace and trace (bh-18, 2026-08-19)
+
+Blackhole ResNet-50 batch-16 (BFLOAT8_B/LoFi), classic arm via the temporarily re-enabled push
+producer, perf-debug arm with TT_METAL_PERF_DEBUG_OPS_CSV. Kernel-duration agreement per op:
+  - non-trace: 230/230 classic device rows matched 1:1; median +0.80%, mean +2.05%, p90 6.8%.
+  - trace (1 replay): 233/233 matched; median +0.46%. The classic report's extra 115 rows are the
+    capture-time host ops with EMPTY device columns (trace capture records without executing); ours
+    reports exactly the device executions.
+  - tails (max ~30-54%) are cross-RUN variance on tiny ops, not measurement disagreement: the arms are
+    separate processes and short ops swing several us run-to-run.
+  - The matmul microbench's +10% capture footprint does NOT appear on ResNet (<1% median): the
+    zone-scope overhead is per zone, so the footprint scales with zone density, not op runtime.
+
+Execution splitting exercised for real on test_perf_trace (15 trace replays): 3,714 rows, max
+EXECUTION 14, 3,220 rows with EXECUTION>0. Per-op duration CoV across an op's 15 executions: median
+1.58% -- replays of the same program measure consistently, which is a self-consistency check no
+single-execution run can provide. Consumer delivered 1,581,952 records with 0 drops; 0 producer
+stalls; COMPLETENESS 550/550 on every arm. First realistic-model validation of the packed-frame
+capture path end to end.

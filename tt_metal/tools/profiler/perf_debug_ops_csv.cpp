@@ -5,6 +5,7 @@
 #include "tools/profiler/perf_debug_ops_csv.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
@@ -35,7 +36,12 @@ void PerfDebugOpsCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
         if (rec.meta.lane >= lanes.size() || lanes[rec.meta.lane].role != PerfDebugLaneRole::Worker) {
             continue;
         }
-        OpAgg& op = ops_[{rec.meta.dev, rec.prog}];
+        constexpr uint32_t kLaneShift = 32;
+        constexpr uint32_t kDevShift = kLaneShift + std::bit_width(kPerfDebugMaxLanes - 1u);
+        uint32_t& completed = pair_count_
+            [(static_cast<uint64_t>(rec.meta.dev) << kDevShift) | (static_cast<uint64_t>(rec.meta.lane) << kLaneShift) |
+             rec.prog];
+        OpAgg& op = ops_[{rec.meta.dev, rec.prog, completed}];
         const uint64_t ts = rec.ts;
         const uint32_t risc = rec.meta.lane % kNumRisc;
         auto& core = op.cores[rec.meta.lane / kNumRisc];
@@ -51,6 +57,7 @@ void PerfDebugOpsCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
             op.k_end = std::max(op.k_end, ts);
             op.risc_end[risc] = std::max(op.risc_end[risc], ts);
             core.second = std::max(core.second, ts);
+            completed++;
         }
     }
 }
@@ -61,7 +68,7 @@ void PerfDebugOpsCsvConsumer::write_csv(const std::string& path) const {
         return;
     }
     std::fputs(
-        "DEVICE ID,GLOBAL CALL COUNT,CORE COUNT,DEVICE KERNEL START CYCLE,DEVICE KERNEL END CYCLE,"
+        "DEVICE ID,GLOBAL CALL COUNT,EXECUTION,CORE COUNT,DEVICE KERNEL START CYCLE,DEVICE KERNEL END CYCLE,"
         "DEVICE KERNEL DURATION [ns],DEVICE KERNEL DURATION DM START [ns],"
         "DEVICE KERNEL DURATION PER CORE MIN [ns],DEVICE KERNEL DURATION PER CORE MAX [ns],"
         "DEVICE KERNEL DURATION PER CORE AVG [ns],DEVICE KERNEL FIRST TO LAST START [ns],"
@@ -70,7 +77,7 @@ void PerfDebugOpsCsvConsumer::write_csv(const std::string& path) const {
         "DEVICE TRISC2 KERNEL DURATION [ns]\n",
         f);
     for (const auto& [key, op] : ops_) {
-        const auto& [dev, prog] = key;
+        const auto& [dev, prog, exec] = key;
         const DeviceMeta meta = dev < devices_.size() ? devices_[dev] : DeviceMeta{};
         const double freq = meta.frequency_ghz;
         auto ns = [&](uint64_t start, uint64_t end) {
@@ -91,9 +98,10 @@ void PerfDebugOpsCsvConsumer::write_csv(const std::string& path) const {
         auto cyc_ns = [&](uint64_t cyc) { return freq > 0.0 ? cyc / freq : 0.0; };
         std::fprintf(
             f,
-            "%u,%u,%u,%llu,%llu,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\n",
+            "%u,%u,%u,%u,%llu,%llu,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\n",
             meta.chip_id,
             prog,
+            exec,
             core_n,
             static_cast<unsigned long long>(op.k_start == UINT64_MAX ? 0 : op.k_start),
             static_cast<unsigned long long>(op.k_end),
