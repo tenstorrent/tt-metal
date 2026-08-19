@@ -4511,7 +4511,22 @@ def optimize_pipeline(
                 f"TT_PERF_STACK{_i}_LAYERS={_d}" for _i, (_sid, _d) in enumerate(sorted(_cov.items()))
             )
             print(f"  [optimize/cc] coverage-sized profiling window (multi-stack): {_cov_repr}")
-            _depth_env = _bridge_depth_env(repo_root, _cov_env, devices, pipe.get("perf_test"), pipe.get("case"), _cov)
+            # THE FULL-MODEL SIGNAL THE COVERAGE PROBE ALREADY MEASURED. Without it the bridge has
+            # no baseline to compare its capped run against, and falls back to probing for one --
+            # which 2026-07-19 removed for the other caller as "a fragile 2nd detection probe",
+            # wiring before_loop to pass full_hint from exactly these facts. This call site predates
+            # that by a day and was never brought along, so it has been running the bridge blind
+            # ever since.
+            _depth_env = _bridge_depth_env(
+                repo_root,
+                _cov_env,
+                devices,
+                pipe.get("perf_test"),
+                pipe.get("case"),
+                _cov,
+                full_hint=int((_cov_facts or {}).get("full_signal") or 0),
+                full_blocks=int((_cov_facts or {}).get("full_blocks") or 0),
+            )
             if _depth_env:
                 try:
                     _ep2 = json.loads(_cov_env.get("PERF_MCP_PROFILE_ENV") or "{}")
@@ -4527,7 +4542,14 @@ def optimize_pipeline(
                 f"  [optimize/cc] coverage-sized profiling window: TT_PERF_LAYERS={_cov_single} (covers all block types)"
             )
             _depth_env = _bridge_depth_env(
-                repo_root, _cov_env, devices, pipe.get("perf_test"), pipe.get("case"), _cov_single
+                repo_root,
+                _cov_env,
+                devices,
+                pipe.get("perf_test"),
+                pipe.get("case"),
+                _cov_single,
+                full_hint=int((_cov_facts or {}).get("full_signal") or 0),
+                full_blocks=int((_cov_facts or {}).get("full_blocks") or 0),
             )
             if _depth_env:
                 _cov_env["PERF_MCP_PROFILE_ENV"] = json.dumps(_depth_env)

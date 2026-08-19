@@ -11,10 +11,17 @@ Run 10, 2026-08-19:
 on a pipeline that implements the cap correctly for BOTH towers -- n_layers for the text stack,
 n_encode_layers for the audio stack, applied through _cap_stack_from_end.
 
-The baseline was the broken half. Neither caller passes full_hint, so `full_op = int(full_hint)` is
-0 and the "uncapped" probe runs through _run_op_sigs(..., _cov_int) -- and _run_op_sigs calls
-_set_depth(env, k), writing the CAP. Both halves therefore ran at depth 2 and were identical by
-construction. The knob could never be shown to work, so every profile ran at full depth.
+THE FIX FOR THIS EXISTS AND WAS APPLIED TO ONE CALLER. 2026-07-19 (8e07303854) added `full_hint` so
+the bridge would reuse the coverage probe's full-model signal -- "no fragile 2nd detection probe" --
+and wired before_loop.py to pass it. run.py's two call sites came from 9b90eed89d, one day EARLIER,
+and were never brought along. So they call the bridge with no baseline at all: `full_op =
+int(full_hint)` is 0, the "uncapped" probe runs through _run_op_sigs(..., _cov_int), and
+_run_op_sigs calls _set_depth(env, k) -- writing the CAP. Both halves ran at depth 2, identical by
+construction, and the knob could never be shown to work.
+
+Both halves of that are fixed here: run.py's call sites pass the signal they already hold in
+_cov_facts, and the baseline probe -- reached only when no hint exists at all -- asks for ALL layers
+rather than for the cap.
 
 WHY IT SURVIVED: it only bites a model whose depth knob IS this tool's own env convention. A model
 exposing a custom knob ignores TT_PERF_LAYERS, so writing it leaves that baseline genuinely uncapped
@@ -66,3 +73,18 @@ def test_the_two_halves_of_the_comparison_use_different_depths():
     probe_call = next(ln for ln in code.splitlines() if "seq2 = _run_op_sigs" in ln)
     assert baseline_call.strip() != probe_call.strip(), "baseline and capped probe are the same call"
     assert baseline_call.rstrip().endswith("case, 0)"), baseline_call
+
+
+def test_the_callers_pass_the_baseline_they_already_measured():
+    """The bridge without full_hint has no baseline and must probe for one. 8e07303854 added the
+    parameter and wired before_loop; run.py's two call sites predate it by a day and never were."""
+    src = (_PA / "cc_optimize" / "run.py").read_text()
+    calls = [i for i in range(len(src)) if src.startswith("_bridge_depth_env(", i)]
+    calls = [i for i in calls if src[max(0, i - 4) : i] != "def "]  # the definition is not a call
+    assert len(calls) == 2, "call sites changed; check they still pass a baseline"
+    for i in calls:
+        assert "full_hint=" in src[i : i + 420], "a call site probes blind again"
+
+    bl = (_PA / "agent" / "before_loop.py").read_text()
+    j = bl.index("_bridge_depth_env(")
+    assert "full_hint=" in bl[j : j + 420], "before_loop stopped passing its measured baseline"
