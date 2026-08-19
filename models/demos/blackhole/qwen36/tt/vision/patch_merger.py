@@ -167,25 +167,59 @@ class PatchMerger(LightweightModule):
         x_norm = ttnn.reshape(x_norm, (x_norm.shape[0], x_norm.shape[1], -1, self.mlp_size))
         x_norm = ttnn.to_layout(x_norm, ttnn.TILE_LAYOUT)
 
+        rows = x_norm.shape[-2]
+        mlp_local = self.mlp_size // self.tp
+
+        # Both merger matmuls go through `vision_mm_plan`, which leaves them on auto at TP=2 and
+        # gives merger_fc2 a 2D config at TP=8, where the per-device N is 8x narrower.
+        fc1_plan = self.args.vision_mm_plan(
+            "merger_fc1",
+            rows=rows,
+            k=self.mlp_size,
+            n=mlp_local,
+            in0_dtype=x_norm.dtype,
+            in1_dtype=self.w1.dtype,
+            out_dtype=x_norm.dtype,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, False),
+        )
+        if fc1_plan.chunk != rows:
+            x_norm = ttnn.reshape(x_norm, [1, rows // fc1_plan.chunk, fc1_plan.chunk, self.mlp_size])
+
         # fc1 column-sharded: replicated in -> fractured-along-dim=3 out
         # (each device owns mlp_size/TP of the GELU activations).
         w1_out = ttnn.linear(
             x_norm,
             self.w1,
             bias=self.b1,
-            activation="gelu",
-            compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # Only reachable on the auto fallback, which cannot fuse the activation.
+            activation=None if fc1_plan.program_config is not None else "gelu",
+            compute_kernel_config=fc1_plan.compute_kernel_config,
+            memory_config=fc1_plan.memory_config,
+            program_config=fc1_plan.program_config,
         )
         ttnn.deallocate(x_norm)
+
+        fc2_plan = self.args.vision_mm_plan(
+            "merger_fc2",
+            rows=rows,
+            k=mlp_local,
+            n=self.out_hidden_size,
+            in0_dtype=w1_out.dtype,
+            in1_dtype=self.w2.dtype,
+            out_dtype=w1_out.dtype,
+            in0_already_l1=fc1_plan.memory_config is ttnn.L1_MEMORY_CONFIG,
+        )
+        if fc2_plan.chunk != w1_out.shape[-2]:
+            w1_out = ttnn.reshape(w1_out, [1, rows // fc2_plan.chunk, fc2_plan.chunk, mlp_local])
 
         # fc2 row-sharded: each device produces partial sums for the full
         # out_hidden_size. Bias is folded in after the reduce_scatter.
         w2_partial = ttnn.linear(
             w1_out,
             self.w2,
-            compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=fc2_plan.compute_kernel_config,
+            memory_config=fc2_plan.memory_config,
+            program_config=fc2_plan.program_config,
         )
         ttnn.deallocate(w1_out)
 
