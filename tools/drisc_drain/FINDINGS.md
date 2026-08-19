@@ -6042,3 +6042,8 @@ Measured:
   - 2x2 (packed path) exact; ops-CSV pytest passed. Both decode branches now gate-covered every run.
 Low fill keeps the packed 3x (N+58 delay-150); high fill keeps raw's burst economics; the selector is
 one compare and one reserved bit.
+
+Final-state confirmation (post raw-fallback, 57f8b10815b): the three classic comparisons re-run on the
+shipped build -- matmul 20/20 median +10.79% (the N+59 zone-density footprint), ResNet non-trace
+230/230 median +0.80%, ResNet trace 233/233 median +0.26%; tails match the N+62 jitter distributions.
+Sparse workloads select packed, as designed; nothing moved.
