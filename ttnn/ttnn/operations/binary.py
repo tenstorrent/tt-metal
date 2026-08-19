@@ -32,16 +32,25 @@ def apply_activations(tensor, activations):
         ttnn.UnaryOpType.LTZ: lambda x: x < 0,
         ttnn.UnaryOpType.GEZ: lambda x: x >= 0,
         ttnn.UnaryOpType.LEZ: lambda x: x <= 0,
+        ttnn.UnaryOpType.SQUARE: lambda x: (
+            integer_golden.binary(x, x, torch.mul) if integer_golden.is_unsigned_dtype(x.dtype) else torch.square(x)
+        ),
     }
 
     if activations is not None:
         for activation in activations:
-            if activation.op_type == ttnn.UnaryOpType.POWER:
-                # Fused binary activations use the same descriptor as the device path.
-                # Predicate operations compare against zero, while POWER reads its descriptor parameter.
-                tensor = torch.pow(tensor, activation.params[0])
+            # The API accepts either a bare enum or a parameter descriptor for fused activations.
+            # Normalize both forms before dispatching so comparison goldens match device-side overloads.
+            activation_type = getattr(activation, "op_type", activation)
+            if activation_type in (ttnn.UnaryOpType.POWER, ttnn.UnaryOpType.POWER_ITERATIVE):
+                params = getattr(activation, "params", ())
+                if not params:
+                    raise ValueError(f"{activation_type} requires an exponent parameter")
+                # Both device power variants have the same mathematical host reference; iterative
+                # execution affects implementation accuracy, not the golden function's definition.
+                tensor = torch.pow(tensor, params[0])
             else:
-                activation_function = act_func_map[activation.op_type]
+                activation_function = act_func_map[activation_type]
                 tensor = activation_function(tensor)
     return tensor
 

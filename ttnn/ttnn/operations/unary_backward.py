@@ -493,6 +493,8 @@ def _golden_function_gelu(grad_tensor, input_tensor, *args, **kwargs):
     _prepare_input_for_backward(input_tensor).retain_grad()
     pyt_y = torch.nn.functional.gelu(input_tensor)
     pyt_y.backward(gradient=grad_tensor)
+    # Backward goldens use a one-element list to preserve the multi-output operation contract.
+    # Comparison infrastructure unwraps that list only when the runtime returns one tensor.
     return [input_tensor.grad]
 
 

@@ -12,6 +12,7 @@
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 #include <fmt/ranges.h>
 
@@ -51,8 +52,8 @@ void py_module(nb::module_& mod) {
                 new (t) UnaryWithParam{arg.first, static_cast<float>(arg.second)};
             })
         .def_ro("op_type", &UnaryWithParam::op_type)
-        // Expose fused-activation parameters so Python golden functions can reproduce
-        // parameterized device operations, including POWER, during comparison mode.
+        // Python comparison goldens read fused activation parameters from this vector.
+        // Register nanobind's vector caster so parameterized POWER goldens remain accessible.
         .def_ro("params", &UnaryWithParam::params)
         .def(nb::init_implicit<UnaryOpType>())
         .def("__repr__", [](const UnaryWithParam& param) {

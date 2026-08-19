@@ -102,7 +102,11 @@ def register_ttnn_cpp_unary_function(unary_function):
             "silu": torch.nn.functional.silu,
             "sin": torch.sin,
             "sqrt": torch.sqrt,
-            "square": torch.square,
+            # Torch lacks unsigned square kernels; widen through integer_golden to model TTNN wraparound.
+            # Signed and floating-point inputs retain Torch's native square implementation.
+            "square": lambda x: (
+                integer_golden.binary(x, x, torch.mul) if integer_golden.is_unsigned_dtype(x.dtype) else torch.square(x)
+            ),
             "tan": torch.tan,
             "tanh": torch.tanh,
             # Unaries with fast_and_approximate_mode
@@ -389,6 +393,10 @@ ttnn.attach_golden_function(ttnn.leaky_relu, golden_function=_golden_function_le
 def _golden_function_relu_min(input_tensor_a, lower_limit, *args, **kwargs):
     import torch
 
+    # Torch does not provide maximum kernels for UInt16/UInt32 tensors.
+    # Widening for the host reference preserves unsigned ordering and restores the input dtype.
+    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+        return integer_golden.binary(input_tensor_a, lower_limit, torch.maximum)
     return torch.max(input_tensor_a, torch.tensor(lower_limit))
 
 

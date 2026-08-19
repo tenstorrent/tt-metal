@@ -556,11 +556,17 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
     import torch
 
     if isinstance(outputs, ttnn.Tensor):
+        # A single runtime tensor commonly corresponds to a one-element backward golden list.
+        # Unwrap only this unambiguous case; retain list validation for genuine multi-output operations.
+        if isinstance(golden_outputs, (list, tuple)) and len(golden_outputs) == 1:
+            golden_outputs = golden_outputs[0]
         if not isinstance(golden_outputs, torch.Tensor):
             raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
         outputs = [outputs]
         golden_outputs = [golden_outputs]
     elif isinstance(outputs, torch.Tensor):
+        if isinstance(golden_outputs, (list, tuple)) and len(golden_outputs) == 1:
+            golden_outputs = golden_outputs[0]
         if not isinstance(golden_outputs, torch.Tensor):
             raise TypeError(f"Expected torch.Tensor, got {type(golden_outputs)}")
         outputs = [outputs]
