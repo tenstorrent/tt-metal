@@ -20,20 +20,29 @@ from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import
 pytestmark = pytest.mark.use_module_device
 
 
-@pytest.mark.parametrize("op", ["sum", "mean", "max", "min", "std", "var"])
+SHAPES = [(3, 4), (1, 1, 3, 4, 5), (3, 4, 8, 56, 33)]
+DIMS = [-1, -2, 0, (-2, -1), (0, -2, -1), None]
+
+# Pair (shape, dim) to drop combos with more reduction dims than rank, and
+# (op, correction) since correction is live only for std/var.
+VALID_SHAPE_DIMS = [(s, d) for s in SHAPES for d in DIMS if not (isinstance(d, tuple) and len(d) > len(s))]
+OP_CORRECTION = [
+    ("sum", False),
+    ("mean", False),
+    ("max", False),
+    ("min", False),
+    ("std", False),
+    ("std", True),
+    ("var", False),
+    ("var", True),
+]
+
+
+@pytest.mark.parametrize("op, correction", OP_CORRECTION)
 @pytest.mark.parametrize("scalar", [1.0, -2.0, 2.0, -2.43, 2.43, 4.0])
-@pytest.mark.parametrize("correction", [True, False])
-@pytest.mark.parametrize("dim", [-1, -2, 0, (-2, -1), (0, -2, -1), None])
-@pytest.mark.parametrize("shape", [(3, 4), (1, 1, 3, 4, 5), (3, 4, 8, 56, 33)])
+@pytest.mark.parametrize("shape, dim", VALID_SHAPE_DIMS)
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype):
-    rank = len(shape)
-    if isinstance(dim, tuple) and len(dim) > rank:
-        pytest.skip("More reduction dims than tensor rank")
-
-    if op not in ("var", "std") and correction:
-        pytest.skip("PyTorch supports the correction argument only for var and std")
-
     if op in ("var", "std") and correction:
         # Bessel's correction divides by (N - 1) where N is the number of elements
         # reduced. With N == 1 this is a divide-by-zero, producing all-NaN output;

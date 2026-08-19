@@ -21,15 +21,46 @@ from loguru import logger
 pytestmark = pytest.mark.use_module_device
 
 
-@pytest.mark.parametrize(
-    "tensor_shape", [(), (2,), (1, 1), (32, 1), (6, 0, 32), (3, 6, 40, 63, 20), (4, 8, 32, 64), (2, 4, 8, 32, 64)]
-)
-@pytest.mark.parametrize("dim", [None, 0, -1, (-2, -1), (0, 2), (0, 2, 4), (0, 2, 3), (0, 3, 4), (1, 2, 3)])
+SHAPES = [(), (2,), (1, 1), (32, 1), (6, 0, 32), (3, 6, 40, 63, 20), (4, 8, 32, 64), (2, 4, 8, 32, 64)]
+DIMS = [None, 0, -1, (-2, -1), (0, 2), (0, 2, 4), (0, 2, 3), (0, 3, 4), (1, 2, 3)]
+
+
+def dims_valid(shape, dim):
+    """torch dim-validity: rank-0 tensors accept dims {0, -1}; otherwise every
+    axis must satisfy -rank <= d < rank. Invalid (shape, dim) combos raise in
+    both frameworks and are covered by test_generic_ops_dim_parity in
+    test_reduction_op_corners.py instead of being crossed here."""
+    rank = len(shape)
+    axes = dim if isinstance(dim, tuple) else (dim,)
+    if dim is None:
+        return True
+    if rank == 0:
+        return all(d in (0, -1) for d in axes)
+    return all(-rank <= d < rank for d in axes)
+
+
+VALID_SHAPE_DIMS = [(s, d) for s in SHAPES for d in DIMS if dims_valid(s, d)]
+
+# correction is live only for std/var; pairing it with the op (instead of
+# crossing) removes the 720 always-skipped combinations.
+OP_CORRECTION = [
+    ("mean", False),
+    ("sum", False),
+    ("max", False),
+    ("min", False),
+    ("prod", False),
+    ("std", False),
+    ("std", True),
+    ("var", False),
+    ("var", True),
+]
+
+
+@pytest.mark.parametrize("tensor_shape, dim", VALID_SHAPE_DIMS)
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("correction", [True, False])
-@pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "prod", "std", "var"])
+@pytest.mark.parametrize("op, correction", OP_CORRECTION)
 def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correction, op):
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
@@ -38,9 +69,6 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
     Note: We do not enforce the same exception type or message.
     """
-    if op not in ("var", "std") and correction:
-        pytest.skip("PyTorch supports the correction argument only for var and std")
-
     torch.manual_seed(0)
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
     pad_value = 1.0 if op == "prod" else None

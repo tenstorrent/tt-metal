@@ -755,3 +755,50 @@ def test_sum_multi_dim_row_major(device, input_shape, dims, keepdim):
     pcc = 0.999
     passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
+
+
+# ---------------------------------------------------------------------------
+# Dim-validity parity: (shape, dim) combinations whose dim set does not fit the
+# tensor rank must raise in both torch and ttnn. These rows used to live inside
+# test_generic_ops as ~500 executed cross-product cells (multiplied by keepdim
+# and correction); one explicit row per invalid combination, through both
+# generic-reduce front-ends (sum) and the welford front-end (var), keeps the
+# same parity guarantee at a fraction of the cost.
+# ---------------------------------------------------------------------------
+
+_PARITY_SHAPES = [(), (2,), (1, 1), (32, 1), (6, 0, 32), (3, 6, 40, 63, 20), (4, 8, 32, 64), (2, 4, 8, 32, 64)]
+_PARITY_DIMS = [(-2, -1), (0, 2), (0, 2, 4), (0, 2, 3), (0, 3, 4), (1, 2, 3)]
+
+
+def _dims_invalid(shape, dim):
+    rank = len(shape)
+    if rank == 0:
+        return any(d not in (0, -1) for d in dim)
+    return any(not (-rank <= d < rank) for d in dim)
+
+
+INVALID_SHAPE_DIMS = [(s, d) for s in _PARITY_SHAPES for d in _PARITY_DIMS if _dims_invalid(s, d)]
+
+
+@pytest.mark.parametrize("tensor_shape, dim", INVALID_SHAPE_DIMS)
+@pytest.mark.parametrize("op", ["sum", "var"])
+def test_generic_ops_dim_parity(device, tensor_shape, dim, op):
+    torch.manual_seed(0)
+    torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    torch_errored = False
+    try:
+        getattr(torch, op)(torch_tensor, dim=dim)
+    except (IndexError, TypeError, RuntimeError) as e:
+        logger.info(f"torch {op} raised: {e}")
+        torch_errored = True
+
+    ttnn_errored = False
+    try:
+        TTNN_REDUCTION_WRAPPERS[op](ttnn_tensor, dim=dim, keepdim=True)
+    except (IndexError, TypeError, RuntimeError) as e:
+        logger.info(f"ttnn {op} raised: {e}")
+        ttnn_errored = True
+
+    assert torch_errored and ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"

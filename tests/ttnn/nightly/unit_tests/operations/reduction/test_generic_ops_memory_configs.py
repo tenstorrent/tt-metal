@@ -20,6 +20,20 @@ from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import
 pytestmark = pytest.mark.use_module_device
 
 
+# explicit_output_mem_config is exercised only for sum and var; pairing it with
+# the op (instead of crossing) removes the always-skipped combinations.
+OP_EXPLICIT_CFG = [
+    ("mean", False),
+    ("sum", False),
+    ("sum", True),
+    ("max", False),
+    ("min", False),
+    ("std", False),
+    ("var", False),
+    ("var", True),
+]
+
+
 @pytest.mark.parametrize(
     "shapes",
     [
@@ -30,14 +44,8 @@ pytestmark = pytest.mark.use_module_device
 )
 @pytest.mark.parametrize("keepdim", [True])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "std", "var"])
-@pytest.mark.parametrize("explicit_output_mem_config", [True, False])
+@pytest.mark.parametrize("op, explicit_output_mem_config", OP_EXPLICIT_CFG)
 def test_generic_ops_ndim_shard(device, shapes, keepdim, layout, op, explicit_output_mem_config):
-    # To reduce the number of tests, we only test sum and var with explicit output mem_config.
-    # This exercises both known code paths where this could make a meaningful difference.
-    if explicit_output_mem_config and op not in ("sum", "var"):
-        pytest.skip("explicit output mem_config only tested for sum and var")
-
     torch.manual_seed(0)
     dim = -2
     input_shape, shard_shape, end_x, end_y = shapes
@@ -134,8 +142,7 @@ def test_generic_ops_ndim_shard(device, shapes, keepdim, layout, op, explicit_ou
 )
 @pytest.mark.parametrize("keepdim", [True])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "std", "var"])
-@pytest.mark.parametrize("explicit_output_mem_config", [True, False])
+@pytest.mark.parametrize("op, explicit_output_mem_config", OP_EXPLICIT_CFG)
 def test_generic_ops_wh_block_shard(
     device,
     input_shape,
@@ -149,11 +156,6 @@ def test_generic_ops_wh_block_shard(
     op,
     explicit_output_mem_config,
 ):
-    # To reduce the number of tests, we only test sum and var with explicit output mem_config.
-    # This exercises both known code paths where this could make a meaningful difference.
-    if explicit_output_mem_config and op not in ("sum", "var"):
-        pytest.skip("explicit output mem_config only tested for sum and var")
-
     torch.manual_seed(0)
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(end_x, end_y))}),
@@ -267,8 +269,17 @@ def test_generic_ops_wh_block_shard(
 
 # Test that generic reduction ops work correctly with a scalar applied to the input.
 @pytest.mark.parametrize("op", ["sum", "mean", "max", "min", "std", "var"])
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+# bfloat8_b only exists in TILE layout, so dtype and layout are paired.
+@pytest.mark.parametrize(
+    "dtype, layout",
+    [
+        (ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.float32, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ],
+)
 def test_generic_ops_dtypes_layouts(device, op, dtype, layout):
     """
     Test generic reduction ops across all documented dtype/layout combinations.
@@ -279,9 +290,6 @@ def test_generic_ops_dtypes_layouts(device, op, dtype, layout):
     """
     shape = (4, 2, 64, 64)
     dim = -1
-
-    if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("bfloat8_b requires TILE_LAYOUT at tensor creation (py_to_tt_tensor.cpp)")
 
     # torch has no bfloat8_b; use float32 as highest-precision reference.
     torch_dtype_map = {
