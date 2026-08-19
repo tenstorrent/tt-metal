@@ -148,6 +148,17 @@ def parse_args() -> argparse.Namespace:
         default="true",
         help="Delete the log and results directory after the run",
     )
+    p.add_argument(
+        "--exclude",
+        action="store_true",
+        help="Run the full workflow (JIRA + SFTP upload) but flag the results discard=1 so "
+        "they are excluded from the production dashboards. Intended for dev end-to-end testing.",
+    )
+    p.add_argument(
+        "--exclude-reason",
+        default="",
+        help="Reason recorded in discard_reason when --exclude is set (defaults to 'dev-run').",
+    )
 
     args = p.parse_args()
     # node is used to build filesystem paths (log/results dirs); constrain it to a
@@ -172,6 +183,8 @@ def run_csv_analysis(
     ticket_key: str | None,
     versions: dict[str, str],
     telemetry: dict | None = None,
+    discard: int | None = None,
+    discard_reason: str | None = None,
 ) -> str | None:
     """Translate the diag_report.json into the runs/checks CSVs for Superset.
 
@@ -206,6 +219,8 @@ def run_csv_analysis(
                 "fw_bundle_version": _clean_version(versions.get("fw_bundle")),
             },
             telemetry=telemetry,
+            discard=discard,
+            discard_reason=discard_reason,
         )
     except Exception as exc:
         log.warning("CSV analysis failed: %s", exc)
@@ -255,6 +270,12 @@ def main() -> int:
     launch_mode = args.launch_mode
     jira_bearer_token = load_jira_secrets(log_dir, launch_mode)
     sftp_user, sftp_host = load_sftp_secrets(log_dir, launch_mode)
+
+    # Dev end-to-end runs: keep the full workflow but flag the results so they
+    # never land in the fleet dashboards.
+    exclude_reason = (args.exclude_reason or "dev-run") if args.exclude else None
+    if args.exclude:
+        log.info("Run marked --exclude: results will upload but are flagged discard=1 (reason: %s)", exclude_reason)
 
     # Collect version info
     versions = collect_version_info()
@@ -480,6 +501,8 @@ def main() -> int:
         ticket_key=ticket_key,
         versions=versions,
         telemetry=telemetry_summary,
+        discard=1 if args.exclude else None,
+        discard_reason=exclude_reason,
     )
 
     # SFTP upload
