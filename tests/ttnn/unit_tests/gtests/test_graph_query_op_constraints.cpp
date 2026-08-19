@@ -467,8 +467,11 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
             true);         // numeric_stable
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        // Ensure some real usage is reported
-        EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 1024);
+        // Ensure some real usage is reported. Softmax is a Metal 2.0 op: its program-scope L1
+        // is reported under dataflow_buffer_peak_size_per_core (and peak_memory_usage_per_core),
+        // not cb_peak_size_per_core, which is legitimately 0 for a ported op. See ResourceUsage
+        // in ttnn/api/ttnn/graph/graph_query_op_constraints.hpp.
+        EXPECT_GT(query.resource_usage.dataflow_buffer_peak_size_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
