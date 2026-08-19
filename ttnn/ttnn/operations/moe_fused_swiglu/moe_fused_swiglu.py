@@ -81,7 +81,7 @@ SUPPORTED = {
     # The activation's dtype x layout cross, collapsed to the two real combinations.
     "input_format": ["bf16_rm", "bfp8_tile"],
     "weight_dtype": list(WEIGHT_DTYPES),
-    "emb": [6144, 7168],
+    "emb": [3584, 6144, 7168],
     "fill": ["balanced", "partial", "full", "empty"],
 }
 
@@ -126,6 +126,7 @@ def validate(
     expert_region_offsets=None,
     read_x_at_offset=False,
     input_m_tiles=None,
+    activation=ttnn.RoutedExpertActivation.Silu,
 ):
     # ---- structural (ValueError) --------------------------------------------------
     if len(input_tensor.shape) != 4:
@@ -266,6 +267,9 @@ def validate(
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"moe_fused_swiglu: unsupported combination (refinement candidate): {exc}")
 
+    if activation not in (ttnn.RoutedExpertActivation.Silu, ttnn.RoutedExpertActivation.SituGlu):
+        raise ValueError("moe_fused_swiglu: activation must be RoutedExpertActivation.Silu or .SituGlu")
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -287,6 +291,7 @@ def moe_fused_swiglu(
     output: ttnn.Tensor = None,
     expert_region_offsets: ttnn.Tensor = None,
     read_x_at_offset: bool = False,
+    activation: ttnn.RoutedExpertActivation = ttnn.RoutedExpertActivation.Silu,
 ) -> ttnn.Tensor:
     """`output` / `expert_region_offsets` / `read_x_at_offset` are the three fusion knobs, with the
     same meanings as `ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn`:
@@ -317,6 +322,7 @@ def moe_fused_swiglu(
         expert_region_offsets=expert_region_offsets,
         read_x_at_offset=read_x_at_offset,
         input_m_tiles=input_m_tiles,
+        activation=activation,
     )
 
     capacity = int(input_tensor.shape[-2])
@@ -384,4 +390,5 @@ def moe_fused_swiglu(
         output=output,
         expert_region_offsets=expert_region_offsets,
         read_x_at_offset=read_x_at_offset,
+        activation=activation,
     )
