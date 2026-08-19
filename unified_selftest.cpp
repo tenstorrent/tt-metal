@@ -24,11 +24,18 @@
 //       unified_selftest.cpp -o /tmp/u_$l && /tmp/u_$l
 //   done
 
+#include <sys/mman.h>
+
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <utility>
 #include <vector>
+
+// One tile per page, and room for a handful of them.
+static constexpr uint32_t kPageBytes = 2048;
+static constexpr uint32_t kFakeL1Bytes = 64 * 1024;
 
 static std::vector<std::string> trace;
 static void T(const std::string& s) { trace.push_back(s); }
@@ -121,9 +128,26 @@ inline void reconfig_data_format_srca(uint32_t old_cb, uint32_t new_cb) {
 inline void init_sfpu(uint32_t icb, uint32_t ocb) { T("  init_sfpu(cb" + n(icb) + " -> cb" + n(ocb) + ")"); }
 }  // namespace ckernel
 
-inline uint32_t get_write_ptr(uint32_t) { return 0; }
-inline uint32_t get_read_ptr(uint32_t) { return 0; }
-inline uint32_t cb_page_bytes(uint32_t) { return 2048; }
+// A stand-in for L1. Almost every stub only hands an address to another stub, so a
+// fake value would do -- but fill_reduce_scaler DEREFERENCES the write pointer to lay
+// the scaler pattern down, and the model's addresses are uint32_t, so the memory has
+// to live below 4GB. MAP_32BIT guarantees that. Linux/x86-64, which is what this
+// harness targets.
+inline uint32_t* l1_base() {
+    static uint32_t* base = [] {
+        void* m = mmap(nullptr, kFakeL1Bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+        if (m == MAP_FAILED) {
+            fprintf(stderr, "selftest: could not map a sub-4GB L1 stand-in\n");
+            abort();
+        }
+        return static_cast<uint32_t*>(m);
+    }();
+    return base;
+}
+
+inline uint32_t get_write_ptr(uint32_t) { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(l1_base())); }
+inline uint32_t get_read_ptr(uint32_t) { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(l1_base())); }
+inline uint32_t cb_page_bytes(uint32_t) { return kPageBytes; }
 
 // An L1 pointer attribute on device (risc_attribs.h); nothing on the host.
 #define tt_l1_ptr
@@ -286,6 +310,28 @@ void example_unary() {
 
     ComputeBlock x = noc_load<1>(in_storage, t0, 0).wait();
     noc_store<0>(out_storage.store(x.exp()), t2, 0);
+}
+
+// A reduction, which is the only path that both fills a scaler and drives
+// Strategy<ReduceFusion>. fill_reduce_scaler is the reason the harness needs a real
+// L1 stand-in: it is the one call in the model that writes through the pointer rather
+// than handing it to an intrinsic. Stage 1 of the shape refactor broke it and NO
+// selftest example caught it -- the device build did -- so it earns a permanent one.
+//
+// The scaler is deliberately NOT popped here: it is held as a kernel-scope
+// ComputeBlock whose destructor pops it, which is what report() checks balances.
+void example_reduce() {
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
+    using In = Shape<2, 2>;
+    using Out = reduce_shape<In, ReduceAxis::Rows>;
+    Storage<In> in_storage(0);
+    Storage<Shape<1, 1>> scaler_storage(3);
+    Storage<Out> out_storage(4);
+
+    ComputeBlock scaler = fill_reduce_scaler<1>(scaler_storage);
+    ComputeBlock a = noc_load<1>(in_storage, t0, 0).wait();
+    noc_store<0>(out_storage.store(reduce_sum<ReduceGeometry<2, 2>, ReduceAxis::Rows>(a, scaler)), t2, 0);
 }
 
 // Core-to-core hop, exercising NocAsyncCopyTx. The peer handshake is still not
@@ -522,6 +568,8 @@ int main() {
     ok &= report("matmul_single");
     tt::unified::example_matmul_acc();
     ok &= report("matmul_acc");
+    tt::unified::example_reduce();
+    ok &= report("reduce");
     tt::unified::example_peer_hop();
     ok &= report("peer_hop");
     ok &= report_same("syntax: free vs method", tt::unified::example_syntax_free, tt::unified::example_syntax_method);
