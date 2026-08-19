@@ -348,6 +348,27 @@ class TPAttention:
                         tuning=getattr(self.args, "prefill_tuning", None),
                     )
                     ck = self.compute_cfg
+                # MODEL-GATED (27B on Wormhole). Emit bf8 so the row-parallel reduce-scatter that
+                # consumes this carries half the bytes -- as the matmul's OUTPUT DTYPE, not a
+                # typecast afterwards, which would be a whole extra pass over [1,S,dim].
+                #
+                # This is the third instance of the same win in this layer; all three reduce-scatter
+                # a [1,1,2048,5120] row-parallel partial, and bf8 lands them all at the same floor:
+                #     MLP down-proj    bf8   589us
+                #     GDN out-proj     bf8   554us   (was 1,029 bf16)
+                #     attention wo     bf8   548us   (was 1,021 bf16)   <- this
+                # MEASURED (T3K TP=8, 27B, seq 2048, single-layer profile, layer3_fullattn):
+                #     wo matmul 2048x768x5120   419 -> 277us  (-142, writes half the bytes)
+                #     reduce-scatter            1021 -> 548us (-473)
+                #                                             = -610us/layer, block 4,146 -> 3,536
+                # ACCURACY, measured not assumed -- the RS sums num_devices partials and this op has a
+                # documented dtype cliff on Blackhole at TP=4 (see gdn/tp.py's fp32/bf16 history):
+                #     test_attention_tp_prefill (S=64)  bf16 0.9993245 -> bf8 0.9991838
+                # a 4th-decimal cost, matching what the GDN out-proj measured (0.9994 -> 0.9993).
+                #
+                # Gated to the 27B because that cliff proves the safe dtype here is TP- and
+                # model-dependent, and TP=8/dim=5120 is the only configuration measured.
+                _wo_bf8 = self.args.dim > 4096 and not tpc.is_blackhole()
                 return ttnn.linear(
                     x,
                     weight,
@@ -356,6 +377,7 @@ class TPAttention:
                     # L1 while it fits; DRAM once the [seq,dim] output would crowd out this matmul's
                     # own circular buffers on WH (see tp_common.prefill_out_memory_config).
                     memory_config=tpc.prefill_out_memory_config(x.shape[-2], weight.shape[-1]),
+                    **({"dtype": ttnn.bfloat8_b} if _wo_bf8 else {}),
                 )
             return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
@@ -380,22 +402,26 @@ class TPAttention:
             # Fused [q|k|v|gate] weight (_qkv sentinel vp=None): qg is the contiguous [q|k|v] block,
             # kp is the gate. Slice q and (already-contiguous) kv directly — no concat needed.
             gate_flat = kp
-            # q_flat, kv feed nlp_create_qkv_heads then free immediately -> L1 (short-lived, no clash).
-            q_flat = ttnn.slice(qg, (0, 0, 0, 0), (1, 1, S, NH * HD), memory_config=ttnn.L1_MEMORY_CONFIG)
-            kv = ttnn.slice(
-                qg, (0, 0, 0, NH * HD), (1, 1, S, NH * HD + 2 * NKV * HD), memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-            ttnn.deallocate(qg)
+            # SINGLE-TENSOR nlp_create_qkv_heads: hand it the contiguous [q|k|v] block whole and let
+            # it do the split in-kernel, instead of slicing q and kv out first to feed the two-tensor
+            # (input, input_kv) overload. The op's fused form handles the GQA asymmetry -- it derives
+            # the q/k/v boundaries from num_heads/num_kv_heads, so a (NH + 2*NKV)*HD = 1280-wide input
+            # is accepted even though the docstring's shape reads 3*head_dim*num_heads.
+            #
+            # VERIFIED BIT-EXACT against the two-slice form: q/k/v all torch.equal, max|diff| == 0.0
+            # (NH=3, NKV=1, HD=256, S=128 -- the 27B TP=8 head geometry).
+            # MEASURED (T3K TP=8, 27B, seq 2048, layer3_fullattn single-layer profile): removes the
+            # two slices, 20.8us (1280->768, q) + 15.8us (1280->512, k|v) = -36.6us and -2 device ops.
+            # Both were running at ~100-130 GB/s, i.e. at bandwidth -- so this is not a slow-op fix,
+            # it is one fewer full pass over the tensor.
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-                q_flat,
-                kv,
+                qg,
                 num_heads=NH,
                 num_kv_heads=NKV,
                 transpose_k_heads=False,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            ttnn.deallocate(q_flat)
-            ttnn.deallocate(kv)
+            ttnn.deallocate(qg)
             return q, gate_flat, k, v
         # Interleaved qg: split [q;gate] per head; gate flattened to [1,1,S,NH*HD] (applied post-concat).
         qg = ttnn.reshape(qg, (1, S, NH, 2 * HD))
@@ -580,8 +606,25 @@ class TPAttention:
         attn = self._concat_heads(attn)
         # concat(attn)+sigmoid(gate) in L1; gated stays DRAM (feeds the wo matmul_reduce_scatter — an L1
         # CCL activation risks clashing with its CBs).
+        # MODEL-GATED (27B on Wormhole). Emit `gated` as bf8 so the wo matmul is BFP8 x BFP8.
+        # `gated` is attn * sigmoid(gate) -- an independent tensor with no KV-cache involvement, so
+        # unlike the attention_norm gather (see layer.py's ATTEMPTED AND REJECTED note) nothing
+        # blocks narrowing it.
+        # MEASURED (T3K TP=8, 27B, seq 2048, layer3_fullattn):
+        #     wo matmul 2048x768x5120   275 -> 261us   (-14)
+        #     gated multiply             36 ->  31us   (-5)
+        #                                              = -22us/layer
+        #     PCC (test_attention_tp_prefill, S=64)  0.9991838 -> 0.9991558
+        # SMALL, and the reason is worth recording: the MLP's down-proj runs the same BFP8 x BFP8
+        # shape at 50.1% of peak against this op's 25.1%, which suggests a much bigger prize -- but
+        # wo's K is 768 (24 tiles) against the down-proj's 2176 (68), so it is load/store-bound and
+        # halving in0's bytes cannot buy what it buys there. Do not extrapolate FLOPs% between
+        # matmuls with very different K.
         gated = ttnn.multiply(
-            attn, ttnn.sigmoid(gate_flat, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.DRAM_MEMORY_CONFIG
+            attn,
+            ttnn.sigmoid(gate_flat, memory_config=ttnn.L1_MEMORY_CONFIG),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **({"dtype": ttnn.bfloat8_b} if (self.args.dim > 4096 and not tpc.is_blackhole()) else {}),
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
@@ -761,7 +804,18 @@ class TPAttention:
                 else:
                     v_sh = ttnn.to_memory_config(v, _kv_cfg)
                     ttnn.deallocate(v)
-                # paged_update_cache takes bf16/fp32 and casts to bf8 cache; decode K/V stay bf16 (prefill fill needs bf8)
+                # DECODE K/V MUST BE bf16/fp32 HERE, AND MUST MATCH THE CACHE -- which is what makes a
+                # bf8 KV cache impossible on this op. paged_update_cache asserts BOTH
+                #   input.dtype == FLOAT32 || input.dtype == BFLOAT16
+                #       (paged_update_cache_device_operation.cpp:296)
+                #   input.dtype == cache.dtype  ("Input and cache tensors must have same dtype!")
+                # so against a bf8 cache a bf16 input fails the second and a bf8 input fails the first.
+                # There is no dtype that satisfies both; a cast does not help (tried, it just moves
+                # which assert fires). paged_fill_cache, which PREFILL uses, has the LOOSER contract
+                # (input==FP32 || input==BF16 || cache==BFP8 || cache==BFP4) -- which is exactly why a
+                # bf8 cache passes every prefill-only profile, every module test and the 64k demo while
+                # failing 5 of 20 test_model_tp cases (every one that decodes after a prefill).
+                # Enabling a bf8 KV cache needs a C++ change to paged_update_cache, not a Python cast.
                 ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
                 ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
             ttnn.deallocate(k_sh)
@@ -800,6 +854,7 @@ class TPAttention:
                     v_sh = ttnn.to_memory_config(v_h, _kv_cfg)
                     ttnn.deallocate(k_h)
                     ttnn.deallocate(v_h)
+                # See the bf8-cache impossibility note at the paged call site above.
                 ttnn.experimental.paged_update_cache(self.k_caches[h], k_sh, update_idxs_tensor=cur_pos_tt)
                 ttnn.experimental.paged_update_cache(self.v_caches[h], v_sh, update_idxs_tensor=cur_pos_tt)
                 ttnn.deallocate(k_sh)
@@ -957,12 +1012,35 @@ class TPAttention:
         else:
             cap = 128 if S >= 2048 else 64  # 128 beats 256
             qk_chunk = cap if not chunk_start_idx else min(cap, chunk_start_idx & -chunk_start_idx)
+        # ASYMMETRIC K-CHUNK (MODEL-GATED, 27B on Wormhole). Every config here had set
+        # q_chunk_size == k_chunk_size; decoupling them is worth -7.2% on this op. The Q chunk is what
+        # bounds the CB footprint (q_chunk >= 256 fails outright -- see below), but K can be doubled
+        # for free because the K/V blocks stream.
+        # MEASURED (T3K TP=8, 27B, seq 2048, layer3_fullattn single-layer profile, device kernel time):
+        #     q=128 k=128  490.1us   <- was (and what the "128 beats 64/256" note above compared)
+        #     q=128 k=256  455.0us   -35.1us  <- used
+        #     q= 64 k=128  532.5us
+        #     q=256 k=256 / q=256 k=128 / q=512 k=128   all FAIL (CB overflow)
+        #     q=128 k=512 / k=1024 / k=2048             all FAIL (CB overflow)
+        # exp_approx_mode was swept at the same time and is a WASH -- 488.9us at k=128 and 455.5us at
+        # k=256, both within noise of exp_approx_mode=False -- so it stays off and costs no accuracy.
+        # Gated because the CB headroom that makes k=256 fit is specific to this head geometry
+        # (NH=3, NKV=1, HD=256 at TP=8) and this chunk length.
+        # LENGTH-CAPPED at the production chunk: at S=4096 the doubled K chunk overflows CBs
+        # (layer3_fullattn-seq4096 fails), same shape of limit as tp_common.PREFILL_FULL_GRID_MAX_M.
+        _kc = (
+            qk_chunk * 2
+            if (
+                self.args.dim > 4096 and not tpc.is_blackhole() and qk_chunk == 128 and S <= tpc.PREFILL_FULL_GRID_MAX_M
+            )
+            else qk_chunk
+        )
         # Full BH grid for SDPA perf (bit-identical to 8×8; see test_tp_chunked_prefill_pcc_sweep)
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
             exp_approx_mode=False,
             q_chunk_size=qk_chunk,
-            k_chunk_size=qk_chunk,
+            k_chunk_size=_kc,
         )
 
         # Pad page table to cover Q+offset and satisfy stick-size % 32 (extra blocks masked by causality).
@@ -1006,8 +1084,25 @@ class TPAttention:
         attn = self._concat_heads(attn)
         # concat(attn)+sigmoid(gate) in L1; gated stays DRAM (feeds the wo matmul_reduce_scatter — an L1
         # CCL activation risks clashing with its CBs).
+        # MODEL-GATED (27B on Wormhole). Emit `gated` as bf8 so the wo matmul is BFP8 x BFP8.
+        # `gated` is attn * sigmoid(gate) -- an independent tensor with no KV-cache involvement, so
+        # unlike the attention_norm gather (see layer.py's ATTEMPTED AND REJECTED note) nothing
+        # blocks narrowing it.
+        # MEASURED (T3K TP=8, 27B, seq 2048, layer3_fullattn):
+        #     wo matmul 2048x768x5120   275 -> 261us   (-14)
+        #     gated multiply             36 ->  31us   (-5)
+        #                                              = -22us/layer
+        #     PCC (test_attention_tp_prefill, S=64)  0.9991838 -> 0.9991558
+        # SMALL, and the reason is worth recording: the MLP's down-proj runs the same BFP8 x BFP8
+        # shape at 50.1% of peak against this op's 25.1%, which suggests a much bigger prize -- but
+        # wo's K is 768 (24 tiles) against the down-proj's 2176 (68), so it is load/store-bound and
+        # halving in0's bytes cannot buy what it buys there. Do not extrapolate FLOPs% between
+        # matmuls with very different K.
         gated = ttnn.multiply(
-            attn, ttnn.sigmoid(gate_flat, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.DRAM_MEMORY_CONFIG
+            attn,
+            ttnn.sigmoid(gate_flat, memory_config=ttnn.L1_MEMORY_CONFIG),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **({"dtype": ttnn.bfloat8_b} if (self.args.dim > 4096 and not tpc.is_blackhole()) else {}),
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)

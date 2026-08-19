@@ -1127,6 +1127,67 @@ def _log_results(perf, prompt_len, num_generated, text):
     logger.info("=" * 70)
 
 
+# Expected content terms per source book, keyed by the Gutenberg epub id in the entry's context URL
+# so this cannot desync from eval_frankenstein_long.json.
+#
+# WHY THIS IS NOT ONE HARDCODED FRANKENSTEIN LIST (it was, and it produced false failures on 4 of the
+# 6 long-context configs):
+#   * entry 4 (seqlen 262144) is epub 2600 = WAR AND PEACE, not Frankenstein at all, so a
+#     Frankenstein term list can never match a correct summary of it.
+#   * the short configs truncate the context to their own token budget, so 8k/16k/32k stop inside
+#     Walton's letters / the first chapters -- BEFORE Victor, the creature, Elizabeth or Geneva are
+#     named. A correct summary of that excerpt legitimately contains none of those words. Hence the
+#     opening-section terms (walton/margaret/arctic/...) for epub 84.
+# Both failure modes were observed: 8k summarised "Robert Walton's four letters and the beginning of
+# Chapter 1" and 256k summarised "Leo Tolstoy's War and Peace (Books One through Five)", and both were
+# reported as long-prefill regressions.
+_CONTEXT_TERMS = {
+    "84": (
+        (
+            "frankenstein",
+            "victor",
+            "creature",
+            "monster",
+            "elizabeth",
+            "geneva",
+            "shelley",
+            "walton",
+            "margaret",
+            "arctic",
+            "expedition",
+            "ingolstadt",
+        ),
+        "Frankenstein",
+    ),
+    "2600": (
+        (
+            "tolstoy",
+            "pierre",
+            "natasha",
+            "andrei",
+            "bolkonski",
+            "rostov",
+            "napoleon",
+            "moscow",
+            "kuragin",
+            "borodino",
+            "war and peace",
+        ),
+        "War and Peace",
+    ),
+}
+
+
+def _context_terms(entry_idx):
+    """(terms, book_name) for one eval_frankenstein_long.json entry, chosen by its epub id."""
+    with open(f"{SAMPLE_PROMPTS_DIR}/eval_frankenstein_long.json") as f:
+        url = json.load(f)[entry_idx].get("context", "")
+    for epub, (terms, book) in _CONTEXT_TERMS.items():
+        if f"epub/{epub}/" in url:
+            return terms, book
+    raise AssertionError(f"no content terms registered for context {url!r} (entry {entry_idx})")
+
+
 def _assert_output_quality(text, num_generated, seqlen=None):
     """Reject output that is present but degenerate.
 
@@ -1161,14 +1222,14 @@ def _assert_output_quality(text, num_generated, seqlen=None):
         assert count <= 10, f"looping output: 8-gram {worst!r} repeats {count}x. TEXT: {stripped[:300]!r}"
 
     if seqlen in _FRANKENSTEIN_CONFIGS and num_generated >= 100:
-        terms = ("frankenstein", "victor", "creature", "monster", "elizabeth", "geneva", "shelley")
+        terms, book = _context_terms(_FRANKENSTEIN_CONFIGS[seqlen])
         low = stripped.lower()
         hits = [t for t in terms if t in low]
         assert hits, (
-            f"long-context output does not reference the Frankenstein context at all "
+            f"long-context output does not reference the {book} context at all "
             f"(expected any of {list(terms)}) — suspect the long-prefill path. TEXT: {stripped[:300]!r}"
         )
-        logger.info(f"  output content check OK (matched {hits})")
+        logger.info(f"  output content check OK ({book}, matched {hits})")
 
 
 def _assert_results(perf, prompt_len, num_generated):
