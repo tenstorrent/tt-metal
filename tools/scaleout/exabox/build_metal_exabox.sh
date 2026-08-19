@@ -23,7 +23,7 @@
 # pay for it.
 #
 # USAGE
-#   mkdir -p /tmp/$USER && cd /tmp/$USER
+#   mkdir -p /scratch/$USER && cd /scratch/$USER
 #   git clone --recursive https://github.com/tenstorrent/tt-metal
 #   cd tt-metal
 #   ./tools/scaleout/exabox/build_metal_exabox.sh --sync-to /data/$USER/tt-metal
@@ -69,7 +69,7 @@ usage() {
 Usage: ./tools/scaleout/exabox/build_metal_exabox.sh [options] [-- <build_metal.sh args>]
 
 Builds tt-metal in a container, bind-mounting the current directory (which
-should be a tt-metal clone on FAST LOCAL DISK, e.g. /tmp/\$USER/tt-metal) so it
+should be a tt-metal clone on FAST LOCAL DISK, e.g. /scratch/\$USER/tt-metal) so it
 appears at the slow-but-canonical Exabox path, so RPATHs and venv shebangs are
 baked correctly for that destination.
 
@@ -187,7 +187,7 @@ if command -v stat >/dev/null 2>&1; then
   case "${fstype}" in
     nfs*|autofs|cifs|smb*)
       warn "source directory is on '${fstype}' — this script exists to AVOID building on \
-network storage. Clone to local scratch (e.g. /tmp/${UNAME}/tt-metal) instead." ;;
+network storage. Clone to local scratch (e.g. /scratch/${UNAME}/tt-metal) instead." ;;
     tmpfs)
       warn "source directory is on tmpfs (RAM). A tt-metal build tree is tens of GB; \
 make sure you actually have that much memory." ;;
