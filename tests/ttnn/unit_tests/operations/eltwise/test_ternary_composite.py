@@ -344,7 +344,7 @@ def test_mac_tts_ttnn(input_shapes, value, device):
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device, seed=1)
 
     output_tensor = ttnn.mac(input_tensor1, input_tensor2, value)
-    golden_tensor = (in_data1 * in_data2 + value).to(torch.bfloat16)
+    golden_tensor = (in_data1.float() * in_data2.float() + value).to(torch.bfloat16)
 
     assert_with_ulp(golden_tensor, ttnn.to_torch(output_tensor), ulp_threshold=1)
 
@@ -363,6 +363,6 @@ def test_mac_tst_ttnn(input_shapes, value, device):
     in_data3, input_tensor3 = data_gen_with_range(input_shapes, -100, 100, device, seed=2)
 
     output_tensor = ttnn.mac(input_tensor1, value, input_tensor3)
-    golden_tensor = (in_data1 * value + in_data3).to(torch.bfloat16)
+    golden_tensor = (in_data1.float() * value + in_data3.float()).to(torch.bfloat16)
 
     assert_with_ulp(golden_tensor, ttnn.to_torch(output_tensor), ulp_threshold=1)

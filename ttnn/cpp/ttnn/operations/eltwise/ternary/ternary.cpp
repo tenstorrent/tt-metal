@@ -94,6 +94,23 @@ inline MemoryConfig determine_memory_config_for_broadcast(
     return sharded_tensor.memory_config();
 }
 
+// Single entry point for the native ternary LLK path.  The ops on that path differ only in
+// the TernaryOpType they dispatch with and in which of the two trailing operands is a
+// scalar, so `where`, `mac` and anything ported later share this call instead of spelling
+// out prim::ternary once per variant.
+template <TernaryOpType op_type, typename ValueB, typename ValueC>
+Tensor invoke_ternary_llk(
+    const Tensor& input_tensor_a,
+    const ValueB& value_b,
+    const ValueC& value_c,
+    const std::optional<DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::prim::ternary(
+        op_type, input_tensor_a, value_b, value_c, output_dtype, memory_config, output, sub_core_grids);
+}
+
 }  // namespace ternary_utils
 
 namespace {
@@ -138,8 +155,8 @@ Tensor invoke_impl(
 
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
     log_debug(tt::LogOp, "Where LLK - TTT");
-    return ttnn::prim::ternary(
-        TernaryOpType::WHERE, condition, t_true, t_false, output_dtype, memory_config, output, sub_core_grids);
+    return ternary_utils::invoke_ternary_llk<TernaryOpType::WHERE>(
+        condition, t_true, t_false, output_dtype, memory_config, output, sub_core_grids);
 }
 
 // TTS: tensor, tensor, scalar
@@ -198,6 +215,83 @@ Tensor invoke_impl(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     log_debug(tt::LogOp, "Where LLK - TSS");
     return ttnn::where_tss(condition, t_true, t_false, memory_config, output, sub_core_grids);
+}
+
+// A native mac needs float operands the SFPU can consume and a broadcast the ternary
+// kernels can express.  Only the tensor operands take part in the check, so the caller
+// passes whichever of b and c are tensors.
+template <typename... Tensors>
+bool mac_needs_composite(const TernaryBroadcastType& broadcast_type, const Tensors&... tensors) {
+    bool is_any_input_block_format = (is_block_float(tensors.dtype()) || ...);
+    // The SFPU mac path multiplies and accumulates in the FP32 SFPU registers, so integer
+    // inputs would be reinterpreted as floats. Keep them on the composite path.
+    bool is_any_input_integer = (is_integer_dtype(tensors.dtype()) || ...);
+    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
+
+    return is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_any_input_integer;
+}
+
+// TTT, TTS and TST share this body: which of b and c is a scalar only changes the operands
+// that take part in the broadcast and dtype checks, because prim::ternary and the composite
+// _mac both already have an overload per scalar position.
+template <typename ValueB, typename ValueC>
+    requires(std::same_as<ValueB, Tensor> || std::same_as<ValueC, Tensor>)
+Tensor mac_impl(
+    const Tensor& input_tensor_a,
+    const ValueB& value_b,
+    const ValueC& value_c,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    constexpr bool b_is_tensor = std::same_as<ValueB, Tensor>;
+    constexpr bool c_is_tensor = std::same_as<ValueC, Tensor>;
+    constexpr auto variant = b_is_tensor && c_is_tensor ? "TTT" : (b_is_tensor ? "TTS" : "TST");
+
+    const auto broadcast_type = [&] {
+        if constexpr (b_is_tensor && c_is_tensor) {
+            return get_broadcast_type(input_tensor_a.logical_shape(), value_b.logical_shape(), value_c.logical_shape());
+        } else if constexpr (b_is_tensor) {
+            return get_broadcast_type(input_tensor_a.logical_shape(), value_b.logical_shape());
+        } else {
+            return get_broadcast_type(input_tensor_a.logical_shape(), value_c.logical_shape());
+        }
+    }();
+
+    const bool needs_composite = [&] {
+        if constexpr (b_is_tensor && c_is_tensor) {
+            return mac_needs_composite(broadcast_type, input_tensor_a, value_b, value_c);
+        } else if constexpr (b_is_tensor) {
+            return mac_needs_composite(broadcast_type, input_tensor_a, value_b);
+        } else {
+            return mac_needs_composite(broadcast_type, input_tensor_a, value_c);
+        }
+    }();
+
+    if (needs_composite) {
+        TT_FATAL(
+            !output.has_value(),
+            "ttnn::mac: output_tensor is not supported when the operation falls back to the composite path "
+            "(unsupported broadcast shape, block-float subtile broadcast, or integer input dtype). "
+            "Remove output_tensor or use shapes/dtypes that are supported by the native LLK path.");
+        TT_FATAL(
+            !sub_core_grids.has_value(),
+            "ttnn::mac: sub_core_grids is not supported when the operation falls back to the composite path. "
+            "Remove sub_core_grids or use shapes/dtypes that are supported by the native LLK path.");
+        log_debug(tt::LogOp, "Mac Fallback - {}", variant);
+        return _mac(input_tensor_a, value_b, value_c, memory_config);
+    }
+
+    log_debug(tt::LogOp, "Mac LLK - {}", variant);
+    return ternary_utils::invoke_ternary_llk<TernaryOpType::MAC>(
+        input_tensor_a,
+        value_b,
+        value_c,
+        ternary_utils::determine_output_dtype(output, input_tensor_a.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input_tensor_a.memory_config()),
+        output,
+        sub_core_grids);
 }
 
 }  // namespace
@@ -430,44 +524,7 @@ Tensor mac(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    auto broadcast_type = get_broadcast_type(
-        input_tensor_a.logical_shape(), input_tensor_b.logical_shape(), input_tensor_c.logical_shape());
-
-    bool is_any_input_block_format = is_block_float(input_tensor_a.dtype()) || is_block_float(input_tensor_b.dtype()) ||
-                                     is_block_float(input_tensor_c.dtype());
-    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
-                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
-                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
-    // The SFPU mac path multiplies and accumulates in the FP32 SFPU registers, so integer
-    // inputs would be reinterpreted as floats. Keep them on the composite path.
-    bool is_any_input_integer =
-        is_integer_dtype(input_tensor_a.dtype()) || is_integer_dtype(input_tensor_b.dtype()) ||
-        is_integer_dtype(input_tensor_c.dtype());
-
-    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_any_input_integer) {
-        TT_FATAL(
-            !output.has_value(),
-            "ttnn::mac: output_tensor is not supported when the operation falls back to the composite path "
-            "(unsupported broadcast shape, block-float subtile broadcast, or integer input dtype). "
-            "Remove output_tensor or use shapes/dtypes that are supported by the native LLK path.");
-        TT_FATAL(
-            !sub_core_grids.has_value(),
-            "ttnn::mac: sub_core_grids is not supported when the operation falls back to the composite path. "
-            "Remove sub_core_grids or use shapes/dtypes that are supported by the native LLK path.");
-        log_debug(tt::LogOp, "Mac Fallback - TTT");
-        return _mac(input_tensor_a, input_tensor_b, input_tensor_c, memory_config);
-    }
-
-    log_debug(tt::LogOp, "Mac LLK - TTT");
-    return ttnn::prim::ternary(
-        TernaryOpType::MAC,
-        input_tensor_a,
-        input_tensor_b,
-        input_tensor_c,
-        ternary_utils::determine_output_dtype(output, input_tensor_a.dtype()),
-        ternary_utils::determine_memory_config(memory_config, input_tensor_a.memory_config()),
-        output,
-        sub_core_grids);
+    return mac_impl(input_tensor_a, input_tensor_b, input_tensor_c, memory_config, output, sub_core_grids);
 }
 
 // TTS: a * b + scalar — native LLK path via prim::ternary
@@ -476,29 +533,7 @@ Tensor mac(
     const Tensor& input_tensor_b,
     float value,
     const std::optional<MemoryConfig>& memory_config) {
-    auto broadcast_type = get_broadcast_type(input_tensor_a.logical_shape(), input_tensor_b.logical_shape());
-
-    bool is_any_input_block_format = is_block_float(input_tensor_a.dtype()) || is_block_float(input_tensor_b.dtype());
-    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
-                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
-                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
-    bool is_any_input_integer = is_integer_dtype(input_tensor_a.dtype()) || is_integer_dtype(input_tensor_b.dtype());
-
-    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_any_input_integer) {
-        log_debug(tt::LogOp, "Mac Fallback - TTS");
-        return _mac(input_tensor_a, input_tensor_b, value, memory_config);
-    }
-
-    log_debug(tt::LogOp, "Mac LLK - TTS");
-    return ttnn::prim::ternary(
-        TernaryOpType::MAC,
-        input_tensor_a,
-        input_tensor_b,
-        value,
-        ternary_utils::determine_output_dtype(std::nullopt, input_tensor_a.dtype()),
-        ternary_utils::determine_memory_config(memory_config, input_tensor_a.memory_config()),
-        std::nullopt,
-        std::nullopt);
+    return mac_impl(input_tensor_a, input_tensor_b, value, memory_config, std::nullopt, std::nullopt);
 }
 
 // TST: a * scalar + c — native LLK path via prim::ternary
@@ -507,29 +542,7 @@ Tensor mac(
     float value,
     const Tensor& input_tensor_c,
     const std::optional<MemoryConfig>& memory_config) {
-    auto broadcast_type = get_broadcast_type(input_tensor_a.logical_shape(), input_tensor_c.logical_shape());
-
-    bool is_any_input_block_format = is_block_float(input_tensor_a.dtype()) || is_block_float(input_tensor_c.dtype());
-    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
-                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
-                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
-    bool is_any_input_integer = is_integer_dtype(input_tensor_a.dtype()) || is_integer_dtype(input_tensor_c.dtype());
-
-    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_any_input_integer) {
-        log_debug(tt::LogOp, "Mac Fallback - TST");
-        return _mac(input_tensor_a, value, input_tensor_c, memory_config);
-    }
-
-    log_debug(tt::LogOp, "Mac LLK - TST");
-    return ttnn::prim::ternary(
-        TernaryOpType::MAC,
-        input_tensor_a,
-        value,
-        input_tensor_c,
-        ternary_utils::determine_output_dtype(std::nullopt, input_tensor_a.dtype()),
-        ternary_utils::determine_memory_config(memory_config, input_tensor_a.memory_config()),
-        std::nullopt,
-        std::nullopt);
+    return mac_impl(input_tensor_a, value, input_tensor_c, memory_config, std::nullopt, std::nullopt);
 }
 
 // TSS: a * scalar1 + scalar2 — native unary SFPU kernel (single pass, no intermediate tensor)
