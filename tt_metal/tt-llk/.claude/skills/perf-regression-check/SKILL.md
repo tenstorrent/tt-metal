@@ -55,12 +55,12 @@ cd tt_metal/tt-llk/tests
 for i in $(seq 1 <iterations>); do
   CHIP_ARCH=<arch> pytest --compile-producer -n 10 -m perf ./python_tests/<test>.py
   CHIP_ARCH=<arch> pytest --compile-consumer -n 15 -m perf ./python_tests/<test>.py
-  cp "$(find . -path '*/perf_data/<test>/<test>.csv' | head -1)" "$WORK/current_run_$i.csv"
+  cp "$(find . -path '*/perf_data/latest/<test>/<test>.csv' | head -1)" "$WORK/current_run_$i.csv"
 done
 ```
 Notes: do **not** pass `-x` (it aborts mid-sweep and the combined CSV is partial). The combine
-step writes `perf_data/<test>/<test>.csv`; the `cp` snapshots it before the next iteration
-overwrites it. If `speed_of_light` is on, add `--speed-of-light` to both pytest calls.
+step writes `perf_data/runs/<tag>/<test>/<test>.csv` and points `perf_data/latest` at it;
+the `cp` snapshots that run before the next iteration starts its own. If `speed_of_light` is on, add `--speed-of-light` to both pytest calls.
 
 **2. Run the same sweep N times on the BASELINE commit.**
 ```bash
