@@ -86,14 +86,16 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_blocks; i++) {
             cb_in0.reserve_back(num_tiles_per_row);
             uint32_t l1_write_addr = cb_in0.get_write_ptr();
-            // pad the tile by reading values from zero buffer in L1
-            fill_with_val<elem_size>(l1_write_addr, padded_X_size << 5, pad_value);  // "<< 5" = "* tile_height"
-            // [avgpool #50329 fix] fill_with_val is a RISC CPU store; on Quasar it lands in the DM core's
-            // private L1 D$/L2 and is NOT visible to the tilize UNPACK (which reads TL1) unless flushed.
-            // Flush the whole tile-row to TL1 before push_back so the pad is coherent (no-op on WH/BH).
+            if (pad_value == 0) {
+                noc.async_write_zeros(cb_in0, padded_X_size << 5);  // "<< 5" = "* tile_height"
+                noc.write_zeros_l1_barrier();
+            } else {
+                // pad the tile by reading values from zero buffer in L1
+                fill_with_val<elem_size>(l1_write_addr, padded_X_size << 5, pad_value);
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-            flush_l2_cache_range(l1_write_addr, padded_X_size << 5);
+                flush_l2_cache_range(l1_write_addr, padded_X_size << 5);
 #endif
+            }
             cb_in0.push_back(num_tiles_per_row);
         }
     };
@@ -102,7 +104,12 @@ void kernel_main() {
         uint32_t padding_rows = (tile_height - num_rows) & 31;
         bool has_rows = (num_rows + padding_rows) > 0;
 
+        // The pad value is the reduction's identity (0 for sum/mean, ±inf for max/min), so zero is
+        // the common case but not the only one -- keep the CPU-store path for the rest.
+        const bool zero_pad = (pad_value == 0);
+
         cb_in0.reserve_back(num_tiles_per_row * has_rows);
+
         uint32_t l1_write_addr = cb_in0.get_write_ptr();
         uint32_t dst_offset = 0;
         for (uint32_t k = 0; k < num_rows; k++) {
@@ -125,21 +132,43 @@ void kernel_main() {
                 {.page_id = base_page_id + k * num_pages_in_row + num_pages_in_row - 1, .offset_bytes = 0},
                 {.offset_bytes = dst_offset});
             uint32_t size_of_padding_columns = padded_X_size - unpadded_X_size;
-            fill_with_val<elem_size>(start_of_row_l1_write_addr + unpadded_X_size, size_of_padding_columns, pad_value);
+            if (zero_pad) {
+                // dst_offset still points at the last page's data (it is advanced below), so step over
+                // that page's payload to reach this row's padding -- the same bytes the CPU path writes
+                // as start_of_row_l1_write_addr + unpadded_X_size. Left in flight; the barrier after the
+                // loop drains every row's zeros at once.
+                noc.async_write_zeros(
+                    cb_in0,
+                    size_of_padding_columns,
+                    {.offset_bytes = dst_offset + size_of_valid_data_in_last_page_in_row});
+            } else {
+                fill_with_val<elem_size>(
+                    start_of_row_l1_write_addr + unpadded_X_size, size_of_padding_columns, pad_value);
+            }
             dst_offset += size_of_valid_data_in_last_page_in_row + size_of_padding_columns;
             l1_write_addr += size_of_valid_data_in_last_page_in_row + size_of_padding_columns;
         }
 
-        fill_with_val<elem_size>(l1_write_addr, padding_rows * padded_X_size, pad_value);
+        if (zero_pad) {
+            // Warning: padding_rows is 0 for every full 32-row block, so this commonly issues a
+            // zero-length iDMA transaction. Tolerated today; guard on padding_rows > 0 if that changes.
+            noc.async_write_zeros(cb_in0, padding_rows * padded_X_size, {.offset_bytes = dst_offset});
+            noc.write_zeros_l1_barrier();
+        } else {
+            fill_with_val<elem_size>(l1_write_addr, padding_rows * padded_X_size, pad_value);
+        }
         noc.async_read_barrier();
         // [avgpool #50329 fix] async_read_barrier fences only the NOC data-row reads. The column pad
-        // (above) and the row pad (just above) are RISC CPU stores (fill_with_val); on Quasar they linger
+        // and the row pad above are RISC CPU stores (fill_with_val); on Quasar they linger
         // in the DM core's private L1 D$/L2 and the tilize UNPACK reads STALE TL1 for the padding rows
         // (leftover block-0 data) -> wrong tilize output. Flush the whole tile-row block through to TL1
         // before push_back. NOC data rows are unaffected (already written directly to TL1 by the NOC
         // engine; flushing clean D$ lines is a no-op). No-op on WH/BH. Mirrors prepare_reduce_scaler.
+        //
+        // Skipped on the zero_pad path: the iDMA zero writes to TL1 directly, so there is nothing
+        // sitting in the DM core's cache to flush.
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-        if (has_rows) {
+        if (!zero_pad && has_rows) {
             flush_l2_cache_range(cb_in0.get_write_ptr(), padded_X_size << 5);
         }
 #endif
