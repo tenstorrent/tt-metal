@@ -1205,6 +1205,47 @@ So Stage B is *correct* -- PCC 0.999886, nine clean iterations, both target cost
 and, at present, not worth enabling. The remaining prize is Stage C: fold the append and the
 argmax into the traced graph, which is what removes the 5.06 ms rather than relocating it.
 
+### F29 — The two branches are indistinguishable on the path that actually runs
+
+`muse-glimmer-30b-dflash` is `muse-glimmer-30b` plus 32 commits, 0 behind. The question that
+matters for serving is whether those 32 commits cost anything, and the honest answer needed a
+measurement at the *current* tip: the earlier A/B (F17) was taken at `b20c1de1858`, ten commits
+back, so it predated the `PrefillRuntimeOffset` threading through `functional_decoder.py`,
+`fused_decoder.py`, `optimized_decoder.py` and `model.py`. Those parameters all default to
+`None`, but "defaults to None" is an argument, not a result.
+
+Both legs back to back in one sitting, ISL 67 / OSL 128, best of 3 trials, greedy, no
+speculation:
+
+| | muse-glimmer-30b (`0dd37ce6ee3`) | dflash tip (`6e58a884bef`) |
+|---|---|---|
+| best t/s/u | 42.895 | 42.975 |
+| median t/s/u | 42.879 | 42.920 |
+| ms/token | 23.313 | 23.269 |
+| best TTFT | 64.33 ms | 63.29 ms |
+| 128 output tokens | -- | **bit-identical** |
+
++0.19 % best, +0.10 % median, TTFT 1.04 ms *better* -- all inside the trial spread (pristine
+decode 2.9840-2.9852 s, dflash 2.9785-2.9823 s; pristine TTFT 64.3-67.3 ms, dflash 63.3-65.6).
+Read as: no measurable difference, in either direction. Bit-identical output over 128 tokens is
+the stronger half of the result -- the shared decoders were touched and did not move a single
+argmax.
+
+**Nothing in the serving path reaches DFlash.** `tt/generator.py` and `tt/generator_vllm.py`
+contain zero DFlash references; `dflash_runner` is imported only by three test harnesses. So
+the 1.21x is reachable by running `tests/dflash_device_e2e.py`, not by serving either branch.
+
+**The method matters more than the numbers here**, because the first attempt at this A/B
+silently measured the *same tree twice*. `git worktree add` with a relative path resolved
+against the shell's cwd (the model directory, not the worktree root), so the reference tree
+landed nested inside `models/autoports/meta_models_muse_glimmer_30b/`, while `PYTHONPATH`
+pointed at the un-nested path -- which did not exist. Resolution fell through to the venv's
+`ttnn-custom.pth`, i.e. the shared checkout, for *both* legs. The harness's `model code: <root>`
+line caught it before any number was recorded; without that line the run would have reported a
+clean "no difference" that was really one tree compared against itself. This is exactly the
+failure mode `run.sh` note (3) describes, met in the wild. Both legs are now checked with a
+`PYTHONPATH` resolution probe before any device time is spent.
+
 ## Artifacts
 
 | file | what |

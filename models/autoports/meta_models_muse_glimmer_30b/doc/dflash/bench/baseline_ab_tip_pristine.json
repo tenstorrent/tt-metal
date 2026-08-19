@@ -1,0 +1,39 @@
+{
+  "label": "pristine-0dd37ce6ee3",
+  "model_root": "/home/ttuser/dev/muse-glimmer/tt-metal/.claude/worktrees/pristine-ab/models/autoports/meta_models_muse_glimmer_30b",
+  "prompt_tokens": 67,
+  "max_new_tokens": 128,
+  "trial_seconds": [
+    3.4305876979778986,
+    2.9851653410005383,
+    2.984017903014319
+  ],
+  "best_seconds": 2.984017903014319,
+  "tokens_per_second": 42.895185002308544,
+  "ms_per_token": 23.312639867299367,
+  "ttft_seconds": [
+    0.06432577199302614,
+    0.06727567201596685,
+    0.06605927599593997
+  ],
+  "best_ttft_ms": 64.32577199302614,
+  "median_tokens_per_second": 42.878696949194186,
+  "first_tokens": [
+    328,
+    19669,
+    200023,
+    10064,
+    262,
+    13940,
+    1023,
+    511,
+    165339,
+    1472,
+    21721,
+    20230,
+    1574,
+    2991,
+    1657,
+    328
+  ]
+}
