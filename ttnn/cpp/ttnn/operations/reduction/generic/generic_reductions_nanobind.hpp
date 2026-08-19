@@ -31,7 +31,8 @@ inline std::string get_generic_reduction_doc(
                 * - INT32
                   - TILE)doc"
                                             : "";
-    // ttnn.mean and ttnn.max expose fast_and_approximate_mode.
+    // All four generic reductions (sum/mean/max/min) expose fast_and_approximate_mode. std/var do
+    // not: Welford already reduces on the SFPU at full fp32, so there is no FPU path to select.
     // ttnn.sum and ttnn.mean both expose output_layout.
     const char* output_layout_kwarg = has_output_layout ? R"doc(
             output_layout (ttnn.Layout, optional): layout of the output tensor. Defaults to `None`, which keeps the layout the chosen path produces naturally (see the Note below). `ttnn.TILE_LAYOUT` or `ttnn.ROW_MAJOR_LAYOUT` is always honored: it is produced directly by the kernel for a -2 reduce of a ROW_MAJOR input, and converted after reducing otherwise. `ttnn.ROW_MAJOR_LAYOUT` is rejected for block-float results (BFLOAT8_B, BFLOAT4_B), which only exist in TILE layout; typecast explicitly if a row-major result is needed.)doc"

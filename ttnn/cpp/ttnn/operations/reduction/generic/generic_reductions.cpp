@@ -181,6 +181,9 @@ static Tensor reduce_impl(
     bool single_reduce_op = (dim.empty()) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
                             (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
+        // Multi-axis reduces run one axis at a time. Every decomposition here is exact (a sum of
+        // partial sums, a max of maxes, a min of mins) and the intermediates stay fp32, so each
+        // sub-step carries the caller's fast_and_approximate_mode rather than being pinned.
         auto reduce_nd_loop = [&](const bool use_reduce_type, float scalar) -> Tensor {
             Tensor output_tensor = input_tensor_arg;
             bool first = true;

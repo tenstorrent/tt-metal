@@ -53,8 +53,7 @@ Tensor mean(
     float scalar = 1.0f,
     bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    // When false (default), fp32 mean reduces on the accurate SFPU path (full fp32); true selects the faster tf32 FPU
-    // path.
+    // When false (default), fp32 mean runs on the accurate SFPU path; true selects the faster tf32 FPU path.
     bool fast_and_approximate_mode = false,
     // See ttnn::sum above.
     const std::optional<Layout>& output_layout = std::nullopt);
@@ -68,7 +67,7 @@ Tensor max(
     float scalar = 1.0f,
     bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    // When false (default), fp32 max selects the accurate SFPU path; true selects the faster FPU path.
+    // When false (default), fp32 max runs on the accurate SFPU path; true selects the faster tf32 FPU path.
     bool fast_and_approximate_mode = false);
 
 Tensor min(
@@ -80,7 +79,7 @@ Tensor min(
     float scalar = 1.0f,
     bool correction = true,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    // When false (default), fp32 min selects the accurate SFPU path; true selects the faster FPU path.
+    // When false (default), fp32 min runs on the accurate SFPU path; true selects the faster tf32 FPU path.
     bool fast_and_approximate_mode = false);
 
 Tensor std(
