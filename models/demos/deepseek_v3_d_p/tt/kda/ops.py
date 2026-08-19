@@ -144,10 +144,9 @@ class _ChunkConstants:
     eye: ttnn.Tensor
     tril: ttnn.Tensor
     ones: ttnn.Tensor
-    masks: ttnn.Tensor
 
     def as_kernel_args(self) -> tuple[ttnn.Tensor, ...]:
-        return self.eye, self.tril, self.ones, self.masks
+        return self.eye, self.tril, self.ones
 
 
 @dataclass(frozen=True)
@@ -249,7 +248,7 @@ def _prepare_chunk_terms(
     program_config: KDARecurrenceProgramConfig,
     compute_config: _RecurrenceComputeConfig,
 ) -> _PreparedChunks:
-    eye_tile, tril_tile, ones_tile, mask_tiles = constants.as_kernel_args()
+    eye_tile, tril_tile, ones_tile = constants.as_kernel_args()
     outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
         inputs.q,
         inputs.k,
@@ -259,7 +258,6 @@ def _prepare_chunk_terms(
         eye_tile,
         tril_tile,
         ones_tile,
-        mask_tiles,
         geometry.heads,
         memory_config=program_config.preparation_memory_config,
         compute_kernel_config=compute_config.preparation,
@@ -571,7 +569,6 @@ def _assert_chunk_constants(constants: _ChunkConstants, chunk_size: int) -> None
         (constants.eye, (1, 1, chunk_size, chunk_size)),
         (constants.tril, (1, 1, chunk_size, chunk_size)),
         (constants.ones, (1, 1, chunk_size, chunk_size)),
-        (constants.masks, (1, 1, chunk_size, 3 * chunk_size)),
     )
     for tensor, expected_shape in expected_shapes:
         assert tuple(tensor.shape) == expected_shape
