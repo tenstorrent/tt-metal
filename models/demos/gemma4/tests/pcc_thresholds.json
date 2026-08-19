@@ -39,6 +39,9 @@
   },
   "gemma-4-12B-it": {
     "1x1": {
+      "_comment_wormhole_1x1": "12B had no wormhole_b0 gates at all - it was only ever calibrated on Blackhole, so WH runs fell through to the 0.99 default and failed. Measured on a real WH T3K opened as 1x1: decode_paged 0.989143, bounded-vs-unbounded parity 0.975997. Both clear the existing Blackhole gates for the same tests, so the WH entries mirror them (same #47311 reduce-precision gap, not a WH-specific regression).",
+      "test_attention_decode_paged[wormhole_b0-cache512-global-1x1]": 0.98,
+      "test_attention_decode_bounded_vs_unbounded_parity[wormhole_b0-cache1500-1x1]": 0.97,
       "test_attention_decode_paged[blackhole-cache512-global-1x1]": 0.98,
       "_comment_batched_decode": "Same #47311 reduce-precision gap as decode_paged; batched node name previously fell through to default 0.99.",
       "test_attention_decode_paged_batched[blackhole-cache512-batch1-global-1x1]": 0.989,

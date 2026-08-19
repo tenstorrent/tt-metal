@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import pytest
 
-from models.demos.gemma4.tt.generator_trace import normalize_gemma4_model_key, resolve_gemma4_demo_long_context
+from models.demos.gemma4.tt.generator_trace import (
+    get_gemma4_long_context_policy,
+    normalize_gemma4_model_key,
+    resolve_gemma4_demo_long_context,
+)
 
 # (mesh, hf_model, max_seq_len) → (bounded, prefill_chunk)
 _EXPECTED = [
@@ -52,6 +56,20 @@ _EXPECTED = [
     ("P150", "google/gemma-4-E4B-it", 262144, False, 4096),
     ("P150x8", "google/gemma-4-E4B-it", 262144, False, 4096),
     ("P150x4", "google/gemma-4-E2B-it", 262144, False, 4096),
+    # ── Wormhole, measured on a real T3K / N300 (12 GB per ASIC) ──────────
+    # 12B/T3K: bounded + chunk 2048 reaches the full HF 256k ISL.
+    ("T3K", "google/gemma-4-12B-it", 8192, False, 2048),
+    ("T3K", "google/gemma-4-12B-it", 16384, True, 2048),
+    ("T3K", "google/gemma-4-12B-it", 131072, True, 2048),
+    ("T3K", "google/gemma-4-12B-it", 262144, True, 2048),
+    # 12B/N300 (24 GB, the only variant that fits one WH card): 128k ceiling.
+    ("N300", "google/gemma-4-12B-it", 8192, False, 2048),
+    ("N300", "google/gemma-4-12B-it", 16384, True, 2048),
+    ("N300", "google/gemma-4-12B-it", 131072, True, 2048),
+    # 26B-A4B/T3K: functional to 128k (MoE prefill slow; serve 32k).
+    ("T3K", "google/gemma-4-26B-A4B-it", 8192, False, 2048),
+    ("T3K", "google/gemma-4-26B-A4B-it", 32768, True, 2048),
+    ("T3K", "google/gemma-4-26B-A4B-it", 131072, True, 2048),
 ]
 
 
@@ -109,3 +127,45 @@ def test_mesh_device_alias_p300x2(monkeypatch):
 )
 def test_normalize_gemma4_model_key_snapshot_paths(path, key):
     assert normalize_gemma4_model_key(path) == key
+
+
+@pytest.mark.parametrize("mesh", ["N300", "T3K", "N150", "N150x4"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "google/gemma-4-12B-it",
+        "google/gemma-4-26B-A4B-it",
+        "google/gemma-4-31B-it",
+        "google/gemma-4-E2B-it",
+        "google/gemma-4-E4B-it",
+    ],
+)
+def test_wormhole_never_inherits_blackhole_policy(mesh, model, monkeypatch):
+    """A WH board must never resolve to a Blackhole (QB2 / P150x*) entry.
+
+    Regression for the silent cross-arch fallback: every (model, device) combo
+    missing from the table used to fall back to the QB2 entry, handing a 24 GB
+    N300 / 96 GB T3K Blackhole's 128 GB headroom ("unbounded KV through 128k")
+    and OOMing on KV allocation. Wormhole must bound early and keep chunk 2048.
+    """
+    monkeypatch.delenv("GEMMA4_BOUNDED_SLIDING", raising=False)
+    monkeypatch.delenv("GEMMA4_GEN_PREFILL_CHUNK", raising=False)
+    monkeypatch.delenv("GEMMA4_DEMO_SINGLE_CHUNK", raising=False)
+    monkeypatch.setenv("MESH_DEVICE", mesh)
+
+    policy = get_gemma4_long_context_policy(None, model)
+    assert "device_fallback" not in policy["source"], (
+        f"{mesh}/{model} fell back to the Blackhole QB2 entry (source={policy['source']}); "
+        "WH has 12 GB per ASIC and cannot inherit Blackhole DRAM headroom."
+    )
+    # Blackhole entries all sit at >= 32k unbounded and chunk 4096; WH must not.
+    assert policy["unbounded_isl_max"] <= 16384, f"{mesh}/{model}: {policy}"
+    assert policy["prefill_chunk"] == 2048, f"{mesh}/{model}: {policy}"
+
+
+def test_blackhole_qb2_fallback_still_applies(monkeypatch):
+    """The QB2 fallback must stay intact for Blackhole boards (no regression)."""
+    monkeypatch.setenv("MESH_DEVICE", "P150")
+    policy = get_gemma4_long_context_policy(None, "google/gemma-4-31B-it")
+    assert policy["source"].endswith("_device_fallback")
+    assert policy["prefill_chunk"] == 4096
