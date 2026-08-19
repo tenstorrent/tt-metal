@@ -1364,21 +1364,24 @@ class TestBatchIsolation:
         unexpected = [tok for tok in all_tokens if tok not in set(hot_tokens)]
         assert not unexpected, f"Sampled tokens outside expected hot set: {unexpected}"
 
-    @pytest.mark.xfail(
-        reason="Per-lane seed behaviour under investigation (#38316). One request seed shared by "
-        "every lane hashes to ONE device seed (generator.py _hash_request_seed_to_device_seed mixes "
-        "no slot index), and manual_seed's compute kernel calls rand_tile_init(seed) per core with "
-        "no lane salt, so identical seeds must give an identical token -- provided manual_seed and "
-        "ttnn.sampling agree on the lane->core mapping. The harness now pins that by setting "
-        "sub_core_grids (see default_sub_core_grids), which is the suspected fix: if this XPASSes, "
-        "the mapping was the cause, #50685 is exonerated and this marker must be deleted. If it "
-        "still fails, the defect is real and needs its own issue.",
-        strict=True,
-    )
-    def test_same_prompt_uniform_seed_agrees(self, mesh_device, device_params):
-        """One seed shared across all lanes, identical logits => one identical token."""
+    def test_uniform_seed_diverges_across_lanes(self, mesh_device, device_params):
+        """One request seed shared by every lane must still give each lane its own draw.
+
+        This asserts the SEED SALT, not agreement. SeedManager._set_slot_seed assigns
+        seed_salts[slot] = _next_free_salt(slot, seed): the first slot holding a given seed
+        gets salt 0 and each later duplicate gets the next free value, and the salt is mixed
+        into _hash_request_seed_to_device_seed. Without it, n>1 completions of one prompt at
+        a fixed seed came out byte-identical (#53077). So a uniform seed vector is exactly the
+        case the salt exists to separate, and identical tokens across lanes would mean the
+        salt is not being applied.
+
+        A request whose seed is unique among live slots always lands on salt 0, so
+        single-seeded reproducibility (test_specific_seed_reproducible,
+        test_seeded_replay_is_deterministic) is unaffected.
+        """
         args = make_sampling_args(mesh_device)
         hot_tokens = [2500, 2501, 2502, 2503, 2504, 2505, 2506, 2507]
+        hot_token_set = set(hot_tokens)
         logits = build_hot_logits(args, hot_tokens=hot_tokens)
         stochastic_params = SamplingParams(
             temperature=[1.5] * BATCH_SIZE,
@@ -1395,9 +1398,30 @@ class TestBatchIsolation:
             advance_seeds=True,
             seed_values=uniform_seed,
         )[0]
-        assert (
-            len(set(out_uniform)) == 1
-        ), f"All users with same prompt and same seed should sample the same token, got {out_uniform}"
+
+        assert len(set(out_uniform)) > 1, (
+            "Every lane sharing seed 7777 produced the same token, so the per-slot seed salt "
+            f"is not reaching the device: {out_uniform}. This is the #53077 failure mode."
+        )
+        assert_tokens_in_vocab(out_uniform, args.vocab_size)
+        unexpected = [tok for tok in out_uniform if tok not in hot_token_set]
+        assert not unexpected, f"Sampled tokens outside expected hot set: {unexpected}"
+
+        # Replay must still be exact: the salt is derived from the live slot layout, which is
+        # identical for a fresh generator given the same seed vector.
+        out_again = run_sampling_generator(
+            mesh_device,
+            args,
+            logits,
+            stochastic_params,
+            num_steps=1,
+            advance_seeds=True,
+            seed_values=uniform_seed,
+        )[0]
+        assert out_uniform == out_again, (
+            "Salted per-slot seeds must still replay exactly for the same seed vector. "
+            f"first={out_uniform}, second={out_again}"
+        )
 
     def _state_setup(self, sg):
         seen = torch.full((BATCH_SIZE, 1), 2000, dtype=torch.int64)
