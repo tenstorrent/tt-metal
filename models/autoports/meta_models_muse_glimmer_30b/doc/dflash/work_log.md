@@ -1011,6 +1011,50 @@ was a 4.6x difference in acceptance. And an invalid gate is worse than no gate: 
 equality kept a 1.21x path switched off for a day, while the metric that mattered
 (acceptance) was pointing the other way the whole time.
 
+### F26 — Attention weight precision does not move acceptance at all
+
+The hypothesis was the most attractive one available: acceptance multiplies every
+per-iteration DFlash cost, the shipped config is BFP4 on attention where the reference keeps
+BFP8, and the sweep's own `c00-baseline-attn8-mlp4-kv8-lofi` measured that swap at 0.5 % of
+baseline decode with identical top-1. If the target's argmax were even slightly sharper, every
+term would shrink at once.
+
+It is refuted. Same prompt, OSL 256, built through `--precision-config` with only
+`attn_projections` moved BFP4 -> BFP8:
+
+| | BFP4 attention (shipped) | BFP8 attention |
+|---|---|---|
+| accepted per verify | 3.765 | **3.765** |
+| mean matches | 2.806 | **2.806** |
+| iterations | 67 | **67** |
+| target forwards | 68 | **68** |
+| DFlash t/s/u | 51.815 | 52.197 |
+| baseline t/s/u | 42.79 | 42.60 |
+
+Not "within noise" — **identical**, to three decimals, with the same iteration count and the
+same number of target forwards. The accept/reject decision came out the same at every
+position in the run. Attention weight precision does not perturb this target's argmax on any
+token that a draft was contending. The apparent speedup improvement (1.211x -> 1.225x) is the
+*baseline* getting 0.4 % slower, exactly as the sweep predicted; DFlash itself did not move.
+
+**It also undermines the reasoning that motivated it, which is worth more than the
+experiment.** F15's three datapoints were read as "the device target's argmax caps
+acceptance": CPU target + CPU drafter 5.33 accepted/forward (F1), device target + HF drafter
+2.57, device target + device drafter 2.50. But **F1's 5.33 was measured over 48 tokens**, and
+F7 — written later — establishes that acceptance spans 2.82-4.00 across mathematically
+equivalent configurations over 11 blocks and that drafting must not be ranked on a 48-token
+run. The 5.33-vs-2.50 gap is therefore not safely attributable to port fidelity at all; a
+large part of it may be the length of the CPU measurement. Until someone re-runs the CPU
+oracle at >= 128 tokens there is no evidence of a fidelity-driven acceptance ceiling.
+
+The candidate and the `--precision-config` flag are kept as the instrument, not deleted: the
+next precision question (BF16 KV, or the LM head at BFP8 *with* a legal matmul geometry --
+`precision_config.py` warns the shipped 52-core/`in0_block_w=2` head geometry overflows L1 at
+BFP8) is one file and one flag away, and this run is the control it would be graded against.
+
+**Do not retry attention dtype for acceptance.** The remaining levers on DFlash are
+structural, not numeric.
+
 ## Artifacts
 
 | file | what |
