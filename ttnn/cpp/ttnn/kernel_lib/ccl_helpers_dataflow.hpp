@@ -272,6 +272,9 @@ public:
     /// the mux to terminate; non-masters inc the master's sync semaphore). No-op if not valid.
     FORCE_INLINE void close();
     FORCE_INLINE SenderT* sender();
+    /// Whether this worker has a mux link at all — the op-side gate for skipping work entirely
+    /// (e.g. strided reduce-scatter's writer does NOTHING, not even CB consumption, without one).
+    FORCE_INLINE bool valid() const;
 
 private:
     SenderT mux_;

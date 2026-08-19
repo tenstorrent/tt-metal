@@ -1270,7 +1270,7 @@ void dz_ring_writer_golden(const DzCfg& g, std::vector<DzEv>& out) {
 // ----------------------- dim-zero RING: candidates (kernel-shaped) --------------------------
 void dz_ring_reader_candidate(const DzCfg& g, std::vector<DzEv>& out) {
     out.clear();
-    auto cursor = sched::RingSliceCursor::starting_at(sched::dim_zero_ring_first_slice(g.chip, g.dir), g.ring, g.dir);
+    auto cursor = sched::RingSliceCursor::starting_at(sched::ring_neighbour_first_slice(g.chip, g.dir), g.ring, g.dir);
     sched::DimZeroChunkWalk walk(g.sliceB, g.gran, g.start, g.end, g.dir);
     sched::SyncCadence cadence(g.cps);
     uint32_t sem_target = 0;
@@ -1314,7 +1314,7 @@ void dz_ring_reader_candidate(const DzCfg& g, std::vector<DzEv>& out) {
 
 void dz_ring_writer_candidate(const DzCfg& g, std::vector<DzEv>& out) {
     out.clear();
-    auto cursor = sched::RingSliceCursor::starting_at(sched::dim_zero_ring_first_slice(g.chip, g.dir), g.ring, g.dir);
+    auto cursor = sched::RingSliceCursor::starting_at(sched::ring_neighbour_first_slice(g.chip, g.dir), g.ring, g.dir);
     sched::DimZeroChunkWalk walk(g.sliceB, g.gran, g.start, g.end, g.dir);
     sched::SyncCadence cadence(g.cps);
 
