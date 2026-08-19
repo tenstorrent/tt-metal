@@ -100,6 +100,48 @@ Sweep-hardening round 2 (adversarial review, 2026-08-16):
     --compiler, and the harness-resolved cc1plus is re-verified against the
     pin at every phase entry.
 
+Batched silicon execution (laneBU, weekly-20260820 forensics):
+  684 silicon legs took 517 min = ~45 s wall per leg while each pytest test
+  completes in ~1.4 s — >95% of device wall time was per-leg session
+  overhead (fresh interpreter + conftest + device open/close per leg, one
+  compile invocation per leg, all x3 by PERF_RUNS).  The batched executor
+  (default; --serial-legacy reverts) preserves the §1 protocol exactly and
+  removes the per-leg spin-up:
+  * legs group by (flag-set, extra_env) — arch is constant (BH) for the
+    silicon phase; ONE compile-producer pass per group into a shared
+    RUNNER_TEMP (seeded from a verified corpus_leg_store build when the
+    exact toolchain/flag-set/tree/farm matches — reuse is an optimization,
+    never a trust decision);
+  * ONE consumer pytest session (--compile-consumer, prebuilt tree, fresh
+    process) per (group, repetition r1/r2/r3, CSV-partition) runs its legs'
+    nodes inside a single dual-flock acquisition and device session — the 3
+    fresh processes per repetition are preserved (determinism requirement);
+    OFF/ON alternate at session granularity inside each repetition;
+  * correctness-then-perf is preserved: each group's correctness nodes run
+    in their own session BEFORE any perf session, and a row whose
+    correctness leg fails has every perf leg withheld (exactly the legacy
+    STOP semantics);
+  * per-leg evidence layout is unchanged: each op still gets its
+    silicon/<sel>/<label>-<leg>/ dir with node.txt, flags.txt, jobkey.json,
+    log.txt, rc.txt, perf CSVs and TEXT_HASHES.txt — the consumer session's
+    outputs are split back per leg (per-node outcomes from the checked-in
+    corpus pytest reporter; per-leg .text manifests are the group build
+    subset at the leg's classify relpaths, so the classify-vs-device
+    hash-match gate keeps its exact strength);
+  * perf-CSV integrity: the harness's perf report is per test MODULE, so
+    two legs may share a session only if their rows in the combined module
+    CSV are separable — same-module legs need distinct mathop tokens (rows
+    split by the mathop column); a leg without a token must be its module's
+    only leg in that session (whole-module CSV copy).  partition_perf_legs
+    encodes this and is selftest-covered.
+  PRE-REGISTERED SPEEDUP (weekly-20260820 shape, 759 main-phase legs):
+    legacy wall ≈ 759 x 45 s ≈ 570 min.  Batched sessions ≈ per group
+    (2 main groups + ~6 pinpair/extra_env groups): 1 producer (no device)
+    + 1 corr session + 3 reps x ~4-13 CSV partitions ≈ 90-120 device
+    sessions; wall ≈ sessions x ~45 s + legs x ~1.4 s ≈ 85-110 min, i.e.
+    a >=5x reduction of the silicon phase with identical evidence.  Knob
+    silicon legs (weekly, 200 legs) stay on the serial path this increment.
+
 Typical one-command full sweep:
   python3 tt_metal/tt-llk/tests/corpus/sweep_2x2.py \
     --evidence-root ~/sfpi-uplift/sweep-2x2/evidence-$(date +%Y%m%d) \
@@ -433,7 +475,52 @@ def cell_selector(r, cell):
     return f"{r['op']}:{cell}"
 
 
+def partition_perf_legs(specs):
+    """Bin-pack perf leg SPECS into consumer sessions with splittable CSVs.
+
+    The harness's perf report is per test MODULE (module-scoped fixture,
+    one combined CSV per module per session), and the CSV rows carry the
+    test parameters but NOT the test id — the only reliable row-level
+    discriminator between two ops of the same module is the `mathop`
+    column.  A session is therefore CSV-splittable iff, per test file,
+    EITHER it holds exactly one leg of that file (whole-module CSV copy)
+    OR every leg of that file carries a distinct `mathop:` token in its
+    node id (row filter by the mathop column).  Same-file legs that differ
+    only in an axis invisible to the CSV (e.g. fresh_cpp_impl sem vs hand)
+    must never share a session — the combiner would collapse their rows.
+
+    specs: dicts with keys file, mathop (token or None), op, sel, leg.
+    Deterministic (sorted greedy first-fit); selftest-covered."""
+    bins = []
+    for spec in sorted(
+        specs,
+        key=lambda s: (s["file"], s["mathop"] or "", s["op"], s["sel"], s["leg"]),
+    ):
+        placed = False
+        for b in bins:
+            same = [x for x in b if x["file"] == spec["file"]]
+            if not same:
+                b.append(spec)
+                placed = True
+                break
+            if (
+                spec["mathop"]
+                and all(x["mathop"] for x in same)
+                and spec["mathop"] not in {x["mathop"] for x in same}
+            ):
+                b.append(spec)
+                placed = True
+                break
+        if not placed:
+            bins.append([spec])
+    return bins
+
+
 class Sweep:
+    # Class default keeps object.__new__-driven selftests (which bypass
+    # __init__) on the legacy serial path; __init__ sets the real mode.
+    exec_mode = "serial"
+
     def __init__(self, args):
         self.a = args
         self.ev = args.evidence_root.resolve()
@@ -455,6 +542,19 @@ class Sweep:
         # --schedule at all) runs EVERY row — the weekly sweep is the full
         # set, the nightly is the budgeted subset.  --ops overrides the
         # filter (an explicit op list is an explicit intent).
+        # Batched silicon executor is the default (laneBU: ~45s/leg session
+        # overhead vs ~1.4s test time); --serial-legacy is the logged escape
+        # back to one pytest session per leg.
+        self.exec_mode = (
+            "serial" if getattr(args, "serial_legacy", False) else "batched"
+        )
+        if self.exec_mode == "serial":
+            print(
+                "sweep: --serial-legacy — batched silicon DISABLED; every "
+                "device leg pays its own pytest session (the pre-batching "
+                "~45s/leg overhead); cells are keyed mode=serial and never "
+                "mix with batched cells"
+            )
         self.deferred = []
         if getattr(args, "schedule", None) == "nightly" and not args.ops:
             self.deferred = [r for r in self.rows if r["schedule"] != "nightly"]
@@ -1138,12 +1238,17 @@ class Sweep:
         # The full identity a cached cell must match before reuse: kernel
         # .text alone cannot see test parameters (node id: input ranges,
         # tolerances), flags, or extra_env (adversarial finding
-        # sweep_2x2.py:572).
+        # sweep_2x2.py:572).  `mode` keys the execution context: batched
+        # cells (co-scheduled consumer session) and serial cells (solo
+        # session) are never mixed inside one row's samples — a mode switch
+        # re-measures instead of silently blending two measurement contexts.
+        batched = self.exec_mode == "batched" and tag == "silicon"
         jobkey = {
             "node": node,
             "flags": flags,
             "extra_env": row_env(row, sel),
             "tag": tag,
+            "mode": "batched" if batched else "serial",
         }
         # Resume skips only GREEN jobs whose (node, flags, extra_env) jobkey
         # matches AND whose archived .text hash set equals what THIS run's
@@ -1186,6 +1291,16 @@ class Sweep:
                         f"resume: {row['op']}/{sel} {label}-{leg} .text hashes "
                         "changed — re-measuring"
                     )
+        # Batched mode (non-dry): this method never executes a device job —
+        # the batched executor already produced the per-leg evidence, and
+        # this call is the ASSEMBLY pass reporting on it (the legacy resume
+        # fast-path above already returned for green, keyed, hash-matched
+        # cells).  Executing serially here would silently mix a solo
+        # measurement into a batched sample set.
+        if batched and not self.a.dry_run:
+            return self._batched_leg_verdict(
+                row, sel, label, leg, work, jobkey, expected_texts
+            )
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True)
         rt = work / "rt"
@@ -1339,6 +1454,644 @@ exit $RC
                 f"issue-slot lower bound {lb:g} cycles/tile "
                 f"({row['marker']} reading valid for this macro-launch shape)"
             )
+
+    # ---------------- batched silicon executor (laneBU) ----------------
+    # See the module docstring "Batched silicon execution" for the protocol
+    # mapping and the pre-registered speedup arithmetic.  The executor runs
+    # BEFORE the per-row assembly pass; assembly (silicon()/_device_job) then
+    # consumes the per-leg evidence through the keyed hash-matched resume
+    # path, so every cell/ratio/STOP decision is computed by the exact
+    # legacy code.
+
+    @staticmethod
+    def _node_file(node):
+        return node.split("::", 1)[0]
+
+    @staticmethod
+    def _node_mathop(node):
+        """The node id's mathop token (the only CSV-visible row
+        discriminator between two ops of one perf module), or None."""
+        m = re.search(r"[\[-]mathop:([A-Za-z0-9_]+)", node)
+        return m.group(1) if m else None
+
+    def _classify_entries(self, row, sel, leg, tag="classify"):
+        """(relpath, text_sha, elf_sha) triples from the classify hash file
+        — the node->ELF map a batched leg's TEXT_HASHES subset uses."""
+        path = self.ev / row["op"] / tag / sel / f"hashes-{leg}.txt"
+        if not path.is_file():
+            return None
+        out = []
+        for line in path.read_text().splitlines():
+            parts = line.split("\t")
+            if len(parts) == 3 and parts[1].startswith("text:"):
+                out.append((parts[0], parts[1][5:], parts[2][4:]))
+        return out
+
+    def _mk_job(self, row, sel, label, leg, flags, kind):
+        node = row["nodes"][sel]
+        return {
+            "row": row,
+            "op": row["op"],
+            "sel": sel,
+            "label": label,
+            "leg": leg,
+            "flags": flags,
+            "kind": kind,
+            "node": node,
+            "extra_env": row_env(row, sel),
+            "file": self._node_file(node),
+            "mathop": self._node_mathop(node),
+            "rep": 0 if kind == "corr" else int(label[1:]),
+            "work": self.ev / row["op"] / "silicon" / sel / f"{label}-{leg}",
+        }
+
+    def _silicon_jobs(self, row, cls):
+        """Enumerate the row's device legs exactly as silicon()/
+        silicon_pinpair() would execute them (byte-identity leg folding,
+        sem-perf refusals, COMPILE_FAIL blocks all mirrored)."""
+        jobs = []
+        if row["kind"] == "pinpair":
+            flags = row["pin_flags"]
+            for sel in ("sem-corr", "hand-corr"):
+                if row["nodes"][sel]:
+                    jobs.append(
+                        self._mk_job(row, sel, "corr", "default", flags, "corr")
+                    )
+            for r in range(1, PERF_RUNS + 1):
+                for sel in ("sem-perf", "hand-perf"):
+                    if row["nodes"][sel]:
+                        jobs.append(
+                            self._mk_job(row, sel, f"r{r}", "default", flags, "perf")
+                        )
+            return jobs
+        for sel in ("sem-corr", "hand-corr"):
+            if not row["nodes"][sel]:
+                continue
+            c = cls.get(sel, {})
+            legs = ["off"] if c.get("all") == "IDENTICAL" else ["off", "on"]
+            for leg in legs:
+                jobs.append(
+                    self._mk_job(
+                        row,
+                        sel,
+                        "corr",
+                        leg,
+                        OFF_FLAGS if leg == "off" else ON_FLAGS,
+                        "corr",
+                    )
+                )
+        for sel in ("sem-perf", "hand-perf"):
+            if not row["nodes"][sel]:
+                continue
+            c = cls.get(sel, {})
+            if c.get("status") == "COMPILE_FAIL":
+                continue
+            identical = c.get("all") == "IDENTICAL"
+            if identical and sel == "sem-perf":
+                continue  # recorded refusal: zero device jobs
+            legs = ["off"] if identical else ["off", "on"]
+            for r in range(1, PERF_RUNS + 1):
+                for leg in legs:
+                    jobs.append(
+                        self._mk_job(
+                            row,
+                            sel,
+                            f"r{r}",
+                            leg,
+                            OFF_FLAGS if leg == "off" else ON_FLAGS,
+                            "perf",
+                        )
+                    )
+        return jobs
+
+    def _job_key(self, job):
+        return {
+            "node": job["node"],
+            "flags": job["flags"],
+            "extra_env": job["extra_env"],
+            "tag": "silicon",
+            "mode": "batched",
+        }
+
+    def _job_cached(self, job):
+        """Quiet twin of _device_job's keyed hash-matched resume check."""
+        if self.a.force:
+            return False
+        work = job["work"]
+        if not (work / "rc.txt").is_file():
+            return False
+        try:
+            rc = int((work / "rc.txt").read_text().strip() or 99)
+        except ValueError:
+            return False
+        if rc != 0 or not self._passed(work / "log.txt"):
+            return False
+        try:
+            cached_key = json.loads((work / "jobkey.json").read_text())
+        except (ValueError, OSError):
+            return False
+        if cached_key != self._job_key(job):
+            return False
+        exp = self._classify_texts(job["row"], job["sel"], job["leg"])
+        if exp is None or not (work / "TEXT_HASHES.txt").is_file():
+            return False
+        return self._texts_of(work / "TEXT_HASHES.txt") == exp
+
+    def _batched_leg_verdict(self, row, sel, label, leg, work, jobkey, expected_texts):
+        """Assembly-side verdict on evidence the batched executor produced
+        (never executes; mirrors the legacy post-run RED semantics)."""
+        rcf = work / "rc.txt"
+        if not rcf.is_file():
+            self.reds.append(
+                f"{row['op']}/{sel} {label}-{leg}: batched executor produced "
+                "no evidence for this leg (session failed before it ran, or "
+                "executor/assembly leg enumeration diverged)"
+            )
+            return 99
+        try:
+            rc = int(rcf.read_text().strip() or 99)
+        except ValueError:
+            rc = 99
+        if rc != 0 or not self._passed(work / "log.txt"):
+            self.reds.append(
+                f"{row['op']}/{sel} {label}-{leg}: device job FAIL rc={rc}"
+            )
+            return rc or 99
+        try:
+            cached_key = json.loads((work / "jobkey.json").read_text())
+        except (ValueError, OSError):
+            cached_key = None
+        if cached_key != jobkey:
+            self.reds.append(
+                f"{row['op']}/{sel} {label}-{leg}: batched evidence jobkey "
+                "mismatch (executor/assembly skew) — cell not trusted"
+            )
+            return 99
+        archived = (
+            self._texts_of(work / "TEXT_HASHES.txt")
+            if (work / "TEXT_HASHES.txt").is_file()
+            else None
+        )
+        if expected_texts is not None and archived != expected_texts:
+            self.reds.append(
+                f"{row['op']}/{sel} {label}-{leg}: device job .text differs "
+                "from this run's classify build (non-deterministic build?)"
+            )
+        return rc
+
+    def _write_failed_leg(self, job, rc, msg):
+        """Executor-side failure evidence for a leg that never ran (group
+        producer failure, unmappable ELFs).  No 'passed' text: assembly
+        raises the RED through the legacy path."""
+        work = job["work"]
+        shutil.rmtree(work, ignore_errors=True)
+        work.mkdir(parents=True)
+        (work / "node.txt").write_text(job["node"] + "\n")
+        (work / "flags.txt").write_text(job["flags"] + "\n")
+        (work / "jobkey.json").write_text(
+            json.dumps(self._job_key(job), indent=2) + "\n"
+        )
+        (work / "log.txt").write_text(f"batched leg NOT RUN: {msg}\n")
+        (work / "rc.txt").write_text(f"{rc}\n")
+
+    def _xdist_available(self):
+        if not hasattr(self, "_xdist_ok"):
+            self._xdist_ok = (
+                subprocess.run(
+                    [str(self.python), "-c", "import xdist"], capture_output=True
+                ).returncode
+                == 0
+            )
+        return self._xdist_ok
+
+    def _group_build(self, gdir, flags, extra_env, jobs):
+        """ONE compile pass for a group's distinct nodes into a shared
+        RUNNER_TEMP.  Seeded from a verified corpus_leg_store build when the
+        exact (cc1plus, arch, flags, tt-metal head, farm path) matches and
+        it covers every leg's classify relpaths; otherwise one
+        --compile-producer session (parallel when xdist is available).
+        Returns {'rt', 'manifest'} or None on compile failure."""
+        rt = gdir / "rt"
+        nodes = sorted({j["node"] for j in jobs})
+        needed = set()
+        for j in jobs:
+            entries = self._classify_entries(j["row"], j["sel"], j["leg"])
+            if entries:
+                needed.update(rel for rel, _, _ in entries)
+        seeded = False
+        try:
+            import importlib.util as _ilu
+
+            spec = _ilu.spec_from_file_location(
+                "corpus_leg_store", HERE / "corpus_leg_store.py"
+            )
+            store = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(store)
+            build = store.find_build(
+                store.DEFAULT_STORE,
+                self.info["cc1plus_sha256"],
+                "bh",
+                flags,
+                self.info["tt_metal_head"],
+                str(ROOT.resolve()),
+            )
+            if build and needed and all((build / rel).is_file() for rel in needed):
+                shutil.rmtree(rt, ignore_errors=True)
+                rt.mkdir(parents=True)
+                rc = subprocess.run(
+                    ["cp", "-al", str(build), str(rt / "tt-llk-build")],
+                    capture_output=True,
+                ).returncode
+                seeded = rc == 0
+                if seeded:
+                    print(
+                        f"batched: group build seeded from store {build} "
+                        f"({len(needed)} ELFs verified present)"
+                    )
+        except Exception as exc:  # seeding is opportunistic, never load-bearing
+            print(f"batched: store seeding unavailable ({exc}); compiling")
+        if not seeded:
+            shutil.rmtree(rt, ignore_errors=True)
+            rt.mkdir(parents=True)
+            cmd = [str(self.python), "-m", "pytest", "-q", "--compile-producer"]
+            if self._xdist_available():
+                cmd += ["-n", "8"]
+            cmd += nodes
+            log = gdir / "producer.log"
+            with open(log, "w") as f:
+                rc = subprocess.run(
+                    cmd,
+                    cwd=PYDIR,
+                    env=self._env("bh", rt, flags, extra=dict(extra_env)),
+                    stdout=f,
+                    stderr=subprocess.STDOUT,
+                    timeout=900 + 90 * len(nodes),
+                ).returncode
+            if rc != 0:
+                return None
+        entries = self._hash_build(rt, gdir / "TEXT_HASHES-group.txt")
+        return {
+            "rt": rt,
+            "manifest": {rel: (t, e) for rel, t, e in entries},
+            "seeded": seeded,
+        }
+
+    def _archive_group_subset(self, rt, rels, dest):
+        """Per-leg ELF archive: the leg's classify relpaths (plus their
+        variant dirs' build.h) copied out of the shared group build."""
+        build = rt / "tt-llk-build"
+        seen_vdirs = set()
+        for rel in rels:
+            src = build / rel
+            if not src.is_file():
+                continue
+            out = dest / rel
+            out.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, out)
+            vdir = src.parent.parent
+            if vdir in seen_vdirs:
+                continue
+            seen_vdirs.add(vdir)
+            for bh in vdir.rglob("build.h"):
+                bout = dest / bh.relative_to(build)
+                bout.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(bh, bout)
+
+    @staticmethod
+    def _filter_perf_csv(src, dst, mathop):
+        """Write dst with only the rows whose mathop column names this
+        leg's op (token match on the enum suffix).  A CSV without a mathop
+        column cannot be split: returns False (caller records the leg
+        failure) — never guesses row ownership."""
+        with src.open() as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames or "mathop" not in reader.fieldnames:
+                return False
+            rows = [
+                r for r in reader if (r.get("mathop") or "").split(".")[-1] == mathop
+            ]
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        with dst.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=reader.fieldnames)
+            w.writeheader()
+            w.writerows(rows)
+        return True
+
+    def _split_batch_session(self, sdir, jobs, session_rc, gctx):
+        """Split one consumer session's outputs back into the per-leg
+        evidence layout (unchanged vs legacy: node.txt, flags.txt,
+        jobkey.json, log.txt, rc.txt, TEXT_HASHES.txt, elf/, perf CSVs)."""
+        reports = {}
+        rj = sdir / "report.json"
+        if rj.is_file():
+            try:
+                reports = json.loads(rj.read_text()).get("reports", {})
+            except ValueError:
+                reports = {}
+        file_count = {}
+        for j in jobs:
+            file_count[j["file"]] = file_count.get(j["file"], 0) + 1
+        for job in jobs:
+            work = job["work"]
+            shutil.rmtree(work, ignore_errors=True)
+            work.mkdir(parents=True)
+            (work / "node.txt").write_text(job["node"] + "\n")
+            (work / "flags.txt").write_text(job["flags"] + "\n")
+            (work / "jobkey.json").write_text(
+                json.dumps(self._job_key(job), indent=2) + "\n"
+            )
+            (work / "session.txt").write_text(str(sdir) + "\n")
+            phases = reports.get(job["node"]) or {}
+            passed = (
+                bool(phases)
+                and "call" in phases
+                and all(p.get("outcome") == "passed" for p in phases.values())
+            )
+            rc = 0 if passed else (1 if phases else 98)
+            notes = []
+            entries = self._classify_entries(job["row"], job["sel"], job["leg"])
+            if entries is None:
+                rc = rc or 97
+                notes.append(
+                    "classify hash file missing — cannot map this node's "
+                    "ELFs out of the group build"
+                )
+            else:
+                lines, missing = [], []
+                for rel, _t, _e in entries:
+                    got = gctx["manifest"].get(rel)
+                    if got is None:
+                        missing.append(rel)
+                    else:
+                        lines.append(f"{rel}\ttext:{got[0]}\telf:{got[1]}")
+                (work / "TEXT_HASHES.txt").write_text(
+                    "\n".join(lines) + ("\n" if lines else "")
+                )
+                if missing:
+                    rc = rc or 97
+                    notes.append(
+                        f"group build lacks {len(missing)} of this leg's "
+                        f"classify ELFs (first: {missing[0]})"
+                    )
+                self._archive_group_subset(
+                    gctx["rt"], [rel for rel, _, _ in entries], work / "elf"
+                )
+            if job["kind"] == "perf":
+                base = pathlib.Path(job["file"]).stem
+                src = sdir / "perf_data" / base
+                solo = file_count[job["file"]] == 1
+                if src.is_dir():
+                    if solo:
+                        shutil.copytree(src, work / "perf_data" / base)
+                        raw = sdir / "raw_perf_data"
+                        if raw.is_dir():
+                            (work / "raw_perf_data").mkdir(exist_ok=True)
+                            for f in sorted(raw.glob(f"{base}.*")):
+                                shutil.copy2(f, work / "raw_perf_data" / f.name)
+                    else:
+                        ok_all = True
+                        for f in sorted(src.glob("*.csv")):
+                            ok_all &= self._filter_perf_csv(
+                                f, work / "perf_data" / base / f.name, job["mathop"]
+                            )
+                        raw = sdir / "raw_perf_data"
+                        if raw.is_dir():
+                            for f in sorted(raw.glob(f"{base}.*.csv")):
+                                (work / "raw_perf_data").mkdir(exist_ok=True)
+                                self._filter_perf_csv(
+                                    f, work / "raw_perf_data" / f.name, job["mathop"]
+                                )
+                        if not ok_all:
+                            rc = rc or 97
+                            notes.append(
+                                "module CSV lacks a mathop column — rows "
+                                "cannot be attributed to this leg (partition "
+                                "bug: same-file legs without tokens shared a "
+                                "session?)"
+                            )
+                elif passed:
+                    notes.append(
+                        "session produced no perf_data for this module "
+                        "(session killed before module teardown?)"
+                    )
+            log_lines = [
+                f"batched consumer session: {sdir}",
+                f"session rc: {session_rc}",
+                f"node: {job['node']}",
+                f"phases: {json.dumps(phases, sort_keys=True)}",
+                *notes,
+            ]
+            if rc == 0:
+                log_lines.append(
+                    "1 passed (batched split; session log has the full run)"
+                )
+            else:
+                log_lines.append(
+                    f"batched leg outcome rc={rc} "
+                    f"({'node ran' if phases else 'node produced no outcome'}; "
+                    "see session log)"
+                )
+            (work / "log.txt").write_text("\n".join(log_lines) + "\n")
+            (work / "rc.txt").write_text(f"{rc}\n")
+
+    def _run_batch_session(self, gctx, gdir, name, jobs, flags, extra_env):
+        """ONE consumer pytest session for a set of legs: single dual-flock
+        acquisition, prebuilt tree (--compile-consumer), per-node outcomes
+        via the checked-in corpus pytest reporter, CSVs copied in-lock,
+        outputs split per leg afterwards."""
+        sdir = gdir / name
+        shutil.rmtree(sdir, ignore_errors=True)
+        sdir.mkdir(parents=True)
+        jobs = sorted(jobs, key=lambda j: (j["file"], j["node"], j["sel"]))
+        # Module-contiguous node order: the perf report fixture is module-
+        # scoped and re-entering a module would unlink+rewrite its CSV.
+        nodes = []
+        for j in jobs:
+            if j["node"] not in nodes:
+                nodes.append(j["node"])
+        for n in nodes:
+            if "'" in n:
+                sys.exit(
+                    f"pytest node id contains a single quote (breaks the "
+                    f"sh -c quoting layers): {n}"
+                )
+        (sdir / "nodes.txt").write_text("\n".join(nodes) + "\n")
+        env_prefix = " ".join(f'{k}="{v}"' for k, v in sorted(extra_env))
+        quoted = " ".join(f"'{n}'" for n in nodes)
+        timeout_s = 600 + 300 * len(nodes)
+        script = f"""#!/usr/bin/env bash
+rm -rf "{LLK}/perf_data" "{gctx['rt']}/tt-llk-build/temp_perf_data"
+cd "{PYDIR}" || exit 97
+env {env_prefix} CHIP_ARCH=blackhole LLK_HOME="{LLK}" RUNNER_TEMP="{gctx['rt']}" \\
+TT_LLK_EXTRA_COMPILER_OPTIONS="{flags}" \\
+SFPU_CORPUS_PYTEST_REPORT="{sdir}/report.json" \\
+PYTHONPATH="{HERE}:$PYTHONPATH" \\
+timeout {timeout_s} "{self.python}" -m pytest -q -v -p sfpu_corpus_pytest_plugin --compile-consumer {quoted} > "{sdir}/log.txt" 2>&1
+RC=$?
+echo $RC > "{sdir}/rc.txt"
+# copy raw+post perf CSVs IN-LOCK immediately (they are overwritten per run)
+if [ -d "{LLK}/perf_data" ]; then cp -r "{LLK}/perf_data" "{sdir}/perf_data"; fi
+if [ -d "{gctx['rt']}/tt-llk-build/temp_perf_data" ]; then cp -r "{gctx['rt']}/tt-llk-build/temp_perf_data" "{sdir}/raw_perf_data"; fi
+exit $RC
+"""
+        session_sh = sdir / "session.sh"
+        session_sh.write_text(script)
+        session_sh.chmod(0o755)
+        print(
+            f"batched session {gdir.name}/{name}: {len(nodes)} node(s), "
+            f"{len(jobs)} leg(s)"
+        )
+        subprocess.run(
+            [
+                "flock",
+                "-x",
+                DEVICE_LOCK,
+                "-c",
+                f"flock -x {SILICON_LOCK} -c '{session_sh}'",
+            ],
+            check=False,
+        )
+        session_rc = (
+            int((sdir / "rc.txt").read_text().strip())
+            if (sdir / "rc.txt").is_file()
+            else 99
+        )
+        self._split_batch_session(sdir, jobs, session_rc, gctx)
+
+    def _batched_silicon(self, gated):
+        """Executor entry: gated = [(row, classifications)] rows the silicon
+        gates admitted.  Produces every pending leg's evidence; assembly
+        (silicon()) then consumes it via the keyed resume path."""
+        jobs = []
+        for row, cls in gated:
+            jobs.extend(self._silicon_jobs(row, cls))
+        if not jobs:
+            return
+        pending = [j for j in jobs if not self._job_cached(j)]
+        groups = {}
+        for j in pending:
+            key = (j["flags"], tuple(sorted(j["extra_env"].items())))
+            groups.setdefault(key, []).append(j)
+
+        def gorder(key):
+            rank = 0 if key[0] == OFF_FLAGS else (1 if key[0] == ON_FLAGS else 2)
+            return (rank, key[0], key[1])
+
+        gkeys = sorted(groups, key=gorder)
+        broot = self.ev / "silicon-batches"
+        broot.mkdir(parents=True, exist_ok=True)
+        gnames = {
+            key: f"g{i}-{hashlib.sha256((key[0] + repr(key[1])).encode()).hexdigest()[:8]}"
+            for i, key in enumerate(gkeys)
+        }
+        plan = [
+            f"batched silicon plan: {len(jobs)} legs total, "
+            f"{len(jobs) - len(pending)} cached (keyed+hash-matched), "
+            f"{len(pending)} to run across {len(gkeys)} group(s)"
+        ]
+        gspecs = {}
+        for key in gkeys:
+            gjobs = groups[key]
+            specs = {}
+            for j in gjobs:
+                if j["kind"] == "perf":
+                    specs[(j["op"], j["sel"], j["leg"])] = {
+                        "file": j["file"],
+                        "mathop": j["mathop"],
+                        "op": j["op"],
+                        "sel": j["sel"],
+                        "leg": j["leg"],
+                    }
+            gspecs[key] = specs
+            parts = partition_perf_legs(list(specs.values()))
+            corr_n = sum(1 for j in gjobs if j["kind"] == "corr")
+            plan.append(
+                f"  group {gnames[key]}: {len({j['node'] for j in gjobs})} "
+                f"node(s), {corr_n} corr leg(s), {len(specs)} perf leg-spec(s) "
+                f"in {len(parts)} CSV partition(s) x {PERF_RUNS} reps; "
+                f"extra_env={dict(key[1])}; flags: {key[0][:80]}..."
+            )
+        (broot / "PLAN.txt").write_text("\n".join(plan) + "\n")
+        for line in plan:
+            print(line)
+        if self.a.dry_run:
+            print("DRY-RUN: batched sessions planned, not executed")
+            return
+        # 1. one compile pass per group (no device, no flocks)
+        gctxs = {}
+        for key in gkeys:
+            self.verify_toolchain("silicon-batch-build")
+            gdir = broot / gnames[key]
+            gdir.mkdir(parents=True, exist_ok=True)
+            gctx = self._group_build(gdir, key[0], key[1], groups[key])
+            if gctx is None:
+                for j in groups[key]:
+                    self._write_failed_leg(
+                        j,
+                        96,
+                        f"group producer compile failed (see {gdir}/producer.log)",
+                    )
+                continue
+            gctxs[key] = gctx
+        # 2. correctness sessions (one per group, before ANY perf session)
+        for key in gkeys:
+            if key not in gctxs:
+                continue
+            corr = [j for j in groups[key] if j["kind"] == "corr"]
+            if corr:
+                self.verify_toolchain("silicon-batch-corr")
+                self._run_batch_session(
+                    gctxs[key], broot / gnames[key], "corr", corr, key[0], key[1]
+                )
+        # 3. rows whose correctness failed get every perf leg withheld
+        #    (assembly reproduces the legacy STOP note from the corr rc)
+        failed_ops = set()
+        for row, cls in gated:
+            for j in jobs:
+                if j["op"] != row["op"] or j["kind"] != "corr":
+                    continue
+                rcf = j["work"] / "rc.txt"
+                try:
+                    rc = int(rcf.read_text().strip() or 99) if rcf.is_file() else 99
+                except ValueError:
+                    rc = 99
+                if rc != 0 or not self._passed(j["work"] / "log.txt"):
+                    failed_ops.add(row["op"])
+                    break
+        # 4. perf sessions: reps x (OFF, ON, ... alternating) x partitions;
+        #    partitions computed once per group => identical composition in
+        #    every repetition (determinism), 3 fresh processes per rep.
+        gparts = {}
+        for key in gkeys:
+            if key not in gctxs:
+                continue
+            live = [s for s in gspecs[key].values() if s["op"] not in failed_ops]
+            gparts[key] = partition_perf_legs(live)
+        maxp = max((len(p) for p in gparts.values()), default=0)
+        for r in range(1, PERF_RUNS + 1):
+            for p in range(maxp):
+                for key in gkeys:
+                    parts = gparts.get(key)
+                    if not parts or p >= len(parts):
+                        continue
+                    part_ids = {(s["op"], s["sel"], s["leg"]) for s in parts[p]}
+                    legs = [
+                        j
+                        for j in groups[key]
+                        if j["kind"] == "perf"
+                        and j["rep"] == r
+                        and (j["op"], j["sel"], j["leg"]) in part_ids
+                    ]
+                    if legs:
+                        self.verify_toolchain("silicon-batch-perf")
+                        self._run_batch_session(
+                            gctxs[key],
+                            broot / gnames[key],
+                            f"r{r}-p{p}",
+                            legs,
+                            key[0],
+                            key[1],
+                        )
 
     def silicon_pinpair(self, row, classifications):
         """kind=pinpair: paired gen-vs-hand A/B at the row's pinned flag set
@@ -2027,6 +2780,34 @@ exit $RC
         return rag
 
     # ---------------- main flow ----------------
+    def _silicon_phase(self, slots):
+        """Execute + assemble the silicon phase for the gated rows, in row
+        order.  slots entries: ("withheld", <result>) pass straight through
+        to the results list; ("go", row, classifications, attribution) rows
+        run through the batched executor (unless --serial-legacy) and then
+        the legacy per-row assembly — silicon() computes every cell, ratio,
+        note and STOP decision from the per-leg evidence via the keyed
+        hash-matched resume path, so batched and serial runs share one
+        assembly code path.  Factored out of run() so the batched-vs-legacy
+        layout selftest can drive it without a toolchain."""
+        gated = [(s[1], s[2]) for s in slots if s[0] == "go"]
+        if self.exec_mode == "batched" and gated:
+            self._batched_silicon(gated)
+        results = []
+        for s in slots:
+            if s[0] == "withheld":
+                results.append(s[1])
+                continue
+            _tag, row, classifications, attribution = s
+            results.append(self.silicon(row, classifications))
+            # Weekly per-knob silicon legs run BEHIND the main BH CRAQ
+            # gate (D3) and add their own per-knob classify/CRAQ/
+            # correctness pipeline inside knob_silicon().  They stay on
+            # the serial per-leg path this increment (jobkeys mode=serial).
+            if attribution and row["op"] in (self.a.knob_silicon_rows or []):
+                self.knob_silicon(row, attribution)
+        return results
+
     def run(self):
         phases = self.a.phases
         self.preflight()
@@ -2045,6 +2826,13 @@ exit $RC
                     "full sweep)",
                 }
             )
+        # Pass 1: classify/CRAQ/attribution per row (unchanged semantics);
+        # rows that reach the silicon phase are GATED here and executed by
+        # the batched executor between gating and per-row assembly (the
+        # assembly pass computes every cell/ratio/STOP through the legacy
+        # silicon() code, consuming the executor's per-leg evidence via the
+        # keyed hash-matched resume path).
+        prelim = []  # ordered: ("row", row, classifications, attribution)
         for row in self.rows:
             if row["kind"] == "skip":
                 skips.append(
@@ -2082,18 +2870,28 @@ exit $RC
             attribution = None
             if self.a.knob_attribution and "classify" in phases:
                 attribution = self.attribute_knobs(row, classifications)
-            if "silicon" in phases:
-                if not self.a.allow_hardware:
-                    skips.append(
-                        {
-                            "op": row["op"],
-                            "corpus_id": row["corpus_id"],
-                            "status": "SKIP_HARDWARE_NOT_AUTHORIZED",
-                            "reason": "silicon phase requires --allow-hardware",
-                        }
-                    )
-                    continue
-                self.verify_toolchain("silicon")
+            prelim.append((row, classifications, attribution))
+        if "silicon" not in phases:
+            for row, classifications, _attr in prelim:
+                results.append(self._result_skeleton(row, classifications))
+        elif not self.a.allow_hardware:
+            for row, _cls, _attr in prelim:
+                skips.append(
+                    {
+                        "op": row["op"],
+                        "corpus_id": row["corpus_id"],
+                        "status": "SKIP_HARDWARE_NOT_AUTHORIZED",
+                        "reason": "silicon phase requires --allow-hardware",
+                    }
+                )
+        else:
+            self.verify_toolchain("silicon")
+            # Gate every row BEFORE any device work (same rules, same REDs
+            # as the per-row flow): keyed classify evidence required, keyed
+            # BH CRAQ gate required.  `slots` keeps the row order so the
+            # results list is unchanged vs the legacy loop.
+            slots = []  # ("withheld", result) | ("go", row, cls, attribution)
+            for row, classifications, attribution in prelim:
                 # Silicon runs only on classify evidence KEYED to this run
                 # (finding sweep_2x2.py:1341: with classify skipped,
                 # classifications={} disabled the byte-identical refusal
@@ -2114,13 +2912,16 @@ exit $RC
                         f"keyed to this toolchain/tree for "
                         f"{','.join(missing_cls)} (run the classify phase)"
                     )
-                    results.append(
-                        dict(
-                            self._result_skeleton(row, classifications),
-                            notes=[
-                                "silicon withheld: classify evidence missing or "
-                                "keyed to another toolchain/tree"
-                            ],
+                    slots.append(
+                        (
+                            "withheld",
+                            dict(
+                                self._result_skeleton(row, classifications),
+                                notes=[
+                                    "silicon withheld: classify evidence missing "
+                                    "or keyed to another toolchain/tree"
+                                ],
+                            ),
                         )
                     )
                     continue
@@ -2134,21 +2935,18 @@ exit $RC
                         self.reds.append(
                             f"{row['op']}: knob silicon withheld — main BH CRAQ gate not green"
                         )
-                    results.append(
-                        dict(
-                            self._result_skeleton(row, classifications),
-                            notes=["silicon withheld: BH CRAQ gate not green"],
+                    slots.append(
+                        (
+                            "withheld",
+                            dict(
+                                self._result_skeleton(row, classifications),
+                                notes=["silicon withheld: BH CRAQ gate not green"],
+                            ),
                         )
                     )
                     continue
-                results.append(self.silicon(row, classifications))
-                # Weekly per-knob silicon legs run BEHIND the main BH CRAQ
-                # gate (D3) and add their own per-knob classify/CRAQ/
-                # correctness pipeline inside knob_silicon().
-                if attribution and row["op"] in (self.a.knob_silicon_rows or []):
-                    self.knob_silicon(row, attribution)
-            else:
-                results.append(self._result_skeleton(row, classifications))
+                slots.append(("go", row, classifications, attribution))
+            results.extend(self._silicon_phase(slots))
         self.emit_scoreboard(results, skips)
         rag = "GREEN"
         if "report" in phases:
@@ -2279,6 +3077,14 @@ def main():
         "--dry-run",
         action="store_true",
         help="print device jobs instead of running them",
+    )
+    ap.add_argument(
+        "--serial-legacy",
+        action="store_true",
+        help="ESCAPE: revert the silicon phase to one pytest session per "
+        "device leg (the pre-batching ~45s/leg overhead path); logged "
+        "loudly; serial and batched cells are jobkey-separated and never "
+        "mix inside a row's samples",
     )
     args = ap.parse_args()
     return Sweep(args).run()

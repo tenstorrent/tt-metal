@@ -77,6 +77,8 @@ python3 "$HERE/selftest_enforcement_gates.py" > "$EV/selftest-enforcement-gates.
   || GATE_SELFTEST_RC=1
 python3 "$HERE/selftest_witness_preflight.py" > "$EV/selftest-witness-preflight.txt" 2>&1 \
   || GATE_SELFTEST_RC=1
+python3 "$HERE/selftest_batched_silicon.py" > "$EV/selftest-batched-silicon.txt" 2>&1 \
+  || GATE_SELFTEST_RC=1
 # Record the conf-lint verdict (already enforced above, pre-source) in-evidence.
 { mv /tmp/nightly-selftest-conf-lint.$$ "$EV/selftest-conf-lint.txt" 2>/dev/null || true; }
 bash "$HERE/conf_lint.sh" > "$EV/conf-lint.txt" 2>&1 || GATE_SELFTEST_RC=1
@@ -208,6 +210,7 @@ if [ -f "$EV/REPORT.md" ]; then
     tail -n 1 "$EV/selftest-dejagnu-gate.txt"
     tail -n 1 "$EV/selftest-enforcement-gates.txt" 2>/dev/null || echo "enforcement-gates self-test: (no record)"
     tail -n 1 "$EV/selftest-witness-preflight.txt" 2>/dev/null || echo "witness-preflight self-test: (no record)"
+    tail -n 1 "$EV/selftest-batched-silicon.txt" 2>/dev/null || echo "batched-silicon self-test: (no record)"
     tail -n 1 "$EV/selftest-conf-lint.txt" 2>/dev/null || true
     tail -n 1 "$EV/conf-lint.txt" 2>/dev/null || echo "conf-lint: (no record)"
     cat "$EV/witness-preflight-status.txt" 2>/dev/null || echo "witness-preflight: (no status recorded)"

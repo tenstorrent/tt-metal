@@ -359,6 +359,52 @@ gate can never bless a sweep:
    system working; clear it by landing the fix or re-reviewing the row,
    never by deleting the row to make the nightly green.
 
+### Batched silicon execution (laneBU increment 4)
+
+Weekly-20260820 forensics: 684 silicon legs took 517 min (~45 s wall/leg)
+while each pytest test completes in ~1.4 s -- >95% was per-leg session
+overhead (fresh interpreter + conftest + device open/close + one compile
+invocation per leg, all x3 by `PERF_RUNS`).  `sweep_2x2.py` now batches by
+default (`--serial-legacy` is the loudly-logged escape), preserving the S1
+protocol exactly:
+
+* silicon legs group by **(flag-set, extra_env)** (arch is constant BH);
+  ONE `--compile-producer` pass per group into a shared `RUNNER_TEMP`
+  (seeded from a verified `corpus_leg_store` build -- `ensure --keep-build`
+  -- when the exact cc1plus/flags/tree/farm matches; reuse is an
+  optimization, never a trust decision);
+* ONE consumer pytest session (`--compile-consumer`, fresh process) per
+  (group, repetition r1/r2/r3, CSV partition) runs its legs' nodes inside a
+  single dual-flock acquisition and device session; **3 fresh processes per
+  rep are preserved**, OFF/ON alternate at session granularity per rep;
+* **correctness before perf**: each group's corr nodes run in their own
+  session before any perf session; a row with a failed corr leg has every
+  perf leg withheld (the legacy STOP semantics, reproduced by the shared
+  assembly code);
+* **per-leg evidence layout unchanged**: the consumer session's outputs are
+  split back per leg (per-node outcomes via the checked-in corpus pytest
+  reporter; per-leg `TEXT_HASHES.txt` is the group-build subset at the
+  leg's classify relpaths, so the classify-vs-device hash-match gate keeps
+  its exact strength; per-leg CSVs are the module CSV filtered by the
+  `mathop` column).  Because the harness's perf report is per test MODULE,
+  two legs share a session only when their CSV rows are separable --
+  same-module legs need distinct `mathop:` tokens; a token-less leg is its
+  module's only leg in that session (`partition_perf_legs`, selftested;
+  sem-vs-hand impl legs of one module never share);
+* batched and serial cells are jobkey-separated (`mode`): a mode switch
+  re-measures instead of blending two measurement contexts.
+
+PRE-REGISTERED speedup (weekly-20260820 shape, 759 main-phase legs):
+legacy = 759 x 45 s = ~570 min; batched = ~90-120 device sessions = ~85-110
+min (session spin-up amortized; per-leg marginal cost = its ~1.4 s test), a
+>=5x reduction of the silicon phase with identical evidence.  Weekly knob
+legs (200) stay on the serial path this increment.  First device validation
+happens on the first post-merge sweep -- the report's class/magnitude drift
+gates own the verdict, and `--serial-legacy` restores the old path
+one-for-one.  Self-test: `selftest_batched_silicon.py` (partitioning,
+3-op dry-run layout parity batched==legacy, session splitting, cache
+keying), run by the nightly wrapper with the other gate self-tests.
+
 ### Pin-cycle infrastructure (laneBU)
 
 #### Shared BASE-leg store (`corpus_leg_store.py`)

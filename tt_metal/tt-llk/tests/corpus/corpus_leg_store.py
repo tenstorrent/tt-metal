@@ -328,6 +328,11 @@ def build_leg(args, ident, dest_dir):
     pub = workdir / "publish"
     pub.mkdir()
     elf_count = hash_build(rt, ident["objcopy"], pub / "text_hashes.tsv")
+    if args.keep_build:
+        # Retain the compiled tree so batched-silicon consumers (sweep_2x2
+        # group producers) can seed a group RUNNER_TEMP from the store
+        # instead of recompiling.  Moved, not copied: the build is large.
+        os.rename(rt / "tt-llk-build", pub / "build")
     if elf_count == 0:
         shutil.rmtree(workdir, ignore_errors=True)
         sys.exit(
@@ -363,6 +368,7 @@ def build_leg(args, ident, dest_dir):
         "tt_metal_head": ident["tt_metal_head"],
         "producer": "custom" if args.producer_cmd else "sfpu_corpus",
         "producer_cmd": cmd,
+        "has_build": bool(args.keep_build),
         "elf_count": elf_count,
         "text_hashes_sha256": sha256_file(pub / "text_hashes.tsv"),
         "results_tsv_sha256": sha256_file(pub / "results.tsv"),
@@ -425,6 +431,45 @@ def consume_or_none(entry, want):
     if detail:
         print(f"corpus-leg-store: {detail}", file=sys.stderr)
     return entry
+
+
+def find_build(store_root, cc1plus_sha256, arch, flags, tt_metal_head, farm_realpath):
+    """Verified prebuilt tree for (toolchain, flag-set), or None.
+
+    Used by sweep_2x2.py's batched-silicon group producer: when a store
+    entry exists for this exact cc1plus sha + arch + flag string, verifies
+    (verify_entry: shas, manifest integrity), carries a retained build tree
+    (`ensure --keep-build`), matches the caller's tt-metal head AND farm
+    realpath (LLK_PROFILER .text hashes are farm-path-dependent — a build
+    from another farm would fail every hash-match gate), the group compile
+    can be seeded from it instead of recompiling.  ANY mismatch returns
+    None (the caller falls back to a fresh compile — reuse is an
+    optimization, never a trust decision)."""
+    entry = (
+        pathlib.Path(store_root) / cc1plus_sha256[:12] / flagset_key(arch, flags)[:12]
+    )
+    build = entry / "build"
+    if not (entry / "leg.json").is_file() or not build.is_dir():
+        return None
+    ok, detail = verify_entry(
+        entry,
+        {
+            "cc1plus_sha256": cc1plus_sha256,
+            "flags": flags,
+            "arch": arch,
+            "tt_metal_head": tt_metal_head,
+            "tt_metal_home_realpath": farm_realpath,
+        },
+    )
+    if not ok or detail:  # a farm-path WARNING also disqualifies build reuse
+        return None
+    try:
+        leg = json.loads((entry / "leg.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if leg.get("tt_metal_home_realpath") != farm_realpath or not leg.get("has_build"):
+        return None
+    return build
 
 
 def cmd_ensure(args):
@@ -530,6 +575,14 @@ def main(argv=None):
         "--keep-failed",
         action="store_true",
         help="keep the workdir of a failed leg for debugging",
+    )
+    ap.add_argument(
+        "--keep-build",
+        action="store_true",
+        help="retain the compiled tt-llk-build tree in the entry (build/) so "
+        "sweep_2x2.py batched-silicon group producers can seed a RUNNER_TEMP "
+        "from the store (find_build); large — use for BASE legs on the "
+        "shared farm",
     )
     ap.add_argument(
         "--producer-cmd",
