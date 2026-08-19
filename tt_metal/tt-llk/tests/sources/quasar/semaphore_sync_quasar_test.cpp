@@ -9,7 +9,6 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
-#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 #include "tensor_shape.h"
 
@@ -27,10 +26,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     // allocate srcA (order matters: A before B)
     ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-        tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+        ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
     // allocate srcB
     ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
-        tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
+        ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
 
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
         static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
@@ -89,8 +88,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
-    ckernel::trisc::bfd_alloc_and_program<pack_res>(
-        tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+    ckernel::trisc::bfd_alloc_and_program<pack_res>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);

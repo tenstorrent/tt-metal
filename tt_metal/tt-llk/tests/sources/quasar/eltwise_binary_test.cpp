@@ -9,7 +9,6 @@
 #include "llk_defs.h"
 #include "perf.h"
 #include "profiler.h"
-#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 // Globals
@@ -40,10 +39,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-            tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), buffer_A[0] / 16, formats.unpack_A_src);
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
-            tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), buffer_B[0] / 16, formats.unpack_B_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(ckernel::DEFAULT_TENSOR_SHAPE, buffer_A[0] / 16, formats.unpack_A_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(ckernel::DEFAULT_TENSOR_SHAPE, buffer_B[0] / 16, formats.unpack_B_src);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
         _llk_unpack_binary_operands_init_(
@@ -190,7 +187,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        ckernel::trisc::bfd_alloc_and_program<pack_res>(tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), buffer_Res[0] / 16, formats.pack_dst);
+        ckernel::trisc::bfd_alloc_and_program<pack_res>(ckernel::DEFAULT_TENSOR_SHAPE, buffer_Res[0] / 16, formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
         PROFILER_SYNC();

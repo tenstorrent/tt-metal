@@ -11,7 +11,6 @@
 #include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
-#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 // Globals
@@ -43,10 +42,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
         // Full 32x32 tiles: 2x2 faces of 16x16 (tiny tiles not supported for quasar). srcA before srcB.
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-            tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
-            tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(static_cast<DataFormat>(formats.unpack_A_dst));
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(static_cast<DataFormat>(formats.unpack_B_dst));
 
@@ -204,8 +201,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         // Full 32x32 tiles: 2x2 faces of 16x16 (tiny tiles not supported for quasar).
-        ckernel::trisc::bfd_alloc_and_program<pack_res>(
-            tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        ckernel::trisc::bfd_alloc_and_program<pack_res>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_matmul_init_(
             ckernel::trisc::bfd_current<pack_res>(), RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/); // Use destination buffer descriptor for packing output

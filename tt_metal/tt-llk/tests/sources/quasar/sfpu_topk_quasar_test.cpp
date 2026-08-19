@@ -11,7 +11,6 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
-#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 // ============================================================================
@@ -105,7 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const int stage_offset = stage_index * NUM_VALUE_TILES_PER_ROW;
 
                     ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-                        tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), L1_ADDRESS(params.buffer_A[0]), unpack_src_format);
+                        ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(params.buffer_A[0]), unpack_src_format);
                     _llk_unpack_configure_unary_<p_unpacr::UNP_A>(static_cast<DataFormat>(unpack_dst_format));
 
                     if (first_iteration)
@@ -364,7 +363,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         l1_addr_16B                = params.buffer_A[tile_L1_offset] / 16;
                     }
 
-                    ckernel::trisc::bfd_alloc_and_program<pack_res>(tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), l1_addr_16B, pack_dst_format);
+                    ckernel::trisc::bfd_alloc_and_program<pack_res>(ckernel::DEFAULT_TENSOR_SHAPE, l1_addr_16B, pack_dst_format);
                     _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, 1);
 
                     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(pack_src_format), ckernel::ReluConfig::none());
