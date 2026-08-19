@@ -289,6 +289,14 @@ public:
     const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
     get_global_logical_bindings() const;
 
+#if defined(TT_METAL_USE_EMULE)
+    // Bind `k` emule in-process virtual ranks to this host's own logical binding. They share one
+    // cluster and one control plane, so they ARE the same host; without a binding each a
+    // rank-addressed socket cannot resolve its mesh. k <= 1 clears them.
+    // See tt-emule docs/multi-rank-emulation.md.
+    void bind_in_process_ranks(uint32_t k);
+#endif
+
     // Check if the physical system supports the specified fabric configuration
     // Returns true if valid, false otherwise.
     bool is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const;

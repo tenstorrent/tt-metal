@@ -44,7 +44,22 @@ struct FiberIdentity {
 // Outcome of a resumable launch. Completed = every fiber ran to Done (registry torn down).
 // HostWait = the run quiesced with a host-facing socket wait parked; the fibers stay ALIVE
 // (no teardown) and the run resumes via pump() as the host feeds the socket. See run_persistent().
-enum class RunOutcome { Completed, HostWait };
+// PeerWait = the run quiesced but a PEER RANK may still deliver into this rank's L1; fibers stay
+// alive on the same contract as HostWait, and the caller re-pumps once a delivery lands.
+enum class RunOutcome { Completed, HostWait, PeerWait };
+
+// Installed by the runner when multi-rank is active; absent (and never consulted) single-rank.
+// Returns true while some peer rank could still deliver here — i.e. this rank's local quiescence is
+// not yet a global one, so the stall is resumable rather than a deadlock. A rank cannot classify a
+// wait as peer-fed on its own (every worker L1 is a legal fabric destination), which is why the
+// question is asked globally instead of per-fiber. See tt-emule docs/multi-rank-emulation.md.
+void set_peer_progress_probe(std::function<bool()> probe);
+
+// Read-only companion for the tier-2 watchdog: true while some peer rank could still act. The probe
+// above publishes this rank's quiescence, so the watchdog thread must not call it. Without this, a
+// rank that legitimately waits for a peer keeps being resumed, its resumption count climbs, and the
+// livelock trip fires on a run that is merely early. See tt-emule docs/multi-rank-emulation.md.
+void set_peer_liveness_probe(std::function<bool()> probe);
 
 class FiberScheduler {
 public:

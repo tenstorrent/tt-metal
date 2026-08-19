@@ -106,12 +106,15 @@ std::vector<FabricType> get_all_mgd_fabric_types() {
     }
     return fabric_types;
 }
-
 #if defined(TT_METAL_USE_EMULE)
 // emule has no fabric router, so the device-L1 connection table is never populated. Record the
 // fwd/bwd-to-neighbor binding host-side for the teleport's 1D dst resolution. Defined in the emule runner.
 // See tt-emule docs/fabric-ccl-emulation.md.
-extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor);
+extern "C" void __emule_fabric_record_conn(
+    uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor, uint32_t chan);
+// Node -> emule chip id, valid for a node on a mesh this rank does not own (where the control
+// plane's own lookup raises). See tt-emule docs/multi-rank-emulation.md.
+extern "C" int __emule_gchip_for_node(uint32_t mesh_id, uint32_t chip_id);
 #endif
 
 template <typename ProgramOrDescriptor>
@@ -229,12 +232,24 @@ void append_fabric_connection_rt_args(
 #if defined(TT_METAL_USE_EMULE)
         // Record (src_chip, worker_core, forwarding_direction, neighbor_chip) for the emule teleport's 1D
         // dst resolution. Called per connection in fwd-then-bwd order (matches the kernel's read order).
+        // Resolved through emule's registry, not the control plane: under multi-rank the DESTINATION
+        // is routinely a node on a peer rank's mesh, which has no local physical chip id.
+        const int emule_src = __emule_gchip_for_node(*src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
+        const int emule_dst = __emule_gchip_for_node(*dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
+        TT_FATAL(
+            emule_src >= 0 && emule_dst >= 0,
+            "emule could not name a fabric connection's endpoints globally. Src: {} -> {}, Dst: {} -> {}",
+            src_fabric_node_id,
+            emule_src,
+            dst_fabric_node_id,
+            emule_dst);
         __emule_fabric_record_conn(
-            static_cast<uint32_t>(control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id)),
+            static_cast<uint32_t>(emule_src),
             static_cast<uint32_t>(worker_core.x),
             static_cast<uint32_t>(worker_core.y),
             static_cast<uint32_t>(forwarding_direction.value()),
-            static_cast<uint32_t>(control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id)));
+            static_cast<uint32_t>(emule_dst),
+            static_cast<uint32_t>(fabric_router_channel));
 #endif
     } else {
         // TODO: will be deprecated. currently for ethernet dispatch case
