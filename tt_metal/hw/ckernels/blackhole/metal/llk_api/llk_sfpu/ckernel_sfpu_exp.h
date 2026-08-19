@@ -62,8 +62,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
     sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
 
     sfpi::vInt exponential_part =
-        sfpi::exexp(z, sfpi::ExponentMode::Biased);    // Extract exponent ( = 2**(integer part of val/ln2))
-    sfpi::vMag fractional_part = sfpi::exman(z);       // Extract mantissa ( = leftover part, in [0; 1])
+        sfpi::exexp(z, sfpi::ExponentMode::Biased);  // Extract exponent ( = 2**(integer part of val/ln2))
+    sfpi::vMag fractional_part = sfpi::exman(z);     // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 
@@ -98,7 +98,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
  */
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool COEFFS_IN_PRGM_REGS = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
     // This function computes exp(x) by leveraging mathematic properties of exp(x):
     // That is, exp(x) = 2**(x / ln2) = 2**(x_i) * 2**(x_f) where
@@ -133,7 +133,15 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 2^23]
     // This uses a 2nd degree polynomial adjustment of the fractional part
-    frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+    if constexpr (COEFFS_IN_PRGM_REGS) {
+        // The degree-1/2 coefficients are fp32 (not bf16-encodable), so as immediates
+        // they cost two SFPLOADI per use per datum — sfpi never hoists volatile
+        // immediate loads. Callers that preload them into vConstFloatPrgm1/2 at init
+        // (sigmoid/silu; Prgm0 stays owned by sfpu_reciprocal's 2.0f) skip that cost.
+        frac = PolynomialEvaluator::eval(frac, 1.0017248f, sfpi::vConstFloatPrgm1, sfpi::vConstFloatPrgm2);
+    } else {
+        frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+    }
 
     // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
@@ -397,9 +405,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     return y;
 }
 
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
-    return _sfpu_exp_fp32_accurate_<true>(x);
-}
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
 
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_exp_accurate_(sfpi::vFloat val);

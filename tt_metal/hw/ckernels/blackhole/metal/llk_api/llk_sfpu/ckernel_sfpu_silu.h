@@ -17,7 +17,7 @@ inline void calculate_silu() {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
         // silu(x) = x * sigmoid(x)
-        sfpi::vFloat result = x * _sfpu_sigmoid_<is_fp32_dest_acc_en>(x);
+        sfpi::vFloat result = x * _sfpu_sigmoid_<is_fp32_dest_acc_en, /*EXP_COEFFS_IN_PRGM_REGS*/ true>(x);
 
         // Round to bfloat16 if not in fp32 accumulation mode
         if constexpr (!is_fp32_dest_acc_en) {
