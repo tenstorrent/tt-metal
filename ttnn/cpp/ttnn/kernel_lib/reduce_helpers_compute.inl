@@ -47,14 +47,20 @@ ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
 // SFPU MIN fold
 template <DataFormat format>
 ALWI void sfpu_reduce_min_fold_init() {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MIN fold: Int32 only");
-    binary_min_int32_tile_init();
+    if constexpr (format == DataFormat::Int32) {
+        binary_min_int32_tile_init();
+    } else {
+        binary_min_tile_init();
+    }
 }
 
 template <DataFormat format>
 ALWI void sfpu_reduce_min_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MIN fold: Int32 only");
-    binary_min_int32_tile(a, b, out);
+    if constexpr (format == DataFormat::Int32) {
+        binary_min_int32_tile(a, b, out);
+    } else {
+        binary_min_tile(a, b, out);
+    }
 }
 
 // SFPU cross-tile add. Int32 uses add_int_tile; Float32 uses add_binary_tile for

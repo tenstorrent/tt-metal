@@ -58,9 +58,7 @@ constexpr bool is_sfpu_reduce_path() {
         // Float32 opts into the SFPU path only in Accurate mode, and only for SUM (accurate ttnn.mean,
         // which the host lowers to SUM + a 1/N post-mul) or MAX (accurate ttnn.max). Everything else
         // non-Int32 stays on the FPU.
-        if constexpr (
-            fp32_mode != ReduceFp32Mode::Accurate || data_format != DataFormat::Float32 ||
-            (pool_type != ckernel::PoolType::SUM && pool_type != ckernel::PoolType::MAX)) {
+        if constexpr (fp32_mode != ReduceFp32Mode::Accurate || data_format != DataFormat::Float32) {
             return false;
         }
     }

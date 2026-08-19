@@ -90,43 +90,6 @@ inline std::string get_generic_reduction_doc(
         output_layout_kwarg);
 }
 
-// Wrapper that detects explicit use of the deprecated 'correction' parameter and
-// emits a Python DeprecationWarning before forwarding to the real implementation.
-// The binding-layer type is std::optional<bool> (default nb::none()) so we can
-// distinguish "user passed correction=True" from "used the default".
-// This whole function can be removed when the deprecated 'correction' parameter is removed.
-template <auto Func>
-Tensor generic_reduction_with_deprecated_correction(
-    const Tensor& input_tensor,
-    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim,
-    bool keepdim,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    float scalar,
-    std::optional<bool> correction,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (correction.has_value()) {
-        // Re-acquire the GIL: this function is registered via bind_function<>(),
-        // which applies nb::call_guard<nb::gil_scoped_release>(), so the GIL is
-        // released by default. PyErr_WarnEx / PyExc_DeprecationWarning are Python
-        // C API and require the GIL.
-        nb::gil_scoped_acquire acquire;
-        PyErr_WarnEx(
-            PyExc_DeprecationWarning,
-            "The 'correction' parameter is deprecated and will be removed in a future release.",
-            1);
-    }
-    return Func(
-        input_tensor,
-        dim,
-        keepdim,
-        memory_config,
-        compute_kernel_config,
-        scalar,
-        correction.value_or(true),
-        sub_core_grids);
-}
-
 // sum takes a trailing 'output_layout' that min/max do not, so it needs its own wrapper instead of
 // the shared generic_reduction_with_deprecated_correction<>. Same deprecated-correction handling.
 inline Tensor sum_with_deprecated_correction(
@@ -192,8 +155,10 @@ inline Tensor mean_with_deprecated_correction(
         output_layout);
 }
 
-// max exposes 'fast_and_approximate_mode' but not 'output_layout', so it cannot share mean's wrapper.
-inline Tensor max_with_deprecated_correction(
+// max and min expose 'fast_and_approximate_mode' but not 'output_layout', so they cannot share
+// mean's wrapper.
+template <auto Func>
+inline Tensor reduction_with_fast_mode(
     const Tensor& input_tensor,
     const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim,
     bool keepdim,
@@ -210,7 +175,7 @@ inline Tensor max_with_deprecated_correction(
             "The 'correction' parameter is deprecated and will be removed in a future release.",
             1);
     }
-    return ttnn::max(
+    return Func(
         input_tensor,
         dim,
         keepdim,
@@ -269,7 +234,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
     ttnn::bind_function<"max">(
         mod,
         max_doc.c_str(),
-        &max_with_deprecated_correction,
+        &reduction_with_fast_mode<&ttnn::max>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -281,11 +246,12 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("sub_core_grids") = nb::none(),
         nb::arg("fast_and_approximate_mode") = false);
 
-    const auto min_doc = get_generic_reduction_doc("min", "ttnn.min", /*int32_supported=*/true);
+    const auto min_doc = get_generic_reduction_doc(
+        "min", "ttnn.min", /*int32_supported=*/true, /*has_output_layout=*/false, /*has_fast_approximate_mode=*/true);
     ttnn::bind_function<"min">(
         mod,
         min_doc.c_str(),
-        &generic_reduction_with_deprecated_correction<&ttnn::min>,
+        &reduction_with_fast_mode<&ttnn::min>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -294,7 +260,8 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("scalar") = 1.0f,
         nb::arg("correction") = nb::none(),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("fast_and_approximate_mode") = false);
 }
 
 }  // namespace ttnn::operations::reduction::detail

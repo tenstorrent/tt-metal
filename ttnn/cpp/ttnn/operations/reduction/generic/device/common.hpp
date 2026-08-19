@@ -64,7 +64,7 @@ inline bool use_sfpu_reduce_path(
         return math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MIN;
     }
     return use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 &&
-           (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MAX);
+           (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN);
 }
 
 // True when a non-unity scalar must be a post-reduce multiply instead of via the scaler CB: MAX/MIN,

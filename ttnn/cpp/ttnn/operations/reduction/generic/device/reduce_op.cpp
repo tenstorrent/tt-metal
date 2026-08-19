@@ -106,10 +106,6 @@ Tensor reduce(
         "output_layout is only supported for sum (SUM) and mean (AVG) reductions, got {}",
         reduce_math);
 
-    if (reduce_math == tt::tt_metal::ReduceOpMath::MIN && input_tensor.dtype() != tt::tt_metal::DataType::INT32) {
-        return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
-    }
-
     auto parallelization_strategy = ttnn::prim::get_parallelization_strategy(input_tensor, reduce_dim);
     auto is_multicore_hw = parallelization_strategy == tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     const ttnn::PadValue pad_value = reduce_op_utils::get_tilize_pad_value(reduce_math, input_tensor.dtype());
@@ -139,8 +135,17 @@ Tensor reduce(
 
     const bool use_sfpu_fp32_mean = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::AVG;
     const bool use_sfpu_fp32_max = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::MAX && !negate;
+    const bool use_sfpu_fp32_min = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::MIN && !negate;
 
-    const bool use_sfpu_fp32_reduce = use_sfpu_fp32_mean || use_sfpu_fp32_max;
+    const bool use_sfpu_fp32_reduce = use_sfpu_fp32_mean || use_sfpu_fp32_max || use_sfpu_fp32_min;
+
+    // The FPU has no float/bf16 MIN primitive, so fast-mode MIN lowers to -MAX(-x) via the fused
+    // negate kernels. Accurate fp32 MIN drives the LLK MIN reduce directly (like Int32 MIN) and must
+    // skip that lowering.
+    if (reduce_math == tt::tt_metal::ReduceOpMath::MIN && input_tensor.dtype() != tt::tt_metal::DataType::INT32 &&
+        !use_sfpu_fp32_min) {
+        return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
+    }
 
     // Dense row-major reduce: a fast path that consumes ROW_MAJOR input directly (no host tilize)
     // and is currently restricted to mean (AVG) / sum (SUM) on 4D BF16/FLOAT32 tensors with
