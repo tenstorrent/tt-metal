@@ -2801,7 +2801,8 @@ void PerfDebugProfiler::stop() {
             // this whole block exists to make impossible.
             if (res[64] != 0 || res[66] != 0 || res[69] != 0) {
                 const uint64_t c_self_cyc = (static_cast<uint64_t>(res[72]) << 32) | res[71];
-                const uint32_t self_bytes = res[64] * 10560u;
+                // Packed wire cost: shipped words plus each frame's 320 B prefix+control (pads ignorable).
+                const uint32_t self_bytes = res[87] * 4u + res[64] * 320u;
                 log_info(
                     tt::LogMetal,
                     "[perf-debug profiler] DRISC {} SELF-ZONES ({}, detail {}): TRACED {} of {} sweeps "

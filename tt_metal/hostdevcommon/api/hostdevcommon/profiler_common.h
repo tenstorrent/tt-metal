@@ -288,23 +288,27 @@ constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE
 // it describes -- and the drainer injects nothing.
 //
 //   [0]                       w0 = SPSC_SPAN_PACKET_TYPE << PP_TYPE_SHIFT; low 27 bits RESERVED, zero
-//   [1]                       payload_words = PROFILER_L1_CONTROL_VECTOR_SIZE + shipped ring words
+//   [1]                       payload_words = PROFILER_L1_CONTROL_VECTOR_SIZE + pack pads + shipped ring words
 //   [2 .. PREFIX)             zero
 //   [PREFIX .. +CONTROL)      the worker's profiler control vector, verbatim
-//   [.. +payload)             for each RISC in ascending order, its LIVE run, packed exactly
-//   [.. frame_words)          zero pad to a 64 B socket page
+//   [.. +payload)             for each RISC in ascending order with a live run: spsc_span_pack_pad()
+//                             skipped words, then the run, ring wrap resolved into a flat array
+//   [.. frame_words)          skipped words up to a 64 B socket page
 //
-// The host recomputes the geometry from the control vector the frame carries -- run = tail - head per
-// RISC -- so there is nothing on the wire to desynchronize: no lane tags, no run lengths, no core id.
+// The host recomputes the geometry from the control vector the frame carries -- per RISC, run =
+// spsc_span_live(head, tail) starting at word counter tail - run -- so there is nothing on the wire to
+// desynchronize: no lane tags, no run lengths, no core id.
 //
-// Runs are packed EXACTLY, with no per-lane alignment padding, because the drainer assembles the frame with
-// CPU loads and stores out of a bulk snapshot rather than landing NoC reads into it. That is the payoff of
-// the fused read: L1-local copies are not bound by L1_ALIGNMENT, so the alignment hazard below cannot arise
-// on the payload at all, and the ring wrap is resolved device-side into a flat array.
+// The payload is never CPU-copied: the NIU gathers each live window straight from the staged span into
+// the host FIFO, one write per contiguous ring segment. A NoC write requires the destination to be
+// CONGRUENT to the source modulo NOC_PCIE_WRITE_ALIGNMENT_BYTES (16 B -- the NoC MIS-DELIVERS a misaligned
+// transfer rather than rejecting it), so each live run is preceded by spsc_span_pack_pad() skipped words
+// bringing the wire offset to the ring phase of the run's first word. The wrap continuation needs no pad:
+// the ring capacity is a multiple of the alignment, so it lands congruent by construction. Skipped words
+// are never written -- the host derives every offset from the control vector and reads past them.
 //
 // Prefix is 16 words (64 B) so the control vector starts at 64 B and the payload at 320 B -- both
-// multiples of L1_ALIGNMENT (16 B on Blackhole), which keeps the WHOLE-PAGE PCIe write aligned. Alignment
-// is not a nicety here: the NoC MIS-DELIVERS a misaligned transfer rather than rejecting it.
+// multiples of L1_ALIGNMENT (16 B on Blackhole), which keeps the control-vector PCIe write aligned.
 constexpr static std::uint32_t SPSC_SPAN_PREFIX_WORDS = 16;
 // Wire type code. Must equal PP_BULK_SPAN in tt_metal/tools/profiler/spsc_packet.h, which is plain C and
 // cannot include this header; spsc_marker_decode.hpp static_asserts that the two agree.
@@ -326,9 +330,19 @@ constexpr static std::uint32_t SPSC_SPAN_PAGE_WORDS = 16;
 // Head and tail are monotonic word counters, so the subtraction is wrap-safe. A lossless producer blocks at
 // capacity, so a run wider than the ring means the snapshot was read torn -- clamped here, and counted by
 // the caller rather than trusted.
-inline std::uint32_t spsc_span_live(std::uint32_t head, std::uint32_t tail, std::uint32_t cap) {
+constexpr std::uint32_t spsc_span_live(std::uint32_t head, std::uint32_t tail, std::uint32_t cap) {
     const std::uint32_t run = tail - head;
     return run > cap ? cap : run;
+}
+
+// NoC L1->PCIe write congruence quantum (NOC_PCIE_WRITE_ALIGNMENT_BYTES), in words.
+constexpr static std::uint32_t SPSC_SPAN_PACK_ALIGN_WORDS = 4;
+// Skipped words before a live run so the NIU gather lands src/dst congruent: both the frame start on the
+// wire and the staged span in L1 sit at alignment-multiple addresses, so only the run's ring phase and the
+// current wire offset (in words from the frame start) decide the pad. The drainer sizes frames with this
+// and the host walks them with it; a disagreement would desynchronize every lane after the first.
+constexpr std::uint32_t spsc_span_pack_pad(std::uint32_t start_counter, std::uint32_t frame_off_words) {
+    return (start_counter - frame_off_words) & (SPSC_SPAN_PACK_ALIGN_WORDS - 1u);
 }
 
 inline std::uint32_t spsc_span_w0() { return SPSC_SPAN_PACKET_TYPE << SPSC_SPAN_TYPE_SHIFT; }
@@ -429,7 +443,7 @@ enum SpscNocFpWord {
 };
 
 // Total words a frame occupies on the wire, including the prefix and the pad up to a socket page.
-inline std::uint32_t spsc_span_frame_words(std::uint32_t payload_words) {
+constexpr std::uint32_t spsc_span_frame_words(std::uint32_t payload_words) {
     const std::uint32_t n = SPSC_SPAN_PREFIX_WORDS + payload_words;
     return (n + SPSC_SPAN_PAGE_WORDS - 1u) & ~(SPSC_SPAN_PAGE_WORDS - 1u);
 }

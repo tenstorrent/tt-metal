@@ -5,12 +5,13 @@
 // SINGLE SOURCE OF TRUTH for the host-side decode of the DRISC drainer's wire
 // (producer: tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp).
 //
-// The wire carries only whole fixed-size BULK_SPAN frames: a 16-word prefix, the worker's 64-word
-// control vector verbatim, and its five raw 512-word rings. Inside each ring is a variable-length
-// packet run (spsc_packet.h): ZONE_START/END/TOTAL markers (2 words), STICKY_TIMER (1 word, per-lane
-// wall-clock high half), STICKY_PROG (2 words, per-core runtime host-id), and DATA/EVENT (2 + size
-// words, self-describing). The producer publishes its tail only on packet boundaries, so a run never
-// ends mid-packet.
+// The wire carries only whole variable-length BULK_SPAN frames (layout and geometry rules in
+// profiler_common.h): a 16-word prefix whose word 1 is the payload length, the worker's 64-word control
+// vector verbatim, then each RISC's live ring window packed flat -- congruence-padded, wrap resolved
+// device-side. Inside each window is a packet run (spsc_packet.h): ZONE_START/END/TOTAL markers
+// (2 words), STICKY_TIMER (1 word, per-lane wall-clock high half), STICKY_PROG (2 words, per-core
+// runtime host-id), and DATA/EVENT (2 + size words, self-describing). The producer publishes its tail
+// only on packet boundaries, so a window never ends mid-packet.
 #pragma once
 
 #include <algorithm>
@@ -51,21 +52,18 @@ static_assert(PP_DATA_SIZE_SHIFT == kernel_profiler::SPSC_DATA_SIZE_SHIFT, "PP_D
 namespace tt::tt_metal::profiler {
 
 // Worker per-RISC SPSC ring depth (words) and RISC count -- MUST match the producer (kernel_profiler.hpp
-// RING_CAPACITY, = kernel_profiler::PROFILER_L1_VECTOR_SIZE) so the BULKCORE sub-ring walk indexes
-// correctly.
+// RING_CAPACITY, = kernel_profiler::PROFILER_L1_VECTOR_SIZE) so run clamps agree with the drainer's.
 inline constexpr uint32_t kSpscRingCap = 512;
-inline constexpr uint32_t kSpscRingMask = kSpscRingCap - 1;
 inline constexpr uint32_t kSpscNRiscDecode = 5;
-static_assert((kSpscRingCap & kSpscRingMask) == 0);
 
-// Largest PP_DATA payload the 7-bit size field can express; bounds the unwrap scratch.
-inline constexpr uint32_t kSpscMaxDataWords = 127;
-
-inline constexpr uint32_t kSpscFrameWords = kernel_profiler::SPSC_SPAN_PREFIX_WORDS +
-                                            kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE +
-                                            kSpscNRiscDecode * kSpscRingCap;
-inline constexpr uint32_t kSpscFramePages = kSpscFrameWords * 4 / (kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4);
-static_assert(kSpscFrameWords == 2640 && kSpscFramePages == 165);
+// Worst case: five full rings, each behind a maximal congruence pad. Larger than the raw 2,640-word span
+// the drainer stages, so this bounds the bounce buffer and frame validation, not any device layout.
+inline constexpr uint32_t kSpscMaxPayloadWords =
+    kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE +
+    kSpscNRiscDecode * (kSpscRingCap + kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS - 1);
+inline constexpr uint32_t kSpscMaxFrameWords = kernel_profiler::spsc_span_frame_words(kSpscMaxPayloadWords);
+inline constexpr uint32_t kSpscMaxFramePages = kSpscMaxFrameWords / kernel_profiler::SPSC_SPAN_PAGE_WORDS;
+static_assert(kSpscMaxFrameWords == 2656 && kSpscMaxFramePages == 166);
 
 // Decode state for one socket's frame stream. Written only by that socket's decode thread.
 struct SpanDecodeState {
@@ -104,26 +102,30 @@ inline void spsc_prefetch(const void* p) {
 #endif
 }
 
-// Decode ONE whole BULK_SPAN frame in place. For each marker calls
+// Decode ONE whole packed BULK_SPAN frame in place. For each marker calls
 //   emit(lane, wire_type, hash16, full_ts, prog)     (ZONE_START/END; ZONE_TOTAL with full_ts = the sum)
 // and for each PP_DATA/PP_EVENT
-//   emit_data(lane, wire_type, id, full_ts, prog, payload_words, n)   (payload unwrapped, hi-word first)
+//   emit_data(lane, wire_type, id, full_ts, prog, payload_words, n)   (payload in place, hi-word first)
 // and emit_prog(core, prog) whenever a core's sticky host-id changes.
 //
-// Head adoption: the mirror and the frame's own head field are both monotonic and can each run behind --
-// the mirror after a frame was lost upstream (device credit-timeout drop), the frame field when the
-// drainer's write-back lagged the snapshot -- so the larger one is always the truth. Adopting it makes an
-// upstream loss a counted resync instead of re-decoding overwritten ring words as markers.
+// Returns the payload words the control vector implies -- the caller checks it against the frame's own
+// length field, since a pack-rule disagreement with the drainer desynchronizes every lane after the
+// first -- or 0 for an unknown-core frame (decoded as nothing; the caller still owns the advance).
+//
+// Head adoption: the mirror and the extent's start are both monotonic and can each run behind -- the
+// mirror after a frame was lost upstream (device credit-timeout drop), the extent when the drainer's
+// head write-back lagged its snapshot, making the frame re-ship words the mirror already consumed -- so
+// decode begins at the larger of the two: adopt-and-count on a loss, skip the overlap on a lag.
 // The optional emit_zones8(lane, timer_hi, prog, w0s, w1s) sink receives EIGHT consecutive 2-word zone
 // markers at once, deinterleaved into AVX2 vectors of word0s and word1s, whenever a 16-word block passes
-// the all-zone type screen -- the dominant case in a full span, and where the scalar walk's per-record
+// the all-zone type screen -- the dominant case in a busy frame, and where the scalar walk's per-record
 // cost lives.
 template <
     typename EmitMarker,
     typename EmitData,
     typename EmitProg = SpscIgnoreProg,
     typename EmitZones8 = SpscNoZones8>
-inline void spsc_decode_frame(
+inline uint32_t spsc_decode_frame(
     SpanDecodeState& st,
     const uint32_t* frame,
     EmitMarker&& emit,
@@ -134,57 +136,66 @@ inline void spsc_decode_frame(
     const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_CORE_XY]);
     if (xy_it == st.core_of_xy.end()) {
         st.unknown_core_frames++;
-        return;
+        return 0;
     }
     const uint32_t core = xy_it->second;
     uint32_t pg = st.prog[core];
-    const uint32_t* ring = ctrl + kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE;
-    for (uint32_t r = 0; r < kSpscNRiscDecode; r++, ring += kSpscRingCap) {
+    uint32_t off = kernel_profiler::SPSC_SPAN_PREFIX_WORDS + kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE;
+    for (uint32_t r = 0; r < kSpscNRiscDecode; r++) {
         const uint32_t lane = core * kSpscNRiscDecode + r;
         const uint32_t tail = ctrl[kernel_profiler::SPSC_RING_TAIL_0 + r];
         const uint32_t frame_head = ctrl[kernel_profiler::SPSC_RING_HEAD_0 + r];
+        const uint32_t extent = kernel_profiler::spsc_span_live(frame_head, tail, kSpscRingCap);
+        if (extent != tail - frame_head) {
+            st.anomalies++;  // torn snapshot; the clamped geometry still frames consistently on both sides
+        }
+        const uint32_t start = tail - extent;
+        const uint32_t* p = nullptr;
+        if (extent != 0) {
+            off += kernel_profiler::spsc_span_pack_pad(start, off);
+            p = frame + off;
+            off += extent;
+        }
         uint32_t head;
         if (st.seeded[lane] == 0) {
             st.seeded[lane] = 1;
-            head = frame_head;
+            head = start;
         } else {
             head = st.head[lane];
-            const int32_t behind = static_cast<int32_t>(frame_head - head);
+            const int32_t behind = static_cast<int32_t>(start - head);
             if (behind > 0) {
                 st.resync_events++;
                 st.resync_words += static_cast<uint32_t>(behind);
-                head = frame_head;
+                head = start;
             } else if (behind < 0) {
                 st.head_lag++;
             }
         }
-        uint32_t run = tail - head;
-        if (run > kSpscRingCap) {
-            st.anomalies++;
-            head = tail - kSpscRingCap;  // only the newest ring-full of words still exists
-            run = kSpscRingCap;
-        }
-        st.head[lane] = head + run;
+        st.head[lane] = tail;
+        const uint32_t run = tail - head;
         if (run == 0) {
             continue;
         }
+        if (run > extent) {
+            st.anomalies++;
+            continue;
+        }
+        p += extent - run;
         st.live_words += run;
-        const uint32_t hm = head & kSpscRingMask;
         // Just-in-time prefetch of this lane's live window: small bursts consumed immediately fit the
         // core's fill-buffer budget -- issuing whole frames ahead was measured 30-40% SLOWER (the bulk
         // cold-line prefetches starve the walk's own demand loads).
-        for (uint32_t off = 0; off < run; off += 16) {
-            spsc_prefetch(ring + ((hm + off) & kSpscRingMask));
+        for (uint32_t o = 0; o < run; o += 16) {
+            spsc_prefetch(p + o);
         }
         uint32_t th = st.timer_hi[lane];
         uint32_t i = 0;
         while (i < run) {
 #if defined(__AVX2__)
             if constexpr (!std::is_same_v<std::decay_t<EmitZones8>, SpscNoZones8>) {
-                const uint32_t idx = (hm + i) & kSpscRingMask;
-                if (i + 16 <= run && idx + 16 <= kSpscRingCap) {
-                    const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ring + idx));
-                    const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ring + idx + 8));
+                if (i + 16 <= run) {
+                    const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + i));
+                    const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p + i + 8));
                     const __m256i even = _mm256_castps_si256(
                         _mm256_shuffle_ps(_mm256_castsi256_ps(v0), _mm256_castsi256_ps(v1), _MM_SHUFFLE(2, 0, 2, 0)));
                     const __m256i odd = _mm256_castps_si256(
@@ -200,14 +211,14 @@ inline void spsc_decode_frame(
                 }
             }
 #endif
-            const uint32_t w0 = ring[(hm + i) & kSpscRingMask];
+            const uint32_t w0 = p[i];
             const uint32_t t = pp_type(w0);
             if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
                 if (i + 2 > run) {
                     st.anomalies++;
                     break;
                 }
-                const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                const uint32_t w1 = p[i + 1];
                 const uint64_t ts = (t == PP_ZONE_TOTAL) ? w1 : pp_full_ts(th, w1);
                 emit(lane, t, pp_low27(w0) & 0xFFFFu, ts, pg);
                 i += 2;
@@ -219,7 +230,7 @@ inline void spsc_decode_frame(
                     st.anomalies++;
                     break;
                 }
-                const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                const uint32_t w1 = p[i + 1];
                 if (w1 != pg) {
                     pg = w1;
                     emit_prog(core, pg);
@@ -231,12 +242,7 @@ inline void spsc_decode_frame(
                     st.anomalies++;
                     break;
                 }
-                const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
-                uint32_t payload[kSpscMaxDataWords];
-                for (uint32_t k = 0; k < n; k++) {
-                    payload[k] = ring[(hm + i + 2 + k) & kSpscRingMask];
-                }
-                emit_data(lane, t, pp_data_id(w0), pp_full_ts(th, w1), pg, payload, n);
+                emit_data(lane, t, pp_data_id(w0), pp_full_ts(th, p[i + 1]), pg, p + i + 2, n);
                 i += 2 + n;
             } else {
                 st.anomalies++;
@@ -246,6 +252,7 @@ inline void spsc_decode_frame(
         st.timer_hi[lane] = th;
     }
     st.prog[core] = pg;
+    return off - kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
 }
 
 }  // namespace tt::tt_metal::profiler

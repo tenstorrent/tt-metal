@@ -5889,3 +5889,47 @@ per block is not free and the saved uops were not the constraint). Confirms N+55
 ceiling is DMA-cold line latency at fill-buffer concurrency, and no instruction-count reduction moves it.
 The code is NOT kept (measured-neutral complexity); this entry preserves the construction should a
 latency-relieved future (warm staging via a copier thread, or a denser wire) make ALU width matter again.
+
+## §N+58 — Live-extent packed frames: NIU-gathered packing at the socket push; 3.0x fewer bytes at 29% fill, exact everywhere (bh-18, 2026-08-19)
+
+The wire moved to the format profiler_common.h always documented: per frame, prefix + control vector +
+each RISC's live window `[tail - run, tail)` packed flat, `w[1]` = the real payload length, frames
+variable-length and page-rounded. The 45%-of-drainer CPU copy that killed exact packing originally is NOT
+reintroduced: ship_once parses the staged control vector (~20 L1 loads/frame), patches the length word,
+and the NIU gathers the windows straight from staging — ~11 NoC writes per frame instead of one burst per
+batch. Packing happens ONLY at the socket push: fillers, the DRAM-ring protocol and the scan are
+byte-identical, so the DRAM slots stay raw and the mover packs blind from the frame's own ctrl.
+
+The part the proposal underestimated: NoC L1->PCIe writes require dst ≡ src (mod 16 B,
+NOC_PCIE_WRITE_ALIGNMENT_BYTES; the NoC mis-delivers rather than rejects). Each live run therefore
+carries 0-3 pad words bringing the wire offset to its ring phase — spsc_span_pack_pad() in
+profiler_common.h, the single rule both sides compute; the wrap continuation is congruent for free
+(512 ≡ 0 mod 4). Worst-case frame is now 2,656 words (10,624 B, 166 pages) — BIGGER than raw when all
+five rings are full. Pad and page-tail words are never written; the host walks past them.
+
+Host: decode_pass parses the peeked window header-by-header (partial tail left unpopped — the device
+only pushes whole frames), acks by actual pages, and the per-lane walk went circular->linear: ring mask,
+wrap-stitch scratch and the AVX2 ring-boundary bailout are all deleted. The decode returns the
+ctrl-implied payload and the receiver checks it against w[1], so a pack-rule disagreement is a counted
+bad frame, not silent corruption.
+
+Measured (judged delay-15, 12x10 x10k):
+  - Correctness exact on every gate: 2x2 20,040 records; role-split, full-role, self-zones; judged runs
+    0 bad frames / 0 anomalies / 0 resyncs / 0 order regressions; COMPLETENESS 600/600, 0 stranded.
+  - Wire 553 -> 502 MB/socket (-9%); busy 12.63 GB/s, 759 Mzones/s (baseline 12.10, 667); stalls
+    351,347 vs 352,621. Best judged run of the series, but within run-to-run spread (632-759 over 3).
+  - WHY only 9%: this benchmark saturates producers by design, so snapshots run 88-96% full — there is
+    almost no dead data to strip. The 2.3x projection used a stale 44% fill figure; the baseline's real
+    fill was 667 Mzones/s x 16 B / 12.1 GB/s = 88%.
+  - Sparse regime (delay 150, 29% fill): 61,897 frames, 215.3 MB packed vs 653.6 MB raw-equivalent
+    (frames x 10,560 — same-run arithmetic, no A/B needed) = 3.04x; decode busy 19.4 ms vs ~54 ms raw
+    at the same GB/s. The win scales inversely with fill; near-empty spans (real-model traces) approach
+    the 165-page -> 5-page floor.
+  - Device cost: mover noc-chunk 6.98 us per 7-frame push at ~96% fill (~9.9 GB/s per mover, ~20 GB/s
+    aggregate — above the device's ~15.9 GB/s offer, so egress stays off the critical path; stalls
+    unchanged agree). Hoisting noc_write_init_state out of the per-chunk path was neutral (7.04 -> 6.98):
+    the cost is the ~77 write issues per push, not command-buffer setup. The judged run's DRAM rings hit
+    100% high-water with ~2,550 filler ring-room waits — that is host-decode < device-offer backlog
+    (250 MB vs 256 MB ring capacity), present in the baseline arithmetic too, absorbed losslessly.
+  - Deferred option if mover issue cost ever matters: a raw-fallback bit for >=~90%-full frames (one
+    burst again). Rejected for now — it is a second wire format for a path that is not the bottleneck.
