@@ -21,6 +21,7 @@
 #include <atomic>
 #include <cassert>
 #include <cerrno>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <limits>
@@ -73,6 +74,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>   // FabricNodeId, MeshId, FabricConfig
 #include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>     // RoutingDirection
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>  // TopologyMapper (peer chip asic ids)
 #include <tt-metalium/distributed_context.hpp>
 
 #include "tt_emule/chip_store.hpp"
@@ -2512,7 +2514,12 @@ static const std::vector<uint32_t>& __emule_fabric_walk(uint32_t src, tt::tt_fab
 // DRAM lives in per-channel private mmaps that are not part of the shared segment.
 // See tt-emule docs/fabric-ccl-emulation.md.
 static std::mutex g_peer_seg_mu;
-static std::unordered_map<uint32_t, uint8_t*> g_peer_seg;  // emule chip id -> attached segment base
+struct EmulePeerSegment {
+    uint8_t* base = nullptr;
+    std::unique_ptr<tt::umd::SocDescriptor> soc;
+    std::unordered_map<tt_xy_pair, size_t> slot_of;
+};
+static std::unordered_map<uint32_t, std::unique_ptr<EmulePeerSegment>> g_peer_seg;
 
 // Cross-rank writes resolved in the packet currently being delivered, published only once its stores
 // are complete. Per-fiber-worker, so concurrent deliveries cannot mix their tallies.
@@ -2727,36 +2734,70 @@ static uint8_t* __emule_fabric_resolve_peer(uint32_t dst_chip, uint64_t noc_addr
     if (info == nullptr || info->local) {
         return nullptr;
     }
-    // Any local chip supplies the geometry: same board, same arch, same harvesting. The mask is part
-    // of the segment name, so a heterogeneous peer fails to attach rather than aliasing silently.
+    // The peer's mask selects both its exact segment and its worker-slot geometry; never guess either.
     auto* local = get_sw_emulated_chip(static_cast<tt::ChipId>(__emule_self->chip_id));
     if (local == nullptr) {
         return nullptr;
     }
-    const uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
-    const uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
-    const size_t slot = local->slot_of(tt_xy_pair(noc_x, noc_y));
-    if (slot == SIZE_MAX) {
-        return nullptr;  // not a Tensix core — no pool slot, hence not in the shared segment
-    }
-
-    uint8_t* base = nullptr;
+    EmulePeerSegment* peer = nullptr;
     {
         std::lock_guard<std::mutex> lk(g_peer_seg_mu);
         auto it = g_peer_seg.find(dst_chip);
         if (it != g_peer_seg.end()) {
-            base = it->second;
+            peer = it->second.get();
         } else {
-            const size_t bytes = local->num_pool_slots() * tt_emule::L1Pool::SLOT_SIZE;
-            base = static_cast<uint8_t*>(tt_emule::chip_store_attach_peer(
-                info->asic_id, local->shm_harvest_mask(), bytes, tt_emule::L1Pool::SLOT_SIZE));
+            const std::string prefix =
+                "tt_emule." + tt_emule::chip_store_job_id() + ".u" + std::to_string(info->asic_id) + ".h";
+            std::optional<uint64_t> peer_mask;
+            try {
+                for (const auto& entry : std::filesystem::directory_iterator("/dev/shm")) {
+                    const std::string name = entry.path().filename().string();
+                    if (!name.starts_with(prefix)) {
+                        continue;
+                    }
+                    const std::string suffix = name.substr(prefix.size());
+                    if (suffix.empty() ||
+                        !std::all_of(suffix.begin(), suffix.end(), [](unsigned char c) { return std::isdigit(c); })) {
+                        continue;
+                    }
+                    const uint64_t mask = std::stoull(suffix);
+                    if (peer_mask.has_value() && *peer_mask != mask) {
+                        peer_mask.reset();
+                        break;  // ambiguous geometry must never pick an arbitrary segment
+                    }
+                    peer_mask = mask;
+                }
+            } catch (...) {
+                peer_mask.reset();
+            }
+            if (peer_mask.has_value()) {
+                constexpr uint64_t field_mask = (1ull << 20) - 1;
+                ChipInfo chip_info;
+                chip_info.noc_translation_enabled = local->get_soc_descriptor().noc_translation_enabled;
+                chip_info.harvesting_masks.tensix_harvesting_mask = *peer_mask & field_mask;
+                chip_info.harvesting_masks.dram_harvesting_mask = (*peer_mask >> 20) & field_mask;
+                chip_info.harvesting_masks.eth_harvesting_mask = (*peer_mask >> 40) & field_mask;
+                auto soc = std::make_unique<tt::umd::SocDescriptor>(
+                    std::make_shared<tt::umd::SocArchDescriptor>(local->get_soc_descriptor().arch), chip_info);
+                const auto cores = soc->get_cores(tt::CoreType::TENSIX, CoordSystem::TRANSLATED);
+                const size_t bytes = cores.size() * tt_emule::L1Pool::SLOT_SIZE;
+                auto* base = static_cast<uint8_t*>(tt_emule::chip_store_attach_peer(
+                    info->asic_id, *peer_mask, bytes, tt_emule::L1Pool::SLOT_SIZE));
+                if (base != nullptr) {
+                    auto segment = std::make_unique<EmulePeerSegment>();
+                    segment->base = base;
+                    segment->soc = std::move(soc);
+                    for (size_t i = 0; i < cores.size(); ++i) {
+                        segment->slot_of[tt_xy_pair(cores[i].x, cores[i].y)] = i;
+                    }
+                    peer = g_peer_seg.emplace(dst_chip, std::move(segment)).first->second.get();
+                }
+            }
             // Cache SUCCESSES only. A miss usually means the owning rank has not opened its devices
             // yet — ranks are not lock-stepped through device open — and caching that would drop
             // every later delivery to the chip for the rest of the run. Retrying costs one failing
             // shm_open. Warn once so a permanent miss is still visible.
-            if (base != nullptr) {
-                g_peer_seg[dst_chip] = base;
-            } else {
+            if (peer == nullptr) {
                 static std::set<uint32_t> warned;
                 if (warned.insert(dst_chip).second) {
                     std::fprintf(stderr,
@@ -2767,7 +2808,26 @@ static uint8_t* __emule_fabric_resolve_peer(uint32_t dst_chip, uint64_t noc_addr
             }
         }
     }
-    if (base == nullptr) {
+    if (peer == nullptr) {
+        return nullptr;
+    }
+    const uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
+    const uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
+    auto verbatim = peer->slot_of.find(tt_xy_pair(noc_x, noc_y));
+    size_t slot = verbatim == peer->slot_of.end() ? SIZE_MAX : verbatim->second;
+    try {
+        auto logical = local->get_soc_descriptor().translate_coord_to(
+            tt_xy_pair(noc_x, noc_y), CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
+        auto dst_xy = peer->soc->translate_coord_to(
+            tt_xy_pair(logical.x, logical.y), CoordSystem::LOGICAL, CoordSystem::TRANSLATED);
+        auto it = peer->slot_of.find(dst_xy);
+        if (it != peer->slot_of.end()) {
+            slot = it->second;
+        }
+    } catch (...) {
+        // Preserve a valid verbatim worker mapping when coordinate translation is unavailable.
+    }
+    if (slot == SIZE_MAX) {
         return nullptr;
     }
     // Only TALLIED here — publishing happens in __emule_fabric_deliver once the stores are done.
@@ -2775,7 +2835,7 @@ static uint8_t* __emule_fabric_resolve_peer(uint32_t dst_chip, uint64_t noc_addr
     // would re-poll, find nothing, and re-park, which is precisely the lost wakeup this exists to
     // prevent. See tt-emule docs/multi-rank-emulation.md.
     ++t_peer_writes;
-    return base + slot * tt_emule::L1Pool::SLOT_SIZE +
+    return peer->base + slot * tt_emule::L1Pool::SLOT_SIZE +
            (static_cast<uint32_t>(noc_addr & NOC_LOCAL_MASK) & L1_SLOT_MASK);
 }
 
