@@ -1,0 +1,165 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Rotary position embedding on device: out = x * cos + (x @ M) * sin.
+
+No library changes -- the rotation is a matmul with kt_dim == 1, which makes it per-tile,
+and the rest is one four-leaf SFPU tree. See unified_kernels/rope.cpp.
+
+The reference does NOT use M. It applies the rotation directly --
+rotated[..., 2i] = -x[..., 2i+1], rotated[..., 2i+1] = x[..., 2i] -- so the matrix the
+device multiplies by is checked against the permutation it is supposed to encode, rather
+than against itself.
+
+Two independent gates:
+
+  max absolute error against the direct reference.
+
+  NORM PRESERVATION, per pair. A rotation by any angle preserves the length of each
+  (x[2i], x[2i+1]) pair, so sqrt(out[2i]^2 + out[2i+1]^2) must equal sqrt(x[2i]^2 +
+  x[2i+1]^2) for every pair and every position. That is a property of the op rather than of
+  this reference, and it fails loudly if cos/sin are mispaired, if the sign of the rotation
+  is wrong, or if the matmul is not per-tile -- all things an error-versus-reference check
+  can hide when both sides are built from the same misunderstanding.
+
+    export TT_METAL_HOME=$PWD
+    source python_env/bin/activate
+    python test_unified_rope.py
+"""
+
+import argparse
+import sys
+
+import torch
+from loguru import logger
+
+import ttnn
+from unified_harness import make_cb, single_core, unified_program
+
+KERNEL = "unified_kernels/rope.cpp"
+TILE = 32
+CB = dict(x=0, cos=1, sin=2, m=3, rot=4, out=16)
+
+
+def trans_mat():
+    """ttnn's rotation tile: M[2i][2i+1] = +1, M[2i+1][2i] = -1, so x @ M sends the pair
+    (x[2i], x[2i+1]) to (-x[2i+1], x[2i])."""
+    m = torch.zeros([TILE, TILE])
+    m[torch.arange(0, TILE, 2), torch.arange(1, TILE, 2)] = 1.0
+    m[torch.arange(1, TILE, 2), torch.arange(0, TILE, 2)] = -1.0
+    return m
+
+
+def rotate_pairs(x):
+    """The permutation M encodes, applied directly -- an independent reference."""
+    r = torch.empty_like(x)
+    r[..., 0::2] = -x[..., 1::2]
+    r[..., 1::2] = x[..., 0::2]
+    return r
+
+
+def cos_sin(seq, dim, theta=10000.0):
+    """Interleaved RoPE angles, each duplicated across its pair."""
+    half = dim // 2
+    freqs = 1.0 / (theta ** (torch.arange(0, half, dtype=torch.float32) / half))
+    ang = torch.outer(torch.arange(seq, dtype=torch.float32), freqs)  # seq x half
+    c = torch.repeat_interleave(torch.cos(ang), 2, dim=-1)
+    s = torch.repeat_interleave(torch.sin(ang), 2, dim=-1)
+    return c, s
+
+
+def run(device, seq_t, dim_t, chunk, seed=0):
+    torch.manual_seed(seed)
+    S, D = seq_t * TILE, dim_t * TILE
+    total_tiles = seq_t * dim_t
+    assert total_tiles % chunk == 0, "chunk must divide the tile count"
+
+    x = (torch.rand([S, D]) - 0.5).to(torch.bfloat16)
+    c, s = cos_sin(S, D)
+    cos_t, sin_t = c.to(torch.bfloat16), s.to(torch.bfloat16)
+    m = trans_mat().to(torch.bfloat16)
+
+    dram = ttnn.DRAM_MEMORY_CONFIG
+
+    def to_dev(t):
+        return ttnn.from_torch(
+            t.reshape(1, 1, *t.shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram
+        )
+
+    tx, tc, ts, tm = to_dev(x), to_dev(cos_t), to_dev(sin_t), to_dev(m)
+    tout = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
+
+    core_ranges, cores = single_core()
+    ct_args = [chunk, total_tiles // chunk]
+    for t in (tx, tc, ts, tm, tout):
+        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+    rt_args = [t.buffer_address() for t in (tx, tc, ts, tm, tout)]
+
+    cbs = [
+        make_cb(CB["x"], core_ranges, num_pages=chunk),
+        make_cb(CB["cos"], core_ranges, num_pages=chunk),
+        make_cb(CB["sin"], core_ranges, num_pages=chunk),
+        make_cb(CB["m"], core_ranges, num_pages=1),
+        make_cb(CB["rot"], core_ranges, num_pages=chunk),
+        make_cb(CB["out"], core_ranges, num_pages=chunk),
+    ]
+
+    program = unified_program(
+        kernel_source=KERNEL,
+        core_ranges=core_ranges,
+        cores=cores,
+        cbs=cbs,
+        compile_time_args=ct_args,
+        runtime_args=rt_args,
+    )
+    out = ttnn.generic_op([tx, tc, ts, tm, tout], program)
+    got = ttnn.to_torch(out).to(torch.float32)[0, 0]
+
+    xf = x.to(torch.float32)
+    want = xf * c + rotate_pairs(xf) * s
+    return got, want, xf
+
+
+def pair_norm(t):
+    """sqrt(t[2i]^2 + t[2i+1]^2) for every pair."""
+    return (t[..., 0::2].pow(2) + t[..., 1::2].pow(2)).sqrt()
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser()
+    p.add_argument("--abs-err", type=float, default=0.02)
+    p.add_argument("--norm-tol", type=float, default=0.02)
+    args = p.parse_args(argv)
+
+    # (seq tiles, dim tiles, tiles per chunk). The chunk is the matmul's rt_dim, so it is
+    # capped at the 8-tile DST budget.
+    cases = [(1, 1, 1), (2, 2, 2), (2, 2, 4), (4, 4, 8), (2, 4, 8), (4, 1, 2)]
+
+    device = ttnn.open_device(device_id=0)
+    failed = []
+    try:
+        for seq_t, dim_t, chunk in cases:
+            got, want, xf = run(device, seq_t, dim_t, chunk)
+            e = (got - want).abs().max().item()
+            # A rotation preserves each pair's length.
+            dev = (pair_norm(got) - pair_norm(xf)).abs().max().item()
+            ok = e <= args.abs_err and dev <= args.norm_tol
+            logger.info(
+                f"S={seq_t * TILE:3d} D={dim_t * TILE:3d} chunk={chunk}  max|err|={e:.5f}  "
+                f"pair-norm dev={dev:.5f}  {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failed.append((seq_t, dim_t, chunk))
+    finally:
+        ttnn.close_device(device)
+
+    if failed:
+        logger.error(f"FAIL: {failed}")
+        return 1
+    logger.info("PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
