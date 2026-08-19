@@ -8,6 +8,7 @@
 #include "allocator_state.hpp"
 #include "allocator_types.hpp"
 #include <tt-metalium/buffer.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <enchantum/enchantum.hpp>
 #include <functional>
 #include <string>
@@ -131,7 +132,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     auto size = buffer->aligned_size();
     auto page_size = buffer->aligned_page_size();
     auto buffer_type = buffer->buffer_type();
-    auto bottom_up = buffer->bottom_up();
+    auto bottom_up = buffer->impl().bottom_up();
     auto num_cores = buffer->num_cores();
     this->verify_safe_allocation();
     if (config_->disable_interleaved) {
@@ -139,7 +140,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     }
 
     // Per-core allocation path: each core gets an independent address
-    if (buffer->per_core_allocation_) {
+    if (buffer->impl().per_core_allocation_) {
         TT_FATAL(
             config_->allocator_mode == AllocatorMode::HYBRID,
             "Per-core allocation requires AllocatorMode::HYBRID when opening the device");
@@ -158,9 +159,9 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             addrs[core] = l1_manager_->allocate_buffer(
                 alloc_size, page_size, bottom_up, config_->compute_grid, /*num_shards=*/1, AllocatorID{bank_id + 1});
         }
-        buffer->set_per_core_addresses(std::move(addrs));
+        buffer->impl().set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
-        return buffer->per_core_addresses_.at(cores[0]);
+        return buffer->impl().per_core_addresses_.at(cores[0]);
     }
 
     switch (buffer_type) {
@@ -214,10 +215,10 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     auto buffer_type = buffer->buffer_type();
 
     // Per-core deallocation path
-    if (buffer->per_core_allocation_) {
+    if (buffer->impl().per_core_allocation_) {
         TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
         using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-        for (const auto& [core, addr] : buffer->per_core_addresses_) {
+        for (const auto& [core, addr] : buffer->impl().per_core_addresses_) {
             auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
             l1_manager_->deallocate_buffer(addr, AllocatorID{bank_id + 1});
         }
@@ -533,7 +534,7 @@ AllocatorImpl::~AllocatorImpl() {
 AllocatorState AllocatorImpl::extract_state() const {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto* buf : allocated_buffers_) {
-        TT_FATAL(!buf->per_core_allocation_, "extract_state does not yet support per-core L1 allocations");
+        TT_FATAL(!buf->impl().per_core_allocation_, "extract_state does not yet support per-core L1 allocations");
     }
 
     std::unordered_map<BufferType, AllocatorState::BufferTypeState> states_per_buffer_type;
@@ -566,7 +567,7 @@ AllocatorState AllocatorImpl::extract_state() const {
 void AllocatorImpl::override_state(const AllocatorState& state) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto* buf : allocated_buffers_) {
-        TT_FATAL(!buf->per_core_allocation_, "override_state does not yet support per-core L1 allocations");
+        TT_FATAL(!buf->impl().per_core_allocation_, "override_state does not yet support per-core L1 allocations");
     }
 
     // Clear all buffer types
@@ -612,42 +613,38 @@ DeviceAddr calculate_bank_size_spread(
 }  // namespace detail
 
 // External facing Allocator
-Allocator::Allocator(AllocatorImpl* _impl) : impl(_impl) {}
+Allocator::Allocator(AllocatorImpl* _impl) : impl_(_impl) {}
 
-void Allocator::deallocate_buffers() { impl->deallocate_buffers(); }
+void Allocator::deallocate_buffers() { impl_->deallocate_buffers(); }
 
-std::unordered_set<Buffer*> Allocator::get_allocated_buffers() const { return impl->get_allocated_buffers(); }
+std::unordered_set<Buffer*> Allocator::get_allocated_buffers() const { return impl_->get_allocated_buffers(); }
 
-uint32_t Allocator::get_num_banks(const BufferType& buffer_type) const { return impl->get_num_banks(buffer_type); }
+uint32_t Allocator::get_num_banks(const BufferType& buffer_type) const { return impl_->get_num_banks(buffer_type); }
 
-DeviceAddr Allocator::get_bank_size(const BufferType& buffer_type) const { return impl->get_bank_size(buffer_type); }
+DeviceAddr Allocator::get_bank_size(const BufferType& buffer_type) const { return impl_->get_bank_size(buffer_type); }
 
 CoreCoord Allocator::get_logical_core_from_bank_id(uint32_t bank_id) const {
-    return impl->get_logical_core_from_bank_id(bank_id);
+    return impl_->get_logical_core_from_bank_id(bank_id);
 }
 
 int32_t Allocator::get_bank_offset(BufferType buffer_type, uint32_t bank_id) const {
-    return impl->get_bank_offset(buffer_type, bank_id);
+    return impl_->get_bank_offset(buffer_type, bank_id);
 }
 
 const std::vector<uint32_t>& Allocator::get_bank_ids_from_logical_core(
     BufferType buffer_type, const CoreCoord& logical_core) const {
-    return impl->get_bank_ids_from_logical_core(buffer_type, logical_core);
+    return impl_->get_bank_ids_from_logical_core(buffer_type, logical_core);
 }
 
 DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const {
-    return impl->get_base_allocator_addr(mem_type);
+    return impl_->get_base_allocator_addr(mem_type);
 }
 
-uint32_t Allocator::get_alignment(BufferType buffer_type) const { return impl->get_alignment(buffer_type); }
+uint32_t Allocator::get_alignment(BufferType buffer_type) const { return impl_->get_alignment(buffer_type); }
 
-Statistics Allocator::get_statistics(const BufferType& buffer_type) const { return impl->get_statistics(buffer_type); }
+Statistics Allocator::get_statistics(const BufferType& buffer_type) const { return impl_->get_statistics(buffer_type); }
 
-AllocatorState Allocator::extract_state() const { return impl->extract_state(); }
-
-void Allocator::override_state(const AllocatorState& state) { impl->override_state(state); }
-
-size_t Allocator::get_worker_l1_size() const { return impl->get_worker_l1_size(); }
+size_t Allocator::get_worker_l1_size() const { return impl_->get_worker_l1_size(); }
 
 }  // namespace tt::tt_metal
 
@@ -656,9 +653,9 @@ namespace tt::tt_metal::experimental {
 void synchronize_allocator_state(Allocator* target, const std::vector<Allocator*>& sources) {
     AllocatorState merged_state;
     for (auto* source : sources) {
-        merged_state.merge(source->extract_state());
+        merged_state.merge(source->impl().extract_state());
     }
-    target->override_state(merged_state);
+    target->impl().override_state(merged_state);
 }
 
 }  // namespace tt::tt_metal::experimental

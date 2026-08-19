@@ -13,18 +13,10 @@
 namespace tt::tt_metal {
 
 namespace detail {
-// TODO: These functions in the detail namespace are sharding utility functions and should be moved to a separate
-// header.
-UncompressedBufferPageMapping compute_page_mapping(
-    const Shape& tensor_shape,
-    const Shape& shard_shape,
-    const std::vector<CoreCoord>& cores,
-    ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D);
-
 // Squeezes tensor and shard shapes to minimize rank while preserving sharding semantics.
 // The returned shapes are guaranteed to have the same rank.
 std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Shape& shard_shape);
-}
+}  // namespace detail
 
 class BufferDistributionSpec {
 public:
@@ -75,10 +67,7 @@ public:
     // number of shards per core in group 1, number of shards per core in group 2.
     std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> core_groups_tuple() const;
 
-    UncompressedBufferPageMapping compute_page_mapping() const {
-        return detail::compute_page_mapping(
-            tensor_shape_in_pages_, shard_shape_in_pages_, cores_, shard_distribution_strategy_);
-    }
+    UncompressedBufferPageMapping compute_page_mapping() const;
 
 private:
     static std::vector<CoreCoord> compute_core_list(

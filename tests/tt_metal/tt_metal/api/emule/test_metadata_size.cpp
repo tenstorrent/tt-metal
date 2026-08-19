@@ -5,6 +5,7 @@
 // To run (from the tt-metal repo root, after an emule build):
 //   build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Metadata_*"
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <cstdio>

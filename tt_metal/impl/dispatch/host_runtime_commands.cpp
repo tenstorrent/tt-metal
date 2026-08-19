@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <host_api.hpp>
@@ -51,7 +52,7 @@ void ValidateBufferRegion(
     Buffer& buffer_obj = GetBufferObject(buffer);
 
     TT_FATAL(
-        buffer_obj.is_valid_region(region),
+        buffer_obj.impl().is_valid_region(region),
         "Buffer region with offset {} and size {} is invalid.",
         region.offset,
         region.size);

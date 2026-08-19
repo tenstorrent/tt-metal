@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/span.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <device.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
@@ -443,7 +444,7 @@ bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer, uint32_t 
 }
 
 uint32_t calculate_partial_page_size(const Buffer& buffer) {
-    const HalMemType buffer_mem_type = buffer.memory_type();
+    const HalMemType buffer_mem_type = buffer.impl().memory_type();
     const uint32_t partial_page_size = tt::align(
         DispatchSettings::BASE_PARTIAL_PAGE_SIZE_DISPATCH,
         MetalContext::instance().hal().get_common_alignment_with_pcie(buffer_mem_type));
@@ -1180,7 +1181,7 @@ bool write_to_device_buffer(
             const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
             const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
             const uint64_t pinned_size = pinned_memory->get_buffer_size();
-            auto region = buffer.root_buffer_region();
+            auto region = buffer.impl().root_buffer_region();
             const uint8_t* src_region_start = src_ptr + region.offset;
             const uint8_t* src_region_end = src_region_start + region.size;
             // Check against L1 alignment because we need the copy from the prefetcher to the dispatcher to be aligned.
@@ -1342,8 +1343,8 @@ bool write_to_device_buffer(
         // Empty filter -> no-op (consistent with the sharded path); nothing was actually written.
         return false;
     }
-    auto root_buffer = buffer.root_buffer();
-    auto region = buffer.root_buffer_region();
+    auto root_buffer = buffer.impl().root_buffer(buffer);
+    auto region = buffer.impl().root_buffer_region();
     InterleavedBufferWriteDispatchParamsVariant dispatch_params_variant = initialize_interleaved_buf_dispatch_params(
         *root_buffer,
         cq_id,
@@ -1393,8 +1394,8 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
 
 BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
     Buffer& buffer, uint32_t cq_id, ttsl::Span<const uint32_t> expected_num_workers_completed) {
-    auto root_buffer = buffer.root_buffer();
-    const BufferRegion region = buffer.root_buffer_region();
+    auto root_buffer = buffer.impl().root_buffer(buffer);
+    const BufferRegion region = buffer.impl().root_buffer_region();
     IDevice* device = root_buffer->device();
 
     BufferReadDispatchParams dispatch_params;

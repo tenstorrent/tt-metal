@@ -25,6 +25,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
+#include "impl/buffers/compute_page_mapping.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape2d.hpp>

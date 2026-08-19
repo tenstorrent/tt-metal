@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <chrono>
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
@@ -237,9 +238,11 @@ void WriteToUnitMeshBuffer(
     auto* device = mesh_device->get_devices()[0];
     std::shared_ptr<Buffer> slow_dispatch_buffer;
     if (sharding_args.has_value()) {
-        slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype, sharding_args.value());
+        slow_dispatch_buffer = BufferImpl::create(
+            device, buf->address(), buf->size(), config.page_size, config.buftype, sharding_args.value());
     } else {
-        slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype);
+        slow_dispatch_buffer =
+            BufferImpl::create(device, buf->address(), buf->size(), config.page_size, config.buftype);
     }
     detail::WriteToBuffer(*slow_dispatch_buffer, src);
 }
@@ -253,9 +256,11 @@ void ReadFromUnitMeshBuffer(
     auto* device = mesh_device->get_devices()[0];
     std::shared_ptr<Buffer> slow_dispatch_buffer;
     if (sharding_args.has_value()) {
-        slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype, sharding_args.value());
+        slow_dispatch_buffer = BufferImpl::create(
+            device, buf->address(), buf->size(), config.page_size, config.buftype, sharding_args.value());
     } else {
-        slow_dispatch_buffer = Buffer::create(device, buf->address(), buf->size(), config.page_size, config.buftype);
+        slow_dispatch_buffer =
+            BufferImpl::create(device, buf->address(), buf->size(), config.page_size, config.buftype);
     }
     detail::ReadFromBuffer(*slow_dispatch_buffer, dst);
 }
