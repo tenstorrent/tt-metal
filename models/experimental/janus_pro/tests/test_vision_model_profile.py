@@ -2,11 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# Profiles steady-state vision-model device execution; warmup is excluded from the signposted measurement.
+
 import os
 
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
@@ -32,7 +35,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
     indirect=True,
 )
 @pytest.mark.parametrize("bsz", [1])
-def test_janus_vision_model(
+def test_janus_vision_model_profile(
     mesh_device,
     dummy_weights,
     reset_seeds,
@@ -68,7 +71,15 @@ def test_janus_vision_model(
         dtype=dtype,
         configuration=model_args,
     )
+
+    warmup_output = tt_model(input_tensor)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(warmup_output)
+
+    signpost("start")
     tt_output = tt_model(input_tensor)
+    ttnn.synchronize_device(mesh_device)
+    signpost("stop")
 
     logger.info("Checking outputs")
     out = ttnn.from_device(tt_output)
