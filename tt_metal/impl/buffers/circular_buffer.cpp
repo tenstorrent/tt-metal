@@ -10,6 +10,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "impl/buffers/circular_buffer.hpp"
+#include "impl/buffers/global_circular_buffer_impl.hpp"
 #include "circular_buffer_config.hpp"
 #include "circular_buffer_constants.h"
 #include "tile.hpp"
@@ -178,11 +179,11 @@ void CircularBufferImpl::assign_global_address() {
 
 void CircularBufferImpl::set_global_circular_buffer(const experimental::GlobalCircularBuffer& global_circular_buffer) {
     TT_FATAL(
-        global_circular_buffer.all_cores().contains(this->core_ranges_),
+        global_circular_buffer.impl().all_cores().contains(this->core_ranges_),
         "Specified cores are not contained in associated GlobalCircularBuffer");
     this->config().set_globally_allocated_address(global_circular_buffer.cb_buffer());
     this->shadow_global_circular_buffer_ = &global_circular_buffer;
-    this->globally_allocated_address_ = global_circular_buffer.buffer_address();
+    this->globally_allocated_address_ = global_circular_buffer.impl().buffer_address();
     this->global_circular_buffer_config_address_ = global_circular_buffer.config_address();
 }
 

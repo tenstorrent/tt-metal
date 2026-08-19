@@ -5,39 +5,36 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <ostream>
 
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
 
 namespace tt::tt_metal::distributed {
-class MeshCommandQueue;
+
 class MeshDevice;
-}  // namespace tt::tt_metal::distributed
-
-namespace tt::tt_metal::distributed {
+class MeshEventImpl;
 
 class MeshEvent {
 public:
-    MeshEvent(uint32_t id, MeshCommandQueue& cq, const MeshCoordinateRange& device_range);
-    [[deprecated(
-        "Use MeshEvent(uint32_t, MeshCommandQueue&, const MeshCoordinateRange&) instead. MeshEvent(uint32_t, "
-        "MeshDevice*, uint32_t, const MeshCoordinateRange&) will be removed after September 9th, 2026.")]]
     MeshEvent(uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range);
+    explicit MeshEvent(MeshEventImpl impl);
 
-    // Returns references to the event data.
-    uint32_t id() const;
+    MeshEvent(const MeshEvent& other);
+    MeshEvent& operator=(const MeshEvent& other);
+    MeshEvent(MeshEvent&& other) noexcept;
+    MeshEvent& operator=(MeshEvent&& other) noexcept;
+    ~MeshEvent();
+
     MeshDevice* device() const;
-    uint32_t mesh_cq_id() const;
-    const MeshCoordinateRange& device_range() const;
+
+    MeshEventImpl& impl();
+    const MeshEventImpl& impl() const;
 
     friend std::ostream& operator<<(std::ostream& os, const MeshEvent& event);
 
 private:
-    uint32_t id_ = 0;
-    MeshDevice* device_ = nullptr;
-    uint32_t mesh_cq_id_ = 0;
-    MeshCoordinateRange device_range_;
+    std::unique_ptr<MeshEventImpl> impl_;
 };
 
 }  // namespace tt::tt_metal::distributed

@@ -15,6 +15,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include "impl/buffers/global_circular_buffer_impl.hpp"
 #include "impl/context/metal_context.hpp"
 
 // Metal 2.0 host API (DFB tests)
@@ -1567,7 +1568,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBIssue) {
         // The remote CB's L1 region base is the global CB buffer address (== fifo_start_addr on the
         // receiver). A single write there lands exactly at the start of the locked region, so the flagged
         // issue address is known exactly on the host.
-        uint32_t gcb_addr = static_cast<uint32_t>(global_cb.buffer_address());
+        uint32_t gcb_addr = static_cast<uint32_t>(global_cb.impl().buffer_address());
 
         KernelHandle locker_kernel = CreateKernel(
             program,

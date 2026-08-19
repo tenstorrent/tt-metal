@@ -115,25 +115,27 @@ GlobalSemaphore CreateGlobalSemaphore(
 }
 }  // namespace experimental
 
+GlobalSemaphore CreateGlobalSemaphore(
+    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, cores, initial_value, buffer_type));
+}
+
+GlobalSemaphore CreateGlobalSemaphore(
+    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
+    return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type));
+}
+
 // GlobalSemaphore implementation
 
-GlobalSemaphore::GlobalSemaphore(
-    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) :
-    GlobalSemaphore(GlobalSemaphoreImpl(device, cores, initial_value, buffer_type)) {}
-
-GlobalSemaphore::GlobalSemaphore(
-    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) :
-    GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type)) {}
-
-GlobalSemaphore::GlobalSemaphore(GlobalSemaphoreImpl&& impl) :
-    pimpl_(std::make_unique<GlobalSemaphoreImpl>(std::move(impl))) {}
+GlobalSemaphore::GlobalSemaphore(GlobalSemaphoreImpl impl) :
+    impl_(std::make_unique<GlobalSemaphoreImpl>(std::move(impl))) {}
 
 GlobalSemaphore::GlobalSemaphore(const GlobalSemaphore& other) :
-    pimpl_(other.pimpl_ ? std::make_unique<GlobalSemaphoreImpl>(*other.pimpl_) : nullptr) {}
+    impl_(other.impl_ ? std::make_unique<GlobalSemaphoreImpl>(*other.impl_) : nullptr) {}
 
 GlobalSemaphore& GlobalSemaphore::operator=(const GlobalSemaphore& other) {
     if (this != &other) {
-        pimpl_ = other.pimpl_ ? std::make_unique<GlobalSemaphoreImpl>(*other.pimpl_) : nullptr;
+        impl_ = other.impl_ ? std::make_unique<GlobalSemaphoreImpl>(*other.impl_) : nullptr;
     }
     return *this;
 }
@@ -144,22 +146,32 @@ GlobalSemaphore& GlobalSemaphore::operator=(GlobalSemaphore&& other) noexcept = 
 
 GlobalSemaphore::~GlobalSemaphore() = default;
 
-IDevice* GlobalSemaphore::device() const { return pimpl_->device(); }
+IDevice* GlobalSemaphore::device() const { return impl().device(); }
 
-std::ostream& operator<<(std::ostream& os, const GlobalSemaphore& global_semaphore) {
-    ttsl::reflection::operator<<(os, global_semaphore);
-    return os;
+GlobalSemaphoreImpl& GlobalSemaphore::impl() {
+    TT_FATAL(impl_ != nullptr, "GlobalSemaphore is in a moved-from state.");
+    return *impl_;
 }
 
-DeviceAddr GlobalSemaphore::address() const { return pimpl_->address(); }
+const GlobalSemaphoreImpl& GlobalSemaphore::impl() const {
+    TT_FATAL(impl_ != nullptr, "GlobalSemaphore is in a moved-from state.");
+    return *impl_;
+}
 
-void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const { pimpl_->reset_semaphore_value(reset_value); }
+DeviceAddr GlobalSemaphore::address() const { return impl().address(); }
+
+void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const { impl().reset_semaphore_value(reset_value); }
 
 std::tuple<CoreRangeSet, BufferType> GlobalSemaphore::attribute_values() const {
-    return std::make_tuple(pimpl_->cores(), pimpl_->buffer_type());
+    return std::make_tuple(impl().cores(), impl().buffer_type());
 }
 
 }  // namespace tt::tt_metal
+
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::GlobalSemaphore& global_semaphore) {
+    ttsl::reflection::operator<<(os, global_semaphore);
+    return os;
+}
 
 namespace std {
 
