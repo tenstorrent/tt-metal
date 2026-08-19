@@ -1,0 +1,132 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "tools/profiler/perf_debug_tracy_consumer.hpp"
+
+#include "hostdevcommon/profiler_common.h"
+#include "tools/profiler/perf_debug_profiler_packets.hpp"
+#include "tools/profiler/perf_debug_profiler_tracy_handler.hpp"
+
+namespace tt::tt_metal::perf_debug {
+
+PerfDebugTracyConsumer::PerfDebugTracyConsumer(PerfDebugTracyHandler* handler) : handler_(handler) {
+    // The SWEEP/PACE alternation is what a drainer row is read by, so those two must contrast; PACE is
+    // deliberate idleness and gets a recessive grey. Mover rows use their own hues because the two roles'
+    // same-named phases have different meanings and scales (a filler's CREDIT-WAIT is DRAM ring room, a
+    // mover's is host FIFO credit).
+    zone_colors_[kernel_profiler::DRISC_ZONE_SWEEP] = 0x2E86C1;
+    zone_colors_[kernel_profiler::DRISC_ZONE_PACE] = 0x707B7C;
+    zone_colors_[kernel_profiler::DRISC_ZONE_READ] = 0x27AE60;
+    zone_colors_[kernel_profiler::DRISC_ZONE_READ_WAIT] = 0x196F3D;
+    zone_colors_[kernel_profiler::DRISC_ZONE_PROC] = 0x8E44AD;
+    zone_colors_[kernel_profiler::DRISC_ZONE_CREDIT_WAIT] = 0xC0392B;
+    zone_colors_[kernel_profiler::DRISC_ZONE_WRITE] = 0xD35400;
+    zone_colors_[kernel_profiler::DRISC_ZONE_WR_BARRIER] = 0xF1C40F;
+    zone_colors_[kernel_profiler::DRISC_ZONE_SYNC] = 0xFFFFFF;
+    zone_colors_mover_[kernel_profiler::DRISC_ZONE_SYNC] = 0xFFFFFF;
+    zone_colors_mover_[kernel_profiler::DRISC_ZONE_SWEEP] = 0x16A085;
+    zone_colors_mover_[kernel_profiler::DRISC_ZONE_READ] = 0x52BE80;
+    zone_colors_mover_[kernel_profiler::DRISC_ZONE_CREDIT_WAIT] = 0xE74C3C;
+    zone_colors_mover_[kernel_profiler::DRISC_ZONE_WRITE] = 0xE67E22;
+    zone_colors_mover_[kernel_profiler::DRISC_ZONE_WR_BARRIER] = 0xF7DC6F;
+}
+
+void PerfDebugTracyConsumer::flush_event(const PerfDebugCaptureContext& ctx) {
+    if (!pend_.active) {
+        return;
+    }
+    pend_.active = false;
+    const auto& dev = ctx.devices[pend_.dev];
+    const auto& li = dev.lanes[pend_.lane];
+    WorkerEventPacket pkt;
+    pkt.chip_id = li.chip_id;
+    pkt.core_virtual_x = li.virtual_x;
+    pkt.core_virtual_y = li.virtual_y;
+    pkt.core_noc0_x = li.noc0_x;
+    pkt.core_noc0_y = li.noc0_y;
+    pkt.risc = li.risc;
+    pkt.id = pend_.id;
+    pkt.runtime_id = pend_.runtime_id;
+    if (!pkt.runtime_id) {
+        pkt.name = ctx.zone_name(static_cast<uint16_t>(pend_.id));
+    }
+    const uint64_t base = dev.clock_synced ? 0 : ts_base_[pend_.dev];
+    pkt.timestamp = pend_.ts >= base ? pend_.ts - base : 0;
+    pkt.runtime_host_id = pend_.prog;
+    pkt.values = pend_.vals;
+    pkt.num_values = pend_.got;
+    handler_->HandleWorkerEvent(pkt);
+}
+
+void PerfDebugTracyConsumer::operator()(const PerfDebugRecordBatch& batch) {
+    const PerfDebugCaptureContext& ctx = *batch.context;
+    if (ts_base_.size() < ctx.devices.size()) {
+        ts_base_.resize(ctx.devices.size(), 0);
+    }
+    for (const PerfDebugRec& r : batch.records) {
+        const auto type = r.meta.type;
+        if (type == PerfDebugRecType::Cont) {
+            if (pend_.active && pend_.got < kMaxEventValues) {
+                pend_.vals[pend_.got++] = r.ts;
+            }
+            if (pend_.active && pend_.got >= pend_.want) {
+                flush_event(ctx);
+            }
+            continue;
+        }
+        if (type == PerfDebugRecType::Ext) {
+            if (pend_.active) {
+                pend_.id = static_cast<uint32_t>(r.ts >> 32);
+                pend_.want = (static_cast<uint32_t>(r.ts) + 1) / 2;
+                if (pend_.want == 0) {
+                    flush_event(ctx);
+                }
+            }
+            continue;
+        }
+        flush_event(ctx);  // any non-continuation record terminates a truncated predecessor
+        if (type == PerfDebugRecType::ZoneTotal) {
+            continue;
+        }
+        if (ts_base_[r.meta.dev] == 0) {
+            ts_base_[r.meta.dev] = r.ts;
+        }
+        if (type == PerfDebugRecType::Data || type == PerfDebugRecType::Event) {
+            pend_ = PendingEvent{};
+            pend_.active = true;
+            pend_.dev = r.meta.dev;
+            pend_.lane = r.meta.lane;
+            pend_.ts = r.ts;
+            pend_.id = r.meta.id;
+            pend_.runtime_id = type == PerfDebugRecType::Event;
+            pend_.prog = r.prog;
+            continue;
+        }
+        const auto& dev = ctx.devices[r.meta.dev];
+        const auto& li = dev.lanes[r.meta.lane];
+        WorkerZonePacket pkt;
+        pkt.chip_id = li.chip_id;
+        pkt.core_virtual_x = li.virtual_x;
+        pkt.core_virtual_y = li.virtual_y;
+        pkt.core_noc0_x = li.noc0_x;
+        pkt.core_noc0_y = li.noc0_y;
+        pkt.risc = li.risc;
+        pkt.timer_id = r.meta.id;
+        pkt.name = ctx.zone_name(static_cast<uint16_t>(r.meta.id));
+        {
+            const auto& tbl = li.role == PerfDebugLaneRole::Mover ? zone_colors_mover_ : zone_colors_;
+            if (auto it = tbl.find(static_cast<uint16_t>(r.meta.id)); it != tbl.end()) {
+                pkt.color = it->second;
+            } else if (auto it2 = zone_colors_.find(static_cast<uint16_t>(r.meta.id)); it2 != zone_colors_.end()) {
+                pkt.color = it2->second;
+            }
+        }
+        const uint64_t base = dev.clock_synced ? 0 : ts_base_[r.meta.dev];
+        pkt.timestamp = r.ts >= base ? r.ts - base : 0;
+        pkt.is_start = type == PerfDebugRecType::ZoneStart;
+        handler_->HandleWorkerZone(pkt);
+    }
+}
+
+}  // namespace tt::tt_metal::perf_debug

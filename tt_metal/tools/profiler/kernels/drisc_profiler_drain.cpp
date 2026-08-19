@@ -1345,8 +1345,28 @@ void kernel_main() {
         }
     }
 
+    // Stop-path sweep-to-empty: on stop=1 keep sweeping until one whole sweep moves nothing, so markers
+    // still in worker rings (or DRAM-ring frames not yet moved) ship instead of being stranded -- exiting
+    // on the stop word directly is what silently cut the capture tail on every lane. Producers are
+    // quiescent at close, so this converges in a sweep or two; the deadline covers one that is not.
+    constexpr uint64_t kStopDrainCycles = 135000000;
+    uint64_t stop_seen_at = 0;
+    uint64_t words_at_stop = 0;
+    uint32_t frames_at_stop_check = 0;
+    uint32_t stop_sweeps = 0;
     const uint64_t t_start = get_timestamp();
-    while (sweeps < kMaxSweeps && *stop == 0 && !egress_dead) {
+    while (sweeps < kMaxSweeps && !egress_dead) {
+        invalidate_l1_cache();
+        if (*stop != 0) {
+            if (stop_seen_at == 0) {
+                stop_seen_at = get_timestamp();
+                words_at_stop = total_words;
+            } else if (frames == frames_at_stop_check || get_timestamp() - stop_seen_at > kStopDrainCycles) {
+                break;
+            }
+            frames_at_stop_check = frames;
+            stop_sweeps++;
+        }
         // ---- COMMON-TRIGGER SYNC EVENT: the rendezvous ----
         //
         // FIRST thing in the loop body, before `sweeps++` and before t_sweep0 is taken, so a barrier wait is
@@ -2197,6 +2217,8 @@ void kernel_main() {
     out[130] = sync_events;
     out[131] = sync_timeouts;
     out[132] = sync_spin_cyc;
+    out[133] = stop_sweeps;
+    out[134] = static_cast<uint32_t>(total_words - words_at_stop);
     // ---- NoC FOOTPRINT counters (0 on the default path) --------------------------------------------------
     //
     // TWO BLOCKS, NEVER BLENDED. `life` covers every sweep this drain loop ran; `win` covers the workload
@@ -2255,8 +2277,8 @@ void kernel_main() {
         out[129] = NOC_WORD_BYTES;         // the byte scale, from the header -- host never hardcodes it
     }
     static_assert(
-        kernel_profiler::SPSC_DRAIN_RESULT_WORDS >= 130,
-        "the results block must hold the self-profiling and NoC-footprint counters");
+        kernel_profiler::SPSC_DRAIN_RESULT_WORDS >= 136,
+        "the results block must hold the self-profiling, NoC-footprint and stop-drain counters");
 
     *phase = kPhaseExit;
     // Only hand the socket back if the consumer was still alive. update_socket_config() talks to the same
