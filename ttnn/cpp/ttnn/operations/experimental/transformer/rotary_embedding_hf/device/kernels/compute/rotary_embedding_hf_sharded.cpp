@@ -108,6 +108,7 @@ void kernel_main() {
                         ckl::WaitPolicy::None,
                         ckl::PopPolicy::None,
                         ckl::InputTileMapping::Block,
+                        ckl::DataFormatReconfig::Enabled,
                         ckl::TileAddressing::Offset),
                     ckl::input(scalar_dfb_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{
                     half_Wt, 0u},
@@ -119,6 +120,7 @@ void kernel_main() {
                         rotated_in_interm_dfb_id,
                         ckl::ReservePolicy::None,
                         ckl::PushPolicy::None,
+                        ckl::DataFormatReconfig::Enabled,
                         ckl::TileAddressing::Offset),
                     ckl::Dst::D0>{0u},
                 ckl::PackTile<
@@ -126,6 +128,7 @@ void kernel_main() {
                         rotated_in_interm_dfb_id,
                         ckl::ReservePolicy::None,
                         ckl::PushPolicy::None,
+                        ckl::DataFormatReconfig::Enabled,
                         ckl::TileAddressing::Offset),
                     ckl::Dst::D1>{half_Wt});
             dfb_rotated_in_interm.push_back(Wt);

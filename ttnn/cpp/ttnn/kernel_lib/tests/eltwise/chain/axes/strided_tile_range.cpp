@@ -32,14 +32,8 @@ void kernel_main() {
             DataFormatReconfig::Disabled,
             TileAddressing::Strided)>{StridedTileRange{input_base, input_stride}},
         PackTile<output(
-            cb_out,
-            ReservePolicy::None,
-            PushPolicy::None,
-            DataFormatReconfig::Disabled,
-            PackRelu::Disabled,
-            L1Accumulation::Disabled,
-            DestAccumulation::Disabled,
-            TileAddressing::Strided)>{StridedTileRange{output_base, output_stride}});
+            cb_out, ReservePolicy::None, PushPolicy::None, DataFormatReconfig::Disabled, TileAddressing::Strided)>{
+            StridedTileRange{output_base, output_stride}});
 
     cb_pop_front(cb_in, Ht * input_stride);
     cb_push_back(cb_out, Ht * output_stride);

@@ -207,9 +207,6 @@ void kernel_main() {
             ckl::ReservePolicy::None,
             ckl::PushPolicy::None,
             ckl::DataFormatReconfig::Disabled,
-            ckl::PackRelu::Disabled,
-            ckl::L1Accumulation::Disabled,
-            ckl::DestAccumulation::Disabled,
             ckl::TileAddressing::Strided);
     };
 
@@ -385,8 +382,7 @@ void kernel_main() {
                     ckl::ReservePolicy::PerOuter,
                     ckl::PushPolicy::PerOuter,
                     ckl::DataFormatReconfig::Disabled,
-                    ckl::PackRelu::Disabled,
-                    ckl::L1Accumulation::Disabled,
+                    ckl::TileAddressing::Direct,
                     ckl::DestAccumulation::WholeShape)>{});
 
             // reduce only one final tile
@@ -515,8 +511,7 @@ void kernel_main() {
                     ckl::ReservePolicy::PerOuter,
                     ckl::PushPolicy::PerOuter,
                     ckl::DataFormatReconfig::Disabled,
-                    ckl::PackRelu::Disabled,
-                    ckl::L1Accumulation::Disabled,
+                    ckl::TileAddressing::Direct,
                     ckl::DestAccumulation::WholeShape)>{});
 
             // If modifying this code, see the long comment at the first REDUCE_SCALAR

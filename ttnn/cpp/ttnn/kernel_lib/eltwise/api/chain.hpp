@@ -342,10 +342,10 @@ struct OutputSpec {
     ReservePolicy reserve;
     PushPolicy push;
     DataFormatReconfig reconfig;
-    PackRelu relu;
-    L1Accumulation l1_accumulation;
-    DestAccumulation dest_accumulation;
     TileAddressing addressing;
+    DestAccumulation dest_accumulation;
+    L1Accumulation l1_accumulation;
+    PackRelu relu;
 };
 
 /// Bind one input buffer id to its configuration.
@@ -360,8 +360,6 @@ constexpr InputSpec input(
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
     TileAddressing addressing = TileAddressing::Direct) noexcept;
 constexpr InputSpec input(uint32_t cb_id, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept;
-constexpr InputSpec input(
-    uint32_t cb_id, WaitPolicy wait, PopPolicy pop, InputTileMapping mapping, TileAddressing addressing) noexcept;
 
 /// Bind srcB of a BinaryFpu and optionally select its intra-tile broadcast. The overload taking
 /// an existing InputSpec makes compile-time helper-produced input configurations composable.
@@ -376,27 +374,20 @@ constexpr BinaryFpuInputSpec input(
     TileAddressing addressing = TileAddressing::Direct) noexcept;
 constexpr BinaryFpuInputSpec input(
     uint32_t cb_id, BroadcastDim broadcast, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept;
-constexpr BinaryFpuInputSpec input(
-    uint32_t cb_id,
-    BroadcastDim broadcast,
-    WaitPolicy wait,
-    PopPolicy pop,
-    InputTileMapping mapping,
-    TileAddressing addressing) noexcept;
 
 /// Bind one output buffer id to its configuration.
-/// Defaults: reserve/push per tile, reconfig enabled, no accumulation, no pack ReLU,
-/// and Direct addressing.
+/// Defaults: reserve/push per tile, reconfig enabled, Direct addressing, no accumulation,
+/// and no pack ReLU. Parameters are ordered by how often call sites set them, so the rare
+/// knobs pay the trailing-default spelling cost instead of the common ones.
 constexpr OutputSpec output(
     uint32_t cb_id,
     ReservePolicy reserve = ReservePolicy::PerTile,
     PushPolicy push = PushPolicy::PerTile,
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
-    PackRelu relu = PackRelu::Disabled,
-    L1Accumulation l1_accumulation = L1Accumulation::Disabled,
+    TileAddressing addressing = TileAddressing::Direct,
     DestAccumulation dest_accumulation = DestAccumulation::Disabled,
-    TileAddressing addressing = TileAddressing::Direct) noexcept;
-constexpr OutputSpec output(uint32_t cb_id, ReservePolicy reserve, PushPolicy push, TileAddressing addressing) noexcept;
+    L1Accumulation l1_accumulation = L1Accumulation::Disabled,
+    PackRelu relu = PackRelu::Disabled) noexcept;
 
 // =============================================================================
 // 2. DEST slot enum — capped at compile-time DEST capacity

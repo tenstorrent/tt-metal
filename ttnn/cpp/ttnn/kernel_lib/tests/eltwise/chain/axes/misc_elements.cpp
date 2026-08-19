@@ -39,7 +39,14 @@ void kernel_main() {
             IterationShape::tiles(n),
             CopyTile<input(cb_a)>{},
             PackTile<output(
-                cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Enabled, PackRelu::Zero)>{},
+                cb_out,
+                ReservePolicy::PerTile,
+                PushPolicy::PerTile,
+                DataFormatReconfig::Enabled,
+                TileAddressing::Direct,
+                DestAccumulation::Disabled,
+                L1Accumulation::Disabled,
+                PackRelu::Zero)>{},
             PackTile<output(cb_linear)>{});
     }
 }

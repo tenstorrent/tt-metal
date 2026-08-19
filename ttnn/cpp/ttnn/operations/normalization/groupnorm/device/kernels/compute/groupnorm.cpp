@@ -262,9 +262,6 @@ void kernel_main() {
             ckl::ReservePolicy::None,
             ckl::PushPolicy::None,
             ckl::DataFormatReconfig::Disabled,
-            ckl::PackRelu::Disabled,
-            ckl::L1Accumulation::Disabled,
-            ckl::DestAccumulation::Disabled,
             ckl::TileAddressing::Strided);
     };
 

@@ -40,16 +40,14 @@ void kernel_main() {
             ReservePolicy::PerOuter,
             PushPolicy::PerOuter,
             DataFormatReconfig::Enabled,
-            PackRelu::Disabled,
-            L1Accumulation::Disabled,
+            TileAddressing::Direct,
             DestAccumulation::PerRow)>;
         using PerRowCallerPack = PackTile<output(
             cb_out,
             ReservePolicy::None,
             PushPolicy::None,
             DataFormatReconfig::Enabled,
-            PackRelu::Disabled,
-            L1Accumulation::Disabled,
+            TileAddressing::Direct,
             DestAccumulation::PerRow)>;
         using WholeShapeAccumulate = BinaryFpu<
             BinaryFpuOp::Add,
@@ -62,16 +60,14 @@ void kernel_main() {
             ReservePolicy::PerOuter,
             PushPolicy::PerOuter,
             DataFormatReconfig::Enabled,
-            PackRelu::Disabled,
-            L1Accumulation::Disabled,
+            TileAddressing::Direct,
             DestAccumulation::WholeShape)>;
         using WholeShapeCallerPack = PackTile<output(
             cb_out,
             ReservePolicy::None,
             PushPolicy::None,
             DataFormatReconfig::Enabled,
-            PackRelu::Disabled,
-            L1Accumulation::Disabled,
+            TileAddressing::Direct,
             DestAccumulation::WholeShape)>;
 
         CircularBuffer output_buffer(cb_out);
@@ -117,14 +113,16 @@ void kernel_main() {
             ReservePolicy::OneUpfront,
             PushPolicy::OneAtEnd,
             DataFormatReconfig::Disabled,
-            PackRelu::Disabled,
+            TileAddressing::Direct,
+            DestAccumulation::Disabled,
             L1Accumulation::Enabled)>;
         using CallerPack = PackTile<output(
             cb_acc,
             ReservePolicy::None,
             PushPolicy::None,
             DataFormatReconfig::Disabled,
-            PackRelu::Disabled,
+            TileAddressing::Direct,
+            DestAccumulation::Disabled,
             L1Accumulation::Enabled)>;
 
         if constexpr (caller_managed) {

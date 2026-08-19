@@ -218,10 +218,10 @@ constexpr OutputSpec OutputSpecConfig::decode(uint16_t storage, uint32_t cb_id) 
         ReserveField::decode(storage),
         PushField::decode(storage),
         ReconfigField::decode(storage),
-        ReluField::decode(storage),
-        L1AccumulationField::decode(storage),
+        AddressingField::decode(storage),
         DestAccumulationField::decode(storage),
-        AddressingField::decode(storage)};
+        L1AccumulationField::decode(storage),
+        ReluField::decode(storage)};
 }
 
 }  // namespace detail
@@ -238,11 +238,6 @@ constexpr InputSpec input(
 
 constexpr InputSpec input(uint32_t cb_id, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept {
     return input(cb_id, wait, pop, InputTileMapping::Scalar, reconfig);
-}
-
-constexpr InputSpec input(
-    uint32_t cb_id, WaitPolicy wait, PopPolicy pop, InputTileMapping mapping, TileAddressing addressing) noexcept {
-    return input(cb_id, wait, pop, mapping, DataFormatReconfig::Enabled, addressing);
 }
 
 constexpr BinaryFpuInputSpec input(InputSpec input_spec, BroadcastDim broadcast) noexcept {
@@ -265,39 +260,18 @@ constexpr BinaryFpuInputSpec input(
     return input(input(cb_id, wait, pop, reconfig), broadcast);
 }
 
-constexpr BinaryFpuInputSpec input(
-    uint32_t cb_id,
-    BroadcastDim broadcast,
-    WaitPolicy wait,
-    PopPolicy pop,
-    InputTileMapping mapping,
-    TileAddressing addressing) noexcept {
-    return input(input(cb_id, wait, pop, mapping, addressing), broadcast);
-}
-
 constexpr OutputSpec output(
     uint32_t cb_id,
     ReservePolicy reserve,
     PushPolicy push,
     DataFormatReconfig reconfig,
-    PackRelu relu,
-    L1Accumulation l1_accumulation,
+    TileAddressing addressing,
     DestAccumulation dest_accumulation,
-    TileAddressing addressing) noexcept {
-    return {cb_id, reserve, push, reconfig, relu, l1_accumulation, dest_accumulation, addressing};
+    L1Accumulation l1_accumulation,
+    PackRelu relu) noexcept {
+    return {cb_id, reserve, push, reconfig, addressing, dest_accumulation, l1_accumulation, relu};
 }
 
-constexpr OutputSpec output(uint32_t cb_id, ReservePolicy reserve, PushPolicy push, TileAddressing addressing) noexcept {
-    return output(
-        cb_id,
-        reserve,
-        push,
-        DataFormatReconfig::Enabled,
-        PackRelu::Disabled,
-        L1Accumulation::Disabled,
-        DestAccumulation::Disabled,
-        addressing);
-}
 
 namespace detail {
 

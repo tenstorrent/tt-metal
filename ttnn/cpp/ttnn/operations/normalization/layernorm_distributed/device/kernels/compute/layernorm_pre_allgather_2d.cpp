@@ -167,8 +167,7 @@ void kernel_main() {
                 ckl::ReservePolicy::PerOuter,
                 ckl::PushPolicy::PerOuter,
                 ckl::DataFormatReconfig::Enabled,
-                ckl::PackRelu::Disabled,
-                ckl::L1Accumulation::Disabled,
+                ckl::TileAddressing::Direct,
                 ckl::DestAccumulation::WholeShape)>{});
     }
     dfb_x2_merge.pop_front(num_cores_y);
