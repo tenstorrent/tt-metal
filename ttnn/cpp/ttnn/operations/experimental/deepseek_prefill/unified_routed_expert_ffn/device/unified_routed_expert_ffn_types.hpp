@@ -38,6 +38,7 @@ enum class RoutedExpertActivation : uint8_t {
     Silu = 0,  // plain SiLU SwiGLU: silu(gate) * up                      (DeepSeek default)
     SwiGluOai =
         1,  // clamped swigluoai: (clamp(up,±L)+1)·clamp(gate,max=L)·σ(α·clamp(gate,max=L))  (MiniMax-M3 / gpt-oss)
+    SituGlu = 2,  // Kimi K3 SiTU-GLU: 4*tanh(gate/4)*sigmoid(gate) * 25*tanh(up/25)
 };
 
 // Attributes (the constants known at host time).
@@ -86,13 +87,7 @@ struct UnifiedRoutedExpertFfnParams {
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
-        "chunk_M_tiles",
-        "m_tiles",
-        "local_expert_id",
-        "read_x_at_offset",
-        "x_is_row_major",
-        "activation",
-        "fuse_bias");
+        "chunk_M_tiles", "m_tiles", "local_expert_id", "read_x_at_offset", "x_is_row_major", "activation", "fuse_bias");
     auto attribute_values() const {
         return std::forward_as_tuple(
             chunk_M_tiles, m_tiles, local_expert_id, read_x_at_offset, x_is_row_major, activation, fuse_bias);

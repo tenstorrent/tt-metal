@@ -28,6 +28,9 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
+#ifdef SITU_GLU
+#include "api/compute/situ_glu.h"
+#endif
 #include "moe_fused_swiglu_compute_helpers.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
@@ -205,6 +208,83 @@ ALWI void mul_blocked(uint32_t n) {
     cb_push_back(OUT, n);
 }
 
+#ifdef SITU_GLU
+// Reduce both halves and apply SiTU while their sums are still in DEST. Four gate and four up
+// outputs fill the eight-tile window, eliminating the old pack-to-L1 + reload boundary.
+template <uint32_t GATE, uint32_t UP, uint32_t OUT>
+ALWI void fold_situ_glu_blocked(uint32_t num_contributors, uint32_t n) {
+    constexpr uint32_t OUTPUTS_PER_WINDOW = DEST_LIMIT / 2;
+    pack_reconfig_data_format(OUT);
+    cb_wait_front(GATE, num_contributors * n);
+    cb_wait_front(UP, num_contributors * n);
+    cb_reserve_back(OUT, n);
+    for (uint32_t base = 0; base < n; base += OUTPUTS_PER_WINDOW) {
+        uint32_t width = n - base;
+        if (width > OUTPUTS_PER_WINDOW) {
+            width = OUTPUTS_PER_WINDOW;
+        }
+        tile_regs_acquire();
+
+        reconfig_data_format(GATE, GATE);
+        uint32_t c;
+        if (num_contributors & 1u) {
+            copy_tile_to_dst_init_short(GATE);
+            for (uint32_t i = 0; i < width; ++i) {
+                copy_tile(GATE, base + i, i);
+            }
+            c = 1;
+        } else {
+            add_tiles_init(GATE, GATE, /*acc_to_dest=*/false);
+            for (uint32_t i = 0; i < width; ++i) {
+                add_tiles(GATE, GATE, base + i, n + base + i, i);
+            }
+            c = 2;
+        }
+        add_tiles_init(GATE, GATE, /*acc_to_dest=*/true);
+        for (; c + 1 < num_contributors; c += 2) {
+            for (uint32_t i = 0; i < width; ++i) {
+                add_tiles(GATE, GATE, c * n + base + i, (c + 1) * n + base + i, i);
+            }
+        }
+
+        reconfig_data_format(UP, UP);
+        if (num_contributors & 1u) {
+            copy_tile_to_dst_init_short(UP);
+            for (uint32_t i = 0; i < width; ++i) {
+                copy_tile(UP, base + i, width + i);
+            }
+            c = 1;
+        } else {
+            add_tiles_init(UP, UP, /*acc_to_dest=*/false);
+            for (uint32_t i = 0; i < width; ++i) {
+                add_tiles(UP, UP, base + i, n + base + i, width + i);
+            }
+            c = 2;
+        }
+        add_tiles_init(UP, UP, /*acc_to_dest=*/true);
+        for (; c + 1 < num_contributors; c += 2) {
+            for (uint32_t i = 0; i < width; ++i) {
+                add_tiles(UP, UP, c * n + base + i, (c + 1) * n + base + i, width + i);
+            }
+        }
+        add_tiles_init(UP, UP, /*acc_to_dest=*/false);
+
+        for (uint32_t i = 0; i < width; ++i) {
+            situ_glu_tile(i, width + i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < width; ++i) {
+            pack_tile(i, OUT);
+        }
+        tile_regs_release();
+    }
+    cb_pop_front(GATE, num_contributors * n);
+    cb_pop_front(UP, num_contributors * n);
+    cb_push_back(OUT, n);
+}
+#endif
+
 // Per-K-block FMA step count for the gate/up matmul: the padded K slot is KR_PAD tiles wide but
 // only `kr_rows` of them are real, so the loop bound shrinks and the pad tiles are never touched.
 struct KrSteps {
@@ -236,8 +316,13 @@ void kernel_main() {
     const uint32_t my_row = get_arg_val<uint32_t>(6);  // row in the column == which scatter slice I own
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_tiles, cb_w_gate, cb_gate_acc);
+    // The activation is compile-time selected and therefore gets its own cached program.
+#ifdef SITU_GLU
+    situ_glu_tile_init();
+#else
     // SiLU rides the packer thread of the root's final reduce add.
     silu_tile_init_pack();
+#endif
 
     CircularBuffer tilize_done(cb_tilize_done);
     CircularBuffer mailbox_compute(cb_mailbox_compute);
@@ -437,6 +522,9 @@ void kernel_main() {
             // PACK must be the ONLY pusher of the slice CBs: `cb_push_back` writes the shared
             // `tiles_received` word from the pushing RISC-V's own count, so two pushers corrupt it.
             if (slice_tiles) {
+#ifdef SITU_GLU
+                // SiTU fuses both reductions with the binary SFPU pass below.
+#else
                 // KGROUPS-1 contributors fold here; the last one rides the SiLU-fused add below.
                 fold_chain<cb_slice_gate, cb_gather_gate>(KGROUPS - 1, slice_tiles);
                 // The final gate add, with SiLU on the packer thread. Chunked to DEST_LIMIT because
@@ -453,7 +541,23 @@ void kernel_main() {
                 gg_buf.pop_front(slice_tiles);
 
                 fold_chain<cb_slice_up, cb_gather_up>(KGROUPS, slice_tiles);
+#endif
+            }
+        }
 
+        {
+            MaybeDeviceZoneScope("compute_swiglu");
+            // SwiGLU on MY SLICE ONLY, straight into the CB the writer unicasts from. The workers'
+            // slices tile the ROOT's cb_h_local as they LAND, so the gather IS the assembly: no
+            // landing CB and no root-side copy.
+            if (slice_tiles) {
+#ifdef SITU_GLU
+                fold_situ_glu_blocked<cb_gather_gate, cb_gather_up, cb_h_slice>(KGROUPS, slice_tiles);
+#else
+                // Inherits phase 1's hoisted cb_gate_acc pack format, which is correct exactly
+                // because cb_h_slice is bfp8 — the epilogue's single dtype boundary.
+                mul_blocked<cb_gate_silu, cb_slice_up, cb_h_slice>(slice_tiles);
+#endif
                 // Drain the landing CBs' padding tail so the pop total equals the reader's
                 // WHOLE-CB push. That is not tidiness: the whole-CB push is what returns the
                 // landing write pointer to the CB base on EVERY core every M-block, which is the
@@ -464,18 +568,6 @@ void kernel_main() {
                     gg_buf.pop_front(CAP - live);
                     gu_buf.pop_front(CAP - live);
                 }
-            }
-        }
-
-        {
-            MaybeDeviceZoneScope("compute_swiglu");
-            // SwiGLU on MY SLICE ONLY, straight into the CB the writer unicasts from. The workers'
-            // slices tile the ROOT's cb_h_local as they LAND, so the gather IS the assembly: no
-            // landing CB and no root-side copy.
-            if (slice_tiles) {
-                // Inherits phase 1's hoisted cb_gate_acc pack format, which is correct exactly
-                // because cb_h_slice is bfp8 — the epilogue's single dtype boundary.
-                mul_blocked<cb_gate_silu, cb_slice_up, cb_h_slice>(slice_tiles);
             }
         }
 

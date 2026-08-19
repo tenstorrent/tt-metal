@@ -25,6 +25,10 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
 
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
+    TT_FATAL(
+        op.activation != RoutedExpertActivation::SituGlu,
+        "unified_routed_expert_ffn: RoutedExpertActivation::SituGlu is supported by "
+        "RoutedExpertImplementation::MoeFusedSwiGlu");
     TT_FATAL(t.x.storage_type() == ttnn::StorageType::DEVICE, "x must be on device");
     // x layout/dtype depends on x_is_row_major:
     //   false (default): x is TILE BFLOAT8_B — the reader reads tile pages directly.
@@ -294,8 +298,7 @@ UnifiedRoutedExpertFfnDeviceOperation::spec_return_value_t UnifiedRoutedExpertFf
 }
 
 UnifiedRoutedExpertFfnDeviceOperation::tensor_return_value_t
-UnifiedRoutedExpertFfnDeviceOperation::create_output_tensors(
-    const operation_attributes_t& op, const tensor_args_t& t) {
+UnifiedRoutedExpertFfnDeviceOperation::create_output_tensors(const operation_attributes_t& op, const tensor_args_t& t) {
     if (t.optional_output.has_value()) {
         return *t.optional_output;
     }
@@ -325,8 +328,8 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<ttnn::Tensor>& gate_bias,
     const std::optional<ttnn::Tensor>& up_bias,
     const std::optional<ttnn::Tensor>& down_bias) {
-    using OperationType =
-        ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
+    using OperationType = ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::
+        UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .chunk_M_tiles = chunk_M_tiles,

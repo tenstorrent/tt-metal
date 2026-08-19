@@ -117,7 +117,8 @@ ttnn::Tensor unified_routed_expert_moe(
     // old ttnn::extract (input slice) + ttnn::insert (output placement) pair
     // into the reader and writer — no per-expert temporary buffer or extra DRAM
     // round trip. The fused implementation is intentionally explicit: callers
-    // with SwiGluOai or projection biases must select the unified path.
+    // with SwiGluOai or projection biases must select the unified path. SiTU-GLU
+    // is implemented by the fused path for Kimi K3.
     //
     // x is the whole shared buffer, so pass this expert's row count
     // (max_dispatched_tokens_per_expert in tiles) as input_m_tiles — the op sizes
@@ -126,8 +127,9 @@ ttnn::Tensor unified_routed_expert_moe(
     const bool use_moe_fused_swiglu = implementation == RoutedExpertImplementation::MoeFusedSwiGlu;
     if (use_moe_fused_swiglu) {
         TT_FATAL(
-            activation == RoutedExpertActivation::Silu,
-            "RoutedExpertImplementation::MoeFusedSwiGlu supports only RoutedExpertActivation::Silu");
+            activation == RoutedExpertActivation::Silu || activation == RoutedExpertActivation::SituGlu,
+            "RoutedExpertImplementation::MoeFusedSwiGlu supports RoutedExpertActivation::Silu and "
+            "RoutedExpertActivation::SituGlu");
         TT_FATAL(
             !has_bias, "RoutedExpertImplementation::MoeFusedSwiGlu does not support routed-expert projection biases");
     }
@@ -175,7 +177,8 @@ ttnn::Tensor unified_routed_expert_moe(
                 fused_core_grid,
                 output,
                 expert_region_offsets,
-                /*read_x_at_offset=*/true);
+                /*read_x_at_offset=*/true,
+                activation);
             continue;
         }
         unified_routed_expert_ffn(
