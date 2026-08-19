@@ -6,8 +6,7 @@
 Dense MLA cache coverage lives in cache/test_mla_cache.py. This suite verifies the sparse-specific
 behavior: sparse capability is resolved explicitly (config / host weights / cache), the offline
 cache build emits the indexer tensorbins, cache-only construction stays sparse (binds TtIndexer,
-never dense), completeness covers the indexer files, and a sparse cache-only construct with no cache
-warns and stays sparse (mirrors dense's lenient placeholder load) instead of silently going dense.
+never dense), completeness covers the indexer files.
 
 The `matches_config` test is host-only (no device); the build→cache-only→PCC test runs on a TP>=2
 mesh so the dense 128-head epilogue fits (TP=1 overflows L1). Validity gating (so collected==run) is
@@ -49,9 +48,7 @@ SP_AXIS, TP_AXIS = 0, 1
 # variant's runtime config stops carrying the DSA fields would be masked by the PCC test below (it can
 # resolve sparse via the cache), so assert matches_config / resolve_has_indexer directly.
 # --------------------------------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "variant", ["deepseek_v32", "glm_5_1", "glm_5_2"], indirect=True, ids=["deepseek_v32", "glm_5_1", "glm_5_2"]
-)
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm_5_1", "glm_5_2"])
 def test_matches_config_detects_dsa(variant, config_only):
     assert TtIndexer.matches_config(config_only), f"{variant.name}: runtime config should carry DSA index_* fields"
     # No host weights, no cache, no explicit override -> still resolves sparse purely from the config.
@@ -112,8 +109,8 @@ def test_glm52_indexer_types_generator():
 
 
 def test_indexer_layer_is_reused_gating():
-    """indexer_layer_is_reused is True only on shared layers. A config WITHOUT indexer_types (GLM-5.1 /
-    v3.2) is all-full -> always False: the single source of truth that keeps GLM-5.1 unaffected."""
+    """indexer_layer_is_reused is True only on shared layers. A config WITHOUT indexer_types (GLM-5.1)
+    is all-full -> always False: the single source of truth that keeps GLM-5.1 unaffected."""
     cfg = glm_5_2_hf_config()
     for i in (0, 1, 2, 6, 10, 74):
         assert indexer_layer_is_reused(cfg, i) is False, f"L{i} is a full layer"
@@ -232,7 +229,7 @@ def _build_mla(config, state_dict, mesh_device, weight_cache_path):
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["deepseek_v32", "glm_5_1"], indirect=True, ids=["deepseek_v32", "glm_5_1"])
+@pytest.mark.parametrize("variant", ["glm_5_1"], indirect=True, ids=["glm_5_1"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant, config_only):
@@ -350,39 +347,3 @@ def test_glm52_shared_layer_cache_skips_indexer(mesh_device, device_params, vari
     assert type(mla_c._indexer).__name__ == "ReuseIndexer", "shared layer must bind ReuseIndexer"
     logger.info(f"[{variant.name}] shared layer {shared_idx}: cache built without indexer, ReuseIndexer bound")
     ttnn.synchronize_device(mesh_device)
-
-
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-            },
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="linear"),
-            id="linear-4x2",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("variant", ["deepseek_v32"], indirect=True, ids=["deepseek_v32"])
-@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
-@pytest.mark.timeout(0)
-def test_sparse_cache_only_without_cache_warns_stays_sparse(mesh_device, device_params, variant, config_only):
-    """Sparse cache-only construction with no indexer cache must WARN (not raise — mirrors dense's
-    lenient placeholder load) and stay sparse, never silently fall back to dense."""
-    config = config_only
-    config.max_seq_len = SEQ_LEN
-    warnings = []
-    sink = logger.add(lambda m: warnings.append(str(m)), level="WARNING")
-    try:
-        mla = _build_mla(config, {}, mesh_device, weight_cache_path=CACHE_DIR)  # empty (cleaned) dir
-    finally:
-        logger.remove(sink)
-    assert mla._has_indexer, "must stay sparse (resolved from config), not fall back to dense"
-    assert type(mla._indexer).__name__ == "TtIndexer", "must bind TtIndexer, never NullIndexer"
-    assert any(
-        "indexer has neither host weights nor a complete cache" in m for m in warnings
-    ), f"expected a loud warning about the missing indexer weights/cache; got: {warnings}"

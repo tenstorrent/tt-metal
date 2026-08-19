@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Realtime-profiler perf harness for the DeepSeek V3.2 / GLM-5.1 / GLM-5.2 MLA (DSA) chunked-prefill layer.
+Realtime-profiler perf harness for the GLM-5.1 / GLM-5.2 MLA (DSA) chunked-prefill layer.
 
 Production scenario (defaults): process one **5k-token chunk** with **50k tokens already cached**,
 on the Galaxy **SP=8 × TP=4** mesh.
@@ -49,7 +49,7 @@ Per-forward regions are what attribute ops to each cold iteration (the per-itera
 replace the old MLA_START signpost split. The run total is the sum of per-forward criticals.
 
 Single test (was a two-test tracy driver+impl split):
-  * test_mla_chunked_perf — parametrized over [deepseek_v32, glm_5_1, glm_5_2] × [warm, cold, long] ×
+  * test_mla_chunked_perf — parametrized over [glm_5_1, glm_5_2] × [warm, cold, long] ×
     [sparse, dense]. Builds the DSA ttMLA (variant from the ``variant`` fixture) and, per scenario,
     measures one forward over the (zero-init) block-cyclic caches (warm/long) or a chunk loop that
     fills them (cold), profiling each forward under the realtime profiler. Prints a per-op table and
@@ -70,7 +70,7 @@ Three scenarios (the test sweeps all three):
     chunk over a long prefix. Like the others the cache scales by SP/8, so per-chip depth stays
     Galaxy-equal on every box (LoudBox=128k, QuietBox=64k box-local cache).
 
-variant axis — deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 / glm_5_2 (64 / 32). All run the
+variant axis — glm_5_1 / glm_5_2 (64 / 32). All run the
   SAME TP=4 meshes: GLM's thin per-chip head shard (64/4=16 < 32) is handled by the head→sequence
   reshard in ttMLA._sparse_mla (#48727) plus the head-replicated seq-sharded indexer, so GLM is no longer
   TP-capped. GLM-5.2's sparse case intentionally builds the final ``full`` indexer layer (layer 74), with
@@ -79,8 +79,8 @@ variant axis — deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 / glm_5_
   All model dims come from the single-source reference configs.
 
 attn_mode axis — a baseline to compare the sparse impl against:
-  * sparse — v3.2 DSA: indexer builds top-k index keys, sparse_sdpa attends only the top-k=2048 keys.
-  * dense  — v3.1 baseline: has_indexer=False -> NullIndexer + full-prefix ring MLA (ring_joint_sdpa
+  * sparse — DSA: indexer builds top-k index keys, sparse_sdpa attends only the top-k=2048 keys.
+  * dense  — baseline: has_indexer=False -> NullIndexer + full-prefix ring MLA (ring_joint_sdpa
     over the whole prefix, no indexer/top-k). Needs no cache fill (ring reads the prefix by logical_n).
   Each case writes its own profiler subdir, including the sparse KV format in the directory name, so
   reports never clobber and the CSVs stay directly comparable.
@@ -94,7 +94,6 @@ Run (Blackhole Galaxy/LoudBox/QuietBox) — all combos (2 variants × 3 scenario
     pytest -m perf models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_mla_chunked_perf -s
     pytest -m perf ...::test_mla_chunked_perf -k "glm_5_1 and cold and sparse and kv_scaled_fp8" -s
     pytest -m perf ...::test_mla_chunked_perf -k "warm and sparse and kv_bf16" -s
-    pytest -m perf ...::test_mla_chunked_perf -k "deepseek_v32 and dense" -s
 
 Knobs (env): DS_PERF_CACHE (default 51200), DS_PERF_CHUNK (default 5120), DS_PERF_LONG_CACHE (default
 512000), DS_PERF_CSV / DS_DENSE_PERF_CSV (summary filename, per-scenario suffix appended; written under
@@ -125,7 +124,6 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import glm_hf_config
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import glm_5_2_hf_config
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
@@ -145,19 +143,18 @@ CHUNK_TOKENS = int(os.environ.get("DS_PERF_CHUNK", 5120))  # 5 * 1024 processed 
 # chunk (the rope table requires total = cache + chunk to be a multiple of chunk). Override with
 # DS_PERF_LONG_CACHE (must stay a chunk multiple), e.g. 522240 (=102 chunks ≈ 512*1024).
 LONG_CACHE_TOKENS = int(os.environ.get("DS_PERF_LONG_CACHE", 512000))
-# attn_mode axis: sparse (v3.2 DSA indexer + sparse_sdpa) vs dense (v3.1 full-prefix ring MLA — no
+# attn_mode axis: sparse (DSA indexer + sparse_sdpa) vs dense (full-prefix ring MLA — no
 # indexer, no top-k), a baseline to compare the sparse impl against. Each mode writes its own profiler
 # subdir + per-scenario CSVs so the two runs never clobber and stay directly comparable.
 ATTN_MODE = os.environ.get("DS_PERF_ATTN_MODE", "sparse")  # module-level default (mesh-shape detection)
-# Model-variant axis: deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_1 / glm_5_2 (64 / 32). ALL
+# Model-variant axis: glm_5_1 / glm_5_2 (64 q-heads / 32 index heads). ALL
 # run the SAME TP=4 meshes — GLM's thin per-chip head shard (64/4=16 < 32) is handled by the
 # head→sequence reshard in ttMLA._sparse_mla (#48727) plus the head-replicated seq-sharded indexer, so
 # no TP cap applies. Every model dimension comes from the single-source reference config, never hardcoded
 # here. GLM-5.2 additionally exercises a nonzero slot of its compact full-indexer cache below.
-VARIANTS = ("deepseek_v32", "glm_5_1", "glm_5_2")
-VARIANT = os.environ.get("DS_PERF_VARIANT", "deepseek_v32")
+VARIANTS = ("glm_5_1", "glm_5_2")
+VARIANT = os.environ.get("DS_PERF_VARIANT", "glm_5_2")
 _CONFIG_BUILDERS = {
-    "deepseek_v32": deepseek_v32_hf_config,
     "glm_5_1": glm_hf_config,
     "glm_5_2": glm_5_2_hf_config,
 }
@@ -364,7 +361,7 @@ pytestmark = pytest.mark.perf
 GALAXY_SP = 8
 GALAXY_TP = 4
 # Head counts / index dims are NOT constants here — they come from the reference config per variant
-# (deepseek_v32: 128/64, glm_5_1: 64/32; see _detect_perf_workload). GALAXY_SP/GALAXY_TP are the
+# (glm_5_1: 64/32; see _detect_perf_workload). GALAXY_SP/GALAXY_TP are the
 # production mesh topology (shared by both variants), not model dims, so they stay in the harness.
 
 
@@ -414,8 +411,8 @@ def _detect_perf_workload(variant_name: str) -> tuple[PerfWorkload, str | None]:
 
     system_name, mesh_shape = system
     sp, tp = mesh_shape
-    # Head counts come from the single-source reference config for the variant (deepseek_v32: 128/64,
-    # glm_5_1: 64/32) — the same builder the config_only fixture resolves, so device and harness agree.
+    # Head counts come from the single-source reference config for the variant (glm_5_1: 64/32) —
+    # the same builder the config_only fixture resolves, so device and harness agree.
     cfg = _CONFIG_BUILDERS[variant_name]()
     local_chunk = _exact_div(CHUNK_TOKENS, GALAXY_SP, "DS_PERF_CHUNK")
     local_heads = _exact_div(cfg.num_attention_heads, GALAXY_TP, f"{variant_name}.num_attention_heads")
@@ -479,7 +476,6 @@ def _op_label(kernel_sources) -> str:
 # the indexer rope (rotary_embedding_indexed) before its shared llama rope kernel, and every real op
 # before the trailing eltwise/unary epilogue. Codes chosen to match the tracy device-op names so the
 # existing per-call graph attribution (parse_percall + its alias sets) consumes this dump unchanged.
-# Verified against the tracy op-code counts/durations for deepseek_v32 warm/sparse.
 _OP_CODE_RULES = (
     # The fused ring indexer includes ring-attention all-gather helper kernels. Match its defining
     # indexer kernels first so the whole program remains attributable to IndexerScore.
