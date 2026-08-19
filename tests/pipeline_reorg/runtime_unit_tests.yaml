@@ -455,14 +455,34 @@
       timeout: 25
     wh_n300_civ2:
       timeout: 25
-    wh_llmbox:
-      timeout: 25
-    wh_galaxy:
-      timeout: 30
     bh_p100a_civ2_viommu:
       timeout: 25
     bh_p150b_civ2_viommu:
       timeout: 25
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+
+# T3K and TG run the same pytest but from their own scripts, and neither pipeline
+# had the power sidecar, so they stay separate entries rather than extra SKUs above.
+- name: runtime_device_profiler_t3k
+  tags: [profiler]
+  cmd: |
+    export DONT_USE_VIRTUAL_ENVIRONMENT=1
+    bash tests/scripts/t3000/run_t3000_profiler_tests.sh run_device_profiler_test
+  skus:
+    wh_llmbox:
+      timeout: 25
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+
+- name: runtime_device_profiler_tg
+  tags: [profiler]
+  cmd: |
+    export DONT_USE_VIRTUAL_ENVIRONMENT=1
+    bash tests/scripts/wh_6u/run_wh_6u_profiler_tests.sh run_device_profiler_test
+  skus:
+    wh_galaxy:
+      timeout: 30
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
 

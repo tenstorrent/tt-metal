@@ -70,7 +70,7 @@ jobs:
         run: |
           WH_SKUS="wh_n150_civ2,wh_n300_civ2,wh_llmbox,wh_galaxy"
           BH_SKUS="bh_p150b_civ2,bh_p100a_civ2_viommu,bh_p150b_civ2_viommu,bh_loudbox,bh_galaxy"
-          MULTICHIP_SKUS="bh_loudbox,wh_galaxy,bh_galaxy"
+          MULTICHIP_SKUS="wh_n300_civ2,wh_llmbox,bh_loudbox,wh_galaxy,bh_galaxy"
           ALL_SKUS="$WH_SKUS,$BH_SKUS"
           VALID_SKUS="wh_n150_civ2 wh_n300_civ2 wh_llmbox wh_galaxy bh_p150b_civ2 bh_p100a_civ2_viommu bh_p150b_civ2_viommu bh_loudbox bh_galaxy wh_all bh_all multichip all"
 

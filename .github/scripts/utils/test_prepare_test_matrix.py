@@ -740,6 +740,8 @@ def test_exclude_tag_removing_every_entry_skips_rather_than_fails(tmp_path: Path
 
 _TRACY_ONLY_UNIT_ENTRIES = {
     "runtime_device_profiler",
+    "runtime_device_profiler_t3k",
+    "runtime_device_profiler_tg",
     "runtime_realtime_profiler",
     "runtime_realtime_profiler_tg",
 }

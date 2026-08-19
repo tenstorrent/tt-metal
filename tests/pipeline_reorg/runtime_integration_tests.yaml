@@ -155,12 +155,22 @@
       timeout: 5
     wh_n300_civ2:
       timeout: 5
-    wh_llmbox:
-      timeout: 8
     bh_p100a_civ2_viommu:
       timeout: 5
     bh_p150b_civ2_viommu:
       timeout: 5
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+
+# The t3000 copy of run_mid_run_data_dump also dumps the ops CSV, and T3K never had
+# the power sidecar, so this stays a separate entry on its own script.
+- name: runtime_profiler_mid_run_data_dump_t3k
+  cmd: |
+    export DONT_USE_VIRTUAL_ENVIRONMENT=1
+    bash tests/scripts/t3000/run_t3000_profiler_tests.sh run_mid_run_data_dump
+  skus:
+    wh_llmbox:
+      timeout: 8
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: runtime
 
