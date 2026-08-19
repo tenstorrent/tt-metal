@@ -35,16 +35,16 @@ constexpr uint32_t kCbBias = 2;  // MM_BIAS only: 1 x ct tiles, resident
 constexpr uint32_t kCbOut = 16;
 constexpr uint32_t kCbAcc = 24;  // running total; a separate CB from kCbOut
 
-// Geometry is compile-time so the strategy can unroll and the DST budget is
-// checked by static_assert. Supplied by the host as -D flags.
-using Geom = u::MatmulGeometry<MM_RT_DIM, MM_CT_DIM, MM_KT_DIM, MM_K_BLOCKS>;
-
+// No geometry to declare: the operand SHAPES below are the geometry, and the DST
+// budget static_assert keys on the output block they imply. MM_K_BLOCKS stays a plain
+// loop bound, which is all it ever was.
+//
 // One spelling of the fusion, biased or not, so the relu variants below do not
 // each need two forms.
 #if defined(MM_BIAS)
-#define MM_FUSION(x, y) u::matmul<Geom>(x, y).bias(bias)
+#define MM_FUSION(x, y) u::matmul(x, y).bias(bias)
 #else
-#define MM_FUSION(x, y) u::matmul<Geom>(x, y)
+#define MM_FUSION(x, y) u::matmul(x, y)
 #endif
 
 constexpr uint32_t kIn0Tiles = MM_RT_DIM * MM_KT_DIM;
@@ -79,7 +79,7 @@ void kernel_main() {
     // The FPU path needs its own hardware startup: SrcOrder::Reverse plus the
     // block dims. compute_init() (init_sfpu) would leave the ALU configured for
     // SFPU work and matmul could not run against it.
-    u::matmul_init<Geom>(kCbIn0, kCbIn1, kCbOut);
+    u::matmul_init<In0, In1>(kCbIn0, kCbIn1, kCbOut);
 
     const auto in0 = TensorAccessor(in0_args, in0_addr);
     const auto in1 = TensorAccessor(in1_args, in1_addr);
@@ -106,8 +106,8 @@ void kernel_main() {
 #endif
     acc.clear();
 
-    for (uint32_t k = 0; k < Geom::num_blocks; ++k) {
-        const bool finish = (k == Geom::num_blocks - 1);
+    for (uint32_t k = 0; k < MM_K_BLOCKS; ++k) {
+        const bool finish = (k == MM_K_BLOCKS - 1);
 
         u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, k).wait();
         u::ComputeBlock b = u::noc_load<1>(in1_storage, in1, k).wait();
@@ -122,7 +122,7 @@ void kernel_main() {
         // both chains at once: relu per k-block, then exp once on the total.
         // exp rather than relu for the epilogue so the two stages stay
         // distinguishable -- relu of a sum of relus would be a no-op.
-        u::Block result = acc.accumulate(u::relu(u::matmul<Geom>(a, b)), finish, [](auto mm) { return u::exp_(mm); });
+        u::Block result = acc.accumulate(u::relu(u::matmul(a, b)), finish, [](auto mm) { return u::exp_(mm); });
 #else
         u::Block result = acc.accumulate(MM_FUSION(a, b), finish);
 #endif
