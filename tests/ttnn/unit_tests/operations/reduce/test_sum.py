@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_allclose, assert_numeric_metrics, assert_with_ulp
 from models.common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
@@ -209,3 +209,44 @@ def test_sum_subcores(device, sub_core_grids, dtype, shape):
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+# Accurate-path ULP cap, matching _SFPU_ULP_MAX in
+# tests/ttnn/nightly/unit_tests/operations/reduction/test_mean_ulp.py: sum is the accumulation mean
+# lowers to, so it is held to the same bar.
+SUM_SFPU_ULP_MAX = 8
+
+
+@pytest.mark.parametrize("input_shape", [(16, 2, 32, 24), (1, 1, 64, 64)])
+@pytest.mark.parametrize("dim", [None, -1, -2])
+@pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["accurate", "fast"])
+def test_sum_fp32_fast_and_approximate_mode(device, input_shape, dim, fast_and_approximate_mode):
+    """FLOAT32 sum with both values of fast_and_approximate_mode.
+    - False (default): accurate SFPU path - within a few ULP of an fp64 golden.
+    - True: faster FPU/TF32 path - result is approximate.
+
+    Unlike max/min, sum accumulates, so it is not bit-exact against torch (the reduction order
+    differs) and accuracy is measured in ULP instead. The input is uniform [1, 2): strictly positive,
+    so the reduction is well conditioned. A zero-mean input would cancel toward zero, where one ULP
+    is tiny and the metric becomes unstable.
+    """
+    torch.manual_seed(1)
+
+    torch_input_tensor = torch.empty(input_shape, dtype=torch.float32).uniform_(1.0, 2.0)
+    # fp64 golden, so the bound measures the device against exact arithmetic rather than against
+    # torch's own fp32 accumulation order.
+    golden_fp64 = torch_input_tensor.to(torch.float64)
+    torch_output_tensor = (torch.sum(golden_fp64) if dim is None else torch.sum(golden_fp64, dim=dim)).to(torch.float32)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    output_tensor = ttnn.sum(input_tensor, fast_and_approximate_mode=fast_and_approximate_mode, dim=dim)
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor)).reshape(torch_output_tensor.shape)
+
+    if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
+        # tf32 truncation puts this path thousands of ULP out, past the range where ULP stays
+        # comparable, so bound it with a loose relative check instead.
+        assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
+    else:
+        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=SUM_SFPU_ULP_MAX)

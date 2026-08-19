@@ -184,7 +184,8 @@ static Tensor reduce_impl(
         // Multi-axis reduces run one axis at a time. Max of maxes is exact, so Max keeps the
         // caller's fast_and_approximate_mode; Mean scales each axis by 1/N, so it stays on FPU.
         const bool sub_step_fast_mode =
-            (reduce_type == reduction_common::ReduceType::Max || reduce_type == reduction_common::ReduceType::Min)
+            (reduce_type == reduction_common::ReduceType::Sum || reduce_type == reduction_common::ReduceType::Max ||
+             reduce_type == reduction_common::ReduceType::Min)
                 ? fast_and_approximate_mode
                 : true;
         auto reduce_nd_loop = [&](const bool use_reduce_type, float scalar) -> Tensor {
@@ -300,7 +301,7 @@ static Tensor reduce_impl(
                 compute_kernel_config,
                 sub_core_grids,
                 /*negate=*/false,
-                /*fast_and_approximate_mode=*/false,
+                /*fast_and_approximate_mode=*/fast_and_approximate_mode,
                 output_layout);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
@@ -682,6 +683,7 @@ Tensor sum(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
+    bool fast_and_approximate_mode,
     const std::optional<Layout>& output_layout) {
     return operations::reduction::convert_output_layout(
         operations::reduction::reduce<reduction_common::ReduceType::Sum>(
@@ -693,7 +695,7 @@ Tensor sum(
             scalar,
             correction,
             sub_core_grids,
-            /*fast_and_approximate_mode=*/false,
+            fast_and_approximate_mode,
             output_layout),
         output_layout);
 }
