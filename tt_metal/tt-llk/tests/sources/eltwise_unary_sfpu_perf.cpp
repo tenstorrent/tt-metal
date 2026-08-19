@@ -130,6 +130,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "fresh_cpp/bitwisenot.h"
 #include "fresh_cpp/castfp32tofp16a.h"
 #include "fresh_cpp/celu.h"
+// Canonical per-op semantic bodies (storm contract: fresh_cpp/README.md).
+#include "fresh_cpp/softplus.h"
+#include "fresh_cpp/softshrink.h"
+#include "fresh_cpp/softsign.h"
+#include "fresh_cpp/sqrt.h"
+#include "fresh_cpp/square.h"
+#include "fresh_cpp/tanh.h"
+#include "fresh_cpp/tanhderivative-lut.h"
+#include "fresh_cpp/tanhshrink.h"
+#include "fresh_cpp/threshold.h"
+#include "fresh_cpp/trigonometry.h"
+#include "fresh_cpp/unarycomp.h"
+#include "fresh_cpp/unarypower.h"
+#include "fresh_cpp/unaryshift.h"
+#include "fresh_cpp/xielu.h"
 
 #ifndef FRESH_CPP_IMPL
 #define FRESH_CPP_IMPL 0
@@ -653,6 +668,64 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_digamma_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
                         }
+                        // Storm S5 (fresh_cpp/ canonical per-op bodies).
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::softshrink)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_softshrink_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                0x3f000000u /* lambda = 0.5f */);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::softsign)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_softsign_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::square)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_square_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::tanhshrink)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_tanhshrink_fresh_cpp,
+                                (is_fp32_dest_acc_en, ITERATIONS),
+                                block_tile,
+                                VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::threshold)
+                        {
+                            // Scalars mirror the production dispatch in sfpu_operations.h (threshold 5.0f, value 10.0f).
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_threshold_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None, 5.0f, 10.0f);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && (SFPU_UNARY_OPERATION == SfpuType::unary_ge || SFPU_UNARY_OPERATION == SfpuType::unary_le))
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_unary_comp_fresh_cpp,
+                                (SFPU_UNARY_OPERATION == SfpuType::unary_ge, ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                0x3f000000u /* value = 0.5f, the production dispatch scalar */);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::left_shift)
+                        {
+                            // Shift amount mirrors the production dispatch constant (SHIFT_AMOUNT = 3u).
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_unary_shift_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None, 3u);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::acosh)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_acosh_fresh_cpp, (is_fp32_dest_acc_en, ITERATIONS), block_tile, VectorMode::None);
+                        }
                         else
                         {
                             test_utils::call_unary_sfpu_operation<
@@ -1094,6 +1167,64 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::digamma)
                         {
                             SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_digamma_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        // Storm S5 (fresh_cpp/ canonical per-op bodies).
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::softshrink)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_softshrink_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                0x3f000000u /* lambda = 0.5f */);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::softsign)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_softsign_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::square)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_square_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::tanhshrink)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_tanhshrink_fresh_cpp,
+                                (is_fp32_dest_acc_en, ITERATIONS),
+                                block_tile,
+                                VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::threshold)
+                        {
+                            // Scalars mirror the production dispatch in sfpu_operations.h (threshold 5.0f, value 10.0f).
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_threshold_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None, 5.0f, 10.0f);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && (SFPU_UNARY_OPERATION == SfpuType::unary_ge || SFPU_UNARY_OPERATION == SfpuType::unary_le))
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_unary_comp_fresh_cpp,
+                                (SFPU_UNARY_OPERATION == SfpuType::unary_ge, ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                0x3f000000u /* value = 0.5f, the production dispatch scalar */);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::left_shift)
+                        {
+                            // Shift amount mirrors the production dispatch constant (SHIFT_AMOUNT = 3u).
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_unary_shift_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None, 3u);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::acosh)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_acosh_fresh_cpp, (is_fp32_dest_acc_en, ITERATIONS), block_tile, VectorMode::None);
                         }
                         else
                         {

@@ -132,3 +132,17 @@ def test_perf_fresh_cpp_int32(
     _run_math_isolate(formats, mathop, input_dimensions, fresh_cpp_impl).run(
         perf_report
     )
+
+
+# Storm S5: fresh/production A-B for the unaryshift row (fresh_cpp/unaryshift.h
+# sem arm vs the production calculate_left_shift hand arm).  A dedicated node —
+# the main int32 sweep keeps its node ids stable (no new axis there, the
+# retype-tripwire lesson).
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32], same=True),
+    mathop=[MathOperation.LeftShift],
+    fresh_cpp_impl=[0, 1],
+)
+def test_perf_unary_shift_fresh_cpp(perf_report, formats, mathop, fresh_cpp_impl):
+    _run_math_isolate(formats, mathop, [128, 64], fresh_cpp_impl).run(perf_report)

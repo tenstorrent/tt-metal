@@ -1303,6 +1303,10 @@ _CAUSAL_LIFT_B2_F32_OPS = [
     MathOperation.Hardmish,
     MathOperation.Hardshrink,
     MathOperation.Heaviside,
+    # Storm S5 (F32 corr rows).
+    MathOperation.Softshrink,
+    MathOperation.Softsign,
+    MathOperation.UnaryGe,
 ]
 _CAUSAL_LIFT_B2_F16B_OPS = [
     MathOperation.Log,
@@ -1327,6 +1331,11 @@ _CAUSAL_LIFT_B2_F16B_OPS = [
     MathOperation.Elu,
     MathOperation.Exp2,
     MathOperation.Fill,
+    # Storm S5 (F16b corr rows).
+    MathOperation.Square,
+    MathOperation.Tanhshrink,
+    MathOperation.Threshold,
+    MathOperation.Acosh,
 ]
 
 
@@ -1390,6 +1399,27 @@ def test_causal_lift_int32_fresh_cpp(mathop, fresh_cpp_impl):
         [64, 64],
         spec_A=spec_A,
         twos_complement=True,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+# Storm S5: dedicated corr family for the unaryshift row's fresh lift.  The
+# existing int sweep (test_eltwise_unary_sfpu_int) cannot grow a fresh_cpp_impl
+# axis without renaming its swept node ids (the retype-tripwire class), so the
+# A/B gets its own nodes.  Same driver, formats, dest_acc, stimuli, and exact
+# int golden as the swept LeftShift node.
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+def test_unary_shift_fresh_cpp(fresh_cpp_impl):
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        DestAccumulation.Yes,
+        ApproximationMode.No,
+        MathOperation.LeftShift,
+        FastMode.No,
+        [64, 64],
+        spec_A=_int_unary_stimuli_spec(MathOperation.LeftShift),
         fresh_cpp_impl=fresh_cpp_impl,
     )
 
