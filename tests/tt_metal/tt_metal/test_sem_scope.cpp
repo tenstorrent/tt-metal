@@ -27,18 +27,11 @@
 
 namespace tt::tt_metal {
 
-// ============================================================================
-// Scoped semaphore (SemScope) tests.
-// ============================================================================
-// Exercises the scoped device Semaphore class (noc_semaphore.h) end-to-end
-// across all three mechanisms -- LOCAL_NONATOMIC (plain L1 RMW),
-// DM_LOCAL_CACHED (32-bit AMO on the cached alias), EXTERNAL (self-targeted
-// NoC atomic). The host resolves each semaphore's mechanism purely from a
-// binder-topology census (program_spec.cpp) -- nothing is configurable on the
-// SemaphoreSpec -- so every test here constructs the SHAPE that makes the
-// census pick the mechanism under test. Raw hardware atomicity is covered by
-// the keystone tests (NocSelfAtomicFixture).
-// ============================================================================
+// Scoped-semaphore (SemScope) tests: exercise the device Semaphore class end-to-end across
+// all three mechanisms (semantics: noc_semaphore.h). The host resolves each semaphore's
+// mechanism purely from a binder-topology census -- nothing is configurable on the
+// SemaphoreSpec -- so every test here builds the shape that makes the census pick the
+// mechanism under test. Raw hardware atomicity is covered by NocSelfAtomicFixture.
 class SemScopeFixture : public MeshDispatchFixture {
 protected:
     static constexpr experimental::NodeCoord core = {0, 0};
@@ -68,18 +61,14 @@ protected:
         num_dms_ = std::min(num_dms_, 6u);  // Metal 2.0 reserves DM0/DM1
     }
 
-    // Runs the smoke kernel and returns the value it read back from the semaphore after
-    // `iterations` increments (and, with_down, decrements). `want` is the scope the census must
-    // resolve for the shape this helper builds:
-    //   LOCAL_NONATOMIC -> sole binder kernel, one thread: nothing can race, the cheap pick
-    //                      (resolution pinned by TestCensusSingleWriterPicksLocal)
-    //   EXTERNAL        -> a read-only OBSERVER kernel binds the semaphore from second_node():
-    //                      an OFF-NODE binder is what forces the NoC atomic (pinned by
-    //                      TestCensusOffNodeBinderBlocksCached) -- an on-node observer would
-    //                      stay DM_LOCAL_CACHED now. Callers must skip-guard on has_second_node().
-    // DM_LOCAL_CACHED is NOT constructible here: the cached pick needs >= 2 writer threads and
-    // the smoke kernel reports without cross-thread sync, so there is no deterministic readback.
-    // Cached coverage lives in run_concurrent and the census-probe tests.
+    // Runs the smoke kernel and returns the semaphore value it read back after `iterations`
+    // increments (and, with_down, decrements). `want` is the scope the census must resolve for
+    // the shape built here: LOCAL_NONATOMIC = a sole single-threaded binder; EXTERNAL = a
+    // read-only observer kernel additionally binds from second_node() (an off-node binder is
+    // what forces the NoC path -- callers must skip-guard on has_second_node()).
+    // DM_LOCAL_CACHED is not constructible here: it needs >= 2 writer threads and the smoke
+    // kernel reports without cross-thread sync, so cached coverage lives in run_concurrent and
+    // the census-probe tests.
     uint32_t run_scope(SemScope want, bool with_down = false, bool sentinel_down = false) {
         if (want == SemScope::DM_LOCAL_CACHED) {
             ADD_FAILURE() << "run_scope cannot build a cached shape (needs >= 2 unsynchronised writer threads)";
@@ -128,10 +117,8 @@ protected:
             .target_nodes = core,
         }};
         if (want == SemScope::EXTERNAL) {
-            // Off-node binder kernel: the census probe with 0 increments and no report is a pure
-            // observer; placed on second_node() it gives the semaphore off-node reach, so the
-            // census must pick EXTERNAL. (On-node it would no longer demote: any number of
-            // on-node DM binder kernels is cached geometry.)
+            // A zero-increment census probe is a pure observer; placed on second_node() it
+            // gives the semaphore the off-node reach that makes the census pick EXTERNAL.
             kernel_specs.push_back(experimental::KernelSpec{
                 .unique_id = OBSERVER,
                 .source = kernel_path_census,
@@ -144,7 +131,7 @@ protected:
                          {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
                 .hw_config = experimental::DataMovementGen2Config{},
             });
-            // WorkUnitSpecs must have DISJOINT target nodes -> the observer gets its own WU.
+            // WorkUnitSpecs must have disjoint target nodes, so the observer gets its own WU.
             work_units.push_back(experimental::WorkUnitSpec{
                 .name = "observer",
                 .kernels = {OBSERVER},
@@ -192,27 +179,19 @@ protected:
         return result.empty() ? 0u : result[0];
     }
 
-    // Multi-DM concurrency proof (roles gated by mhartid in the kernel). num_dms threads
-    // share one bound Semaphore; mode picks CONCURRENT_UP, PRODUCER_CONSUMER or
-    // MULTI_CONSUMER. `want` is the scope the census must resolve for the shape built here:
-    //   DM_LOCAL_CACHED -> both semaphores single-node with every binder (here one multi-threaded
-    //                      DM kernel) on that node = cached geometry (pinned by
-    //                      TestCachedSemLivesInPoolNotRing). No longer the ONLY cached shape --
-    //                      any number of on-node DM binder kernels stays cached; the multi-kernel
-    //                      variant is pinned by TestCachedMultiKernelExactCount.
-    //   EXTERNAL        -> both semaphores span a SECOND node, which disqualifies the per-core
-    //                      pool (pinned by TestCensusMultiNodeSemPicksExternal); the kernel's
-    //                      threads still all run on `core` and hammer the local cell. An extra
-    //                      binder kernel is NOT used here: an on-node one no longer demotes to
-    //                      EXTERNAL, and it would eat a DM hart and could displace hart 2, the
-    //                      kernel's mhartid-gated reporter.
-    // Callers wanting EXTERNAL must skip-guard on has_second_node().
-    // Returns the reporter's value() readback, and asserts the kernel-reported baked scope of
-    // BOTH bound semaphores equals `want` -- so a census change can't silently demote these
-    // shapes to a different (still count-exact) mechanism while the tests stay green.
+    // Multi-DM concurrency proof: num_dms threads share one bound Semaphore, roles gated by
+    // mhartid in the kernel; mode picks CONCURRENT_UP, PRODUCER_CONSUMER or MULTI_CONSUMER.
+    // `want` is the scope the census must resolve for the shape built here: single-node
+    // semaphores with the one binder kernel on that node resolve DM_LOCAL_CACHED; spanning a
+    // second node disqualifies the per-core pool -> EXTERNAL (callers must skip-guard on
+    // has_second_node()). The EXTERNAL shape spans nodes rather than adding a binder kernel,
+    // which would eat a DM hart and could displace the mhartid-gated reporter.
+    // Returns the reporter's value() readback and asserts the baked scope of both semaphores
+    // equals `want`, so a census change cannot silently demote these shapes to a different
+    // (still count-exact) mechanism while the tests stay green.
     uint32_t run_concurrent(SemScope want, const std::string& mode_define) {
         const bool has_watchdog = mode_define == "MODE_MULTI_CONSUMER";
-        // Sentinel prefill: see run_scope. The watchdog word lives on its OWN 64B line.
+        // Sentinel prefill: see run_scope. The watchdog word lives on its own 64B line.
         std::vector<uint32_t> sentinel(3, kNoReport);
         tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
         if (has_watchdog) {
@@ -301,13 +280,11 @@ protected:
         return result[0];
     }
 
-    // Coexistence run: a DM_LOCAL_CACHED semaphore (pool) + an EXTERNAL semaphore (ring) hammered
-    // concurrently by all DMs; returns {cached_final, external_final}, both expected num_dms*iters.
-    // Shapes select the mechanisms: cached_sem is single-node with all binders (one multi-threaded
-    // DM kernel) on its node (= cached geometry -> pool); external_sem/done_sem span a second node, which
-    // disqualifies the per-core pool (-> ring). Callers must skip-guard on has_second_node().
-    // Also asserts the kernel-reported baked scopes: cached_sem must actually be the pool
-    // (DM_LOCAL_CACHED) and external_sem the ring (EXTERNAL), or the coexistence proof is void.
+    // Coexistence run: a DM_LOCAL_CACHED semaphore (pool) and an EXTERNAL semaphore (ring)
+    // hammered concurrently by all DMs; returns {cached_final, external_final}, both expected
+    // num_dms*iters. Shapes select the mechanisms (single-node vs spanning a second node);
+    // callers must skip-guard on has_second_node(). The baked scopes are asserted too --
+    // without that the coexistence proof is void.
     std::pair<uint32_t, uint32_t> run_coexist() {
         std::vector<uint32_t> zero(4, 0);
         tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, zero);
@@ -372,10 +349,10 @@ protected:
         return {result[0], result[1]};
     }
 
-    // Remote-up run: a SENDER kernel on second_node() bumps sem::counter on `core` purely via
-    // Semaphore::up(noc, x, y, 1) while a RECEIVER kernel on `core` waits for the exact total,
-    // then reports {baked scope, value()}. Two binder kernels with one off the semaphore's node:
-    // the census must resolve EXTERNAL. Callers must skip-guard on has_second_node().
+    // Remote-up run: a sender kernel on second_node() bumps sem::counter on `core` purely via
+    // Semaphore::up(noc, x, y, 1) while a receiver kernel on `core` waits for the exact total,
+    // then reports {baked scope, value()}. The off-node binder makes the census resolve
+    // EXTERNAL. Callers must skip-guard on has_second_node().
     std::pair<uint32_t, uint32_t> run_remote(uint32_t sender_threads, uint32_t iters) {
         const uint32_t expected = sender_threads * iters;
         // Sentinel prefill: see run_scope.
@@ -455,26 +432,25 @@ protected:
     }
 
     // ---- Census probe harness ----
-    // One binding kernel in a census shape. All kernels are single-node so per-node runtime args stay
-    // simple; off-node shapes set CensusKernel::node (sole kernel elsewhere, or a second kernel there).
+    // One binding kernel in a census shape. All kernels are single-node; off-node shapes set
+    // CensusKernel::node.
     struct CensusKernel {
         experimental::NodeCoord node{core};
         uint32_t num_threads = 1;
         uint32_t increments = 0;  // 0 for a binder that only reads
         bool reporter = false;    // exactly one kernel should report
         // Nonzero: the reporter spins counter.wait_min(wait_min_total) before reading value().
-        // Its kernel barrier only orders its OWN threads, so this read-only spin on the bound
-        // semaphore (the scope's view is coherent) is how it waits out ANOTHER binder kernel's
-        // increments, making multi-kernel counts exact.
+        // Its kernel barrier only orders its own threads, so this read-only spin is how it
+        // waits out another binder kernel's increments, making multi-kernel counts exact.
         uint32_t wait_min_total = 0;
     };
 
     // Build + run a program with the given census shape; returns {baked_scope, counter_value}.
-    // The scope is read back from the device -- the census's ACTUAL decision, since counts
+    // The scope is read back from the device -- the census's actual decision, since counts
     // alone look right under any correct mechanism.
     std::pair<uint32_t, uint32_t> run_census(
         const experimental::Nodes& sem_target, const std::vector<CensusKernel>& kernels) {
-        // Sentinel prefill (see run_scope), at the REPORTER's node: the probe writes its local L1.
+        // Sentinel prefill (see run_scope) at the reporter's node: the probe writes its local L1.
         experimental::NodeCoord reporter_node = core;
         for (const auto& k : kernels) {
             if (k.reporter) {
@@ -494,14 +470,13 @@ protected:
         std::vector<experimental::KernelSpec> kernel_specs;
         experimental::ProgramRunArgs params;
         // Each kernel gets barrier slot = its index; only NUM_KERNEL_BARRIERS(2) slots exist and
-        // wait_threads() does not bounds-check. Both are free here: census kernels use no DFBs
-        // (whose runtime claims slots 0/1) and cached-pool seeding uses NO barrier at all
-        // (claim-and-publish on the pool row itself).
+        // wait_threads() does not bounds-check. Both slots are free here: census kernels use no
+        // DFBs (whose runtime claims slots 0/1) and cached-pool seeding uses no barrier at all.
         EXPECT_LE(kernels.size(), 2u) << "run_census supports at most 2 kernels (barrier slots)";
         if (kernels.size() > 2u) {
             return {kNoReport, 0u};
         }
-        // WorkUnitSpecs must have DISJOINT target nodes -> group kernels by node into one WU each.
+        // WorkUnitSpecs must have disjoint target nodes, so group kernels by node into one WU each.
         std::vector<std::pair<experimental::NodeCoord, std::vector<experimental::KernelSpecName>>> by_node;
         for (size_t i = 0; i < kernels.size(); i++) {
             const auto& k = kernels[i];
@@ -536,7 +511,7 @@ protected:
                     {{"report_addr", report_addr},
                      {"increment_times", k.increments},
                      {"is_reporter", k.reporter ? 1u : 0u},
-                     // Distinct barrier slot per kernel (see the safety note on the cap above).
+                     // Distinct barrier slot per kernel (see the cap's safety note above).
                      {"barrier_idx", static_cast<uint32_t>(i)},
                      {"wait_min_total", k.wait_min_total}}),
             });
@@ -578,15 +553,13 @@ protected:
 
     static constexpr uint32_t kNoReport = 0xDEADBEEFu;  // sentinel: outside every SemScope value
     static uint32_t scope_val(SemScope s) { return static_cast<uint32_t>(s); }
-    // The semaphore's RING slot as observed by the last run_census() (report word 2). For a cached
+    // The semaphore's ring slot as observed by the last run_census() (report word 2). For a cached
     // semaphore this must stay at the initial value, proving the count lives in the pool.
     uint32_t census_ring_word_{kNoReport};
 };
 
-// EXTERNAL: local up() is a self-targeted NoC atomic increment; value() reads via the uncached
-// alias. Shape: a read-only observer kernel binds the semaphore from a SECOND node -- the
-// off-node binder is what makes the census pick the NoC atomic. Single writer -> value() ==
-// iterations.
+// EXTERNAL smoke: a read-only observer binds the semaphore from a second node, forcing the
+// NoC path; a single writer's value() must equal iterations.
 TEST_F(SemScopeFixture, TestExternalScopeIncrement) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes: the EXTERNAL shape binds an observer kernel off-node";
@@ -597,11 +570,9 @@ TEST_F(SemScopeFixture, TestExternalScopeIncrement) {
         << "Semaphore<EXTERNAL>::up()/value() did not produce the expected single-writer count.";
 }
 
-// DM_LOCAL_CACHED: local up() is a 32-bit RISC-V AMO on the cached alias. The census picks the
-// pool for any single-node semaphore whose binders are all DM kernels on its node with >= 2
-// total instances (a single instance is LOCAL_NONATOMIC), so the smallest cached shape is
-// 2 threads; the census probe barrier-syncs before reporting, making the count exact. Asserts
-// the resolution AND the count.
+// DM_LOCAL_CACHED smoke: the smallest cached shape is one 2-thread on-node binder kernel (a
+// single instance would be LOCAL_NONATOMIC). The probe barrier-syncs before reporting, so
+// both the resolution and the exact count are asserted.
 TEST_F(SemScopeFixture, TestDmLocalCachedScopeIncrement) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs: a 1-instance shape resolves LOCAL_NONATOMIC";
@@ -613,9 +584,8 @@ TEST_F(SemScopeFixture, TestDmLocalCachedScopeIncrement) {
     EXPECT_EQ(count, 2 * iterations) << "Semaphore<DM_LOCAL_CACHED>::up()/value() did not produce the expected count.";
 }
 
-// LOCAL_NONATOMIC: the legacy plain L1 read-modify-write. A single-writer single-node shape is
-// the census's cheap pick (pinned by TestCensusSingleWriterPicksLocal) -- the default path
-// existing DFB/CCL/SDPA callers get. value() == iterations.
+// LOCAL_NONATOMIC smoke: a single-writer single-node shape is the census's cheap pick -- the
+// default path existing DFB/CCL/SDPA callers get. value() must equal iterations.
 TEST_F(SemScopeFixture, TestLocalNonatomicScopeIncrement) {
     const uint32_t observed = run_scope(SemScope::LOCAL_NONATOMIC);
     log_info(LogTest, "LOCAL_NONATOMIC scope value(): {} (expected {})", observed, iterations);
@@ -623,10 +593,9 @@ TEST_F(SemScopeFixture, TestLocalNonatomicScopeIncrement) {
         << "Semaphore<LOCAL_NONATOMIC>::up()/value() (legacy default) did not produce the expected count.";
 }
 
-// up(N) then down(N) must leave the semaphore at 0, per scope. For EXTERNAL this exercises the
-// atomic NoC decrement (INCR_GET of a negative value); for LOCAL_NONATOMIC the legacy decrement.
-// (DM_LOCAL_CACHED has no single-writer shape under the census; its LR/SC decrement is covered
-// by TestDmLocalCachedProducerConsumer and TestDmLocalCachedMultiConsumerDown.)
+// up(N) then down(N) must leave the semaphore at 0, per scope. DM_LOCAL_CACHED has no
+// single-writer shape under the census; its decrement is covered by the producer/consumer
+// and multi-consumer tests.
 TEST_F(SemScopeFixture, TestExternalScopeUpDown) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes: the EXTERNAL shape binds an observer kernel off-node";
@@ -642,20 +611,17 @@ TEST_F(SemScopeFixture, TestLocalNonatomicScopeUpDown) {
     EXPECT_EQ(observed, 0u) << "Semaphore<LOCAL_NONATOMIC>::down() (legacy) did not return to 0.";
 }
 
-// NOTE: the scope-table dispatch is exercised by every test here: sem::counter is a plain
-// constexpr id, the kernels construct via `Semaphore s(sem::counter)`, and the mechanism
-// comes from the census-resolved per-kernel scope table the host bakes.
+// Note the scope-table dispatch is exercised by every test here: the kernels construct via a
+// plain `Semaphore s(sem::counter)` and the mechanism comes from the baked per-kernel table.
 
-// ---- Concurrency proofs (Quasar-only): the single-writer tests above cannot tell an
-// atomic path from a non-atomic one; these do. ----
+// ---- Concurrency proofs: the single-writer tests above cannot tell an atomic path from a
+// non-atomic one; these do. ----
 
-// G1: all num_dms DMs concurrently up(1) a shared Semaphore. Exact num_dms*iters proves
-// up() routes to the atomic mechanism (a non-atomic up() would lose updates -> less).
-// EXTERNAL down() must survive a semaphore that VIOLATES the never-0xFFFFFFFF invariant (that
-// value is the CAS-return sentinel): the subtract's pre-op return IS the sentinel, so the bounded
-// poll inside the lock must give up instead of wedging, leaving the ret slot usable. The kernel
-// set()s the word to 0xFFFFFFFF and down(1)s TWICE: completing at all proves no wedge, and the
-// second down() proves the next lock acquire still works. Exact final value pins the arithmetic.
+// EXTERNAL down() must survive a semaphore holding 0xFFFFFFFF, the CAS-return sentinel: the
+// subtract's pre-op return IS the sentinel, so the bounded poll inside the lock must give up
+// instead of wedging. The kernel set()s the word to 0xFFFFFFFF and down(1)s twice: completing
+// at all proves no wedge, the second down() proves the next lock acquire still works, and the
+// exact final value pins the arithmetic.
 TEST_F(SemScopeFixture, TestExternalSentinelValueDoesNotWedgeDown) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes: the EXTERNAL shape binds an observer kernel off-node";
@@ -665,6 +631,8 @@ TEST_F(SemScopeFixture, TestExternalSentinelValueDoesNotWedgeDown) {
     EXPECT_EQ(observed, 0xFFFFFFFDu) << "down() from the sentinel value must complete and subtract exactly";
 }
 
+// All num_dms DMs concurrently up(1) a shared Semaphore. An exact num_dms*iters count proves
+// up() routes to the atomic mechanism (a non-atomic up() would lose updates).
 TEST_F(SemScopeFixture, TestExternalConcurrentUp) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes: the EXTERNAL shape spans the semaphore across two nodes";
@@ -685,9 +653,9 @@ TEST_F(SemScopeFixture, TestDmLocalCachedConcurrentUp) {
     EXPECT_EQ(observed, expected) << "Semaphore<DM_LOCAL_CACHED>::up() lost updates under concurrency.";
 }
 
-// G2: (num_dms-1) producers up(1) while a SINGLE consumer down(1)s them all. Exact 0 proves
-// down()'s decrement is atomic vs concurrent producer increments (a non-atomic down() loses
-// producer increments -> the consumer starves and the test times out).
+// (num_dms-1) producers up(1) while a single consumer down(1)s them all. Exact 0 proves the
+// decrement is atomic against concurrent increments; a non-atomic down() loses producer
+// increments, so the failure mode is a starved consumer timing out, not a wrong count.
 TEST_F(SemScopeFixture, TestExternalProducerConsumer) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs";
@@ -709,9 +677,9 @@ TEST_F(SemScopeFixture, TestDmLocalCachedProducerConsumer) {
     EXPECT_EQ(observed, 0u) << "Semaphore<DM_LOCAL_CACHED>::down() lost a concurrent producer increment.";
 }
 
-// G3: ONE producer feeds single credits while (num_dms-1) consumers CONCURRENTLY down(iters).
-// Exact 0 proves the cached down()'s CAS retry loop never double-spends a credit
-// (an overdraw wraps unsigned; a lost credit hangs the run).
+// One producer feeds single credits while (num_dms-1) consumers concurrently down() them.
+// Exact 0 proves the cached down() never double-spends a credit (an overdraw wraps unsigned;
+// a lost credit hangs the run).
 TEST_F(SemScopeFixture, TestDmLocalCachedMultiConsumerDown) {
     if (num_dms_ < 4) {
         GTEST_SKIP() << "needs >= 4 user DMs: producer + watchdog + at least two RACING consumers";
@@ -723,8 +691,7 @@ TEST_F(SemScopeFixture, TestDmLocalCachedMultiConsumerDown) {
            "(the LR/SC CAS retry loop is broken -- two consumers passed the >= check on one credit).";
 }
 
-// EXTERNAL multi-consumer down(): the NoC-CAS lock serializes consumers while the producer's
-// plain increments commute. Exact 0 = no credit double-spent, none lost.
+// The same multi-consumer shape on EXTERNAL. Exact 0 = no credit double-spent, none lost.
 TEST_F(SemScopeFixture, TestExternalMultiConsumerDown) {
     if (num_dms_ < 4) {
         GTEST_SKIP() << "needs >= 4 user DMs: producer + watchdog + at least two RACING consumers";
@@ -739,10 +706,9 @@ TEST_F(SemScopeFixture, TestExternalMultiConsumerDown) {
 
 // ---- Cached-pool / EXTERNAL coexistence ----
 
-// A DM_LOCAL_CACHED sem (pool) + an EXTERNAL sem (ring) hammered concurrently by all DMs.
-// The pool is physically disjoint from the NoC-written ring (MEM_DM_CACHED_SEM_BASE <
-// MEM_MAP_END <= kernel_config ring base), so the cached AMO's 64B dirty-line write-back
-// cannot clobber the ring word. Both counts exact => coexistence works.
+// A cached (pool) and an EXTERNAL (ring) semaphore hammered concurrently by all DMs. Both
+// counts exact proves a cached dirty-line write-back cannot clobber the NoC-written ring word
+// (pool isolation: dev_mem_map.h).
 TEST_F(SemScopeFixture, TestCachedExternalCoexistence) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs: a 1-instance cached_sem shape resolves LOCAL_NONATOMIC";
@@ -760,13 +726,13 @@ TEST_F(SemScopeFixture, TestCachedExternalCoexistence) {
            "ring word (pool separation FAILED).";
 }
 
-// ---- Remote up() proofs: Semaphore::up(noc, x, y, v) driven from a SECOND node. ----
-// The receiver wait_min()s for the expected total before reporting, so a LOST increment
+// ---- Remote up() proofs: Semaphore::up(noc, x, y, v) driven from a second node. ----
+// The receiver wait_min()s for the expected total before reporting, so a lost increment
 // manifests as a hang; the exact-count EXPECTs catch overshoot and wrong-word landings.
 
 // One off-node sender thread. Exact count proves remote up() reaches the semaphore's word and
 // loses nothing; the scope report proves the census demoted the off-node-written semaphore to
-// EXTERNAL (any local mechanism would split or lose the remote increments).
+// EXTERNAL.
 TEST_F(SemScopeFixture, TestExternalRemoteUpExactCount) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes for an off-node sender";
@@ -780,7 +746,7 @@ TEST_F(SemScopeFixture, TestExternalRemoteUpExactCount) {
            "(a LOST increment would hang in the receiver's wait_min, not fail here).";
 }
 
-// All user-DM sender threads hammer the SAME remote word. Exact count proves the remote
+// All user-DM sender threads hammer the same remote word. Exact count proves remote
 // increments from independent harts stay mutually atomic through the class API.
 TEST_F(SemScopeFixture, TestExternalRemoteUpConcurrentExactCount) {
     if (!has_second_node()) {
@@ -797,15 +763,11 @@ TEST_F(SemScopeFixture, TestExternalRemoteUpConcurrentExactCount) {
            "hang in the receiver's wait_min before reporting).";
 }
 
-// ============================================================================
-// Census stress suite.
-// ============================================================================
-// Each test builds a census shape and asserts the scope the host ACTUALLY baked
-// (read back from the device) -- counts alone look right under any correct mechanism.
-// NOTE: no "compute kernel binds a cached semaphore" shape -- Metal 2.0 forbids
-// semaphore bindings on compute kernels outright (ValidateProgramSpec), so a
-// binder is always a data-movement kernel.
-// ============================================================================
+// ---- Census stress suite ----
+// Each test builds a census shape and asserts the scope the host actually baked (read back
+// from the device) -- counts alone look right under any correct mechanism. There is no
+// "compute kernel binds a semaphore" shape: Metal 2.0 forbids that outright
+// (ValidateProgramSpec), so a binder is always a data-movement kernel.
 
 // 1 writer instance on a single-cell semaphore -> nothing can race -> cheapest path.
 TEST_F(SemScopeFixture, TestCensusSingleWriterPicksLocal) {
@@ -815,11 +777,10 @@ TEST_F(SemScopeFixture, TestCensusSingleWriterPicksLocal) {
     EXPECT_EQ(count, iterations);
 }
 
-// Many writer instances (threads) all on the semaphore's ONE node -> the census picks the
-// cached-pool AMO (asserted via the baked-scope readback), and the count is exact under
-// concurrency. RESIDENCY: the count must live in the POOL, so the kernel_config RING slot must
-// still hold the untouched initial value -- every other cached assertion is count-only and would
-// pass even if the semaphore had silently fallen back to the ring; this is the test that can tell.
+// Residency check for the cached pick: the count must live in the pool, so the kernel_config
+// ring slot must still hold the untouched initial value. Every other cached assertion is
+// count-only and would pass even if the semaphore had silently fallen back to the ring; this
+// is the test that can tell.
 TEST_F(SemScopeFixture, TestCachedSemLivesInPoolNotRing) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs";
@@ -835,12 +796,10 @@ TEST_F(SemScopeFixture, TestCachedSemLivesInPoolNotRing) {
            "to the kernel_config ring.";
 }
 
-// POSITIVE CONTROL for the residency probe: under EXTERNAL the live count IS in the ring slot,
-// so report[2] must carry it (non-zero). Without this, a broken ring readback that always
-// returns 0 would make TestCachedSemLivesInPoolNotRing pass vacuously. A read-only observer
-// binder kernel on second_node() (0 increments) gives the semaphore off-node reach, so the
-// census picks EXTERNAL (an on-node observer would stay cached now); being off-node it costs
-// no writer hart, and the count stays exact (the observer never writes).
+// Positive control for the residency probe: under EXTERNAL the live count IS in the ring
+// slot, so report[2] must carry it. Without this, a broken ring readback that always returns
+// 0 would make TestCachedSemLivesInPoolNotRing pass vacuously. The off-node read-only
+// observer forces EXTERNAL without costing a writer hart, so the count stays exact.
 TEST_F(SemScopeFixture, TestRingResidencyProbePositiveControl) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs >= 2 worker nodes: only an off-node observer binder forces EXTERNAL";
@@ -858,16 +817,13 @@ TEST_F(SemScopeFixture, TestRingResidencyProbePositiveControl) {
            "not see it -- the residency check could pass vacuously";
 }
 
-// TWO cached semaphores, each with its own multi-threaded binder kernel, co-resident on ONE
-// node: BOTH must resolve DM_LOCAL_CACHED. This shape is now a CAPABILITY, not a conflict --
-// each semaphore lives in its own pool row, each row is seeded by an independent
-// claim-and-publish on that row, and there is NO shared node-wide seeder barrier left for the
-// two groups to mix (the old design demoted this shape to EXTERNAL because unequal thread
-// counts would hang its shared rendezvous). Unequal thread counts on purpose: the exact shape
-// the old rule could not cache must now complete and count exactly.
+// Two cached semaphores, each with its own multi-threaded binder kernel, co-resident on one
+// node: both must resolve DM_LOCAL_CACHED, complete, and count exactly. The old design
+// demoted this shape to EXTERNAL because its shared node-wide seeder rendezvous would hang on
+// unequal thread counts; the counts here are unequal on purpose to pin the repaired shape.
 TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
-    // threads_b = num_dms_ - 2 must be >= 2 (so BOTH kernels are multi-threaded cached shapes)
-    // and != 2 (unequal counts, the old design's hanging variant). num_dms_ >= 5 guarantees both.
+    // threads_b must be >= 2 (so both kernels are multi-threaded cached shapes) and != 2
+    // (unequal counts, the old design's hanging variant). num_dms_ >= 5 guarantees both.
     if (num_dms_ < 5) {
         GTEST_SKIP() << "needs >= 5 user DMs so both kernels are multi-threaded cached shapes "
                         "with different thread counts";
@@ -875,7 +831,6 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
     std::vector<uint32_t> sentinel(3, kNoReport);
     tt::tt_metal::detail::WriteToDeviceL1(device_, core, report_addr, sentinel);
 
-    // Two semaphores, two kernels of DIFFERENT thread counts, both on `core`, one kernel per semaphore.
     const experimental::SemaphoreSpecName SEM_A{"sem_a"};
     const experimental::SemaphoreSpecName SEM_B{"sem_b"};
     experimental::SemaphoreSpec sem_a{.unique_id = SEM_A, .target_nodes = core};
@@ -934,7 +889,7 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord{0, 0};
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
-    RunProgram(mesh_device_, workload);  // must COMPLETE: the two rows' seed protocols are independent
+    RunProgram(mesh_device_, workload);  // completing at all is part of the proof (the old design hung here)
 
     tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 3 * sizeof(uint32_t), result);
     ASSERT_EQ(result.size(), 3u);
@@ -947,19 +902,16 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
         << "sem_a's count is off -- its row's claim-and-publish seed raced or the rows collided";
 }
 
-// The headline multi-kernel cached keystone: TWO multi-threaded DM kernels on `core` both bind
-// ONE shared single-node semaphore and both hammer it -- the census must keep it
-// DM_LOCAL_CACHED (any number of on-node DM binder kernels is cached geometry) and the total
-// must be EXACT across kernel (not just thread) boundaries, proving the row is seeded exactly
-// once for ALL binder harts and the cached AMO loses nothing between kernels. Cross-kernel
-// completion: kernel A's reporter cannot barrier with kernel B (each kernel syncs internally on
-// its own slot, 0 and 1, as run_census hands out), so it spins counter.wait_min(total) -- a
-// read-only op on the bound Semaphore, coherent on-node -- before reading value(). A LOST
-// increment therefore hangs the run instead of underreporting; overshoot still fails the EXPECT.
+// The multi-kernel cached keystone: two multi-threaded DM kernels both bind and hammer one
+// shared single-node semaphore. It must stay DM_LOCAL_CACHED and the total must be exact
+// across kernel (not just thread) boundaries, proving the pool row is seeded exactly once for
+// all binder harts. The reporter cannot barrier with the other kernel, so it spins
+// counter.wait_min(total) before reading value() -- a lost increment therefore hangs the run
+// instead of underreporting; overshoot still fails the EXPECT.
 TEST_F(SemScopeFixture, TestCachedMultiKernelExactCount) {
-    // threads_b = num_dms_ - 2 must be >= 2 (both kernels multi-threaded) and != 2 (unequal
-    // counts, so nothing about the kernels' internal barriers accidentally lines up).
-    // num_dms_ >= 5 guarantees both.
+    // threads_b must be >= 2 (both kernels multi-threaded) and != 2 (unequal counts, so
+    // nothing about the kernels' internal barriers accidentally lines up). num_dms_ >= 5
+    // guarantees both.
     if (num_dms_ < 5) {
         GTEST_SKIP() << "needs >= 5 user DMs for two multi-threaded kernels with different thread counts";
     }
@@ -978,14 +930,11 @@ TEST_F(SemScopeFixture, TestCachedMultiKernelExactCount) {
                                "than once (a re-seed erases earlier increments)";
 }
 
-// Self-restore keystone: the LAST binder hart out of a program clears the pool row's protocol
-// words (entered/exited/seeded), so the NEXT program's first hart re-seeds the counter from the
-// ring init value. THREE back-to-back FRESH programs with the same cached shape must all resolve
-// DM_LOCAL_CACHED and all count exactly. Three runs, not two: a fully missing reset already
-// breaks run 2 (stale seeded -> no re-seed -> count carries run 1's total), but a PARTIAL reset
-// (e.g. only `exited` left stale) leaves run 2 healthy and only breaks deterministically on run
-// 3 (the restore branch never fires again, so run 3 sees stale entered/seeded -> nobody seeds
-// -> count reads high or the entry spin hangs).
+// Self-restore keystone: the last binder hart out of a program resets the pool row so the
+// next program re-seeds it. Three back-to-back fresh programs with the same cached shape must
+// all resolve cached and count exactly. Three runs, not two: a fully missing reset already
+// breaks run 2, but a PARTIAL reset leaves run 2 healthy and only breaks deterministically on
+// run 3 (count reads high, or the entry spin hangs).
 TEST_F(SemScopeFixture, TestCachedSelfRestoresAcrossLaunches) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs: a 1-instance shape resolves LOCAL_NONATOMIC";
@@ -1003,14 +952,12 @@ TEST_F(SemScopeFixture, TestCachedSelfRestoresAcrossLaunches) {
     }
 }
 
-// Cached seeding is IMMUNE to a co-resident kernel's barrier-slot choice BY CONSTRUCTION: the
-// seed protocol uses no barrier at all -- each pool row is seeded once per program by
-// claim-and-publish on the row itself and self-restored by the last binder hart out -- so
-// there is no rendezvous KB's slot pick could ever mix with. This test pins that end-to-end:
-// KA (cached sem) runs beside KB, which syncs on user array slot 1 with a DIFFERENT thread
-// count and binds a two-node sem (EXTERNAL by shape -- the coexistence partner). The run must
-// complete (a seed protocol regressed onto a barrier could hang KA at entry against KB's
-// group), KA must stay cached, and its count must be exact.
+// Cached seeding uses no barrier at all (seed protocol: the genfiles.cpp stubs), so it is
+// immune to a co-resident kernel's barrier-slot choice by construction. This test pins that
+// end-to-end: KA (cached sem) runs beside KB, which syncs on user barrier slot 1 with a
+// different thread count and binds a two-node (EXTERNAL) sem. The run must complete -- a seed
+// protocol regressed onto a barrier could hang KA against KB's group -- KA must stay cached,
+// and its count must be exact.
 TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
     // Same geometry as TestCensusTwoCachedSemsOneNodeBothCached: threads_b >= 2 and != threads_a.
     if (num_dms_ < 5) {
@@ -1081,7 +1028,7 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinate zero_coord{0, 0};
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
-    // Must COMPLETE: a seed protocol regressed onto a kernel barrier could hang KA against KB's group.
+    // Completing at all is part of the proof (see the test banner).
     RunProgram(mesh_device_, workload);
 
     tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 3 * sizeof(uint32_t), result);
@@ -1109,10 +1056,10 @@ TEST_F(SemScopeFixture, TestCensusMultiNodeSemPicksExternal) {
     EXPECT_EQ(scope, scope_val(SemScope::EXTERNAL)) << "a multi-node semaphore must not take the per-core cached pool";
 }
 
-// Node confinement in ISOLATION: a single multi-threaded binder kernel on a different node than the
-// semaphore. Every other cached conjunct holds (all binders are DM kernels, multi-writer,
-// single-cell sem), so only the node-confinement check can demote this to EXTERNAL. Count is not
-// asserted: the binder's node has no host-initialized word for this semaphore.
+// Node confinement in isolation: a single multi-threaded binder kernel on a different node
+// than the semaphore. Every other cached conjunct holds, so only the node-confinement check
+// can demote this to EXTERNAL. Count is not asserted: the binder's node has no
+// host-initialized word for this semaphore.
 TEST_F(SemScopeFixture, TestCensusOffNodeSoleBinderPicksExternal) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs";
@@ -1129,16 +1076,10 @@ TEST_F(SemScopeFixture, TestCensusOffNodeSoleBinderPicksExternal) {
         << "with every other cached conjunct satisfied, node confinement alone must demote to EXTERNAL";
 }
 
-// The census is conservative: bindings carry no read-only declaration, so EVERY binder is a
+// The census is conservative: bindings carry no read-only declaration, so every binder is a
 // possible writer -- a second binder kernel means two instances, never LOCAL_NONATOMIC. But a
-// second ON-node kernel no longer forces EXTERNAL: ANY number of binder kernels/threads stays
-// DM_LOCAL_CACHED as long as the semaphore is single-node and every binder is a DM kernel
-// confined to its node (the node's DM cache domain is coherent, and each pool row seeds by
-// claim-and-publish, so extra kernels bring no rendezvous to conflict). The variants this shape
-// folds in (two 1-thread writers; a writer plus a would-be consumer) resolve cached the same
-// way -- the cached AMO is multi-writer- and multi-consumer-safe. Off-node binder coverage
-// lives in the OffNode tests (TestCensusOffNodeBinderBlocksCached,
-// TestCensusOffNodeSoleBinderPicksExternal).
+// second ON-node kernel does not force EXTERNAL: any number of on-node DM binder kernels is
+// cached geometry. Off-node binder coverage lives in the OffNode tests.
 TEST_F(SemScopeFixture, TestCensusSecondBinderKernelStaysCached) {
     const auto [scope, count] = run_census(
         core, {{.num_threads = 1, .increments = iterations, .reporter = true}, {.num_threads = 1, .increments = 0}});
@@ -1149,9 +1090,8 @@ TEST_F(SemScopeFixture, TestCensusSecondBinderKernelStaysCached) {
     EXPECT_EQ(count, iterations);  // exact: the second kernel binds but never increments
 }
 
-// An off-node binder blocks the cached path: it would address that node's pool copy. With the
-// per-node conflict rule gone, off-node reach is the ONLY demoter in this shape -- a second
-// ON-node binder kernel stays cached (TestCensusSecondBinderKernelStaysCached).
+// An off-node binder blocks the cached path: it would address that node's pool copy. Off-node
+// reach is the only demoter in this shape.
 TEST_F(SemScopeFixture, TestCensusOffNodeBinderBlocksCached) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs";
@@ -1171,12 +1111,10 @@ TEST_F(SemScopeFixture, TestCensusOffNodeBinderBlocksCached) {
 }
 
 // ---- Multi-consumer census shapes ----
-// down() is multi-consumer-safe on both atomic tiers (cached CAS retry loop; EXTERNAL NoC-CAS
-// lock), so shapes a multi-consumer pattern produces resolve by topology like any other and
-// these tests pin the RESOLUTIONS.
+// down() is multi-consumer-safe on both atomic tiers, so multi-consumer shapes resolve by
+// topology like any other; these tests pin the resolutions.
 
-// The 2-thread single-kernel shape passes cached geometry: it must resolve DM_LOCAL_CACHED
-// (whose CAS down() is multi-consumer-safe).
+// The 2-thread single-kernel shape passes cached geometry: it must resolve DM_LOCAL_CACHED.
 TEST_F(SemScopeFixture, TestCensusMultiConsumerCachedShape) {
     if (num_dms_ < 2) {
         GTEST_SKIP() << "needs >= 2 user DMs";
@@ -1189,13 +1127,11 @@ TEST_F(SemScopeFixture, TestCensusMultiConsumerCachedShape) {
     EXPECT_EQ(count, 2u) << "the cached AMO lost an update, or the pool was not initialised";
 }
 
-// Semaphore ids are unique per CORE, not per program: sem_near (on `core`) and sem_far (on
-// second_node()) each get id 0, so this one kernel's scope table has ONE slot for both. Alone,
-// sem_near's shape is cached-eligible (a 2-thread on-node DM binder kernel) while sem_far's
-// off-node binder makes it EXTERNAL -- a divergent slot. The host must promote BOTH to EXTERNAL
-// (one slot holds one mechanism; EXTERNAL is correct for every topology). A broken promotion
-// pass cannot slip through quietly: the emitted per-binding tripwires would then contradict each
-// other and fail this kernel's JIT build.
+// Semaphore ids are unique per CORE, not per program: sem_near and sem_far each get id 0, so
+// this one kernel's scope table has one slot for both. Alone, sem_near would be cached and
+// sem_far EXTERNAL -- a divergent slot -- so the host must promote both to EXTERNAL, which is
+// correct for every topology. A broken promotion pass cannot slip through quietly: the
+// emitted per-binding tripwires would contradict each other and fail this kernel's JIT build.
 TEST_F(SemScopeFixture, TestIdCollisionPromotesToExternal) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs a second node for the disjoint-node id collision";
