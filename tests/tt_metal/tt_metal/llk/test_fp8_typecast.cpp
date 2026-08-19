@@ -355,4 +355,98 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeSpecMatchesLegacy) {
     EXPECT_EQ(legacy, spec);
 }
 
+// ============================================================================
+// Eltwise binary (add): two classic circular buffers (c_0, c_1) -> c_16. The id-free (2.0) add kernel must
+// produce output bit-for-bit identical to the legacy CB-id add kernel on the same inputs (differential
+// equivalence -- no golden needed).
+// ============================================================================
+static vector<std::uint32_t> run_binary_add(
+    distributed::MeshDevice& mesh_device,
+    const vector<std::uint32_t>& src0_vec,
+    const vector<std::uint32_t>& src1_vec,
+    std::uint32_t num_tiles,
+    const std::string& compute_kernel) {
+    IDevice* dev = mesh_device.get_devices()[0];
+    Program program = CreateProgram();
+    CoreCoord core = {0, 0};
+
+    const tt::DataFormat fmt = tt::DataFormat::Float16_b;
+    std::uint32_t tile_bytes = tt::tile_size(fmt);
+
+    auto make_dram = [&]() {
+        InterleavedBufferConfig cfg{
+            .device = dev,
+            .size = num_tiles * tile_bytes,
+            .page_size = num_tiles * tile_bytes,
+            .buffer_type = BufferType::DRAM};
+        return CreateBuffer(cfg);
+    };
+    auto src0_buffer = make_dram();
+    auto src1_buffer = make_dram();
+    auto dst_buffer = make_dram();
+
+    auto make_cb = [&](tt::CBIndex idx) {
+        CircularBufferConfig cb_cfg = CircularBufferConfig(tile_bytes, {{idx, fmt}}).set_page_size(idx, tile_bytes);
+        CreateCircularBuffer(program, core, cb_cfg);
+    };
+    make_cb(tt::CBIndex::c_0);
+    make_cb(tt::CBIndex::c_1);
+    make_cb(tt::CBIndex::c_16);
+
+    auto reader = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    CreateKernel(program, compute_kernel, core, ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {num_tiles}});
+
+    detail::WriteToBuffer(src0_buffer, src0_vec);
+    detail::WriteToBuffer(src1_buffer, src1_vec);
+    SetRuntimeArgs(program, reader, core, {src0_buffer->address(), 0, src1_buffer->address(), 0, num_tiles});
+    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles});
+
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+
+    vector<std::uint32_t> result_vec;
+    detail::ReadFromBuffer(dst_buffer, result_vec);
+    return result_vec;
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixBinaryAddSpecMatchesLegacy) {
+    auto& mesh_device = *devices_[0];
+    constexpr std::uint32_t num_tiles = 64;
+    auto src0 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto src1 = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/7, /*offset=*/-10.0f);
+
+    auto legacy = run_binary_add(
+        mesh_device,
+        src0,
+        src1,
+        num_tiles,
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary_add_legacy.cpp");
+    auto spec = run_binary_add(
+        mesh_device,
+        src0,
+        src1,
+        num_tiles,
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary_add_idfree.cpp");
+
+    EXPECT_EQ(legacy, spec);
+}
+
 }  // namespace tt::tt_metal
