@@ -233,6 +233,22 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
         .unpack_modes = unpack_modes,
     };
 
+    // A compute hardware config holds exactly one generation's settings, so the generation the
+    // program will run on selects which one this factory builds. The five settings above are common
+    // to both generations and carry over unchanged; bfp_pack_precision_mode has no Gen2 equivalent
+    // and is not set here, and enable_2x_src_register is Gen2-only and stays at its default.
+    ComputeHardwareConfig compute_hw_config{compute_config};
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+        compute_hw_config = ComputeGen2Config{
+            .fpu_math_fidelity = default_math_fidelity,
+            .sfpu_precision_mode = Precision::Precise,
+            .enable_32_bit_dest = true,
+            .double_buffer_dest = true,
+            .unpack_modes = unpack_modes,
+        };
+    }
+
     const KernelSpec::CompilerOptions::Defines compute_defines(defines_kernel_args);
 
     auto make_compute = [&](const KernelSpecName& unique_id) {
@@ -266,7 +282,7 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
                  }},
             .compile_time_args = {{"default_acc_value", std::bit_cast<uint32_t>(default_acc_value)}},
             .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "tiles_per_row"}},
-            .hw_config = ComputeHardwareConfig{compute_config},
+            .hw_config = compute_hw_config,
         };
     };
 
