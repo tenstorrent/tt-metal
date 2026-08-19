@@ -112,17 +112,17 @@ struct RingAccumulatorState {
 };
 
 // Ring-streaming lightweight-mask context. Field NAMES match LightweightMaskContext so sdpa_ring_v2's
-// generic `lw_mask.<field>` reads work for either type, BUT the 10 compile-time-constant fields are
-// template params (static constexpr → zero per-instance storage), leaving only the 3 per-ring-iter
-// runtime fields on the stack. Shrinks the live lw_mask object ~56 B → ~12 B on kernel_main's frame.
+// generic `lw_mask.<field>` reads work for either type, BUT the compile-time-constant fields are
+// template params (static constexpr → zero per-instance storage), leaving only the per-ring-iter
+// runtime fields on the stack. Shrinks the live lw_mask object ~56 B → ~20 B on kernel_main's frame.
+// The two partial columns are runtime fields because they may come from a device tensor per dispatch;
+// their CB tile INDICES stay compile-time.
 // Only the ring_joint_sdpa producer uses it; exp_ring keeps the plain LightweightMaskContext —
 // sdpa_ring_v2's MaskCtx template param is deduced per caller.
 template <
     uint32_t NeginfTileIdx,
     uint32_t CausalDiagTileIdx,
     uint32_t LocalNPaddedTiles,
-    uint32_t GlobalNPartialCol,
-    uint32_t JointLPartialCol,
     uint32_t GlobalNPartialTileIdx,
     uint32_t JointLPartialTileIdx,
     uint32_t StraddleMaskChunkId>
@@ -132,13 +132,13 @@ struct RingStreamingMaskCtx {
     uint32_t global_n_padded_tiles = 0;
     uint32_t joint_n_padded_tiles = 0;
     uint32_t straddle_num_padded_tiles = 0;
+    uint32_t global_n_partial_col = 0;
+    uint32_t joint_l_partial_col = 0;
     // Compile-time-constant fields (no per-instance storage):
     static constexpr uint32_t neginf_tile_idx = NeginfTileIdx;
     static constexpr uint32_t causal_diag_tile_idx = CausalDiagTileIdx;
     static constexpr uint32_t primary_diag_tile_idx = CausalDiagTileIdx;
     static constexpr uint32_t local_n_padded_tiles = LocalNPaddedTiles;
-    static constexpr uint32_t global_n_partial_col = GlobalNPartialCol;
-    static constexpr uint32_t joint_l_partial_col = JointLPartialCol;
     static constexpr uint32_t global_n_partial_tile_idx = GlobalNPartialTileIdx;
     static constexpr uint32_t joint_l_partial_tile_idx = JointLPartialTileIdx;
     static constexpr uint32_t straddle_mask_chunk_id = StraddleMaskChunkId;
@@ -2624,15 +2624,18 @@ void sdpa_ring_v2(
             if constexpr (lightweight_mask_enabled) {
                 if (apply_mask) {
                     bool partial_tile_selected = false;
+                    // Live column 0 = tile-aligned boundary this dispatch: no partial stamp.
                     if constexpr (global_n_mask_enabled) {
                         if (is_global_n_mask_chunk) {
-                            lw_partial_tile_idx = lw_mask.global_n_partial_tile_idx;
+                            lw_partial_tile_idx =
+                                lw_mask.global_n_partial_col > 0 ? lw_mask.global_n_partial_tile_idx : 0u;
                             partial_tile_selected = true;
                         }
                     }
                     if constexpr (joint_n_mask_enabled) {
                         if (!partial_tile_selected && is_joint_n_mask_chunk) {
-                            lw_partial_tile_idx = lw_mask.joint_l_partial_tile_idx;
+                            lw_partial_tile_idx =
+                                lw_mask.joint_l_partial_col > 0 ? lw_mask.joint_l_partial_tile_idx : 0u;
                         }
                     }
                 }

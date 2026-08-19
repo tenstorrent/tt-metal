@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <variant>
+
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -12,6 +14,10 @@
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
 
 namespace ttnn::transformer {
+
+// A logical (unpadded) sequence length: a host scalar, or a single-valued device tensor read on-device so
+// the value can change between replays of one captured trace.
+using LogicalLength = std::variant<std::size_t, ttnn::Tensor>;
 
 ttnn::Tensor scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
@@ -89,8 +95,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
-    std::size_t logical_n,
-    std::size_t logical_l,
+    // The tensor form of logical_l always selects the sharded-joint path (its placeholder is the padded
+    // ring total); omit it for a replicated joint.
+    const LogicalLength& logical_n,
+    const LogicalLength& logical_l,
     operations::transformer::SDPAProgramConfig program_config,
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,

@@ -159,7 +159,18 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> slot_id;
     std::optional<Tensor> kv_actual_isl;
 
+    // Trace-safe transport for logical_n / logical_l (opt-in, independent of the metadata path above):
+    // single-valued uint32/int32 device tensors read on-device each dispatch. When set, the matching
+    // RingJointSDPAParams scalar is a worst-case capacity placeholder (the padded ring total), so every
+    // host-side derivation stays valid and the kernels narrow it per dispatch.
+    std::optional<Tensor> logical_n_tensor;
+    std::optional<Tensor> logical_l_tensor;
+
     bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
+
+    bool has_logical_n_tensor() const { return logical_n_tensor.has_value(); }
+
+    bool has_logical_l_tensor() const { return logical_l_tensor.has_value(); }
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.
