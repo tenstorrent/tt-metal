@@ -36,7 +36,8 @@ _EXPECTED = [
     # ── 31B / T3K (WH 12 GB/ASIC: multi-chunk 2048; bound from 32k) ───────
     ("T3K", "google/gemma-4-31B-it", 8192, False, 2048),
     ("T3K", "google/gemma-4-31B-it", 16384, False, 2048),
-    ("T3K", "google/gemma-4-31B-it", 32768, True, 2048),
+    # Unbounded ceiling re-measured at 32768; bounded now starts at 65536 so the
+    # multi-request sliding remap stays out of the served range.
     ("T3K", "google/gemma-4-31B-it", 131072, True, 2048),
     # ── 12B: stay unbounded through 128k on multi-chip BH for perf ────────
     ("P150x8", "google/gemma-4-12B-it", 131072, False, 4096),
@@ -57,19 +58,27 @@ _EXPECTED = [
     ("P150x8", "google/gemma-4-E4B-it", 262144, False, 4096),
     ("P150x4", "google/gemma-4-E2B-it", 262144, False, 4096),
     # ── Wormhole, measured on a real T3K / N300 (12 GB per ASIC) ──────────
-    # 12B/T3K: bounded + chunk 2048 reaches the full HF 256k ISL.
+    # Bounded sliding is deliberately kept OUT of the WH serving range: its
+    # sliding page-table remap is keyed on the current tensor's row index rather
+    # than the request's persistent KV slot, which corrupts any multi-request
+    # batch (see generator_trace 12B/T3K comment). These cases pin that
+    # bounded_sliding stays False across the whole served context.
+    # 12B/T3K: unbounded measured through 131072; bounded only at the full 256k.
     ("T3K", "google/gemma-4-12B-it", 8192, False, 2048),
-    ("T3K", "google/gemma-4-12B-it", 16384, True, 2048),
-    ("T3K", "google/gemma-4-12B-it", 131072, True, 2048),
+    ("T3K", "google/gemma-4-12B-it", 16384, False, 2048),
+    ("T3K", "google/gemma-4-12B-it", 131072, False, 2048),
     ("T3K", "google/gemma-4-12B-it", 262144, True, 2048),
-    # 12B/N300 (24 GB, the only variant that fits one WH card): 128k ceiling.
+    # 12B/N300 (24 GB, the only variant that fits one WH card): unbounded to 8k,
+    # bounded above — so concurrent serving stays at/below 8192 there.
     ("N300", "google/gemma-4-12B-it", 8192, False, 2048),
     ("N300", "google/gemma-4-12B-it", 16384, True, 2048),
     ("N300", "google/gemma-4-12B-it", 131072, True, 2048),
-    # 26B-A4B/T3K: functional to 128k (MoE prefill slow; serve 32k).
+    # 26B-A4B/T3K and 31B/T3K: unbounded measured through 32768.
     ("T3K", "google/gemma-4-26B-A4B-it", 8192, False, 2048),
-    ("T3K", "google/gemma-4-26B-A4B-it", 32768, True, 2048),
-    ("T3K", "google/gemma-4-26B-A4B-it", 131072, True, 2048),
+    ("T3K", "google/gemma-4-26B-A4B-it", 32768, False, 2048),
+    ("T3K", "google/gemma-4-26B-A4B-it", 65536, True, 2048),
+    ("T3K", "google/gemma-4-31B-it", 32768, False, 2048),
+    ("T3K", "google/gemma-4-31B-it", 65536, True, 2048),
 ]
 
 
@@ -167,8 +176,10 @@ def test_wormhole_never_inherits_blackhole_policy(mesh, model, monkeypatch):
         f"{mesh}/{model} fell back to the Blackhole QB2 entry (source={policy['source']}); "
         "WH has 12 GB per ASIC and cannot inherit Blackhole DRAM headroom."
     )
-    # Blackhole entries all sit at >= 32k unbounded and chunk 4096; WH must not.
-    assert policy["unbounded_isl_max"] <= 16384, f"{mesh}/{model}: {policy}"
+    # Blackhole gemma4 entries all use chunk 4096; every WH entry must stay at
+    # the 2048 chunk the WH boards were measured with. (unbounded_isl_max is no
+    # longer a useful discriminator: WH T3K is now measured unbounded through
+    # 131072 for 12B, which legitimately exceeds some Blackhole entries.)
     assert policy["prefill_chunk"] == 2048, f"{mesh}/{model}: {policy}"
 
 
