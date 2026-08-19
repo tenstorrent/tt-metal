@@ -1388,3 +1388,17 @@
       tier: 2
   owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
   team: models
+
+- name: On-device sampling unit tests
+  cmd: |
+    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap"
+  model: tt-model-sampling
+  skus:
+    wh_n150:
+      timeout: 10
+      tier: 3
+    bh_p150:
+      timeout: 10
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
