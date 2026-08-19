@@ -9,7 +9,7 @@
 #include "api/tensor/noc_traits.h"
 #include "ckernel.h"
 
-#include "sort_dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/index_tile_dataflow.hpp"
 
 #include <cstdint>
 
@@ -162,9 +162,9 @@ void kernel_main() {
 
             } else {
                 if (is_32_bit_data) {
-                    generate_index_tile<uint32_t>(index_tensor_cb_index, w);
+                    dataflow_kernel_lib::generate_index_tile<uint32_t>(index_tensor_cb_index, w);
                 } else {
-                    generate_index_tile<uint16_t>(index_tensor_cb_index, w);
+                    dataflow_kernel_lib::generate_index_tile<uint16_t>(index_tensor_cb_index, w);
                 }
 
                 index_tensor_cb.wait_front(one_tile);
