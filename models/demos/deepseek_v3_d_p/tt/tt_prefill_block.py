@@ -333,6 +333,8 @@ class TtPrefillBlock(LightweightModule):
                 gate_fallback_mode=gate_fallback_mode,
                 routed_expert_activations_dtype=routed_expert_activations_dtype,
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
+                routed_expert_implementation=routed_expert_implementation,
+                routed_expert_weight_memory_layout=routed_expert_weight_memory_layout,
                 shared_expert_activations_dtype=shared_expert_activations_dtype,
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
                 weight_cache_path=weight_cache_path,
