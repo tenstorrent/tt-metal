@@ -329,6 +329,12 @@ All on this host, against pristine upstream vLLM `dev` `bf98d55`:
   The one-off `8.62x` from an early direct `api_server` launch remains
   unexplained, but it is a single outlier against two reproducible runs and should
   not be relied on.
+- **CORRECTION (2026-08-19): the `MODEL_SPECS_ENV nowhere` claim above does not
+  hold for the new dispatch path.** `tt-agentic-bringup-qb2` ->
+  `tt-shield/on-dispatch.yml@vvukoman/enable-on-dispatch-cross-repo-trigger` sets
+  `MODEL_SPECS_ENV: dev`, so TTI loads `workflows/model_specs/dev/llm.yaml` and a
+  **prod-only entry is the invisible one**. Dev specs must also omit
+  `tt_metal_commit`/`vllm_commit`/`version`. See `agentic_bringup_ci_dispatch.md`.
 - **Branch age.** This branch is ~1,900 commits behind tt-metal main, and 13 of
   those commits touch `models/demos/gemma4` modules the autoport's serving path
   imports (`attention/operations.py`, `attention/decode.py`, `layer.py`,

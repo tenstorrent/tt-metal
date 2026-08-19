@@ -24,6 +24,7 @@ the distinct CI failure modes:
 | Image build `pathspec 'c127c17' did not match` | Branch's Dockerfile still cloned `tenstorrent/vllm`; merge `origin/main` |
 | Benchmarks passed but every block `NA (ungraded)` | Added a `gemma-4-31b` perf reference entry; note it still cannot gate (see below) |
 | `--workflow release` dies at setup without an `EVAL_CONFIGS` entry | Added a base-appropriate eval config |
+| The LLM benchmark driver posts to `/v1/chat/completions` for **every** model; a base checkpoint defines no chat template, so all 17 sweep points die on `vllm bench serve`'s pre-flight probe with `Bad Request` | Endpoint selection from tokenizer capability: tt-inference-server branch `fix/benchmark-completions-endpoint-for-base-models`. Stopgap meanwhile: a passthrough `chat-template` in the spec |
 
 Two structural facts worth repeating because they bound any green result:
 
@@ -69,6 +70,9 @@ same traps.
 | Switched git branches while a release run was live | Changes files under a running job | It happened to be safe (server code already loaded, runtime spec snapshotted), but a separate worktree is the correct approach |
 | Re-ran a failed readiness probe into the same output directory | Overwrote committed evidence: a passing 200 check became a 404 and `server.log` was truncated 13,981 -> 874 lines | Restored with `git checkout --`; never reuse an evidence directory |
 | Lowered `GEMMA4_PREFILL_SDPA_MAX_SEQ` to dodge an L1 clash | Traded a visible crash for **silently wrong answers**: GPQA 37.5 -> 17.5, below the random floor, because the chunked path attends over `bfloat8_b` cache K/V | Reverted, with the measurement recorded in the spec so it is not repeated. Fixed the clash with SDPA L1 headroom instead |
+| Hand-rolled sampling-parameter normalisation twice before looking for the platform helper | The first version rejected wide `top_k` instead of clamping, and passed a raw temperature where `ttnn.sampling` needs `1/T` | Search for an existing helper before writing a conversion, and check where comparable code calls it from |
+| Amended with `git commit --amend -m` after `git checkout <base> -- <file>` had reset the index | The pushed commit was missing the spec entry; CI failed a second time on the same error | Verify the committed tree (`git diff --stat <base> HEAD`, `git show HEAD:<path>`) and the remote, not the working tree |
+| Ran `git reset --hard` with uncommitted documentation in the tree | Reverted edits to two tracked docs; only the new untracked file survived | Commit or stash docs before resetting; `git status` before any reset |
 | Scheduled the next run 45 s after the previous finished | The previous server had not released the 4 chips; `ttnn.open_mesh_device` failed | Wait for the process to exit, then reset, then prove the mesh opens |
 
 ### Wrong diagnoses I published and later corrected
@@ -84,7 +88,36 @@ same traps.
 | "The 84.3 GPQA figure is transplanted from Qwen3.6-27B" | Half wrong. The **value** is Gemma's own published GPQA Diamond; only TTI's `published_score_ref` is misattributed |
 | "The `test_logging_utils` failures come from the concurrently running server" | Wrong. They reproduce on pristine `origin/main` with nothing running |
 
-## 5. Index of model defects
+## 5. Findings from dispatching unmodified
+
+Running the model through CI with **no** spec workarounds (2026-08-19, run
+32245795692) surfaced one harness defect, cleared one suspected model defect, and
+led to fixing a third. Detail in `agentic_bringup_ci_dispatch.md`.
+
+| Finding | Whose defect | Status |
+| --- | --- | --- |
+| Benchmark driver hardcodes the chat endpoint, so any base checkpoint fails its pre-flight probe | tt-inference-server (`llm_module/drivers/vllm.py:58-64`) | Fix pushed: `fix/benchmark-completions-endpoint-for-base-models` |
+| 5 s `TT_METAL_OPERATION_TIMEOUT_SECONDS` aborts the cold first compile | previously believed ours | **Did not reproduce.** Zero `TT_THROW`/device-timeout in the run; the cold compile completed inside the default. The spec override is unnecessary and stays out |
+| Non-greedy request kills EngineCore (`_require_semantic_greedy`) | ours | **Fixed**, tt-metal branch `mvasiljevic/gemma4-31b-nongreedy-sampling`. The generator already supported non-greedy; only the adapter refused. Never actually reached in CI — the chat-template failure came first |
+| Raw temperature applied where `ttnn.sampling` needs 1/T | ours, latent | **Fixed by the same change.** The kernel multiplies top-k values by `temp` (`sampling.cpp:465`), so `temp` is the reciprocal; `_make_sampling_params` does not transform it. Greedy hid it because T=1 inverts to itself |
+
+Two lessons worth keeping.
+
+The spec entry carried six settings that no other model in the 58-template catalog
+needed, each pre-empting a failure. Removing them turned one into a reproducible
+upstream bug report and proved another was never a problem on this host.
+
+And prefer the platform helper over a hand-rolled equivalent.
+`models.common.sampling.format_sampling_params` clamps `top_k` into the sampler's
+`[1, 32]` and inverts temperature. Two hand-rolled attempts rejected wide `top_k`
+instead of clamping it (so a default vLLM request would still have failed) and
+would have passed a raw temperature. Placement matters too: that helper is called
+5 times in `tt_transformers/tt/generator.py` and 0 times in its
+`generator_vllm.py`, so normalisation belongs on the generator — which also makes
+it testable without vLLM installed (9 tests, 2.6 s, versus a contract file that
+cannot even be collected without it).
+
+## 6. Index of model defects
 
 See `defects_found_by_release_flow.md` for the four defects the local release flow
 exposed: the greedy-only adapter versus the upstream bench client's changed
