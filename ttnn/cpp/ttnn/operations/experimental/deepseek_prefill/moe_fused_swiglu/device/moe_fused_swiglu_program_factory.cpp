@@ -479,6 +479,9 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
                 .math_approx_mode = compute_config.math_approx_mode,
             },
     };
+    if (operation_arguments.activation == RoutedExpertActivation::SituGlu) {
+        compute_descriptor.defines.emplace_back("SITU_GLU", "1");
+    }
 
     for (uint32_t y = 0; y < kgroups; ++y) {
         for (uint32_t x = 0; x < hgroups; ++x) {
