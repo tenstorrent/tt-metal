@@ -87,6 +87,15 @@ SYNC_TO=""              # opt-in rsync destination (must equal TARGET_PATH)
 DRY_RUN=0
 EXTRA_BUILD_ARGS=()     # everything after `--`, forwarded to build_metal.sh
 
+# .cpmcache is CMake Package Manager's cache of downloaded/extracted third-party
+# sources (tidy, usearch, pugixml, boost, ...), consulted only during the build
+# itself to avoid re-fetching from the network. Nothing at runtime references it
+# -- RPATHs point at build*/lib, not .cpmcache -- so it's dead weight on a sync
+# meant to make the build usable elsewhere, not to let someone keep incrementally
+# rebuilding from the synced copy. Excluded by default; add more with
+# --sync-exclude (repeatable) if you find other build-only bulk worth dropping.
+SYNC_EXCLUDES=(".cpmcache")
+
 # Soft warning threshold for free space on the local scratch filesystem (GiB).
 MIN_FREE_GIB=50
 
@@ -116,6 +125,9 @@ Options:
                         the real filesystem (i.e. the actual NFS mount). Must be
                         identical to --target-path or the script refuses, because
                         any other destination invalidates the baked-in RPATHs.
+  --sync-exclude <pat>  Additional rsync --exclude pattern for the --sync-to copy
+                        (repeatable). .cpmcache is excluded by default (build-only
+                        source cache, not needed to use the built tree).
   --dry-run             Print the docker command that would run, then exit.
   -h, --help            Show this help.
 
@@ -146,6 +158,7 @@ while [[ $# -gt 0 ]]; do
     --home-dir)    [[ $# -ge 2 ]] || die "--home-dir needs a value";    HOME_DIR="$2"; shift 2 ;;
     --entrypoint)  [[ $# -ge 2 ]] || die "--entrypoint needs a value";  ENTRYPOINT="$2"; shift 2 ;;
     --sync-to)     [[ $# -ge 2 ]] || die "--sync-to needs a value";     SYNC_TO="$2"; shift 2 ;;
+    --sync-exclude) [[ $# -ge 2 ]] || die "--sync-exclude needs a value"; SYNC_EXCLUDES+=("$2"); shift 2 ;;
     --dry-run)     DRY_RUN=1; shift ;;
     -h|--help)     usage; exit 0 ;;
     --)            shift; EXTRA_BUILD_ARGS=("$@"); break ;;
@@ -473,10 +486,18 @@ info "Container build finished in $(( (SECONDS - start_ts) / 60 ))m $(( (SECONDS
 # Optional last mile: put the tree on the real (slow) shared filesystem
 # ----------------------------------------------------------------------------
 if [[ -n "${SYNC_TO}" ]]; then
-  info "Syncing to ${SYNC_TO} (this is the slow NFS part; expect it to take a while)"
+  RSYNC_EXCLUDE_ARGS=()
+  for pat in "${SYNC_EXCLUDES[@]}"; do
+    RSYNC_EXCLUDE_ARGS+=(--exclude="${pat}")
+  done
+  if (( ${#SYNC_EXCLUDES[@]} > 0 )); then
+    info "Syncing to ${SYNC_TO} (excluding: ${SYNC_EXCLUDES[*]}) — this is the slow NFS part; expect it to take a while"
+  else
+    info "Syncing to ${SYNC_TO} (this is the slow NFS part; expect it to take a while)"
+  fi
   mkdir -p "${SYNC_TO}"
   sync_start=${SECONDS}
-  rsync -a --human-readable "${SRC}/" "${SYNC_TO}/"
+  rsync -a --human-readable "${RSYNC_EXCLUDE_ARGS[@]}" "${SRC}/" "${SYNC_TO}/"
   info "Sync finished in $(( (SECONDS - sync_start) / 60 ))m $(( (SECONDS - sync_start) % 60 ))s"
   cat <<EOF
 
@@ -495,6 +516,6 @@ other Slurm nodes and is not yet usable for multi-node jobs. Its baked-in paths
 already say ${TARGET_PATH}, so the correct last step is to copy it to exactly that
 path on the shared mount:
     ./tools/scaleout/exabox/build_metal_exabox.sh --sync-to ${TARGET_PATH}
-(or just: rsync -a ${SRC}/ ${TARGET_PATH}/)
+(or just: rsync -a --exclude=.cpmcache ${SRC}/ ${TARGET_PATH}/)
 EOF
 fi
