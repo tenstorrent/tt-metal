@@ -835,7 +835,8 @@ __attribute__((noinline)) void calculate_expm1_fresh_cpp()
 }
 
 // MIGRATED (storm contract, fresh_cpp/README.md — new bodies never land here):
-//   calculate_sqrt_rsqrt_fresh_cpp  -> fresh_cpp/sqrt.h (also serves rsqrt)
+//   calculate_sqrt_rsqrt_fresh_cpp  -> fresh_cpp/rsqrt.h (shared sqrt/rsqrt
+//     template, RECIPROCAL selects the arm; fresh_cpp/sqrt.h includes it)
 //   calculate_unary_power_fresh_cpp -> fresh_cpp/unarypower.h
 //   calculate_xielu_fresh_cpp       -> fresh_cpp/xielu.h (natural loop-held-scalar form)
 
