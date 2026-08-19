@@ -107,13 +107,13 @@ inline uint32_t tt_l1_ptr* staging() { return reinterpret_cast<uint32_t tt_l1_pt
 inline volatile uint32_t tt_l1_ptr* control() { return reinterpret_cast<volatile uint32_t tt_l1_ptr*>(kControlBase); }
 
 #ifndef FD_BENCH_PF_TIMELINE
-#define FD_BENCH_PF_TIMELINE 1
+#define FD_BENCH_PF_TIMELINE 0
 #endif
 #ifndef FD_BENCH_PF_CHUNK_WAYPOINTS
-#define FD_BENCH_PF_CHUNK_WAYPOINTS 1
+#define FD_BENCH_PF_CHUNK_WAYPOINTS 0
 #endif
 #ifndef FD_BENCH_DP_TIMELINE
-#define FD_BENCH_DP_TIMELINE 1
+#define FD_BENCH_DP_TIMELINE 0
 #endif
 #ifndef FD_BENCH_DP_CHUNK_WAYPOINTS
 #define FD_BENCH_DP_CHUNK_WAYPOINTS 0

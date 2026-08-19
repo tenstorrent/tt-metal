@@ -16,7 +16,6 @@
 #include "api/debug/assert.h"
 #include <limits>
 #include <array>
-#include <type_traits>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region
@@ -340,7 +339,7 @@ class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>((get_semaphore<programmable_core_type>(my_sem_id)));
 
         // Ensure last sem_inc has landed
         noc_async_atomic_barrier();
@@ -361,7 +360,7 @@ public:
     // unless it calls release_all_pages to return partially-consumed blocks.
     FORCE_INLINE void wait_all_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>((get_semaphore<programmable_core_type>(my_sem_id)));
 
         // Downstream component sets the MSB as a terminate bit
         // Mask that off to avoid a race between the sem count and terminate
@@ -437,8 +436,9 @@ public:
         // TL1 cell and the split is intentional -- the NoC atomic is serviced by the TL1 SRAM bank at
         // the plain offset. Adding MEM_L1_UNCACHED_BASE here would target a different offset.
         noc_semaphore_inc(
-            get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)), n, noc_idx);
-        // #endif
+            get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)),
+            n,
+            noc_idx);
     }
 
     uint32_t additional_count{0};
