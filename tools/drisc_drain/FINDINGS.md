@@ -6006,3 +6006,17 @@ EXECUTION 14, 3,220 rows with EXECUTION>0. Per-op duration CoV across an op's 15
 single-execution run can provide. Consumer delivered 1,581,952 records with 0 drops; 0 producer
 stalls; COMPLETENESS 550/550 on every arm. First realistic-model validation of the packed-frame
 capture path end to end.
+
+## §N+62 — Per-op repeatability under capture: perf-debug jitters 3-4x more than classic, medians unbiased (bh-18, 2026-08-19)
+
+N+61's cross-profiler tails were claimed to be run-to-run variance; measured (ResNet-50 non-trace,
+230 ops, per-op |kernel-duration diff| distributions):
+  pd vs pd (3 pairs):      median 0.71-0.82%, p90 5.0-5.8%, max 23-32%
+  classic vs classic:      median 0.21%,      p90 2.1%,     max 7.0%
+  classic vs pd (2 pairs): median 1.5-1.7%,   p90 6.1-6.8%, max 29-34%
+The cross tails match pd's own within-arm spread -- no hidden per-op disagreement -- but the variance
+is OURS: under capture the same op repeats ~3-4x less tightly than under classic, with no mean shift
+and 0 stalls. Fits sweep-collision contention: which ops a filler's 10.5 KB span reads land on differs
+with sweep phase per run, injecting per-op jitter without bias. The ~1% cross-median residual above
+pd's within-arm floor is the long-op-amortized zone-scope cost. Honest footprint statement for real
+models: medians unbiased to ~1.5%, per-op jitter p90 ~5.5% vs classic's ~2%.
