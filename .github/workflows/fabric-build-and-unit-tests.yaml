@@ -97,15 +97,13 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    env:
-      # Derive ARCH_NAME from the SKU prefix so testlist entries don't have to
-      # author it. Merge-gate fabric SKUs are wh_* -> wormhole_b0; empty fallback
-      # trips the -z guard in run_cpp_fabric_tests.sh for any unrecognized SKU.
-      DERIVED_ARCH: ${{ startsWith(matrix.test-group.sku, 'wh_') && 'wormhole_b0' || (startsWith(matrix.test-group.sku, 'bh_') && 'blackhole' || '') }}
+    # ARCH_NAME is derived inline from matrix.test-group.sku:
+    # bh_* / *blackhole* -> blackhole; wh_* / *wormhole* -> wormhole_b0; else '' so
+    # run_cpp_fabric_tests.sh trips its -z guard on unrecognized SKUs.
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
-        ARCH_NAME: ${{ env.DERIVED_ARCH }}
+        ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || (contains(matrix.test-group.sku, 'wh_') || contains(matrix.test-group.sku, 'wormhole')) && 'wormhole_b0' || '' }}
         LOGURU_LEVEL: INFO
         TT_LOGGER_LEVEL: warn
         LD_LIBRARY_PATH: /work/build/lib

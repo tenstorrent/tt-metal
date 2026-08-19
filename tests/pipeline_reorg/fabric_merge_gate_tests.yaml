@@ -1,8 +1,8 @@
 # Fabric N300 merge-gate matrix.
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
-# `arch` is derived from the SKU prefix (wh_* -> wormhole_b0, bh_* -> blackhole)
-# inside the impl workflow's DERIVED_ARCH env, not authored per entry.
+# `arch` is derived from the SKU inline in the impl workflow's ARCH_NAME
+# expression (bh_* -> blackhole, wh_* -> wormhole_b0), not authored per entry.
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> merge_gate).
 # Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 #

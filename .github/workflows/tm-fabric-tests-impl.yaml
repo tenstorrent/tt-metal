@@ -125,19 +125,17 @@ jobs:
     # Coverage: bind the mainline GH environment on main so the fabric BW /
     # latency SFTP upload secrets below are available.
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
-    env:
-      # Derive ARCH_NAME from the SKU prefix so testlist entries don't have to
-      # author it. Fabric SKUs are wh_* -> wormhole_b0, bh_* -> blackhole; empty
-      # fallback trips the -z guard in run_cpp_fabric_tests.sh / run_t3000_unit_tests.sh
-      # for any unrecognized SKU.
-      DERIVED_ARCH: ${{ startsWith(matrix.test-group.sku, 'wh_') && 'wormhole_b0' || (startsWith(matrix.test-group.sku, 'bh_') && 'blackhole' || '') }}
+    # ARCH_NAME is derived inline from matrix.test-group.sku:
+    # bh_* / *blackhole* -> blackhole; wh_* / *wormhole* -> wormhole_b0; else '' so
+    # run_cpp_fabric_tests.sh / run_t3000_unit_tests.sh trip their -z guards on
+    # unrecognized SKUs.
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ env.DERIVED_ARCH }}
+        ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || (contains(matrix.test-group.sku, 'wh_') || contains(matrix.test-group.sku, 'wormhole')) && 'wormhole_b0' || '' }}
         LOGURU_LEVEL: INFO
         TT_LOGGER_LEVEL: warn
         GTEST_OUTPUT: xml:/work/generated/test_reports/
@@ -231,7 +229,7 @@ jobs:
         uses: ./docker-job/.github/actions/check-latency-bw-results
         with:
           path: /work
-          arch: ${{ env.DERIVED_ARCH }}
+          arch: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || (contains(matrix.test-group.sku, 'wh_') || contains(matrix.test-group.sku, 'wormhole')) && 'wormhole_b0' || '' }}
           check_bw: ${{ github.ref_name == 'main' }}
           check_latency: ${{ github.ref_name == 'main' }}
       - name: Upload benchmark data
