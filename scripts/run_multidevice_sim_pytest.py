@@ -86,6 +86,9 @@ def load_config(path: Path):
         for key in ("sim_so", "cluster_desc", "mesh_graph_desc"):
             if key in t and isinstance(t[key], str):
                 t[key] = t[key].format(**defaults)
+        # "sim" (craq-sim) unless the entry says otherwise, so every pre-existing
+        # topology keeps its exact behaviour.
+        t.setdefault("runtime", "sim")
         t.setdefault("required", False)
         t.setdefault("extra_env", {})
         t.setdefault("applies_to_ops", [])
@@ -93,11 +96,23 @@ def load_config(path: Path):
         t["cq_wait_clocks"] = t.get("cq_wait_clocks", defaults.get("cq_wait_clocks", 200))
         t["hang_watchdog_clocks"] = t.get("hang_watchdog_clocks", defaults.get("hang_watchdog_clocks", 2_000_000))
         t["wall_clock_timeout_s"] = t.get("wall_clock_timeout_s", defaults.get("wall_clock_timeout_s", 900))
+        # A hardware entry's mesh shape is box-specific; let one env var retarget it
+        # without editing the matrix (e.g. EVAL_HW_MESH_SHAPE=2,4 on an 8-chip box).
+        if t["runtime"] == "hardware" and os.environ.get("EVAL_HW_MESH_SHAPE"):
+            t["mesh_shape"] = [int(x) for x in os.environ["EVAL_HW_MESH_SHAPE"].split(",")]
         topologies.append(t)
     return defaults, topologies
 
 
-def select_topologies(topologies, op, names):
+def select_topologies(topologies, op, names, runtime=None):
+    """Pick topologies for this run. `runtime` ("sim"/"hardware") filters the matrix so a
+    sim invocation never picks up a hardware entry and vice versa; None means no filter
+    (explicit --topology names are always honoured verbatim)."""
+    if runtime:
+        topologies = [t for t in topologies if t.get("runtime", "sim") == runtime]
+        if not topologies:
+            sys.stderr.write(f"run_multidevice_sim_pytest: no topology with runtime '{runtime}'\n")
+            sys.exit(EXIT_CONFIG)
     if names:
         by_name = {t["name"]: t for t in topologies}
         missing = [n for n in names if n not in by_name]
@@ -109,7 +124,10 @@ def select_topologies(topologies, op, names):
     if op:
         sel = [t for t in topologies if op in t.get("applies_to_ops", [])]
         if not sel:
-            sys.stderr.write(f"run_multidevice_sim_pytest: no topology lists op '{op}' in applies_to_ops\n")
+            sys.stderr.write(
+                f"run_multidevice_sim_pytest: no topology lists op '{op}' in applies_to_ops"
+                f"{f' with runtime {runtime}' if runtime else ''}\n"
+            )
             sys.stderr.write(f"  matrix: {[(t['name'], t['applies_to_ops']) for t in topologies]}\n")
             sys.exit(EXIT_CONFIG)
         return sel
@@ -121,10 +139,39 @@ def select_topologies(topologies, op, names):
 # Env
 # --------------------------------------------------------------------------------------
 def build_env(topo) -> dict:
-    """The craq-sim multichip recipe env for one topology (FAST dispatch)."""
+    """The env for one topology: the craq-sim recipe, or bare real-silicon (FAST dispatch)."""
     env = dict(os.environ)
     # Do NOT inherit run_safe_pytest's slow-dispatch forcing — the recipe is fast dispatch.
     env.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
+
+    if topo["runtime"] == "hardware":
+        # Real silicon: the cluster is auto-discovered, so we must NOT set the sim triple.
+        # Strip any inherited sim env rather than trusting the caller's shell to be clean —
+        # a leaked TT_METAL_SIMULATOR would silently grade on the simulator and the row
+        # would be published as hardware-validated.
+        for k in (
+            "TT_METAL_SIMULATOR",
+            "TT_METAL_MOCK_CLUSTER_DESC_PATH",
+            "TT_MESH_GRAPH_DESC_PATH",
+            "TT_METAL_SIMULATOR_CQ_WAIT_CLOCKS",
+            "TTSIM_HANG_WATCHDOG_CLOCKS",
+            "TT_METAL_DRAM_BACKED_CQ",
+            "TT_METAL_DISABLE_PRECOMPILED_FW",
+        ):
+            env.pop(k, None)
+        env["ARCH_NAME"] = topo["arch"]
+        if topo.get("mesh_shape") is not None:
+            shape = ",".join(str(d) for d in topo["mesh_shape"])
+            env["MULTIDEV_SIM_MESH_SHAPE"] = shape
+            # What the CCL golden suites actually read to size their mesh_device fixture.
+            env["CCL_HW_MESH_SHAPE"] = shape
+        if topo.get("fabric_config"):
+            env["MULTIDEV_SIM_FABRIC_CONFIG"] = str(topo["fabric_config"])
+        env["MULTIDEV_SIM_TOPOLOGY"] = topo["name"]
+        for k, v in (topo.get("extra_env") or {}).items():
+            env[str(k)] = str(v)
+        return env
+
     env["TT_METAL_SIMULATOR"] = topo["sim_so"]
     env["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = topo["cluster_desc"]
     env["TT_MESH_GRAPH_DESC_PATH"] = topo["mesh_graph_desc"]
@@ -168,6 +215,8 @@ def _rewrite_junit_path(pytest_args, topo_name):
 def validate_paths(topo) -> list[str]:
     """Fail-fast: a missing sim/.so or descriptor is a config error, not a silent wrong run."""
     problems = []
+    if topo.get("runtime", "sim") == "hardware":
+        return problems  # no .so and no descriptors — the real cluster is auto-discovered
     so = Path(topo["sim_so"])
     if not so.is_file():
         problems.append(f"sim .so missing: {so}  (build+stage per SETUP.md, or set the TT_SIM_*_SO env var)")
@@ -210,10 +259,20 @@ def run_one(topo, pytest_args, log_dir) -> tuple[str, str]:
     cmd = [sys.executable, "-m", "pytest", *pytest_args]
     timeout_s = int(topo["wall_clock_timeout_s"])
 
-    print(f"  sim_so          = {env['TT_METAL_SIMULATOR']}", flush=True)
-    print(f"  cluster_desc    = {env['TT_METAL_MOCK_CLUSTER_DESC_PATH']}", flush=True)
-    print(f"  mesh_graph_desc = {env['TT_MESH_GRAPH_DESC_PATH']}", flush=True)
-    print(f"  watchdog_clocks = {env['TTSIM_HANG_WATCHDOG_CLOCKS']}   wall_clock_timeout = {timeout_s}s", flush=True)
+    if topo["runtime"] == "hardware":
+        print(f"  runtime         = HARDWARE (real silicon; no simulator)", flush=True)
+        print(
+            f"  mesh_shape      = {topo.get('mesh_shape')}   CCL_HW_MESH_SHAPE = {env.get('CCL_HW_MESH_SHAPE')}",
+            flush=True,
+        )
+        print(f"  wall_clock_timeout = {timeout_s}s", flush=True)
+    else:
+        print(f"  sim_so          = {env['TT_METAL_SIMULATOR']}", flush=True)
+        print(f"  cluster_desc    = {env['TT_METAL_MOCK_CLUSTER_DESC_PATH']}", flush=True)
+        print(f"  mesh_graph_desc = {env['TT_MESH_GRAPH_DESC_PATH']}", flush=True)
+        print(
+            f"  watchdog_clocks = {env['TTSIM_HANG_WATCHDOG_CLOCKS']}   wall_clock_timeout = {timeout_s}s", flush=True
+        )
     print(f"  $ {' '.join(cmd)}", flush=True)
     print(f"  log -> {log_path}", flush=True)
 
@@ -291,6 +350,12 @@ def main():
     ap.add_argument("--topology", action="append", default=[], help="run under this named topology (repeatable)")
     ap.add_argument("--list", action="store_true", help="print the resolved matrix and exit")
     ap.add_argument(
+        "--runtime",
+        choices=["sim", "hardware", "all"],
+        default=os.environ.get("EVAL_RUNTIME", "sim"),
+        help="run the sim topologies (default) or the real-silicon ones; also settable via EVAL_RUNTIME",
+    )
+    ap.add_argument(
         "--log-dir", type=Path, default=REPO_DIR / "generated" / "multidevice_sim", help="where per-topology logs go"
     )
     ap.add_argument("--timeout", type=int, default=None, help="override the per-topology wall-clock backstop (seconds)")
@@ -303,8 +368,10 @@ def main():
 
     if args.list:
         print(f"config: {args.config}")
+        print(f"runtime filter: {args.runtime}  (pass --runtime to switch; 'all' shows everything)")
         print(f"resolved defaults: {defaults}")
-        for t in topologies:
+        listed = [t for t in topologies if args.runtime == "all" or t["runtime"] == args.runtime]
+        for t in listed:
             print(f"\n  {t['name']}  (arch={t['arch']}, required={t['required']}, ops={t['applies_to_ops']})")
             print(
                 f"    mesh_shape      = {t.get('mesh_shape', '<unset>')}   fabric_config = {t.get('fabric_config', '<unset>')}"
@@ -312,9 +379,11 @@ def main():
             print(
                 f"      ^ the op's acceptance test MUST open a mesh_device of this shape + fabric_config (else fabric init hangs)"
             )
-            print(f"    sim_so          = {t['sim_so']}")
-            print(f"    cluster_desc    = {t['cluster_desc']}")
-            print(f"    mesh_graph_desc = {t['mesh_graph_desc']}")
+            print(f"    runtime         = {t['runtime']}")
+            if t["runtime"] != "hardware":
+                print(f"    sim_so          = {t['sim_so']}")
+                print(f"    cluster_desc    = {t['cluster_desc']}")
+                print(f"    mesh_graph_desc = {t['mesh_graph_desc']}")
             missing = validate_paths(t)
             print(f"    paths           = {'OK' if not missing else 'MISSING: ' + '; '.join(missing)}")
         return EXIT_OK
@@ -323,7 +392,11 @@ def main():
         sys.stderr.write("run_multidevice_sim_pytest: no pytest args given (pass them after the options or after --)\n")
         return EXIT_CONFIG
 
-    selected = select_topologies(topologies, args.op, args.topology)
+    # An explicit --topology names the entry outright, so don't runtime-filter it away;
+    # --op selection picks from the matrix and must respect the runtime.
+    selected = select_topologies(
+        topologies, args.op, args.topology, runtime=None if (args.topology or args.runtime == "all") else args.runtime
+    )
     print(f"[multidevice-sim] running {len(selected)} topology(ies) serially: {[t['name'] for t in selected]}")
     multi = len(selected) > 1
 

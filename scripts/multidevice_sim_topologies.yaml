@@ -16,6 +16,16 @@
 #
 # Topology path fields use Python str.format placeholders ({sim_bh_so}, {craqsim_data}, ...)
 # resolved against the `defaults` below.
+#
+# ── runtime: sim | hardware ─────────────────────────────────────────────────────────
+# Each topology declares where it runs. `runtime: sim` (the DEFAULT when the field is
+# absent, so every pre-existing entry is unchanged) is the craq-sim path above.
+# `runtime: hardware` runs on real silicon: no sim .so, no mock cluster descriptor and
+# no mesh-graph descriptor -- the real cluster is auto-discovered -- so those three
+# fields are omitted and their existence checks are skipped. Its `mesh_shape` is
+# exported as CCL_HW_MESH_SHAPE so the CCL golden suites size their mesh_device to the
+# box. Select with `--runtime hardware` (or EVAL_RUNTIME=hardware); the runner defaults
+# to `sim` so existing invocations behave exactly as before.
 
 defaults:
   sim_bh_so:
@@ -132,4 +142,27 @@ topologies:
     applies_to_ops: [all_reduce]
     grade_primary: true
     required: false       # probe op (CCL+compute validation), not a gating topology
+    extra_env: {}
+
+  # ── HARDWARE: real silicon, no simulator ───────────────────────────────────────────
+  # A 4-chip Blackhole QuietBox (p150a x4). Selected only with `--runtime hardware`, so
+  # it is invisible to every existing sim invocation. mesh_shape MUST be a shape the box
+  # can actually open -- `(2,4)`/`(1,8)` need 8 chips and fail with
+  # `system_mesh.cpp: requested_size <= system_size` on a 4-chip box. It is exported as
+  # CCL_HW_MESH_SHAPE, which the CCL golden suites read.
+  #
+  # On a box with a different chip count, change mesh_shape here (or override with
+  # EVAL_HW_MESH_SHAPE) -- nothing else needs to move.
+  - name: bh_quietbox_1x4_hw
+    runtime: hardware
+    arch: blackhole
+    mesh_shape: [1, 4]
+    fabric_config: FABRIC_1D
+    applies_to_ops: [point_to_point, all_gather, all_reduce]
+    grade_primary: true   # the hardware grade target; _grade_primary_topology filters by runtime,
+                          # so this does not collide with the sim entries' grade_primary.
+    required: true
+    # Real fabric is ~100x faster per case than the sim, so the sim's tight backstop is
+    # unnecessary; this is sized for the FULL golden cartesian rather than a bounded sample.
+    wall_clock_timeout_s: 5400
     extra_env: {}
