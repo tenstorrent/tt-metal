@@ -35,13 +35,13 @@
 
 - name: Llama 3.3-70B prefix-caching benchmark
   cmd: |
-    export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ MESH_DEVICE=TG
-    pytest --timeout 1140 models/demos/llama3_70b_galaxy/demo/prefix_caching_benchmark.py
+    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct MESH_DEVICE=TG
+    pytest --timeout 2280 models/demos/llama3_70b_galaxy/demo/prefix_caching_benchmark.py
   model: llama3.3-70b
   model_family: Llama
   skus:
     wh_galaxy:
-      timeout: 20
+      timeout: 40
       tier: 1
   owner_id: U09LTAPEU2U # Viktor Pus
   team: models

@@ -395,7 +395,7 @@ models:
     bh_p300: 800
   sweep_tier1:
     wh_n150: 30
-    wh_galaxy: 30
+    wh_galaxy: 40
     bh_p150: 30
   sweep_tier2:
     wh_n150: 30
