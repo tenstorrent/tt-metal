@@ -96,7 +96,7 @@ Options:
   -h, --help            Show this help.
 
 Everything after a literal '--' is forwarded verbatim to build_metal.sh, e.g.
-  ... build_metal_exabox.sh -- --build-type Release --enable-ccache
+  ... build_metal_exabox.sh -- --build-type Release
 EOF
 }
 
