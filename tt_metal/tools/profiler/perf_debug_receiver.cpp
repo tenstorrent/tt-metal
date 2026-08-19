@@ -298,14 +298,21 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
 
     const uint64_t t0 = tsc_now();
     alignas(64) uint32_t bounce[profiler::kSpscFrameWords];
-    for (uint32_t f = 0; f < nframes; f++) {
+    // nullptr when the frame straddles the FIFO wrap (rare; the walk copies it through the bounce).
+    auto frame_at = [&](uint32_t f) -> const uint32_t* {
         const size_t off = static_cast<size_t>(f) * profiler::kSpscFrameWords;
-        const uint32_t* frame;
         if (off + profiler::kSpscFrameWords <= first_words) {
-            frame = view.first + off;
-        } else if (off >= first_words) {
-            frame = view.second + (off - first_words);
-        } else {
+            return view.first + off;
+        }
+        if (off >= first_words) {
+            return view.second + (off - first_words);
+        }
+        return nullptr;
+    };
+    for (uint32_t f = 0; f < nframes; f++) {
+        const uint32_t* frame = frame_at(f);
+        if (frame == nullptr) {
+            const size_t off = static_cast<size_t>(f) * profiler::kSpscFrameWords;
             const size_t head_words = first_words - off;
             std::copy_n(view.first + off, head_words, bounce);
             std::copy_n(view.second, profiler::kSpscFrameWords - head_words, bounce + head_words);
