@@ -26,6 +26,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace {
 
@@ -86,33 +87,49 @@ void kernel_main() {
     // phantom rows the reader clamped, and are dropped here.
     auto write_tiles = [&](uint32_t rt0, uint32_t valid_ht, uint32_t w0, uint32_t nw) {
         const uint32_t n = BLOCK_HT * nw;
-        cb_wait_front(cb_output_tiles, n);
+        // PERMANENT per-stage instrumentation (kernel_lib/perf_instrumentation.hpp).
+        // `wr_wait` is the writer STARVED on compute; `wr_issue` is the
+        // RISC-serial transaction issue; `wr_barrier` the real NoC wait.  Split
+        // because a starved writer's fix lives upstream, not here.
+        {
+            MaybeDeviceZoneScope("wr_wait");
+            cb_wait_front(cb_output_tiles, n);
+        }
         uint32_t addr = get_read_ptr(cb_output_tiles);
-        for (uint32_t r = 0; r < valid_ht; ++r) {
-            const uint32_t row_base = (rt0 + r) * Wt_core + w0;
-            for (uint32_t w = 0; w < nw; ++w) {
-                if constexpr (!SKIP_DM_PAYLOAD) {
-                    if constexpr (COALESCE) {
-                        noc_async_write_tile(row_base + w, out_acc, addr + w * IN_TILE_BYTES);
-                    } else {  // lever B5/B6 off-arm: two aligned partial-page transactions
-                        const uint32_t src_t = addr + w * IN_TILE_BYTES;
-                        noc_async_write(src_t, out_acc.get_noc_addr(row_base + w), SPLIT_FIRST);
-                        noc_async_write(
-                            src_t + SPLIT_FIRST, out_acc.get_noc_addr(row_base + w, SPLIT_FIRST), SPLIT_SECOND);
+        {
+            MaybeDeviceZoneScope("wr_issue");
+            for (uint32_t r = 0; r < valid_ht; ++r) {
+                const uint32_t row_base = (rt0 + r) * Wt_core + w0;
+                for (uint32_t w = 0; w < nw; ++w) {
+                    if constexpr (!SKIP_DM_PAYLOAD) {
+                        if constexpr (COALESCE) {
+                            noc_async_write_tile(row_base + w, out_acc, addr + w * IN_TILE_BYTES);
+                        } else {  // lever B5/B6 off-arm: two aligned partial-page transactions
+                            const uint32_t src_t = addr + w * IN_TILE_BYTES;
+                            noc_async_write(src_t, out_acc.get_noc_addr(row_base + w), SPLIT_FIRST);
+                            noc_async_write(
+                                src_t + SPLIT_FIRST, out_acc.get_noc_addr(row_base + w, SPLIT_FIRST), SPLIT_SECOND);
+                        }
+                    }
+                    if constexpr (!BARRIER_PER_BLOCK) {
+                        noc_async_write_barrier();  // lever B7 off-arm
                     }
                 }
-                if constexpr (!BARRIER_PER_BLOCK) {
-                    noc_async_write_barrier();  // lever B7 off-arm
-                }
+                addr += nw * IN_TILE_BYTES;
             }
-            addr += nw * IN_TILE_BYTES;
+        }  // wr_issue
+        {
+            MaybeDeviceZoneScope("wr_barrier");
+            noc_async_write_barrier();
         }
-        noc_async_write_barrier();
         cb_pop_front(cb_output_tiles, n);
     };
 
     auto write_sticks = [&](uint32_t rt, bool valid, uint32_t w0, uint32_t nw) {
-        cb_wait_front(cb_rm_out, nw);
+        {
+            MaybeDeviceZoneScope("wr_wait");
+            cb_wait_front(cb_rm_out, nw);
+        }
         if (valid) {
             const uint32_t row0 = rt * TILE_DIM;
             const uint32_t nrows = umin(TILE_DIM, NUM_ROWS - row0);
@@ -121,16 +138,22 @@ void kernel_main() {
             const uint32_t chunk_bytes = umin(padded, ROW_BYTES - byte_off);
 
             uint32_t src = get_read_ptr(cb_rm_out);
-            for (uint32_t r = 0; r < nrows; ++r) {
-                if constexpr (!SKIP_DM_PAYLOAD) {
-                    noc_async_write(src, out_acc.get_noc_addr(row0 + r, byte_off), chunk_bytes);
+            {
+                MaybeDeviceZoneScope("wr_issue");
+                for (uint32_t r = 0; r < nrows; ++r) {
+                    if constexpr (!SKIP_DM_PAYLOAD) {
+                        noc_async_write(src, out_acc.get_noc_addr(row0 + r, byte_off), chunk_bytes);
+                    }
+                    if constexpr (!BARRIER_PER_BLOCK) {
+                        noc_async_write_barrier();  // lever B7 off-arm
+                    }
+                    src += padded;
                 }
-                if constexpr (!BARRIER_PER_BLOCK) {
-                    noc_async_write_barrier();  // lever B7 off-arm
-                }
-                src += padded;
+            }  // wr_issue
+            {
+                MaybeDeviceZoneScope("wr_barrier");
+                noc_async_write_barrier();
             }
-            noc_async_write_barrier();
         }
         cb_pop_front(cb_rm_out, nw);
     };

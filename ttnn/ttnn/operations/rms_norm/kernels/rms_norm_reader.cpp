@@ -52,6 +52,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 namespace {
@@ -139,35 +140,44 @@ void kernel_main() {
     //      (risk R1).  In Regime A the accumulator's 32 columns are all
     //      meaningful (the pad only ever lives in the last W-tile, and the RM
     //      reader zero-fills it), so a full scaler is the correct one.
-    if constexpr (!REGIME_A && W_PARTIAL > 0) {
-        // The two reduce datapaths consume DIFFERENT forms of the partial, in
-        // different tile layouts, so the tile the reader emits at index 1 is
-        // chosen by the same REDUCE_VIA_ADD knob the compute side reads:
-        //   ReduceTile       -> a PARTIAL SCALER tile (matmul-with-ones layout);
-        //                       compute passes ReducePartialScaler::last_tile_at(1).
-        //   AccumulateViaAdd -> a 0/1 MASK tile in row-0 broadcast layout, which
-        //                       the masked accumulating broadcast-mul folds into
-        //                       the last tile; compute passes partial_mask(W_PARTIAL, 1).
-        // Passing the ReduceTile form to AccumulateViaAdd is silent, catastrophic
-        // data corruption, not a compile error: valid_reduce_dim_elements stays 0,
-        // the datapath reads "tile-aligned" and NEVER masks, so the poisoned tile
-        // padding enters the sum of squares (measured rms ~1.0 on every
-        // w_non_aligned pad-poison case).
-        if constexpr (REDUCE_VIA_ADD) {
+    // PERMANENT per-stage instrumentation (kernel_lib/perf_instrumentation.hpp).
+    // Every NoC region is split into `_reserve` (back-pressure from the
+    // consumer), `_issue` (RISC-serial transaction issue) and `_barrier` (the
+    // real NoC wait): a barrier at ~0 with a hot issue loop and a hot barrier
+    // with a cheap issue loop want opposite fixes.
+    {
+        MaybeDeviceZoneScope("rd_scaler");
+        if constexpr (!REGIME_A && W_PARTIAL > 0) {
+            // The two reduce datapaths consume DIFFERENT forms of the partial, in
+            // different tile layouts, so the tile the reader emits at index 1 is
+            // chosen by the same REDUCE_VIA_ADD knob the compute side reads:
+            //   ReduceTile       -> a PARTIAL SCALER tile (matmul-with-ones layout);
+            //                       compute passes ReducePartialScaler::last_tile_at(1).
+            //   AccumulateViaAdd -> a 0/1 MASK tile in row-0 broadcast layout, which
+            //                       the masked accumulating broadcast-mul folds into
+            //                       the last tile; compute passes partial_mask(W_PARTIAL, 1).
+            // Passing the ReduceTile form to AccumulateViaAdd is silent, catastrophic
+            // data corruption, not a compile error: valid_reduce_dim_elements stays 0,
+            // the datapath reads "tile-aligned" and NEVER masks, so the poisoned tile
+            // padding enters the sum of squares (measured rms ~1.0 on every
+            // w_non_aligned pad-poison case).
+            if constexpr (REDUCE_VIA_ADD) {
+                dataflow_kernel_lib::
+                    prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                        1.0f);
+                dataflow_kernel_lib::prepare_reduce_mask<cb_reduce_scaler, ckernel::ReduceDim::REDUCE_ROW>(W_PARTIAL);
+            } else {
+                dataflow_kernel_lib::prepare_partial_reduce_scalers<
+                    cb_reduce_scaler,
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_ROW,
+                    W_PARTIAL>(1.0f);
+            }
+        } else {
             dataflow_kernel_lib::
                 prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
-            dataflow_kernel_lib::prepare_reduce_mask<cb_reduce_scaler, ckernel::ReduceDim::REDUCE_ROW>(W_PARTIAL);
-        } else {
-            dataflow_kernel_lib::prepare_partial_reduce_scalers<
-                cb_reduce_scaler,
-                ckernel::PoolType::SUM,
-                ckernel::ReduceDim::REDUCE_ROW,
-                W_PARTIAL>(1.0f);
         }
-    } else {
-        dataflow_kernel_lib::
-            prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
-    }
+    }  // rd_scaler
 
     // ---- gamma ingest -------------------------------------------------------
     // Places gamma tiles [w0, w0 + n) into cb_gamma_tiles (TILE gamma), or
@@ -179,23 +189,41 @@ void kernel_main() {
                 constexpr uint32_t group_bytes = GAMMA_INGEST_BLOCK * TILE_DIM * GAMMA_ELEM_SIZE;
                 for (uint32_t o = 0; o < n; o += GAMMA_INGEST_BLOCK) {
                     const uint32_t byte_off = (w0 + o) * TILE_DIM * GAMMA_ELEM_SIZE;
-                    cb_reserve_back(cb_gamma_rm, GAMMA_INGEST_BLOCK);
+                    {
+                        MaybeDeviceZoneScope("rd_gamma_reserve");
+                        cb_reserve_back(cb_gamma_rm, GAMMA_INGEST_BLOCK);
+                    }
                     const uint32_t addr = get_write_ptr(cb_gamma_rm);
                     if (byte_off < GAMMA_ROW_BYTES) {
-                        noc_async_read(
-                            g_acc.get_noc_addr(0, byte_off), addr, umin(group_bytes, GAMMA_ROW_BYTES - byte_off));
-                        noc_async_read_barrier();
+                        {
+                            MaybeDeviceZoneScope("rd_gamma_issue");
+                            noc_async_read(
+                                g_acc.get_noc_addr(0, byte_off), addr, umin(group_bytes, GAMMA_ROW_BYTES - byte_off));
+                        }
+                        {
+                            MaybeDeviceZoneScope("rd_gamma_barrier");
+                            noc_async_read_barrier();
+                        }
                     }
                     cb_push_back(cb_gamma_rm, GAMMA_INGEST_BLOCK);
                 }
             } else {
-                cb_reserve_back(cb_gamma_tiles, n);
-                uint32_t addr = get_write_ptr(cb_gamma_tiles);
-                for (uint32_t i = 0; i < n; ++i) {
-                    noc_async_read_tile(w0 + i, g_acc, addr);
-                    addr += GAMMA_TILE_BYTES;
+                {
+                    MaybeDeviceZoneScope("rd_gamma_reserve");
+                    cb_reserve_back(cb_gamma_tiles, n);
                 }
-                noc_async_read_barrier();
+                uint32_t addr = get_write_ptr(cb_gamma_tiles);
+                {
+                    MaybeDeviceZoneScope("rd_gamma_issue");
+                    for (uint32_t i = 0; i < n; ++i) {
+                        noc_async_read_tile(w0 + i, g_acc, addr);
+                        addr += GAMMA_TILE_BYTES;
+                    }
+                }
+                {
+                    MaybeDeviceZoneScope("rd_gamma_barrier");
+                    noc_async_read_barrier();
+                }
                 cb_push_back(cb_gamma_tiles, n);
             }
         }
@@ -204,27 +232,36 @@ void kernel_main() {
     // ---- TILE input: one full BLOCK_HT x nw row-block chunk per call ---------
     auto read_tiles = [&](uint32_t rt0, uint32_t w0, uint32_t nw) {
         const uint32_t n = BLOCK_HT * nw;
-        cb_reserve_back(cb_input_tiles, n);
-        uint32_t addr = get_write_ptr(cb_input_tiles);
-        for (uint32_t r = 0; r < BLOCK_HT; ++r) {
-            const uint32_t row_base = umin(rt0 + r, LAST_RT) * Wt_core + w0;
-            for (uint32_t w = 0; w < nw; ++w) {
-                if constexpr (!SKIP_DM_PAYLOAD) {
-                    if constexpr (COALESCE) {
-                        noc_async_read_tile(row_base + w, in_acc, addr);
-                    } else {  // lever B5/B6 off-arm: two aligned partial-page transactions
-                        noc_async_read(in_acc.get_noc_addr(row_base + w), addr, SPLIT_FIRST);
-                        noc_async_read(
-                            in_acc.get_noc_addr(row_base + w, SPLIT_FIRST), addr + SPLIT_FIRST, SPLIT_SECOND);
-                    }
-                }
-                if constexpr (!BARRIER_PER_BLOCK) {
-                    noc_async_read_barrier();  // lever B7 off-arm
-                }
-                addr += IN_TILE_BYTES;
-            }
+        {
+            MaybeDeviceZoneScope("rd_in_reserve");
+            cb_reserve_back(cb_input_tiles, n);
         }
-        noc_async_read_barrier();
+        uint32_t addr = get_write_ptr(cb_input_tiles);
+        {
+            MaybeDeviceZoneScope("rd_in_issue");
+            for (uint32_t r = 0; r < BLOCK_HT; ++r) {
+                const uint32_t row_base = umin(rt0 + r, LAST_RT) * Wt_core + w0;
+                for (uint32_t w = 0; w < nw; ++w) {
+                    if constexpr (!SKIP_DM_PAYLOAD) {
+                        if constexpr (COALESCE) {
+                            noc_async_read_tile(row_base + w, in_acc, addr);
+                        } else {  // lever B5/B6 off-arm: two aligned partial-page transactions
+                            noc_async_read(in_acc.get_noc_addr(row_base + w), addr, SPLIT_FIRST);
+                            noc_async_read(
+                                in_acc.get_noc_addr(row_base + w, SPLIT_FIRST), addr + SPLIT_FIRST, SPLIT_SECOND);
+                        }
+                    }
+                    if constexpr (!BARRIER_PER_BLOCK) {
+                        noc_async_read_barrier();  // lever B7 off-arm
+                    }
+                    addr += IN_TILE_BYTES;
+                }
+            }
+        }  // rd_in_issue
+        {
+            MaybeDeviceZoneScope("rd_in_barrier");
+            noc_async_read_barrier();
+        }
         cb_push_back(cb_input_tiles, n);
     };
 
@@ -236,23 +273,33 @@ void kernel_main() {
         const uint32_t padded = nw * TILE_DIM * ELEM_SIZE;
         const uint32_t chunk_bytes = umin(padded, ROW_BYTES - byte_off);
 
-        cb_reserve_back(cb_rm_in, nw);
+        {
+            MaybeDeviceZoneScope("rd_in_reserve");
+            cb_reserve_back(cb_rm_in, nw);
+        }
         const uint32_t base = get_write_ptr(cb_rm_in);
         uint32_t dst = base;
-        for (uint32_t r = 0; r < nrows; ++r) {
-            if constexpr (!SKIP_DM_PAYLOAD) {
-                noc_async_read(in_acc.get_noc_addr(row0 + r, byte_off), dst, chunk_bytes);
+        {
+            MaybeDeviceZoneScope("rd_in_issue");
+            for (uint32_t r = 0; r < nrows; ++r) {
+                if constexpr (!SKIP_DM_PAYLOAD) {
+                    noc_async_read(in_acc.get_noc_addr(row0 + r, byte_off), dst, chunk_bytes);
+                }
+                if constexpr (!BARRIER_PER_BLOCK) {
+                    noc_async_read_barrier();  // lever B7 off-arm
+                }
+                dst += padded;
             }
-            if constexpr (!BARRIER_PER_BLOCK) {
-                noc_async_read_barrier();  // lever B7 off-arm
-            }
-            dst += padded;
+        }  // rd_in_issue
+        {
+            MaybeDeviceZoneScope("rd_in_barrier");
+            noc_async_read_barrier();
         }
-        noc_async_read_barrier();
         // Zero the pad tail of every valid stick so tilize never promotes
         // uninitialised L1 into the reduction.  H-padding rows need no fill:
         // the reduction is per-row and the writer never emits a pad row.
         if (chunk_bytes < padded) {
+            MaybeDeviceZoneScope("rd_zero_pad");
             uint32_t tail = base + chunk_bytes;
             for (uint32_t r = 0; r < nrows; ++r) {
                 zero_l1(tail, padded - chunk_bytes);

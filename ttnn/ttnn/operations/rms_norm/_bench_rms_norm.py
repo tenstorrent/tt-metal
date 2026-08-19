@@ -78,6 +78,44 @@ BENCH_SHAPES = {
     "grid_starved": ((1, 1, 32, 7168), ttnn.bfloat16, ttnn.TILE_LAYOUT),
     "smallest": ((32, 17), ttnn.bfloat16, ttnn.TILE_LAYOUT),
     "row_major": ((1, 1, 8192, 1024), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    # --- Perf 1: the perf-gated focus case, at its EXACT feature_spec config ---
+    # feature_spec.LOOSE_CASES `_perf_case(32, 7168, 104259, minimum_expected_speedup=7.0)`:
+    # (1,1,32,7168), bf16, TILE, INTERLEAVED, gamma bf16 TILE, HiFi2,
+    # fp32_dest_acc_en=False.  It differs from `grid_starved` in ONE knob that is a
+    # different DATAPATH, not a detail: gamma at TILE layout is read straight into
+    # cb_gamma_tiles, where `grid_starved`'s ROW_MAJOR gamma goes through the
+    # cb_gamma_rm staging CB + a compute-side tilize.  Measuring the goal on the
+    # RM-gamma proxy would be measuring a different program.
+    "focus": ((1, 1, 32, 7168), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    # The other three perf-gated interleaved decode shapes, same corner.
+    "decode_1024": ((1, 1, 32, 1024), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    "decode_2304": ((1, 1, 32, 2304), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    "decode_5120": ((1, 1, 32, 5120), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    # The perf-gated prefill shapes at the same corner (gamma TILE).
+    "prefill_1024": ((1, 1, 8192, 1024), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    "prefill_7168": ((1, 1, 8192, 7168), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    # --- Perf 1 guard set: one representative per distinct KERNEL PATH ---------
+    # W non-aligned (the masked reduce / partial-scaler datapath) on a wide,
+    # W-chunked shape, and H non-aligned (the phantom-row clamp) on a maskless
+    # Regime A shape.  Both are supported cells, so a graduation that regressed
+    # them would be a regression on a supported cell.
+    "w_nonalign": ((1, 1, 32, 4095), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    "h_nonalign": ((1, 1, 100, 736), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+}
+
+# Bench shapes whose gamma must be built at a specific layout (default: TILE for a
+# block-float dtype, ROW_MAJOR otherwise).  Every perf-gated feature_spec case
+# pins gamma to TILE, which is a distinct gamma datapath (no staging CB, no
+# compute-side tilize).
+BENCH_GAMMA_LAYOUT = {
+    "focus": ttnn.TILE_LAYOUT,
+    "decode_1024": ttnn.TILE_LAYOUT,
+    "decode_2304": ttnn.TILE_LAYOUT,
+    "decode_5120": ttnn.TILE_LAYOUT,
+    "prefill_1024": ttnn.TILE_LAYOUT,
+    "prefill_7168": ttnn.TILE_LAYOUT,
+    "w_nonalign": ttnn.TILE_LAYOUT,
+    "h_nonalign": ttnn.TILE_LAYOUT,
 }
 
 
@@ -142,7 +180,7 @@ def _dispatch(device, run_fn, iters=N_ITERS):
     return N_WARMUP + iters
 
 
-def _make(device, shape, dtype, layout):
+def _make(device, shape, dtype, layout, gamma_layout=None):
     # torch is imported lazily: ttnn/ forbids a module-level torch import, and
     # this bench module lives beside the op.
     import torch
@@ -154,13 +192,13 @@ def _make(device, shape, dtype, layout):
     g = ttnn.from_torch(
         torch.randn((1, 1, 1, shape[-1]), dtype=torch.float32),
         dtype=dtype,
-        layout=ttnn.TILE_LAYOUT if dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,
+        layout=gamma_layout or (ttnn.TILE_LAYOUT if dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT),
         device=device,
     )
     return x, g
 
 
-def run_arm(device, manifest, label, name, levers=None, iters=N_ITERS, config="default", dtype=None):
+def run_arm(device, manifest, label, name, levers=None, iters=N_ITERS, config="default", dtype=None, gamma=True):
     """Dispatch one (shape, precision-corner, lever-setting) arm; append to the manifest.
 
     `config` names a BENCH_CONFIGS corner and `dtype` overrides the shape's dtype
@@ -169,8 +207,10 @@ def run_arm(device, manifest, label, name, levers=None, iters=N_ITERS, config="d
     """
     shape, shape_dtype, layout = BENCH_SHAPES[name]
     dtype = dtype or shape_dtype
-    x, g = _make(device, shape, dtype, layout)
+    x, g = _make(device, shape, dtype, layout, BENCH_GAMMA_LAYOUT.get(name))
     cfg = BENCH_CONFIGS[config]()
+    if not gamma:
+        g = None
     n = _dispatch(device, lambda: rms_norm(x, gamma=g, compute_kernel_config=cfg, _levers=levers), iters)
     manifest.append(
         {
@@ -178,6 +218,7 @@ def run_arm(device, manifest, label, name, levers=None, iters=N_ITERS, config="d
             "shape": name,
             "config": config,
             "dtype": str(dtype),
+            "gamma": gamma,
             "levers": levers or {},
             "calls": n,
             "profiled": iters,
@@ -296,6 +337,59 @@ def run_fidelity(device, shape_name):
                 "profiled": N_ITERS,
             }
         )
+    return manifest
+
+
+# --- Perf 1 guard set --------------------------------------------------------
+# One representative per distinct (kernel path x layout x placement) the op can
+# take, at the corner that path is actually used at.  This is what a graduation
+# is re-measured against: it is how a MATERIAL regression on a supported cell is
+# FOUND (and only a measured one earns a carve-out).
+#
+# (name, config, dtype-override, gamma-present) — the comment names the path.
+GATESET = [
+    ("focus", "loose", None, True),  # Regime B, TILE, TILE gamma  <- FOCUS
+    ("decode_1024", "loose", None, True),  # Regime A, 1 core, narrow
+    ("decode_2304", "loose", None, True),  # Regime A, 1 core
+    ("decode_5120", "loose", None, True),  # Regime A/B boundary, 1 core
+    ("prefill_1024", "loose", None, True),  # Regime A, full grid, DRAM-bound
+    ("prefill_7168", "loose", None, True),  # Regime B, full grid
+    ("grid_starved", "loose", None, True),  # Regime B + ROW_MAJOR gamma (staging + tilize)
+    ("row_major", "loose", None, True),  # ROW_MAJOR input path (tilize/untilize)
+    ("smallest", "loose", None, True),  # B0 per-core-overhead regime
+    ("w_nonalign", "loose", None, True),  # masked reduce / partial scaler
+    ("h_nonalign", "loose", None, True),  # phantom-row clamp
+    ("focus", "loose", None, False),  # no_gamma path (scale writes straight out)
+    ("prefill_1024", "loose", ttnn.bfloat8_b, True),  # block-float datapath
+    ("prefill_1024", "default", ttnn.float32, True),  # fp32 + fp32 DEST (EXCLUSIONS bar fp32+False)
+]
+
+
+def run_gateset(device):
+    """Every guard-set arm, at the applied defaults.  The no-regression baseline."""
+    manifest = []
+    for name, config, dtype, gamma in GATESET:
+        tag = f"{name}/{config}" + (f"/{str(dtype).split('.')[-1]}" if dtype else "") + ("" if gamma else "/no_gamma")
+        run_arm(device, manifest, f"gate:{tag}", name, config=config, dtype=dtype, gamma=gamma)
+    return manifest
+
+
+def run_focus(device, shape_name="focus"):
+    """Perf 1: a perf-gated case at its exact config, plus its cumulative ablation.
+
+    Every arm here runs the `loose` corner (bf16 / HiFi2 / fp32_dest_acc_en=False)
+    because that is what the feature_spec perf cases supply; the default corner is
+    a different program and would not be the gated measurement.
+
+    The ablation arms are peeled CUMULATIVELY (`stub_dm`, `stub_compute`, then
+    `stub_both`): the reader's NoC reads run in parallel with the TRISC compute,
+    so removing either alone leaves the other holding the wall and under-counts
+    it.  Only `stub_both` licenses a statement about the whole op.
+    """
+    manifest = []
+    run_arm(device, manifest, f"{shape_name}/ON", shape_name, config="loose")
+    for lev, arm in ABLATION_ARMS.items():
+        run_arm(device, manifest, f"{shape_name}/ABL:{lev}", shape_name, arm, config="loose")
     return manifest
 
 

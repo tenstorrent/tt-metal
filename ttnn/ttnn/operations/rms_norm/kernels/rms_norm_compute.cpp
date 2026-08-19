@@ -38,6 +38,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -121,6 +122,7 @@ constexpr uint32_t cb_scale_out = HAS_GAMMA ? cb_normed : cb_output_tiles;
 template <uint32_t N>
 ALWI void ingest_gamma() {
     if constexpr (HAS_GAMMA && GAMMA_IS_ROW_MAJOR) {
+        MaybeDeviceZoneScope("cp_gamma_tilize");
         for (uint32_t o = 0; o < N; o += GAMMA_INGEST_BLOCK) {
             ckl::tilize<GAMMA_INGEST_BLOCK, cb_gamma_rm, cb_gamma_tiles>(1);
         }
@@ -135,13 +137,17 @@ ALWI void ingest_gamma() {
 //              AtEnd in Regime B, where the reader re-pushes the chunk's slice.
 template <ckl::PopPolicy RmsPop, ckl::PopPolicy GammaPop>
 ALWI void scale_chunk(uint32_t cw) {
-    ckl::mul<
-        ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-        ckl::input(cb_rms_recip, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, RmsPop, ckl::OperandKind::Col),
-        ckl::output(cb_scale_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-        ckl::IterationShape::grid(BLOCK_HT, cw).block_size(DEST_BLOCK));
+    {
+        MaybeDeviceZoneScope("cp_scale_mul");
+        ckl::mul<
+            ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+            ckl::input(cb_rms_recip, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, RmsPop, ckl::OperandKind::Col),
+            ckl::output(cb_scale_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+            ckl::IterationShape::grid(BLOCK_HT, cw).block_size(DEST_BLOCK));
+    }
 
     if constexpr (HAS_GAMMA) {
+        MaybeDeviceZoneScope("cp_gamma_mul");
         ckl::mul<
             ckl::input(cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
             ckl::input(
@@ -183,6 +189,7 @@ void kernel_main() {
         // ---------------- sum of squares over the reduced axis ---------------
         if constexpr (REGIME_A) {
             if constexpr (IS_ROW_MAJOR) {
+                MaybeDeviceZoneScope("cp_tilize");
                 ckl::tilize<Wt_core, cb_rm_in, cb_input_tiles>(BLOCK_HT);
             }
             // accumulate-then-finalize (catalog `row_reduce_accumulate`):
@@ -191,33 +198,44 @@ void kernel_main() {
             // reduce<SUM, REDUCE_ROW> below.  No mask is needed here - the
             // accumulator's 32 columns are all meaningful, since the only padded
             // columns live in the last W-tile and the RM reader zero-fills them.
-            ckl::sum_of_squares<
-                ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Block),
-                ckl::row_output(cb_sumsq_acc)>(ckl::IterationShape::grid(BLOCK_HT, Wt_core).block_size(DEST_BLOCK));
+            {
+                MaybeDeviceZoneScope("cp_sumsq");
+                ckl::sum_of_squares<
+                    ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Block),
+                    ckl::row_output(cb_sumsq_acc)>(ckl::IterationShape::grid(BLOCK_HT, Wt_core).block_size(DEST_BLOCK));
+            }
 
-            ckl::reduce<
-                ckernel::PoolType::SUM,
-                ckernel::ReduceDim::REDUCE_ROW,
-                cb_sumsq_acc,
-                cb_reduce_scaler,
-                cb_sumsq>(ckl::ReduceInputBlockShape::of(BLOCK_HT, 1, 1));
+            {
+                MaybeDeviceZoneScope("cp_reduce");
+                ckl::reduce<
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_ROW,
+                    cb_sumsq_acc,
+                    cb_reduce_scaler,
+                    cb_sumsq>(ckl::ReduceInputBlockShape::of(BLOCK_HT, 1, 1));
+            }
         } else {
             for (uint32_t c = 0; c < NUM_REDUCE_CHUNKS; ++c) {
                 const bool is_last = (c + 1 == NUM_REDUCE_CHUNKS);
                 if constexpr (IS_ROW_MAJOR) {
+                    MaybeDeviceZoneScope("cp_tilize");
                     ckl::tilize<WT_REDUCE_BLOCK, cb_rm_in, cb_input_tiles>(BLOCK_HT);
                 }
-                ckl::square<
-                    ckl::input(
-                        cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                    ckl::output(cb_squared, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-                    ckl::IterationShape::grid(BLOCK_HT, WT_REDUCE_BLOCK).block_size(DEST_BLOCK));
+                {
+                    MaybeDeviceZoneScope("cp_square");
+                    ckl::square<
+                        ckl::input(
+                            cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                        ckl::output(cb_squared, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                        ckl::IterationShape::grid(BLOCK_HT, WT_REDUCE_BLOCK).block_size(DEST_BLOCK));
+                }
 
                 // `at_last` marks the finalizing chunk: on the AccumulateViaAdd
                 // datapath cb_sumsq holds the RAW partial sum between chunks and
                 // the within-tile collapse runs exactly once, on the last one.
                 // ReduceTile ignores the flag (it finalizes every chunk), so the
                 // same call site is correct for both datapaths.
+                MaybeDeviceZoneScope("cp_reduce");
                 ckl::reduce<
                     ckernel::PoolType::SUM,
                     ckernel::ReduceDim::REDUCE_ROW,
@@ -240,18 +258,22 @@ void kernel_main() {
         // One helper call, one dst-sync window, no constant CBs.  MulUnary /
         // AddUnary take fp32 bit patterns, so 1/W and epsilon are applied at
         // full fp32 precision.
-        ckl::eltwise_chain(
-            ckl::IterationShape::tiles(BLOCK_HT),
-            ckl::CopyTile<ckl::input(cb_sumsq)>{},
-            ckl::MulUnary<>{inv_w_bits},
-            ckl::AddUnary<>{eps_bits},
-            ckl::Rsqrt<>{},
-            ckl::PackTile<ckl::output(cb_rms_recip)>{});
+        {
+            MaybeDeviceZoneScope("cp_rms_chain");
+            ckl::eltwise_chain(
+                ckl::IterationShape::tiles(BLOCK_HT),
+                ckl::CopyTile<ckl::input(cb_sumsq)>{},
+                ckl::MulUnary<>{inv_w_bits},
+                ckl::AddUnary<>{eps_bits},
+                ckl::Rsqrt<>{},
+                ckl::PackTile<ckl::output(cb_rms_recip)>{});
+        }
 
         // ---------------- scale (and gamma) ----------------------------------
         if constexpr (REGIME_A) {
             scale_chunk<ckl::PopPolicy::AtEnd, ckl::PopPolicy::None>(Wt_core);
             if constexpr (IS_ROW_MAJOR) {
+                MaybeDeviceZoneScope("cp_untilize");
                 ckl::untilize<Wt_core, cb_output_tiles, cb_rm_out>(BLOCK_HT);
             }
         } else {
@@ -260,10 +282,12 @@ void kernel_main() {
                 // reversing it deadlocks on the depth-1 staging CB.
                 ingest_gamma<WT_SCALE_BLOCK>();
                 if constexpr (IS_ROW_MAJOR) {
+                    MaybeDeviceZoneScope("cp_tilize");
                     ckl::tilize<WT_SCALE_BLOCK, cb_rm_in, cb_input_tiles>(BLOCK_HT);
                 }
                 scale_chunk<ckl::PopPolicy::None, ckl::PopPolicy::AtEnd>(WT_SCALE_BLOCK);
                 if constexpr (IS_ROW_MAJOR) {
+                    MaybeDeviceZoneScope("cp_untilize");
                     ckl::untilize<WT_SCALE_BLOCK, cb_output_tiles, cb_rm_out>(BLOCK_HT);
                 }
             }

@@ -67,7 +67,7 @@ layouts, the full-grid and the single-core core counts.
 
 ---
 
-### [x] Refinement 1 — Numerical configurability expansion
+### [ ] Refinement 1 — Numerical configurability expansion
 
 **Goal**: add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` and to `SUPPORTED["gamma_dtype"]`, and add
 `False` to `SUPPORTED["fp32_dest_acc_en"]` for `bfloat16` activations. Expose the full
