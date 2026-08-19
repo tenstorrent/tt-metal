@@ -15,6 +15,9 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <string>
 #include <exception>
 #include <functional>
 #include <mutex>
@@ -407,9 +410,134 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
     this->wait_for_outstanding_reads(lock);
 }
 
+// ===========================================================================================
+// EXPERIMENT, not for merge: aggregate statistics about what a real model's MeshWorkload
+// enqueues actually look like, so the shape can be reproduced in a local benchmark. The host
+// microbenchmarks that motivated the bounded fan-out used synthetic programs; this records the
+// device counts, program counts, command-stream sizes and realised chunk counts that GLM 5.2
+// chunked prefill produces, plus the host time each enqueue costs.
+// ===========================================================================================
+namespace dispatch_stats {
+
+constexpr size_t kBytesBuckets = 28;  // log2 of total command bytes
+constexpr size_t kTaskBuckets = 40;   // device tasks per workload
+constexpr size_t kChunkBuckets = 12;  // realised chunks per workload
+
+struct Stats {
+    std::atomic<uint64_t> n{0};
+    std::atomic<uint64_t> lock_ns{0};
+    std::atomic<uint64_t> work_ns{0};
+    std::atomic<uint64_t> work_ns_max{0};
+    std::atomic<uint64_t> tasks{0};
+    std::atomic<uint64_t> programs{0};
+    std::atomic<uint64_t> chunks{0};
+    std::atomic<uint64_t> bytes{0};
+    std::atomic<uint64_t> fanned_out{0};
+    std::array<std::atomic<uint64_t>, kBytesBuckets> bytes_log2{};
+    std::array<std::atomic<uint64_t>, kTaskBuckets> task_hist{};
+    std::array<std::atomic<uint64_t>, kChunkBuckets> chunk_hist{};
+};
+
+Stats g_stats;
+
+template <size_t N>
+std::string sparse(const std::array<std::atomic<uint64_t>, N>& h) {
+    std::string out;
+    for (size_t i = 0; i < N; i++) {
+        const uint64_t v = h[i].load(std::memory_order_relaxed);
+        if (v) {
+            out += fmt::format("{}{}:{}", out.empty() ? "" : " ", i, v);
+        }
+    }
+    return out.empty() ? "-" : out;
+}
+
+// Logs one window and clears it, so a dump describes the enqueues since the previous dump rather
+// than everything since process start - otherwise the first, cold iteration dominates every mean.
+void dump() {
+    auto& s = g_stats;
+    const uint64_t n = s.n.load(std::memory_order_relaxed);
+    if (!n) {
+        return;
+    }
+    const double dn = static_cast<double>(n);
+    log_info(
+        tt::LogMetal,
+        "DISPATCH_STATS n={} work_us_mean={:.2f} work_us_max={:.2f} lock_us_mean={:.2f} "
+        "tasks_mean={:.2f} programs_mean={:.2f} chunks_mean={:.3f} fanned_out_pct={:.1f} "
+        "bytes_mean={:.0f} bytes_per_task_mean={:.0f}",
+        n,
+        s.work_ns.load(std::memory_order_relaxed) / dn / 1000.0,
+        s.work_ns_max.load(std::memory_order_relaxed) / 1000.0,
+        s.lock_ns.load(std::memory_order_relaxed) / dn / 1000.0,
+        s.tasks.load(std::memory_order_relaxed) / dn,
+        s.programs.load(std::memory_order_relaxed) / dn,
+        s.chunks.load(std::memory_order_relaxed) / dn,
+        100.0 * s.fanned_out.load(std::memory_order_relaxed) / dn,
+        s.bytes.load(std::memory_order_relaxed) / dn,
+        s.bytes.load(std::memory_order_relaxed) / std::max<double>(1.0, s.tasks.load(std::memory_order_relaxed)));
+    log_info(
+        tt::LogMetal,
+        "DISPATCH_STATS_HIST bytes_log2=[{}] tasks=[{}] chunks=[{}]",
+        sparse(s.bytes_log2),
+        sparse(s.task_hist),
+        sparse(s.chunk_hist));
+
+    s.lock_ns.store(0, std::memory_order_relaxed);
+    s.work_ns.store(0, std::memory_order_relaxed);
+    s.work_ns_max.store(0, std::memory_order_relaxed);
+    s.tasks.store(0, std::memory_order_relaxed);
+    s.programs.store(0, std::memory_order_relaxed);
+    s.chunks.store(0, std::memory_order_relaxed);
+    s.bytes.store(0, std::memory_order_relaxed);
+    s.fanned_out.store(0, std::memory_order_relaxed);
+    for (auto& b : s.bytes_log2) {
+        b.store(0, std::memory_order_relaxed);
+    }
+    for (auto& b : s.task_hist) {
+        b.store(0, std::memory_order_relaxed);
+    }
+    for (auto& b : s.chunk_hist) {
+        b.store(0, std::memory_order_relaxed);
+    }
+    s.n.store(0, std::memory_order_relaxed);
+}
+
+void record(uint64_t lock_ns, uint64_t work_ns, size_t tasks, size_t programs, size_t chunks, size_t bytes) {
+    auto& s = g_stats;
+    s.lock_ns.fetch_add(lock_ns, std::memory_order_relaxed);
+    s.work_ns.fetch_add(work_ns, std::memory_order_relaxed);
+    uint64_t prev_max = s.work_ns_max.load(std::memory_order_relaxed);
+    while (work_ns > prev_max && !s.work_ns_max.compare_exchange_weak(prev_max, work_ns, std::memory_order_relaxed)) {
+    }
+    s.tasks.fetch_add(tasks, std::memory_order_relaxed);
+    s.programs.fetch_add(programs, std::memory_order_relaxed);
+    s.chunks.fetch_add(chunks, std::memory_order_relaxed);
+    s.bytes.fetch_add(bytes, std::memory_order_relaxed);
+    if (chunks > 1) {
+        s.fanned_out.fetch_add(1, std::memory_order_relaxed);
+    }
+    size_t log2_bytes = 0;
+    while ((bytes >> log2_bytes) > 1 && log2_bytes + 1 < kBytesBuckets) {
+        log2_bytes++;
+    }
+    s.bytes_log2[log2_bytes].fetch_add(1, std::memory_order_relaxed);
+    s.task_hist[std::min(tasks, kTaskBuckets - 1)].fetch_add(1, std::memory_order_relaxed);
+    s.chunk_hist[std::min(chunks, kChunkBuckets - 1)].fetch_add(1, std::memory_order_relaxed);
+    // Dump periodically rather than at exit, so the numbers survive a teardown that races the logger.
+    constexpr uint64_t kWindow = 2000;
+    if (s.n.fetch_add(1, std::memory_order_relaxed) + 1 >= kWindow) {
+        dump();
+    }
+}
+
+}  // namespace dispatch_stats
+
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     ZoneScopedN("EnqueueProgram");
+    const auto ab_before_lock = std::chrono::steady_clock::now();
     auto lock = lock_api_function_();
+    const auto ab_after_lock = std::chrono::steady_clock::now();
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
@@ -752,6 +880,15 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // From the dispatcher's perspective, binaries are now committed to DRAM
     mesh_workload.impl().set_program_binary_status(mesh_device_id, ProgramBinaryStatus::Committed);
     mesh_workload.set_last_used_command_queue_for_testing(this);
+
+    const auto ab_done = std::chrono::steady_clock::now();
+    dispatch_stats::record(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(ab_after_lock - ab_before_lock).count(),
+        std::chrono::duration_cast<std::chrono::nanoseconds>(ab_done - ab_after_lock).count(),
+        num_tasks,
+        programs.size(),
+        num_bounds,
+        total_command_bytes);
 
     if (blocking) {
         this->finish_nolock({{sub_device_id}});
