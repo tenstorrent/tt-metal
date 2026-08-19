@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
 from dataclasses import dataclass
@@ -686,6 +687,33 @@ class HADAMARD(TemplateParameter):
 
 
 @dataclass
+class ROPE(TemplateParameter):
+    ht: int = 1
+    wt: int = 1
+    x_base: int = 0
+    x_stride: int = 64
+    cos_base: int = 64
+    sin_base: int = 128
+    cs_stride: int = 64
+    has_scale: bool = False
+    scale_fp32: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t ROPE_HT = {self.ht};",
+            f"constexpr std::uint32_t ROPE_WT = {self.wt};",
+            f"constexpr std::uint32_t ROPE_X_BASE = {self.x_base};",
+            f"constexpr std::uint32_t ROPE_X_STRIDE = {self.x_stride};",
+            f"constexpr std::uint32_t ROPE_COS_BASE = {self.cos_base};",
+            f"constexpr std::uint32_t ROPE_SIN_BASE = {self.sin_base};",
+            f"constexpr std::uint32_t ROPE_CS_STRIDE = {self.cs_stride};",
+            f"constexpr bool ROPE_HAS_SCALE = {str(self.has_scale).lower()};",
+            f"constexpr std::uint32_t ROPE_SCALE_FP32 = {hex(self.scale_fp32)};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TOPK_XL(TemplateParameter):
     k: int = 512
     num_chunks: int = 1
@@ -699,6 +727,8 @@ class TOPK_XL(TemplateParameter):
     fused_reduce: bool = False
     chunk_base_mode: TopKXLChunkBaseMode = TopKXLChunkBaseMode.Static
     chunk_base: int = 0
+    fused_e2e: bool = False
+    seg_base: int = 0
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -714,6 +744,8 @@ class TOPK_XL(TemplateParameter):
             f"constexpr bool TOPK_XL_FUSED_REDUCE = {str(self.fused_reduce).lower()};",
             f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE_MODE = {self.chunk_base_mode.value};",
             f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE = {self.chunk_base};",
+            f"constexpr bool TOPK_XL_FUSED_E2E = {str(self.fused_e2e).lower()};",
+            f"constexpr std::uint32_t TOPK_XL_SEG_BASE = {self.seg_base};",
         ]
         return "\n".join(lines)
 
@@ -1469,3 +1501,55 @@ class TYPECAST_FORMATS(TemplateParameter):
             f"constexpr auto TYPECAST_OUT_FORMAT = DataFormat::{self.output_format.name};",
         ]
         return "\n".join(lines)
+
+
+@dataclass
+class ZERO_PAD_ROWS(TemplateParameter):
+    """SFPU row bounds for _zero_pad_tile_."""
+
+    valid_rows: int = 0
+    total_rows: int = 32
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr int ZERO_PAD_VALID_ROWS = {self.valid_rows};\n"
+            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.total_rows};"
+        )
+
+
+@dataclass
+class SPARSE_K_CONFIG(TemplateParameter):
+    sparse_k_iterations: int = 32
+    bank_mask: int = 0x3F
+    my_bank: int = 0
+    global_bank_shift: int = 14
+    within_bank_mask: int = 0x3FFF
+    out_shift: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr int SPARSE_K_ITERATIONS = {self.sparse_k_iterations};\n"
+            f"constexpr std::uint32_t SPARSE_K_BANK_MASK = {self.bank_mask}u;\n"
+            f"constexpr std::uint32_t SPARSE_K_MY_BANK = {self.my_bank}u;\n"
+            f"constexpr std::uint32_t SPARSE_K_GLOBAL_BANK_SHIFT = {self.global_bank_shift}u;\n"
+            f"constexpr std::uint32_t SPARSE_K_WITHIN_BANK_MASK = {self.within_bank_mask}u;\n"
+            f"constexpr std::uint32_t SPARSE_K_OUT_SHIFT = {self.out_shift}u;"
+        )
+
+
+@dataclass
+class CLAMPED_SILU_PARAMS(TemplateParameter):
+    clamped_silu_op: str = "GATE"
+    scalar0: float = 1.0
+    scalar1: float = 1.0
+
+    @staticmethod
+    def _fp32_bits(value: float) -> int:
+        return struct.unpack("<I", struct.pack("<f", value))[0]
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {self._fp32_bits(self.scalar0)}u;\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {self._fp32_bits(self.scalar1)}u;"
+        )
