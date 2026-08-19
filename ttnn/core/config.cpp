@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
 #include <iomanip>
 #include <ostream>
 #include <sstream>
@@ -23,59 +24,137 @@ namespace ttnn::core {
 
 Config CONFIG{};
 
-void Config::apply_json_overrides(const std::string& json_text, bool strict) {
+void Config::apply_json_overrides(const std::string& json_text, bool strict, const std::string& source) {
+    const std::string from = source.empty() ? std::string{} : fmt::format(" (from {})", source);
     nlohmann::json json;
     try {
         json = nlohmann::json::parse(json_text);
     } catch (const nlohmann::json::exception& e) {
-        // Reached from a static initializer, so name the source instead of surfacing a bare parser error.
-        TT_THROW("TTNN config overrides are not valid JSON: {} (input: {})", e.what(), json_text);
+        // Wrapped: a bare nlohmann parse error does not say that TTNN config is what failed.
+        TT_THROW("TTNN config overrides are not valid JSON: {}{}", e.what(), from);
     }
-    TT_FATAL(json.is_object(), "TTNN config overrides must be a JSON object, got: {}", json_text);
+    TT_FATAL(json.is_object(), "TTNN config overrides must be a JSON object, got: {}{}", json_text, from);
 
-    // Restore on any failure: a rejected override must not leave process-wide settings half applied.
-    attributes_t previous = this->attributes;
-    try {
+    // Apply into a copy so a strict rejection leaves process-wide settings untouched.
+    attributes_t next = this->attributes;
+    std::vector<std::string_view> applied;
+    for (const auto& [key, value] : json.items()) {
+        bool known = false;
         reflect::for_each(
             [&](auto I) {
-                auto name = reflect::member_name<I>(this->attributes);
-                auto it = json.find(std::string(name));
-                if (it == json.end()) {
+                auto name = reflect::member_name<I>(next);
+                if (name != key) {
                     return;
                 }
-                auto& member = reflect::get<I>(this->attributes);
+                known = true;
+                auto& member = reflect::get<I>(next);
                 using T = std::decay_t<decltype(member)>;
-                if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, float>) {
-                    member = it->template get<T>();
-                } else if constexpr (std::is_same_v<T, std::optional<std::filesystem::path>>) {
-                    member = it->is_null() ? T{} : T{it->template get<std::string>()};
-                } else {
-                    member = std::filesystem::path(it->template get<std::string>());
+                try {
+                    if constexpr (std::is_same_v<T, std::filesystem::path>) {
+                        member = T{value.get<std::string>()};
+                    } else if constexpr (std::is_same_v<T, std::optional<std::filesystem::path>>) {
+                        member = value.is_null() ? T{} : T{value.get<std::string>()};
+                    } else {
+                        static_assert(
+                            std::is_arithmetic_v<T> || std::is_same_v<T, std::string>,
+                            "Config attribute type needs a JSON conversion in apply_json_overrides");
+                        member = value.get<T>();
+                    }
+                } catch (const nlohmann::json::exception& e) {
+                    // Strict callers get nothing applied; a config file keeps the keys that did parse.
+                    if (strict) {
+                        TT_THROW("Bad value for configuration key {}: {}{}", key, e.what(), from);
+                    }
+                    log_warning(tt::LogAlways, "Ignoring configuration key {}: {}{}", key, e.what(), from);
+                    return;
                 }
-                this->validate(name);
-                json.erase(it);
+                applied.push_back(name);
             },
-            this->attributes);
-        for (const auto& [key, value] : json.items()) {
+            next);
+        if (!known) {
             if (strict) {
-                TT_THROW("Unknown configuration key: {}", key);
+                TT_THROW("Unknown configuration key: {}{}", key, from);
             }
-            log_warning(tt::LogAlways, "Unknown configuration key: {}", key);
+            log_warning(tt::LogAlways, "Unknown configuration key: {}{}", key, from);
         }
-    } catch (const nlohmann::json::exception& e) {
-        this->attributes = std::move(previous);
-        TT_THROW("TTNN config override has a bad value: {} (input: {})", e.what(), json_text);
-    } catch (...) {
-        this->attributes = std::move(previous);
-        throw;
+    }
+
+    this->attributes = std::move(next);
+    for (std::string_view name : applied) {
+        this->validate(name);
     }
 }
 
-// Parse TTNN_CONFIG_OVERRIDES at load so pure C++ consumers (e.g. the sanity-pipeline gtests) honor
-// it too; ttnn/__init__.py applies overrides through the same function.
-static const int apply_env_config_overrides = [] {
-    if (const char* overrides = std::getenv("TTNN_CONFIG_OVERRIDES")) {
-        CONFIG.apply_json_overrides(overrides, /*strict=*/true);
+std::vector<std::string> Config::keys() {
+    std::vector<std::string> names;
+    reflect::for_each<attributes_t>([&](auto I) { names.emplace_back(reflect::member_name<I, attributes_t>()); });
+    return names;
+}
+
+void Config::load_from_file(const std::filesystem::path& path) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        log_warning(tt::LogAlways, "Failed to load ttnn configuration from {}: cannot open the file", path.string());
+        return;
+    }
+    std::stringstream text;
+    text << file.rdbuf();
+    try {
+        this->apply_json_overrides(
+            text.str(),
+            /*strict=*/false,
+            fmt::format("{}; update or delete it to get the new default config", path.string()));
+    } catch (const std::exception& e) {
+        // A stale or corrupt file must not fail the process, and this also runs at library load.
+        log_warning(tt::LogAlways, "Failed to load ttnn configuration from {}: {}", path.string(), e.what());
+    }
+}
+
+void Config::save_to_file(const std::filesystem::path& path) const {
+    nlohmann::ordered_json json;
+    reflect::for_each(
+        [&](auto I) {
+            const auto& member = reflect::get<I>(this->attributes);
+            using T = std::decay_t<decltype(member)>;
+            auto name = std::string(reflect::member_name<I>(this->attributes));
+            if constexpr (std::is_same_v<T, std::filesystem::path>) {
+                json[name] = member.string();
+            } else if constexpr (std::is_same_v<T, std::optional<std::filesystem::path>>) {
+                json[name] = member.has_value() ? nlohmann::ordered_json(member->string()) : nlohmann::ordered_json();
+            } else {
+                json[name] = member;
+            }
+        },
+        this->attributes);
+    std::ofstream file(path);
+    TT_FATAL(file.is_open(), "Failed to open {} to save the TTNN configuration", path.string());
+    file << json.dump(4);
+}
+
+// Apply both config sources at load so pure C++ consumers (e.g. the sanity-pipeline gtests) honor them
+// too, in the order ttnn/__init__.py used to: the file first, then the env var on top.
+static const int apply_env_config = [] {
+    try {
+        if (const char* config_path = std::getenv("TTNN_CONFIG_PATH")) {
+            const std::filesystem::path path{config_path};
+            if (std::filesystem::exists(path)) {
+                CONFIG.load_from_file(path);
+            } else {
+                if (path.has_parent_path()) {
+                    std::filesystem::create_directories(path.parent_path());
+                }
+                Config{}.save_to_file(path);
+            }
+        }
+        if (const char* overrides = std::getenv("TTNN_CONFIG_OVERRIDES")) {
+            CONFIG.apply_json_overrides(overrides, /*strict=*/true, "TTNN_CONFIG_OVERRIDES");
+        }
+    } catch (const std::exception& e) {
+        // Nothing can catch this early (dlopen, pre-main), so fail here with the reason.
+        // _Exit, not exit: running atexit handlers here deadlocks against the loader lock.
+        log_critical(tt::LogAlways, "Cannot apply the TTNN configuration: {}", e.what());
+        std::fflush(nullptr);
+        std::_Exit(1);
     }
     return 0;
 }();
