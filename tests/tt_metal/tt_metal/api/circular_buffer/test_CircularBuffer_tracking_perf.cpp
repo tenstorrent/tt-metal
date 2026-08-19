@@ -6,8 +6,8 @@
 //
 // Device::get_total_cb_allocated() used to recompute the device-wide CB footprint on every
 // program registration, walking every live program and expanding per core. Programs only
-// leave that set in ~ProgramImpl, so a host holding many programs alive -- exactly what
-// ttnn's program cache does across a parameter sweep -- made each call O(live programs) and
+// leave that set in ~ProgramImpl, so a host holding many programs alive -- exactly what an
+// op-level program cache does across a parameter sweep -- made each call O(live programs) and
 // the whole sweep O(N^2). It also answered the wrong question: a registered program
 // occupies no CB space until it is dispatched.
 //
@@ -124,7 +124,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, TensixCircularBufferTrackingCostS
         grid.x * grid.y,
         kCbsPerProgram);
 
-    // Programs are held alive for the whole test, mirroring ttnn's program cache
+    // Programs are held alive for the whole test, mirroring an op-level program cache
     // holding one entry per parameter variant.
     std::vector<Program> cached_programs;
     cached_programs.reserve(256);
