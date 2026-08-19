@@ -52,6 +52,11 @@ inline void _topk_large_indices_mark_neginf_indices_() {
 
     for (uint32_t i = 0; i < iterations; ++i) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+#ifdef TOPK_XL_STABLE_TIES
+        // The value words carry stale rank stamps in lo16 after the last
+        // stamped merge/rebuild; the exact-(-inf) compare needs the bare value.
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0);
+#endif
         TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
         TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
         TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_0, indices_offset);
@@ -105,6 +110,20 @@ FORCE_INLINE void mark_neginf_indices(uint32_t idst) {
     MATH((ckernel::sfpu::_topk_large_indices_mark_neginf_indices_init_()));
     MATH((_llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_topk_large_indices_mark_neginf_indices_<K>, idst, VectorMode::RC_custom)));
+}
+
+// Sequential-ties rank stamp of a single sorted unfused run at `idst`. Must
+// run before any unfused rebuild that is NOT preceded by a merge (the merge
+// stamps internally): a rebuild of tied [bf16|0] keys scrambles the tie order
+// the fused sort established. Requires topk_xl_init<K, false> first.
+template <uint32_t K>
+FORCE_INLINE void topk_xl_stamp_seq_ranks(uint32_t idst) {
+#ifdef TOPK_XL_STABLE_TIES
+    MATH((_llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_topk_xl_stamp_seq_ranks_<K, false>, idst, VectorMode::RC_custom)));
+#else
+    (void)idst;
+#endif
 }
 
 // First half of chunk processing: pull the chunk from the input CB into DST.
