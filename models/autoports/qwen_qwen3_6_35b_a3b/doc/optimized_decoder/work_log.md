@@ -343,6 +343,10 @@ Fixes in this pass:
 
 Final stage-review subagent `01a017e0-74af-7dd2-965e-c77fb5f06cef` returned `clean-pass`. Residual risks were limited to read-only review scope, small classified device-side layout bridges, and non-blocking environment log noise.
 
+## Local Commits
+
+- `tt-metal`, branch `vkovacevic/agentic-research/qb2-qwen36-35b-a3b`: `0b076f14a0be2ac5fb0cd24f98766acfbf3eb17f` (`Optimize qwen3.6 decoder`). Local checkpoint only; not pushed.
+
 ## Artifacts
 
 - Final code: `models/autoports/qwen_qwen3_6_35b_a3b/tt/optimized_decoder.py`
