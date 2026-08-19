@@ -145,7 +145,7 @@ def wh_9b_n300(args):
     """True only for Qwen3.5-9B on a Wormhole N300 -- the exact configuration the DECODE
     optimizations below were measured and PCC-validated on.
 
-    Single source of truth for the scope of four decode changes that were all measured on this one
+    Single source of truth for the scope of five decode changes that were all measured on this one
     config and are unvalidated anywhere else:
       * ``TPAttention._make_heads_decode``'s ``skip_v_reshard`` (v goes straight from the head split
         into the paged-cache write)
@@ -154,6 +154,7 @@ def wh_9b_n300(args):
       * the fused sigmoid-multiply attention gate in ``TPAttention.forward_decode``
       * ``mlp_w1/w3_decode_1d_progcfg``'s num_cores=56 + fp32_dest_acc_en=False, paired with
         ``Qwen36MLP.compute_kernel_config_gateup_decode``
+      * ``rope_permuted_enabled`` below (permuted-head_dim full-width RoPE)
 
     Three conditions, each load-bearing:
       * ``not is_blackhole()`` -- Blackhole has 1.84x the L1 and a taller grid, takes a different
@@ -171,6 +172,27 @@ def wh_9b_n300(args):
     Outside this scope every one of the four falls back to the previously shipped behavior.
     """
     return not is_blackhole() and getattr(args, "dim", 0) <= 4096 and getattr(args, "device_name", None) == "N300"
+
+
+def rope_permuted_enabled(args):
+    """Permuted-head_dim full-width RoPE (attention/rope_tp.py's rope_channel_perm has the
+    derivation). Reorders head_dim so ``rotary_embedding_hf``'s native full-width rotate-half
+    pairing coincides with HF's partial one, collapsing the partial-rope slice/transpose/concat
+    chain into one call. The permutation is folded into q_proj/k_proj/q_norm/k_norm at load time
+    (attention/tp.py's load_attention_weights_tp), so it changes the WEIGHTS, not just an op
+    sequence -- the ".rp" cache tag there keeps the two variants from ever aliasing on disk.
+
+    ON for Wormhole 9B N300 (wh_9b_n300). No env var: this is the shipping path on that config,
+    plus the geometric precondition that rope_head_dim < head_dim (Qwen3.5's partial rotary --
+    with no unrotated tail to skip, the "partial" chain is already one op and there is nothing
+    to collapse). Off everywhere else (unvalidated on N150/T3K/P150x4/Blackhole and on the 27B).
+
+    MEASURED on a whole decode layer (tests/perf/test_attn_rope_permuted_sweep.py, N300, device
+    profiler): 46 -> 38 programs and 704.5 -> 687.4 us at B=1; 49 -> 37 programs and 907.2 ->
+    778.1 us (-14.2%) at B=32. Takes the decode RoPE section from 15 device ops to 7 per
+    full-attention layer per token; prefill drops slice/slice/concat per Q and K.
+    """
+    return wh_9b_n300(args) and getattr(args, "rope_head_dim", 0) < getattr(args, "head_dim", 0)
 
 
 # Grid helpers
