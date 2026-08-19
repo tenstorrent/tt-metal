@@ -37,6 +37,11 @@ ITERS_ID="${ITERS_ID:-iters20}"
 # Kimi only: the perf test's use_trace axis ("notrace" replays nothing, "traced" captures the chunk
 # forward once and replays it). The GLM test has no such axis, so this is unused for GLM5_2.
 TRACE_ID="${TRACE_ID:-notrace}"
+# Kimi only: the perf test's perf_margin axis. The single param is None — "take the band from the
+# mode" (TRACED_PERF_MARGIN / UNTRACED_PERF_MARGIN, resolved by kimi_chunked_perf_gate) — so its id
+# is "margin_auto". It was "margin5pct" while the param was the DEFAULT_PERF_MARGIN literal; keep
+# this in step with the ids= on the test's perf_margin parametrize, or the node id stops collecting.
+MARGIN_ID="${MARGIN_ID:-margin_auto}"
 
 # Per-model: test function, variant id, num_layers id, node-id suffix, env vars.
 # ENV_VARS must set the model's TTNN cache var: the weight_cache_path fixture (tests/conftest.py)
@@ -46,12 +51,12 @@ TRACE_ID="${TRACE_ID:-notrace}"
 case "${MODEL:-}" in
   KIMI_K2_6)
     TEST_FUNC="test_kimi_prefill_transformer_chunked_perf"
-    VARIANT_ID="kimi"; LAYERS_ID="L61"; NODE_SUFFIX="-margin5pct-$TRACE_ID"
+    VARIANT_ID="kimi"; LAYERS_ID="L61"; NODE_SUFFIX="-$MARGIN_ID-$TRACE_ID"
     ENV_VARS='KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill PREFILL_TRACE_DIR=/mnt/models/kimi-prefill-cache/vllm-kimi-k26-codedebug-56320'
     ;;
   KIMI_K2_7)
     TEST_FUNC="test_kimi_prefill_transformer_chunked_perf"
-    VARIANT_ID="k27"; LAYERS_ID="L61"; NODE_SUFFIX="-margin5pct-$TRACE_ID"
+    VARIANT_ID="k27"; LAYERS_ID="L61"; NODE_SUFFIX="-$MARGIN_ID-$TRACE_ID"
     ENV_VARS='KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320'
     ;;
   GLM5_2)

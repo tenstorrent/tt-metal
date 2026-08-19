@@ -72,7 +72,7 @@ fi
 # uniformly so the three panes cannot describe different run points.
 # The loop count needs no env: it is positional arg 2 of every script.
 RUN_ENV="TT_METAL_HOME=$TT_METAL_HOME MODEL=$MODEL"
-for v in TRACE_ID MESH_ID PRELOAD_ID CHUNKS_ID ITERS_ID STALE_SECS LOGURU_LEVEL PREFLIGHT; do
+for v in TRACE_ID MARGIN_ID MESH_ID PRELOAD_ID CHUNKS_ID ITERS_ID STALE_SECS LOGURU_LEVEL PREFLIGHT; do
   [ -n "${!v:-}" ] && RUN_ENV+=" $v=${!v}"
 done
 
@@ -92,6 +92,11 @@ run_pane() { printf 'bash -l -c %q' "$1"; }
 tmux new-session -d -s "$SESSION" -n stress -x 240 -y 60 \
   -E "$(run_pane "$STRESS_CMD")"
 P_STRESS=$(tmux list-panes -t "$SESSION:stress" -F '#{pane_id}')
+# `failed`, not `on`: a pane whose command exits non-zero is kept so its error is still on screen,
+# while a clean end-of-loop pane closes as before. Without this a preflight rejection — the stale
+# node id case — kills the pane in ~2s and the launch looks like it did nothing at all. Set here,
+# right after the pane is created, so it is in place before the preflight can finish.
+tmux set-option -t "$SESSION:stress" -w remain-on-exit failed 2>/dev/null || true
 P_WATCH=$(tmux split-window -h -P -F '#{pane_id}' -t "$P_STRESS" "$(run_pane "$WATCH_CMD")")
 P_TAIL=$(tmux split-window -v -P -F '#{pane_id}' -t "$P_STRESS" "$(run_pane "$TAIL_CMD")")
 P_HOST=$(tmux split-window -v -P -F '#{pane_id}' -t "$P_WATCH" "$(run_pane "$HOST_CMD")")
