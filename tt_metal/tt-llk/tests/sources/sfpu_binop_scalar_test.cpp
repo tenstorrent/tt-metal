@@ -67,6 +67,12 @@ static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
 
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+// Storm-contract semantic body (fresh_cpp/binopscalar.h).
+#include "fresh_cpp/binopscalar.h"
+
+#ifndef FRESH_CPP_IMPL
+#define FRESH_CPP_IMPL 0
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS)
 {
@@ -89,14 +95,31 @@ void run_kernel(RUNTIME_PARAMETERS)
     // faces (8 rows each), so ITERATIONS is 8 per call, matching the production
     // add_unary_tile / sub_unary_tile / ... APIs.
     SFPU_UNARY_INIT(unused);
-    SFPU_UNARY_CALL(
-        DstSync::SyncHalf,
-        is_fp32_dest_acc_en,
-        calculate_binop_with_scalar,
-        (APPROX_MODE, SFPU_BINOP_MODE, 8 /* ITERATIONS */),
-        0 /* dst_index */,
-        VectorMode::RC,
-        SFPU_UNARY_SCALAR);
+    // Storm-lane S1 selector (fresh_cpp/binopscalar.h semantic body): the
+    // row's representative ScalarAdd arm only; the other modes keep
+    // production-only coverage.
+    if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINOP_MODE == static_cast<int>(ckernel::sfpu::ADD))
+    {
+        SFPU_UNARY_CALL(
+            DstSync::SyncHalf,
+            is_fp32_dest_acc_en,
+            calculate_binop_scalar_add_fresh_cpp,
+            (8 /* ITERATIONS */),
+            0 /* dst_index */,
+            VectorMode::RC,
+            SFPU_UNARY_SCALAR);
+    }
+    else
+    {
+        SFPU_UNARY_CALL(
+            DstSync::SyncHalf,
+            is_fp32_dest_acc_en,
+            calculate_binop_with_scalar,
+            (APPROX_MODE, SFPU_BINOP_MODE, 8 /* ITERATIONS */),
+            0 /* dst_index */,
+            VectorMode::RC,
+            SFPU_UNARY_SCALAR);
+    }
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

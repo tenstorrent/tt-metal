@@ -19,6 +19,7 @@ from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    FRESH_CPP_IMPL,
     SFPU_BINOP_MODE,
     SFPU_UNARY_SCALAR,
 )
@@ -70,6 +71,7 @@ def _run_sfpu_binop_scalar(
     scalar=_PRESUBMIT_SCALAR,
     input_dimensions=[32, 32],
     spec_A=None,
+    fresh_cpp_impl=None,
 ):
     """Drive one scalar binop variant.
 
@@ -96,7 +98,8 @@ def _run_sfpu_binop_scalar(
     configuration = TestConfig(
         "sources/sfpu_binop_scalar_test.cpp",
         formats,
-        templates=[
+        templates=([] if fresh_cpp_impl is None else [FRESH_CPP_IMPL(fresh_cpp_impl)])
+        + [
             SFPU_BINOP_MODE(mathop),
             SFPU_UNARY_SCALAR(scalar_bits),
             APPROX_MODE(ApproximationMode.No),
@@ -183,6 +186,26 @@ def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
     """The rest of the scalar axis: zero, unity, a sign flip and a fractional multiplier."""
     _skip_unsupported(formats, dest_acc, mathop, scalar)
     _run_sfpu_binop_scalar(formats, dest_acc, mathop, scalar=scalar)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    dest_acc=[DestAccumulation.No],
+    mathop=[MathOperation.ScalarAdd],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_binop_scalar(formats, dest_acc, mathop, fresh_cpp_impl):
+    """Storm lane S1: A/B the fresh ScalarAdd (x + s, scalar decoded from the
+    same raw fp32 bits the production dispatch sends) against the production
+    calculate_binop_with_scalar — identical stimuli, scalar, golden, and
+    format-aware tolerance gate."""
+    _run_sfpu_binop_scalar(
+        formats,
+        dest_acc,
+        mathop,
+        scalar=_PRESUBMIT_SCALAR,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
 
 
 # Not swept here yet: edge values on the *tensor* operand. All five ops are

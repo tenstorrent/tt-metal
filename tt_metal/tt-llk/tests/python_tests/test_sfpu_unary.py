@@ -1291,6 +1291,10 @@ _CAUSAL_LIFT_B2_F32_OPS = [
     MathOperation.Rpow,
     MathOperation.Selu,
     MathOperation.Sign,
+    # Storm lane S1 (fresh_cpp/<op>.h bodies; formats mirror each op's swept
+    # corr leg).
+    MathOperation.Add1,
+    MathOperation.CastFp32ToFp16a,
 ]
 _CAUSAL_LIFT_B2_F16B_OPS = [
     MathOperation.Log,
@@ -1308,6 +1312,9 @@ _CAUSAL_LIFT_B2_F16B_OPS = [
     MathOperation.Frac,
     # Storm lane S3 (fresh_cpp/ per-op headers).
     MathOperation.Log1p,
+    # Storm lane S1.
+    MathOperation.Abs,
+    MathOperation.Celu,
 ]
 
 
@@ -1339,6 +1346,38 @@ def test_causal_lift_fresh_cpp(mathop, fresh_cpp_impl):
         [64, 64],
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+# Storm lane S1: int32 causal-tier lifts (fresh_cpp/absint32.h /
+# fresh_cpp/bitwisenot.h).  Same stimuli, golden, and exact integer contract
+# as the swept production node (test_eltwise_unary_sfpu_int32_signed).
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 1], ids=["production", "fresh_cpp"])
+@pytest.mark.parametrize(
+    "mathop",
+    [MathOperation.AbsInt32, MathOperation.BitwiseNot],
+    ids=lambda m: m.name,
+)
+def test_causal_lift_int32_fresh_cpp(mathop, fresh_cpp_impl):
+    """A/B the storm-S1 fresh typed int32 bodies (value-level negation-select /
+    two's-complement inversion, typed vInt Dst views) against the production
+    kernels with identical inputs and the exact integer golden."""
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    # Both signs, zero straddled deterministically; magnitudes stay far from
+    # INT32_MIN (abs(INT32_MIN) is unrepresentable) and from INT32_MAX —
+    # identical to the swept production node's stimuli.
+    spec_A = StimuliSpec.uniform(low=-1_000_000.0, high=1_000_000.0)
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        DestAccumulation.Yes,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=spec_A,
+        twos_complement=True,
         fresh_cpp_impl=fresh_cpp_impl,
     )
 

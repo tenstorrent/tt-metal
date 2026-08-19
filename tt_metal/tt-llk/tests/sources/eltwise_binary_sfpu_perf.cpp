@@ -113,6 +113,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // Storm-contract canonical per-op semantic bodies (new bodies never land in
 // the legacy aggregator above).
 #include "fresh_cpp/shift.h"
+// Storm-contract semantic bodies (one op per header, fresh_cpp/README.md).
+#include "fresh_cpp/atan2.h"
+#include "fresh_cpp/binary_float.h"
+#include "fresh_cpp/binarybitwise.h"
+#include "fresh_cpp/binarycomp.h"
+#include "fresh_cpp/binaryfmod.h"
+#include "fresh_cpp/binaryremainder.h"
 
 #ifndef FRESH_CPP_IMPL
 #define FRESH_CPP_IMPL 0
@@ -180,6 +187,35 @@ inline void run_selected_binary_sfpu(
         // branch: torch defaults rtol=1e-5, atol=1e-8, EQUAL_NAN=false).
         call_isclose_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, /*EQUAL_NAN=*/false, 8>(
             dst_in0, dst_in1, dst_out, VectorMode::RC, /*rtol_bits=*/0x3727c5acu, /*atol_bits=*/0x322bcc77u);
+    }
+    // Storm-lane S1 selectors (fresh_cpp/<op>.h semantic bodies).
+    else if constexpr (
+        FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::SUB &&
+        static_cast<std::uint32_t>(formats.math) != static_cast<std::uint32_t>(DataFormat::Int32))
+    {
+        call_binary_float_sub_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
+    }
+    else if constexpr (
+        FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::EQ &&
+        static_cast<std::uint32_t>(formats.math) != static_cast<std::uint32_t>(DataFormat::Int32))
+    {
+        call_binary_comp_eq_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
+    }
+    else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::FMOD)
+    {
+        call_binary_fmod_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
+    }
+    else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::REMAINDER)
+    {
+        call_binary_remainder_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
+    }
+    else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::ATAN2)
+    {
+        call_atan2_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
+    }
+    else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::BITWISE_AND)
+    {
+        call_binary_bitwise_and_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
     }
     else
     {

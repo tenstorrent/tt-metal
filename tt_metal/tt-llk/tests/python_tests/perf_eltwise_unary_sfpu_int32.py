@@ -21,6 +21,7 @@ from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
     FAST_MODE,
+    FRESH_CPP_IMPL,
     ITERATIONS,
     LOOP_FACTOR,
     MATH_OP,
@@ -58,24 +59,31 @@ _INT32_UNARY_OPS = [
 ]
 
 
-def _run_math_isolate(formats, mathop, input_dimensions):
+def _run_math_isolate(formats, mathop, input_dimensions, fresh_cpp_impl=None):
     tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
     unpack_to_dest = formats.input_format.is_32_bit()
 
+    templates = [
+        MATH_OP(mathop=mathop),
+        APPROX_MODE(ApproximationMode.No),
+        ITERATIONS(32),
+        FAST_MODE(FastMode.No),
+        STABLE_SORT(StableSort.No),
+        CLAMP_NEGATIVE(False),
+    ]
+    # Storm lane S1: the fresh/production selector is a compile define; leave
+    # it off entirely for the swept production-only nodes so their variant
+    # identity is unchanged.
+    if fresh_cpp_impl is not None:
+        templates.append(FRESH_CPP_IMPL(fresh_cpp_impl))
+
     return PerfConfig(
         "sources/eltwise_unary_sfpu_perf.cpp",
         formats,
         run_types=[PerfRunType.MATH_ISOLATE],
-        templates=[
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(ApproximationMode.No),
-            ITERATIONS(32),
-            FAST_MODE(FastMode.No),
-            STABLE_SORT(StableSort.No),
-            CLAMP_NEGATIVE(False),
-        ],
+        templates=templates,
         runtimes=[
             TILE_COUNT(tile_count_A),
             LOOP_FACTOR(16),
@@ -106,3 +114,21 @@ def _run_math_isolate(formats, mathop, input_dimensions):
 )
 def test_perf_eltwise_unary_sfpu_int32(perf_report, formats, mathop, input_dimensions):
     _run_math_isolate(formats, mathop, input_dimensions).run(perf_report)
+
+
+# Storm lane S1: fresh typed-C++ semantic selectors (impl 1) A/B'd against
+# the hand-shaped production int32 bodies (impl 0) on the same node family —
+# identical stimuli, marker, and metric as the swept production nodes above.
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32], same=True),
+    mathop=[MathOperation.AbsInt32, MathOperation.BitwiseNot],
+    input_dimensions=[[128, 64]],
+    fresh_cpp_impl=[0, 1],
+)
+def test_perf_fresh_cpp_int32(
+    perf_report, formats, mathop, input_dimensions, fresh_cpp_impl
+):
+    _run_math_isolate(formats, mathop, input_dimensions, fresh_cpp_impl).run(
+        perf_report
+    )

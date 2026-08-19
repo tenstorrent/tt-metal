@@ -90,6 +90,12 @@ static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
 
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+// Storm-contract semantic body (fresh_cpp/binopscalar.h).
+#include "fresh_cpp/binopscalar.h"
+
+#ifndef FRESH_CPP_IMPL
+#define FRESH_CPP_IMPL 0
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -178,14 +184,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // Scalar binop reads one Dest tile and writes the result back to
                         // the same tile. The SFPU cost is data-independent, so this
                         // measures the representative math cost.
-                        SFPU_UNARY_CALL(
-                            DST_SYNC_MODE,
-                            is_fp32_dest_acc_en,
-                            calculate_binop_with_scalar,
-                            (APPROX_MODE, SFPU_BINOP_MODE, 8),
-                            block_tile,
-                            VectorMode::RC,
-                            SFPU_UNARY_SCALAR);
+                        // Storm-lane S1 selector (fresh_cpp/binopscalar.h semantic
+                        // body): the fresh ScalarAdd arm at impl 1, production
+                        // otherwise.
+                        if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINOP_MODE == static_cast<int>(ckernel::sfpu::ADD))
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_binop_scalar_add_fresh_cpp, (8), block_tile, VectorMode::RC, SFPU_UNARY_SCALAR);
+                        }
+                        else
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_binop_with_scalar,
+                                (APPROX_MODE, SFPU_BINOP_MODE, 8),
+                                block_tile,
+                                VectorMode::RC,
+                                SFPU_UNARY_SCALAR);
+                        }
                     }
                 }
             }
@@ -207,14 +224,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                             block_tile, formats.math, formats.math);
 
-                        SFPU_UNARY_CALL(
-                            DST_SYNC_MODE,
-                            is_fp32_dest_acc_en,
-                            calculate_binop_with_scalar,
-                            (APPROX_MODE, SFPU_BINOP_MODE, 8),
-                            block_tile,
-                            VectorMode::RC,
-                            SFPU_UNARY_SCALAR);
+                        // Storm-lane S1 selector (fresh_cpp/binopscalar.h semantic
+                        // body): the fresh ScalarAdd arm at impl 1, production
+                        // otherwise.
+                        if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINOP_MODE == static_cast<int>(ckernel::sfpu::ADD))
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_binop_scalar_add_fresh_cpp, (8), block_tile, VectorMode::RC, SFPU_UNARY_SCALAR);
+                        }
+                        else
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_binop_with_scalar,
+                                (APPROX_MODE, SFPU_BINOP_MODE, 8),
+                                block_tile,
+                                VectorMode::RC,
+                                SFPU_UNARY_SCALAR);
+                        }
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();

@@ -26,6 +26,7 @@ from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     MathOperation,
+    PerfRunType,
     Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
@@ -34,6 +35,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    FRESH_CPP_IMPL,
     ITERATIONS,
     LOOP_FACTOR,
     NUM_FACES,
@@ -47,7 +49,16 @@ from helpers.test_variant_parameters import (
 _SCALAR_BITS = struct.unpack("<I", struct.pack("<f", 2.0))[0]
 
 
-def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
+def _run(
+    formats,
+    mathop,
+    dest_acc,
+    loop_factor,
+    iterations,
+    input_dimensions,
+    fresh_cpp_impl=None,
+    run_types=None,
+):
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
     )
@@ -56,14 +67,20 @@ def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions):
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
 
+    # Storm lane S1: the fresh/production selector is a compile define; leave
+    # it off entirely for the swept production-only nodes so their variant
+    # identity is unchanged.
+    extra_templates = [] if fresh_cpp_impl is None else [FRESH_CPP_IMPL(fresh_cpp_impl)]
+
     configuration = PerfConfig(
         "sources/sfpu_binop_scalar_perf.cpp",
         formats,
-        run_types=ALL_PERF_RUN_TYPES,
+        run_types=ALL_PERF_RUN_TYPES if run_types is None else run_types,
         # SPEED_OF_LIGHT-style: everything is a compile-time template so the measured
         # kernel has no runtime-parameter reads. These sweep values are single-valued,
         # so making them templates does not expand the build matrix.
-        templates=[
+        templates=extra_templates
+        + [
             SFPU_BINOP_MODE(mathop),
             SFPU_UNARY_SCALAR(_SCALAR_BITS),
             APPROX_MODE(ApproximationMode.No),
@@ -132,4 +149,33 @@ def test_perf_sfpu_binop_scalar(
         loop_factor,
         iterations,
         input_dimensions,
+    ).run(perf_report)
+
+
+# Storm lane S1 (fresh_cpp/binopscalar.h semantic body): fresh ScalarAdd
+# (impl 1) A/B'd against the production kernel (impl 0), MATH_ISOLATE only,
+# on the swept node family's formats and dimensions.
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    dest_acc=[DestAccumulation.No],
+    mathop=[MathOperation.ScalarAdd],
+    fresh_cpp_impl=[0, 1],
+)
+def test_perf_fresh_cpp_binop_scalar(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    fresh_cpp_impl,
+):
+    _run(
+        formats,
+        mathop,
+        dest_acc,
+        16,
+        32,
+        [128, 64],
+        fresh_cpp_impl=fresh_cpp_impl,
+        run_types=[PerfRunType.MATH_ISOLATE],
     ).run(perf_report)

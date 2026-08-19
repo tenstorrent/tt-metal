@@ -279,3 +279,22 @@ def test_perf_fresh_cpp_snake_beta(perf_report, formats, dest_acc, fresh_cpp_imp
         input_dimensions=[128, 64],
         fresh_cpp_impl=fresh_cpp_impl,
     ).run(perf_report)
+
+
+# Storm lane S1 (fresh_cpp/addcdiv.h semantic body).
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[0, 1],
+)
+def test_perf_fresh_cpp_addcdiv(perf_report, formats, dest_acc, fresh_cpp_impl):
+    _run(
+        formats,
+        MathOperation.SfpuAddcdiv,
+        dest_acc,
+        loop_factor=16,
+        iterations=32,
+        input_dimensions=[128, 64],
+        fresh_cpp_impl=fresh_cpp_impl,
+    ).run(perf_report)
