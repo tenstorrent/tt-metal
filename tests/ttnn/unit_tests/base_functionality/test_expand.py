@@ -70,6 +70,9 @@ def test_expand(input_shape, output_shape, tensor_layout, dtype, device):
         # zero-size dims (zero-volume tensors)
         [(3, 1), (0, 3, 1)],
         [(3, 1), (2, 3, 0)],
+        # all-ones repetition (exercises repeat early-return + rank fixup)
+        [(3, 1), (1, 3, 1)],
+        [(3, 1), (1, 1, 3, 1)],
     ],
 )
 @pytest.mark.parametrize(
