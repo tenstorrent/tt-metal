@@ -1,0 +1,120 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-License-Identifier: Apache-2.0
+//
+// rms_norm writer (BRISC / NoC1 - the reader owns NoC0, so the read and write
+// streams overlap instead of contending, lever B9).
+//
+// TILE output      : drains cb_output_tiles, one barrier per block (lever B7).
+// ROW_MAJOR output : drains cb_rm_out (tile-sized pages produced by the
+//                    untilize helper) and writes only the VALID sticks and only
+//                    W_true bytes of each - tile padding is never written back.
+//
+// HELPER SUBSTITUTION: the row-major drain does not call
+// dataflow_kernel_lib::write_sticks_after_untilize() because that helper owns
+// its own block loop over `total_num_rows` and cannot be interleaved with this
+// op's (row-block x W-chunk) iteration order, which must match the compute
+// kernel's untilize call sequence exactly.  The body below is the same
+// wait/write/barrier/pop shape, driven by this op's loop nest.
+
+#include <stdint.h>
+
+#include "api/dataflow/dataflow_api.h"
+
+namespace {
+
+constexpr uint32_t cb_output_tiles = 7;
+constexpr uint32_t cb_rm_out = 9;
+
+constexpr uint32_t IS_ROW_MAJOR = get_compile_time_arg_val(0);
+constexpr uint32_t REGIME_A = get_compile_time_arg_val(1);
+constexpr uint32_t HAS_GAMMA = get_compile_time_arg_val(2);
+constexpr uint32_t GAMMA_IS_ROW_MAJOR = get_compile_time_arg_val(3);
+constexpr uint32_t Wt_core = get_compile_time_arg_val(4);
+constexpr uint32_t W_PARTIAL = get_compile_time_arg_val(5);
+constexpr uint32_t BLOCK_HT = get_compile_time_arg_val(6);
+constexpr uint32_t WT_REDUCE_BLOCK = get_compile_time_arg_val(7);
+constexpr uint32_t WT_REDUCE_TAIL = get_compile_time_arg_val(8);
+constexpr uint32_t WT_SCALE_BLOCK = get_compile_time_arg_val(9);
+constexpr uint32_t WT_SCALE_TAIL = get_compile_time_arg_val(10);
+constexpr uint32_t Rt = get_compile_time_arg_val(11);
+constexpr uint32_t NUM_ROWS = get_compile_time_arg_val(12);
+constexpr uint32_t ROW_BYTES = get_compile_time_arg_val(13);
+constexpr uint32_t ELEM_SIZE = get_compile_time_arg_val(14);
+constexpr uint32_t GAMMA_ELEM_SIZE = get_compile_time_arg_val(15);
+constexpr uint32_t GAMMA_ROW_BYTES = get_compile_time_arg_val(16);
+constexpr uint32_t DEST_BLOCK_CT = get_compile_time_arg_val(17);
+constexpr uint32_t GAMMA_TILE_BYTES = get_compile_time_arg_val(18);
+constexpr uint32_t IN_TILE_BYTES = get_compile_time_arg_val(19);
+
+constexpr uint32_t TILE_DIM = 32;
+constexpr uint32_t NUM_SCALE_CHUNKS = (Wt_core + WT_SCALE_BLOCK - 1) / WT_SCALE_BLOCK;
+
+constexpr auto output_args = TensorAccessorArgs<20>();
+
+FORCE_INLINE uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
+
+}  // namespace
+
+void kernel_main() {
+    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    const uint32_t start_row_block = get_arg_val<uint32_t>(1);
+    const uint32_t num_row_blocks_here = get_arg_val<uint32_t>(2);
+
+    const auto out_acc = TensorAccessor(output_args, dst_addr);
+
+    auto write_tiles = [&](uint32_t rt0, uint32_t ht, uint32_t w0, uint32_t nw) {
+        const uint32_t n = ht * nw;
+        cb_wait_front(cb_output_tiles, n);
+        uint32_t addr = get_read_ptr(cb_output_tiles);
+        for (uint32_t r = 0; r < ht; ++r) {
+            const uint32_t row_base = (rt0 + r) * Wt_core + w0;
+            for (uint32_t w = 0; w < nw; ++w) {
+                noc_async_write_tile(row_base + w, out_acc, addr);
+                addr += IN_TILE_BYTES;
+            }
+        }
+        noc_async_write_barrier();
+        cb_pop_front(cb_output_tiles, n);
+    };
+
+    auto write_sticks = [&](uint32_t rt, uint32_t w0, uint32_t nw) {
+        const uint32_t row0 = rt * TILE_DIM;
+        const uint32_t nrows = umin(TILE_DIM, NUM_ROWS - row0);
+        const uint32_t byte_off = w0 * TILE_DIM * ELEM_SIZE;
+        const uint32_t padded = nw * TILE_DIM * ELEM_SIZE;
+        const uint32_t chunk_bytes = umin(padded, ROW_BYTES - byte_off);
+
+        cb_wait_front(cb_rm_out, nw);
+        uint32_t src = get_read_ptr(cb_rm_out);
+        for (uint32_t r = 0; r < nrows; ++r) {
+            noc_async_write(src, out_acc.get_noc_addr(row0 + r, byte_off), chunk_bytes);
+            src += padded;
+        }
+        noc_async_write_barrier();
+        cb_pop_front(cb_rm_out, nw);
+    };
+
+    auto write_chunk = [&](uint32_t rt0, uint32_t ht, uint32_t w0, uint32_t nw) {
+        if constexpr (IS_ROW_MAJOR) {
+            for (uint32_t r = 0; r < ht; ++r) {
+                write_sticks(rt0 + r, w0, nw);
+            }
+        } else {
+            write_tiles(rt0, ht, w0, nw);
+        }
+    };
+
+    for (uint32_t b = 0; b < num_row_blocks_here; ++b) {
+        const uint32_t rt0 = (start_row_block + b) * BLOCK_HT;
+        const uint32_t ht = umin(BLOCK_HT, Rt - rt0);
+
+        if constexpr (REGIME_A) {
+            write_chunk(rt0, ht, 0, Wt_core);
+        } else {
+            for (uint32_t c = 0; c < NUM_SCALE_CHUNKS; ++c) {
+                const uint32_t nw = (c + 1 == NUM_SCALE_CHUNKS) ? WT_SCALE_TAIL : WT_SCALE_BLOCK;
+                write_chunk(rt0, ht, c * WT_SCALE_BLOCK, nw);
+            }
+        }
+    }
+}

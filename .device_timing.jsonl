@@ -1,0 +1,10 @@
+{"event": "phase", "phase": "planner", "state": "start", "at_ms": 1787156161766}
+{"event": "phase", "phase": "planner", "state": "end", "at_ms": 1787158207978}
+{"event": "phase", "phase": "implementer", "state": "start", "at_ms": 1787158208748}
+{"source":"run_safe_pytest","pid":1632942,"started_at_ms":1787159519856,"wait_ms":6,"run_ms":16790,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":1,"precompile_mode":"local","precompile_reason":"nothing_to_compile","precompile_s":11}
+{"source":"run_safe_pytest","pid":1633842,"started_at_ms":1787159555571,"wait_ms":5,"run_ms":11877,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":1,"precompile_mode":"local","precompile_reason":"nothing_to_compile","precompile_s":6}
+{"source":"run_safe_pytest","pid":1634882,"started_at_ms":1787159612368,"wait_ms":4,"run_ms":70714,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":2,"precompile_mode":"local","precompile_reason":"ok","precompile_s":7}
+{"source":"run_safe_pytest","pid":1636328,"started_at_ms":1787159807416,"wait_ms":5,"run_ms":75978,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":2,"precompile_mode":"local","precompile_reason":"ok","precompile_s":13}
+{"source":"run_safe_pytest","pid":1637727,"started_at_ms":1787159930664,"wait_ms":4,"run_ms":13365,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":1,"precompile_mode":"local","precompile_reason":"ok","precompile_s":8}
+{"source":"tt-probe","pid":1638252,"started_at_ms":1787159960119,"wait_ms":208,"run_ms":44819,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":1639134,"started_at_ms":1787160089841,"wait_ms":4,"run_ms":13219,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0,"precompile_mode":"local","precompile_reason":"ok","precompile_s":8}
