@@ -4,7 +4,7 @@ We took Voxtral-TTS, a 4B text to speech model with three stacks, through the wh
 single p150b. Eight things worth fixing. Point 4 is the root of point 5, so they are one job. Points
 6 and 7 are one line each.
 
-## 1. Add these eleven optimizations
+## 1. Add these twelve optimizations
 
 - Each is measured on our port and comes with the condition for when it applies. None of them is
   named in the optimizer's list of steps to try:
@@ -21,6 +21,8 @@ single p150b. Eight things worth fixing. Point 4 is the root of point 5, so they
   - pad a varying input to a few fixed sizes, since every distinct size compiles its own kernels,
     but choose those sizes for the model's own range: a ladder from another workload pads further
     than it needs to, and that is wasted work on every call
+  - prepare a conv's weights once per input size rather than on every call, and share the result
+    between sizes whose prepared layout comes out byte-identical
   - split a fused op into primitives once tracing is on
   - swap a hand rolled interior for a library primitive
   - try removing a config applied earlier
