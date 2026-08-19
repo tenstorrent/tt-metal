@@ -27,8 +27,10 @@ def install_attention_signposts(layer):
     On a ``linear_attention`` layer that region IS the Gated DeltaNet block: attention_norm (its
     pre/post distributed-norm ops and the full-width all-gather), the fused in-projection, the
     conv1d + FIR, the chunked delta-rule prep/scan, the out-projection and its reduce-scatter. On a
-    ``full_attention`` layer it is QKV + RoPE + paged SDPA + wo instead. Everything except the
-    trailing residual add, which layer.forward does after the call returns.
+    ``full_attention`` layer it is QKV + RoPE + paged SDPA + wo instead. On a vision block
+    (``tt/vision/vision_block.py``) it is the LayerNorm + all-gather, QKV + RoPE, non-causal SDPA
+    over the whole padded sequence, and wo + reduce-scatter. Everything except the trailing residual
+    add, which layer.forward does after the call returns.
 
     Extract it with::
 
@@ -94,11 +96,14 @@ def install_attention_signposts(layer):
 def install_mlp_signposts(layer):
     """Bracket the MLP sub-region of ``layer`` with ``mlp_start`` / ``mlp_stop``.
 
-    Wraps the two instance methods that bound the MLP -- ``ffn_norm.forward`` and
+    Wraps the two instance methods that bound the MLP -- the pre-MLP norm's ``forward`` and
     ``feed_forward.forward`` -- rather than duplicating layer.forward's body in a test, so this
     cannot drift when that body changes. ``LightweightModule.__call__`` delegates to ``self.forward``
     and layer.forward calls ``feed_forward.forward`` directly, so patching the instance attribute
     catches both call styles. The wrappers only emit signposts; they do not touch the tensors.
+
+    The pre-MLP norm is ``ffn_norm`` on a text decoder layer but ``ff_norm`` on a vision block, so it
+    is resolved by name rather than assumed and one helper serves both profilers.
 
     WHAT IS INSIDE THE BRACKET: ff_norm (pre-AG stats, stats all-gather, post-AG, and in 27B prefill
     the bf8 typecast + the full-width all-gather) then gate/up, the SwiGLU multiply, down, and the
@@ -112,7 +117,13 @@ def install_mlp_signposts(layer):
     """
     from tracy import signpost
 
-    orig_norm, orig_mlp = layer.ffn_norm.forward, layer.feed_forward.forward
+    norm = getattr(layer, "ffn_norm", None)
+    if norm is None:
+        norm = getattr(layer, "ff_norm", None)
+    if norm is None:
+        raise AttributeError(f"{type(layer).__name__} has neither `ffn_norm` nor `ff_norm`")
+
+    orig_norm, orig_mlp = norm.forward, layer.feed_forward.forward
 
     def norm_wrapped(*a, **kw):
         signpost("mlp_start")
@@ -123,9 +134,9 @@ def install_mlp_signposts(layer):
         signpost("mlp_stop")
         return out
 
-    layer.ffn_norm.forward, layer.feed_forward.forward = norm_wrapped, mlp_wrapped
+    norm.forward, layer.feed_forward.forward = norm_wrapped, mlp_wrapped
 
     def restore():
-        layer.ffn_norm.forward, layer.feed_forward.forward = orig_norm, orig_mlp
+        norm.forward, layer.feed_forward.forward = orig_norm, orig_mlp
 
     return restore
