@@ -28,7 +28,7 @@ on:
       timeout_minutes:
         description: "Per-architecture job timeout in minutes"
         required: false
-        default: "360"
+        default: "180"
         type: string
   schedule:
     # Fridays at 02:00 UTC. GitHub evaluates cron in UTC (note: scheduled
@@ -61,7 +61,7 @@ jobs:
       # empty and the `|| 'N'` fallback kicks in.
       workers: ${{ fromJSON(inputs.workers || '10') }}
       per_test_timeout_seconds: ${{ fromJSON(inputs.per_test_timeout_seconds || '300') }}
-      timeout_minutes: ${{ fromJSON(inputs.timeout_minutes || '360') }}
+      timeout_minutes: ${{ fromJSON(inputs.timeout_minutes || '180') }}
 
   ttsim-digest:
     name: "📊 Weekly ttsim digest"
