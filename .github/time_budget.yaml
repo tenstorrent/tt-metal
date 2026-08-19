@@ -209,12 +209,10 @@ scaleout:
     bh_galaxy: 10
   sanity:
     wh_galaxy: 20
+    wh_llmbox_civ2: 30
+    wh_n300_civ2: 15
     bh_quietbox_2: 15
     bh_p300: 15
-    wh_llmbox_civ2: 30
-    # fabric_sanity_tests.yaml SKUs (dedicated fabric smoke in sanity-tests.yaml).
-    wh_n300_civ2: 15
-    bh_p150b_civ2_viommu: 15
   perf:
     # T3K fabric ubench (fabric_perf_tests.yaml).
     wh_llmbox_perf: 140

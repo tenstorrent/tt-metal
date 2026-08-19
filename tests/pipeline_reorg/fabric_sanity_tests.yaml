@@ -1,8 +1,7 @@
 # Fabric sanity test matrix — consumed by .github/workflows/fabric-sanity-tests-impl.yaml.
-# Single source of truth for fabric coverage in the sanity pipeline: WH single-card,
-# T3K llmbox, and BH single-card smoke bar. Wired into sanity-tests.yaml via the
-# `fabric-sanity-tests` job (which passes wh_n300_civ2 + wh_llmbox_civ2 + bh_p150b_civ2_viommu
-# depending on run-wormhole / run-blackhole toggles).
+# Single source of truth for fabric coverage in the sanity pipeline: WH N300, T3K
+# llmbox, and BH multi-card (QB2 / P300). Wired into sanity-tests.yaml via the
+# `fabric-sanity-tests` job.
 #
 # Each entry: name, cmd, skus{sku: {timeout}}, team, owner_id.
 # `arch` is derived from the SKU prefix (wh_* -> wormhole_b0, bh_* -> blackhole)
@@ -40,15 +39,18 @@
   team: scaleout
   owner_id: U08RRAU5E15 # Ridvan Song
 
-- name: BH card fabric sanity
-  # Single-card smoke on BH viommu; heavy multi-card / multi-runner BH coverage
-  # runs in tm-fabric-tests (bh_loudbox / bh_p300 / bh_quietbox_2).
+- name: fabric fast unit tests (1D, 2D, single erisc)
+  # Multi-card BH smoke: Fabric1D/2D fixtures, FabricMuxV2 smoke, and a
+  # DISABLE_MULTI_AERISC repeat of the 1D pass.
   cmd: |
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-    ./build/test/tt_metal/tt_fabric/test_system_health
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2Smoke*Fixture.*"
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
   skus:
-    bh_p150b_civ2_viommu:
+    bh_quietbox_2:
+      timeout: 15
+    bh_p300:
       timeout: 15
   team: scaleout
-  owner_id: U06US5C7M7X # Sean Nijjar
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar

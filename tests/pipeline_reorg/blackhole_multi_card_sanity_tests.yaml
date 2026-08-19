@@ -13,20 +13,6 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 
-- name: fabric fast unit tests (1D, 2D, single erisc)
-  cmd: |
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2Smoke*Fixture.*"
-    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-  skus:
-    bh_quietbox_2:
-      timeout: 15
-    bh_p300:
-      timeout: 15
-  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
-  team: scaleout
-
 - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
   cmd: |
     pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
