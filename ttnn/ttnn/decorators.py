@@ -50,7 +50,24 @@ def compare_tensors_using_pcc(
             torch_output = to_torch_for_comparison(output, golden_output)
         else:
             torch_output = output
-        matches, actual_pcc = comp_pcc(golden_output, torch_output, desired_pcc)
+        # Flatten both tensors so element counts and constant-value checks are shape-independent.
+        # Mark PCC as degenerate when either tensor is empty/singleton or constant, since correlation is undefined.
+        # The degenerate branch uses allclose; the else branch retains the normal PCC comparison.
+        flattened_golden = golden_output.reshape(-1)
+        flattened_output = torch_output.reshape(-1)
+        pcc_is_degenerate = (
+            flattened_golden.numel() < 2
+            or flattened_output.numel() < 2
+            or (flattened_golden.numel() > 0 and torch.all(flattened_golden == flattened_golden[0]))
+            or (flattened_output.numel() > 0 and torch.all(flattened_output == flattened_output[0]))
+        )
+        if pcc_is_degenerate:
+            if golden_output.dtype != torch_output.dtype:
+                torch_output = torch_output.to(golden_output.dtype)
+            matches = bool(torch.allclose(golden_output, torch_output, rtol=1e-5, atol=1e-4, equal_nan=True))
+            actual_pcc = 1.0 if matches else 0.0
+        else:
+            matches, actual_pcc = comp_pcc(golden_output, torch_output, desired_pcc)
         comparison_record = {
             "tensor_id": int(output.tensor_id),
             "golden_tensor_id": int(golden_output.tensor_id),
