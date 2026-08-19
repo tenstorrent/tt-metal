@@ -26,6 +26,7 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/shard_data_transfer.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 
 namespace tt::tt_metal {
@@ -40,10 +41,6 @@ class MeshDevice;
 class MeshWorkload;
 }  // namespace distributed
 struct ProgramCommandSequence;
-namespace experimental {
-
-class ShardDataTransferHelper;
-}  // namespace experimental
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
@@ -56,8 +53,6 @@ struct MeshCoreDataReadDescriptor;
 
 using MeshCompletionReaderVariant =
     std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
-
-class ShardDataTransfer;
 
 // THREAD SAFETY: All methods are thread safe.
 class MeshCommandQueue {
@@ -142,36 +137,6 @@ public:
     virtual void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;
     virtual void enqueue_trace(const MeshTraceId& trace_id, bool blocking) = 0;
-};
-
-// Specifies host data to be written to or read from a MeshBuffer shard.
-class ShardDataTransfer {
-private:
-    MeshCoordinate shard_coord_;
-    void* host_data_ = nullptr;
-    std::optional<BufferRegion> region_;
-    std::shared_ptr<experimental::PinnedMemory> pinned_memory_ = nullptr;
-    friend class experimental::ShardDataTransferHelper;
-
-public:
-    explicit ShardDataTransfer(const MeshCoordinate& shard_coord) : shard_coord_(shard_coord) {}
-
-    MeshCoordinate shard_coord() const { return shard_coord_; }
-    void* host_data() const { return host_data_; }
-    std::optional<BufferRegion> region() const { return region_; }
-
-    ShardDataTransfer& shard_coord(const MeshCoordinate& shard_coord) {
-        shard_coord_ = shard_coord;
-        return *this;
-    }
-    ShardDataTransfer& host_data(void* host_data) {
-        host_data_ = host_data;
-        return *this;
-    }
-    ShardDataTransfer& region(std::optional<BufferRegion> region) {
-        region_ = region;
-        return *this;
-    }
 };
 
 }  // namespace tt::tt_metal::distributed
