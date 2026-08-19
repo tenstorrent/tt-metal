@@ -204,6 +204,11 @@ ALWI void reduce_accumulate_via_add(
     if constexpr (no_wait_p) {
         ASSERT(get_dfb_num_pages(input_dfb_id) >= in_tiles);
     }
+    if constexpr (streaming) {
+        const uint32_t required_input_pages =
+            full_cnt > 1u ? ((full_cnt & 1u) ? 3u : 2u) : ((full_cnt == 1u && has_partial) ? 2u : 1u);
+        ASSERT(get_dfb_num_pages(input_dfb_id) >= required_input_pages);
+    }
 
     if (has_partial) {
         ASSERT(input_dfb_id != scaler_dfb_id && output_dfb_id != scaler_dfb_id);
@@ -228,27 +233,35 @@ ALWI void reduce_accumulate_via_add(
 
     for (uint32_t output_idx = 0; output_idx < n_out; ++output_idx) {
         tile_regs_acquire();
+        uint32_t deferred_stream_pop = 0;
 
         if constexpr (streaming) {
             uint32_t consumed = 0;
+            uint32_t held_seed_tiles = 0;
             if (full_cnt & 1u) {
                 input_dfb.wait_front(1);
                 copy_tile_init(input_dfb_id);
                 copy_tile(input_dfb_id, 0, 0);
-                input_dfb.pop_front(1);
                 consumed = 1;
+                held_seed_tiles = 1;
             }
-            add_tiles_init(input_dfb_id, input_dfb_id, true);
+            add_init(input_dfb_id, input_dfb_id, true);
             for (; consumed < full_cnt; consumed += 2) {
-                input_dfb.wait_front(2);
-                add_tiles(input_dfb_id, input_dfb_id, 0, 1, 0);
-                input_dfb.pop_front(2);
+                input_dfb.wait_front(held_seed_tiles + 2);
+                add_tiles(input_dfb_id, input_dfb_id, held_seed_tiles, held_seed_tiles + 1, 0);
+                input_dfb.pop_front(held_seed_tiles + 2);
+                held_seed_tiles = 0;
             }
             if (has_partial) {
-                input_dfb.wait_front(1);
-                fold_partial_last(0);
-                input_dfb.pop_front(1);
+                input_dfb.wait_front(held_seed_tiles + 1);
+                fold_partial_last(held_seed_tiles);
+                input_dfb.pop_front(held_seed_tiles + 1);
+                held_seed_tiles = 0;
             }
+            // A one-tile stream has no later math op with which to retire its seed. Keep the
+            // input page live through tile_regs_commit so the producer cannot recycle it while
+            // copy_tile is still in flight.
+            deferred_stream_pop = held_seed_tiles;
         } else {
             uint32_t start;
             if constexpr (is_row) {
@@ -265,7 +278,7 @@ ALWI void reduce_accumulate_via_add(
                 copy_tile(input_dfb_id, start, 0);
                 tile = 1;
             }
-            add_tiles_init(input_dfb_id, input_dfb_id, true);
+            add_init(input_dfb_id, input_dfb_id, true);
             for (; tile < full_cnt; tile += 2) {
                 add_tiles(input_dfb_id, input_dfb_id, start + tile * stride, start + (tile + 1) * stride, 0);
             }
@@ -293,6 +306,9 @@ ALWI void reduce_accumulate_via_add(
         post_reduce_op(0);
 
         tile_regs_commit();
+        if (deferred_stream_pop > 0u) {
+            input_dfb.pop_front(deferred_stream_pop);
+        }
         tile_regs_wait();
         if constexpr (should_pop_p) {
             output_dfb.reserve_back(1);
@@ -500,11 +516,15 @@ ALWI void reduce(
         "against on Quasar.");
 #endif
 
-    // Auto deliberately remains the existing ReduceTile datapath.  AccumulateViaAdd is opt-in until
-    // a cost model can choose it without changing existing kernels' behavior.
-    constexpr ReduceAlgorithm resolved_algorithm =
-        algorithm == ReduceAlgorithm::Auto ? ReduceAlgorithm::ReduceTile : algorithm;
-    if constexpr (resolved_algorithm == ReduceAlgorithm::AccumulateViaAdd) {
+    constexpr bool explicitly_accumulate_via_add = algorithm == ReduceAlgorithm::AccumulateViaAdd;
+    constexpr bool auto_can_accumulate_via_add = algorithm == ReduceAlgorithm::Auto && reduce_type == PoolType::SUM &&
+                                                 input_policy == ReduceInputPolicy::BulkWaitBulkPop &&
+                                                 (reconfig_mode == ReduceDataFormatReconfigMode::INPUT ||
+                                                  reconfig_mode == ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT) &&
+                                                 fp32_mode == ReduceFp32Mode::Fast &&
+                                                 reduce_format != DataFormat::Int32 && !is_accumulate_v<AccumulateT>;
+
+    if constexpr (explicitly_accumulate_via_add) {
         static_assert(
             reduce_type == PoolType::SUM || reduce_type == PoolType::AVG,
             "AccumulateViaAdd supports SUM and standalone AVG only; MAX/MIN must use ReduceTile");
@@ -548,6 +568,28 @@ ALWI void reduce(
             reconfig_mode,
             PostReduceOp>(input_block_shape, input_memory_layout, partial_scaler, post_reduce_op);
         return;
+    }
+
+    if constexpr (auto_can_accumulate_via_add) {
+        const uint32_t reduced_tiles = reduce_dim == ReduceDim::REDUCE_ROW ? input_block_shape.cols
+                                       : reduce_dim == ReduceDim::REDUCE_COL
+                                           ? input_block_shape.rows
+                                           : input_block_shape.rows * input_block_shape.cols;
+        const bool contiguous =
+            input_memory_layout.row_stride == 0 || input_memory_layout.row_stride == input_block_shape.cols;
+        const bool tile_aligned = !partial_scaler.uses_partial() && partial_scaler.valid_reduce_dim_elements == 0;
+        if (reduced_tiles >= ACCUMULATE_VIA_ADD_MIN_REDUCED_TILES && contiguous && tile_aligned) {
+            detail::reduce_accumulate_via_add<
+                reduce_type,
+                reduce_dim,
+                input_dfb_id,
+                scaler_dfb_id,
+                output_dfb_id,
+                input_policy,
+                reconfig_mode,
+                PostReduceOp>(input_block_shape, input_memory_layout, partial_scaler, post_reduce_op);
+            return;
+        }
     }
 
     // =============================================================================

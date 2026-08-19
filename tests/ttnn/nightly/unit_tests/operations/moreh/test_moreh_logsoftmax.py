@@ -131,6 +131,22 @@ def run_moreh_logsoftmax_backward_test(
 
 @pytest.mark.parametrize(
     "shape_dim",
+    [
+        pytest.param(([1, 1, 32, 32 * 8], 3), id="row-8-tiles"),
+        pytest.param(([1, 1, 32 * 8, 32], 2), id="col-8-tiles"),
+    ],
+)
+def test_logsoftmax_eight_tile_reduce_happy_path(shape_dim, device):
+    """Exercise the aligned small-kernel reduction exactly at the Auto algorithm cutoff."""
+    shape, dim = shape_dim
+    torch.manual_seed(0)
+    strategy_type = ttnn.operations.moreh.SoftmaxOpParallelizationStrategy
+    strategy = strategy_type.SMALL_W if dim == 3 else strategy_type.SMALL_H
+    run_moreh_logsoftmax_test(shape, dim, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, 0.1, 0.1, True, strategy=strategy)
+
+
+@pytest.mark.parametrize(
+    "shape_dim",
     (
         [[32, 32], 1],  # single tile
         [[3, 32, 32 * 5], 2],  # mutiple tile with dim W

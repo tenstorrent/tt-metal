@@ -6,7 +6,8 @@
 The suite intentionally drives the helper itself through a tiny ProgramDescriptor instead of
 testing it indirectly through a migrated operation.  Cases marked xfail are positive specifications
 for combinations AccumulateViaAdd does not support yet; an implementation that starts working turns
-those cases into strict XPASS failures so the marker must be removed.
+those cases into strict XPASS failures so the marker must be removed. Auto-dispatch cases exercise
+both sides of the eight-reduced-tile cutoff and every compile-time gate on the initial happy path.
 """
 
 from dataclasses import dataclass
@@ -156,8 +157,27 @@ void kernel_main() {
                                                  : ReducePartialScaler::partial_mask(
                                                        partial_elems, mask_tile_idx);
 
+    using ckernel::PoolType;
+    using ckernel::ReduceDim;
+    constexpr ReduceDim dim = dim_id == 0u   ? ReduceDim::REDUCE_ROW
+                              : dim_id == 1u ? ReduceDim::REDUCE_COL
+                                             : ReduceDim::REDUCE_SCALAR;
+    constexpr PoolType pool = pool_id == 0u   ? PoolType::SUM
+                              : pool_id == 1u ? PoolType::AVG
+                              : pool_id == 2u ? PoolType::MAX
+                                             : PoolType::MIN;
+    constexpr ReduceFp32Mode fp32_mode =
+        fp32_mode_id == 0u ? ReduceFp32Mode::Fast : ReduceFp32Mode::Accurate;
+    constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[cb_in]);
+    constexpr bool is_sfpu = is_sfpu_reduce_path<pool, dim, reduce_format, fp32_mode>();
+    constexpr bool swap_reduce_operands = reduce_swaps_operands<pool, dim, is_sfpu>();
+    constexpr bool reconfigures_input = reconfig_id == 1u || reconfig_id == 3u;
+
     if constexpr (algorithm_id == 2u) {
         compute_kernel_hw_startup(cb_in, cb_in, cb_out);
+    } else if constexpr (!reconfigures_input && swap_reduce_operands) {
+        // NONE / OUTPUT mean a prior operation already left SrcA/SrcB in reduce order.
+        compute_kernel_hw_startup(cb_scaler, cb_in, cb_out);
     } else {
         compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
     }
@@ -388,7 +408,7 @@ def _run_reduce(
     out_shape = _output_shape(dim, Ht, Wt, NC)
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(out_shape)),
-        ttnn.float32,
+        ttnn.int32 if input_dtype == ttnn.int32 else ttnn.float32,
         ttnn.TILE_LAYOUT,
         device,
         _sharded_memory_config(out_shape),
@@ -583,9 +603,101 @@ def test_accumulate_via_add_reduce_mean_matches_direct_avg(device, dim):
     torch.testing.assert_close(direct, explicit, rtol=0, atol=0)
 
 
-def test_reduce_algorithm_default_remains_reduce_tile(device):
+def test_reduce_algorithm_auto_stays_on_reduce_tile_below_cutoff(device):
     auto, expected = _run_reduce(device, dim="row", pool="sum", algorithm="auto", Ht=2, Wt=3)
     explicit, explicit_expected = _run_reduce(device, dim="row", pool="sum", algorithm="reduce_tile", Ht=2, Wt=3)
+    _assert_result(auto, expected)
+    _assert_result(explicit, explicit_expected)
+    torch.testing.assert_close(auto, explicit, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dim", DIMS)
+@pytest.mark.parametrize(
+    "reduced_tiles,expected_algorithm",
+    [(7, "reduce_tile"), (8, "accumulate_via_add")],
+    ids=["below-cutoff", "at-cutoff"],
+)
+def test_reduce_algorithm_auto_dispatch_cutoff_for_every_dimension(device, dim, reduced_tiles, expected_algorithm):
+    Ht, Wt = (1, reduced_tiles) if dim != "col" else (reduced_tiles, 1)
+    auto, expected = _run_reduce(
+        device,
+        dim=dim,
+        pool="sum",
+        policy="bulk",
+        algorithm="auto",
+        Ht=Ht,
+        Wt=Wt,
+    )
+    explicit, explicit_expected = _run_reduce(
+        device,
+        dim=dim,
+        pool="sum",
+        policy="bulk",
+        algorithm=expected_algorithm,
+        Ht=Ht,
+        Wt=Wt,
+    )
+    _assert_result(auto, expected)
+    _assert_result(explicit, explicit_expected)
+    torch.testing.assert_close(auto, explicit, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    "pool,policy,reconfig,input_dtype,fp32_mode,row_stride,expected_algorithm",
+    [
+        pytest.param("sum", "bulk", "input_and_output", ttnn.bfloat16, "fast", 0, "accumulate_via_add", id="eligible"),
+        pytest.param("avg", "bulk", "input_and_output", ttnn.bfloat16, "fast", 0, "reduce_tile", id="avg"),
+        pytest.param("sum", "stream", "input_and_output", ttnn.bfloat16, "fast", 0, "reduce_tile", id="stream"),
+        pytest.param(
+            "sum", "wait_upfront", "input_and_output", ttnn.bfloat16, "fast", 0, "reduce_tile", id="wait-upfront"
+        ),
+        pytest.param("sum", "no_wait", "input_and_output", ttnn.bfloat16, "fast", 0, "reduce_tile", id="no-wait"),
+        pytest.param("sum", "bulk", "none", ttnn.bfloat16, "fast", 0, "reduce_tile", id="no-reconfig"),
+        pytest.param("sum", "bulk", "output", ttnn.bfloat16, "fast", 0, "reduce_tile", id="output-reconfig-only"),
+        pytest.param("sum", "bulk", "input", ttnn.bfloat16, "fast", 0, "accumulate_via_add", id="input-reconfig"),
+        pytest.param("sum", "bulk", "input_and_output", ttnn.float32, "accurate", 0, "reduce_tile", id="accurate-fp32"),
+        pytest.param("sum", "bulk", "input_and_output", ttnn.int32, "fast", 0, "reduce_tile", id="int32"),
+        pytest.param("sum", "bulk", "input_and_output", ttnn.bfloat16, "fast", 9, "reduce_tile", id="padded-layout"),
+    ],
+)
+def test_reduce_algorithm_auto_happy_path_support_matrix(
+    device,
+    pool,
+    policy,
+    reconfig,
+    input_dtype,
+    fp32_mode,
+    row_stride,
+    expected_algorithm,
+):
+    auto, expected = _run_reduce(
+        device,
+        dim="row",
+        pool=pool,
+        policy=policy,
+        algorithm="auto",
+        Ht=1,
+        Wt=8,
+        input_dtype=input_dtype,
+        fp32_dest=True,
+        fp32_mode=fp32_mode,
+        reconfig=reconfig,
+        row_stride=row_stride,
+    )
+    explicit, explicit_expected = _run_reduce(
+        device,
+        dim="row",
+        pool=pool,
+        policy=policy,
+        algorithm=expected_algorithm,
+        Ht=1,
+        Wt=8,
+        input_dtype=input_dtype,
+        fp32_dest=True,
+        fp32_mode=fp32_mode,
+        reconfig=reconfig,
+        row_stride=row_stride,
+    )
     _assert_result(auto, expected)
     _assert_result(explicit, explicit_expected)
     torch.testing.assert_close(auto, explicit, rtol=0, atol=0)

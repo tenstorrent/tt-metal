@@ -87,7 +87,9 @@ enum class ReduceDataFormatReconfigMode { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT 
  *
  * Controls when to wait for input tiles and whether to pop them after processing:
  *
- * - WaitAndPopPerTile: Wait/process/pop one tile at a time (streaming, safe for any CB size).
+ * - WaitAndPopPerTile: Stream tiles through the input CB. ReduceTile processes one tile at a
+ *   time. AccumulateViaAdd processes pairs and requires at least two input pages for an even
+ *   reduce-tile count, or three pages for an odd count greater than one.
  *
  * - BulkWaitBulkPop: Wait for bulk, process all with indexed access, pop bulk.
  *   Bulk size depends on reduce dimension:
@@ -110,12 +112,21 @@ enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNo
 /**
  * @brief Which datapath implements the reduce.
  *
- * Auto is the default and currently always resolves to ReduceTile.  AccumulateViaAdd is an
- * explicitly selected float SUM/AVG datapath: it adds the reduce-dimension tiles into one DST
- * register, then performs the within-tile collapse with sfpu_reduce.  Keeping Auto mapped to
- * ReduceTile makes this addition behavior-neutral for every existing caller.
+ * Auto is the default. It selects AccumulateViaAdd when all of the following hold:
+ *   - standard (unit-scaler) floating-point SUM in Fast fp32 mode,
+ *   - BulkWaitBulkPop with a contiguous, tile-aligned input block,
+ *   - NoAccumulation, and
+ *   - at least ACCUMULATE_VIA_ADD_MIN_REDUCED_TILES tiles per output.
+ * Everything else stays on ReduceTile. In particular, callers using prepare_reduce_scaler with a
+ * non-unit SUM scaler must select ReduceTile explicitly if they otherwise match the Auto fast path.
+ *
+ * AccumulateViaAdd is also an explicitly selectable float SUM/AVG datapath: it adds the
+ * reduce-dimension tiles into one DST register, then performs the within-tile collapse with
+ * sfpu_reduce.
  */
 enum class ReduceAlgorithm { Auto, ReduceTile, AccumulateViaAdd };
+
+inline constexpr uint32_t ACCUMULATE_VIA_ADD_MIN_REDUCED_TILES = 8;
 
 // =============================================================================
 // Configuration Types
