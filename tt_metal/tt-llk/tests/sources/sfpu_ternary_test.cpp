@@ -86,6 +86,8 @@ using namespace ckernel;
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu_operations.h"
 #include "fresh_cpp_operations.h"
+// Storm-contract semantic bodies (one op per header, fresh_cpp/README.md).
+#include "fresh_cpp/addcdiv.h"
 
 #ifndef FRESH_CPP_IMPL
 #define FRESH_CPP_IMPL 0
@@ -238,6 +240,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_addcmul_fresh_cpp,
+                        (is_fp32_dest_acc_en, MATH_FORMAT, 8),
+                        0 /*DST_IN0*/,
+                        1 /*DST_IN1*/,
+                        2 /*DST_IN2*/,
+                        0 /*DST_OUT*/,
+                        VectorMode::RC,
+                        SFPU_TERNARY_SCALAR);
+                }
+                // Storm-lane S1 selector (fresh_cpp/addcdiv.h semantic body).
+                else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_TERNARY_OPERATION == SfpuType::addcdiv)
+                {
+                    SFPU_TERNARY_CALL(
+                        dest_sync,
+                        is_fp32_dest_acc_en,
+                        calculate_addcdiv_fresh_cpp,
                         (is_fp32_dest_acc_en, MATH_FORMAT, 8),
                         0 /*DST_IN0*/,
                         1 /*DST_IN1*/,

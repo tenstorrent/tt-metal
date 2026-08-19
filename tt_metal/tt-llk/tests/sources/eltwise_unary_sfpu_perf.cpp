@@ -110,6 +110,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu_operations.h"
 #include "fresh_cpp_operations.h"
+// Storm-contract semantic bodies (one op per header, fresh_cpp/README.md).
+#include "fresh_cpp/abs.h"
+#include "fresh_cpp/absint32.h"
+#include "fresh_cpp/add1.h"
+#include "fresh_cpp/bitwisenot.h"
+#include "fresh_cpp/castfp32tofp16a.h"
+#include "fresh_cpp/celu.h"
 
 #ifndef FRESH_CPP_IMPL
 #define FRESH_CPP_IMPL 0
@@ -292,6 +299,40 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::equal_zero)
                         {
                             SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_eqz_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        // Storm-lane S1 selectors (fresh_cpp/<op>.h semantic bodies).
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::abs)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_abs_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::abs_int32)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_abs_int32_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::bitwise_not)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_bitwise_not_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::add1)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_add1_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::cast_fp32_to_fp16a)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_cast_fp32_to_fp16a_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::celu)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_celu_fresh_cpp,
+                                (is_fp32_dest_acc_en, ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_CELU_ALPHA_BITS,
+                                ckernel::sfpu::FRESH_CELU_ALPHA_RECIP_BITS);
                         }
                         else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::clamp)
                         {
@@ -562,6 +603,40 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::equal_zero)
                         {
                             SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_eqz_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        // Storm-lane S1 selectors (fresh_cpp/<op>.h semantic bodies).
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::abs)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_abs_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::abs_int32)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_abs_int32_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::bitwise_not)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_bitwise_not_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::add1)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_add1_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::cast_fp32_to_fp16a)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_cast_fp32_to_fp16a_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::celu)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_celu_fresh_cpp,
+                                (is_fp32_dest_acc_en, ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_CELU_ALPHA_BITS,
+                                ckernel::sfpu::FRESH_CELU_ALPHA_RECIP_BITS);
                         }
                         else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::clamp)
                         {

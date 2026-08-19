@@ -85,6 +85,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "sfpu_operations.h"
 #include "fresh_cpp_operations.h"
+// Storm-contract semantic bodies (one op per header, fresh_cpp/README.md).
+#include "fresh_cpp/addcdiv.h"
 
 #ifndef FRESH_CPP_IMPL
 #define FRESH_CPP_IMPL 0
@@ -197,6 +199,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 VectorMode::RC,
                                 SFPU_TERNARY_SCALAR);
                         }
+                        // Storm-lane S1 selector (fresh_cpp/addcdiv.h semantic body).
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_TERNARY_OPERATION == SfpuType::addcdiv)
+                        {
+                            SFPU_TERNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_addcdiv_fresh_cpp,
+                                (is_fp32_dest_acc_en, MATH_FORMAT_ENUM, 8),
+                                block_tile,
+                                (block_tile + 1) % MAX_TILES_DEST,
+                                (block_tile + 2) % MAX_TILES_DEST,
+                                block_tile,
+                                VectorMode::RC,
+                                SFPU_TERNARY_SCALAR);
+                        }
                         else
                         {
                             test_utils::call_ternary_sfpu_operation<
@@ -236,6 +253,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 DST_SYNC_MODE,
                                 is_fp32_dest_acc_en,
                                 calculate_addcmul_fresh_cpp,
+                                (is_fp32_dest_acc_en, MATH_FORMAT_ENUM, 8),
+                                block_tile,
+                                (block_tile + 1) % MAX_TILES_DEST,
+                                (block_tile + 2) % MAX_TILES_DEST,
+                                block_tile,
+                                VectorMode::RC,
+                                SFPU_TERNARY_SCALAR);
+                        }
+                        // Storm-lane S1 selector (fresh_cpp/addcdiv.h semantic body).
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_TERNARY_OPERATION == SfpuType::addcdiv)
+                        {
+                            SFPU_TERNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_addcdiv_fresh_cpp,
                                 (is_fp32_dest_acc_en, MATH_FORMAT_ENUM, 8),
                                 block_tile,
                                 (block_tile + 1) % MAX_TILES_DEST,

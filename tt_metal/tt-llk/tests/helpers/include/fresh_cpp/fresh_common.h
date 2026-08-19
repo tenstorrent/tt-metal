@@ -1,0 +1,123 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+// Shared golden-math building blocks for the storm-contract semantic bodies
+// (fresh_cpp/<op>.h).  These state published, op-independent numeric identities
+// in plain typed C++ — no l_reg pinning, raw TTI, replay/macro templates, or
+// markers.  They are NOT ops themselves: each op's header states its own
+// mathematical definition and only reuses these statements.
+#include <cstdint>
+
+namespace ckernel::sfpu
+{
+
+// Reciprocal of a strictly positive finite fp32 vector, stated from the
+// published bit-pattern seed (Blinn's constant-minus-bits approximation,
+// K = 0x7EF127EA; "Floating-point tricks", IEEE CG&A 1997) refined by three
+// Newton–Raphson steps r <- r*(2 - x*r).  Each step squares the relative
+// error (seed ~1e-1 -> ~1e-8, fp32-limited), so the result is correctly
+// rounded to well below every bf16/fp32 tolerance gate in the suite.
+sfpi_inline sfpi::vFloat fresh_recip_positive(const sfpi::vFloat x)
+{
+    constexpr int RECIP_SEED_MAGIC = 0x7EF127EA;
+    sfpi::vFloat r                 = sfpi::as<sfpi::vFloat>(sfpi::vInt(RECIP_SEED_MAGIC) - sfpi::as<sfpi::vInt>(x));
+    for (int step = 0; step < 3; ++step)
+    {
+        r = r * (2.0f - x * r);
+    }
+    return r;
+}
+
+// Truncate a non-negative fp32 vector to its integer part: the 2^23
+// mantissa-shift round-to-nearest, then take back the one-off when nearest
+// rounded up.  Values at or above 2^23 carry no fraction and pass through.
+sfpi_inline sfpi::vFloat fresh_trunc_nonneg(const sfpi::vFloat v)
+{
+    constexpr float MANTISSA_ONE = 8388608.0f; // 2^23
+    sfpi::vFloat r               = v;
+    const sfpi::vFloat nearest   = (v + MANTISSA_ONE) - MANTISSA_ONE;
+    v_if (v < MANTISSA_ONE)
+    {
+        r = nearest;
+    }
+    v_endif;
+    // Nearest may round up; truncation of a non-negative value never does.
+    v_if (r > v)
+    {
+        r = r - 1.0f;
+    }
+    v_endif;
+    return r;
+}
+
+// Residue of a non-negative dividend modulo a positive divisor:
+// r = aa - trunc(aa * (1/ab)) * ab, followed by the two one-step corrections
+// that put a rounding-perturbed quotient back into the mathematical range
+// 0 <= r < ab.  recip is the divisor's reciprocal (fresh_recip_positive).
+sfpi_inline sfpi::vFloat fresh_mod_positive(const sfpi::vFloat aa, const sfpi::vFloat ab, const sfpi::vFloat recip)
+{
+    const sfpi::vFloat quotient = fresh_trunc_nonneg(aa * recip);
+    sfpi::vFloat r              = aa - quotient * ab;
+    // A quotient one off in either direction leaves r one divisor outside
+    // the range; two guarded steps restore 0 <= r < ab.
+    v_if (r < 0.0f)
+    {
+        r = r + ab;
+    }
+    v_endif;
+    v_if (r >= ab)
+    {
+        r = r - ab;
+    }
+    v_endif;
+    v_if (r < 0.0f)
+    {
+        r = r + ab;
+    }
+    v_endif;
+    return r;
+}
+
+// exp(x) stated by exponent/mantissa recombination (the exp_21f algorithm of
+// Moroz, Samotyy, Walczyk & Cieslinski 2022): exp(x) = 2**(x/ln2) = 2**xi *
+// 2**xf; xlog2 = x/ln2 + 127 is the result's biased exponent, its fixed-point
+// encoding is split into exponent (integer) and mantissa (fraction) fields,
+// the fraction is refined by the published quadratic, and the two recombine
+// with setexp.  Overflow saturates the biased exponent at 255; underflow
+// (xlog2 <= 0) zeroes the exponent source so the recombination produces a
+// subnormal that the bf16 store path flushes to zero.
+sfpi_inline sfpi::vFloat fresh_exp(const sfpi::vFloat x)
+{
+    constexpr float ONE_LN2 = 1.4426950216293334961f;
+    constexpr float C0      = 1.0017248f;
+    constexpr float C1      = 7.839635491371155e-08f;
+    constexpr float C2      = 4.791750143340323e-15f;
+
+    sfpi::vFloat xlog2 = x * ONE_LN2 + 127.0f;
+    xlog2              = sfpi::min(xlog2, 255.0f);
+
+    // Fixed-point encoding of xlog2: mantissa (implicit one) shifted left by
+    // the unbiased exponent.
+    const sfpi::vInt iexp = sfpi::exexp(xlog2);
+    sfpi::vInt zi         = sfpi::exman(xlog2, sfpi::MantissaMode::ImplicitOne);
+    zi                    = sfpi::shft(zi, iexp, sfpi::ShiftMode::Logical);
+    const sfpi::vFloat z  = sfpi::as<sfpi::vFloat>(zi);
+
+    // Quadratic refinement of 2**xf on [0, 1) from the encoding's mantissa.
+    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(sfpi::exman(z), sfpi::RoundMode::Nearest);
+    frac              = (C2 * frac + C1) * frac + C0;
+
+    // Underflow: zero the exponent source where xlog2 is not positive.
+    sfpi::vFloat zc = z;
+    v_if (xlog2 <= 0.0f)
+    {
+        zc = 0.0f;
+    }
+    v_endif;
+
+    return sfpi::setexp(frac, sfpi::exexp(zc, sfpi::ExponentMode::Biased));
+}
+
+} // namespace ckernel::sfpu

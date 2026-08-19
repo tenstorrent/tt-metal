@@ -727,6 +727,108 @@ def test_fresh_cpp_binary_max_min(formats, dest_acc, mathop, fresh_cpp_impl):
     )
 
 
+# Storm lane S1 (fresh_cpp/<op>.h semantic bodies): each test A/Bs impl 0
+# (production) against impl 1 (fresh typed C++) under the op's own golden,
+# stimuli, and format-aware tolerance gate; formats mirror the op's swept
+# corpus corr leg.
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    mathop=[MathOperation.SfpuElwsub],
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_binary_sub(formats, dest_acc, mathop, fresh_cpp_impl):
+    """A/B the fresh binary float subtract (a - b in fp32, RNE to the bf16
+    store) against the production calculate_sfpu_binary SUB arm with
+    identical stimuli and golden."""
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        broadcast_type=LlkBroadcastType.None_,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    mathop=[MathOperation.SfpuElwEq],
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_binary_eq(formats, dest_acc, mathop, fresh_cpp_impl):
+    """A/B the fresh binary equality predicate (1.0 where a == b else 0.0)
+    against the production calculate_binary_comp_fp32 with the crafted paired
+    stimuli of test_sfpu_binary_eq_ne (the equal branch is exercised)."""
+    spec_A, spec_B = _eq_ne_stimuli_specs()
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=spec_A,
+        spec_B=spec_B,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    mathop=[MathOperation.SfpuBinaryFmod, MathOperation.SfpuBinaryRemainder],
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_binary_fmod_remainder(formats, dest_acc, mathop, fresh_cpp_impl):
+    """A/B the fresh fmod/remainder (magnitude residue via reciprocal +
+    truncation with the trunc-vs-floor sign contracts stated directly)
+    against the production kernels with identical stimuli and golden."""
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        broadcast_type=LlkBroadcastType.None_,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    mathop=[MathOperation.SfpuAtan2],
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_binary_atan2(formats, dest_acc, mathop, fresh_cpp_impl):
+    """A/B the fresh atan2 (octant reduction + published A&S 4.4.49 minimax)
+    against the production minimax kernel; both are approximations matched
+    under the suite's tolerance + PCC gate, identical [-5, 5] stimuli."""
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0),
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuBitwiseAnd],
+    dest_acc=[DestAccumulation.Yes],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_binary_bitwise(formats, dest_acc, mathop, fresh_cpp_impl):
+    """A/B the fresh bitwise AND (raw int32 Dst bit patterns, typed raw-I32
+    views) against the production kernel; exact integer contract on the
+    suite's default int stimuli."""
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwsub],

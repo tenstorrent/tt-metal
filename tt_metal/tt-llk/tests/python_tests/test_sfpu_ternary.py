@@ -220,6 +220,24 @@ def test_fresh_cpp_addcmul(formats, dest_acc, fresh_cpp_impl):
 
 
 @parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_addcdiv(formats, dest_acc, fresh_cpp_impl):
+    """Storm lane S1: A/B the fresh addcdiv (a + value * b * recip(c), the
+    torch.addcdiv statement with a typed reciprocal derivation) against the
+    production kernel — identical stimuli (c held away from zero), golden,
+    and tolerance gate."""
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuAddcdiv,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@parametrize(
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
