@@ -42,7 +42,7 @@
       "test_attention_decode_paged[blackhole-cache512-global-1x1]": 0.98,
       "_comment_batched_decode": "Same #47311 reduce-precision gap as decode_paged; batched node name previously fell through to default 0.99.",
       "test_attention_decode_paged_batched[blackhole-cache512-batch1-global-1x1]": 0.989,
-      "_comment_batched_decode_wh": "Wormhole twins of the two rows above, both at 0.98. Same node, same layer, same cache reached through two entry points: WH measures 0.983648 for BOTH, so the blackhole pair's 0.98/0.989 split does not reproduce here and one gate covers them. Not the reduce depth (a 4x k_chunk_size sweep moves these <1e-4) — bfp8 attention weights are the bulk of it: at bf16 both read 0.989143, and with GEMMA4_DECODE_SDPA_FIDELITY=hifi4 on top, 0.989203. No configuration reaches 0.99, so this is the one 12B decode node that stays below the default even at full precision.",
+      "_comment_batched_decode_wh": "Wormhole twins of the two rows above, both at 0.98. Same node, same layer, same cache reached through two entry points: WH measures 0.983648 for BOTH, so the blackhole pair's 0.98/0.989 split does not reproduce here and one gate covers them. Not the reduce depth (a 4x k_chunk_size sweep moves these <1e-4) — bfp8 attention weights are the bulk of it: at bf16 both read 0.989143, and decode-SDPA HiFi4 (the shipped default) 0.989203. No configuration reaches 0.99, so this is the one 12B decode node that stays below the default even at full precision.",
       "test_attention_decode_paged[wormhole_b0-cache512-global-1x1]": 0.98,
       "test_attention_decode_paged_batched[wormhole_b0-cache512-batch1-global-1x1]": 0.98,
       "test_attention_decode_bounded_vs_unbounded_parity[blackhole-cache1500-1x1]": 0.97,
@@ -175,7 +175,7 @@
       "test_lm_head_bfp8_weight_decode_batch32[blackhole-1x8]": 0.99,
       "test_sampling_log_probs_pcc[wormhole_b0-1x8]": 0.999,
       "test_sampling_log_probs_pcc[blackhole-1x8]": 0.999,
-      "_comment_teacher_forcing_e2e": "Baselined to measured generator-path behaviour, not a correctness target: 129 teacher-forced steps span PCC 0.5628 (decode[98]) to 0.9800, mean 0.9139, prefill 0.8375. Floor is the worst step; test_full_model[wormhole_b0-1x8] holds 0.98 on the same weights, so raise this as the e2e gap closes. p64_n64 is unmeasured and still falls back to 0.99.",
+      "_comment_teacher_forcing_e2e": "Baselined to measured 31B seq=128 behaviour, not a correctness target: 129 teacher-forced steps span PCC 0.5628 (decode[98]) to 0.9800, mean 0.9139, prefill 0.8375. Floor is the worst step. test_full_model 0.98 is a ~6-token prompt; at 128 tokens ttnn_prefill_forward matches the generator (test_prefill_path_parity). p64_n64 is unmeasured and still falls back to 0.99.",
       "test_e2e_logits_pcc[wormhole_b0-p128_n128-1x8]": 0.55
     }
   }
