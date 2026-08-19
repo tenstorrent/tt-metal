@@ -240,11 +240,11 @@ constexpr InputSpec input(uint32_t cb_id, WaitPolicy wait, PopPolicy pop, DataFo
     return input(cb_id, wait, pop, InputTileMapping::Scalar, reconfig);
 }
 
-constexpr BinaryFpuInputSpec input(InputSpec input_spec, BroadcastDim broadcast) noexcept {
+constexpr BroadcastInputSpec input(InputSpec input_spec, BroadcastDim broadcast) noexcept {
     return {input_spec, broadcast};
 }
 
-constexpr BinaryFpuInputSpec input(
+constexpr BroadcastInputSpec input(
     uint32_t cb_id,
     BroadcastDim broadcast,
     WaitPolicy wait,
@@ -255,7 +255,7 @@ constexpr BinaryFpuInputSpec input(
     return {input(cb_id, wait, pop, mapping, reconfig, addressing), broadcast};
 }
 
-constexpr BinaryFpuInputSpec input(
+constexpr BroadcastInputSpec input(
     uint32_t cb_id, BroadcastDim broadcast, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept {
     return input(input(cb_id, wait, pop, reconfig), broadcast);
 }
@@ -274,14 +274,6 @@ constexpr OutputSpec output(
 
 
 namespace detail {
-
-constexpr InputSpec binary_fpu_input_spec(InputSpec input_spec) noexcept { return input_spec; }
-
-constexpr InputSpec binary_fpu_input_spec(BinaryFpuInputSpec input_spec) noexcept { return input_spec.input_spec; }
-
-constexpr BroadcastDim binary_fpu_broadcast(InputSpec /*input_spec*/) noexcept { return BroadcastDim::None; }
-
-constexpr BroadcastDim binary_fpu_broadcast(BinaryFpuInputSpec input_spec) noexcept { return input_spec.broadcast; }
 
 struct CopyTileConfig {
     using DstField = ConfigField<Dst, first_config_bit, Dst::D15>;
@@ -377,8 +369,8 @@ constexpr uint32_t pack_tile_config_bits(OutputSpec output_spec, Dst dst) noexce
 }
 
 constexpr uint32_t binary_fpu_config_bits(
-    BinaryFpuOp op, BroadcastDim bcast, InputSpec a, InputSpec b, Dst dst, DestAccumulation accumulation) noexcept {
-    return BinaryFpuConfig{op, bcast, a, b, dst, accumulation}.bits;
+    BinaryFpuOp op, InputSpec a, BroadcastInputSpec b, Dst dst, DestAccumulation accumulation) noexcept {
+    return BinaryFpuConfig{op, b.broadcast, a, b.input_spec, dst, accumulation}.bits;
 }
 
 constexpr uint32_t dest_reuse_binary_config_bits(

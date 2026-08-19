@@ -41,13 +41,13 @@ namespace compute_kernel_lib {
 // Defaults: no broadcast, both operands per-tile streaming.
 // ---------------------------------------------------------------------------
 
-template <InputSpec AInput, auto BInput, OutputSpec Output>
+template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output>
 ALWI void add(IterationShape shape);
 
-template <InputSpec AInput, auto BInput, OutputSpec Output>
+template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output>
 ALWI void sub(IterationShape shape);
 
-template <InputSpec AInput, auto BInput, OutputSpec Output>
+template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output>
 ALWI void mul(IterationShape shape);
 
 // ---------------------------------------------------------------------------

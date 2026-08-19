@@ -330,11 +330,18 @@ struct InputSpec {
     TileAddressing addressing;
 };
 
-/// Binary-FPU srcB configuration. Broadcast is kept out of `InputSpec` because ordinary inputs
-/// (CopyTile, SFPU operands, unary broadcast, and srcA) cannot consume this FPU-specific state.
-struct BinaryFpuInputSpec {
+/// The second (srcB) input of a `BinaryFpu`. srcB is the only operand the FPU broadcast path
+/// supports, so it carries a richer spec than the plain `InputSpec` used for srcA. Broadcast is
+/// kept out of `InputSpec` because ordinary inputs (CopyTile, SFPU operands, unary broadcast,
+/// and srcA) cannot consume this FPU-specific state.
+struct BroadcastInputSpec {
     InputSpec input_spec;
     BroadcastDim broadcast;
+
+    constexpr BroadcastInputSpec(InputSpec spec, BroadcastDim dim) noexcept : input_spec(spec), broadcast(dim) {}
+
+    /// Implicit: a plain input participates as srcB without broadcasting.
+    constexpr BroadcastInputSpec(InputSpec spec) noexcept : input_spec(spec), broadcast(BroadcastDim::None) {}
 };
 
 struct OutputSpec {
@@ -363,8 +370,8 @@ constexpr InputSpec input(uint32_t cb_id, WaitPolicy wait, PopPolicy pop, DataFo
 
 /// Bind srcB of a BinaryFpu and optionally select its intra-tile broadcast. The overload taking
 /// an existing InputSpec makes compile-time helper-produced input configurations composable.
-constexpr BinaryFpuInputSpec input(InputSpec input_spec, BroadcastDim broadcast) noexcept;
-constexpr BinaryFpuInputSpec input(
+constexpr BroadcastInputSpec input(InputSpec input_spec, BroadcastDim broadcast) noexcept;
+constexpr BroadcastInputSpec input(
     uint32_t cb_id,
     BroadcastDim broadcast,
     WaitPolicy wait = WaitPolicy::PerTile,
@@ -372,7 +379,7 @@ constexpr BinaryFpuInputSpec input(
     InputTileMapping mapping = InputTileMapping::Scalar,
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
     TileAddressing addressing = TileAddressing::Direct) noexcept;
-constexpr BinaryFpuInputSpec input(
+constexpr BroadcastInputSpec input(
     uint32_t cb_id, BroadcastDim broadcast, WaitPolicy wait, PopPolicy pop, DataFormatReconfig reconfig) noexcept;
 
 /// Bind one output buffer id to its configuration.
@@ -457,17 +464,12 @@ enum class DestReuseType : uint8_t {
 
 namespace detail {
 
-constexpr InputSpec binary_fpu_input_spec(InputSpec input_spec) noexcept;
-constexpr InputSpec binary_fpu_input_spec(BinaryFpuInputSpec input_spec) noexcept;
-constexpr BroadcastDim binary_fpu_broadcast(InputSpec input_spec) noexcept;
-constexpr BroadcastDim binary_fpu_broadcast(BinaryFpuInputSpec input_spec) noexcept;
-
 constexpr uint32_t copy_tile_config_bits(Dst dst, InputSpec input_spec) noexcept;
 
 constexpr uint32_t pack_tile_config_bits(OutputSpec output_spec, Dst dst) noexcept;
 
 constexpr uint32_t binary_fpu_config_bits(
-    BinaryFpuOp op, BroadcastDim bcast, InputSpec a, InputSpec b, Dst dst, DestAccumulation accumulation) noexcept;
+    BinaryFpuOp op, InputSpec a, BroadcastInputSpec b, Dst dst, DestAccumulation accumulation) noexcept;
 
 constexpr uint32_t dest_reuse_binary_config_bits(
     BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst) noexcept;
@@ -489,19 +491,13 @@ using CopyTile = detail::CopyTileImpl<Input.cb_id, detail::copy_tile_config_bits
 template <
     BinaryFpuOp Op,
     InputSpec AInput,
-    auto BInput,
+    BroadcastInputSpec BInput,
     Dst DstSlot = Dst::D0,
     DestAccumulation Accumulation = DestAccumulation::Disabled>
 using BinaryFpu = detail::BinaryFpuImpl<
     AInput.cb_id,
-    detail::binary_fpu_input_spec(BInput).cb_id,
-    detail::binary_fpu_config_bits(
-        Op,
-        detail::binary_fpu_broadcast(BInput),
-        AInput,
-        detail::binary_fpu_input_spec(BInput),
-        DstSlot,
-        Accumulation)>;
+    BInput.input_spec.cb_id,
+    detail::binary_fpu_config_bits(Op, AInput, BInput, DstSlot, Accumulation)>;
 
 /// Apply an FPU binary operation between one CB input and `DstSlot`.
 /// The LLK operation is in-place in DEST: it reads and overwrites the same slot.

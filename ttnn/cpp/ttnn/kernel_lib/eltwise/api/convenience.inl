@@ -5,19 +5,19 @@
 
 namespace compute_kernel_lib {
 
-template <InputSpec AInput, auto BInput, OutputSpec Output>
+template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output>
 ALWI void add(IterationShape shape) {
     eltwise_chain(
         shape, BinaryFpu<BinaryFpuOp::Add, AInput, BInput, Dst::D0, Output.dest_accumulation>{}, PackTile<Output>{});
 }
 
-template <InputSpec AInput, auto BInput, OutputSpec Output>
+template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output>
 ALWI void sub(IterationShape shape) {
     eltwise_chain(
         shape, BinaryFpu<BinaryFpuOp::Sub, AInput, BInput, Dst::D0, Output.dest_accumulation>{}, PackTile<Output>{});
 }
 
-template <InputSpec AInput, auto BInput, OutputSpec Output>
+template <InputSpec AInput, BroadcastInputSpec BInput, OutputSpec Output>
 ALWI void mul(IterationShape shape) {
     eltwise_chain(
         shape, BinaryFpu<BinaryFpuOp::Mul, AInput, BInput, Dst::D0, Output.dest_accumulation>{}, PackTile<Output>{});
