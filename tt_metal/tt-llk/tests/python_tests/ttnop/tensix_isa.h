@@ -100,10 +100,13 @@ constexpr std::uint32_t TT_OP_SFPNOP      = 0x8fu;
 // is Nop_type=1 → TT_OP(0x43, (UNP_SEL<<8)|1).
 constexpr std::uint32_t FILLER_TTI_NOP = 0x08000000u; // TTI_NOP
 constexpr std::uint32_t FILLER_SFPNOP  = 0x3C000002u; // SFPNOP
+#if defined(ARCH_QUASAR)
 constexpr std::uint32_t FILLER_UNPACR0 = 0x0C000005u; // quasar UNPACR_NOP UNP_A, Nop_type=1
 constexpr std::uint32_t FILLER_UNPACR1 = 0x0C000405u; // quasar UNPACR_NOP UNP_B, Nop_type=1
-// constexpr std::uint32_t FILLER_UNPACR0 = 0x0C000009u; // WH UNPACR_NOP unpacker 0 / SrcA
-// constexpr std::uint32_t FILLER_UNPACR1 = 0x0E000009u; // WH UNPACR_NOP unpacker 1 / SrcB
+#else
+constexpr std::uint32_t FILLER_UNPACR0 = 0x0C000009u; // WH UNPACR_NOP unpacker 0 / SrcA
+constexpr std::uint32_t FILLER_UNPACR1 = 0x0E000009u; // WH UNPACR_NOP unpacker 1 / SrcB
+#endif
 
 // The only filler that costs the RISC a cycle without also costing the Tensix
 // front-end one, so it is the only one that can shift a RISC MMIO write against

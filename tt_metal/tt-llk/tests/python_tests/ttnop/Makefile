@@ -4,10 +4,11 @@
 
 CXXFLAGS ?= -O2 -std=c++17 -Wall -Wextra
 
-scan: scan.cpp tensix_isa.h elf32.h
-	$(CXX) $(CXXFLAGS) -o $@ scan.cpp
+
+scan-%: scan.cpp tensix_isa.h elf32.h
+	$(CXX) $(CXXFLAGS) -DARCH_$(shell echo $* | tr a-z A-Z) -o $@ scan.cpp
 
 clean:
-	rm -f scan
+	rm -f scan scan-*
 
 .PHONY: clean

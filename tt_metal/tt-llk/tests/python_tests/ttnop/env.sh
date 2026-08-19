@@ -26,7 +26,7 @@ DEVICE_LOCK="${TTNOP_DEVICE_LOCK:-/tmp/tt-llk-test-$CHIP_ARCH.lock}"
 BUILD_LOCK="${TTNOP_BUILD_LOCK:-/tmp/ttnop-build-$CHIP_ARCH.lock}"
 
 build_scanner() {
-    make --silent -C "$HERE" scan
+    make --silent -C "$HERE" "scan-$CHIP_ARCH"
 }
 
 # Run pytest over a node-id file (so a huge suite never hits ARG_MAX), under a
