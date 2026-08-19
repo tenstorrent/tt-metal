@@ -194,7 +194,9 @@ struct NocReleasePolicy {
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
 #ifdef ARCH_QUASAR
-        Semaphore<programmable_core_type>(sem_id).up(pages);
+        // Semaphore<programmable_core_type>(sem_id).up(pages);
+        auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<programmable_core_type>(sem_id));
+        *sem_addr += pages;
 #else
         uint32_t sem_addr = get_semaphore<programmable_core_type>(sem_id);
         noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), pages, noc_idx);
@@ -1604,7 +1606,6 @@ void kernel_main() {
 #else
     DPRINT("dispatch_{}{}: start\n", is_h_variant, is_d_variant);
 #endif
-
     // Get runtime args
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);

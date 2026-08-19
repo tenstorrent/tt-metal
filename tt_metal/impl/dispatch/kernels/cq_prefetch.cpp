@@ -26,9 +26,6 @@
 #include "tt_metal/impl/dispatch/kernels/telemetry.hpp"
 #include "api/debug/dprint.h"
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
-#ifdef ARCH_QUASAR
-#include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
-#endif
 
 // FABRIC_RELAY is defined exactly when !is_hd(), so this catches an _h/_d build.
 // Quasar FD assumes prefetcher and dispatcher share a Tensix; remote-chip support needs cross-Tensix verification.
@@ -822,6 +819,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
 #endif
                     break;
                 }
+
                 // `issue_fence` may have been wrapped inside read_from_pcie before issuing the read.
                 const uint32_t read_fence = issue_fence;
 
@@ -1125,6 +1123,7 @@ static uint32_t write_pages_to_dispatcher(
         /*flush_last_transfer=*/true>(scratch_write_addr, noc_addr, amt_to_write);
 #endif
     downstream_data_ptr += amt_to_write;
+
     return npages;
 }
 
@@ -1270,6 +1269,7 @@ uint32_t process_relay_paged_cmd_large(
         write_pages_to_dispatcher_and_release_quasar<true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 #else
         uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
+
         downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
         // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
         DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
@@ -3187,7 +3187,6 @@ static uintptr_t process_relay_inline_all(uintptr_t data_ptr, uintptr_t fence, b
 CBReaderWithManualRelease<my_upstream_cb_sem_id, cmddat_q_log_page_size, cmddat_q_base, cmddat_q_end> h_cmddat_q_reader;
 
 // Used in prefetch_d downstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
-// Quasar only builds the fused _hd path today; this _d-only path does not need an iDMA drain.
 inline void relay_raw_data_to_downstream(uintptr_t& data_ptr, uint64_t wlength, uint32_t& local_downstream_data_ptr) {
     // In initial return, we return the header bytes as well
     uint32_t initial_data_to_return = sizeof(CQPrefetchHToPrefetchDHeader);
@@ -3389,16 +3388,16 @@ void kernel_main_d() {
         num_hops,
         NCRISC_WR_CMD_BUF>(get_noc_addr_helper(downstream_noc_xy, 0), my_dev_id, to_dev_id, router_direction);
 #else
-    // On Quasar, relay to the dispatcher is a same-core iDMA copy; no NOC init-state needed for that
-    // path. RELAY_INLINE_NOFLUSH's header write also moved to local_copy_bytes_issue() on this arch, so
-    // nothing here still depends on noc_async_write()'s init state.
-#if !defined(ARCH_QUASAR)
+    //     // On Quasar, relay to the dispatcher is a same-core iDMA copy; no NOC init-state needed for that
+    //     // path. RELAY_INLINE_NOFLUSH's header write also moved to local_copy_bytes_issue() on this arch, so
+    //     // nothing here still depends on noc_async_write()'s init state.
+    // #if !defined(ARCH_QUASAR)
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), 0, 1, my_noc_index);
     cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, DispatchSRelayInlineState::downstream_write_cmd_buf>(
         0, get_noc_addr_helper(dispatch_s_noc_xy, downstream_data_ptr_s), 0, 1, my_noc_index);
 #endif
-#endif
+    // #endif
 
     // Initialize cmd_ptr tracking for release_pages synchronization assertions
     relay_client.init_cmd_ptr_tracking<cmddat_q_base>();
