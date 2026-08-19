@@ -5,8 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # `Shape` as a template parameter -- what it looks like, and what it costs
 
-> **Status.** The `Extent` rename, Stage 1 (mechanical templating) and Stage 2 (the
-> checks) have landed. Stages 3-4 are still outlined below. Stage 1 came in at **+188/-158 lines** across
+> **Status.** The `Extent` rename and Stages 1-3 have landed. Stage 4 (delete
+> `ReduceGeometry`) is still outlined below. Stage 1 came in at **+188/-158 lines** across
 > `api.h`, `impl_v1.hpp`, `shape.hpp`, seven kernels and the selftest, with all three
 > selftest traces byte-identical and all eight device tests passing.
 
@@ -268,3 +268,26 @@ control proving the legal case still passes. What building them turned up:
 - **The bias check now catches a rank error.** `Shape<ct_dim, 1>` and
   `Shape<1, ct_dim>` have identical page counts, so the old runtime page-count `ASSERT`
   could not tell a column from a row. Both are now rejected; verified on device.
+
+## 9. What Stage 3 found
+
+`MatmulGeometry`'s five `uint32_t` parameters became two shapes, and it is now derived
+rather than declared -- no kernel writes one. `rt_dim`, `ct_dim` and `kt_dim` are read
+off the operands with their agreement checked; `NumBlocks` and `In1RowStride` are
+deleted outright. `MatmulNode` carries `lhs_shape`/`rhs_shape` and exposes
+`MatmulGeometry<SA, SB>` as `geometry`, so `Strategy<FPUFusion>`'s body did not change
+at all -- which is why the trace stayed byte-identical through the whole stage.
+
+- **`Accumulator` bypassed `store` conformance, and that was a real hole.** It drives
+  the strategy directly, so nothing checked that its two Storages matched the matmul's
+  output block. Proven the worst way: a `Storage<Shape<2,1>>` accumulator on a
+  `Shape<1,2>` matmul compiled AND ran correctly on device, because the two shapes hold
+  the same number of pages. Now a `static_assert` on the node's shape, the same one
+  `store` applies.
+- **A sabotage that looks fine can be a no-op.** The first attempt at the wrong-output
+  test swapped `Shape<rt, ct>` for `Shape<ct, rt>` in the default configuration, where
+  `rt == ct == 1` -- identical types, nothing to catch. Asymmetric dimensions are
+  required to make that test mean anything.
+- **`matmul_init` needs the shapes before the buffers.** It programs the block
+  dimensions, so in `matmul_mcast.cpp` the `using` aliases had to move above the
+  `matmul_init` call they feed.

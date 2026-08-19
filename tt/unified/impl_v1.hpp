@@ -323,6 +323,15 @@ template <typename S, AccumulatorMode Mode>
 template <typename Node, typename Epilogue>
 Block<S> Accumulator<S, Mode>::accumulate(const Node& node, bool finish, Epilogue epilogue) {
     static_assert(is_fpu_fusion<Node>::value, "Accumulator drives FPU fusions");
+    // The same conformance Storage::store enforces. The accumulator does NOT go through
+    // store -- it drives the strategy directly -- so without this the two buffers it
+    // was built from could disagree with the node's output block and nothing would say
+    // so. A page-count match is not enough: Shape<1,2> and Shape<2,1> both hold two
+    // pages, and a matmul mis-shaped that way ran correctly on device.
+    static_assert(
+        same_shape_v<node_shape_t<Node>, S>,
+        "this Accumulator's shape is not the shape the matmul produces -- its two Storages must both be "
+        "Shape<A_rows, B_cols>");
 
     if constexpr (std::is_same_v<Epilogue, std::nullptr_t>) {
         Strategy<expr::kind_of_t<Node>>::template run<Mode>(node, acc_storage.cb_id, out_storage.cb_id, reload, finish);
@@ -330,7 +339,7 @@ Block<S> Accumulator<S, Mode>::accumulate(const Node& node, bool finish, Epilogu
         // Apply the epilogue to a bare-chain node of the same geometry to
         // recover just the ops it adds; those are the finish-only ones. The
         // node's own chain stays per-step.
-        using Bare = MatmulNode<typename Node::geometry, expr::UnaryChain<>>;
+        using Bare = MatmulNode<typename Node::lhs_shape, typename Node::rhs_shape, expr::UnaryChain<>>;
         using Fused = decltype(epilogue(std::declval<Bare>()));
         static_assert(
             is_fpu_fusion<Fused>::value,
@@ -402,9 +411,9 @@ auto rsqrt(const ComputeBlock<S>& b) {
     return expr::Un<RsqrtOp, TileSource<S>>{{}, as_node(b)};
 }
 
-template <typename Geometry, typename SA, typename SB>
+template <typename SA, typename SB>
 auto matmul(const ComputeBlock<SA>& a, const ComputeBlock<SB>& b) {
-    return matmul<Geometry>(as_node(a), as_node(b));
+    return matmul(as_node(a), as_node(b));
 }
 
 template <typename Geometry, ReduceAxis Axis, typename SB, typename SC>
