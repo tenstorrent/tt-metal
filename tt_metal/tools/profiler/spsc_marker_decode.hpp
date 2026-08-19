@@ -170,8 +170,9 @@ inline void spsc_decode_frame(
         }
         st.live_words += run;
         const uint32_t hm = head & kSpscRingMask;
-        // The frame is DMA-fresh host memory the walk is about to miss on line by line; fetching the whole
-        // live window up front overlaps those misses with the walk instead of serializing on them.
+        // Just-in-time prefetch of this lane's live window: small bursts consumed immediately fit the
+        // core's fill-buffer budget -- issuing whole frames ahead was measured 30-40% SLOWER (the bulk
+        // cold-line prefetches starve the walk's own demand loads).
         for (uint32_t off = 0; off < run; off += 16) {
             spsc_prefetch(ring + ((hm + off) & kSpscRingMask));
         }

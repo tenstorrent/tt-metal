@@ -5855,3 +5855,21 @@ is latency-bound, so expect modest), decode fan-out via frame sharding (unattrac
 2 decode + consumer + workload + Tracy client already fill it), and producer-side wire changes (the big
 lever, out of receiver scope). Context: at delay 15 the host already drains within 1.3x of the device's
 offered rate; host-attributable stalls are ~60k of ~352k.
+
+## §N+56 — Cross-frame window prefetch REGRESSES 30-40%: bulk cold-line prefetch starves demand loads (bh-18, 2026-08-19)
+
+Software-pipelining the prefetch (while decoding frame f: blind-prefetch f+2's ctrl lines; read f+1's
+head/tail fields and prefetch its full live windows) measured 121-129 ms decode on BOTH threads across two
+judged runs, versus 88-99 ms with the per-lane just-in-time prefetch -- reverted. Mechanism: a full-fill
+frame's windows are ~160 cold lines; issuing them as one burst saturates the core's line-fill buffers, so
+the CURRENT frame's demand loads queue behind speculative prefetches. The per-lane form (<= 32 lines,
+consumed immediately) fits the LFB budget, which is why it measured +9% when introduced (§N+54) while the
+"better" pipelined form loses.
+
+Combined with §N+55 (ALU trims wall-time-neutral), the single-thread decode ceiling on this part is set by
+DMA-cold DRAM latency at LFB-limited concurrency: ~6 GB/s/thread decoding vs 13.6 GB/s raw-streaming the
+same bytes. AVX-512 (present on this Zen 4) is predicted neutral by the same evidence -- it halves
+instruction count, which §N+55 showed does not move wall time, and 512-bit ops are double-pumped here so
+load-port pressure is unchanged. Not built; the dispatch + code duplication is complexity with no predicted
+return. The remaining single-thread levers are wire-side (producer-packed records / higher span fill), not
+host-side.
