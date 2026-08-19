@@ -35,7 +35,7 @@ from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import (
     init_kv_cache,
     preprocess_encoder_inputs,
 )
-from models.demos.audio.whisper.tt.whisper_generator import GenerationParams, WhisperGenerator
+from models.demos.audio.whisper.tt.whisper_generator import GenerationParams, PerfMetrics, WhisperGenerator
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import verify_perf
@@ -380,21 +380,20 @@ def run_demo_whisper_for_conditional_generation_inference(
 
                 # Extract final metrics from last result
                 if last_result is not None:
-                    ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput, is_final = last_result
+                    ttnn_output, avg_logprob, no_speech_prob, perf, is_final = last_result
                     print()  # New line after streaming
                 else:
                     # Fallback if no results
-                    ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput, is_final = (
+                    ttnn_output, avg_logprob, no_speech_prob, perf, is_final = (
                         [""] * current_batch_size,
                         None,
                         None,
-                        0.0,
-                        0.0,
+                        PerfMetrics(),
                         False,
                     )
             else:
                 # Non-streaming mode
-                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = model_pipeline(
+                ttnn_output, avg_logprob, no_speech_prob, perf = model_pipeline(
                     current_batch,
                     stream=False,
                     return_perf_metrics=True,
@@ -402,8 +401,14 @@ def run_demo_whisper_for_conditional_generation_inference(
                 )
 
             if i >= num_warmup_runs:  # Exclude first compile run
-                total_ttft += ttft
-                total_decode_throughput += avg_decode_throughput
+                total_ttft += perf.ttft
+                total_decode_throughput += perf.decode_throughput
+            logger.info(
+                f"Feature extraction: {perf.feature_extract_s*1000:.3f}ms "
+                f"({perf.feature_extract_throughput:.1f} audio-s/s), "
+                f"encoder: {perf.encoder_s*1000:.3f}ms "
+                f"({perf.encoder_throughput:.1f} audio-s/s, trace_hit={perf.encoder_trace_hit})"
+            )
             batch_start = i + 1
             batch_end = i + current_batch_size
             logger.info(f"Model Output (Inputs {batch_start}--{batch_end}) Sample: {ttnn_output}")
