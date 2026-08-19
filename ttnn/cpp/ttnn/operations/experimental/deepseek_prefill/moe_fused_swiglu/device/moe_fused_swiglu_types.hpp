@@ -12,8 +12,11 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_types.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu {
+
+using unified_routed_expert_ffn::RoutedExpertActivation;
 
 struct OperationArguments {
     uint32_t local_expert_id = 0;
@@ -21,6 +24,7 @@ struct OperationArguments {
     uint32_t grid_x = 0;
     uint32_t grid_y = 0;
     bool read_x_at_offset = false;
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu;
     tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::BFLOAT8_B;
     tt::tt_metal::MemoryConfig output_memory_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
@@ -32,6 +36,7 @@ struct OperationArguments {
         "grid_x",
         "grid_y",
         "read_x_at_offset",
+        "activation",
         "output_dtype",
         "output_memory_config",
         "compute_kernel_config");
@@ -43,6 +48,7 @@ struct OperationArguments {
             grid_x,
             grid_y,
             read_x_at_offset,
+            activation,
             output_dtype,
             output_memory_config,
             compute_kernel_config);
