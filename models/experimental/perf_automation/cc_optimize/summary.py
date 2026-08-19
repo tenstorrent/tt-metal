@@ -80,10 +80,51 @@ def upsert_report_section(model_root, key: str, block_md: str):
         else:
             parts = [existing.strip(), block] if existing.strip() else [block]
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n\n".join(parts) + "\n")
+        _text = "\n\n".join(parts) + "\n"
+        path.write_text(_text)
+        _mirror_report(_text)
         return path
     except Exception:  # noqa: BLE001
         return None
+
+
+def _mirror_report(text: str) -> None:
+    """Keep a copy of the live report somewhere a reboot cannot reach.
+
+    THE REPORT HAD NO DURABLE HOME. It was moved out of the model directory for a real reason -- git
+    revert after a no-gain attempt restored the committed blob and rewound a live report from 30
+    attempts back to 7 -- into the run directory, which is gitignored and safe from that. But an
+    optimize run works in a throwaway worktree under /tmp, so the run directory is under /tmp too,
+    and /tmp is cleared on boot.
+
+    Run 10, 2026-08-19: the box rebooted at 12:56 after fourteen hours. The report was being written
+    live -- 18805 bytes at 11:50, 18935 at 12:13 -- and went with the worktree. Every measurement
+    survived, because --persist keeps those in ~/.perf_mcp; only the rendered report was lost, and
+    only because it was the one artifact still living in the disposable copy.
+
+    So: the same text, written a second time into the durable state directory. Outside git, so no
+    revert can rewind it; outside the worktree, so no reboot can take it. Best-effort and silent --
+    a mirror that cannot be written must never cost the report that can.
+    """
+    try:
+        from cc_optimize.tmpstate import state_dir
+    except Exception:  # noqa: BLE001
+        try:
+            from .tmpstate import state_dir
+        except Exception:  # noqa: BLE001
+            return
+    try:
+        import os as _os
+
+        # Only when a durable directory was actually configured (--persist). Without it state_dir()
+        # is the system temp dir, which is the very place this exists to escape.
+        if not (_os.environ.get("PERF_MCP_STATE_DIR") or "").strip():
+            return
+        d = state_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        (d / _REPORT_NAME).write_text(text)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def optimize_block(model_root, attempts_len: int, text: str, when_note: str) -> str:
