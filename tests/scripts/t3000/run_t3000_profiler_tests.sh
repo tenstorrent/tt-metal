@@ -231,6 +231,17 @@ run_profiling_test() {
     run_tracy_wasm_gui_http_integration
 }
 
+# DIAGNOSTIC (mtairum): good-host Llama-8B decode device-perf per-op table.
+# On df945c6a where the tracy device profiler works (current main overflows, #53158).
+# test_device_perf.py internally spawns `python -m tracy`, so just run the pytest.
+run_goodhost_deviceperf() {
+    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
+    echo "GOODHOST_DP_INFO hostname=$(hostname) commit=$(git rev-parse --short HEAD)"
+    pytest -s --timeout 1200 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-1024-2-2-1-32-False" 2>&1
+}
+
+
 main() {
     cd $TT_METAL_HOME
 

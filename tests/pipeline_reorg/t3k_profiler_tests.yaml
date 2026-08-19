@@ -90,3 +90,11 @@
       timeout: 8
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn # Placeholder; see https://github.com/tenstorrent/tt-metal/issues/44285
+
+- name: Llama 3.1-8B DEVICE-PERF (goodhost diag)
+  cmd: run_goodhost_deviceperf
+  skus:
+    wh_llmbox:
+      timeout: 15
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: ttnn
