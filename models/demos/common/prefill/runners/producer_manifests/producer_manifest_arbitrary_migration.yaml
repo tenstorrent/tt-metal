@@ -2,7 +2,7 @@
 #
 # Migrates via an explicit `migration.pairs` mapping (0->3, 1->2) instead of the uniform src+offset;
 # equivalent CLI: --migrations "0:3,1:2". src and dst sets must be disjoint (overlaps and duplicate
-# destinations are rejected). The runner validates the migrated KV on-device.
+# destinations are rejected).
 #
 # Requires (a) a running migration_endpoint (launch_migration_endpoints.sh, prefill_endpoint_id 1) and
 # (b) a single-rank REQUEST-mode runner with migration enabled. Start from
@@ -11,11 +11,12 @@
 #   PREFILL_ENABLE_MIGRATION: "1"     # publish the KV table + reach WORKER_READY
 #   PREFILL_MIGRATION_CMD_QUEUE / _TABLE_QUEUE / _RESP_QUEUE / _TABLE_PATH / _CLIENT_DIR  # match below
 #   PREFILL_MANIFEST + PREFILL_NUM_LAYERS                                    # your model
-#   PREFILL_VALIDATE_MIGRATION: "1"   # optional: on-device PCC of each migrated pair
-#   PREFILL_STANDALONE_CHUNKED_NCHUNKS: "22"  # with VALIDATE_MIGRATION: num_users * chunks
-# Run:
-#   python -m models.demos.common.prefill.runners.prefill_producer \
+# Run it with migration_driver, NOT prefill_producer — the latter ignores `migration:` entirely, so
+# `pairs:` below would never take effect:
+#   python -m models.demos.common.prefill.runners.migration_driver \
 #     --manifest models/demos/common/prefill/runners/producer_manifests/producer_manifest_arbitrary_migration.yaml
+# Every verdict is logged there — the runner validates nothing. Sources come from check_pcc below,
+# destinations from --verify-migration (default dst-bytes).
 #
 # MODEL-AGNOSTIC: this file describes the migration SCENARIO only, so it works with any prefill model.
 # The model + wire layout are deliberately NOT set here; they must match the runner you launched. Supply
@@ -36,7 +37,7 @@ workload:
   chunks: "11"
   max_requests: 2         # one resident request per slot (no recycling)
   interleave: round_robin
-  check_pcc: false        # the RUNNER validates the migrated KV on-device (VALIDATE_MIGRATION=1)
+  check_pcc: true         # SOURCE-slot golden PCC; --verify-migration covers the destinations
 
 migration:
   issue: true             # attach the Python MigrationLayerClient and migrate

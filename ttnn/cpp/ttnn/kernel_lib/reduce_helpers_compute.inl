@@ -28,14 +28,20 @@ namespace detail {
 // SFPU MAX fold
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_init() {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MAX fold: Int32 only");
-    binary_max_int32_tile_init();
+    if constexpr (format == DataFormat::Int32) {
+        binary_max_int32_tile_init();
+    } else {
+        binary_max_tile_init();
+    }
 }
 
 template <DataFormat format>
 ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
-    static_assert(format == DataFormat::Int32, "SFPU reduce MAX fold: Int32 only");
-    binary_max_int32_tile(a, b, out);
+    if constexpr (format == DataFormat::Int32) {
+        binary_max_int32_tile(a, b, out);
+    } else {
+        binary_max_tile(a, b, out);
+    }
 }
 
 // SFPU MIN fold
@@ -80,8 +86,8 @@ ALWI void sfpu_reduce_sum_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     }
 }
 
-// Pool-type dispatched cross-tile fold init (MAX -> binary_max, MIN -> binary_min, SUM -> add_int).
-// Used by compute_kernel_lib::reduce() for the Int32 SFPU path.
+// Pool-type dispatched cross-tile fold init (MAX -> binary_max, MIN -> binary_min, SUM -> add).
+// Used by compute_kernel_lib::reduce() for the Int32 SFPU path and for accurate fp32 SUM/MAX.
 template <PoolType pool_type, DataFormat format>
 ALWI void sfpu_reduce_fold_init() {
     if constexpr (pool_type == PoolType::SUM) {
@@ -216,9 +222,10 @@ ALWI void reload_accumulator_if_needed(
             // A vanilla copy_tile reload would leave the running max at col 0, but the
             // next GMPOOL iteration only reads row 0 — so it would be silently dropped.
             // Within-face-16x16-transpose on reload puts col 0 of each face back at row 0
-            // of that face, restoring the exact layout GMPOOL expects.
+            // of that face, restoring the exact layout GMPOOL expects. The SFPU path never runs
+            // GMPOOL — its running max is a plain full-tile value — so it must not transpose.
             constexpr bool reload_within_face_transpose =
-                (reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW);
+                (reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW && !is_sfpu);
 
             reconfig_data_format_srca(prev_srca_cb, accumulate.config.cb_accumulator);
             copy_tile_to_dst_init_short(
@@ -286,7 +293,7 @@ ALWI void reduce(
     ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
     PostReduceOp post_reduce_op) {
-    // Int32 MAX is routed to the SFPU path via is_sfpu_reduce_path<>(); all other formats use FPU/GMPOOL.
+    // Int32 MAX and Accurate fp32 SUM/MAX route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
     // =============================================================================
     // Static Assertions (compile-time validation)

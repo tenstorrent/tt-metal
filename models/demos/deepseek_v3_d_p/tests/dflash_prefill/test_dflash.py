@@ -32,7 +32,6 @@ _FABRIC_1D = {
 
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
 @pytest.mark.parametrize("ctx_len", [5120], ids=["ctx5k"])
-@pytest.mark.parametrize("fc_mode", ["sliced", "concat"], ids=["sliced", "concat"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -53,13 +52,12 @@ def test_dflash_pcc(
     num_links,
     topology,
     ctx_len,
-    fc_mode,
     use_pretrained,
     drafter_cfg,
     drafter_state_dict,
     hf_context_kv,
 ):
-    logger.info(f"fc_mode={fc_mode}  weights={'pretrained' if use_pretrained else 'random'}  ctx_len={ctx_len}")
+    logger.info(f"weights={'pretrained' if use_pretrained else 'random'}  ctx_len={ctx_len}")
     cfg = drafter_cfg
     sd = drafter_state_dict
 
@@ -85,7 +83,6 @@ def test_dflash_pcc(
         max_seq_len=ctx_len,
         num_links=num_links,
         topology=topology,
-        fc_mode=fc_mode,
     )
     hidden_shard = [None, None]
     hidden_shard[tp_axis] = 3  # tap hidden TP-sharded on the hidden dim
@@ -104,9 +101,9 @@ def test_dflash_pcc(
             mesh_mapper=mapper,
         )
         drafter.tap(h_tt, tid)
-    # Caller owns the K/V caches (like the MLA prefill runner) and passes them into write_kv_cache.
+    # Caller owns the K/V caches (like the MLA prefill runner) and passes them into forward().
     k_cache, v_cache = allocate_dflash_kv_cache(mesh_device, cfg, ctx_len, sp_axis=sp_axis, tp_axis=tp_axis)
-    drafter.write_kv_cache(k_cache, v_cache)
+    drafter.forward(k_cache, v_cache)
     ttnn.synchronize_device(mesh_device)
 
     # cache SP-sharded on seq → concat SP along seq(dim2), TP along kv-head(dim1) → full
