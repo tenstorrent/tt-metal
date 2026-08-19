@@ -699,6 +699,20 @@ _OP_DOMAIN_REGISTRY: Dict[
             distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
         ),
     ),
+    # logaddexp2: same shape, tighter boundary. The composed log2(2**a + 2**b) form
+    # overflows past |x| > 127 rather than 88.7, so the same +/-200 draw crosses it
+    # with room to spare: 33.2% of positions have an operand past 127. The
+    # log2(1 + 2**-|a - b|) correction clears half an ulp of the result while
+    # |a - b| < 17.5, which is 8.6% of positions -- a wider band than logaddexp
+    # because log2(e) scales the correction up by 1.44.
+    MathOperation.SfpuLogaddexp2: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+    ),
     MathOperation.SfpuAddTopRow: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
@@ -943,6 +957,7 @@ _SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuXlogy,
         MathOperation.SfpuLogaddexp,
+        MathOperation.SfpuLogaddexp2,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLogicalRightShift,

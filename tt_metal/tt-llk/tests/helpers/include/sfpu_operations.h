@@ -55,6 +55,7 @@
 #include "llk_sfpu/ckernel_sfpu_lcm.h"
 #include "llk_sfpu/ckernel_sfpu_lgamma.h"
 #include "llk_sfpu/ckernel_sfpu_logaddexp.h"
+#include "llk_sfpu/ckernel_sfpu_logaddexp2.h"
 #include "llk_sfpu/ckernel_sfpu_logical_not.h"
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"
 #include "llk_sfpu/ckernel_sfpu_mask.h"
@@ -1627,6 +1628,13 @@ void call_binary_sfpu_operation_init()
         // like fmod/remainder. Mirrors logaddexp_binary_tile_init().
         SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_logaddexp_init, (DST_ACCUM_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::LOGADDEXP2)
+    {
+        // Same shape as logaddexp: log1p's coefficients live in the program constant
+        // registers and differ by destination precision. The base-2 conversion is in the
+        // kernel, not here, so this loads exactly the constants log1p expects.
+        SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_logaddexp2_init, (DST_ACCUM_MODE));
+    }
     else if constexpr (BINOP == BinaryOp::REMAINDER)
     {
         // is_fp32_dest_acc_en only selects the (inert) legacy_compat=false branch of
@@ -1806,6 +1814,22 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_sfpu_logaddexp,
+            (APPROXIMATION_MODE, DST_ACCUM_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::LOGADDEXP2)
+    {
+        // Same kernel shape in base 2: the input is scaled by ln 2 and the log1p result
+        // by log2(e), so log1p sees the same (0, 1] argument range and needs no new
+        // coefficients. Measured: a variant with log2(e) folded into its own minimax fit
+        // came out at the same 1.45e-06 worst relative error over 262144 pairs.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_logaddexp2,
             (APPROXIMATION_MODE, DST_ACCUM_MODE, PER_FACE_ITERATIONS),
             dst_index_in0,
             dst_index_in1,

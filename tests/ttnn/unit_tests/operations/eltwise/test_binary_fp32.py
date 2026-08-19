@@ -474,3 +474,45 @@ def test_logaddexp_beyond_exp_range_fp32(device, a, b):
         f"the exact result is {z_torch.flatten()[0].item()}"
     )
     assert_allclose(tt_out, z_torch, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        (100.0, 0.0),  # exact answer is 100; 2**100 is representable, 2**200 is not
+        (128.0, 0.0),  # just past log2(FLT_MAX) = 128
+        (129.0, 128.0),
+        (200.0, 199.0),
+        (1000.0, 999.0),
+        (127.0, 127.0),  # exact answer is 128; 2**127 + 2**127 overflows
+        (-126.0, -126.0),  # both powers are still normal here
+        (-1000.0, -1000.0),  # both flush to zero, and log2(0) is -inf
+        (5.0, 3.0),  # inside the currently-working band, as a control
+        (0.0, 0.0),
+    ],
+)
+def test_logaddexp2_beyond_exp2_range_fp32(device, a, b):
+    # Same bound as logaddexp, one binade tighter on the composed form:
+    #     max(a, b) <= logaddexp2(a, b) <= max(a, b) + 1
+    # so a finite pair always has a finite result. Composing it as
+    # log2(2**a + 2**b) breaks that: 2**x saturates above 128 rather than
+    # logaddexp's 88.72, and flushes to zero below -149, so the composition
+    # returned +/-inf on both sides.
+    #
+    # The existing coverage stops just short of the boundary: [-60, 100] in
+    # tests/sweep_framework/sweeps/eltwise/binary/logaddexp2, and [1, 5] in
+    # test_logaddexp2_fp32 above. Neither reaches 128, so the failure was never seen.
+    x_torch = torch.tensor([[a]], dtype=torch.float32)
+    y_torch = torch.tensor([[b]], dtype=torch.float32)
+    golden_fn = ttnn.get_golden_function(ttnn.logaddexp2)
+    z_torch = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.logaddexp2(x_tt, y_tt))
+
+    assert torch.isfinite(tt_out).all(), (
+        f"logaddexp2({a}, {b}) returned {tt_out.flatten()[0].item()}; "
+        f"the exact result is {z_torch.flatten()[0].item()}"
+    )
+    assert_allclose(tt_out, z_torch, rtol=1e-5, atol=1e-5)
