@@ -90,7 +90,7 @@ inline uint64_t PhysicalMcast::get_noc_addr(uintptr_t l1_addr) const {
 }
 
 inline PhysicalMcast LogicalMcast::to_physical() const {
-    return PhysicalMcast{coord.to_physical(), coord.to_physical(shape.h - 1, shape.w - 1)};
+    return PhysicalMcast{coord.to_physical(), coord.to_physical(extent.h - 1, extent.w - 1)};
 }
 
 inline uint64_t LogicalMcast::get_noc_addr(uintptr_t l1_addr) const { return to_physical().get_noc_addr(l1_addr); }
@@ -785,7 +785,7 @@ void synchronize_cores() {
         kCoreGridKnown,
         "synchronize_cores() with no region needs the program's core grid: build the program through "
         "unified_program(), which defines TT_UNIFIED_CORE_GRID_H/W -- or pass a region explicitly");
-    synchronize_cores<thread>(LogicalMcast{LogicalCoord{0, 0}, Shape{kCoreGridH, kCoreGridW}});
+    synchronize_cores<thread>(LogicalMcast{LogicalCoord{0, 0}, Extent{kCoreGridH, kCoreGridW}});
 }
 
 // --- Core-to-core movement ---
