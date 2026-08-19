@@ -137,9 +137,10 @@ FORCE_INLINE void align_local_dfb_to_persistent_slot(uint32_t relay_dfb_id, uint
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
 
-// Align DM's private local relay-DFB iface to the Persistent receiver's post-ctor
-// (post-resize) rd_ptr / page size / limit. Called from PersistentDFB::bind_relay().
-// No NOC — copies from the already-hydrated receiver iface into get_local_cb_interface(relay_id).
+// Align DM's private local relay-DFB iface to the Persistent receiver's
+// rd_ptr / page size / limit. Called from PersistentDFB::bind_relay() and from
+// set_receiver_entry_size() so a mid-kernel page-size change does not leave the
+// local CB on the old stride. No NOC — copies from the receiver iface.
 FORCE_INLINE void align_local_dfb_to_persistent_receiver_iface(
     uint32_t relay_dfb_id, const CrossNodeReceiverDFBInterface& iface) {
     LocalCBInterface& local = get_local_cb_interface(relay_dfb_id);

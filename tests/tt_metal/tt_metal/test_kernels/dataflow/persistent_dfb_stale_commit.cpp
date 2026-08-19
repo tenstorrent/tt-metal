@@ -33,7 +33,7 @@ FORCE_INLINE void test_stale_commit_after_resize(
 
     // Change the live epoch without touching peer credits; this test exercises
     // stale-epoch rejection only.
-    dfb.sync_sender_wr_ptr_from_credits();
+    iface.fifo_wr_ptr = iface.fifo_start_addr + dfb.derived_wr_offset(iface, 0);
     dfb.resize_sender_interface<false>(new_entry_size, noc_index);
     volatile tt_l1_ptr uint32_t* config = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.config_ptr);
     config[PERSISTENT_DFB_CFG_APPLIED_ENTRY_SIZE] = iface.fifo_page_size;
