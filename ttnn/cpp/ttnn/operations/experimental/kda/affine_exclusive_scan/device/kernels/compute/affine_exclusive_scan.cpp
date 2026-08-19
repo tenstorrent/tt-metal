@@ -12,22 +12,12 @@
 #include "experimental/kernel_args.h"
 
 namespace {
-template <bool Mirror>
 FORCE_INLINE void matmul(
-    DataflowBuffer& a,
-    DataflowBuffer& b,
-    DataflowBuffer& out,
-    DataflowBuffer& send,
-    uint32_t Mt,
-    uint32_t Kt,
-    uint32_t Nt) {
+    DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out, uint32_t Mt, uint32_t Kt, uint32_t Nt) {
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t out_id = out.get_id();
     out.reserve_back(Mt * Nt);
-    if constexpr (Mirror) {
-        send.reserve_back(Mt * Nt);
-    }
     pack_reconfig_data_format(out_id);
     reconfig_data_format(b_id, a_id);
     matmul_init(a_id, b_id);
@@ -44,20 +34,13 @@ FORCE_INLINE void matmul(
         }
     }
     out.push_back(Mt * Nt);
-    if constexpr (Mirror) {
-        send.push_back(Mt * Nt);
-    }
 }
 
-template <bool Mirror>
-FORCE_INLINE void add(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out, DataflowBuffer& send, uint32_t tiles) {
+FORCE_INLINE void add(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out, uint32_t tiles) {
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t out_id = out.get_id();
     out.reserve_back(tiles);
-    if constexpr (Mirror) {
-        send.reserve_back(tiles);
-    }
     pack_reconfig_data_format(out_id);
     reconfig_data_format(a_id, b_id);
     add_init(a_id, b_id);
@@ -70,19 +53,12 @@ FORCE_INLINE void add(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out,
         tile_regs_release();
     }
     out.push_back(tiles);
-    if constexpr (Mirror) {
-        send.push_back(tiles);
-    }
 }
 
-template <bool Mirror>
-FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, DataflowBuffer& send, uint32_t tiles) {
+FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) {
     const uint32_t in_id = in.get_id();
     const uint32_t out_id = out.get_id();
     out.reserve_back(tiles);
-    if constexpr (Mirror) {
-        send.reserve_back(tiles);
-    }
     pack_reconfig_data_format(out_id);
     reconfig_data_format_srca(in_id);
     copy_tile_to_dst_init_short(in_id);
@@ -95,9 +71,6 @@ FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, DataflowBuffer& 
         tile_regs_release();
     }
     out.push_back(tiles);
-    if constexpr (Mirror) {
-        send.push_back(tiles);
-    }
 }
 }  // namespace
 
@@ -107,70 +80,58 @@ TT_KERNEL void compute(uint32_t group) {
     constexpr uint32_t kv = Kt * Vt;
     DataflowBuffer initial_a(dfb::initial_a);
     DataflowBuffer initial_b(dfb::initial_b);
-    DataflowBuffer stage_a_ping(dfb::stage_a_ping);
-    DataflowBuffer stage_b_ping(dfb::stage_b_ping);
-    DataflowBuffer stage_a_pong(dfb::stage_a_pong);
-    DataflowBuffer stage_b_pong(dfb::stage_b_pong);
-    DataflowBuffer send_a_ping(dfb::send_a_ping);
-    DataflowBuffer send_b_ping(dfb::send_b_ping);
-    DataflowBuffer send_a_pong(dfb::send_a_pong);
-    DataflowBuffer send_b_pong(dfb::send_b_pong);
-    DataflowBuffer remote_a(dfb::remote_a);
-    DataflowBuffer remote_b(dfb::remote_b);
+    DataflowBuffer local_a(dfb::local_a);
+    DataflowBuffer local_b(dfb::local_b);
+    DataflowBuffer to_remote_a(dfb::to_remote_a);
+    DataflowBuffer to_remote_b(dfb::to_remote_b);
+    DataflowBuffer from_remote_a(dfb::from_remote_a);
+    DataflowBuffer from_remote_b(dfb::from_remote_b);
     DataflowBuffer initial_state(dfb::initial_state);
     DataflowBuffer final(dfb::final);
     DataflowBuffer scratch(dfb::scratch);
     DataflowBuffer stage_token(dfb::stage_token);
 
-    compute_kernel_hw_startup(dfb::initial_a, dfb::initial_b, dfb::stage_a_ping);
+    compute_kernel_hw_startup(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
     initial_a.wait_front(kk);
     initial_b.wait_front(kv);
-    copy<true>(initial_a, stage_a_ping, send_a_ping, kk);
-    copy<true>(initial_b, stage_b_ping, send_b_ping, kv);
+    copy(initial_a, to_remote_a, kk);
+    copy(initial_b, to_remote_b, kv);
     initial_a.pop_front(kk);
     initial_b.pop_front(kv);
 
-    bool ping = false;
     for (uint32_t distance = 1; distance < G; distance *= 2) {
         if (group < distance) {
             continue;
         }
-        DataflowBuffer& current_a = ping ? stage_a_pong : stage_a_ping;
-        DataflowBuffer& current_b = ping ? stage_b_pong : stage_b_ping;
-        DataflowBuffer& next_a = ping ? stage_a_ping : stage_a_pong;
-        DataflowBuffer& next_b = ping ? stage_b_ping : stage_b_pong;
-        DataflowBuffer& next_send_a = ping ? send_a_ping : send_a_pong;
-        DataflowBuffer& next_send_b = ping ? send_b_ping : send_b_pong;
         stage_token.wait_front(1);
-        current_a.wait_front(kk);
-        current_b.wait_front(kv);
-        remote_a.wait_front(kk);
-        remote_b.wait_front(kv);
-        matmul<true>(current_a, remote_a, next_a, next_send_a, Kt, Kt, Kt);
-        matmul<false>(current_a, remote_b, scratch, scratch, Kt, Kt, Vt);
+        local_a.wait_front(kk);
+        local_b.wait_front(kv);
+        from_remote_a.wait_front(kk);
+        from_remote_b.wait_front(kv);
+        matmul(local_a, from_remote_a, to_remote_a, Kt, Kt, Kt);
+        matmul(local_a, from_remote_b, scratch, Kt, Kt, Vt);
         scratch.wait_front(kv);
-        add<true>(scratch, current_b, next_b, next_send_b, kv);
+        add(scratch, local_b, to_remote_b, kv);
         stage_token.pop_front(1);
-        current_a.pop_front(kk);
-        current_b.pop_front(kv);
-        remote_a.pop_front(kk);
-        remote_b.pop_front(kv);
+        local_a.pop_front(kk);
+        local_b.pop_front(kv);
+        from_remote_a.pop_front(kk);
+        from_remote_b.pop_front(kv);
         scratch.pop_front(kv);
-        ping = !ping;
     }
 
     stage_token.wait_front(1);
     initial_state.wait_front(kv);
     if (group == 0) {
-        copy<false>(initial_state, final, final, kv);
+        copy(initial_state, final, kv);
     } else {
-        remote_a.wait_front(kk);
-        remote_b.wait_front(kv);
-        matmul<false>(remote_a, initial_state, scratch, scratch, Kt, Kt, Vt);
+        from_remote_a.wait_front(kk);
+        from_remote_b.wait_front(kv);
+        matmul(from_remote_a, initial_state, scratch, Kt, Kt, Vt);
         scratch.wait_front(kv);
-        add<false>(scratch, remote_b, final, final, kv);
-        remote_a.pop_front(kk);
-        remote_b.pop_front(kv);
+        add(scratch, from_remote_b, final, kv);
+        from_remote_a.pop_front(kk);
+        from_remote_b.pop_front(kv);
         scratch.pop_front(kv);
     }
     initial_state.pop_front(kv);
