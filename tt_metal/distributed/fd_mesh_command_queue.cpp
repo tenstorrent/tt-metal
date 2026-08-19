@@ -108,11 +108,12 @@ void record_program_sub_device_for_range(
 // per workload: the first task to reach the program takes ownership through `prepared` and the rest
 // block there until the update lands. If the owner throws, the flag stays clear and the next waiter
 // retries, so a waiter can never block forever.
-// Ceiling on how many workers a single MeshWorkload dispatch may fan out across, including the calling
-// thread. Bounded because the calling thread pays for every worker it wakes, serially: measured on a
-// 32-device mesh, a large workload is fastest at 8 and gets worse from there, as the wake-ups start to
-// cost more than the copying they overlap.
-constexpr size_t k_max_dispatch_fanout = 8;
+// EXPERIMENT, not for merge: pinned to 1 so a dispatch never leaves the calling thread. This
+// neutralises the per-device fan-out entirely, to test whether it is what regressed GLM 5.2 chunked
+// prefill in #53545. A ceiling of 8 is what the microbenchmarks want; if this run comes back at the
+// pre-#52775 1.76 s then the fan-out is the whole story and the 32 KB threshold is simply too low for
+// real model ops, and if it stays at 1.99 s then the regression lives in another part of #52775.
+constexpr size_t k_max_dispatch_fanout = 1;
 
 struct ProgramDispatchEntry {
     Program* program = nullptr;
