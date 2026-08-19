@@ -43,6 +43,9 @@ _REVIEWED_SIM_BH_SHA256=$sbh
 _REVIEWED_SIM_WH_SHA256=$swh
 _REVIEWED_LLK_UPSTREAM_BASE=${LLK_BASE_FOR_FIXTURES}
 _REVIEWED_LLK_API_EXCEPTIONS="${LLK_EXC_FOR_FIXTURES}"
+_REVIEWED_FIRE_WITNESSES="
+-mtt-tensix-optimize-ccmask|perf_fixture.py::node[a]|-fdump-tree-rvtt_ccmask|ccmask: folded zeroing CC region
+"
 EOF
 }
 # R7 fixtures inherit the real conf's reviewed upstream base (the repo's LLK
@@ -152,8 +155,34 @@ check "R8 measured-row-unwired refuses RED" 1 $?
 grep -q "\[R8\]" "$TMP/out11.log" || { echo "SELFTEST FAIL: R8 RED lacks the rule tag"; overall=1; }
 grep -q "fixture__op_measured" "$TMP/out11.log" || { echo "SELFTEST FAIL: R8 RED does not name the missing corpus id"; overall=1; }
 
+# 12. (R9) missing witness table -> RED naming R9
+grep -v "_REVIEWED_FIRE_WITNESSES\|ccmask" "$TMP/ok.conf" > "$TMP/nowit.conf"
+"$LINT" "$TMP/nowit.conf" "$TMP/ok.tsv" > "$TMP/out12.log" 2>&1
+check "R9 missing witness table refuses RED" 1 $?
+grep -q "\[R9\]" "$TMP/out12.log" || { echo "SELFTEST FAIL: missing-table RED lacks the R9 tag"; overall=1; }
+
+# 13. (R9) malformed witness row (3 fields) -> RED
+sed 's/^-mtt-tensix-optimize-ccmask|perf_fixture.py::node\[a\]|-fdump-tree-rvtt_ccmask|ccmask: folded zeroing CC region$/-mtt-tensix-optimize-ccmask|perf_fixture.py::node[a]|-fdump-tree-rvtt_ccmask/' \
+  "$TMP/ok.conf" > "$TMP/badwit.conf"
+"$LINT" "$TMP/badwit.conf" "$TMP/ok.tsv" > "$TMP/out13.log" 2>&1
+check "R9 malformed witness row refuses RED" 1 $?
+grep -q "4 non-empty" "$TMP/out13.log" || { echo "SELFTEST FAIL: malformed-row RED lacks the field diagnosis"; overall=1; }
+
+# 14. (R9) witnessed flag not in the reviewed ON set -> RED naming the flag
+sed 's/^-mtt-tensix-optimize-ccmask|/-mtt-tensix-optimize-not-a-real-flag|/' \
+  "$TMP/ok.conf" > "$TMP/offsetwit.conf"
+"$LINT" "$TMP/offsetwit.conf" "$TMP/ok.tsv" > "$TMP/out14.log" 2>&1
+check "R9 witness for a non-ON-set flag refuses RED" 1 $?
+grep -q "not-a-real-flag" "$TMP/out14.log" || { echo "SELFTEST FAIL: non-ON-set RED does not name the flag"; overall=1; }
+
+# 15. (R9) exact duplicate witness row -> RED
+awk '1; /^-mtt-tensix-optimize-ccmask\|/ && !d {print; d=1}' "$TMP/ok.conf" > "$TMP/dupwit.conf"
+"$LINT" "$TMP/dupwit.conf" "$TMP/ok.tsv" > "$TMP/out15.log" 2>&1
+check "R9 duplicate witness row refuses RED" 1 $?
+grep -q "duplicate witness" "$TMP/out15.log" || { echo "SELFTEST FAIL: dup-row RED lacks the duplicate diagnosis"; overall=1; }
+
 if [ "$overall" -eq 0 ]; then
-  echo "conf-lint self-test: ALL GREEN (coherent->GREEN, stale-prose->RED, stale-(CURRENT)->RED, dup-(CURRENT)->RED, stale-anchor->RED, no-anchor->RED, bad-sim-pin->RED, shipping-state->GREEN, bogus-llk-base->RED, R8-wired->GREEN, R8-unwired->RED)"
+  echo "conf-lint self-test: ALL GREEN (coherent->GREEN, stale-prose->RED, stale-(CURRENT)->RED, dup-(CURRENT)->RED, stale-anchor->RED, no-anchor->RED, bad-sim-pin->RED, shipping-state->GREEN, bogus-llk-base->RED, R8-wired->GREEN, R8-unwired->RED, R9 missing/malformed/non-ON/dup->RED)"
 else
   echo "conf-lint self-test: FAILED"
 fi

@@ -20,11 +20,18 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 # --allow-pin-override: the ONLY sanctioned way to run with a PINNED_* value
 # from the environment (sweep_2x2.conf rejects silent env overrides).  The
 # flag is consumed here, never forwarded to sweep_2x2.py.
+# --skip-witness: the ONLY sanctioned way to skip the union fire-witness
+# preflight (conf R9's compile half, witness_preflight.py) — an EMERGENCY
+# escape, logged loudly here and recorded in the evidence dir.
 ARGS=()
+SKIP_WITNESS=0
 for _a in "$@"; do
   if [ "$_a" = "--allow-pin-override" ]; then
     export ALLOW_PIN_OVERRIDE=1
     echo "nightly: --allow-pin-override — environment pin values will be honored AND LOGGED"
+  elif [ "$_a" = "--skip-witness" ]; then
+    SKIP_WITNESS=1
+    echo "nightly: *** --skip-witness — THE UNION FIRE-WITNESS GATE IS BEING SKIPPED (emergency escape; the pin-11 no-fire class is UNGUARDED this run) ***"
   else
     ARGS+=("$_a")
   fi
@@ -68,6 +75,8 @@ bash "$HERE/selftest_dejagnu_gate.sh" > "$EV/selftest-dejagnu-gate.txt" 2>&1 \
   || GATE_SELFTEST_RC=1
 python3 "$HERE/selftest_enforcement_gates.py" > "$EV/selftest-enforcement-gates.txt" 2>&1 \
   || GATE_SELFTEST_RC=1
+python3 "$HERE/selftest_witness_preflight.py" > "$EV/selftest-witness-preflight.txt" 2>&1 \
+  || GATE_SELFTEST_RC=1
 # Record the conf-lint verdict (already enforced above, pre-source) in-evidence.
 { mv /tmp/nightly-selftest-conf-lint.$$ "$EV/selftest-conf-lint.txt" 2>/dev/null || true; }
 bash "$HERE/conf_lint.sh" > "$EV/conf-lint.txt" 2>&1 || GATE_SELFTEST_RC=1
@@ -75,6 +84,42 @@ if [ "$GATE_SELFTEST_RC" -ne 0 ]; then
   echo "FATAL: gate self-tests failed (see $EV/selftest-*.txt) — refusing to sweep"
   exit 2
 fi
+
+# UNION FIRE-WITNESS preflight (conf R9's compile half; the pin-11 lesson):
+# every _REVIEWED_FIRE_WITNESSES entry's node is compiled at the pinned
+# toolchain with the FULL reviewed ON set + its dump flag, and the required
+# dump line must be present — a missing line is RED naming the flag ('fire
+# witness stale on the union') and refuses the sweep.  Fast (~1-3 compiles,
+# witness nodes only).  SKIP-with-reason when the env preconditions are
+# absent (same policy as the corpus compile gate below) or on --dry-run;
+# --skip-witness is the loudly-logged emergency escape.
+WIT_STATUS="" WIT_REASON=""
+WIT_PY="$HERE/../python_tests/.venv/bin/python"
+WIT_CXX="$HERE/../sfpi/compiler/bin/riscv-tt-elf-g++"
+WIT_DRY=0
+for _a in "$@"; do [ "$_a" = "--dry-run" ] && WIT_DRY=1; done
+if [ "$SKIP_WITNESS" = 1 ]; then
+  WIT_STATUS=SKIPPED WIT_REASON="--skip-witness EMERGENCY ESCAPE (the pin-11 no-fire class is unguarded this run)"
+elif [ ! -x "$WIT_PY" ]; then
+  WIT_STATUS=SKIP WIT_REASON="missing tt-llk venv ($WIT_PY)"
+elif [ ! -x "$WIT_CXX" ]; then
+  WIT_STATUS=SKIP WIT_REASON="missing pinned SFPI toolchain ($WIT_CXX)"
+elif [ "$WIT_DRY" = 1 ]; then
+  WIT_STATUS=DRY_RUN WIT_REASON="dry-run: witness compiles not executed; real command: python3 $HERE/witness_preflight.py --work $EV/witness-preflight"
+else
+  if python3 "$HERE/witness_preflight.py" --work "$EV/witness-preflight" \
+       > "$EV/witness-preflight.txt" 2>&1; then
+    WIT_STATUS=PASS WIT_REASON="every declared witness fires on the union ($EV/witness-preflight/verdicts.json)"
+  else
+    WIT_RC=$?
+    echo "RED: union fire-witness preflight FAILED (rc=$WIT_RC) — an ON-set flag's fire witness is stale on the union (or the gate could not run):"
+    grep -E "RED|ERROR" "$EV/witness-preflight.txt" | head -10 || true
+    echo "     (full output: $EV/witness-preflight.txt; --skip-witness is the logged emergency escape)"
+    echo "witness-preflight: RED (rc=$WIT_RC)" > "$EV/witness-preflight-status.txt"
+    exit 1
+  fi
+fi
+echo "witness-preflight: $WIT_STATUS — $WIT_REASON" | tee "$EV/witness-preflight-status.txt"
 
 # Corpus compile gate (coverage-parity plan item 1): every mapped corpus row
 # (109 functional-module-mapped rows) must COMPILE green on BH with the pinned
@@ -162,8 +207,10 @@ if [ -f "$EV/REPORT.md" ]; then
     tail -n 3 "$EV/selftest-report-gate.txt"
     tail -n 1 "$EV/selftest-dejagnu-gate.txt"
     tail -n 1 "$EV/selftest-enforcement-gates.txt" 2>/dev/null || echo "enforcement-gates self-test: (no record)"
+    tail -n 1 "$EV/selftest-witness-preflight.txt" 2>/dev/null || echo "witness-preflight self-test: (no record)"
     tail -n 1 "$EV/selftest-conf-lint.txt" 2>/dev/null || true
     tail -n 1 "$EV/conf-lint.txt" 2>/dev/null || echo "conf-lint: (no record)"
+    cat "$EV/witness-preflight-status.txt" 2>/dev/null || echo "witness-preflight: (no status recorded)"
     cat "$EV/corpus-compile-gate-status.txt" 2>/dev/null || echo "corpus-compile-gate: (no status recorded)"
     echo '```'
   } >> "$EV/REPORT.md"
