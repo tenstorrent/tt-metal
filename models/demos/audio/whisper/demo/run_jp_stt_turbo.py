@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Japanese STT on tt-metal: Whisper large-v3, language=ja, one N150 chip.
+"""Japanese STT on tt-metal: Whisper large-v3-turbo, language=ja, one N150 chip.
 
-See japanese_demo_readme.md in this folder.
+See japanese_turbo_demo_readme.md in this folder.
 """
 
 from __future__ import annotations
@@ -46,9 +46,9 @@ def _load_wav(path: str) -> tuple[int, np.ndarray]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Japanese Whisper STT on one N150")
+    parser = argparse.ArgumentParser(description="Japanese Whisper turbo STT on one N150")
     parser.add_argument("--wav", required=True, help="Input wav (any rate; stereo ok)")
-    parser.add_argument("--model", default="openai/whisper-large-v3")
+    parser.add_argument("--model", default="openai/whisper-large-v3-turbo")
     parser.add_argument("--language", default="ja", help="Whisper language code (ja, not japanese)")
     parser.add_argument("--warmup", action="store_true", help="Run a 1s silence pass first")
     args = parser.parse_args()
