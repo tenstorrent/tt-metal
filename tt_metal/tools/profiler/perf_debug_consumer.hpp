@@ -50,7 +50,7 @@ static_assert(sizeof(PerfDebugRecMeta) == 4);
 struct PerfDebugRec {
     uint64_t ts;
     PerfDebugRecMeta meta;
-    uint32_t prog;  // runtime host-id in force on this lane's core (0 when never set)
+    uint32_t prog;  // runtime host-id in force on this lane (0 when never set); exact per lane
 };
 static_assert(sizeof(PerfDebugRec) == 16);
 static_assert(std::is_trivially_copyable_v<PerfDebugRec>);

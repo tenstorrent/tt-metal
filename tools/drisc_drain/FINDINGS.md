@@ -5962,3 +5962,27 @@ uniform across columns -- a run difference, not a measurement difference. It is 
     kernels that emit zones in loops (compute CB waits). OPEN -- needs a marker-count ablation.
 Also: no *-FW columns are possible on this branch -- the SPSC lifecycle wrapper deliberately emits no
 FW markers -- so the CSV reports kernel columns only, plus kernel start/end cycles.
+
+## §N+60 — Per-lane STICKY_PROG: exact op attribution structurally; supersedes N+59's window method (bh-18, 2026-08-19)
+
+N+59's consumer-side attribution (BRISC windows + nearest-start assignment) was a timestamp-proximity
+heuristic -- safe only while launch skew << op gap, i.e. guaranteed to misattribute on trace replays.
+Root cause was the wire: only BRISC emitted STICKY_PROG, so the other lanes' rings carried no op
+identity at all and rec.prog on them was sweep-granular. Now every RISC emits its own sticky at its
+launch point (ncrisc.cc/trisc.cc mirror brisc.cc; each reads host_assigned_id from its own mailbox) and
+decode scopes prog per LANE -- rec.prog is exact on every record by in-ring ordering, the same mechanism
+that always made BRISC exact. The ops-CSV consumer's window/matching machinery is deleted; it keys on
+rec.prog directly.
+
+Cost, measured:
+  - Judged delay-15: 351,090 stalls (baseline 350,988-352,621), 11.50 GB/s busy / 691 Mzones/s (spread
+    of prior runs 632-820 at 10.5-13.7 GB/s) -- within run noise, no pipeline cost.
+  - Launch-heavy matmul loop: medians 16,610-17,196 ns post vs 16,450-16,850 pre (n=3 each, overlapping
+    ranges) -- bounded above by ~2%, indistinguishable from noise; the sticky is ~20-40 cycles per
+    subordinate per launch, outside the kernel wrappers and the marker hot path.
+  - Wire: +8 words (32 B) per core per launch.
+  - Gates: pytest passed, 2x2 exact (20,040 records), COMPLETENESS 600/600.
+
+vs classic after the structural fix: same uniform +11% on kernel columns, first-to-last-start +2.8%
+mean -- confirming N+59's residual is the capture's zone-scope overhead (user: perf-debug zone scope is
+currently ~2x the device profiler's per-zone cost), not attribution.
