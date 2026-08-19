@@ -23,8 +23,11 @@ Two things shaped the route here, and only one of them survived as a limit:
 * **acceptance is workload-bound before it is port-bound.**  F15 read it as a hard
   cap from the target's fidelity, which F25 corrects: the same code measures 18 % on
   free-form code, 26 % on structured output, and an external bring-up reports 83 % on
-  a repeating pattern.  The drafter is genuinely weaker than the CPU oracle suggested,
-  but "capped" overstated it — the *prompt* moves acceptance more than the port does.
+  a repeating pattern — the *prompt* moves acceptance more than the port does.  F26 then
+  removes the evidence for a fidelity cap altogether: moving attention weights BFP4 ->
+  BFP8 leaves acceptance *bit-identical*, and F1's 5.33 accepted/forward — the figure the
+  cap was inferred from — was measured over 48 tokens, a length F7 says cannot rank
+  drafting at all.
 
 The *shipped* non-speculative path is unaffected: measured against the pristine
 pre-DFlash commit it is 42.92 vs 42.96 t/s/u, a -0.10 % difference inside the
