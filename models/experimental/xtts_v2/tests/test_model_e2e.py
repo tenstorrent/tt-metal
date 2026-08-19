@@ -20,12 +20,21 @@ Opens its own device, like `demo/`, so the model's real trace-region and L1_SMAL
 ones under test.
 """
 import torch
-import torch.nn.functional as F
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.xtts_v2.reference.xtts_hifigan_ref import HifiganReference
 from models.experimental.xtts_v2.tests.reference_helpers import gpt_reference
-from models.experimental.xtts_v2.tt.ttnn_xtts_model import AR_COMP, HOP, ISR, OSR, VOC_BUCKETS, XttsV2, _voc_bucket
+from models.experimental.xtts_v2.tt.ttnn_xtts_model import (
+    AR_COMP,
+    HOP,
+    ISR,
+    OSR,
+    VOC_BUCKETS,
+    XttsV2,
+    _voc_bucket,
+    _voc_input,
+    _voc_pad,
+)
 
 TARGET_PCC_WAV = 0.99  # waveform vs the CPU reference, same gate as test_hifigan_pcc
 
@@ -56,8 +65,7 @@ def _latents_for(Lb):
     lat = gpt_reference()["latents"]  # [1,T,1024]
     n = int((Lb - 7) / ((AR_COMP / HOP) * (OSR / ISR)))  # inside the bucket, so the replay pads
     lat = lat.repeat(1, n // lat.shape[1] + 1, 1)[:, :n]
-    z = F.interpolate(lat.transpose(1, 2), scale_factor=AR_COMP / HOP, mode="linear")
-    return F.interpolate(z, scale_factor=OSR / ISR, mode="linear")
+    return _voc_input(lat)
 
 
 def _clip(seconds, seed):  # a reference clip's LENGTH is what picks the conv shapes, not its content
@@ -98,7 +106,7 @@ def run_model_e2e(verbose=True):
             z = _latents_for(Lb)
             L = z.shape[-1]
             assert _voc_bucket(L) == Lb, f"z of {L} frames does not land in bucket {Lb}"
-            gold = reference(F.pad(z, (0, Lb - L)), g)[:, :, : L * HOP]
+            gold = reference(_voc_pad(z, Lb), g)[:, :, : L * HOP]
             ok, pcc = comp_pcc(gold, tts._vocode(z, g), pcc=TARGET_PCC_WAV)
             if verbose:
                 print(f"  bucket {Lb:5d} (L={L}) latents -> waveform vs CPU reference  pcc: {pcc}")

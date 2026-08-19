@@ -102,9 +102,10 @@ MAX_PREFIX = LATENTS + 404  # 32 cond latents + start/text/stop (<= 404 embedded
 # HifiDecoder.forward constants: gpt code stride 1024 samples @ 22.05 kHz, vocoder hop 256,
 # and the 22050 -> 24000 output resample — both applied as host linear interpolates on z.
 AR_COMP, HOP, ISR, OSR = 1024, 256, 22050, 24000
+FADE_MS = 5  # output fade; a request cut mid-word would otherwise end on a step
 OUTPUT_SR = OSR
 # The vocoder runs at one of a FIXED set of frame counts (the cap: 605 codes -> 2420 frames
-# @22.05kHz -> 2634 @24kHz); z is zero-padded up to its bucket and the waveform trimmed back.
+# @22.05kHz -> 2634 @24kHz); z is padded up to its bucket (_voc_pad) and the waveform trimmed.
 # WHY a fixed set: ttnn conv/conv_transpose sliding-window ("halo") config tensors are pinned
 # in L1_SMALL for the lifetime of their program-cache entry, so every DISTINCT input length
 # permanently consumes L1_SMALL — with per-utterance lengths the second generate() OOMs
@@ -127,6 +128,34 @@ def _voc_bucket(L):
     """Smallest VOC_BUCKETS frame count that fits L."""
     assert L <= VOC_L, f"vocoder input {L} frames exceeds the fixed cap {VOC_L}"
     return next(b for b in VOC_BUCKETS if b >= L)
+
+
+def _voc_input(gpt_latents):
+    """GPT latents [1,T,1024] -> vocoder input z [1,1024,L]: code stride -> hop, then 22.05->24 kHz."""
+    z = F.interpolate(gpt_latents.transpose(1, 2), scale_factor=AR_COMP / HOP, mode="linear")
+    return F.interpolate(z, scale_factor=OSR / ISR, mode="linear")
+
+
+def _voc_pad(z, Lb):
+    """Pad z [1,1024,L] up to Lb frames by HOLDING the last frame.
+
+    conv_pre has a bias, so zero frames are a step change at the boundary, and the generator answers
+    with a burst that reaches back into the audio that is kept. Repeating the last frame keeps the
+    boundary smooth; the padding itself is discarded either way."""
+    return torch.cat([z, z[..., -1:].expand(-1, -1, Lb - z.shape[-1])], -1)
+
+
+def _fade_out(wav, ms=FADE_MS):
+    """Ramp the last `ms` of a waveform to zero, so a request never ends on a step.
+
+    One cut short by max_new_tokens ends mid-word at full amplitude, which is a click; one that
+    ends by itself is already near silence there and this is inaudible."""
+    n = min(int(ms * OUTPUT_SR / 1000), wav.shape[-1])
+    if n == 0:
+        return wav
+    out = wav.clone()
+    out[..., -n:] *= torch.linspace(1, 0, n) ** 0.5  # equal-power, so the level falls evenly
+    return out
 
 
 def _sample_token(latent, seen, gen, mh_w, mh_b, penalty=REPETITION_PENALTY):
@@ -350,7 +379,7 @@ class XttsV2:
         """z torch [1,1024,L] + d-vector -> waveform torch [1,1,L*HOP], padded to z's bucket."""
         dev = self.mesh_device
         L, Lb = z.shape[-1], _voc_bucket(z.shape[-1])
-        z_nhwc = F.pad(z, (0, Lb - L)).permute(0, 2, 1).reshape(1, 1, Lb, 1024)
+        z_nhwc = _voc_pad(z, Lb).permute(0, 2, 1).reshape(1, 1, Lb, 1024)
         g_2d = speaker_embedding.reshape(1, 512)
         trace = self._voc_traces.get(Lb)
         if trace is None:  # not warmed up (or a shape warmup did not cover): run eager
@@ -461,9 +490,7 @@ class XttsV2:
 
         # --- vocoder: two host interpolates (HifiDecoder.forward) + HiFi-GAN on device. ---
         t0 = time.time()
-        z = F.interpolate(gpt_latents.transpose(1, 2), scale_factor=AR_COMP / HOP, mode="linear")
-        z = F.interpolate(z, scale_factor=OSR / ISR, mode="linear")  # [1,1024,L_true]
-        wav = self._vocode(z, voice.speaker_embedding)
+        wav = _fade_out(self._vocode(_voc_input(gpt_latents), voice.speaker_embedding))
         t_voc = time.time() - t0
 
         self.last_timings.update(
