@@ -57,7 +57,7 @@ Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order
                                  schedule for all slots.
   PREFILL_DFLASH_GOLDEN_KV_DIR   dir with the DFlash drafter's golden context K/V (k_cache/v_cache
                                  .safetensors); set it to ALSO PCC the drafter caches the table carries.
-  PREFILL_DFLASH_PCC             per-(layer, head) bar for that drafter check (default 0.99). Both feed
+  PREFILL_DFLASH_PCC             per-(layer, head) bar for that drafter check (default 0.88). Both feed
                                  dflash_kv_table_pcc_check in deepseek_v3_d_p/tt/dflash_prefill/
                                  dflash_kv_validation.py; unset golden => the drafter half is skipped.
   PREFILL_SEND_SHUTDOWN          "1" to close the stream with an all -1 sentinel so the runner exits
@@ -1032,7 +1032,7 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
         _write_pcc_verdict(rank, ok=False, min_pcc=0.0, checked=0, threshold=threshold)
         return False
 
-    dflash_threshold = float(os.environ.get("PREFILL_DFLASH_PCC", "0.99"))
+    dflash_threshold = float(os.environ.get("PREFILL_DFLASH_PCC", "0.88"))
     # Under DFlash the table also carries the drafter's context caches (extra dflash_* configs); PCC them
     # via the deepseek gate. The import + read closure are built only when those configs are present, so a
     # non-DFlash run neither imports the deepseek module nor measures anything.

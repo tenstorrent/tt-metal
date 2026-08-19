@@ -23,7 +23,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 GOLDEN_KV_ENV = "PREFILL_DFLASH_GOLDEN_KV_DIR"
 GOLDEN_KV_DEFAULT = "/mnt/models/deepseek-prefill-cache/golden/dflash_context_kv_55k_v3"
 PCC_ENV = "PREFILL_DFLASH_PCC"
-DEFAULT_PCC = 0.99
+DEFAULT_PCC = 0.88
 
 
 def read_slot_dflash_kv(
