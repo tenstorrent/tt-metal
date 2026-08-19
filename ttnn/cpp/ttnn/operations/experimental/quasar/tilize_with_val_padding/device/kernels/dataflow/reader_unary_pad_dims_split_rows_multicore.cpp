@@ -110,16 +110,6 @@ void kernel_main() {
 
         cb_in0.reserve_back(num_tiles_per_row * has_rows);
 
-        // Zero the whole tile-row block with the iDMA zero device, then let the data reads below
-        // overwrite the valid region. One hardware transaction across 8 backend engines replaces the
-        // per-row column fills and the trailing row fill, and removes the D$/L2 flush entirely (iDMA
-        // writes reach TL1 directly). The barrier must land before any read is issued, or the zero
-        // pass would wipe bytes the NOC has already delivered.
-        if (zero_pad && has_rows) {
-            noc.async_write_zeros(cb_in0, padded_X_size << 5);
-            noc.write_zeros_l1_barrier();
-        }
-
         uint32_t l1_write_addr = cb_in0.get_write_ptr();
         uint32_t dst_offset = 0;
         for (uint32_t k = 0; k < num_rows; k++) {
@@ -142,7 +132,14 @@ void kernel_main() {
                 {.page_id = base_page_id + k * num_pages_in_row + num_pages_in_row - 1, .offset_bytes = 0},
                 {.offset_bytes = dst_offset});
             uint32_t size_of_padding_columns = padded_X_size - unpadded_X_size;
-            if (!zero_pad) {
+            if (zero_pad) {
+                // dst_offset still points at the last page, so this row's pad starts one page
+                // payload further in. Drained by the single barrier after the loop.
+                noc.async_write_zeros(
+                    cb_in0,
+                    size_of_padding_columns,
+                    {.offset_bytes = dst_offset + size_of_valid_data_in_last_page_in_row});
+            } else {
                 fill_with_val<elem_size>(
                     start_of_row_l1_write_addr + unpadded_X_size, size_of_padding_columns, pad_value);
             }
@@ -150,7 +147,12 @@ void kernel_main() {
             l1_write_addr += size_of_valid_data_in_last_page_in_row + size_of_padding_columns;
         }
 
-        if (!zero_pad) {
+        if (zero_pad) {
+            // Warning: padding_rows is 0 for every full 32-row block, so this commonly issues a
+            // zero-length iDMA transaction. Tolerated today; guard on padding_rows > 0 if that changes.
+            noc.async_write_zeros(cb_in0, padding_rows * padded_X_size, {.offset_bytes = dst_offset});
+            noc.write_zeros_l1_barrier();
+        } else {
             fill_with_val<elem_size>(l1_write_addr, padding_rows * padded_X_size, pad_value);
         }
         noc.async_read_barrier();
