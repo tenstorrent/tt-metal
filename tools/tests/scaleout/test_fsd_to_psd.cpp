@@ -11,7 +11,7 @@
 
 #include <gtest/gtest.h>
 
-#include "fsd_to_psd/fsd_to_psd.hpp"
+#include <tt-metalium/experimental/fabric/fsd_to_psd.hpp>
 #include "protobuf/factory_system_descriptor.pb.h"
 #include "protobuf/physical_system_descriptor.pb.h"
 

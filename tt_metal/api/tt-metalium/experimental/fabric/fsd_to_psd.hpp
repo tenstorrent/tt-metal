@@ -23,8 +23,14 @@
 
 #include "protobuf/factory_system_descriptor.pb.h"  // tt::scaleout_tools::fsd::proto (from scaleout_tools)
 #include "protobuf/physical_system_descriptor.pb.h"  // tt::fabric::proto (compiled into this lib)
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>  // tt::tt_metal::PhysicalSystemDescriptor
 
 namespace tt::scaleout_tools {
+
+// Convenience, proto-free entry point: parse an FSD textproto file and return the ready-to-use C++
+// PhysicalSystemDescriptor. Consumers with only a file path (e.g. tt-run / generate_rank_bindings) can use this
+// and need no protobuf headers on their include path.
+::tt::tt_metal::PhysicalSystemDescriptor build_psd_from_fsd_file(const std::string& fsd_path);
 
 // Parse a Factory System Descriptor textproto file from disk.
 // Throws std::runtime_error if the file cannot be read or parsed.

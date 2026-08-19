@@ -10,7 +10,7 @@
 //     library) instead of a hand-maintained table, so it stays in sync with tt::BoardType automatically.
 //   - logging uses tt::LogFabric (Fabric Manager used its own tt::LogFabricManager category).
 
-#include "fsd_to_psd.hpp"
+#include <tt-metalium/experimental/fabric/fsd_to_psd.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -157,6 +157,11 @@ std::vector<std::vector<uint32_t>> partition_fsd_hosts_by_connectivity(
         throw std::runtime_error(fmt::format("Failed to parse Factory System Descriptor textproto: {}", path));
     }
     return fsd;
+}
+
+::tt::tt_metal::PhysicalSystemDescriptor build_psd_from_fsd_file(const std::string& fsd_path) {
+    // parse FSD -> PSD proto -> wrap in the C++ PhysicalSystemDescriptor (no protos leak to callers).
+    return ::tt::tt_metal::PhysicalSystemDescriptor(build_psd_from_fsd(load_fsd_textproto(fsd_path)));
 }
 
 ::tt::fabric::proto::PhysicalSystemDescriptor build_psd_from_fsd(

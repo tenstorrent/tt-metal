@@ -9,14 +9,25 @@
 #include <unordered_set>
 #include <fstream>
 #include <climits>
+#include <unistd.h>  // gethostname
 
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include <tt_stl/assert.hpp>
 #include "llrt/tt_target_device.hpp"
-#include "tt_metal/fabric/fabric_host_utils.hpp"
 
 namespace tt::tt_metal {
+
+namespace {
+// Local hostname helper. Previously via fabric_host_utils.hpp, which transitively pulls the heavy
+// llrt/tt_cluster.hpp + EDM builders; this TU is compiled into the runtime-free topology library, so inline the
+// trivial gethostname() wrapper instead.
+std::string local_get_host_name() {
+    char hostname[HOST_NAME_MAX + 1] = {};
+    ::gethostname(hostname, sizeof(hostname) - 1);
+    return std::string(hostname);
+}
+}  // namespace
 
 /**************************************************************************************************
  Discovery helper functions
@@ -458,7 +469,7 @@ std::string PhysicalSystemDescriptor::my_host_name() const {
         return local_hostname_;
     }
     // Fallback for file-based PSD (no discovery) - assume hostnames are unique
-    return get_host_name();
+    return local_get_host_name();
 }
 
 uint32_t PhysicalSystemDescriptor::get_rank_for_hostname(const std::string& host_name) const {

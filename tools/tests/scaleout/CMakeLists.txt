@@ -164,28 +164,30 @@ target_link_libraries(
         enchantum::enchantum
 )
 
-# Test for the offline FSD -> PSD builder (TT::FsdToPsd). Links tt_metal so the PSD proto symbols
-# (compiled once, in fabric) resolve; TT::FsdToPsd itself does not link the metal runtime.
+# Test for the offline FSD -> PSD builder, which lives in the lean TT::ScaleoutTopology static library. Note this
+# test does NOT link tt_metal: TT::ScaleoutTopology provides the FSD->PSD builder + FSD/PSD proto + PSD class
+# symbols without the metal runtime — the whole point of the lean library.
 add_executable(test_fsd_to_psd)
 target_sources(test_fsd_to_psd PRIVATE ${TEST_FSD_TO_PSD_SRCS})
 
 target_include_directories(
     test_fsd_to_psd
+    PRIVATE
+        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>" # tt-metalium public headers (incl fsd_to_psd.hpp)
     SYSTEM
     PRIVATE
         ${Metalium_BINARY_DIR}/tools/scaleout # scaleout-generated protobuf/factory_system_descriptor.pb.h
-        "$<TARGET_PROPERTY:fabric,BINARY_DIR>" # fabric-generated protobuf/physical_system_descriptor.pb.h
+        "$<TARGET_PROPERTY:scaleout_topology,BINARY_DIR>" # topology-generated protobuf/physical_system_descriptor.pb.h
 )
 
 target_link_libraries(
     test_fsd_to_psd
     PRIVATE
-        TT::FsdToPsd
+        TT::ScaleoutTopology
         TT::ScaleoutTools
-        tt_metal
         gmock_main
         protobuf::libprotobuf
         enchantum::enchantum
 )
 
-add_dependencies(test_fsd_to_psd scaleout_generated_protos fabric_generated_protos)
+add_dependencies(test_fsd_to_psd topology_generated_protos scaleout_generated_protos)
