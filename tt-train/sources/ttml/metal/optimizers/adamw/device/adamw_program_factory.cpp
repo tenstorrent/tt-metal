@@ -131,11 +131,18 @@ void assign_per_core_runtime_args(
     float one_minus_beta1 = 1.0f - attrs.beta1;
     float one_minus_beta2 = 1.0f - attrs.beta2;
 
-    float bias_correction1 = 1.0f - attrs.beta1_pow;
-    float bias_correction2 = 1.0f - attrs.beta2_pow;
-    float step_size = attrs.lr / bias_correction1;
-    float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
-    float decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
+    // In tensor-scalar mode the kernel overwrites these three from the scalars
+    // CB, and the lr / beta*_pow / weight_decay attrs are left defaulted.
+    float step_size = 0.0f;
+    float inv_sqrt_bc2 = 0.0f;
+    float decay_factor = 0.0f;
+    if (step_size_buffer == nullptr) {
+        float bias_correction1 = 1.0f - attrs.beta1_pow;
+        float bias_correction2 = 1.0f - attrs.beta2_pow;
+        step_size = attrs.lr / bias_correction1;
+        inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
+        decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
+    }
 
     std::vector<uint32_t> seeds = make_stochastic_rounding_seeds(attrs.stochastic_rounding_seed, num_cores);
 
@@ -494,11 +501,18 @@ void AdamWProgramFactory::override_runtime_arguments(
     float one_minus_beta1 = 1.0f - attrs.beta1;
     float one_minus_beta2 = 1.0f - attrs.beta2;
 
-    float bias_correction1 = 1.0f - attrs.beta1_pow;
-    float bias_correction2 = 1.0f - attrs.beta2_pow;
-    float step_size = attrs.lr / bias_correction1;
-    float inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
-    float decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
+    // In tensor-scalar mode the kernel overwrites these three from the scalars
+    // CB, and the lr / beta*_pow / weight_decay attrs are left defaulted.
+    float step_size = 0.0f;
+    float inv_sqrt_bc2 = 0.0f;
+    float decay_factor = 0.0f;
+    if (!tensor_args.step_size.has_value()) {
+        float bias_correction1 = 1.0f - attrs.beta1_pow;
+        float bias_correction2 = 1.0f - attrs.beta2_pow;
+        step_size = attrs.lr / bias_correction1;
+        inv_sqrt_bc2 = 1.0f / std::sqrt(bias_correction2);
+        decay_factor = 1.0f - attrs.lr * attrs.weight_decay;
+    }
 
     std::vector<uint32_t> seeds = make_stochastic_rounding_seeds(attrs.stochastic_rounding_seed, num_cores);
 

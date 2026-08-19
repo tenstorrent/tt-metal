@@ -103,6 +103,12 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
                 "Tensor '{}' must hold exactly one element, got {}",
                 name,
                 tensor->logical_volume());
+            // The launch infrastructure targets param's device; a scalar tensor on another
+            // device would pass its (device-local) buffer address to the reader unnoticed.
+            TT_FATAL(
+                tensor->device() == param.device(),
+                "Tensor '{}' must be on the same device as the parameter tensor",
+                name);
         }
     }
 }
