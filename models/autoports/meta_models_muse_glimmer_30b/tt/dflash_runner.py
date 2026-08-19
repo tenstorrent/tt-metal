@@ -47,7 +47,14 @@ import torch
 import ttnn
 
 from .dflash_accept import accept_block
-from .dflash_drafter import DFlashDrafter, DFlashDrafterCache, build_noise_ids, context_bucket
+from .dflash_drafter import (
+    DFlashAnchorCache,
+    DFlashDrafter,
+    DFlashDrafterCache,
+    build_context_hidden_states,
+    build_noise_ids,
+    context_bucket,
+)
 
 #: The LM head and the tile-padded prefill path both work in 32-row M tiles.
 TILE_ROWS = 32
@@ -149,6 +156,7 @@ class DFlashRunner:
         verify_width: int = 256,
         verify_rows: int = 32,
         offset_free_verify: bool = True,
+        anchor_cache: bool = False,
         offset_free_eager: bool = False,
         max_verify_traces: int = 24,
     ) -> None:
@@ -293,6 +301,17 @@ class DFlashRunner:
         #: Falls back to the per-window path automatically once the window would leave the
         #: sliding window, where the graph genuinely differs.
         self.offset_free_verify = bool(offset_free_verify)
+        #: Keep the drafter's context as a persistent per-layer K/V cache instead of
+        #: re-uploading and re-projecting the whole padded prefix every iteration.  The padded
+        #: path spends 0.773 s of a 4.94 s OSL-256 run shipping ``[1, 1, bucket, 33280]`` bf16
+        #: *replicated to every device* -- 34 MB/device at bucket 512 -- to deliver one to
+        #: sixteen new rows, and another 0.775 s re-running ``encoder.fc`` and every layer's
+        #: ``k_proj``/``v_proj`` over the whole bucket.
+        #:
+        #: Requires the traced verify: only that path produces a fixed 32-row tap tensor, and a
+        #: varying tap row count would put a shape back in the loop, which is what F6 measured
+        #: at 82x.  Falls back to ``forward_padded`` rather than raising when unavailable.
+        self.anchor_cache = bool(anchor_cache)
         #: Diagnostic: run the offset-free *graph* with no trace at all.  This splits the
         #: two ways F24's divergence-at-window-advance can be caused -- a wrong graph
         #: (chunked SDPA pinned to TILE_SIZE, no ``start_pos == 0`` branch) versus stale
@@ -475,6 +494,29 @@ class DFlashRunner:
             host = host.reshape(1, -1, self.config.hidden_size)[:, offset : offset + num_rows, :]
             pieces.append(host.to(torch.bfloat16))
         return torch.cat(pieces, dim=-1)
+
+    def _taps_to_device(self, taps: dict, *, own: bool) -> ttnn.Tensor:
+        """Concatenate the tapped hidden states **on device**: ``[1, 1, rows, 5 * hidden]``.
+
+        This is :func:`build_context_hidden_states`, which has existed unused since it was
+        written.  ``own=False`` is mandatory for trace outputs: they are the captured graph's
+        own buffers, refreshed in place by each replay, so freeing them invalidates the trace --
+        the reason ``_taps_from`` exists alongside ``_taps_to_host``.
+        """
+        return build_context_hidden_states(taps, self._tap_layers(), deallocate=own)
+
+    def _anchor_cache_available(self) -> tuple[bool, str]:
+        """``(usable, why not)`` for the persistent anchor cache."""
+        if not self.anchor_cache:
+            return False, "not requested"
+        if not self.trace_verify or self.verify_mode.startswith("decode"):
+            return False, "needs the traced verify, which is what produces a fixed 32-row tap"
+        if int(self.verify_rows) != TILE_ROWS:
+            return False, f"needs verify_rows == {TILE_ROWS}, got {self.verify_rows}"
+        page_block = int(self.model.config.page_block_size)
+        if page_block % TILE_ROWS:
+            return False, f"needs a tile-aligned page block for the write row, got {page_block}"
+        return True, ""
 
     def _ensure_verify_inputs(self, tt_page_table: ttnn.Tensor, *, host_page_row=None) -> None:
         """Allocate the traced verify's persistent inputs exactly once.
@@ -1432,8 +1474,14 @@ class DFlashRunner:
         hidden = model.prefill_forward(embedded, page_table=tt_page_table, user_id=0, start_pos=0)
         stats.target_forwards += 1
         self._alloc_note("after prompt prefill")
-        # Context for iteration 0 is the whole prompt: positions 0..L-1.
-        context_host = self._taps_to_host(prompt_len)
+        # Context for iteration 0 is the whole prompt: positions 0..L-1.  The anchor cache
+        # wants these on device, so hold them and let the padded path drain them instead.
+        prompt_taps_held: dict | None = None
+        if self.anchor_cache:
+            prompt_taps_held = model.take_hidden_state_taps()
+            context_host = torch.zeros((1, 0, self.config.context_fan_in), dtype=torch.bfloat16)
+        else:
+            context_host = self._taps_to_host(prompt_len)
         logits = model.prefill_logits(hidden, last_token_index=prompt_len - 1, apply_softcap=not self.uncapped_argmax)
         ttnn.deallocate(hidden)
         anchor = self._argmax_rows(logits, model.row_within_tile(prompt_len - 1) + 1)[
@@ -1467,6 +1515,36 @@ class DFlashRunner:
         # Absolute position of the first context row we are about to pass.
         context_start = 0
         drafter_cache = DFlashDrafterCache(self.config.num_hidden_layers)
+        anchor_cache: DFlashAnchorCache | None = None
+        usable, why = self._anchor_cache_available()
+        if self.anchor_cache and not usable:
+            from loguru import logger as _logger
+
+            _logger.info(f"DFlash: anchor cache unavailable ({why}); using the padded context path")
+        if usable:
+            # One block of headroom past the generation: the anchor write covers the whole
+            # 32-row verify window, so it reaches anchor_pos + block even on the last iteration.
+            capacity = context_bucket(prompt_len + max_new_tokens + block)
+            # Allocated here, before any trace capture, so its bytes land in the allocation
+            # baseline rather than showing up as drift across a replay (F19).
+            anchor_cache = DFlashAnchorCache(
+                config=self.config,
+                mesh_device=model.mesh_device,
+                capacity=capacity,
+                num_layers=self.config.num_hidden_layers,
+            )
+            t_taps = time.perf_counter()
+            prompt_taps = self._taps_to_device(prompt_taps_held, own=True)
+            stats.taps_seconds += time.perf_counter() - t_taps
+            self.drafter.append_anchors(
+                prompt_taps,
+                cache=anchor_cache,
+                dest_row=0,
+                positions=torch.arange(int(prompt_taps.shape[2])),
+            )
+            ttnn.deallocate(prompt_taps)
+            anchor_cache.note_committed(prompt_len)
+            self._alloc_note("anchor cache seeded")
         # The padded path is stateless on device, so the accumulated context lives
         # here instead of in a device K/V cache.  ``context_host`` stays the
         # per-iteration delta the incremental path wants; this is the running
@@ -1513,7 +1591,10 @@ class DFlashRunner:
             self._alloc_note("noise")
             stats.draft_noise_seconds += time.perf_counter() - t_noise
             t_forward = time.perf_counter()
-            if self.padded_drafting:
+            tt_context: ttnn.Tensor | None = None
+            if anchor_cache is not None:
+                drafter_out = self.drafter.forward_anchored(noise, cache=anchor_cache, noise_start=anchor_pos)
+            elif self.padded_drafting:
                 # The accumulated prefix, padded up to a bucket so the shape is constant.
                 valid = int(accumulated_context.shape[1])
                 # Row i must be at absolute position i, so the prefix must end exactly
@@ -1554,7 +1635,8 @@ class DFlashRunner:
                     noise_positions=noise_positions,
                     cache=drafter_cache,
                 )
-            ttnn.deallocate(tt_context)
+            if tt_context is not None:
+                ttnn.deallocate(tt_context)
             # _DFlashLayer.forward rebinds its local name rather than freeing the
             # hidden state it was handed, so `noise` is still live here -- and would stay
             # live across the verify replay, at an address inside the trace's footprint.
@@ -1608,6 +1690,32 @@ class DFlashRunner:
             # Context for the next iteration: verify_hidden[:n_matches + 1], i.e. the
             # anchor plus the accepted candidates, at positions anchor_pos..+n_matches.
             num = result.n_matches + 1
+            if anchor_cache is not None:
+                t_taps = time.perf_counter()
+                # The write covers the whole 32-row verify window at its tile-aligned start, so
+                # the accepted count never reaches a shape -- it only advances ``valid_len``,
+                # which changes the mask's contents.  Rows past the committed prefix are stale
+                # and excluded by ``kv_valid`` until the next window rewrites them.
+                aligned_start = anchor_pos - lead
+                owned_taps = verify_taps is None
+                taps_src = verify_taps if verify_taps is not None else model.take_hidden_state_taps()
+                device_taps = self._taps_to_device(taps_src, own=owned_taps)
+                stats.taps_seconds += time.perf_counter() - t_taps
+                rows_written = int(device_taps.shape[2])
+                self.drafter.append_anchors(
+                    device_taps,
+                    cache=anchor_cache,
+                    dest_row=aligned_start,
+                    positions=torch.arange(aligned_start, aligned_start + rows_written),
+                )
+                ttnn.deallocate(device_taps)
+                anchor_cache.note_committed(result.n_committed)
+                if hidden is not None:
+                    ttnn.deallocate(hidden)
+                context_start = anchor_pos
+                anchor_pos = anchor_pos + result.n_committed
+                self._alloc_note("anchor append")
+                continue
             t_taps = time.perf_counter()
             if verify_taps is not None:
                 # Trace outputs: read, never drain.
@@ -1627,6 +1735,8 @@ class DFlashRunner:
             anchor_pos = anchor_pos + result.n_committed
 
         drafter_cache.release()
+        if anchor_cache is not None:
+            anchor_cache.release()
         self.release_verify_traces()
         # Disarm, not merely drain: release_hidden_state_taps() frees captured tensors but
         # leaves _tap_indices set, so a later non-speculative decode would keep capturing

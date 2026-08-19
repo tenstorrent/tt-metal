@@ -23,6 +23,7 @@ Drafter only: 5.11 GB and no 30B target, so this runs in about a minute.
 from __future__ import annotations
 
 import argparse
+import time
 
 import torch
 
@@ -65,6 +66,22 @@ def main() -> None:
         help="committed counts to replay, as a real generation produces them",
     )
     parser.add_argument("--mesh", default="1,4")
+    parser.add_argument(
+        "--capacity",
+        type=int,
+        default=0,
+        help="override the cache capacity, to reproduce a real run's width (0 = derive it)",
+    )
+    parser.add_argument(
+        "--time-iterations",
+        type=int,
+        default=0,
+        help=(
+            "after the correctness check, time this many propose+append iterations. The runner "
+            "at OSL 256 sits CPU-bound for minutes, so the question is whether the drafter path "
+            "itself is slow or whether it is something the runner adds around it."
+        ),
+    )
     args = parser.parse_args()
 
     commits = [int(c) for c in args.commits.split(",") if c.strip()]
@@ -88,7 +105,7 @@ def main() -> None:
 
         torch.manual_seed(0)
         total = args.prompt_len + sum(commits)
-        capacity = context_bucket(total + block)
+        capacity = args.capacity or context_bucket(total + block)
         print(f"prompt {args.prompt_len}, commits {commits} -> {total} anchors; capacity {capacity}")
 
         # Stand-in for the target's tapped hidden states, at the real width.
@@ -188,6 +205,34 @@ def main() -> None:
         print(f"max abs delta         : {float((a.to(torch.float32) - b.to(torch.float32)).abs().max()):.5f}")
         print(f"argmax agreement      : {agree}/{block}")
         print(f"all finite            : {bool(torch.isfinite(b.to(torch.float32)).all())}")
+
+        if args.time_iterations:
+            print()
+            print(f"timing {args.time_iterations} propose+append iterations at capacity {capacity}")
+            per_iter = []
+            entries_seen = [program_cache_entries(mesh)]
+            for i in range(args.time_iterations):
+                start = time.perf_counter()
+                noise_i = up(noise_host)
+                out_i = drafter.forward_anchored(noise_i, cache=cache, noise_start=cache.valid_len)
+                # One 32-row append, exactly what the runner does after a verify.
+                dest = (cache.valid_len // TILE) * TILE
+                piece = torch.zeros((1, 1, TILE, fan_in), dtype=torch.float32)
+                tt_piece = up(piece)
+                drafter.append_anchors(tt_piece, cache=cache, dest_row=dest, positions=torch.arange(dest, dest + TILE))
+                ttnn.deallocate(tt_piece)
+                ttnn.deallocate(out_i)
+                ttnn.synchronize_device(mesh)
+                per_iter.append((time.perf_counter() - start) * 1000.0)
+                cache.note_committed(1)
+                entries_seen.append(program_cache_entries(mesh))
+            print(f"  per-iteration ms : {[round(v, 1) for v in per_iter]}")
+            warm = per_iter[1:] or per_iter
+            print(f"  first / median warm: {per_iter[0]:.1f} ms / {sorted(warm)[len(warm)//2]:.1f} ms")
+            print(
+                f"  program cache     : {entries_seen[0]} -> {entries_seen[-1]}  "
+                f"(stable after first: {len(set(entries_seen[2:])) <= 1})"
+            )
 
         cache.release()
     finally:

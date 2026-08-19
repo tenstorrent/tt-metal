@@ -733,12 +733,16 @@ class _DFlashLayer(LightweightModule):
         context half of K/V is deliberately *not* re-normalised per layer (see the module
         docstring's fourth difference), so one projection serves all five layers.
         """
-        if dest_row % ANCHOR_WINDOW_ROWS or rows % ANCHOR_WINDOW_ROWS:
-            raise ValueError(f"anchor writes must be tile-aligned, got rows={rows} dest_row={dest_row}")
-        if rows > ANCHOR_FILL_MAX_ROWS:
+        # Only the *destination* must be tile-aligned: ``fill_cache`` writes the input's
+        # tile-padded row count, so a 67-row prompt tap legitimately writes 96 rows and the
+        # 29 beyond it land above ``valid_len``, where ``kv_valid`` excludes them.
+        if dest_row % ANCHOR_WINDOW_ROWS:
+            raise ValueError(f"anchor writes must land on a tile boundary, got dest_row={dest_row}")
+        padded_rows = ((rows + ANCHOR_WINDOW_ROWS - 1) // ANCHOR_WINDOW_ROWS) * ANCHOR_WINDOW_ROWS
+        if padded_rows > ANCHOR_FILL_MAX_ROWS:
             raise ValueError(
-                f"a single fill_cache of {rows} rows exceeds the {ANCHOR_FILL_MAX_ROWS}-row work-split "
-                "limit; chunk it (see ANCHOR_FILL_MAX_ROWS)"
+                f"a single fill_cache of {padded_rows} padded rows exceeds the "
+                f"{ANCHOR_FILL_MAX_ROWS}-row work-split limit; chunk it (see ANCHOR_FILL_MAX_ROWS)"
             )
         key, value = self._project_kv(context_projected, rows, rope=rope)
         ttnn.fill_cache(cache.k[layer_idx], key, 0, update_idx=dest_row)

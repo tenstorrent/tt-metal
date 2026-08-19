@@ -136,6 +136,15 @@ def main() -> None:
         help="diagnostic: run the offset-free graph with no trace, isolating graph from replay",
     )
     parser.add_argument(
+        "--anchor-cache",
+        action="store_true",
+        help=(
+            "keep the drafter's context as a persistent per-layer K/V cache instead of "
+            "re-uploading the whole padded prefix every iteration. The padded path spends "
+            "0.773 s of a 4.94 s OSL-256 run shipping 34 MB/device to deliver 1-16 new rows."
+        ),
+    )
+    parser.add_argument(
         "--precision-config",
         default=None,
         help=(
@@ -196,6 +205,7 @@ def main() -> None:
             verify_width=args.verify_width,
             verify_rows=args.verify_rows,
             offset_free_verify=args.offset_free_verify,
+            anchor_cache=args.anchor_cache,
             offset_free_eager=args.offset_free_eager,
         )
 
@@ -288,6 +298,7 @@ def main() -> None:
             "verify": args.verify,
             "trace_verify": args.trace_verify,
             "precision_config": args.precision_config or "selected",
+            "anchor_cache": args.anchor_cache,
             "dflash": stats.as_dict(),
             "dflash_token_ids": dflash_tokens,
             "baseline_token_ids": baseline_tokens,
