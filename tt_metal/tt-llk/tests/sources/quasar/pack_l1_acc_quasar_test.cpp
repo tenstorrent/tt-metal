@@ -29,15 +29,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT                  = params.TILE_CNT;
-    const std::uint32_t TEST_FACE_C_DIM           = params.TEST_FACE_C_DIM;
-    const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
-    const std::uint32_t num_faces                 = params.num_faces;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
     const Operand& buffer_A                       = params.buffer_A;
 #endif
     constexpr std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
-    ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Unp0>(); // allocate srcA
 
     {
         ZONE_SCOPED("INIT")
@@ -76,14 +72,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        buffer_descriptor_u bd_val = {0};
-        bd_val.f.l1_addr_16B       = L1_ADDRESS(buffer_A[0]);
-        bd_val.f.format            = static_cast<std::uint8_t>(formats.unpack_A_src);
-        bd_val.f.x_dim             = TEST_FACE_C_DIM;
-        bd_val.f.y_dim             = TEST_FACE_R_DIM;
-        bd_val.f.z_dim             = num_faces;
-
-        _configure_buf_desc_table_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), bd_val);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+            tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
             _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
@@ -286,9 +276,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
-    const std::uint32_t TEST_FACE_C_DIM           = params.TEST_FACE_C_DIM;
-    const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
-    const std::uint32_t num_faces                 = params.num_faces;
     const int RELU_CONFIG                         = params.RELU_CONFIG;
     const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
@@ -296,7 +283,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
-    ckernel::trisc::bfd_alloc<pack_res>();
 
     {
         ZONE_SCOPED("INIT")
@@ -319,15 +305,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        buffer_descriptor_u bd_val = {0};
-
-        bd_val.f.l1_addr_16B = L1_ADDRESS(buffer_Res[0]);
-        bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
-        bd_val.f.x_dim       = TEST_FACE_C_DIM;
-        bd_val.f.y_dim       = TEST_FACE_R_DIM;
-        bd_val.f.z_dim       = num_faces;
-
-        _configure_buf_desc_table_(ckernel::trisc::bfd_current<pack_res>(), bd_val);
+        ckernel::trisc::bfd_alloc_and_program<pack_res>(
+            tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         const ckernel::ReluConfig relu_config = ckernel::ReluConfig::from_packed(RELU_CONFIG);
         _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);

@@ -8,6 +8,7 @@
 #include "ckernel.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 using namespace ckernel;
@@ -47,7 +48,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Unp0>(); // T0 source descriptor slot for buffer_A
     const std::uint32_t num_tiles = params.TILE_CNT;
 
     // DEST DVALID handshake: T0 is the producer, T1 (SFPU) and T2 (PACK) are the consumers.
@@ -66,18 +66,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     // Source descriptor: buffer_A in L1, L1-side format = formats.unpack_A_src,
-    // face geometry from the harness.
-    buffer_descriptor_u bd_val = {0};
-
-    bd_val.f.l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
-    bd_val.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-    bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = params.num_faces;
-
-    // TDMA descriptor: bind the buffer descriptor to slot 0; reg_data_format =
-    // unpack_A_dst is the DEST-side (post-conversion) format.
-    _configure_buf_desc_table_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), bd_val);
+    // face geometry from the harness. reg_data_format = unpack_A_dst is the
+    // DEST-side (post-conversion) format.
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+        tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
 
     // Configure unpacker → init unary operand path → unpack tile 0 from L1 into DEST.
     _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
@@ -180,25 +172,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
-    ckernel::trisc::bfd_alloc<pack_res>(); // T2 destination descriptor slot for buffer_Res
+    constexpr auto pack_res                = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
     const std::uint32_t num_tiles_per_pack = params.TILE_CNT;
 
     // PACK is the final consumer of the DEST DVALID chain.
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
     // Destination descriptor: buffer_Res in L1, L1-side format = formats.pack_dst,
-    // face geometry from the harness.
-    buffer_descriptor_u bd_val = {0};
-    bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_Res[0]);
-    bd_val.f.format            = static_cast<std::uint8_t>(formats.pack_dst);
-    bd_val.f.x_dim             = params.TEST_FACE_C_DIM;
-    bd_val.f.y_dim             = params.TEST_FACE_R_DIM;
-    bd_val.f.z_dim             = params.num_faces;
-
-    // TDMA descriptor: bind buffer_Res to slot 8; reg_data_format = pack_src is
-    // the DEST-side format the packer reads.
-    _configure_buf_desc_table_(ckernel::trisc::bfd_current<pack_res>(), bd_val);
+    // face geometry from the harness. reg_data_format = pack_src is the DEST-side
+    // format the packer reads.
+    ckernel::trisc::bfd_alloc_and_program<pack_res>(
+        tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
 
     // Configure pack engine 0 → init → pack tile from DST_INDEX into buffer_Res → release section.
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());

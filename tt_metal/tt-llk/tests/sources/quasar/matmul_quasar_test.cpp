@@ -11,6 +11,7 @@
 #include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 // Globals
@@ -33,8 +34,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t CT_DIM      = params.CT_DIM;
     const std::uint32_t RT_DIM      = params.RT_DIM;
     const std::uint32_t KT_DIM      = params.KT_DIM;
-    const std::uint32_t num_faces_A = params.num_faces_A;
-    const std::uint32_t num_faces_B = params.num_faces_B;
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
@@ -43,28 +42,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
-        ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Unp0>(); // allocate srcA (order matters: A before B)
-        ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Unp1>(); // allocate srcB
-        // src A input configuration
-        buffer_descriptor_u bd_src_a = {0};
-        bd_src_a.f.l1_addr_16B       = L1_ADDRESS(buffer_A[0]);
-        bd_src_a.f.format            = static_cast<std::uint8_t>(formats.unpack_A_src);
-        bd_src_a.f.lmt_addr_16B      = 0;
-        bd_src_a.f.x_dim             = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-        bd_src_a.f.y_dim             = FACE_R_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-        bd_src_a.f.z_dim             = num_faces_A; // Number of faces = 4, tiny tiles not supported for quasar
-
-        // src B input configuration
-        buffer_descriptor_u bd_src_b = {0};
-        bd_src_b.f.l1_addr_16B       = L1_ADDRESS(buffer_B[0]);
-        bd_src_b.f.format            = static_cast<std::uint8_t>(formats.unpack_B_src);
-        bd_src_b.f.lmt_addr_16B      = 0;
-        bd_src_b.f.x_dim             = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-        bd_src_b.f.y_dim             = FACE_R_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
-        bd_src_b.f.z_dim             = num_faces_B; // Number of faces = 4, tiny tiles not supported for quasar
-
-        _configure_buf_desc_table_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), bd_src_a);
-        _configure_buf_desc_table_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(), bd_src_b);
+        // Full 32x32 tiles: 2x2 faces of 16x16 (tiny tiles not supported for quasar). srcA before srcB.
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+            tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
+            tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(static_cast<DataFormat>(formats.unpack_A_dst));
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(static_cast<DataFormat>(formats.unpack_B_dst));
 
@@ -203,12 +185,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t CT_DIM      = params.CT_DIM;
     const std::uint32_t RT_DIM      = params.RT_DIM;
-    const std::uint32_t num_faces   = params.num_faces;
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
     constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
-    ckernel::trisc::bfd_alloc<pack_res>();
     {
         ZONE_SCOPED("INIT")
         // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
@@ -223,15 +203,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        buffer_descriptor_u bd_dst = {0};
-        bd_dst.f.l1_addr_16B       = L1_ADDRESS(buffer_Res[0]);
-        bd_dst.f.lmt_addr_16B      = 0;
-        bd_dst.f.format            = static_cast<std::uint8_t>(formats.pack_dst);
-        bd_dst.f.x_dim             = FACE_C_DIM;
-        bd_dst.f.y_dim             = FACE_R_DIM;
-        bd_dst.f.z_dim             = num_faces;
-
-        _configure_buf_desc_table_(ckernel::trisc::bfd_current<pack_res>(), bd_dst);
+        // Full 32x32 tiles: 2x2 faces of 16x16 (tiny tiles not supported for quasar).
+        ckernel::trisc::bfd_alloc_and_program<pack_res>(
+            tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_matmul_init_(
             ckernel::trisc::bfd_current<pack_res>(), RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/); // Use destination buffer descriptor for packing output

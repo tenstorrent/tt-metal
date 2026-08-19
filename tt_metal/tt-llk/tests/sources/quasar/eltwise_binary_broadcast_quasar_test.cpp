@@ -9,6 +9,7 @@
 #include "llk_defs.h"
 #include "perf.h"
 #include "profiler.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 #ifdef LLK_TRISC_UNPACK
@@ -24,38 +25,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT        = params.TILE_CNT;
-    const std::uint32_t num_faces       = params.num_faces;
-    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const Operand& buffer_A             = params.buffer_A;
-    const Operand& buffer_B             = params.buffer_B;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const std::uint32_t num_faces   = params.num_faces;
+    const Operand& buffer_A         = params.buffer_A;
+    const Operand& buffer_B         = params.buffer_B;
 #endif
-    ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Unp0>(); // allocate srcA (order matters: A before B)
-    ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Unp1>(); // allocate srcB
     const std::uint32_t num_tiles_per_unpack = TILE_CNT;
 
     {
         ZONE_SCOPED("INIT")
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-        buffer_descriptor_u bd_val_A = {0};
-        bd_val_A.f.l1_addr_16B       = buffer_A[0] / 16;
-        bd_val_A.f.format            = static_cast<std::uint8_t>(formats.unpack_A_src);
-        bd_val_A.f.x_dim             = TEST_FACE_C_DIM;
-        bd_val_A.f.y_dim             = TEST_FACE_R_DIM;
-        bd_val_A.f.z_dim             = num_faces;
-
-        buffer_descriptor_u bd_val_B = {0};
-        bd_val_B.f.l1_addr_16B       = buffer_B[0] / 16;
-        bd_val_B.f.format            = static_cast<std::uint8_t>(formats.unpack_B_src);
-        bd_val_B.f.x_dim             = TEST_FACE_C_DIM;
-        bd_val_B.f.y_dim             = TEST_FACE_R_DIM;
-        bd_val_B.f.z_dim             = num_faces;
-
-        _configure_buf_desc_table_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), bd_val_A);
-        _configure_buf_desc_table_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(), bd_val_B);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+            tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), buffer_A[0] / 16, formats.unpack_A_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
+            tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), buffer_B[0] / 16, formats.unpack_B_src);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
         _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(
@@ -189,15 +174,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT        = params.TILE_CNT;
-    const std::uint32_t num_faces       = params.num_faces;
-    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const Operand& buffer_Res           = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
-    ckernel::trisc::bfd_alloc<pack_res>();
+    constexpr auto pack_res                = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
     const std::uint32_t num_tiles_per_pack = TILE_CNT;
 
     {
@@ -214,14 +195,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        buffer_descriptor_u bd_val = {0};
-        bd_val.f.l1_addr_16B       = buffer_Res[0] / 16;
-        bd_val.f.format            = static_cast<std::uint8_t>(formats.pack_dst);
-        bd_val.f.x_dim             = TEST_FACE_C_DIM;
-        bd_val.f.y_dim             = TEST_FACE_R_DIM;
-        bd_val.f.z_dim             = num_faces;
-
-        _configure_buf_desc_table_(ckernel::trisc::bfd_current<pack_res>(), bd_val);
+        ckernel::trisc::bfd_alloc_and_program<pack_res>(tensor_shape_from_dimensions(FACE_R_DIM, FACE_C_DIM, 2, 2), buffer_Res[0] / 16, formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
         PROFILER_SYNC();
