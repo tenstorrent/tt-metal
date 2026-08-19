@@ -131,13 +131,11 @@ _CASE_IDS = [f"p{p}_n{n}" for p, n in _CASES]
 
 _BLOCK_SIZE = 64
 
-# Baselined to the current measured behaviour of the generator path, not to a
-# device-correctness target. Measured on gemma-4-31B-it, WH T3K 1x8, p128_n128
-# (all-bf16 weights): top1=77.52%, top5=93.80% over 129 predictions. The bar
-# sits just under that, so these assertions detect a *regression* from today's
-# numbers; they do not certify TT matches HF. Raise them as the gap closes —
-# note test_full_model[wormhole_b0-1x8] holds 0.98 PCC on the same checkpoint,
-# so the loss is in this end-to-end path rather than the layer math.
+# Baselined to measured 31B p128_n128 behaviour, not a correctness target.
+# ``test_full_model`` 0.98 PCC is a ~6-token prompt; at 128 tokens the same
+# ``ttnn_prefill_forward`` path matches the generator
+# (``test_prefill_path_parity``) and last-row PCC vs HF is seq-length bfp8
+# accumulation, not an e2e-path leak.
 _MIN_TOP1_AGREEMENT = float(os.getenv("GEMMA4_TF_MIN_TOP1", "0.75"))
 _MIN_TOP5_AGREEMENT = float(os.getenv("GEMMA4_TF_MIN_TOP5", "0.92"))
 
