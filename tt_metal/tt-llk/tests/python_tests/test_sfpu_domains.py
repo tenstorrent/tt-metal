@@ -22,7 +22,12 @@ import struct
 
 import pytest
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
+from helpers.llk_params import (
+    ApproximationMode,
+    DestAccumulation,
+    MathOperation,
+    ReducePool,
+)
 from helpers.sfpu_domains import (
     GENERATED_NAN_SIGN_OPS,
     Operand,
@@ -609,6 +614,130 @@ def test_nan_sign_gate_ignores_ops_that_forward_a_nan():
         assert op not in GENERATED_NAN_SIGN_OPS
         for cell in _EDGE_SWEEP_CELLS:
             assert not nan_sign_is_unspecified(op, *cell)
+
+
+def test_binary_nan_sign_is_relaxed_only_where_sfpmad_emits_it():
+    """An emitted NaN loses its sign; a selected one keeps it. Per op, not per lane.
+
+    `SFPMAD.md` scopes its NaN wording to "if a NaN is emitted" and draws no line between a NaN it
+    computed and one that arrived on an input -- Blackhole gives the canonical 0x7fc00000 either
+    way, Wormhole "might or might not" set the sign either way. So for the four arithmetic ops the
+    sign is never the operand's, including at `sub(NaN, 1)`.
+
+    binary_max_min is the counter-case and the reason this is not a blanket relaxation: a bare
+    SFPSWAP(VEC_MIN_MAX) *selects* an operand, so the NaN it returns is the datum it was handed and
+    its sign is real on both arches.
+
+    A genuine infinity is never relaxed on either path -- `0 - (-inf)` is `+inf` by IEEE, and that
+    is the assertion the per-lane mask exists to keep.
+
+    The exclusion list is deliberately the *selecting* ops rather than an allowlist of the
+    arithmetic ones: every op that is not max/min computes its result, including the compositions
+    whose NaN arrives via a reciprocal or an exp.
+    """
+    import torch
+    from helpers.golden_generators import BinarySFPUGolden
+
+    nan = float("nan")
+    canonicalise = BinarySFPUGolden._canonicalise_emitted_nan
+
+    # The composition ops are in this list deliberately. Excluding them is what broke the
+    # Wormhole gate for div/fmod/remainder once, on a Blackhole-green branch: their NaN is as
+    # computed as add's, and the xfails that used to cover them were deleted on the premise that
+    # the gate would excuse the sign.
+    for op in (
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
+        MathOperation.SfpuElwmul,
+        MathOperation.SfpuElwrsub,
+        MathOperation.SfpuElwdiv,
+        MathOperation.SfpuBinaryFmod,
+        MathOperation.SfpuBinaryRemainder,
+        MathOperation.SfpuXlogy,
+        MathOperation.SfpuElwpow,
+        MathOperation.SfpuAtan2,
+    ):
+        assert op not in BinarySFPUGolden._NAN_SIGN_SELECTED_OPS, (
+            f"{op.name} computes its NaN through the datapath, so its sign is the ISA's to "
+            "choose and must be relaxed"
+        )
+        # A forwarded NaN is relaxed too, which is the whole of this fix: a negative one must not
+        # come back out of the golden carrying the operand's sign.
+        row = torch.tensor([-nan, nan, float("inf"), -float("inf"), 1.0])
+        out, mask = canonicalise(op, row)
+        assert mask.tolist() == [True, True, False, False, False], (
+            f"{op.name}: the mask must be every NaN lane and no infinity lane, got "
+            f"{mask.tolist()}"
+        )
+        assert not math.copysign(1.0, float(out[0])) < 0.0, (
+            f"{op.name}: a -NaN must be canonicalised, or the golden exports a sign the ISA "
+            "declines to promise"
+        )
+        assert float(out[2]) == float("inf") and float(out[3]) == -float("inf"), (
+            f"{op.name}: infinities must pass through untouched -- their sign is IEEE's and "
+            "stays asserted"
+        )
+
+    for op in (MathOperation.SfpuBinaryMax, MathOperation.SfpuBinaryMin):
+        assert op in BinarySFPUGolden._NAN_SIGN_SELECTED_OPS, (
+            f"{op.name} is a bare SFPSWAP that selects an operand, so its NaN sign is a real "
+            "datum -- see _reduce_extremum for the same argument on the reduce path"
+        )
+        row = torch.tensor([-nan, nan, 1.0])
+        out, mask = canonicalise(op, row)
+        assert not mask.any(), f"{op.name} must relax nothing"
+        assert (
+            math.copysign(1.0, float(out[0])) < 0.0
+        ), f"{op.name}: a selected -NaN must keep its sign"
+
+
+def test_reduce_nan_sign_is_relaxed_only_for_the_accumulating_pools():
+    """Sum and Average emit their NaN through SFPMAD; Max and Min select a lane.
+
+    The golden canonicalises only the first pair, and `test_float_reduce_specials` relaxes the
+    comparison only for the same pair. Both read `_SFPMAD_REDUCE_POOLS`, so they cannot drift.
+
+    The case that motivated it: `torch.sum` over a column holding `+inf` and `-inf` returns a
+    *negatively* signed NaN, which the pack substitution turns into `-inf` -- where Blackhole's
+    SFPMAD emits the canonical 0x7fc00000 and packs `+inf`.
+    """
+    import torch
+    from helpers.golden_generators import UnarySFPUGolden
+
+    pools = UnarySFPUGolden._SFPMAD_REDUCE_POOLS
+    assert set(pools) == {ReducePool.Sum, ReducePool.Average}
+    assert ReducePool.Max not in pools and ReducePool.Min not in pools, (
+        "Max/Min are a bare SFPSWAP(VEC_MIN_MAX) that selects a lane, so the NaN they return "
+        "is the datum they picked and its sign stays asserted"
+    )
+
+    # torch really does hand back a negative NaN here, which is what makes this load-bearing.
+    column = torch.tensor([[float("inf")], [-float("inf")]])
+    host_nan = torch.sum(column)
+    assert math.copysign(1.0, float(host_nan)) < 0.0, (
+        "torch.sum over (+inf, -inf) no longer returns a negative NaN; the canonicalisation is "
+        "still correct but this test no longer demonstrates why"
+    )
+
+    model = UnarySFPUGolden._model_reduce_dest_and_pack
+    for pool, want_positive in (
+        (ReducePool.Sum, True),
+        (ReducePool.Average, True),
+        (ReducePool.Max, False),
+        (ReducePool.Min, False),
+    ):
+        out = model(
+            torch.tensor([-float("nan")]),
+            DataFormat.Float32,
+            DataFormat.Float32,
+            DestAccumulation.Yes,
+            pool,
+        )
+        got_positive = not math.copysign(1.0, float(out[0])) < 0.0
+        assert got_positive == want_positive, (
+            f"{pool}: expected the sign to be "
+            f"{'canonicalised' if want_positive else 'preserved'}"
+        )
 
 
 @pytest.mark.parametrize(

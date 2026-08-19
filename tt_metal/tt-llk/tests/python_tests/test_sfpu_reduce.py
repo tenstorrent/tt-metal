@@ -700,6 +700,10 @@ def test_int32_reduce_extreme(request, mathop, reduce_pool, injected_value, base
 _INF = float("inf")
 _NAN = float("nan")
 
+# The pools whose NaN is emitted by SFPMAD rather than selected from a lane. Read from the golden
+# so the test and the model cannot disagree about which those are.
+_SFPMAD_REDUCE_POOLS = UnarySFPUGolden._SFPMAD_REDUCE_POOLS
+
 # (class name, per-column injection) -- each entry fills column/row 0..k of an otherwise-1.0 tile.
 _REDUCE_SPECIAL_CLASSES = {
     "pos_inf": [_INF],
@@ -884,10 +888,13 @@ def test_float_reduce_specials(mathop, reduce_pool, edge_class, formats):
     # slice would stop checking those. `golden_slice` itself cannot be used for this -- by the time
     # it is returned the substitution has already happened and there is no NaN left to see.
     #
-    # A reduction has no forwarded-versus-generated distinction, unlike the binary sweep: the fold
-    # performs arithmetic on the special, so SFPMAD emits the resulting NaN whether or not an input
-    # was one. Measured: 4 of 96 variants -- Average over both_inf and over nan, on Float16_b.
-    if generated_nan_sign_is_asserted(
+    # Sum and Average only. They accumulate, so a NaN they produce comes out of SFPMAD and its sign
+    # is the ISA's to choose. Max and Min are a bare SFPSWAP(VEC_MIN_MAX) that *selects* a lane, so
+    # a NaN they return is the datum they picked -- Max over the `nan` class returns the input
+    # +NaN, whose sign is real -- and relaxing it here would accept a -inf and hide a broken
+    # selection or a broken order. UnarySFPUGolden._SFPMAD_REDUCE_POOLS is the same split on the
+    # golden side. Measured: 4 of 96 variants, Average over both_inf and over nan, on Float16_b.
+    if reduce_pool in _SFPMAD_REDUCE_POOLS and generated_nan_sign_is_asserted(
         formats.input_format,
         formats.output_format,
         dest_acc,

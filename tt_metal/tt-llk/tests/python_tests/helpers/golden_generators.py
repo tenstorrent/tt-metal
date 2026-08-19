@@ -2468,7 +2468,7 @@ class UnarySFPUGolden:
         if operation in [MathOperation.ReduceColumn, MathOperation.ReduceRow]:
             reduced = self.ops[operation](operand1, reduce_pool)
             return self._model_reduce_dest_and_pack(
-                reduced, input_format, data_format, self.dest_acc
+                reduced, input_format, data_format, self.dest_acc, reduce_pool
             )
 
         # determine the data format for dst
@@ -3318,16 +3318,34 @@ class UnarySFPUGolden:
         tiles = x.reshape(rows // TILE_DIM, TILE_DIM, cols // TILE_DIM, TILE_DIM)
         return torch.cumsum(tiles.to(torch.float32), dim=1).flatten()
 
-    @staticmethod
+    # Pools whose NaN result is *emitted by SFPMAD* rather than selected from a lane. Sum and
+    # Average accumulate, so a NaN they produce is arithmetic and its sign is the ISA's to choose
+    # (canonical 0x7fc00000 on Blackhole, unspecified on Wormhole). Max and Min are a bare
+    # SFPSWAP(VEC_MIN_MAX) -- see _reduce_extremum -- so a NaN they return is the lane they picked,
+    # sign included, and it stays asserted on both arches.
+    _SFPMAD_REDUCE_POOLS = (ReducePool.Sum, ReducePool.Average)
+
+    @classmethod
     def _model_reduce_dest_and_pack(
-        reduced, input_format: DataFormat, output_format: DataFormat, dest_acc
+        cls,
+        reduced,
+        input_format: DataFormat,
+        output_format: DataFormat,
+        dest_acc,
+        reduce_pool: ReducePool = None,
     ):
         """The Dest write and the pack, for the reduce path that used to skip both.
 
         Same two steps and the same order as the element-wise path above and as
-        BinarySFPUGolden: round to the width Dest holds, keeping a NaN's sign across the cast
-        (cast_to_dest_dtype, not `.to()`), then substitute a signed infinity wherever the packer
-        cannot write a NaN through this pipeline.
+        BinarySFPUGolden: canonicalise the sign of a NaN the fold *emitted*, round to the width
+        Dest holds keeping that sign across the cast (cast_to_dest_dtype, not `.to()`), then
+        substitute a signed infinity wherever the packer cannot write a NaN through this pipeline.
+
+        The canonicalisation is what stops the host library deciding the answer. `torch.sum` over a
+        column holding `+inf` and `-inf` returns a *negatively* signed NaN, which the substitution
+        below would turn into `-inf` -- where Blackhole's SFPMAD emits the canonical 0x7fc00000 and
+        packs `+inf`. Same defect the element-wise and binary paths already carry a fix for, in the
+        one path that returns before reaching theirs.
 
         Only the float axis is modelled. Integer reduce operands never reach here -- __call__
         routes them through _call_integer or keeps their own layout handling -- and
@@ -3335,6 +3353,9 @@ class UnarySFPUGolden:
         """
         if input_format.is_integer() or output_format.is_integer():
             return reduced
+
+        if reduce_pool in cls._SFPMAD_REDUCE_POOLS:
+            reduced = torch.where(torch.isnan(reduced), reduced.abs(), reduced)
 
         dst_format = (
             DataFormat.Float32
@@ -3826,7 +3847,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
         *collect_generated_nan* additionally returns a per-lane mask of the results that were a
         NaN this op *invented*, in the result's layout -- for a caller that has to stop asserting
-        the sign of one. See _canonicalise_generated_nan.
+        the sign of one. See _canonicalise_emitted_nan.
         """
         if operation not in self.ops:
             raise ValueError(f"Unsupported SFPU operation: {operation}")
@@ -3956,8 +3977,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 result_row = torch.tensor(
                     [float(v) for v in row_values], dtype=torch.float32
                 )
-                result_row, generated_row = self._canonicalise_generated_nan(
-                    result_row, src1_row, src2_row
+                result_row, generated_row = self._canonicalise_emitted_nan(
+                    operation, result_row
                 )
                 generated_nan[dst_row_start : dst_row_start + elements_per_row] = (
                     generated_row
@@ -4003,37 +4024,50 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
         return result
 
-    @staticmethod
-    def _canonicalise_generated_nan(result_row, src1_row, src2_row):
-        """Clear the sign of a NaN this op *generated*, keep the sign of one it forwarded.
+    # The ops whose NaN result is a *selected operand* rather than a computed one -- an exclusion
+    # list, because they are the minority and because an allowlist of the arithmetic ops silently
+    # drops the composition ops (div, fmod, remainder, xlogy, pow, atan2), whose NaN is every bit
+    # as computed as add's.
+    #
+    # binary_max_min is a bare SFPSWAP(VEC_MIN_MAX): it picks one of its two inputs, so a NaN it
+    # returns is the datum it was handed, sign included, and asserting that sign is sound on both
+    # arches. Everything else builds its result through the datapath, and `SFPMAD.md` scopes its
+    # NaN-sign wording to "if a NaN is emitted" without distinguishing one it computed from one
+    # that arrived on an input -- so on Wormhole any NaN they emit has a sign that "might or might
+    # not be set", and on Blackhole it is the canonical 0x7fc00000. Either way it is not the
+    # operand's. The six comparisons never return a NaN at all (they store 0.0 or 1.0), so which
+    # side of this split they fall on cannot matter.
+    _NAN_SIGN_SELECTED_OPS = frozenset(
+        {
+            MathOperation.SfpuBinaryMax,
+            MathOperation.SfpuBinaryMin,
+        }
+    )
 
-        Per element rather than per op, which is why this is derived from the operands instead of
-        from a set like UnarySFPUGolden._NAN_SIGN_TRANSPARENT_OPS: `sub` forwards a NaN operand's
-        sign at (NaN, 1) and invents one at (inf, inf), so no per-op answer is right for both.
+    @classmethod
+    def _canonicalise_emitted_nan(cls, operation, result_row):
+        """Clear the sign of a NaN the datapath computed; keep the sign of one SFPSWAP selected.
 
-        - **Forwarded** (an operand is already NaN): SFPMAD says "if any input is NaN or
-          +/-Infinity, then the result will be NaN or +/-Infinity, following the usual IEEE754
-          rules", and IEEE propagates an input NaN. The sign is the datum's, so keep it.
-        - **Generated** (both operands finite, result NaN -- 0/0, x%0, 0*log(0), inf-inf): an
-          invalid-operation default whose sign IEEE 754 leaves unspecified. Blackhole's SFPMAD
-          promises the canonical 0x7fc00000, Wormhole's says the sign "might or might not be
-          set", so the golden must not export the host libm's arbitrary choice -- which it did,
-          and is why xlogy(0,0) and div(0,0) disagreed for no reason either kernel owns.
+        IEEE 754 leaves the sign of an invalid-operation default unspecified, and the ISA declines
+        to promise the operand's sign even for a NaN that merely passed through: `SFPMAD.md` says
+        only "if a NaN is emitted", then that Blackhole gives the canonical 0x7fc00000 and Wormhole
+        "might or might not" set the sign bit. So for the arithmetic ops the golden must not export
+        a sign at all -- not the host libm's invented one, which is what made xlogy(0,0) and
+        div(0,0) disagree for no reason either kernel owns, and not the operand's either.
 
         abs() clears the sign bit without disturbing the payload, as UnarySFPUGolden does at the
         same point. It only becomes observable once the pack path substitutes a *signed* infinity
         for the NaN, where the assertion is sound on Blackhole and gated off on Wormhole.
 
-        Returns the mask as well as the row, because a caller gating that assertion needs to know
-        *which lanes*: this is the last point where the distinction is legible, the substitution
-        downstream leaving no NaN to re-derive it from.
+        Returns the per-lane mask as well as the row, because a caller gating that assertion needs
+        to know *which lanes*: this is the last point where a NaN is still legible, the
+        substitution downstream leaving none to re-derive it from. Lanes holding a genuine
+        infinity are never in it -- `0 - (-inf)` is `+inf` by IEEE and stays asserted.
         """
-        generated = (
-            torch.isnan(result_row)
-            & ~torch.isnan(src1_row.to(torch.float32))
-            & ~torch.isnan(src2_row.to(torch.float32))
-        )
-        return torch.where(generated, result_row.abs(), result_row), generated
+        if operation in cls._NAN_SIGN_SELECTED_OPS:
+            return result_row, torch.zeros_like(result_row, dtype=torch.bool)
+        emitted = torch.isnan(result_row)
+        return torch.where(emitted, result_row.abs(), result_row), emitted
 
     @staticmethod
     def _dest_format(
