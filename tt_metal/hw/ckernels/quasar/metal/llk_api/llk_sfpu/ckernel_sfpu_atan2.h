@@ -23,22 +23,31 @@ namespace sfpu {
  * the quadrant back in from the operand signs. IEEE corner cases (|x| == |y|, both zero,
  * negative-signed x including -0.0, and NaN in either operand) are handled explicitly.
  *
- * @tparam APPROXIMATION_MODE: Use the LUT-only reciprocal. Polynomial degree and
- *         final rounding continue to follow the Dest mode.
- * @tparam is_fp32_dest_acc_en: 32-bit Dest; selects the 7-term polynomial and skips
- *         the final bf16 round. Its precise mode also uses a Newton-refined reciprocal.
+ * Dest width and APPROXIMATION_MODE control independent pieces:
+ *   - Polynomial: 7-term when @p is_fp32_dest_acc_en, otherwise 3-term. Unaffected by
+ *     APPROXIMATION_MODE.
+ *   - Store rounding: round-to-nearest bf16 only when Dest is 16-bit. An FP32 Dest
+ *     keeps the full-width result even when APPROXIMATION_MODE is true.
+ *   - Reciprocal for @c a: LUT seed only (0 Newton steps) when APPROXIMATION_MODE is
+ *     true or Dest is 16-bit; LUT seed plus two Newton-Raphson steps only for FP32 Dest
+ *     with APPROXIMATION_MODE false.
+ *
+ * @tparam APPROXIMATION_MODE Selects the reciprocal used to form @c a. Does not select
+ *         the polynomial or the bf16 store round — those follow Dest width only.
+ * @tparam is_fp32_dest_acc_en 32-bit Dest: 7-term polynomial, no bf16 store round, and
+ *         (when APPROXIMATION_MODE is false) a Newton-refined reciprocal.
  * @param y: Numerator operand; its sign is copied onto the result.
  * @param x: Denominator operand; a negative sign reflects the result into the
  *        second/third quadrant.
- * @note Call @ref calculate_sfpu_atan2_init with matching template args first — it programs
- *       the Newton-Raphson constant the reciprocal refines with.
+ * @note Call @ref calculate_sfpu_atan2_init with matching template args first. Init
+ *       programs the reciprocal path that matches the combination above (Newton
+ *       constant only for the FP32 precise reciprocal).
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
-    constexpr bool is_bf16 = !is_fp32_dest_acc_en || APPROXIMATION_MODE;
-    // Quasar's reciprocal is iteration-templated: 0 = LUT seed only (bf16-accurate),
-    // 2 = LUT seed plus two Newton-Raphson steps (fp32-accurate).
-    constexpr int recip_iterations = is_bf16 ? 0 : 2;
+    // Reciprocal only: LUT seed is bf16-accurate; two Newton steps are used solely on
+    // the precise FP32-Dest path. Polynomial degree and store rounding stay on Dest width.
+    constexpr int recip_iterations = (APPROXIMATION_MODE || !is_fp32_dest_acc_en) ? 0 : 2;
 
     sfpi::vFloat r;
     sfpi::vFloat q;
@@ -51,7 +60,8 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     // a = min(|x|, |y|) / max(|x|, |y|), i.e. a is on [0, 1].
     sfpi::vFloat a = min * _sfpu_reciprocal_<recip_iterations>(max);
 
-    // Minimax approximation for atan(a).
+    // Minimax atan(a): Dest width only — 7-term on FP32 Dest, 3-term otherwise.
+    // APPROXIMATION_MODE does not select this path.
 
     if constexpr (is_fp32_dest_acc_en) {
         q = 0x1.01cp-8f;
@@ -110,6 +120,7 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     }
     v_endif;
 
+    // 16-bit Dest only. FP32 Dest keeps the full-width result, including APPROXIMATION_MODE.
     if constexpr (!is_fp32_dest_acc_en) {
         r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::Nearest);
     }
@@ -128,9 +139,12 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
 /**
  * @brief Apply atan2 over two Dest operand tiles into a result tile.
  *
- * @tparam APPROXIMATION_MODE: Forwarded to @ref _sfpu_atan2_.
+ * @tparam APPROXIMATION_MODE Forwarded to @ref _sfpu_atan2_; selects only the
+ *         reciprocal (LUT-only vs Newton), not the polynomial or store rounding.
  * @tparam ITERATIONS: Number of SFPU loop iterations over the Dest tile.
- * @tparam is_fp32_dest_acc_en: Whether Dest is in FP32 mode; must match the init.
+ * @tparam is_fp32_dest_acc_en Whether Dest is in FP32 mode; must match the init.
+ *         Selects the 7-term vs 3-term polynomial and whether the result is
+ *         rounded to bf16.
  * @tparam TILE_SHAPE: Destination tile shape used to derive the operand stride.
  * @param dst_index_in0: Dest tile index of the y operand.
  * @param dst_index_in1: Dest tile index of the x operand.
@@ -159,11 +173,12 @@ inline void calculate_sfpu_atan2(
 }
 
 /**
- * @brief Initialisation hook for atan2; programs the Newton-Raphson reciprocal constant.
+ * @brief Initialisation hook for atan2; programs the reciprocal used to form @c a.
  *
- * @tparam APPROXIMATION_MODE: Must match @ref calculate_sfpu_atan2.
- * @tparam is_fp32_dest_acc_en: Must match @ref calculate_sfpu_atan2 — together with
- *         APPROXIMATION_MODE it selects the reciprocal variant.
+ * @tparam APPROXIMATION_MODE Must match @ref calculate_sfpu_atan2. true (or a 16-bit
+ *         Dest) selects the LUT-only reciprocal init; Newton-Raphson constants are
+ *         programmed only for FP32 Dest with APPROXIMATION_MODE false.
+ * @tparam is_fp32_dest_acc_en Must match @ref calculate_sfpu_atan2.
  */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_atan2_init() {
