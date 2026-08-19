@@ -92,7 +92,6 @@ class VisionAttention(LightweightModule):
         self.causal_mask = causal_mask
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
         self.ccl_dtype = configuration.ccl_dtype
-        self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
 
         # Each device holds n_heads / tp heads.
@@ -126,12 +125,9 @@ class VisionAttention(LightweightModule):
         self.sdpa_prefill_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.SDPA_PREFILL, configuration=configuration
         )
-        self.li_qkv_prefill_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_QKV_PREFILL, configuration=configuration
-        )
-        self.li_o_prefill_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_O_PREFILL, configuration=configuration
-        )
+        # NOTE: qkv/wo fidelity deliberately no longer comes from `decoders_optimizations`
+        # (LI_QKV_PREFILL / LI_O_PREFILL), whose `accuracy` preset is HiFi4 -- worthless on bfloat8_b
+        # weights and half the throughput. `vision_mm_plan` picks it per family instead.
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
@@ -268,22 +264,17 @@ class VisionAttention(LightweightModule):
 
         self.scale = self.head_dim**-0.5
 
-        # Per-device qkv matmul program config: each device's qkv_size is
-        # `local_qkv_size`. Match the existing per-device 8x8 grid layout.
-        dram_shard_grid_width = 8
-        self.xqkv_prefill_progcfg = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=1,
-            out_subblock_h=1,
-            out_subblock_w=1,
-            per_core_M=max(
-                1,
-                8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),
-            ),
-            per_core_N=math.ceil(self.local_qkv_size / 32 / dram_shard_grid_width),
-            transpose_mcast=False,
-            fused_activation=None,
-            fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
+    def qkv_plan(self, seq_len: int, in0_dtype=ttnn.bfloat16):
+        """The qkv matmul's plan. `VisionBlock` reads `.in0_memory_config` off it so the norm that
+        produces qkv's input writes it where that is faster."""
+        return self.configuration.vision_mm_plan(
+            "qkv",
+            rows=seq_len,
+            k=self.hidden_size,
+            n=self.local_qkv_size,
+            in0_dtype=in0_dtype,
+            in1_dtype=self.wqkv.dtype,
+            out_dtype=self.activation_dtype or in0_dtype,
         )
 
     def forward_prefill(
@@ -300,24 +291,23 @@ class VisionAttention(LightweightModule):
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
 
         # ---- QKV matmul (column / head sharded) -----------------------------------
-        if seq_len > self.MAX_QKV_MM_SEQ_LEN:
-            if seq_len % self.MAX_QKV_MM_SEQ_LEN != 0:
-                raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
-            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
+        # The bias goes INSIDE the matmul: this projection is column-parallel so its output is final
+        # (no collective to double-count it), and folding it removes a ~0.95 ms/block elementwise add.
+        qkv_plan = self.qkv_plan(seq_len, in0_dtype=x_11SH.dtype)
+        if qkv_plan.chunk != seq_len:
+            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // qkv_plan.chunk, qkv_plan.chunk, -1])
 
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
+            bias=self.wqkv_bias_prefill,
             dtype=self.activation_dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
-            program_config=self.xqkv_prefill_progcfg(seq_len),
+            memory_config=qkv_plan.memory_config,
+            compute_kernel_config=qkv_plan.compute_kernel_config,
+            program_config=qkv_plan.program_config,
         )
 
-        if self.wqkv_bias_prefill is not None:
-            xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
-
-        if seq_len > self.MAX_QKV_MM_SEQ_LEN:
+        if qkv_plan.chunk != seq_len:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
         ttnn.deallocate(x_11SH)
@@ -404,21 +394,32 @@ class VisionAttention(LightweightModule):
         )
         ttnn.deallocate(attn_output_1QSD)
 
-        if seq_len > 1024:
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
+        # The bias is NOT folded in here: this projection is row-parallel, so the matmul output is a
+        # partial sum and the collective below would add the bias once per device.
+        wo_plan = self.configuration.vision_mm_plan(
+            "wo",
+            rows=seq_len,
+            k=self.n_local_heads * self.padded_head_dim,
+            n=self.hidden_size,
+            in0_dtype=attn_output_11SH.dtype,
+            in1_dtype=self.wo.dtype,
+            out_dtype=self.activation_dtype or ttnn.bfloat8_b,
+        )
+        if wo_plan.chunk != seq_len:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // wo_plan.chunk, wo_plan.chunk, -1])
 
         # Each device contributes a partial sum of the full output dim.
         output_partial = ttnn.linear(
             attn_output_11SH,
             self.wo,
-            compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
+            compute_kernel_config=wo_plan.compute_kernel_config,
             dtype=self.activation_dtype or ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.model_config["VISION_WO_PREFILL_PROGCFG"](seq_len),
+            memory_config=wo_plan.memory_config,
+            program_config=wo_plan.program_config,
         )
         ttnn.deallocate(attn_output_11SH)
 
-        if seq_len > 1024:
+        if wo_plan.chunk != seq_len:
             output_partial = ttnn.reshape(output_partial, [1, 1, seq_len, -1])
 
         # On T3K/QB2 `tt_all_reduce(dim=3)` is implemented as a reduce_scatter, so the result is
