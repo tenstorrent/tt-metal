@@ -283,7 +283,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -311,9 +310,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
-        ckernel::trisc::bfd_alloc_and_program<pack_res>(tensor_shape, L1_ADDRESS(buffer_Res[0]) /*l1_addr_16B*/, formats.pack_dst);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_Res[0]) /*l1_addr_16B*/, formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none() /*relu_config*/);
-        _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), tensor_shape, num_tiles_per_pack);
+        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, num_tiles_per_pack);
         PROFILER_SYNC();
     }
     {

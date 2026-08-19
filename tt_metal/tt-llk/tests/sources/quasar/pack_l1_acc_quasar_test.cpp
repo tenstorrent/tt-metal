@@ -281,8 +281,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res                     = params.buffer_Res;
 #endif
 
-    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
-
     {
         ZONE_SCOPED("INIT")
         // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
@@ -304,10 +302,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        ckernel::trisc::bfd_alloc_and_program<pack_res>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         const ckernel::ReluConfig relu_config = ckernel::ReluConfig::from_packed(RELU_CONFIG);
-        _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
+        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
         _llk_pack_relu_config_<p_pacr::PACK0, is_fp32_dest_acc_en>(relu_config);
         PROFILER_SYNC();
     }

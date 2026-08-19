@@ -288,7 +288,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int DST_INDEX                       = params.DST_INDEX;
     const Operand& buffer_Res                 = params.buffer_Res;
 #endif
-    constexpr auto pack_res                = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
     const std::uint32_t num_tiles_per_pack = output_tiles_in_block;
 
     {
@@ -312,9 +311,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        ckernel::trisc::bfd_alloc_and_program<pack_res>(TENSOR_SHAPE_FROM_PARAMS(params), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+            TENSOR_SHAPE_FROM_PARAMS(params), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
+        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
         PROFILER_SYNC();
     }
     {

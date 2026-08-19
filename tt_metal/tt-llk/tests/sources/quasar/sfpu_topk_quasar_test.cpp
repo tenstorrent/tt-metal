@@ -313,8 +313,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int NUM_VALUE_TILES_PER_ROW            = params.FULL_CT_DIM / NUM_STAGES;
     const int NUM_TILES_IN_RESULT_BUFFER_PER_ROW = (TOPK_K / ckernel::trisc::TILE_C_DIM) * NUM_STAGES;
 
-    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
-
     // Dest dvalid sync chain: FPU (datacopy) -> SFPU (topk) -> PACK.
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
@@ -363,8 +361,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         l1_addr_16B                = params.buffer_A[tile_L1_offset] / 16;
                     }
 
-                    ckernel::trisc::bfd_alloc_and_program<pack_res>(ckernel::DEFAULT_TENSOR_SHAPE, l1_addr_16B, pack_dst_format);
-                    _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, 1);
+                    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(ckernel::DEFAULT_TENSOR_SHAPE, l1_addr_16B, pack_dst_format);
+                    _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1);
 
                     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(pack_src_format), ckernel::ReluConfig::none());
                     _llk_pack_(tile_dest_offset, 0, ckernel::DEFAULT_TENSOR_SHAPE);

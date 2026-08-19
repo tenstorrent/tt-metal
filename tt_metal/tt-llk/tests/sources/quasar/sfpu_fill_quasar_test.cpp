@@ -171,7 +171,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    constexpr auto pack_res                = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
     const std::uint32_t num_tiles_per_pack = params.TILE_CNT;
 
     // PACK is the final consumer of the DEST DVALID chain.
@@ -180,11 +179,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Destination descriptor: buffer_Res in L1, L1-side format = formats.pack_dst,
     // face geometry from the harness. reg_data_format = pack_src is the DEST-side
     // format the packer reads.
-    ckernel::trisc::bfd_alloc_and_program<pack_res>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+        ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
 
     // Configure pack engine 0 → init → pack tile from DST_INDEX into buffer_Res → release section.
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
+    _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
     _llk_pack_(params.DST_INDEX, 0, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }

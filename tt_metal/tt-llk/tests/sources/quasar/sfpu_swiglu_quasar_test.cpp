@@ -180,7 +180,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    constexpr auto pack_res                  = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
     constexpr std::uint32_t num_output_tiles = 1;
 
     // Declare the same dvalid client chain that UNPACK/MATH used, seen from
@@ -194,10 +193,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
 
-    ckernel::trisc::bfd_alloc_and_program<pack_res>(ckernel::DEFAULT_TENSOR_SHAPE, params.buffer_Res[0] / 16, formats.pack_dst);
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(ckernel::DEFAULT_TENSOR_SHAPE, params.buffer_Res[0] / 16, formats.pack_dst);
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, num_output_tiles);
+    _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, num_output_tiles);
 
     // Output lives at Dest tile index 2 — this is the layout *this driver*
     // uses (see "Layout used by this test" at the top of the file): gate=0,

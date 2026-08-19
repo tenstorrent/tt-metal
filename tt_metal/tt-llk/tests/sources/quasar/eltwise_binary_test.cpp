@@ -172,7 +172,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t OUTPUT_TILE_CNT = params.OUTPUT_TILE_CNT;
     const Operand& buffer_Res           = params.buffer_Res;
 #endif
-    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
 
     {
         ZONE_SCOPED("INIT")
@@ -187,9 +186,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        ckernel::trisc::bfd_alloc_and_program<pack_res>(ckernel::DEFAULT_TENSOR_SHAPE, buffer_Res[0] / 16, formats.pack_dst);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(ckernel::DEFAULT_TENSOR_SHAPE, buffer_Res[0] / 16, formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
+        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
         PROFILER_SYNC();
     }
     {

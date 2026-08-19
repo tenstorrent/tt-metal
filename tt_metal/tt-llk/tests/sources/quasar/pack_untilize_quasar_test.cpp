@@ -280,7 +280,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -314,22 +313,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if (tensor_shape.face_r_dim < ckernel::pack::PACR_STRIDE_OFFSET_ROWS)
         {
             // PACR_STRIDE quirk: tiny-tiles index L1 rows as tiles, so the BD is built with y_dim = 1.
-            ckernel::trisc::bfd_alloc_and_program<pack_res, ckernel::trisc::L1AccessMode::Strided>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Strided>(
+                tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         }
         else
         {
-            ckernel::trisc::bfd_alloc_and_program<pack_res, ckernel::trisc::L1AccessMode::Continuous>(
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, ckernel::trisc::L1AccessMode::Continuous>(
                 tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         }
 
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         if (tensor_shape.total_num_faces() == NUM_FACES)
         {
-            _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(ckernel::trisc::bfd_current<pack_res>(), tensor_shape);
+            _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape);
         }
         else
         {
-            _llk_pack_untilize_strided_init_<FULL_CT_DIM, BLOCK_CT_DIM>(ckernel::trisc::bfd_current<pack_res>(), tensor_shape);
+            _llk_pack_untilize_strided_init_<FULL_CT_DIM, BLOCK_CT_DIM>(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape);
         }
         PROFILER_SYNC();
     }
@@ -358,7 +358,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     else
                     {
                         _llk_pack_untilize_strided_<FULL_CT_DIM>(
-                            ckernel::trisc::bfd_current<pack_res>(), tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
+                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
                     }
                 }
             }
@@ -376,7 +376,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     else
                     {
                         _llk_pack_untilize_strided_<FULL_CT_DIM>(
-                            ckernel::trisc::bfd_current<pack_res>(), tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
+                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, y * y_stride_external, 0 /*src_tile_idx*/);
                     }
                     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
