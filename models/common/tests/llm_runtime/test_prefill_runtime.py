@@ -22,7 +22,7 @@ import models.common.llm_runtime.trace_compiler as trace_compiler_module
 import ttnn
 from models.common.llm_runtime.config import PageTableLayout
 from models.common.llm_runtime.output_reader import OutputReader
-from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
+from models.common.llm_runtime.prefill.config import BatchedPrefillPolicy, PrefillRuntimeConfig
 from models.common.llm_runtime.prefill.inputs import PrefillDeviceInputs, PrefillHostInputs, PrefillPositionInputs
 from models.common.llm_runtime.prefill.plan import _plan_prefill_requests
 from models.common.llm_runtime.prefill.postprocess import fit_prefill_sampling_logits
@@ -97,6 +97,7 @@ def _runtime(
     disable_batched_prefill=False,
     max_prefill_batch_size=8,
     batched_prefill_batched_extract=True,
+    batched_prefill_policy=None,
     trace_capture_prime_sequence_lengths=(),
 ):
     mesh_device = SimpleNamespace(shape=(1, 1))
@@ -119,6 +120,7 @@ def _runtime(
         disable_batched_prefill=disable_batched_prefill,
         max_prefill_batch_size=max_prefill_batch_size,
         batched_prefill_batched_extract=batched_prefill_batched_extract,
+        batched_prefill_policy=batched_prefill_policy,
         device_sampling_enabled=device_sampling_enabled,
         can_enable_trace=lambda length, cached: cached == 0 and length in trace_lengths,
         trace_capture_prime_sequence_lengths=trace_capture_prime_sequence_lengths,
@@ -147,6 +149,7 @@ def _plan(
     disable_batched_prefill=False,
     max_batch_size=32,
     max_prefill_batch_size=8,
+    batched_prefill_policy=None,
 ):
     tokens, page_table, prompt_lens, start_pos = _inputs(
         prompt_length=prompt_length,
@@ -167,8 +170,21 @@ def _plan(
         supports_batched_prefill=supports_batched_prefill,
         disable_batched_prefill=disable_batched_prefill,
         max_prefill_batch_size=max_prefill_batch_size,
+        batched_prefill_policy=batched_prefill_policy,
         max_actual_page_table_width=256,
         canonical_page_table_width=264,
+    )
+
+
+def _physical_32_policy():
+    return BatchedPrefillPolicy(
+        physical_batch_sizes=(32,),
+        minimum_active_rows=16,
+        maximum_physical_batch=32,
+        maximum_sequence_length=2048,
+        maximum_total_tokens=128 * 1024,
+        allow_cached_prefix=False,
+        sampling_requires_batched_output=True,
     )
 
 
@@ -189,6 +205,9 @@ def test_trace_applicability_classification_does_not_allocate_a_prefill_plan(mon
         supports_batched_prefill,
         disable_batched_prefill,
         max_prefill_batch_size,
+        batched_prefill_policy,
+        sampling_requested,
+        batched_output_available,
         max_actual_page_table_width=None,
         canonical_page_table_width=None,
     ):
@@ -937,6 +956,259 @@ def test_batched_prefill_active_15_pads_one_whole_wave_to_16():
     assert requests[0].source_rows == tuple(range(15))
     assert torch.all(requests[0].tokens[15] == 0)
     assert torch.all(requests[0].page_table[15] == -1)
+
+
+@pytest.mark.parametrize(
+    ("active_rows", "expected_request_count", "expected_kind"),
+    [(15, 15, "single"), (16, 1, "batched"), (31, 1, "batched"), (32, 1, "batched")],
+)
+def test_fixed_physical_32_policy_enforces_active_row_floor(active_rows, expected_request_count, expected_kind):
+    requests = _plan(
+        prompt_length=128,
+        slots=tuple(range(active_rows)),
+        max_prefill_batch_size=32,
+        batched_prefill_policy=_physical_32_policy(),
+    )
+
+    assert len(requests) == expected_request_count
+    assert all(request.kind == expected_kind for request in requests)
+    if expected_kind == "batched":
+        assert requests[0].padded_batch_size == 32
+
+
+def test_fixed_physical_32_policy_preserves_metadata_and_sanitizes_padding():
+    slots = tuple(range(31, 0, -1))
+    request = _plan(
+        prompt_length=80,
+        slots=slots,
+        max_prefill_batch_size=32,
+        batched_prefill_policy=_physical_32_policy(),
+    )[0]
+
+    assert request.source_rows == tuple(range(31))
+    assert request.slots == slots
+    assert request.prompt_lengths == (80,) * 31
+    assert request.cached_tokens == (0,) * 31
+    assert request.last_token_indices == (79,) * 31
+    assert torch.all(request.tokens[31] == 0)
+    assert torch.all(request.page_table[31] == -1)
+
+
+def test_fixed_physical_32_policy_keeps_cached_and_long_sequences_sequential():
+    cached = _plan(
+        prompt_length=128,
+        cached_tokens=32,
+        slots=tuple(range(16)),
+        max_prefill_batch_size=32,
+        batched_prefill_policy=_physical_32_policy(),
+    )
+    long = _plan(
+        prompt_length=2049,
+        slots=tuple(range(16)),
+        max_prefill_batch_size=32,
+        batched_prefill_policy=_physical_32_policy(),
+    )
+
+    assert len(cached) == len(long) == 16
+    assert all(request.kind == "single" and request.uses_chunked_prefill for request in cached)
+    assert all(request.kind == "single" and request.uses_chunked_prefill for request in long)
+
+
+@pytest.mark.parametrize(
+    "sampling_params",
+    [
+        SamplingParams(temperature=0.0, top_k=1, top_p=1.0),
+        SamplingParams(temperature=1.0, top_k=32, top_p=0.08, seed=17),
+    ],
+)
+def test_fixed_physical_32_policy_keeps_slot_stable_sampling_on_safe_batched_output(sampling_params):
+    runtime = _runtime(
+        allow_force_argmax=True,
+        max_prefill_batch_size=32,
+        batched_prefill_policy=_physical_32_policy(),
+    )
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=80, rows=16)
+
+    prepared = runtime.prepare(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
+        start_pos=start_pos,
+        empty_slots=tuple(range(15, -1, -1)),
+        sampling_params=sampling_params,
+    )
+
+    assert len(prepared) == 1
+    assert prepared[0].request.kind == "batched"
+    assert prepared[0].request.padded_batch_size == 32
+    assert prepared[0].request.slots == tuple(range(15, -1, -1))
+
+
+def test_fixed_physical_32_policy_rejects_sampling_without_batched_output():
+    runtime = _runtime(
+        max_prefill_batch_size=32,
+        batched_prefill_batched_extract=False,
+        batched_prefill_policy=_physical_32_policy(),
+    )
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=80, rows=16)
+
+    prepared = runtime.prepare(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
+        start_pos=start_pos,
+        empty_slots=tuple(range(16)),
+        sampling_params=SamplingParams(temperature=0.0, top_k=1, top_p=1.0),
+    )
+
+    assert len(prepared) == 16
+    assert all(item.request.kind == "single" for item in prepared)
+
+
+def test_fixed_physical_32_signatures_ignore_active_row_count():
+    runtime = _runtime(
+        trace_lengths=(128,),
+        max_prefill_batch_size=32,
+        batched_prefill_policy=_physical_32_policy(),
+    )
+
+    def prepare(rows):
+        tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=80, rows=rows)
+        return runtime.prepare(
+            tokens=tokens,
+            page_table=page_table,
+            prompt_lens=prompt_lens,
+            start_pos=start_pos,
+            empty_slots=tuple(range(rows)),
+        )[0]
+
+    prepared = [prepare(rows) for rows in (16, 31, 32)]
+
+    assert {item.request.padded_batch_size for item in prepared} == {32}
+    assert {item.program_signatures for item in prepared} == {prepared[0].program_signatures}
+    assert {item.trace_signature for item in prepared} == {prepared[0].trace_signature}
+    assert prepared[0].program_signatures[0].padded_batch_size == 32
+    assert prepared[0].trace_signature.padded_batch_size == 32
+
+
+@pytest.mark.parametrize(
+    ("prompt_length", "padded_sequence_length"),
+    ((80, 128), (700, 1024), (1500, 2048)),
+)
+def test_physical_32_trace_capture_replays_refreshed_active_rows_and_slots(
+    monkeypatch,
+    prompt_length,
+    padded_sequence_length,
+):
+    runtime = _runtime(
+        trace_lengths=(padded_sequence_length,),
+        max_prefill_batch_size=32,
+        batched_prefill_policy=_physical_32_policy(),
+    )
+
+    def prepare(slots):
+        tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=prompt_length, rows=len(slots))
+        return runtime.prepare(
+            tokens=tokens,
+            page_table=page_table,
+            prompt_lens=prompt_lens,
+            start_pos=start_pos,
+            empty_slots=slots,
+        )[0]
+
+    captured = prepare(tuple(range(16)))
+    replayed = (
+        prepare(tuple(range(30, -1, -1))),
+        prepare(tuple(range(31, -1, -1))),
+    )
+    assert all(item.program_signatures == captured.program_signatures for item in replayed)
+    assert all(item.trace_signature == captured.trace_signature for item in replayed)
+    assert captured.trace_signature.padded_batch_size == 32
+    assert captured.trace_signature.padded_sequence_length == padded_sequence_length
+
+    events = []
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda mesh: events.append(("sync", mesh)))
+    monkeypatch.setattr(ttnn, "begin_trace_capture", lambda mesh, cq_id: events.append(("begin", cq_id)) or 73)
+    monkeypatch.setattr(
+        ttnn,
+        "end_trace_capture",
+        lambda mesh, trace_id, cq_id: events.append(("end", trace_id, cq_id)),
+    )
+    monkeypatch.setattr(
+        ttnn,
+        "execute_trace",
+        lambda mesh, trace_id, cq_id, blocking: events.append(("execute", trace_id, cq_id, blocking)),
+    )
+    monkeypatch.setattr(ttnn, "release_trace", lambda mesh, trace_id: events.append(("release", trace_id)))
+    monkeypatch.setattr(trace_compiler_module, "_trim_host_allocator", lambda: None)
+
+    compiler = ProgramCompiler("mesh", lambda: object())
+    program = compiler.compile(captured.program_signatures[0], lambda _: torch.zeros(1))
+    operation_plan = runtime.capture_plan(captured)
+    persistent = PrefillHiddenPersistentInputs(
+        PrefillDeviceInputs("tokens", "cos", "sin", "page-table", None, "positions", None)
+    )
+    workspace = PrefillReplayState(
+        PrefillPositionInputs("slice-start", "slice-end", "row-index"),
+        kpt=None,
+        position_signature=prompt_length - 1,
+    )
+    captured_rows = []
+    refreshed = []
+    monkeypatch.setattr(
+        runtime,
+        "_run_hidden_body",
+        lambda request, device_inputs, *, fill_rows=None: captured_rows.append(fill_rows) or "hidden-output",
+    )
+    monkeypatch.setattr(
+        runtime.trace.hooks.input_stager,
+        "refresh_regular_device_inputs",
+        lambda request, device_inputs: refreshed.append(
+            (request.slots, request.source_rows, request.tokens.clone(), request.page_table.clone(), device_inputs)
+        ),
+    )
+
+    trace = TraceCompiler(compiler)
+    trace_key = trace.register_capture_plan(
+        TraceCapturePlan(
+            program.key,
+            operation_plan.signature,
+            "prefill",
+            lambda: persistent,
+            lambda value: operation_plan.capture(value.values),
+            prepare_workspace=lambda: workspace,
+            workspace_fingerprint=operation_plan.workspace_fingerprint,
+        )
+    )
+    trace.capture_all()
+
+    for prepared in replayed:
+        assert compiler.key_for(prepared.program_signatures[0]) == program.key
+        assert TraceKey.from_signature(prepared.trace_signature) == trace_key
+        trace.replay(
+            program.key,
+            lambda artifact, decision, prepared=prepared: runtime.refresh_trace(
+                prepared,
+                artifact.persistent_inputs.values,
+                workspace,
+            ),
+            reset_batch=True,
+        )
+
+    assert captured_rows == [32]
+    assert [len(item[1]) for item in refreshed] == [31, 32]
+    assert [item[0] for item in refreshed] == [tuple(range(30, -1, -1)), tuple(range(31, -1, -1))]
+    assert all(item[2].shape == (32, padded_sequence_length) for item in refreshed)
+    assert torch.all(refreshed[0][2][31] == 0)
+    assert torch.all(refreshed[0][3][31] == -1)
+    assert all(item[4] is persistent.device_inputs for item in refreshed)
+    assert [event[0] for event in events].count("begin") == 1
+    assert [event[0] for event in events].count("execute") == 2
+    assert trace.trace_count == 1
+    assert trace.replay_counts == {"prefill": 2, "decode": 0}
+
+    trace.cleanup()
+    assert ("release", 73) in events
 
 
 def test_active_15_and_16_share_complete_program_and_trace_signatures(monkeypatch):
@@ -2774,8 +3046,19 @@ def test_prefill_runtime_config_resolves_frozen_static_capabilities(expect_error
     assert not config.disable_batched_prefill
     assert config.max_prefill_batch_size == 8
     assert config.batched_prefill_batched_extract
+    assert config.batched_prefill_policy == BatchedPrefillPolicy(
+        physical_batch_sizes=(1, 2, 4, 8),
+        minimum_active_rows=2,
+        maximum_physical_batch=8,
+        maximum_sequence_length=2048,
+        maximum_total_tokens=128 * 1024,
+        allow_cached_prefix=False,
+        sampling_requires_batched_output=True,
+    )
     with expect_error(FrozenInstanceError, "cannot assign to field"):
         config.max_batch_size = 8
+    with expect_error(FrozenInstanceError, "cannot assign to field"):
+        config.batched_prefill_policy.minimum_active_rows = 1
 
 
 def test_prefill_runtime_config_rejects_mesh_and_sampler_mismatches(expect_error):

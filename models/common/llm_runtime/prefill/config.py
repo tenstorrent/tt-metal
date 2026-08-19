@@ -13,6 +13,61 @@ from models.common.llm_runtime.output_reader import OutputReader
 from models.common.llm_runtime.prefill.sampling_helpers import _TILE_SIZE
 
 _SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
+_DEFAULT_MAX_BATCHED_PREFILL_TOKENS = 128 * 1024
+
+
+@dataclass(frozen=True)
+class BatchedPrefillPolicy:
+    """Immutable eligibility and physical-geometry policy for batched prefill."""
+
+    physical_batch_sizes: tuple[int, ...]
+    minimum_active_rows: int
+    maximum_physical_batch: int
+    maximum_sequence_length: int
+    maximum_total_tokens: int
+    allow_cached_prefix: bool
+    sampling_requires_batched_output: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.physical_batch_sizes, tuple):
+            raise TypeError("physical_batch_sizes must be a tuple")
+        if not self.physical_batch_sizes:
+            raise ValueError("physical_batch_sizes must not be empty")
+        for index, value in enumerate(self.physical_batch_sizes):
+            _require_positive_int(f"physical_batch_sizes[{index}]", value)
+            if value not in _SUPPORTED_PREFILL_BATCH_SIZES:
+                raise ValueError(f"physical_batch_sizes must be drawn from {_SUPPORTED_PREFILL_BATCH_SIZES}")
+        if tuple(sorted(set(self.physical_batch_sizes))) != self.physical_batch_sizes:
+            raise ValueError("physical_batch_sizes must be strictly increasing")
+        _require_positive_int("minimum_active_rows", self.minimum_active_rows)
+        _require_positive_int("maximum_physical_batch", self.maximum_physical_batch)
+        if self.maximum_physical_batch != self.physical_batch_sizes[-1]:
+            raise ValueError("maximum_physical_batch must be the largest physical batch size")
+        _require_positive_int("maximum_sequence_length", self.maximum_sequence_length)
+        _require_positive_int("maximum_total_tokens", self.maximum_total_tokens)
+        _require_bool("allow_cached_prefix", self.allow_cached_prefix)
+        _require_bool("sampling_requires_batched_output", self.sampling_requires_batched_output)
+
+    @classmethod
+    def default(
+        cls,
+        *,
+        maximum_physical_batch: int,
+        maximum_sequence_length: int,
+    ) -> "BatchedPrefillPolicy":
+        """Resolve the pre-policy planner behavior as an explicit value."""
+
+        return cls(
+            physical_batch_sizes=tuple(
+                size for size in _SUPPORTED_PREFILL_BATCH_SIZES if size <= maximum_physical_batch
+            ),
+            minimum_active_rows=2,
+            maximum_physical_batch=maximum_physical_batch,
+            maximum_sequence_length=maximum_sequence_length,
+            maximum_total_tokens=_DEFAULT_MAX_BATCHED_PREFILL_TOKENS,
+            allow_cached_prefix=False,
+            sampling_requires_batched_output=True,
+        )
 
 
 @dataclass(frozen=True)
@@ -29,6 +84,7 @@ class PrefillRuntimeConfig:
     disable_batched_prefill: bool
     max_prefill_batch_size: int
     batched_prefill_batched_extract: bool
+    batched_prefill_policy: BatchedPrefillPolicy
     cluster_shape: tuple[int, int]
     device_sampling_enabled: bool
     can_enable_trace: Callable[[int, int], bool]
@@ -53,6 +109,7 @@ class PrefillRuntimeConfig:
         disable_batched_prefill: bool = False,
         max_prefill_batch_size: int = 8,
         batched_prefill_batched_extract: bool = True,
+        batched_prefill_policy: BatchedPrefillPolicy | None = None,
         device_sampling_enabled: bool,
         can_enable_trace: Callable[[int, int], bool],
         trace_capture_prime_sequence_lengths: tuple[int, ...] = (),
@@ -66,6 +123,16 @@ class PrefillRuntimeConfig:
         _require_positive_int("max_prefill_batch_size", max_prefill_batch_size)
         _require_supported_prefill_batch_size(max_prefill_batch_size)
         _require_bool("batched_prefill_batched_extract", batched_prefill_batched_extract)
+        if batched_prefill_policy is None:
+            batched_prefill_policy = BatchedPrefillPolicy.default(
+                maximum_physical_batch=max_prefill_batch_size,
+                maximum_sequence_length=max_prefill_chunk_size,
+            )
+        elif not isinstance(batched_prefill_policy, BatchedPrefillPolicy):
+            raise TypeError("batched_prefill_policy must be a BatchedPrefillPolicy")
+        if batched_prefill_policy.maximum_sequence_length > max_prefill_chunk_size:
+            raise ValueError("batched_prefill_policy maximum_sequence_length cannot exceed max_prefill_chunk_size")
+        max_prefill_batch_size = batched_prefill_policy.maximum_physical_batch
         if not isinstance(output_reader, OutputReader):
             raise TypeError("output_reader must be an OutputReader")
         mesh_device = output_reader.mesh_device
@@ -119,6 +186,7 @@ class PrefillRuntimeConfig:
             disable_batched_prefill=disable_batched_prefill,
             max_prefill_batch_size=max_prefill_batch_size,
             batched_prefill_batched_extract=batched_prefill_batched_extract,
+            batched_prefill_policy=batched_prefill_policy,
             cluster_shape=resolved_cluster_shape,
             device_sampling_enabled=device_sampling_enabled,
             can_enable_trace=can_enable_trace,
@@ -139,6 +207,10 @@ class PrefillRuntimeConfig:
         _require_positive_int("max_prefill_batch_size", self.max_prefill_batch_size)
         _require_supported_prefill_batch_size(self.max_prefill_batch_size)
         _require_bool("batched_prefill_batched_extract", self.batched_prefill_batched_extract)
+        if not isinstance(self.batched_prefill_policy, BatchedPrefillPolicy):
+            raise TypeError("batched_prefill_policy must be a BatchedPrefillPolicy")
+        if self.max_prefill_batch_size != self.batched_prefill_policy.maximum_physical_batch:
+            raise ValueError("max_prefill_batch_size must match batched_prefill_policy")
         _require_positive_int("sampling_batch_size", self.sampling_batch_size)
         if not isinstance(self.output_reader, OutputReader):
             raise TypeError("output_reader must be an OutputReader")
