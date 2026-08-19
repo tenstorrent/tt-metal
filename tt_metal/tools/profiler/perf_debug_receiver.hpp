@@ -94,9 +94,9 @@ private:
         std::atomic<bool> producers_done{false};
         bool retired = false;
 
-        uint64_t passes = 0, frames = 0, records = 0, zone_markers = 0, stall_zones = 0;
+        uint64_t passes = 0, frames = 0, pages = 0, records = 0, zone_markers = 0, stall_zones = 0;
         uint64_t decode_ticks = 0;
-        uint64_t order_regressions = 0, partial_frame_polls = 0, bad_frames = 0;
+        uint64_t order_regressions = 0, bad_frames = 0;
         uint64_t first_data_tsc = 0, last_commit_tsc = 0;
         uint64_t min_zone_ts = 0, max_zone_ts = 0;
         uint64_t checksum = 0;  // READ_ONLY ablation: defeats elision of the bandwidth-probe reads

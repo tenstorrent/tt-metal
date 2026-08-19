@@ -4,31 +4,36 @@
 //
 // The DRISC streaming-profiler drainer: worker SPSC rings -> DRISC -> D2H socket -> host.
 //
-// The DRISC is a CONDUIT. It bulk-reads a worker's whole profiler_msg_t into a staging slot and writes
-// that same slot straight to the host -- it never copies the payload, never re-frames it, and authors
-// exactly 7 words about it: a 2-word frame header, 5 patched heads. Identity, per-lane progress and extent
-// all reach the host inside the worker's own control vector, which rides at the front of the span.
+// The DRISC is a CONDUIT. It bulk-reads a worker's whole profiler_msg_t into a staging slot and ships out
+// of that same slot -- it never copies the payload, and authors exactly 8 words about it: a 2-word frame
+// header (word 1 patched to the packed payload length at push), 5 patched heads. Identity, per-lane
+// progress and extent all reach the host inside the worker's own control vector, which rides at the front
+// of the span.
 //
-// ---- Why there is no copy: it was 45% of the drainer ----
+// ---- Why the CPU never touches the payload: a copy was 45% of the drainer ----
 //
-// The previous version packed each lane's live run exactly, with CPU loads and stores out of the staged
+// An early version packed each lane's live run exactly, with CPU loads and stores out of the staged
 // snapshot. Per-phase instrumentation killed it: a busy sweep cost 2,271 us against an idle sweep's 36 us,
 // and 2,244 us of that was the copy -- 20.4 us to move one core's 2,490 words, i.e. ~11 CYCLES PER WORD.
 // A `volatile tt_l1_ptr` word-at-a-time loop cannot be unrolled, widened or pipelined by the compiler.
-// Meanwhile the socket credit wait was 0.0% and the PCIe write 0.1%.
 //
-// So exact packing traded a resource that cost 0.1% (PCIe bytes) for one that cost 45% (DRISC cycles).
-// Shipping the raw span over-sends the dead tail of each ring, which is nearly free at the high occupancy
-// bulk reading actually produces -- and it makes the payload untouched by software, which is also why the
-// alignment hazard class cannot arise: both ends of the transfer are whole slots.
+// Its replacement shipped the raw span whole, which zeroed the copy -- and made host cost frames x
+// 10,560 B regardless of fill. ship_once now does the exact packing the copy died for, WITHOUT the
+// copy: the NIU gathers each live window straight from the staged slot into the host FIFO (layout and
+// the congruence-pad rule in profiler_common.h). The saving is the dead ring bytes, so it scales
+// inversely with fill: ~9% on a saturated delay-15 capture whose snapshots run ~90-96% full, up to ~30x
+// on a sparse workload whose spans are nearly empty. The price is write ISSUES -- ~11 NoC writes per
+// frame instead of one burst per batch, measured 6.98 us per 7-frame push at ~96% fill (~9.9 GB/s per
+// mover, still above the device's ~15.9 GB/s offered aggregate, so egress stays off the critical path).
 //
 // ---- Layout: the prefix lives IN FRONT of the staging slot ----
 //
 //   slot = [16-word prefix][2,624-word span: 64-word control vector + 5 x 512-word rings]
-//        = 2,640 words = 10,560 B = exactly 165 socket pages, so a frame never needs padding.
+//        = 2,640 words = 10,560 B = exactly 165 socket pages.
 //
-// The bulk read lands at slot+64 B, so prefix and span are contiguous and one NoC write ships the frame.
-// Slots are contiguous too, so a run of adjacent cores that all have data ships as a SINGLE write.
+// The bulk read lands at slot+64 B, so prefix and span are contiguous and a frame stages in one piece.
+// Slots are contiguous too, so a run of adjacent cores that all have data moves to a DRAM ring as a
+// SINGLE write (stage_run); only the socket push gathers per frame (ship_once).
 //
 // The staged span is reused by the next batch's reads, so the write must land before then -- hence one
 // write barrier per batch. That costs PCIe latency rather than bandwidth, and the measured write phase was
@@ -74,8 +79,9 @@
 // produced 0/25 failures held in stream mode and 0/25 doing filler-only duty. The hazard lives in the
 // egress/host-facing half.
 //
-// The frame layout does not change, which is what keeps the host decoder untouched: a DRAM ring slot is the
-// same 2,640-word prefix+span the socket path ships, so the mover copies whole frames and never re-frames.
+// A DRAM ring slot is the same raw 2,640-word prefix+span the full-job drainer stages, so the mover copies
+// whole slots out of the ring and packs only at its socket push -- every role puts one wire format on the
+// socket and the host decoder cannot tell them apart.
 
 #include <cstdint>
 
@@ -100,9 +106,11 @@
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 #endif
 
-// D2H: write L1 to PCIe host RAM in NOC_MAX_BURST_SIZE chunks.
+// D2H: write L1 to PCIe host RAM in NOC_MAX_BURST_SIZE chunks. The caller runs
+// noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC) once per push -- the packed
+// gather calls this ~11 times per frame, so a per-call init would repeat command-buffer setup that
+// nothing between the calls invalidates.
 inline void write_to_host_chunked(uint32_t pcie_xy_enc, uint32_t src_l1, uint64_t dst_pcie, uint32_t size) {
-    noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
     while (size) {
         const uint32_t chunk = size > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : size;
         noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
@@ -533,6 +541,18 @@ void kernel_main() {
     static_assert(kSpanBytes <= NOC_MAX_BURST_SIZE, "the fused span read must fit one NoC burst");
     static_assert(kNumRisc <= kernel_profiler::PROFILER_SPSC_MAX_RISC, "control layout too small");
     static_assert(kSlotWords % kPageWords == 0, "a slot must be a whole number of socket pages");
+    // The packed gather's congruence argument (profiler_common.h): pads bring each run to its ring phase,
+    // and everything else -- the slot base, the payload base, a wrap continuation -- must land congruent
+    // with NO pad, which these divisibilities are the proof of.
+    static_assert(
+        kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS * 4u == NOC_PCIE_WRITE_ALIGNMENT_BYTES,
+        "the shared pad rule no longer matches this part's NoC write congruence");
+    static_assert(
+        kRingWords % kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS == 0 &&
+            (kPrefix + kCtrlWords) % kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS == 0 &&
+            kStageBase % (kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS * 4u) == 0 &&
+            kSlotBytes % (kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS * 4u) == 0,
+        "packed-gather congruence broken");
 
     const uint32_t num_cores = get_arg_val<uint32_t>(0);
     const uint32_t cv_src = get_arg_val<uint32_t>(1);  // start of profiler_msg_t on the worker
@@ -676,12 +696,12 @@ void kernel_main() {
     }
 
     // Every frame's prefix is IDENTICAL and the bulk read lands past it (at slot + 16 words), so it is
-    // written once here and never touched again. It used to be 16 stores per core per visit.
+    // written once here. Word 1 -- the packed payload length -- is the exception: ship_once patches it at
+    // push time, the first moment the fill is known.
     for (uint32_t sl = 0; sl < kNStage; sl++) {
         volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase + sl * kSlotBytes);
         pfx[0] = kernel_profiler::spsc_span_w0();
-        pfx[1] = kSpanWords;  // constant: control vector + five whole rings
-        for (uint32_t k = 2; k < kPrefix; k++) {
+        for (uint32_t k = 1; k < kPrefix; k++) {
             pfx[k] = 0;
         }
     }
@@ -771,13 +791,36 @@ void kernel_main() {
     // never fires in normal operation -- it exists purely to convert "wait forever" into "lose a frame".
     constexpr uint64_t kCreditWaitCycles = 67500000ull;
 
-    // Ship `count` adjacent slots as ONE contiguous write. They are already framed in place: nothing is
-    // copied, nothing is assembled.
+    // Packed frame geometry, derived from the staged control vector exactly as the host re-derives it
+    // (profiler_common.h), and the length-word patch that publishes it. Non-volatile loads on purpose,
+    // same argument as process_batch: staging is a landed, barrier-waited snapshot.
+    auto pack_frame_words = [&](uint32_t slot) -> uint32_t {
+        const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
+        uint32_t off = kPrefix + kCtrlWords;
+        for (uint32_t r = 0; r < kNumRisc; r++) {
+            const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
+            const uint32_t run =
+                kernel_profiler::spsc_span_live(cv[kernel_profiler::SPSC_RING_HEAD_0 + r], tail, kRingWords);
+            if (run != 0) {
+                off += kernel_profiler::spsc_span_pack_pad(tail - run, off) + run;
+            }
+        }
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot)[1] = off - kPrefix;
+        return kernel_profiler::spsc_span_frame_words(off - kPrefix);
+    };
+
+    // Ship `count` adjacent staged slots as PACKED frames: per frame, the prefix + control vector and then
+    // each live lane's window, NIU-gathered straight out of the slot. Nothing is copied; the dead ring
+    // tails simply never ship.
     // Returns false if this send was dropped (credit wait expired), so an amplified run stops repeating
     // into a consumer that is not acking instead of billing one dropped frame per repeat.
     auto ship_once = [&](uint32_t start, uint32_t count) -> bool {
-        const uint32_t nbytes = count * kSlotBytes;
-        const uint32_t npages = count * kPagesPerSlot;
+        uint32_t npages = 0;
+        for (uint32_t f = 0; f < count; f++) {
+            npages += pack_frame_words(kStageBase + (start + f) * kSlotBytes) / kPageWords;
+        }
+        // The NIU reads the patched length words; Blackhole stores can reach SRAM out of order.
+        asm volatile("fence" ::: "memory");
         const uint64_t t0 = get_timestamp();
         *phase = kPhaseReserve;  // if the host sees this stuck, the credit wait is the deadlock
         const bool credited = reserve_pages_bounded(sender, npages, t0 + kCreditWaitCycles, stop);
@@ -803,15 +846,53 @@ void kernel_main() {
         if (static_cast<uint32_t>(t1 - t0) > max_reserve) {
             max_reserve = static_cast<uint32_t>(t1 - t0);
         }
-        // A multi-page write is one contiguous burst, so it must be split where the FIFO wraps;
-        // socket_push_pages only wraps the pointer, it does not split the transfer.
         *phase = kPhWrChunk;
-        const uint32_t base = kStageBase + start * kSlotBytes;
+        noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
         const uint32_t fifo_size = sender.downstream_fifo_curr_size;
-        const uint32_t first = (sender.write_ptr + nbytes > fifo_size) ? fifo_size - sender.write_ptr : nbytes;
-        write_to_host_chunked(pcie_xy_enc, base, pcie_base + sender.write_ptr, first);
-        if (first < nbytes) {
-            write_to_host_chunked(pcie_xy_enc, base + first, pcie_base, nbytes - first);
+        uint32_t wr = sender.write_ptr;
+        // Every gather piece is split where the FIFO wraps; socket_push_pages only wraps the pointer, it
+        // does not split a transfer. Pad and page-tail words are skipped, never written.
+        auto put = [&](uint32_t src, uint32_t len) {
+            const uint32_t first = (wr + len > fifo_size) ? fifo_size - wr : len;
+            write_to_host_chunked(pcie_xy_enc, src, pcie_base + wr, first);
+            if (first < len) {
+                write_to_host_chunked(pcie_xy_enc, src + first, pcie_base, len - first);
+            }
+            wr += len;
+            if (wr >= fifo_size) {
+                wr -= fifo_size;
+            }
+        };
+        auto skip = [&](uint32_t len) {
+            wr += len;
+            if (wr >= fifo_size) {
+                wr -= fifo_size;
+            }
+        };
+        for (uint32_t f = 0; f < count; f++) {
+            const uint32_t slot = kStageBase + (start + f) * kSlotBytes;
+            const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
+            put(slot, (kPrefix + kCtrlWords) * 4u);
+            uint32_t off = kPrefix + kCtrlWords;
+            for (uint32_t r = 0; r < kNumRisc; r++) {
+                const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
+                const uint32_t run =
+                    kernel_profiler::spsc_span_live(cv[kernel_profiler::SPSC_RING_HEAD_0 + r], tail, kRingWords);
+                if (run == 0) {
+                    continue;
+                }
+                const uint32_t pad = kernel_profiler::spsc_span_pack_pad(tail - run, off);
+                skip(pad * 4u);
+                const uint32_t hm = (tail - run) & (kRingWords - 1u);
+                const uint32_t ring_l1 = slot + (kPrefix + kCtrlWords + r * kRingWords) * 4u;
+                const uint32_t chunk = run <= kRingWords - hm ? run : kRingWords - hm;
+                put(ring_l1 + hm * 4u, chunk * 4u);
+                if (chunk < run) {
+                    put(ring_l1, (run - chunk) * 4u);
+                }
+                off += pad + run;
+            }
+            skip((kernel_profiler::spsc_span_frame_words(off - kPrefix) - off) * 4u);
         }
         const uint64_t t2 = get_timestamp();
         c_wr_chunk += t2 - t1;
@@ -1027,13 +1108,12 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* pfx =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase + kSelfSlot * kSlotBytes);
         pfx[0] = kernel_profiler::spsc_span_w0();
-        pfx[1] = kSpanWords;  // the full five-ring span: only ring 0 is live, and the host skips the rest
-        for (uint32_t k = 2; k < kPrefix; k++) {
+        for (uint32_t k = 1; k < kPrefix; k++) {
             pfx[k] = 0;
         }
         // The whole control vector, not just the words we use: it ships verbatim and the host reads a head
-        // and a tail for all five RISCs. Rings 1-4 must read tail == head == 0 forever or the decoder would
-        // walk uninitialised L1 as markers.
+        // and a tail for all five RISCs. Rings 1-4 must read tail == head == 0 forever or the gather would
+        // ship uninitialised L1 for the decoder to walk as markers.
         for (uint32_t k = 0; k < kCtrlWords; k++) {
             self_ctrl[k] = 0;
         }
@@ -2163,7 +2243,7 @@ void kernel_main() {
     // reports only "it worked" is indistinguishable from one that captured the wrong 0.5% of the run. These say
     // how much was captured, how much was deliberately discarded, how much was refused for budget, and what it
     // cost -- so "silently truncated" is not a state this can be in.
-    out[64] = self_frames;       // self frames shipped (x 10,560 B each)
+    out[64] = self_frames;       // self frames shipped
     out[65] = self_markers;      // markers written into the self ring
     out[66] = self_sweeps;       // sweeps whose zones were shipped
     out[67] = self_sweeps_work;  // of those, the ones that actually did work -- the ones worth having

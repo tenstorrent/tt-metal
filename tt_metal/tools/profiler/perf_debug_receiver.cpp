@@ -25,11 +25,13 @@ namespace tt::tt_metal::perf_debug {
 
 namespace {
 
-constexpr uint32_t kMaxFramesPerPass = 64;
-// Credit-return quantum: pop+ack every 8 decoded frames (~84 KB, about one mover push) instead of once
-// per pass, so the device sees credit at decode pace rather than in 676 KB steps.
+// Credit-return quantum: pop+ack every 8 decoded frames (about one mover push) instead of once per pass,
+// so the device sees credit at decode pace rather than in whole-pass steps.
 constexpr uint32_t kAckBatchFrames = 8;
-constexpr uint32_t kFrameBytes = profiler::kSpscFrameWords * 4;
+// Per-pass peek window (~680 KB). Every complete frame inside it is consumed -- pages peeked but not
+// consumed are clflushed again by the next peek, so the only re-flush waste is a partial tail frame.
+constexpr uint32_t kMaxPagesPerPass = 64 * profiler::kSpscMaxFramePages;
+constexpr uint32_t kPageBytes = kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4;
 constexpr size_t kConsumerScratchRecs = 1 << 16;
 constexpr uint32_t kEmptyPollsBeforeSleep = 1000;
 // Decode threads probe the FIFO at least this often when idle; consumers are latency-tolerant and may
@@ -135,42 +137,26 @@ void PerfDebugReceiver::start() {
 }
 
 bool PerfDebugReceiver::decode_pass(Stream& s) {
-    const uint32_t np = s.sock->pages_available();
-    const uint32_t nframes_avail = np / profiler::kSpscFramePages;
-    if (nframes_avail == 0) {
-        if (np != 0) {
-            s.partial_frame_polls++;
-        }
+    const uint32_t avail = s.sock->pages_available();
+    if (avail == 0) {
         if (s.producers_done.load(std::memory_order_acquire)) {
-            if (np != 0 && !s.desync_warned) {
-                s.desync_warned = true;
-                log_warning(
-                    tt::LogMetal,
-                    "[perf-debug receiver] d{}/s{}: {} pages (a partial frame) remain after the drainers "
-                    "finished -- flow control desynchronized; dropping them",
-                    s.dev,
-                    s.sock_idx,
-                    np);
-                s.sock->pop(np, true);
-            }
             s.retired = true;
         }
         return false;
     }
 
-    const uint32_t nframes = std::min(nframes_avail, kMaxFramesPerPass);
-    const uint32_t npages = nframes * profiler::kSpscFramePages;
+    const uint32_t np = std::min(avail, kMaxPagesPerPass);
     if (s.first_data_tsc == 0) {
         s.first_data_tsc = tsc_now();
     }
     if (no_decode_) {
-        s.sock->pop(npages, true);
-        s.frames += nframes;
+        s.sock->pop(np, true);
+        s.pages += np;
         s.passes++;
         return true;
     }
     if (read_only_) {
-        const auto v = s.sock->peek(npages);
+        const auto v = s.sock->peek(np);
         const uint64_t t0 = tsc_now();
         uint64_t acc = 0;
         for (size_t i = 0; i < v.first_bytes / 4; i += 16) {
@@ -181,14 +167,14 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         }
         s.checksum ^= acc;
         s.decode_ticks += tsc_now() - t0;
-        s.sock->pop(npages, true);
+        s.sock->pop(np, true);
         s.last_commit_tsc = tsc_now();
-        s.frames += nframes;
+        s.pages += np;
         s.passes++;
         return true;
     }
 
-    const auto view = s.sock->peek(npages);
+    const auto view = s.sock->peek(np);
     const size_t first_words = view.first_bytes / 4;
     auto& w = s.ring->writer();
     uint64_t pos = w.position();
@@ -297,45 +283,60 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
 #endif
 
     const uint64_t t0 = tsc_now();
-    alignas(64) uint32_t bounce[profiler::kSpscFrameWords];
-    // nullptr when the frame straddles the FIFO wrap (rare; the walk copies it through the bounce).
-    auto frame_at = [&](uint32_t f) -> const uint32_t* {
-        const size_t off = static_cast<size_t>(f) * profiler::kSpscFrameWords;
-        if (off + profiler::kSpscFrameWords <= first_words) {
-            return view.first + off;
-        }
-        if (off >= first_words) {
-            return view.second + (off - first_words);
-        }
-        return nullptr;
-    };
-    for (uint32_t f = 0; f < nframes; f++) {
-        const uint32_t* frame = frame_at(f);
-        if (frame == nullptr) {
-            const size_t off = static_cast<size_t>(f) * profiler::kSpscFrameWords;
-            const size_t head_words = first_words - off;
-            std::copy_n(view.first + off, head_words, bounce);
-            std::copy_n(view.second, profiler::kSpscFrameWords - head_words, bounce + head_words);
-            frame = bounce;
-        }
-        if (!pp_is_bulkspan(frame[0]) ||
-            kernel_profiler::spsc_span_frame_words(frame[1]) != profiler::kSpscFrameWords) {
+    const size_t total_words = first_words + view.second_bytes / 4;
+    alignas(64) uint32_t bounce[profiler::kSpscMaxFrameWords];
+    // Headers never split across the spans: frames start on page boundaries and the FIFO wraps on one.
+    auto word_at = [&](size_t o) { return o < first_words ? view.first[o] : view.second[o - first_words]; };
+    size_t o = 0;
+    uint32_t frames = 0, pages_done = 0, acked_pages = 0;
+    while (o + kernel_profiler::SPSC_SPAN_PREFIX_WORDS <= total_words) {
+        const uint32_t w1 = word_at(o + 1);
+        if (!pp_is_bulkspan(word_at(o)) || w1 < kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE ||
+            w1 > profiler::kSpscMaxPayloadWords) {
+            // Framing is lost; step one page and rescan for the next header.
             s.bad_frames++;
+            o += kernel_profiler::SPSC_SPAN_PAGE_WORDS;
+            pages_done++;
             continue;
         }
-        for (uint32_t line = 0; line < 6; line++) {
-            profiler::spsc_prefetch(frame + profiler::kSpscFrameWords + 16 * line);
+        const uint32_t fw = kernel_profiler::spsc_span_frame_words(w1);
+        if (o + fw > total_words) {
+            break;  // the device pushes whole frames, so the rest of this one is in flight; leave it unpopped
+        }
+        const uint32_t* frame;
+        if (o + fw <= first_words) {
+            frame = view.first + o;
+        } else if (o >= first_words) {
+            frame = view.second + (o - first_words);
+        } else {
+            const size_t head_words = first_words - o;
+            std::copy_n(view.first + o, head_words, bounce);
+            std::copy_n(view.second, fw - head_words, bounce + head_words);
+            frame = bounce;
+        }
+        if (frame != bounce) {
+            for (uint32_t line = 0; line < 6; line++) {
+                profiler::spsc_prefetch(frame + fw + 16 * line);
+            }
         }
         if (sink) {
-            w.emit_reserve(pos + profiler::kSpscFrameWords);
+            w.emit_reserve(pos + fw);
         }
 #if defined(__AVX2__)
-        profiler::spsc_decode_frame(s.decode, frame, emit, emit_data, profiler::SpscIgnoreProg{}, emit_zones8);
+        const uint32_t payload =
+            profiler::spsc_decode_frame(s.decode, frame, emit, emit_data, profiler::SpscIgnoreProg{}, emit_zones8);
 #else
-        profiler::spsc_decode_frame(s.decode, frame, emit, emit_data);
+        const uint32_t payload = profiler::spsc_decode_frame(s.decode, frame, emit, emit_data);
 #endif
-        if ((f + 1) % kAckBatchFrames == 0) {
-            s.sock->pop(kAckBatchFrames * profiler::kSpscFramePages, true);
+        if (payload != 0 && payload != w1) {
+            s.bad_frames++;
+        }
+        o += fw;
+        pages_done += fw / kernel_profiler::SPSC_SPAN_PAGE_WORDS;
+        frames++;
+        if (frames % kAckBatchFrames == 0) {
+            s.sock->pop(pages_done - acked_pages, true);
+            acked_pages = pages_done;
         }
     }
     if (pos != pos0) {
@@ -348,11 +349,29 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     s.min_zone_ts = min_ts;
     s.max_zone_ts = max_ts;
     s.decode_ticks += tsc_now() - t0;
-    if (const uint32_t left = nframes % kAckBatchFrames; left != 0) {
-        s.sock->pop(left * profiler::kSpscFramePages, true);
+    if (pages_done > acked_pages) {
+        s.sock->pop(pages_done - acked_pages, true);
+    }
+    if (pages_done == 0) {
+        if (s.producers_done.load(std::memory_order_acquire)) {
+            if (!s.desync_warned) {
+                s.desync_warned = true;
+                log_warning(
+                    tt::LogMetal,
+                    "[perf-debug receiver] d{}/s{}: {} pages (a partial frame) remain after the drainers "
+                    "finished -- flow control desynchronized; dropping them",
+                    s.dev,
+                    s.sock_idx,
+                    avail);
+                s.sock->pop(avail, true);
+            }
+            s.retired = true;
+        }
+        return false;
     }
     s.last_commit_tsc = tsc_now();
-    s.frames += nframes;
+    s.pages += pages_done;
+    s.frames += frames;
     s.passes++;
     return true;
 }
@@ -560,12 +579,12 @@ std::vector<uint32_t> PerfDebugReceiver::final_lane_heads(uint32_t device_index)
 }
 
 void PerfDebugReceiver::log_report() const {
-    uint64_t total_frames = 0, total_wire_words = 0, total_zone_markers = 0, total_resync_words = 0;
+    uint64_t total_pages = 0, total_wire_words = 0, total_zone_markers = 0, total_resync_words = 0;
     uint64_t busy_ticks = 0, order_regressions = 0;
     uint64_t first_tsc = 0, last_tsc = 0;
     for (const auto& sp : streams_) {
         const Stream& s = *sp;
-        total_frames += s.frames;
+        total_pages += s.pages;
         total_wire_words += s.decode.live_words;
         total_zone_markers += s.zone_markers;
         total_resync_words += s.decode.resync_words;
@@ -579,11 +598,11 @@ void PerfDebugReceiver::log_report() const {
             tt::LogMetal,
             "[perf-debug receiver] d{}/s{}: {} frames ({:.1f} MB) in {} passes | decode {:.1f} ms | {} records "
             "({} zones, {} stall-zones) | resyncs {} ({} words) | head-lag {} | anomalies {} | bad frames {} | "
-            "unknown-core frames {} | partial-frame polls {} | order regressions {} [MUST be 0]",
+            "unknown-core frames {} | order regressions {} [MUST be 0]",
             s.dev,
             s.sock_idx,
             s.frames,
-            s.frames * static_cast<double>(kFrameBytes) / 1e6,
+            s.pages * static_cast<double>(kPageBytes) / 1e6,
             s.passes,
             ticks_to_ms(s.decode_ticks),
             s.records,
@@ -595,7 +614,6 @@ void PerfDebugReceiver::log_report() const {
             s.decode.anomalies,
             s.bad_frames,
             s.decode.unknown_core_frames,
-            s.partial_frame_polls,
             s.order_regressions);
     }
     uint64_t consumer_drops = 0;
@@ -610,7 +628,7 @@ void PerfDebugReceiver::log_report() const {
     }
     const double busy_ms = ticks_to_ms(busy_ticks);
     const double wall_ms = (first_tsc != 0 && last_tsc > first_tsc) ? ticks_to_ms(last_tsc - first_tsc) : 0.0;
-    const double d2h_gb = total_frames * static_cast<double>(kFrameBytes) / 1e9;
+    const double d2h_gb = total_pages * static_cast<double>(kPageBytes) / 1e9;
     const double wire_gb = total_wire_words * 4.0 / 1e9;
     const double mzones = total_zone_markers / 2.0 / 1e6;
     auto rate = [](double num, double ms) { return ms > 0.0 ? num / (ms / 1e3) : 0.0; };
