@@ -23,7 +23,8 @@ ttnn::Tensor moe_fused_swiglu(
     const std::optional<tt::tt_metal::CoreCoord>& core_grid,
     const std::optional<ttnn::Tensor>& output,
     const std::optional<ttnn::Tensor>& expert_region_offsets,
-    bool read_x_at_offset) {
+    bool read_x_at_offset,
+    RoutedExpertActivation activation) {
     constexpr uint32_t TILE = 32;
     const uint32_t capacity_tiles = activations.padded_shape()[-2] / TILE;
     const uint32_t m_tiles = input_m_tiles.value_or(capacity_tiles);
@@ -73,6 +74,7 @@ ttnn::Tensor moe_fused_swiglu(
         grid_x,
         grid_y,
         read_x_at_offset,
+        activation,
         output_dtype,
         output_memory_config,
         resolved_compute_config,

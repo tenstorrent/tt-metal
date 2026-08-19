@@ -16,8 +16,10 @@ void bind_moe_fused_swiglu(nb::module_& mod) {
         R"doc(
         Fused routed-expert SwiGLU using a configurable rectangular worker grid.
 
-        Computes ``silu(activations @ w_gate) * (activations @ w_up) @ w_down`` in one
-        device program. The number of valid token rows is read on device from
+        Computes a gated activation over ``activations @ w_gate`` and
+        ``activations @ w_up``, followed by ``@ w_down``, in one device program.
+        ``activation`` selects plain SiLU SwiGLU (default) or Kimi K3 SiTU-GLU.
+        The number of valid token rows is read on device from
         ``counts[global_expert_idx_table[local_expert_id]]``; no host readback
         or host branch depends on the count.
 
@@ -43,7 +45,8 @@ void bind_moe_fused_swiglu(nb::module_& mod) {
         nb::arg("core_grid") = nb::none(),
         nb::arg("output") = nb::none(),
         nb::arg("expert_region_offsets") = nb::none(),
-        nb::arg("read_x_at_offset") = false);
+        nb::arg("read_x_at_offset") = false,
+        nb::arg("activation") = RoutedExpertActivation::Silu);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu::detail

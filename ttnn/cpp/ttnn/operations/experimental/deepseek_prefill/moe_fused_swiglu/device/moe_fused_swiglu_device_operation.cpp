@@ -174,6 +174,11 @@ void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
         operation_arguments.grid_y,
         available_grid.x,
         available_grid.y);
+    TT_FATAL(
+        operation_arguments.activation == RoutedExpertActivation::Silu ||
+            operation_arguments.activation == RoutedExpertActivation::SituGlu,
+        "moe_fused_swiglu: activation must be RoutedExpertActivation::Silu or "
+        "RoutedExpertActivation::SituGlu");
 
     TT_FATAL(
         operation_arguments.output_dtype == tt::tt_metal::DataType::BFLOAT8_B ||
@@ -341,6 +346,7 @@ ttnn::Tensor moe_fused_swiglu(
     uint32_t grid_x,
     uint32_t grid_y,
     bool read_x_at_offset,
+    operations::experimental::deepseek_prefill::moe_fused_swiglu::RoutedExpertActivation activation,
     tt::tt_metal::DataType output_dtype,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
@@ -354,6 +360,7 @@ ttnn::Tensor moe_fused_swiglu(
             .grid_x = grid_x,
             .grid_y = grid_y,
             .read_x_at_offset = read_x_at_offset,
+            .activation = activation,
             .output_dtype = output_dtype,
             .output_memory_config = output_memory_config,
             .compute_kernel_config = compute_kernel_config},
