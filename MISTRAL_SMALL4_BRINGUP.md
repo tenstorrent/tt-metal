@@ -1095,6 +1095,13 @@ export PREFILL_TRACE_DIR=/data/kmabee/mistral4_golden_traces/mistral4_15360_36L
 
 ### Re-running all of this on a higher-power machine
 
+> **Short version for a fresh session on another box:**
+> `/data/kmabee/HANDOFF_12kW_perf_rerun.md` — a self-contained ~120-line prompt with the reference
+> table, the setup block, the 8 commands, the traps, and what to report. Kept outside git because it
+> hard-codes `/data/kmabee` paths. Everything below is the longer form.
+
+
+
 This box is **8 kW**; a **12 kW** machine should raise every number here, and prefill is exactly the
 regime that benefits (device-bound at large windows — at 25.6k eager and traced are within 1%, so
 the device, not the host, is the limit). Everything needed to reproduce the whole table:
