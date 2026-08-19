@@ -41,34 +41,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+                set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
             }
             else
             {
                 // CFG persists across run types, so non-L1_TO_L1 runs must not
                 // inherit the unpack-to-dest handshake.
                 set_up_zero_dest_dvalid_handshake_for_unpack();
-            }
-
-            DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            if constexpr (is_fp32_dest_acc_en)
-            {
-                if (pack_src_format == DataFormat::Float32)
-                {
-                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>();
-                }
-                else if (pack_src_format == DataFormat::Int32)
-                {
-                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
-                }
-                else
-                {
-                    _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
-                }
-            }
-            else
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>();
             }
         }
 
@@ -86,11 +65,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (unpack_to_dest)
         {
-            const std::uint32_t tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
             // ISSUE tt-llk #988: For unpack to dest cannot init the unpacker with 1 tile per unpack, because it will
             // keep writing to dest_idx=0.
             _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
-                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, tiles_in_block /*num_tiles_per_unpack*/);
+                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, OUTPUT_NUM_TILES_IN_BLOCK /*num_tiles_per_unpack*/);
         }
         else
         {
@@ -101,8 +79,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        const std::uint32_t tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
-        const std::uint32_t num_blocks     = static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS);
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -111,13 +87,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
+                const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT;
                 if constexpr (is_fp32_dest_acc_en)
                 {
-                    _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(src_handshake_iters);
                 }
                 else
                 {
-                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(LOOP_FACTOR * TILE_CNT);
+                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(src_handshake_iters);
                 }
             }
         }
@@ -125,9 +102,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t block = 0; block < num_blocks; block++)
+                for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS); block++)
                 {
-                    _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block * tiles_in_block, ckernel::DEFAULT_TENSOR_SHAPE);
+                    _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block * OUTPUT_NUM_TILES_IN_BLOCK, ckernel::DEFAULT_TENSOR_SHAPE);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
                         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
@@ -180,30 +157,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // dest-dvalid handshake.
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
 
-            DataFormat math_format     = static_cast<DataFormat>(formats.math);
-            DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-            if constexpr (is_fp32_dest_acc_en)
-            {
-                if (pack_src_format == DataFormat::Float32)
-                {
-                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-                }
-                else if (pack_src_format == DataFormat::Int32)
-                {
-                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-                }
-                else
-                {
-                    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-                }
-            }
-            else
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-            }
+            configure_math_hardware_for_float32_int32_or_default<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(
+                static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.pack_src));
 
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
@@ -219,13 +177,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
             {
+                const std::uint32_t src_handshake_iters = LOOP_FACTOR * num_blocks * tiles_in_block;
                 if constexpr (is_fp32_dest_acc_en)
                 {
-                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(src_handshake_iters);
                 }
                 else
                 {
-                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(LOOP_FACTOR * num_blocks * tiles_in_block);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(src_handshake_iters);
                 }
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -288,18 +247,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
-            cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+            set_up_zero_dest_dvalid_handshake_for_pack();
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             if constexpr (unpack_to_dest)
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+                set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
             }
             else
             {
-                set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
             }
         }
 

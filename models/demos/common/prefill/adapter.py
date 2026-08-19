@@ -206,6 +206,11 @@ class PrefillModelAdapter(ABC):
     moe_pcc_threshold: float = 0.999
     mla_pcc_threshold: float = 0.999
     supports_pretrained: bool = True
+    # Model layer whose ``self_attn.*`` holds the MLA weights; None if no checkpoint is reachable.
+    pretrained_mla_layer: Optional[int] = 0
+    # This variant's OWN golden MLA-trace dirs (each holding mla_io/ + kv_cache/), for the
+    # MLA-level trace tests; one per user, cycled. Empty = no trace was ever recorded for it.
+    mla_trace_defaults: tuple[str, ...] = ()
     # Whether the tokenizer needs trust_remote_code=True (custom tokenizer code shipped in the repo,
     # e.g. Kimi's tiktoken-backed BBPE). DeepSeek-V3 uses a stock fast tokenizer, so it turns this off
     # to avoid the flat-config trust_remote_code import path that otherwise breaks its load.

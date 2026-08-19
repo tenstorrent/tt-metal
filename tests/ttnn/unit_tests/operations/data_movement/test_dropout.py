@@ -74,6 +74,10 @@ def test_dropout_seed_distinguishes_cache_entries(device, in_place, use_per_devi
       * different seed must NOT grow the cache  -> guards against re-adding seed to the hash.
       * different seed must change the dropout mask -> guards against the frozen-seed bug on the
         fast path (the in_place case is only reachable since resolve_bindings allows input==output).
+
+    Parametrized over `use_per_device_seed` so both cache-hit override hooks are exercised:
+    the mesh path (`DropoutMeshWorkloadFactory::override_runtime_arguments`, per-device seed offset)
+    and the single-program path (`DropoutProgramFactory::override_runtime_arguments`).
     """
     t = torch.ones((1, 1, 32, 64))
     tensor = ttnn.from_torch(t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)

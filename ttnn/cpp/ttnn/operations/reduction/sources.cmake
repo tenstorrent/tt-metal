@@ -43,6 +43,10 @@ set(TTNN_OP_REDUCTION_SRCS
     topk/topk.cpp
     topk/device/topk_single_core_program_factory.cpp
     topk/device/topk_multi_core_program_factory.cpp
+    topk/device/topk_route_prep_device_operation.cpp
+    topk/device/topk_route_prep_program_factory.cpp
+    topk/device/topk_route_finish_device_operation.cpp
+    topk/device/topk_route_finish_program_factory.cpp
     reduction_common/reduction_common.cpp
     reduce_op_validation.cpp
     manual_seed/manual_seed.cpp

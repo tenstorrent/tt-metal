@@ -87,12 +87,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // The addr-mods are identical for every block, so init once outside the loop.
     _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE>(tensor_shape);
 
-    const std::uint32_t ct_dim     = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks = static_cast<std::uint32_t>(params.OUTPUT_NUM_BLOCKS);
 
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
-        _llk_math_sub_bcast_cols_reuse_custom_(ct_dim, tensor_shape, 0 /*dst_index*/);
+        _llk_math_sub_bcast_cols_reuse_custom_(params.OUTPUT_NUM_TILES_IN_BLOCK, tensor_shape, 0 /*dst_index*/);
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
 }

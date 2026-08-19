@@ -14,7 +14,7 @@ namespace tt::tt_metal::internal {
 
 /**
  * @warning INTERNAL. Everything declared in this header lives under
- * @c tt-metalium/internal: it exists to serve tt-metal's own tooling and
+ * @c api/internal: it exists to serve tt-metal's own tooling and
  * bindings, is not part of the supported user-facing API, and may change or be
  * removed without a deprecation period.
  *

@@ -51,7 +51,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const volatile FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t num_tiles = params.TILE_CNT;
 
     // -------------------------------------------------------------------------
     // Data format inference and dimensions
@@ -90,7 +89,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_pack.f.y_dim       = PARAM_SRCS_YDIM;
     bd_pack.f.z_dim       = PARAM_SRCS_ZDIM;
     _configure_buf_desc_table_(buf_desc_id_pack, bd_pack);
-    _llk_pack_hw_configure_<p_pacr::PACK1, false>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
+    _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
 
     // Implied math format disable for SrcS and sfpmem mod selection
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
@@ -105,10 +104,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_sfpu_init_();
 
     const int num_sfpu_iterations = PARAM_SRCS_YDIM >> 1; // SFP_ROWS == 2
-    for (std::uint32_t i = 0; i < num_tiles; ++i)
+    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         // Unpack/Pack calls can be moved outside the loop by incorporating the loop into the auto-loop registers
-        // Keeping them here for now since num_tiles is not a compile-time constant
+        // Keeping them here for now since params.TILE_CNT is not a compile-time constant
         _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_unpack, i * PARAM_SRCS_SLICE_COUNT); // Sets dvalid for SFPU to read
 
         // Pack is placed before SFPU because SFPU loop fills up and clogs the instruction buffer leading to hangs
@@ -117,20 +116,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t slice = 0; slice < PARAM_SRCS_SLICE_COUNT; slice++)
         {
             // Passing addresses into calculate_* will land in a follow-up PR handled in https://github.com/tenstorrent/tt-llk/issues/1353.
-            const int load_base_addr  = ckernel::math::SFPU_SRCS_BASE_ADDR;                       // First slice of SrcS
             const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM; // Third slice of SrcS
 
 #pragma GCC unroll 8
             for (int d = 0; d < num_sfpu_iterations; d++)
             {
-                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, load_base_addr + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, ckernel::math::SFPU_SRCS_BASE_ADDR + (d << 1));
                 // Multiply LREG0 * LREG0, store result in LREG0
                 TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
                 // Store result back to destination
                 TT_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, store_base_addr + (d << 1));
             }
 
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>(); // Clears dvalid for SFPU read and write
+            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true /*SRCS_RD_DONE*/, true /*SRCS_WR_DONE*/>(); // Clears dvalid for SFPU read and write
         }
     }
 
