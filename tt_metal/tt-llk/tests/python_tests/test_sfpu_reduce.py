@@ -656,12 +656,11 @@ def test_int32_reduce_extreme(request, mathop, reduce_pool, injected_value, base
 # =============================================================================
 # Cat B — IEEE specials in a reduction
 #
-# The audit's section 4.8 records all three reduce ops as ⬜ for the edge sweep, and the registry
-# is why: ReduceColumn/ReduceRow/ReduceScalar each carry a plain uniform(-1, 1) domain with no
-# singularity and no knee, so edge_spec() returns None and no sweep can reach them however it is
-# pointed. What they have instead is cat B, and it behaves unlike cat B anywhere else in this
-# repository: a reduction *propagates* its special to the single output element, so one poisoned
-# lane is not one probe among 4096 -- it is the whole answer.
+# ReduceColumn/ReduceRow/ReduceScalar each carry a plain uniform(-1, 1) domain with no
+# singularity and no knee, so edge_spec() returns None and no edge sweep can reach them. What
+# they have instead is cat B, and it behaves unlike cat B anywhere else here: a reduction
+# *propagates* its special to the single output element, so one poisoned lane is the whole
+# answer rather than one probe among 4096.
 #
 # The classes below are therefore about the interaction between a special and the fold, which no
 # element-wise sweep can express:
@@ -702,10 +701,9 @@ _REDUCE_SPECIAL_CLASSES = {
 def _build_reduce_specials_tile(edge_class, torch_format):
     """A 32x32 tile carrying *edge_class*'s specials, with the rest held at 1.0.
 
-    Injected down column 0 (and 1, for both_inf) rather than scattered, so that a *single* reduced
-    lane carries the special and the other 31 stay finite. A scattered injection would leave every
-    lane poisoned and the variant could then only report "something in this tensor diverges" --
-    the same defect the binary suite's per-class split exists to avoid.
+    Injected down column 0 (and 1, for both_inf) rather than scattered, so a *single* reduced lane
+    carries the special and the other 31 stay finite. A scattered injection would poison every
+    lane and the variant could then only report "something in this tensor diverges".
     """
     tile = torch.full((TILE_DIM, TILE_DIM), 1.0, dtype=torch_format)
     if edge_class == "all_inf":
@@ -723,10 +721,9 @@ def _build_reduce_specials_tile(edge_class, torch_format):
 def _run_float_reduce_specials(mathop, reduce_pool, edge_class, formats, dest_acc):
     """Drive one specials class through the float reduce and return (golden, device) slices.
 
-    Deliberately a near-copy of _run_int32_reduce's body rather than a shared helper: that one
-    hardcodes Int32, the two's-complement pack path and an integer stimulus, and threading a
-    format axis plus a float builder through it would leave one function serving two families with
-    a flag for every difference. If a third caller appears, factor then.
+    A near-copy of _run_int32_reduce's body rather than a shared helper: that one hardcodes Int32,
+    the two's-complement pack path and an integer stimulus, and threading a format axis plus a
+    float builder through it would need a flag per difference. If a third caller appears, factor.
     """
     input_dimensions = [TILE_DIM, TILE_DIM]
     torch_format = format_dict[formats.input_format]
@@ -797,10 +794,9 @@ def _run_float_reduce_specials(mathop, reduce_pool, edge_class, formats, dest_ac
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
-    # Does the fold itself produce a NaN, before the pack path has a chance to substitute an
-    # infinity for it? Asked of the golden on a pipeline that preserves one (Float32 into a 32-bit
-    # Dest) rather than re-deriving the pool's semantics here -- a second statement of "when is a
-    # reduction NaN" in the test file would be one more thing to keep in step with the golden.
+    # Does the fold itself produce a NaN, before the pack path substitutes an infinity for it?
+    # Asked of the golden on a pipeline that preserves one (Float32 into a 32-bit Dest) rather
+    # than restating the pool's semantics here.
     nan_probe = get_golden_generator(UnarySFPUGolden)(
         mathop,
         src_A_untilized.to(torch.float32),
@@ -875,10 +871,9 @@ def test_float_reduce_specials(mathop, reduce_pool, edge_class, formats):
     # slice would stop checking those. `golden_slice` itself cannot be used for this -- by the time
     # it is returned the substitution has already happened and there is no NaN left to see.
     #
-    # A reduction has no forwarded-versus-generated distinction to make, unlike the binary sweep:
-    # the fold performs arithmetic on the special, so SFPMAD emits the resulting NaN whether or not
-    # an input was one. Measured: 4 of 96 variants -- Average over both_inf and over nan, on
-    # Float16_b -- and Sum's NaN happened to agree by sign, which is luck rather than a contract.
+    # A reduction has no forwarded-versus-generated distinction, unlike the binary sweep: the fold
+    # performs arithmetic on the special, so SFPMAD emits the resulting NaN whether or not an input
+    # was one. Measured: 4 of 96 variants -- Average over both_inf and over nan, on Float16_b.
     if generated_nan_sign_is_asserted(
         formats.input_format,
         formats.output_format,

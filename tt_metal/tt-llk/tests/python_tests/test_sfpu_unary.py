@@ -382,20 +382,11 @@ _APPROX_EXP_ACCURACY_XFAIL = {
     (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
 }
 
-# ...and it is a **Wormhole** limit. Measured on a Blackhole p150b: the two combinations of the
-# three that Blackhole can reach both XPASSed — (Float16, Float16_b, Yes) and
-# (Float32, Float16_b, Yes), each at both tile shapes, 4 XPASS in total and no other unary
-# XPASS. The third has a Float16 input at dest_acc=No, which
-# _skip_bh_unsupported_float_combo excludes before any marker applies.
-#
-# So Blackhole's exp approximation holds the default 5% rtol where Wormhole's overshoots by
-# ~5.7%. Blackhole therefore *asserts* approximate exp's accuracy rather than tolerating it,
-# and a regression there fails instead of quietly returning to XFAIL. Same reasoning, and the
-# same shape of gate, as _WORMHOLE_ONLY_EDGE_CLASSES in test_sfpu_binary.py.
-#
-# Kept as a set-plus-gate rather than by deleting the entries: the limit is real on Wormhole
-# and the numbers behind it are recorded above, so the arch is the discriminator, not the
-# measurement's validity.
+# ...and it is a **Wormhole** limit. Measured on a Blackhole p150b: both of the three
+# combinations Blackhole can reach XPASSed, at both tile shapes, and no other unary variant
+# XPASSed. So Blackhole's exp approximation holds the default 5% rtol where Wormhole's
+# overshoots by ~5.7%, and Blackhole *asserts* the accuracy rather than tolerating it. Same
+# shape of gate as _WORMHOLE_ONLY_EDGE_CLASSES in test_sfpu_binary.py.
 _APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY = True
 
 
@@ -530,45 +521,25 @@ _EDGE_SWEEP_OPS = sorted(
 #
 # THE -0.0 PROBE REACHES THE SFPU ON ONLY TWO OF THE EIGHT COMBINATIONS:
 #
-#   The three signed-zero ops partition *exactly* on unpack_to_dest, which
-#   eltwise_unary_sfpu sets to (input.is_32_bit() and dest_acc == Yes) — the only path on
-#   which the datum skips SrcA and the datacopy:
-#
-#     * Sign and Heaviside diverge on exactly the 2 combinations where unpack_to_dest is
-#       True, and nowhere else. Their two sets are identical.
-#     * Signbit diverges on exactly the complementary 6.
-#
-#   Asserted, not just observed — see _assert_signed_zero_partition_valid below.
+#   The signed-zero divergences partition *exactly* on unpack_to_dest, which
+#   eltwise_unary_sfpu sets to (input.is_32_bit() and dest_acc == Yes) — the only path on which
+#   the datum skips SrcA and the datacopy. Sign and Heaviside diverge on those 2 combinations
+#   and nowhere else; Signbit used to hold the complementary 6, which is what identified the
+#   split. Asserted rather than observed — see _assert_signed_zero_partition_valid below.
 #
 #   One cause explains all three. Neither calculate_sign nor calculate_heaviside guards
-#   |v| != 0 on its v_if(v < 0.0F), so a real -0.0 in the LREG would make them diverge on
-#   all 8; passing on 6 says the LREG holds +0.0 there. Signbit reads the sign bit
-#   directly, so on those same 6 it returns 0 — and it returns 1, correctly, on the 2 where
-#   the datum does arrive intact, which is why it passes exactly where the other two fail.
-#   A genuinely broken sign-bit read would fail on all 8, so the implementation is not the
-#   suspect.
+#   |v| != 0 on its v_if(v < 0.0F), so a real -0.0 in the LREG would make them diverge on all
+#   8; passing on 6 says the LREG holds +0.0 there. Signbit reads the sign bit directly, so it
+#   returned 0 on those 6 and 1, correctly, on the 2 where the datum does arrive — a genuinely
+#   broken sign-bit read would fail on all 8.
 #
-#   Two consequences, neither cosmetic:
+#   Signbit's 6 entries are therefore gone rather than kept: they recorded a *stimulus*
+#   limitation that no kernel fix could clear. negative_zero_delivered() keeps the -0.0 probe
+#   off the pipelines that flatten it, so Sign and Heaviside no longer pass vacuously there
+#   either.
 #
-#     * Signbit's 6 entries can never XPASS. The input never arrives, so they record a
-#       *stimulus* limitation rather than a kernel defect, and no kernel fix can clear
-#       them. The earlier reading of this as "a kernel-contract bug" was wrong.
-#     * Sign and Heaviside *passing* on those same 6 is vacuous. The golden's answers for
-#       -0.0 (0 for sign, 0.5 for heaviside) coincide with the hardware's answers for
-#       +0.0, so those cases agree without ever having tested what they name.
-#
-#   NOT DIRECTLY MEASURED, and worth doing before anything is built on it: drive datacopy
-#   with custom(values=[0.0, -0.0]) and read the DEST sign bit on a (Float16_b, *, No)
-#   variant. If DEST holds +0.0 the above is confirmed and the -0.0 probe should be scoped
-#   to the unpack-to-dest combinations, which turns Signbit's 6 xfails and Sign/Heaviside's
-#   6 vacuous passes into honest skips. The probe is left in place until then: dropping it
-#   on an unmeasured hypothesis would lose real coverage silently if the hypothesis is wrong,
-#   and the non-strict xfails still report XPASS if delivery ever changes.
-#
-#   The host-side check on record establishes L1 only. -0.0 leaves the *host* correctly —
-#   verified that the stimulus pipeline preserves it into both Float32 and Float16_b
-#   buffers — which says nothing about unpack -> SrcA -> DEST, so it does not contradict
-#   any of the above.
+#   The host-side check on record establishes L1 only: -0.0 leaves the *host* correctly, which
+#   says nothing about unpack -> SrcA -> DEST.
 #
 # STILL OPEN — not explained by the ISA:
 #
@@ -605,21 +576,17 @@ _EDGE_KNOWN_DIVERGENCES = {
 }
 
 
-# The cat-B divergences, derived rather than listed. Each of these three ops diverges on
-# exactly the combinations that *deliver* the probe it diverges on, so writing the rule beats
-# writing its current answer: the sets stay right when the format axis grows or when a
-# delivery measurement is revised, and there is no second copy to forget.
+# The cat-B divergences, derived rather than listed: each op diverges on exactly the
+# combinations that *deliver* the probe it diverges on, so the sets stay right when the format
+# axis grows or a delivery measurement is revised.
 #
 #   Reciprocal  every combination carrying specials at all -- 1/NaN is the probe.
-#   Sqrt, Rsqrt every combination that also delivers a real -0.0, which is the strictly
-#               smaller unpack-to-dest set. At dest_acc=No the kernel is handed +0.0 and
-#               agrees with the golden, so those combinations pass rather than xfail.
+#   Sqrt, Rsqrt every combination that also delivers a real -0.0, the strictly smaller
+#               unpack-to-dest set. At dest_acc=No the kernel is handed +0.0 and agrees.
 #
-# Measured on a Blackhole p300a: Reciprocal on all 3 reachable combinations, Sqrt and Rsqrt
-# on both of theirs. The rest of each set is Wormhole-only (_skip_bh_unless_fp32 takes
-# dest_acc=No down to Float32->Float32 there) and follows from the same kernel path. The
-# xfails are non-strict, so a Wormhole run that disagrees reports XPASS -- which this suite
-# reads as a signal worth more than most deliberate work, rather than as noise.
+# Measured on a Blackhole p300a: Reciprocal on all 3 reachable combinations, Sqrt and Rsqrt on
+# both of theirs. The rest of each set is Wormhole-only (_skip_bh_unless_fp32 takes dest_acc=No
+# down to Float32->Float32 there) and follows from the same kernel path.
 def _cat_b_divergences(delivers):
     return tuple(
         (fmt.input_format, fmt.output_format, dest_acc)
@@ -682,15 +649,14 @@ def _unpack_to_dest(input_format: DataFormat, dest_acc: DestAccumulation) -> boo
 def _assert_signed_zero_partition_valid():
     """The three signed-zero ops must partition on unpack_to_dest, exactly.
 
-    This is the whole basis for reading Signbit's six entries as "the probe is not
-    delivered" rather than as a kernel-contract bug, and for calling Sign's and Heaviside's
-    other six vacuous. It is an inference from *which* combinations diverge, so it stops
-    being load-bearing the moment the sets stop lining up — and a reason string is prose,
-    which no run checks. Assert the shape instead, so editing a table without revisiting the
-    explanation fails at collection.
+    This is the whole basis for reading Signbit's former six entries as "the probe is not
+    delivered" rather than as a kernel-contract bug. It is an inference from *which*
+    combinations diverge, so it stops holding the moment the sets stop lining up — and a reason
+    string is prose, which no run checks. Assert the shape instead, so editing a table without
+    revisiting the explanation fails at collection.
 
-    Deliberately not asserting the *count*: what matters is that each op's divergent set is
-    precisely one side of the unpack_to_dest split, which stays true if the format axis grows.
+    Not asserting the *count*: what matters is that each op's divergent set is precisely one
+    side of the unpack_to_dest split, which stays true if the format axis grows.
     """
     all_combos = [
         (fmt.input_format, fmt.output_format, dest_acc)
@@ -704,11 +670,9 @@ def _assert_signed_zero_partition_valid():
         MathOperation.Heaviside: True,
     }
 
-    # Signbit used to hold the other side of this partition: six xfails recording that the
-    # -0.0 probe never arrived on the datacopy path. negative_zero_delivered() now keeps the
-    # probe off those pipelines entirely, so there is nothing left to xfail -- and an entry
-    # here would be a standing non-strict xfail that can never fire, which is the shape of
-    # thing that masks a regression rather than recording one.
+    # Signbit used to hold the other side of this partition: six xfails recording that the -0.0
+    # probe never arrived on the datacopy path. negative_zero_delivered() now keeps the probe
+    # off those pipelines, so an entry here would be a non-strict xfail that can never fire.
     assert MathOperation.Signbit not in _EDGE_KNOWN_DIVERGENCES, (
         "Signbit's divergences were a stimulus limitation, not a kernel defect. The -0.0 "
         "probe is no longer sent where it cannot be delivered, so re-adding entries here "
@@ -773,14 +737,11 @@ def test_eltwise_unary_sfpu_edges(
 
     specials = _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials)
 
-    # Marked after the gate, not before, because three of these divergences are cat-B's and
-    # the gate can take cat B away. _cat_b_divergences derives Reciprocal's, Sqrt's and
-    # Rsqrt's sets from the combinations that *deliver* the probe, so on a cell where the
-    # gate has since switched specials off the probe is not sent, the divergence cannot
-    # occur, and the entry would be a non-strict xfail that can never fire -- XPASS every
-    # run, recording nothing, which is exactly what Signbit's deleted entries were.
-    # Sign, Heaviside, RsqrtCompat and Erfinv are unaffected: their divergences are cat-A
-    # poles and signed zeros that edge_values() emits with or without specials.
+    # Marked after the gate, not before, because three of these divergences are cat-B's and the
+    # gate can take cat B away: where it has, the probe is not sent, the divergence cannot
+    # occur, and the entry would be a non-strict xfail that XPASSes every run. Sign, Heaviside,
+    # RsqrtCompat and Erfinv are unaffected -- their divergences are cat-A poles and signed
+    # zeros that edge_values() emits with or without specials.
     diverges_here = (formats.input_format, formats.output_format, dest_acc) in (
         _EDGE_KNOWN_DIVERGENCES.get(mathop, ())
     )
@@ -898,47 +859,37 @@ def test_eltwise_unary_sfpu_int(
 #
 # The unary shift ops take their amount as a compile-time immediate, not as an operand, so
 # until SFPU_SHIFT_AMOUNT existed the only amount ever tested was the fixed 3 that
-# sfpu_operations.h hard-coded -- one point out of the 32 legal ones, and none of the
-# out-of-range ones. (The *binary* shift ops take theirs as a second operand and have been
-# swept over this same list for a while; that asymmetry is why this needed a C++ change.)
+# sfpu_operations.h hard-coded. (The *binary* shift ops take theirs as a second operand and
+# have been swept over this same list for a while; that asymmetry is why this needed a C++
+# change.)
 #
 # The amounts are shared with the binary shift sweep through sfpu_domains.SHIFT_EDGE_AMOUNTS
-# rather than copied, so the two suites cannot drift on what counts as an interesting shift:
-# the in-range ends (0, 31), the first out-of-range value (32), larger ones, and negatives.
+# rather than copied, so the two suites cannot drift on what counts as an interesting shift.
 #
-# **The two unary shifts do not share an out-of-range rule.** calculate_left_shift zeroes the
-# result; calculate_right_shift clamps the amount to 31 and shifts anyway. They agree for a
-# positive operand, because x >> 31 is 0 either way, and part company for a negative one,
-# where the clamped arithmetic shift yields -1. The goldens model each kernel separately.
-# Assuming one rule for both is easy and wrong -- and it is also where the *unary* right shift
-# differs from the *binary* one, which really does produce 0 for both signs.
+# The two unary shifts do not share an out-of-range rule -- see
+# UnarySFPUGolden._shift_amount, which models each kernel separately.
 _UNARY_SHIFT_OPS = [MathOperation.LeftShift, MathOperation.RightShift]
 
 # The unary sweep takes the shared amounts but collapses the negatives to one.
 #
 # SFPU_SHIFT_AMOUNT emits the amount with a `u` suffix and both kernels branch on
-# `shift_amt >= 32` as unsigned, so every negative amount arrives as a large unsigned and
-# takes the same out-of-range path as 32, 33, 40, ... -- four amounts, one code path, eight
-# redundant silicon variants. The *binary* shift ops take their amount as a signed operand,
-# where the four are genuinely distinct, which is why the shared list keeps them and only this
-# consumer narrows.
+# `shift_amt >= 32` as unsigned, so every negative amount arrives as a large unsigned and takes
+# the same out-of-range path as 32, 33, 40, ... -- four amounts, one code path. The *binary*
+# shift ops take theirs as a signed operand, where the four are genuinely distinct, which is
+# why the shared list keeps them and only this consumer narrows.
 #
-# One is kept rather than none, because the unsigned wrap is load-bearing and worth pinning: if
-# SHIFT_AMOUNT ever became signed, -1 would compare as in-range and `v << -1` is undefined
-# behaviour rather than a wrong answer.
+# One is kept rather than none because the unsigned wrap is worth pinning: if SHIFT_AMOUNT ever
+# became signed, -1 would compare as in-range and `v << -1` is undefined behaviour.
 _UNARY_SHIFT_AMOUNTS = [n for n in SHIFT_EDGE_AMOUNTS if n >= 0] + [-1]
 
 # A shift is exact, so the stimulus only has to reach the interesting magnitudes rather than
-# straddle a boundary: powers of two around a byte and a half-word, a few odd values to catch
-# a lost low bit, and zero. Magnitudes only -- these are all non-negative, and the docstring
-# below says why no negative counterpart is drivable.
+# straddle a boundary: powers of two around a byte and a half-word, a few odd values to catch a
+# lost low bit, and zero. Non-negative only -- the docstring below says why.
 #
-# 2**30 is here for the *right* shift specifically. Without it the largest magnitude is 2**16,
-# so every stimulus is already 0 by an amount of 17 and each of 17..30 asserts nothing but
-# 0 >> n == 0 -- which cannot tell calculate_right_shift's `eff = 31` clamp apart from a clamp
-# anywhere in that range. 2**30 >> 30 == 1 restores the distinction at the top in-range amount.
-# It needs no left-shift exclusion: the limit filter below drops it from every LeftShift
-# variant that would overflow int32, keeping it only at an amount of 0.
+# 2**30 is here for the *right* shift: without it the largest magnitude is 2**16, so every
+# stimulus is already 0 by an amount of 17 and each of 17..30 asserts nothing but 0 >> n == 0,
+# which cannot tell calculate_right_shift's `eff = 31` clamp from a clamp anywhere in that
+# range. The limit filter below drops it from every LeftShift variant that would overflow.
 _SHIFT_STIMULUS_MAGNITUDES = [0, 1, 2, 3, 7, 255, 256, 1023, 65535, 65536, 2**30]
 
 _INT32_MAX = 2**31 - 1
@@ -948,27 +899,19 @@ def _shift_stimulus_values(mathop, shift_amount):
     """Values that stay representable after *mathop* shifts them by *shift_amount*.
 
     A left shift is the only one that can leave int32, and the amount is a compile-time
-    immediate here, so the value set has to be chosen per variant rather than once. One bound
-    suffices, because the magnitudes are non-negative: keeping the result <= INT32_MAX also
-    keeps it clear of INT32_MIN, which Dst stores as sign-magnitude and cannot represent. The
-    binary sweep needs both bounds on its (value, shift) product only because its value list
-    really does carry negatives.
-
-    Out-of-range amounts need no filter at all: neither kernel can overflow there. Left shift
-    returns 0, and right shift clamps to 31, which lands on 0 or -1.
+    immediate here, so the value set is chosen per variant. One bound suffices because the
+    magnitudes are non-negative: keeping the result <= INT32_MAX also keeps it clear of
+    INT32_MIN, which Dst stores as sign-magnitude and cannot represent. Out-of-range amounts
+    need no filter -- left shift returns 0, right shift clamps to 31.
 
     Positive-only, for the reason _int_unary_stimuli_spec gives: Dst stores integers as
-    sign-magnitude, so a negative operand does not survive the round trip the way two's
-    complement would. Driving negatives makes every RightShift variant except a shift of 0
-    disagree, in range as well as out, which is what identifies it as delivery rather than
-    arithmetic -- a stimulus limitation, not a kernel divergence.
+    sign-magnitude, so a negative operand does not survive the round trip.
 
-    **This is what makes the out-of-range half of the sweep weaker than it looks for
-    RightShift.** The two kernels do not share a rule: left shift zeroes, right shift clamps
-    the amount to 31 and shifts anyway, so an out-of-range right shift of a *negative* gives
-    -1. UnarySFPUGolden models that, but no probe can reach it while negatives cannot be
-    delivered, so the assertion here only covers the positive half where the two rules happen
-    to coincide at 0. Re-measure this the day a negative int32 operand can be delivered.
+    **That makes the out-of-range half weaker than it looks for RightShift.** An out-of-range
+    right shift of a *negative* gives -1 rather than 0, which UnarySFPUGolden models, but no
+    probe can reach it while negatives cannot be delivered -- so this only covers the positive
+    half, where the two kernels' rules coincide at 0. Re-measure once a negative int32 operand
+    can be delivered.
     """
     magnitudes = _SHIFT_STIMULUS_MAGNITUDES
     if mathop == MathOperation.LeftShift and 0 <= shift_amount < 32:
@@ -1126,13 +1069,10 @@ def _threshold_op_stimuli_spec(mathop):
     # Force a regular subset onto the op's threshold so both the equal and not-equal
     # branches fire and the output is non-constant.
     #
-    # The threshold comes from op_edge_points() rather than a local literal. These three
-    # ops are outside _OP_DOMAIN_REGISTRY, so sfpu_unary_ops() keeps them out of the edge
-    # sweep and edge_spec() never sees them — this is the only consumer of their
-    # _OP_EDGE_POINTS entry, the same arrangement the int32 comparison ops have. A local
-    # 0.5 could drift from UNARY_COMP_THRESHOLD, which the golden reads, with no test
-    # noticing: the stimuli would stop landing on the threshold and the output would
-    # quietly collapse to a constant again.
+    # The threshold comes from op_edge_points() rather than a local literal, which could drift
+    # from UNARY_COMP_THRESHOLD -- the value the golden reads -- with no test noticing. These
+    # three ops are outside _OP_DOMAIN_REGISTRY, so this is the only consumer of their
+    # _OP_EDGE_POINTS entry, the same arrangement the int32 comparison ops have.
     edges = op_edge_points(mathop)
     if not edges:
         raise AssertionError(
@@ -1202,9 +1142,9 @@ def eltwise_unary_sfpu(
     # register it rather than falling back to the positive-only default.
     # The domain has to hold for the whole pipeline, so for_op_pipeline resolves against
     # both formats and keeps the tighter — see its docstring for why both matter.
-    # approx_mode is passed because the exp family's positive side is bounded twice: by
-    # range always, and by the approximation's accuracy only in ApproximationMode.Yes. The
-    # registry carries the first; for_op applies the second from _APPROX_ACCURACY_MAX.
+    # approx_mode is passed because the exp family's positive side is bounded twice: by range
+    # always, and by the approximation's accuracy only in ApproximationMode.Yes. The registry
+    # carries the first; for_op applies the second from _APPROX_ACCURACY_MAX.
     if spec_A is None:
         spec_A = exclude_undefined(
             mathop,

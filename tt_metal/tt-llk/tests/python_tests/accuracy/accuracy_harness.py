@@ -187,11 +187,11 @@ def build_sweep_spec(
     *distribution* defaults to RAMP (deterministic, sorted — clean curves).
     Pass *seed* for reproducible random distributions.
 
-    *approx_mode* narrows the exp family to the ceiling its approximation stays
-    accurate to. This harness measures error rather than asserting a tolerance, so
-    the wider accurate-path domain is the useful one and None is a reasonable
-    default — but a sweep run in ApproximationMode.Yes should pass it, otherwise
-    the curve's tail is the approximation's known overshoot rather than a finding.
+    *approx_mode* narrows the exp family to its approximation's accuracy ceiling.
+    This harness measures error rather than asserting a tolerance, so None is a
+    reasonable default — but a sweep run in ApproximationMode.Yes should pass it,
+    otherwise the curve's tail is the approximation's known overshoot rather than a
+    finding.
     """
     spec = for_op(
         op, in_fmt, distribution_a=distribution, approx_mode=approx_mode

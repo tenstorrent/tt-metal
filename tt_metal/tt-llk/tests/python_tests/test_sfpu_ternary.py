@@ -56,10 +56,9 @@ def _ternary_default_specs(mathop, input_format):
     callers of _run_sfpu_ternary can override any operand to reach an edge the defaults
     exclude (e.g. the c -> 0 pole that addcdiv and snake_beta pin away from).
 
-    The registry branch reads spec_C rather than reusing spec_B for it. That reuse was
-    correct only while OperandSpecs had two operands; once it grew spec_C, keeping it would
-    have silently dropped a registered C domain on the one code path that exists to honour
-    it -- and dead today, since nothing is registered, is exactly when that goes unnoticed.
+    The registry branch reads spec_C rather than reusing spec_B for it: that reuse was correct
+    only while OperandSpecs had two operands, and keeping it would silently drop a registered C
+    domain on the one code path that exists to honour it.
     """
     if mathop in _OP_DOMAIN_REGISTRY:
         specs = exclude_undefined_pair(mathop, for_op(mathop, input_format))
@@ -202,10 +201,8 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
 # Deliberate edge values on the third operand
 #
 # The random sweep holds c in uniform(1, 2) for addcdiv and snake_beta because both divide by
-# it, so the pole is unreachable by construction; this drives it. Possible only once
-# OperandSpecs gained spec_C -- before, the registry could not express a third operand,
-# `_ternary_default_specs` reused B for C, and the singularity had nowhere to live.
-# `edge_spec(op, ..., operand=Operand.C)` now resolves through the usual metadata:
+# it, so the pole is unreachable by construction; this drives it.
+# `edge_spec(op, ..., operand=Operand.C)` resolves it through the usual metadata:
 #
 #   addcdiv    a + value * b / c    -> _OP_SINGULARITIES C = (0.0, BOTH)
 #   snake_beta a + sin(b*a)^2 / c   -> _OP_SINGULARITIES C = (0.0, BOTH)
@@ -225,15 +222,12 @@ _TERNARY_EDGE_OPS = [
 
 # Ops that divide by c, and therefore need a numerator held away from zero.
 #
-# c = 0 with an unconstrained numerator mixes two questions. The interesting one is the pole
-# with a nonzero numerator: 4064 of 4096 elements land on c = 0 (custom() zero-fills each
-# face's remainder) and every one should be ±inf. The other is 0/0 -- golden NaN, hardware inf
-# -- the indeterminate form, a property of the kernels' reciprocal composition rather than of
-# the pole, already recorded against div, fmod, remainder and xlogy in test_sfpu_binary's
-# _BINARY_EDGE_REASON. Measured on Blackhole, unconstrained addcdiv and snake_beta fail only
-# where the golden is NaN and agree on every ±inf, so holding the numerator off zero turns a
-# tolerated xfail into a real assertion about the pole and loses nothing already covered.
-# Driving 0/0 here would want its own variant and xfail, as the binary suite splits classes.
+# c = 0 with an unconstrained numerator mixes two questions: the pole with a nonzero numerator,
+# where every element should be ±inf, and 0/0, the indeterminate form already recorded against
+# div, fmod, remainder and xlogy in the binary suite. Measured on Blackhole, unconstrained
+# addcdiv and snake_beta fail only where the golden is NaN and agree on every ±inf, so holding
+# the numerator off zero turns a tolerated xfail into a real assertion about the pole. Driving
+# 0/0 here would want its own variant and xfail, as the binary suite splits classes.
 _TERNARY_DIVIDES_BY_C = frozenset(
     {MathOperation.SfpuAddcdiv, MathOperation.SfpuSnakeBeta}
 )
@@ -243,10 +237,9 @@ _TERNARY_DIVIDES_BY_C = frozenset(
 # holding both off zero keeps it clear of that too (|b*a| <= 1 < pi).
 #
 # Two specs differing only in seed: the seed is per-spec, so one spec shared by both operands
-# makes them bit-identical and every variant runs a == b. The pole on c is still reached --
-# which is why that passed -- but the operands stop being independent, snake_beta degenerating
-# from sin(b*a) to sin(a^2), and a kernel reading the wrong one would be invisible. Seeded
-# rather than defaulted so the streams stay reproducible while differing.
+# makes them bit-identical and every variant runs a == b -- which still reaches the pole on c,
+# but degenerates snake_beta from sin(b*a) to sin(a^2) and hides a kernel reading the wrong
+# operand. Seeded rather than defaulted so the streams stay reproducible while differing.
 _TERNARY_NONZERO_A = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=0)
 _TERNARY_NONZERO_B = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=1)
 

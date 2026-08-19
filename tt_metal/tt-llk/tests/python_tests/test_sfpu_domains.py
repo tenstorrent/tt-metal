@@ -384,12 +384,11 @@ def _binary_op_enumerators(arch_dir: str) -> set:
     return set(re.findall(r"^\s*([A-Z][A-Z0-9_]*)\s*(?:=|,)", body.group(1), re.M))
 
 
-# Coverage audit section 4.5 lists these five as driven by "none (WH/BH)". That is true of the
-# enum *members* and false of the *kernels*, and the difference is an alias that crosses a
-# MathOpType boundary: these carry MathOpType.SFPU_BINARY_INT, which only the Quasar dispatch
-# header implements, while the same kernels are reached on WH/BH through the SFPU_BINARY members
-# below at DataFormat.Int32. Section 2.4 of the audit already warns about aliasing for
-# SfpuWhere/TTNNWhere and LogicalNot/LogicalNotUnary; these are the same hazard one enum apart.
+# Listed in the coverage audit as driven by "none (WH/BH)", which is true of the enum *members*
+# and false of the *kernels*: these carry MathOpType.SFPU_BINARY_INT, which only the Quasar
+# dispatch header implements, while the same kernels are reached on WH/BH through the SFPU_BINARY
+# members below at DataFormat.Int32. Same aliasing hazard the audit records for SfpuWhere/TTNNWhere
+# and LogicalNot/LogicalNotUnary, one enum apart.
 _QUASAR_INT_BINARY_ALIASES = {
     MathOperation.SfpuGtInt: MathOperation.SfpuElwGt,
     MathOperation.SfpuLtInt: MathOperation.SfpuElwLt,

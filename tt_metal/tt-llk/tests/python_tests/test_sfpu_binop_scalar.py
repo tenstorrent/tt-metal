@@ -196,10 +196,8 @@ def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
 
 # Edge values on the *tensor* operand. All five ops are x (+|-|*|/) c for a compile-time c,
 # which is smooth in x -- no pole, no knee -- so cat A and cat D contribute nothing and
-# edge_spec() returns None for every one of them unless specials are on. Cat B is therefore
-# their entire edge story, and this test was a comment until the scalar ops were enrolled in
-# SPECIALS_READY_OPS, because before that it would have collected 20 variants and skipped all
-# 20: nightly runtime and a test name that reads like protection, with nothing behind it.
+# edge_spec() returns None unless specials are on. Cat B is their entire edge story, which is
+# why this test only exists now the scalar ops are enrolled in SPECIALS_READY_OPS.
 #
 # Two of the eight (format, dest_acc) pairs survive both gates, and they are complementary
 # rather than redundant -- between them they cover both sides of the delivery split:

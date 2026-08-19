@@ -288,12 +288,9 @@ class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 
     Emitted as a macro rather than a constexpr because sfpu_operations.h selects on
-    ``#ifdef SFPU_SHIFT_AMOUNT``: the header is shared by every unary test, and only the
-    shift sweep sets this, so the other tests have to keep compiling without it.
-
-    The binary shift ops take their amount as a second operand and need none of this; it is
-    the unary ones whose amount is a compile-time immediate, which is why sweeping it was a
-    cross-language change rather than test wiring.
+    ``#ifdef SFPU_SHIFT_AMOUNT``: the header is shared by every unary test, and only the shift
+    sweep sets this, so the others have to keep compiling without it. The binary shift ops take
+    their amount as a second operand and need none of this.
     """
 
     shift_amount: int = 3
