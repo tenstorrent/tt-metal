@@ -21,11 +21,6 @@ from ttnn._ttnn.operations.normalization import (
 )
 
 
-# ===========================================================================
-#  Pure CPU-only tests (no device fixture required)
-# ===========================================================================
-
-
 # ---------------------------------------------------------------------------
 # groupnorm_input_mask.cpp  create_group_norm_input_mask_impl():
 #   TT_FATAL — num_cores_across_channel must be > 0
@@ -69,34 +64,21 @@ def test_find_expected_dram_grid_no_valid_grid(expect_error):
         )
 
 
-# ===========================================================================
-#  Device-dependent tests (use TT-Sim simulated device)
-# ===========================================================================
-
-
 # ---------------------------------------------------------------------------
-# groupnorm.cpp  get_mask_tensor():
-#   TT_FATAL — num_virtual_cols == 0 (non-L1 buffer path; DRAM height-sharded skips validate_dram_grid)
+# normalization.py  dram_group_norm_virtual_columns():
+#   AssertionError — no valid num_virtual_cols (wraps compute_num_virtual_cols)
+#
+# No num_virtual_cols can satisfy (num_channels / nvc) % 32 == 0 and
+# num_groups % nvc == 0 for grid_x=1, num_channels=48, num_groups=16, so the
+# helper must raise instead of returning 0.
 # ---------------------------------------------------------------------------
-def test_get_mask_tensor_num_virtual_cols_zero(device, expect_error):
-    torch_x = torch.randn(1, 1, 32, 48, dtype=torch.bfloat16)
-    shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-        (32, 48),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    dram_height_sharded = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.DRAM,
-        shard_spec,
-    )
-    x = ttnn.interleaved_to_sharded(
-        ttnn.from_torch(torch_x, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT),
-        dram_height_sharded,
-    )
-
-    with expect_error(RuntimeError, "Cannot determine num_virtual_cols"):
-        ttnn.group_norm(x, num_groups=16, core_grid=ttnn.CoreGrid(x=1, y=1), inplace=True)
+def test_dram_group_norm_virtual_columns_none_valid(expect_error):
+    with expect_error(AssertionError, "could not find a valid num_virtual_cols for"):
+        ttnn.operations.normalization.dram_group_norm_virtual_columns(
+            core_grid=ttnn.CoreGrid(x=1, y=1),
+            num_channels=48,
+            num_groups=16,
+        )
 
 
 # ---------------------------------------------------------------------------

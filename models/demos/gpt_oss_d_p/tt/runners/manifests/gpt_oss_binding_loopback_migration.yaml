@@ -29,12 +29,6 @@ global_env:
   # Set PREFILL_MIGRATION_CLIENT_DIR in the shell / gate script (tt-run does not forward PREFILL_*):
   #   export PREFILL_MIGRATION_CLIENT_DIR=<tt-llm-engine>/disaggregation/migration/build_RelWithDebInfo/python
 
-  PREFILL_VALIDATE_MIGRATION: "1"
-  PREFILL_MIGRATE_PAIRWISE: "1"
-  PREFILL_STANDALONE_CHUNKED_NCHUNKS: "22"
-  MIGRATION_DONE_FILE: "/tmp/migration_done.sentinel"
-  PREFILL_MIGRATE_WAIT_S: "1200"
-
   HF_MODEL: "/data/jmalone/.cache/huggingface/hub/models--openai--gpt-oss-120b/gpt-oss-120b"
   PREFILL_TTNN_CACHE: "/data/jmalone/gpt_oss_tt_cache/"
   GPT_OSS_WEIGHTS_FROM_CACHE: "1"

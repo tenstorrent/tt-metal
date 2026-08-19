@@ -651,7 +651,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     try {
         // A go signal is a few hundred bytes, far less work than waking a worker to hand one over,
         // so the calling thread issues them itself here, overlapping them with the workers above.
-        this->write_go_signal_to_unused_sub_grids(
+        this->write_go_signal_sequences_to_unused_sub_grids(
             chip_ids_in_workload,
             sub_device_id,
             expected_num_workers_completed,
@@ -1275,6 +1275,14 @@ void FDMeshCommandQueue::reset_worker_state(
     for (auto* device : mesh_device_->get_devices()) {
         TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
     }
+    // The launch message ring buffer and the worker GO mailboxes are shared across hardware CQs, and only the
+    // CQ that is passed reset_launch_msg_state resets them. Nothing orders that reset against worker programs
+    // still outstanding on the other CQs, so drain this CQ before the resetting CQ remaps the mailboxes. The
+    // caller holds the MeshDevice api lock, hence the nolock variant. Note that this must happen before
+    // sub_device_cq_owner is resized: finish_nolock indexes it with the currently active sub device ids.
+    if (!reset_launch_msg_state && in_use_) {
+        this->finish_nolock();
+    }
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     in_use_ = true;
@@ -1311,16 +1319,23 @@ void FDMeshCommandQueue::reset_worker_state(
     }
 }
 
-void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
+void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
     std::unordered_set<uint32_t>& chip_ids_in_workload,
     const SubDeviceId& sub_device_id,
     uint32_t expected_num_workers_completed,
     bool mcast_go_signals,
     bool unicast_go_signals,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
+    // The config-buffer manager is mesh-global. Covered devices receive this stall through their program sequence;
+    // unused devices must receive it here before a later workload can overwrite the globally freed ring region.
+    std::optional<uint32_t> config_ring_sync_count;
+    if (dispatch_md.stall_first || dispatch_md.stall_before_program) {
+        config_ring_sync_count = dispatch_md.sync_count;
+    }
+
     for (auto& device : mesh_device_->get_devices()) {
         if (!chip_ids_in_workload.contains(device->id())) {
-            write_go_signal(
+            write_go_signal_sequence(
                 id_,
                 mesh_device_,
                 sub_device_id,
@@ -1329,7 +1344,8 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
                 this->virtual_program_dispatch_core(),
                 mcast_go_signals,
                 unicast_go_signals,
-                dispatch_md);
+                dispatch_md,
+                config_ring_sync_count);
         }
     }
 }
@@ -1569,7 +1585,7 @@ void FDMeshCommandQueue::record_end() {
                 auto& trace_worker_descriptor = trace_worker_descriptors[sub_device];
                 program_dispatch::ProgramDispatchMetadata go_signal_md;
                 go_signal_md.prefetcher_cache_info.is_cached = true;
-                write_go_signal(
+                write_go_signal_sequence(
                     this->id_,
                     this->mesh_device_,
                     sub_device,
@@ -1578,7 +1594,8 @@ void FDMeshCommandQueue::record_end() {
                     this->virtual_program_dispatch_core(),
                     multicast,
                     unicast,
-                    go_signal_md);
+                    go_signal_md,
+                    std::nullopt);
 
                 auto& worker_launch_msg_state = worker_launch_message_buffer_state[sub_device_id];
                 if (multicast) {
