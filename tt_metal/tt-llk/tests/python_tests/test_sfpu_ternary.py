@@ -220,6 +220,25 @@ def test_fresh_cpp_addcmul(formats, dest_acc, fresh_cpp_impl):
 
 
 @parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_snake_beta(formats, dest_acc, fresh_cpp_impl):
+    """Handwritten-shaped production snake_beta (metal ckernel_sfpu_snake_beta.h:
+    reciprocal Newton constant in vConstFloatPrgm0, PolynomialEvaluator Horner,
+    unroll-8 pin) vs fresh typed-C++ body (fresh_cpp/snakebeta.h) A/B over
+    identical stimuli/golden; pass criterion is the suite's format-aware
+    tolerance gate."""
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuSnakeBeta,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@parametrize(
     formats=input_output_formats(
         [
             DataFormat.Float16_b,

@@ -110,6 +110,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu_operations.h"
 #include "fresh_cpp_operations.h"
+// Storm-contract canonical per-op semantic bodies (new bodies never land in
+// the legacy aggregator above).
+#include "fresh_cpp/rdiv.h"
+#include "fresh_cpp/relu.h"
+#include "fresh_cpp/roundingops.h"
+#include "fresh_cpp/rpow.h"
+#include "fresh_cpp/selu.h"
+#include "fresh_cpp/sign.h"
 
 #ifndef FRESH_CPP_IMPL
 #define FRESH_CPP_IMPL 0
@@ -461,6 +469,69 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 "fresh i1 selector supports only non-approx, bf16 dest");
                             SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_i1_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
                         }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::floor)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_floor_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::trunc)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_trunc_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::frac)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_frac_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::rdiv)
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::rdiv || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh rdiv selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_rdiv_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_RDIV_VALUE);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::rpow)
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::rpow || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh rpow selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_rpow_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::selu)
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::selu || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh selu selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_selu_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_SELU_SCALE,
+                                ckernel::sfpu::FRESH_SELU_ALPHA);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::sign)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sign_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::relu_max)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_relu_max_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_RELU_MAX_THRESHOLD);
+                        }
                         else
                         {
                             test_utils::call_unary_sfpu_operation<
@@ -730,6 +801,69 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::i1 || (!APPROX_MODE && !is_fp32_dest_acc_en),
                                 "fresh i1 selector supports only non-approx, bf16 dest");
                             SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_i1_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::floor)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_floor_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::trunc)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_trunc_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::frac)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_frac_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::rdiv)
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::rdiv || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh rdiv selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_rdiv_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_RDIV_VALUE);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::rpow)
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::rpow || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh rpow selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_rpow_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::selu)
+                        {
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_UNARY_OPERATION != SfpuType::selu || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                                "fresh selu selector supports only non-approx, bf16 dest");
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_selu_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_SELU_SCALE,
+                                ckernel::sfpu::FRESH_SELU_ALPHA);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::sign)
+                        {
+                            SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sign_fresh_cpp, (ITERATIONS), block_tile, VectorMode::None);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::relu_max)
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_relu_max_fresh_cpp,
+                                (ITERATIONS),
+                                block_tile,
+                                VectorMode::None,
+                                ckernel::sfpu::FRESH_RELU_MAX_THRESHOLD);
                         }
                         else
                         {

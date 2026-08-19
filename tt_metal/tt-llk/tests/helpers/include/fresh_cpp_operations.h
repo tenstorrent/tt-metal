@@ -659,16 +659,7 @@ __attribute__((noinline)) void calculate_left_shift_fresh_cpp()
 // no exponent-shift strength reductions where a plain statement exists.
 // ---------------------------------------------------------------------------
 
-// Shared: round-to-nearest integer and its int value via the 1.5*2^23
-// rounding-bias identity (|z| < 2^22; golden math, the same identity the
-// production expm1/exp kernels use through raw bit reads).
-sfpi_inline sfpi::vFloat fresh_round_nearest(const sfpi::vFloat z, sfpi::vInt& k_int)
-{
-    constexpr float ROUNDING_BIAS = 12582912.0f; // 1.5 * 2^23
-    const sfpi::vFloat t          = z + ROUNDING_BIAS;
-    k_int                         = sfpi::as<sfpi::vInt>(t) - sfpi::as<sfpi::vInt>(sfpi::vFloat(ROUNDING_BIAS));
-    return t - ROUNDING_BIAS;
-}
+// fresh_round_nearest: moved to fresh_cpp/helpers.h (storm migration).
 
 // fresh_trunc_magnitude / fresh_fmod_core: moved to fresh_cpp/helpers.h
 // (storm migration).

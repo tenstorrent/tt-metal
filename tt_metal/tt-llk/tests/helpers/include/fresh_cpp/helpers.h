@@ -13,6 +13,17 @@
 namespace ckernel::sfpu
 {
 
+// Shared: round-to-nearest integer and its int value via the 1.5*2^23
+// rounding-bias identity (|z| < 2^22; golden math, the same identity the
+// production expm1/exp kernels use through raw bit reads).
+sfpi_inline sfpi::vFloat fresh_round_nearest(const sfpi::vFloat z, sfpi::vInt& k_int)
+{
+    constexpr float ROUNDING_BIAS = 12582912.0f; // 1.5 * 2^23
+    const sfpi::vFloat t          = z + ROUNDING_BIAS;
+    k_int                         = sfpi::as<sfpi::vInt>(t) - sfpi::as<sfpi::vInt>(sfpi::vFloat(ROUNDING_BIAS));
+    return t - ROUNDING_BIAS;
+}
+
 // Shared: truncate-toward-zero via round-nearest + downward fixup on the
 // magnitude (exact for every finite input; pass-through for |v| >= 2^23,
 // inf, NaN — the same contract as the production kernels' exponent-shift

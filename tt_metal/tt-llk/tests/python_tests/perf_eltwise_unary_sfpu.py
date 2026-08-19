@@ -375,6 +375,15 @@ def test_perf_unary_max_min_fresh_cpp(
         MathOperation.Gelu,
         MathOperation.Expm1Cw,
         MathOperation.I1,
+        # Storm S4 (fresh bodies in fresh_cpp/<op>.h).
+        MathOperation.Rdiv,
+        MathOperation.Rpow,
+        MathOperation.Selu,
+        MathOperation.Sign,
+        MathOperation.ReluMax,
+        MathOperation.Floor,
+        MathOperation.Trunc,
+        MathOperation.Frac,
     ],
     fresh_cpp_impl=[0, 1],
 )

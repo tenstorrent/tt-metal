@@ -85,6 +85,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "sfpu_operations.h"
 #include "fresh_cpp_operations.h"
+// Storm-contract canonical per-op semantic bodies (new bodies never land in
+// the legacy aggregator above).
+#include "fresh_cpp/snakebeta.h"
 
 #ifndef FRESH_CPP_IMPL
 #define FRESH_CPP_IMPL 0
@@ -197,6 +200,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 VectorMode::RC,
                                 SFPU_TERNARY_SCALAR);
                         }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_TERNARY_OPERATION == SfpuType::snake_beta)
+                        {
+                            // The fresh snake_beta states the bf16-dest contract (bf16 sin arm
+                            // + single-iteration reciprocal).
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_TERNARY_OPERATION != SfpuType::snake_beta || !is_fp32_dest_acc_en,
+                                "fresh snake_beta selector supports only bf16 dest");
+                            SFPU_TERNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_snake_beta_fresh_cpp,
+                                (8),
+                                block_tile,
+                                (block_tile + 1) % MAX_TILES_DEST,
+                                (block_tile + 2) % MAX_TILES_DEST,
+                                block_tile,
+                                VectorMode::RC);
+                        }
                         else
                         {
                             test_utils::call_ternary_sfpu_operation<
@@ -243,6 +264,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 block_tile,
                                 VectorMode::RC,
                                 SFPU_TERNARY_SCALAR);
+                        }
+                        else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_TERNARY_OPERATION == SfpuType::snake_beta)
+                        {
+                            // The fresh snake_beta states the bf16-dest contract (bf16 sin arm
+                            // + single-iteration reciprocal).
+                            static_assert(
+                                FRESH_CPP_IMPL != 1 || SFPU_TERNARY_OPERATION != SfpuType::snake_beta || !is_fp32_dest_acc_en,
+                                "fresh snake_beta selector supports only bf16 dest");
+                            SFPU_TERNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_snake_beta_fresh_cpp,
+                                (8),
+                                block_tile,
+                                (block_tile + 1) % MAX_TILES_DEST,
+                                (block_tile + 2) % MAX_TILES_DEST,
+                                block_tile,
+                                VectorMode::RC);
                         }
                         else
                         {
