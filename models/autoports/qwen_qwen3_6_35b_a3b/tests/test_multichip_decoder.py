@@ -597,6 +597,8 @@ def test_multichip_decoder_graph_summary():
     assert summary.full_attention_kv_heads_per_device == 1
     assert summary.linear_attention_value_heads_per_device == 16
     assert summary.moe_active_decode_uses_routing_remap
+    assert summary.moe_active_prefill_uses_token_sparse_path
+    assert summary.moe_prefill_experts_per_ep_device == 4
 
 
 def test_multichip_runtime_fallback_audit_source():

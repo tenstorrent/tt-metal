@@ -7,8 +7,8 @@ Using operations until 'MC_LINEAR_DECODE_END'.
 Detected data from 4 devices. Merging device data...
 Writing CSV output to models/autoports/qwen_qwen3_6_35b_a3b/doc/multichip_decoder/tracy/final_exact_nnz/linear_attention/multichip_decode_perf_report.csv
 Overall DRAM roofline (modeled ops): 5.2% (27 GB/s)
-Warning: Unclassified operation 'MoeRoutingRemapDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
 Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'MoeRoutingRemapDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
 Warning: Unclassified operation 'ScatterDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
 Writing CSV stacked report to models/autoports/qwen_qwen3_6_35b_a3b/doc/multichip_decoder/tracy/final_exact_nnz/linear_attention/multichip_decode_summary.csv.csv
 Plotting PNG stacked report to models/autoports/qwen_qwen3_6_35b_a3b/doc/multichip_decoder/tracy/final_exact_nnz/linear_attention/multichip_decode_summary.csv.png

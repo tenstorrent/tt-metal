@@ -1,0 +1,12 @@
+
+[2026-08-19T05:42:37Z] source graph_summary
+[2026-08-19T05:42:42Z] graph_summary exit=0
+
+[2026-08-19T05:42:42Z] source source_fallback_audit
+[2026-08-19T05:42:47Z] source_fallback_audit exit=0
+
+[2026-08-19T05:42:47Z] reset before linear_seq5
+Resetting all PCI devices: [0, 1, 2, 3]
+[95m Re-initializing boards after reset.... [0m
+[2026-08-19T05:43:32Z] active watcher linear_seq5
+[2026-08-19T05:44:18Z] linear_seq5 exit=134

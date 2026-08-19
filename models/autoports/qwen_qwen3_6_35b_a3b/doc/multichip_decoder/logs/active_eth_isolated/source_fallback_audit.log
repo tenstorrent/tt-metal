@@ -1,0 +1,61 @@
+2026-08-19 05:42:44.008 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /localdev/vkovacevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/vkovacevic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, cov-7.0.0, benchmark-5.2.3, anyio-4.14.2, split-0.11.0, dash-2.15.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_multichip_runtime_fallback_audit_source PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+
+(3 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_multichip_runtime_fallback_audit_source
+======================== 1 passed, 2 warnings in 1.34s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 1 instances!
+ - leaked instance 0x74a4c4ce7138 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 14 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - ... skipped remainder
+nanobind: leaked 233 functions!
+ - leaked function "buffer_page_size"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "buffer_aligned_page_size"
+ - leaked function ""
+ - leaked function "to_torch_with_padded_shape"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function "__init__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

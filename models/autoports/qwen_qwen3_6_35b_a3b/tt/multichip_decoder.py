@@ -88,6 +88,7 @@ class MultichipDecoderGraphSummary:
     full_attention_kv_heads_per_device: int
     linear_attention_value_heads_per_device: int
     moe_active_decode_uses_routing_remap: bool
+    moe_active_prefill_uses_token_sparse_path: bool
     moe_prefill_experts_per_ep_device: int
 
 
@@ -101,7 +102,8 @@ GRAPH_SUMMARY = MultichipDecoderGraphSummary(
     full_attention_kv_heads_per_device=1,
     linear_attention_value_heads_per_device=16,
     moe_active_decode_uses_routing_remap=True,
-    moe_prefill_experts_per_ep_device=128,
+    moe_active_prefill_uses_token_sparse_path=True,
+    moe_prefill_experts_per_ep_device=4,
 )
 
 
@@ -961,18 +963,6 @@ class _MultichipQwenMoe:
             _require(state, "mlp.experts.down_proj"), device=device, dtype=policy.routed_moe_weight_dtype
         )
 
-        sparsity = torch.zeros((1, 1, self.ep, cfg.num_experts), dtype=torch.bfloat16)
-        experts_per_ep = cfg.num_experts // self.ep
-        for row in range(self.ep):
-            sparsity[:, :, row, row * experts_per_ep : (row + 1) * experts_per_ep] = 1
-        self.prefill_sparsity = _mesh_tensor(
-            sparsity,
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=_ep_row_mapper(device),
-        )
-
     def _router_dense(self, flat: ttnn.Tensor) -> ttnn.Tensor:
         logits = ttnn.linear(flat, self.router, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         probs = ttnn.softmax(logits, dim=-1, numeric_stable=True)
@@ -1069,75 +1059,14 @@ class _MultichipQwenMoe:
         return _all_reduce_tp(routed, self.plan)
 
     def _routed_prefill_chunk(self, flat: ttnn.Tensor, routing: ttnn.Tensor) -> ttnn.Tensor:
-        logical_tokens = _shape(flat)[2]
+        tokens = _shape(flat)[2]
         hidden = _shape(flat)[3]
-        physical_tokens = int(math.ceil(logical_tokens / TILE_SIZE) * TILE_SIZE)
-        if physical_tokens != logical_tokens:
-            flat = ttnn.pad(flat, (1, 1, physical_tokens, hidden), (0, 0, 0, 0), 0.0)
-            routing = ttnn.pad(routing, (1, 1, physical_tokens, self.cfg.num_experts), (0, 0, 0, 0), 0.0)
-
-        group_size = physical_tokens // TILE_SIZE
-        grouped = ttnn.reshape(flat, (1, group_size, TILE_SIZE, hidden))
-        sparsity = ttnn.repeat(self.prefill_sparsity, (1, 1, group_size, 1))
-        nnz = (self.cfg.num_experts // self.ep) * group_size
-        output_tile = ttnn.Tile([TILE_SIZE, TILE_SIZE])
-        gate_up_config = _optimized_sparse_matmul_program_config(
-            TILE_SIZE, self.local_gate_up_width, policy=self.policy
-        )
-        down_config = _optimized_sparse_matmul_program_config(TILE_SIZE, self.cfg.hidden_size, policy=self.policy)
-        gate_up_input = (
-            ttnn.to_memory_config(grouped, ttnn.L1_MEMORY_CONFIG)
-            if self.policy.use_prefill_l1_sparse_inputs
-            else grouped
-        )
-
-        gate_up = ttnn.sparse_matmul(
-            gate_up_input,
-            self.routed_gate_up,
-            sparsity=sparsity,
-            nnz=nnz,
-            memory_config=self.policy.sparse_prefill_memory_config,
-            output_tile=output_tile,
-            program_config=gate_up_config,
-            dtype=self.policy.sparse_prefill_output_dtype,
-        )
-        gate_up = ttnn.transpose(gate_up, 1, 3)
-        gate_up = ttnn.reshape(gate_up, (1, self.cfg.num_experts, physical_tokens, self.local_gate_up_width))
-        gate = _slice_last(gate_up, 0, self.local_moe_intermediate_size)
-        up = _slice_last(gate_up, self.local_moe_intermediate_size, self.local_gate_up_width)
-
-        expert_hidden = _silu_mul_fused(gate, up)
-        expert_hidden = ttnn.reshape(
-            expert_hidden, (1, self.cfg.num_experts, physical_tokens, self.local_moe_intermediate_size)
-        )
-        down_input = (
-            ttnn.to_memory_config(expert_hidden, ttnn.L1_MEMORY_CONFIG)
-            if self.policy.use_prefill_l1_sparse_inputs
-            else expert_hidden
-        )
-        routed = ttnn.sparse_matmul(
-            down_input,
-            self.routed_down,
-            sparsity=self.prefill_sparsity,
-            nnz=self.cfg.num_experts // self.ep,
-            is_input_a_sparse=True,
-            memory_config=self.policy.sparse_prefill_memory_config,
-            output_tile=output_tile,
-            program_config=down_config,
-            dtype=self.policy.sparse_prefill_output_dtype,
-        )
-        routed = ttnn.reshape(routed, (1, self.cfg.num_experts, physical_tokens, self.cfg.hidden_size))
-        prefill_mask = ttnn.reshape(self.prefill_sparsity, (1, self.cfg.num_experts))
-        routing = ttnn.mul(routing, prefill_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        routing = ttnn.permute(routing, (0, 3, 2, 1))
-        routed = ttnn.mul(routed, routing, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        routed = ttnn.unsqueeze_to_4D(ttnn.experimental.fast_reduce_nc(routed, dims=[1]))
-        routed = ttnn.reshape(routed, (1, 1, physical_tokens, self.cfg.hidden_size))
-        routed = _all_reduce_ep(routed, self.plan)
-        routed = _all_reduce_tp(routed, self.plan)
-        if physical_tokens != logical_tokens:
-            routed = _slice(routed, (0, 0, 0, 0), (1, 1, logical_tokens, self.cfg.hidden_size))
-        return routed
+        outputs = []
+        for start in range(tokens):
+            flat_token = _slice(flat, (0, 0, start, 0), (1, 1, start + 1, hidden))
+            routing_token = _slice(routing, (0, 0, start, 0), (1, 1, start + 1, self.cfg.num_experts))
+            outputs.append(self._routed_decode(flat_token, routing_token))
+        return _concat_dim2_bounded(outputs)
 
     def _routed_chunk(self, flat: ttnn.Tensor, routing: ttnn.Tensor) -> ttnn.Tensor:
         if _shape(flat)[2] == 1:

@@ -6,7 +6,7 @@ Using operations after 'MC_FULL_PREFILL'.
 Using operations until 'MC_FULL_PREFILL_END'.
 Detected data from 4 devices. Merging device data...
 Writing CSV output to models/autoports/qwen_qwen3_6_35b_a3b/doc/multichip_decoder/tracy/final_exact_nnz/full_attention/multichip_prefill_perf_report.csv
-Overall DRAM roofline (modeled ops): 7.5% (38 GB/s)
+Overall DRAM roofline (modeled ops): 1.7% (9 GB/s)
 Warning: Unclassified operation 'PagedFillCacheDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
 Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
 Warning: Unclassified operation 'ScatterDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
