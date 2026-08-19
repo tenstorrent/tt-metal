@@ -89,27 +89,15 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                     wide_reduction ? (MAX_TILES_PER_REDUCTION * TILE_WIDTH) : (in_ntiles_c * TILE_WIDTH);
                 constexpr uint32_t tail_offset_bytes = total_elems_to_reduce * row_stride_elems * BYTES_PER_ELEM;
                 constexpr uint32_t tail_elems = (num_tilized_rows - total_elems_to_reduce) * row_stride_elems;
-                if constexpr (bf16_init_value == 0) {
-                    // [avgpool MOP-timeout fix -- LLK team / amokan/mop_bank_experiement] Zero the pad tail with
-                    // the iDMA zero device instead of a CPU fill_with_val + D$/L2 flush. The CPU store + flush
-                    // is a slow reader op that stalls the compute reduce MOP long enough to trip the MOP
-                    // timeout; async_write_zeros writes straight to TL1 (no flush needed) and does not stall the
-                    // MOP. 0 is the avg/sum pad identity so this covers avgpool; max/min (non-zero init) keeps
-                    // the CPU fill below. The tail region is disjoint from the leading rows process_h() reads
-                    // into, and the barrier lands the zeros in TL1 before compute reads them.
-                    noc.async_write_zeros(in_cb, tail_elems * BYTES_PER_ELEM, {.offset_bytes = tail_offset_bytes});
-                    noc.write_zeros_l1_barrier();
-                } else {
-                    fill_with_val(
-                        in_cb.get_write_ptr() + tail_offset_bytes, tail_elems, static_cast<uint16_t>(bf16_init_value));
+                fill_with_val(
+                    in_cb.get_write_ptr() + tail_offset_bytes, tail_elems, static_cast<uint16_t>(bf16_init_value));
 #ifdef ARCH_QUASAR
-                    // Quasar sim coherency: write back the CPU-store tail fill so compute's TL1 read of in_cb's
-                    // pad rows sees the init value (not stale L1). Same reason as the window-copy write-back.
-                    flush_l2_cache_range(
-                        static_cast<uintptr_t>(in_cb.get_write_ptr() + tail_offset_bytes),
-                        static_cast<size_t>(tail_elems) * 2);
+                // Quasar sim coherency: write back the CPU-store tail fill so compute's TL1 read of in_cb's
+                // pad rows sees the init value (not stale L1). Same reason as the window-copy write-back.
+                flush_l2_cache_range(
+                    static_cast<uintptr_t>(in_cb.get_write_ptr() + tail_offset_bytes),
+                    static_cast<size_t>(tail_elems) * 2);
 #endif
-                }
             }
         }
         for (uint32_t h = 0; h < kernel_h; ++h) {
