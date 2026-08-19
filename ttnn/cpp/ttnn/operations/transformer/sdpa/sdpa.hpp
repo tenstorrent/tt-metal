@@ -54,7 +54,9 @@ ttnn::Tensor scaled_dot_product_attention(
     /// coord is decoded from its within-block position. K/V stay strided. Zero-pad blocks (bt|T,bh|H,bw|W).
     const std::optional<std::array<uint32_t, 3>>& neighborhood_block = std::nullopt,
     /// Box-sparse tile-skip (only with neighborhood_block): losslessly skip fully-masked k-chunks per q-tile.
-    bool neighborhood_block_tileskip = false);
+    bool neighborhood_block_tileskip = false,
+    /// GNA region-reuse path (with neighborhood_block): read each region's K/V once, reuse across its blocks.
+    bool neighborhood_gna = false);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).

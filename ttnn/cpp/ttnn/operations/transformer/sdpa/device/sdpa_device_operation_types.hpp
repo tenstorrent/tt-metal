@@ -56,6 +56,11 @@ struct SDPAParams {
     // a q-tile (exp(-inf)=0, lossless). Forces qk_subblock_h=1 for tile granularity; adds a per-chunk
     // active-q-tile-range CB (reader -> compute). See windowed_loop_geometry.hpp::block_qtile_k_band.
     bool neighborhood_block_tileskip = false;
+    // GNA region-reuse path (only with neighborhood_block): FlashAttention-style — load a spatial region's
+    // K/V-union into L1 ONCE and reuse it across the region's query-blocks, plain-flash + tile-mask (see
+    // GNA_FUSED_KERNEL_SPEC.md). Off => existing per-block fused path. Build-out in progress (P4/P5); when
+    // off, byte-identical to today. Region geometry rides new runtime args from the program factory.
+    bool neighborhood_gna = false;
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;

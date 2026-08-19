@@ -829,6 +829,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Block-permuted Q descriptor {bt, bh, bw}; all-zero when strided (bt==0 selects the strided path in
     // the reader/mask). The block counts (Hb, Wb) are derived kernel-side from nb_H/bh, nb_W/bw.
     const std::array<uint32_t, 3> block = operation_attributes.neighborhood_block.value_or(std::array<uint32_t, 3>{});
+    // GNA region-reuse path (P4/P5 build-out): branch point. Off => existing per-block fused path (baseline).
+    [[maybe_unused]] const bool gna_region = operation_attributes.neighborhood_gna;
     if (is_windowed) {
         // The reader->compute k-range ctrl CB carries each Q chunk's {k_lo, k_hi} and is needed in both
         // windowed sub-modes (block-diagonal and 3D-neighborhood); double-buffered so the reader can run a

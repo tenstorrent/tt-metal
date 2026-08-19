@@ -51,7 +51,8 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard,
     bool neighborhood_gather,
     const std::optional<std::array<uint32_t, 3>>& neighborhood_block,
-    bool neighborhood_block_tileskip) {
+    bool neighborhood_block_tileskip,
+    bool neighborhood_gna) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -106,7 +107,8 @@ ttnn::Tensor scaled_dot_product_attention(
         neighborhood_w_shard,
         neighborhood_gather,
         neighborhood_block,
-        neighborhood_block_tileskip);
+        neighborhood_block_tileskip,
+        neighborhood_gna);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).
@@ -152,6 +154,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         false,         // neighborhood_gather
         std::nullopt,  // neighborhood_block
         false,         // neighborhood_block_tileskip
+        false,         // neighborhood_gna
         paged_cache_geometry);
 }
 
@@ -198,6 +201,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         false,         // neighborhood_gather
         std::nullopt,  // neighborhood_block
         false,         // neighborhood_block_tileskip
+        false,         // neighborhood_gna
         paged_cache_geometry);
 }
 
