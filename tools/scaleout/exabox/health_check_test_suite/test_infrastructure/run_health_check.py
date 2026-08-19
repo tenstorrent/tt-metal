@@ -387,14 +387,14 @@ def main() -> int:
     # between the deployments: it drives Slurm (scontrol reboot + requeue), which
     # orchestration has no equivalent for, so there we say so and ticket instead.
     restart_count = slurm_restart_count()
-    if exit_code != 0 and args.reboot_on_failure and launch_mode != "slurm":
+    if effective_code != 0 and args.reboot_on_failure and launch_mode != "slurm":
         log.warning(
             "--reboot-on-failure is not supported in %s launch mode (reboot-and-requeue "
             "needs Slurm); proceeding to JIRA ticketing",
             launch_mode,
         )
     elif should_reboot(
-        exit_code=exit_code,
+        exit_code=effective_code,
         enabled=args.reboot_on_failure,
         slurm_job_id=slurm_job_id,
         restart_count=restart_count,
@@ -402,7 +402,7 @@ def main() -> int:
     ):
         log.info(
             "Test failed (exit %d); rebooting and requeuing for a clean rerun (restart_count=%d, cap=%d)",
-            exit_code,
+            effective_code,
             restart_count,
             REBOOT_CAP,
         )

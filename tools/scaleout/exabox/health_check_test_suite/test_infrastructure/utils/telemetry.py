@@ -74,6 +74,8 @@ _COUNTER_METRICS = frozenset(
 
 _VALUE_METRICS = frozenset(
     {
+        "tt_ai_clock_limit_mhz",
+        "tt_ai_clock_mhz",
         "tt_chip_count",
     }
 )
