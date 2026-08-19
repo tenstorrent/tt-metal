@@ -74,7 +74,7 @@ constexpr uint32_t XPRIO = CT(XPRIO);
 constexpr uint32_t WD_MROW_ROUNDS = CT(WD_MROW_ROUNDS);
 constexpr uint32_t WD_MGROUPS = CT(WD_MGROUPS);
 constexpr uint32_t WD_MGROUP_MIN_BLOCKS = CT(WD_MGROUP_MIN_BLOCKS);
-constexpr uint32_t MGROUP_ROWS = M_BLOCK / 2;
+constexpr uint32_t MGROUP_ROWS = CT(MGROUP_ROWS);
 constexpr uint32_t DEPTH_H = CT(DEPTH_H);
 constexpr uint32_t H_ROUND_NOC1_MASK = CT(H_ROUND_NOC1_MASK);
 constexpr uint32_t SCATTER_ONE_SIGNAL = CT(SCATTER_ONE_SIGNAL);
@@ -350,9 +350,15 @@ void kernel_main() {
             // every peer's reader reserves its landing CBs and THEN invites the whole column, so
             // this wait is what stops block b+1's contribution from overwriting a landing slot
             // compute has not consumed yet. MONOTONE, never reset — the running total only grows.
-            noc_semaphore_wait_min(sem_go_ptr, invites + KGROUPS);
+            {
+                MaybeDeviceZoneScope("writer_scatter_invite_wait");
+                noc_semaphore_wait_min(sem_go_ptr, invites + KGROUPS);
+            }
             invites += KGROUPS;
-            cb_wait_front(cb_gate_acc, gu_block_tiles);
+            {
+                MaybeDeviceZoneScope("writer_scatter_gate_wait");
+                cb_wait_front(cb_gate_acc, gu_block_tiles);
+            }
             uint32_t gate_dst = get_write_ptr(cb_gather_gate);
             if constexpr (PHASE_CB_ALIAS) {
                 // The three BFP8 phase views have the physical LCM capacity, which can exceed
@@ -368,16 +374,31 @@ void kernel_main() {
             // accumulator CB outright — two RISC-Vs popping one CB corrupt its shared `tiles_acked`
             // word the way two pushers corrupt `tiles_received`.
             if constexpr (SCATTER_ONE_SIGNAL) {
-                moe_fused_swiglu::scatter_payload_to(RT_PEERS, cb_gate_acc, gate_dst, sl_w, sl_a, my_row, H_TILE);
-                while (mailbox_words[moe_fused_swiglu::MBOX_UP_SCATTER_DONE] < b + 1) {
-                    invalidate_l1_cache();
+                {
+                    MaybeDeviceZoneScope("writer_scatter_gate_payload");
+                    moe_fused_swiglu::scatter_payload_to(RT_PEERS, cb_gate_acc, gate_dst, sl_w, sl_a, my_row, H_TILE);
+                }
+                {
+                    MaybeDeviceZoneScope("writer_scatter_up_wait");
+                    while (mailbox_words[moe_fused_swiglu::MBOX_UP_SCATTER_DONE] < b + 1) {
+                        invalidate_l1_cache();
+                    }
                 }
                 // Both NoC payload barriers have now completed. One signal per source/destination
                 // pair proves both gate and up are resident in the target landing buffers.
-                moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, sl_w);
+                {
+                    MaybeDeviceZoneScope("writer_scatter_signal");
+                    moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, sl_w);
+                }
             } else {
-                moe_fused_swiglu::scatter_payload_to(RT_PEERS, cb_gate_acc, gate_dst, sl_w, sl_a, my_row, H_TILE);
-                moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, sl_w);
+                {
+                    MaybeDeviceZoneScope("writer_scatter_gate_payload");
+                    moe_fused_swiglu::scatter_payload_to(RT_PEERS, cb_gate_acc, gate_dst, sl_w, sl_a, my_row, H_TILE);
+                }
+                {
+                    MaybeDeviceZoneScope("writer_scatter_signal");
+                    moe_fused_swiglu::scatter_signal(RT_PEERS, SEM_DATA, sl_w);
+                }
             }
             cb_pop_front(cb_gate_acc, gu_block_tiles);
         }

@@ -85,6 +85,7 @@ KERNEL_CT_ORDER = {
         "WD_RESIDENT",
         "WD_MROW_ROUNDS",
         "WD_MGROUPS",
+        "MGROUP_ROWS",
         "WD_MGROUP_MIN_BLOCKS",
         "GU_CHUNKS",
         "XPRIO",
@@ -146,6 +147,7 @@ KERNEL_CT_ORDER = {
         "XPRIO",
         "WD_MROW_ROUNDS",
         "WD_MGROUPS",
+        "MGROUP_ROWS",
         "WD_MGROUP_MIN_BLOCKS",
         "DEPTH_H",
         "H_ROUND_NOC1_MASK",
@@ -190,6 +192,7 @@ KERNEL_CT_ORDER = {
         "WD_RESIDENT",
         "WD_MROW_ROUNDS",
         "WD_MGROUPS",
+        "MGROUP_ROWS",
         "WD_MGROUP_MIN_BLOCKS",
         "GU_CHUNKS",
         "ELTWISE_BLK",
@@ -312,7 +315,7 @@ def nd_shard_n_tiles(t):
     return int(shape[-1]) // TILE
 
 
-def weight_memory_configs(device, emb, hidden, core_grid=None, shard_height_tiles=1):
+def weight_memory_configs(device, emb, hidden, core_grid=None, shard_height_tiles=1, transpose_grid=False):
     """The op's PREFERRED weight placement, as `(gate_up, down)` memory configs.
 
     A pure function of K, N and the grid — never of the runtime token count. Each shard is exactly
@@ -326,7 +329,8 @@ def weight_memory_configs(device, emb, hidden, core_grid=None, shard_height_tile
     Placement is the CALLER's to choose. The op reads whatever it is handed and takes the
     coalesced path whenever `nd_shard_n_tiles` can prove a run.
     """
-    hgroups, kgroups = worker_grid(device, core_grid)
+    physical_columns, physical_rows = worker_grid(device, core_grid)
+    hgroups, kgroups = (physical_rows, physical_columns) if transpose_grid else (physical_columns, physical_rows)
     blk = Blocking(hgroups, kgroups, emb, hidden, m_t_max=1)
     dram = device.dram_grid_size()
     banks = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram.x - 1, dram.y - 1))])
@@ -383,6 +387,16 @@ def _rotating_mcast_args(device, noc, x0, y0, x1, y1):
     return corners + [coordinate for sender in senders for coordinate in sender]
 
 
+def _rotating_mcast_args_for_cores(device, noc, cores):
+    """Encode one physical rectangle while preserving ``cores`` as the sender rotation order."""
+    senders = [_virt(device, x, y) for x, y in cores]
+    xs, ys = zip(*senders)
+    corners = [min(xs), min(ys), max(xs), max(ys)]
+    if noc == ttnn.NOC.NOC_1:
+        corners = [max(xs), max(ys), min(xs), min(ys)]
+    return corners + [coordinate for sender in senders for coordinate in sender]
+
+
 def _cb_allocation(total_size, core_ranges, logical_views, formats):
     """One physical allocation, exposed through one or more independent logical CB views."""
     return ttnn.CBDescriptor(
@@ -421,11 +435,19 @@ def create_program_descriptor(
     core_grid=None,
     expert_region_offsets=None,
     read_x_at_offset=False,
+    transpose_grid=False,
+    situ_glu=False,
 ):
     device = input_tensor.device()
-    hgroups, kgroups = worker_grid(device, core_grid)
+    physical_columns, physical_rows = worker_grid(device, core_grid)
+    hgroups, kgroups = (physical_rows, physical_columns) if transpose_grid else (physical_columns, physical_rows)
     num_cores = hgroups * kgroups
-    all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(hgroups - 1, kgroups - 1))])
+    all_cores = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(physical_columns - 1, physical_rows - 1))]
+    )
+
+    def physical_core(hgroup, kgroup):
+        return (kgroup, hgroup) if transpose_grid else (hgroup, kgroup)
 
     emb = int(input_tensor.shape[-1])
     hidden = int(w_gate.shape[-1])
@@ -512,13 +534,16 @@ def create_program_descriptor(
     # own (SEM_H_RDY_BASE); see the reader.
     x_mcast_ct = _mcast_compile_time_args(geo.SEM_X_BASE, geo.SEM_X_BASE + 1, hgroups - 1, True)
     h_mcast_ct = _mcast_compile_time_args(geo.SEM_H_BASE, geo.SEM_H_BASE + 1, num_cores - 1, True)
-    h_mcast_noc1_args = _rotating_mcast_args(device, ttnn.NOC.NOC_1, 0, 0, hgroups - 1, kgroups - 1)[:4]
+    logical_cores = [physical_core(h, k) for k in range(kgroups) for h in range(hgroups)]
+    h_mcast_args = _rotating_mcast_args_for_cores(device, ttnn.NOC.NOC_0, logical_cores)
+    h_mcast_noc1_args = _rotating_mcast_args_for_cores(device, ttnn.NOC.NOC_1, logical_cores)[:4]
 
     h_group_rect_args = []
     if blk.wd_mgroups:
-        for y0 in (0, blk.mgroup_rows):
-            y1 = min(y0 + blk.mgroup_rows - 1, kgroups - 1)
-            h_group_rect_args.append(_rotating_mcast_args(device, ttnn.NOC.NOC_0, 0, y0, hgroups - 1, y1)[:4])
+        for k0 in range(0, kgroups, blk.mgroup_rows):
+            k1 = min(k0 + blk.mgroup_rows - 1, kgroups - 1)
+            group_cores = [physical_core(h, k) for k in range(k0, k1 + 1) for h in range(hgroups)]
+            h_group_rect_args.append(_rotating_mcast_args_for_cores(device, ttnn.NOC.NOC_0, group_cores)[:4])
     else:
         h_group_rect_args = [[0, 0, 0, 0] for _ in range((kgroups + blk.mgroup_rows - 1) // blk.mgroup_rows)]
 
@@ -566,6 +591,7 @@ def create_program_descriptor(
         "WD_RESIDENT": int(blk.wd_resident),
         "WD_MROW_ROUNDS": int(blk.wd_mrow_rounds and blk.wd_resident),
         "WD_MGROUPS": int(blk.wd_mgroups),
+        "MGROUP_ROWS": blk.mgroup_rows,
         "WD_MGROUP_MIN_BLOCKS": geo.WD_MGROUP_MIN_BLOCKS,
         "GU_CHUNKS": blk.gu_chunks,
         "XPRIO": int(geo.XPRIO),
@@ -632,14 +658,15 @@ def create_program_descriptor(
     # ---- runtime args -------------------------------------------------------------------------
     mailbox_addr = mailbox.buffer_address()
     reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-    for y in range(kgroups):
-        for x in range(hgroups):
-            core = ttnn.CoreCoord(x, y)
-            i = y * hgroups + x
-            kr, kstart = blk.kr_sizes[y], blk.kr_starts[y]
-            hn, hstart = blk.hn_sizes[x], blk.hn_starts[x]
+    for kgroup in range(kgroups):
+        for hgroup in range(hgroups):
+            physical_x, physical_y = physical_core(hgroup, kgroup)
+            core = ttnn.CoreCoord(physical_x, physical_y)
+            i = kgroup * hgroups + hgroup
+            kr, kstart = blk.kr_sizes[kgroup], blk.kr_starts[kgroup]
+            hn, hstart = blk.hn_sizes[hgroup], blk.hn_starts[hgroup]
             ec, jstart = blk.ec_sizes[i], blk.ec_starts[i]
-            gi = (y % blk.mgroup_rows) * hgroups + x
+            gi = (kgroup % blk.mgroup_rows) * hgroups + hgroup
             ec_group, jstart_group = blk.ec_group_sizes[gi], blk.ec_group_starts[gi]
 
             args = [
@@ -657,19 +684,20 @@ def create_program_descriptor(
                 jstart,
                 ec_group,
                 jstart_group,
-                x,
-                y,
+                hgroup,
+                kgroup,
                 start_tensor.buffer_address(),
             ]
             # The whole COLUMN in virtual coordinates: the scatter's peer list (invite fan-out +
             # gather destinations). Row r is at index r on every core in the column, which is what
             # makes "worker r owns tiles [r*a, (r+1)*a)" agree grid-wide.
             for r in range(kgroups):
-                args.extend(_virt(device, x, r))
-            args.extend(_rotating_mcast_args(device, ttnn.NOC.NOC_0, 0, y, hgroups - 1, y))
-            args.extend(_rotating_mcast_args(device, ttnn.NOC.NOC_0, 0, 0, hgroups - 1, kgroups - 1))
-            args.extend(h_group_rect_args[y // blk.mgroup_rows])
-            reader_rt[x][y] = args
+                args.extend(_virt(device, *physical_core(hgroup, r)))
+            x_group_cores = [physical_core(h, kgroup) for h in range(hgroups)]
+            args.extend(_rotating_mcast_args_for_cores(device, ttnn.NOC.NOC_0, x_group_cores))
+            args.extend(h_mcast_args)
+            args.extend(h_group_rect_args[kgroup // blk.mgroup_rows])
+            reader_rt[physical_x][physical_y] = args
 
             wargs = [
                 mailbox_addr,
@@ -684,19 +712,21 @@ def create_program_descriptor(
                 jstart,
                 ec_group,
                 jstart_group,
-                x,
-                y,
-                x % kgroups,
+                hgroup,
+                kgroup,
+                hgroup % kgroups,
             ]
             # Full-M eight-round W_down: row y gathers every hidden-column fragment onto the
             # diagonal core (y, y).  Appended before the existing column peer table.
-            wargs.extend(_virt(device, y, y))
+            diagonal_h = kgroup if kgroup < hgroups else 0
+            diagonal_k = kgroup if kgroup < hgroups else 0
+            wargs.extend(_virt(device, *physical_core(diagonal_h, diagonal_k)))
             for r in range(kgroups):
-                wargs.extend(_virt(device, x, r))
+                wargs.extend(_virt(device, *physical_core(hgroup, r)))
             wargs.extend(h_mcast_noc1_args)
-            writer_rt[x][y] = wargs
+            writer_rt[physical_x][physical_y] = wargs
 
-            compute_rt[x][y] = [mailbox_addr, kr, hn, ec, ec_group, x, y]
+            compute_rt[physical_x][physical_y] = [mailbox_addr, kr, hn, ec, ec_group, hgroup, kgroup]
 
     dm_defines = [("H_MCAST_POSTED", "1" if geo.H_MCAST_POSTED else "0")]
 
@@ -723,7 +753,7 @@ def create_program_descriptor(
             compile_time_args=compute_ct,
             runtime_args=compute_rt,
             config=compute_kernel_config,
-            defines=[],
+            defines=[("SITU_GLU", "1")] if situ_glu else [],
         ),
     ]
 

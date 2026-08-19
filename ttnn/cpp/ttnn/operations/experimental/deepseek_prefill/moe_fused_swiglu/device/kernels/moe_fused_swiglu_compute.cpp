@@ -72,7 +72,7 @@ constexpr uint32_t HN_BLOCK = CT(HN_BLOCK);
 constexpr uint32_t WD_MROW_ROUNDS = CT(WD_MROW_ROUNDS);
 constexpr uint32_t WD_MGROUPS = CT(WD_MGROUPS);
 constexpr uint32_t WD_MGROUP_MIN_BLOCKS = CT(WD_MGROUP_MIN_BLOCKS);
-constexpr uint32_t MGROUP_ROWS = M_BLOCK / 2;
+constexpr uint32_t MGROUP_ROWS = CT(MGROUP_ROWS);
 constexpr uint32_t WD_RESIDENT = CT(WD_RESIDENT);
 constexpr bool WD_PACKED = WD_RESIDENT && moe_fused_swiglu::hidden_blocks_are_balanced(HID_T, HGROUPS, HN_PAD);
 // The hidden-axis chunk the gate/up weight stream is published and consumed in, so the matmul on
@@ -430,7 +430,15 @@ void kernel_main() {
                 // FIFO state untouched: the reader remains its only pusher. The tiny ready CB is
                 // the compute->reader completion edge that cb_x_stage's payload used to provide.
                 tilize_done.reserve_back(1);
-                tilize_row<KR_PAD, cb_x_in, cb_x_tiles>(TILE_H, x_slot_offset + t * KR_PAD);
+                {
+                    MaybeDeviceZoneScope("compute_tilize_input_wait");
+                    DataflowBuffer x_input(cb_x_in);
+                    x_input.wait_front(TILE_H);
+                }
+                {
+                    MaybeDeviceZoneScope("compute_tilize_body");
+                    tilize_row<KR_PAD, cb_x_in, cb_x_tiles>(TILE_H, x_slot_offset + t * KR_PAD);
+                }
                 tilize_done.push_back(1);
             }
         }
@@ -483,22 +491,43 @@ void kernel_main() {
                     CircularBuffer& weight_buf = run_up ? wu_buf : wg_buf;
                     CircularBuffer& accum_buf = run_up ? up_buf : gate_buf;
                     shape_c.wait_in0_per_m_subblock = stream_m && (pass == 0);
-                    matmul_row_major<
-                        /*init_matmul=*/true,
-                        /*retain_in0=*/true,
-                        /*retain_in1=*/false,
-                        MatmulTarget::Interm>(
-                        x_buf,
-                        weight_buf,
-                        accum_buf,
-                        accum_buf,
-                        shape_c,
-                        /*in1_width=*/GU_CHUNK_W,
-                        /*out_row_width=*/HN_PAD,
-                        KrSteps{kr_rows},
-                        NoPreKBlock{},
-                        NoIn1Offset{},
-                        chunk_col0);
+                    if (run_up) {
+                        MaybeDeviceZoneScope("compute_up_matmul");
+                        matmul_row_major<
+                            /*init_matmul=*/true,
+                            /*retain_in0=*/true,
+                            /*retain_in1=*/false,
+                            MatmulTarget::Interm>(
+                            x_buf,
+                            weight_buf,
+                            accum_buf,
+                            accum_buf,
+                            shape_c,
+                            /*in1_width=*/GU_CHUNK_W,
+                            /*out_row_width=*/HN_PAD,
+                            KrSteps{kr_rows},
+                            NoPreKBlock{},
+                            NoIn1Offset{},
+                            chunk_col0);
+                    } else {
+                        MaybeDeviceZoneScope("compute_gate_matmul");
+                        matmul_row_major<
+                            /*init_matmul=*/true,
+                            /*retain_in0=*/true,
+                            /*retain_in1=*/false,
+                            MatmulTarget::Interm>(
+                            x_buf,
+                            weight_buf,
+                            accum_buf,
+                            accum_buf,
+                            shape_c,
+                            /*in1_width=*/GU_CHUNK_W,
+                            /*out_row_width=*/HN_PAD,
+                            KrSteps{kr_rows},
+                            NoPreKBlock{},
+                            NoIn1Offset{},
+                            chunk_col0);
+                    }
                 }
             }
             gate_buf.push_back(gu_block_tiles);
