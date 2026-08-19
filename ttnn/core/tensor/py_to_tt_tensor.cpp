@@ -362,18 +362,26 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
 
     const DataType mapped_dst_type =
         (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? DataType::BFLOAT16 : dst_dtype;
+    const DataType mapped_src_type = to_ttnn_dtype(src_dtype);
 
-    if (to_ttnn_dtype(src_dtype) == DataType::INVALID) {
+    // Nanobind cannot convert other Python tensor dtypes directly to bfloat16.
+    // Keep a float32 host buffer and let tensor creation perform the final
+    // float32-to-bfloat16 conversion instead.
+    if (mapped_dst_type == DataType::BFLOAT16 && mapped_src_type != DataType::BFLOAT16) {
+        return DataType::FLOAT32;
+    }
+
+    if (mapped_src_type == DataType::INVALID) {
         return mapped_dst_type;
     }
 
-    if (is_sharded && get_datatype_tile_size(dst_dtype) != get_datatype_tile_size(to_ttnn_dtype(src_dtype))) {
+    if (is_sharded && get_datatype_tile_size(dst_dtype) != get_datatype_tile_size(mapped_src_type)) {
         // Sharded typecast does not support conversion between tensors with types of different tile size:
         // See explicit assertion in the `TypecastShardedProgramFactory::create` method implementation.
         return mapped_dst_type;
     }
 
-    return to_ttnn_dtype(src_dtype);  // borrow pytensor by default.
+    return mapped_src_type;  // borrow pytensor by default.
 }
 }  // namespace
 

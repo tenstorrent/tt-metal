@@ -116,6 +116,26 @@ def preprocess_args_and_kwargs(*function_args, **function_kwargs) -> Any:
     return function_args, function_kwargs
 
 
+def unwrap_traced_torch_tensors(*function_args, **function_kwargs) -> Any:
+    import torch
+
+    def unwrap(arg: Any) -> Any:
+        if isinstance(arg, ttnn.torch_tracer.TracedTorchTensor):
+            # Native tensor importers consume the underlying tensor through
+            # DLPack and may reject Torch subclasses.
+            with torch._C.DisableTorchFunctionSubclass():
+                return arg.as_subclass(torch.Tensor)
+        elif isinstance(arg, (tuple, list)):
+            return type(arg)([unwrap(element) for element in arg])
+        elif isinstance(arg, dict):
+            return {key: unwrap(value) for key, value in arg.items()}
+        return arg
+
+    function_args = [unwrap(arg) for arg in function_args]
+    function_kwargs = {name: unwrap(arg) for name, arg in function_kwargs.items()}
+    return function_args, function_kwargs
+
+
 def preprocess_return_value(return_value):
     import torch
 
@@ -166,12 +186,13 @@ def trace_ttnn_operation(pretty_operation_name, operation):
         original_function_kwargs = function_kwargs
         function_args, function_kwargs = preprocess_args_and_kwargs(*function_args, **function_kwargs)
         input_tensors = get_input_tensors(function_args) + get_input_tensors(function_kwargs)
+        execution_args, execution_kwargs = unwrap_traced_torch_tensors(*function_args, **function_kwargs)
 
         GRAPH_STACK.append(nx.MultiDiGraph())
 
         node_name = f"{pretty_operation_name}_{ttnn.torch_tracer.get_unique_id()}"
 
-        operation_return_type = operation(*function_args, **function_kwargs)
+        operation_return_type = operation(*execution_args, **execution_kwargs)
 
         output_tensors = preprocess_return_value(operation_return_type)
 
