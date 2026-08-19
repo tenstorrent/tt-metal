@@ -118,7 +118,10 @@ inline void _llk_unpack_A_mop_config_(
     }
     else if constexpr (BType == BroadcastType::COL)
     {
-        if constexpr (acc_to_dest)
+        // The accumulating datacopy keeps the plain staging below: its math MOP issues ELWADD(SRCB_BCAST_COL)
+        // either way and clears SrcA exactly once, which the single zeroed SrcA dvalid of that staging matches.
+        // Only dest reuse needs the one-zeroed-SrcA-per-math-run staging here, because then SrcA carries real data.
+        if constexpr (acc_to_dest && (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE))
         {
             // Use unpacker-bank readiness for the dummy SrcA publication so unpack can prepare
             // the next bank while math consumes the current bank.
@@ -149,6 +152,9 @@ inline void _llk_unpack_A_mop_config_(
         const std::uint32_t innerloop = tensor_shape.num_faces_c_dim;
         if constexpr (acc_to_dest)
         {
+            // The accumulating datacopy issues ELWADD(SRCB_BCAST_ROW) instead of MOVB2D, so every SrcB face has to be
+            // paired with a zeroed SrcA whose dvalid is set. The math MOP clears SrcA and SrcB once per outer
+            // iteration.
             // Publish one dummy SrcA DVALID per tensor face, using unpacker-bank readiness so
             // unpack can prepare the next bank while math consumes the current bank.
             static constexpr std::uint32_t unpack_srca_reuse = (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA)
@@ -167,7 +173,12 @@ inline void _llk_unpack_A_mop_config_(
     }
     else if constexpr (BType == BroadcastType::SCALAR)
     {
-        static_assert((!acc_to_dest) && "accumulate into dest with broadcast scaler is not supported!");
+        // The accumulating scalar broadcast runs on ELWADD(SRCB_BCAST_ALL) with the dest-accumulate bit set, and the
+        // staging below is already exactly what that needs: one zeroed SrcA with its dvalid set plus one SrcB unpack.
+        // Dest reuse stays rejected because it makes SrcA carry real data instead of the zero fill.
+        static_assert(
+            !(acc_to_dest && (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE)),
+            "accumulate into dest with broadcast scalar and dest reuse is not supported!");
         constexpr std::uint32_t outerloop = 1;
         constexpr std::uint32_t innerloop = 1;
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_inc_z_0);
