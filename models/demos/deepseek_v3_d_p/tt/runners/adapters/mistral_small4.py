@@ -20,7 +20,7 @@ DeepSeek/Kimi residents in three ways that the adapter has to account for:
   * **Weights.** The checkpoint stores experts as ONE stacked fp8 tensor per projection with gate
     and up fused (``mlp.experts.gate_up_proj`` ``[128, 4096, 4096]``), not per-expert
     ``mlp.experts.{i}.*``; and fp8 is PER-TENSOR (rank-0 ``*_scale_inv``), not [128,128] block.
-    Neither is handled by the shared loader yet — see ``supports_pretrained`` below.
+    Both are handled now — see ``supports_pretrained`` below.
 
 Single expert group with a device gate, like Kimi and GLM, so the MoE routing all-gather's
 semaphores go to L1_SMALL (needs the L1_SMALL carve-out at mesh-open).
@@ -74,11 +74,11 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
     ref_cache_env = "TT_MISTRAL4_PREFILL_HOST_REF_CACHE"
     mla_ref_cache_env = "MISTRAL4_MLA_REF_CACHE"
     ttnn_cache_env = "TT_MISTRAL4_PREFILL_TTNN_CACHE"
-    # ⚠ False until the two weight-format gaps above are closed. The pretrained fixtures would
-    # otherwise fail deep inside the dequantizer with a shape error; `supports_pretrained = False`
-    # makes run_model() skip with a clear message instead (test_mla.py:189-190). Flip this in the
-    # same change that lands the Mistral state-dict converter.
-    supports_pretrained = False
+    # Both weight-format gaps are now handled: per-tensor fp8 (`is_per_tensor_fp8` /
+    # `_dequantize_per_tensor_fp8_state_dict` in utils/test_utils.py) and the stacked+fused expert
+    # tensors plus the absent router correction bias (`_extract_routed_experts*` in
+    # utils/transformer_helpers.py), on both the random and the layer-by-layer pretrained paths.
+    supports_pretrained = True
     # Provisional, matching the other MLA+MoE residents. Re-baseline once real PCC is measured.
     mla_pcc_threshold = 0.995
     moe_pcc_threshold = 0.971
@@ -89,3 +89,36 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
         (conftest ``_resolve_config_only``); serving goes through ``load_hf_config``. Both hand off
         to ``mistral4_hf_config``."""
         return mistral4_hf_config
+
+    # --- CPU reference (transformers >= 5.12 ships `mistral4`, so no vendored copy is needed) ---
+    # These are not optional decoration: `create_hf_model` instantiates reference_model_cls to build
+    # the TT state_dict, so WITHOUT them even a random-weight transformer run cannot start. Imported
+    # lazily to keep `import ...adapters` cheap for the H2D producers.
+
+    @property
+    def reference_model_cls(self):
+        from transformers.models.mistral4.modeling_mistral4 import Mistral4Model
+
+        return Mistral4Model
+
+    @property
+    def reference_attention_cls(self):
+        from transformers.models.mistral4.modeling_mistral4 import Mistral4Attention
+
+        return Mistral4Attention
+
+    @property
+    def reference_moe_cls(self):
+        from transformers.models.mistral4.modeling_mistral4 import Mistral4MoE
+
+        return Mistral4MoE
+
+    @property
+    def reference_rotary_cls(self):
+        """Rope module the reference attention needs its (cos, sin) from. transformers >= 5 computes
+        rope at the MODEL level and passes `position_embeddings` down, so an attention module used
+        standalone has to be handed them explicitly (the vendored DeepSeek/Kimi references build rope
+        internally and expose nothing here)."""
+        from transformers.models.mistral4.modeling_mistral4 import Mistral4RotaryEmbedding
+
+        return Mistral4RotaryEmbedding

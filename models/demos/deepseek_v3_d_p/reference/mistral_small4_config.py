@@ -18,8 +18,6 @@ and the expert weights ship as ONE stacked fp8 tensor per projection with gate a
 fused, not as per-expert ``mlp.experts.{i}.*`` entries.
 """
 
-import types
-
 
 class MistralSmall4Config:
     """Mistral Small 4 119B model dimensions."""
@@ -81,104 +79,101 @@ class MistralSmall4Config:
 
 
 def mistral4_hf_config(max_seq: int = 8192):
-    """HF-attribute-style config the unified ttMLA reads (Mistral Small 4 dims, YaRN factor 128).
+    """The HF-attribute config both the device path and the CPU reference read.
 
-    Hand-built for the same reason GLM's is (see ``glm_5_1_config.glm_hf_config``): ttMLA, rope and
-    the cache-build path read a *curated field set*, and Mistral's own ``config.json`` does not
-    present it in the shape they index. Specifically:
+    Returns a **real** ``Mistral4Config`` (transformers >= 5.12 ships ``mistral4`` natively), built
+    explicitly from ``MistralSmall4Config`` so this module stays the single source of truth for the
+    dims -- a transformers upgrade cannot silently move the model out from under us.
 
-      * ``rope_parameters`` -> ``rope_scaling``. transformers 5.x renamed the block; ``tt/mla/rope.py``
-        indexes ``hf_config.rope_scaling[...]``. This is the known silent-wrong-answer gotcha.
-      * ``rope_theta`` must be **hoisted**. Mistral nests it INSIDE ``rope_parameters``;
-        ``rope.py`` reads it as a *top-level* ``hf_config.rope_theta``. So the mapping is a rename
-        PLUS a hoist, not a rename alone.
-      * ``max_seq_len`` is a top-level field this family uses and no HF config has.
+    Why a real config rather than a ``SimpleNamespace`` like GLM's builder:
 
-    Field set actually consumed (verified by grep, not assumed):
-      * ``tt/mla/mla.py``  -> hidden_size, num_attention_heads, kv_lora_rank, q_lora_rank,
-        qk_nope_head_dim, qk_rope_head_dim, v_head_dim, rms_norm_eps, rope_scaling["factor"|"mscale"]
-      * ``tt/mla/rope.py`` -> max_seq_len, qk_rope_head_dim, rope_theta, and rope_scaling's
-        factor / original_max_position_embeddings / beta_fast / beta_slow / mscale / mscale_all_dim
+      * ``PreTrainedConfig`` already aliases ``rope_scaling`` -> ``rope_parameters``, so the
+        transformers 5.x rename resolves itself. The dict it returns is a *superset* of the six keys
+        ``tt/mla/rope.py`` indexes (factor, original_max_position_embeddings, beta_fast, beta_slow,
+        mscale, mscale_all_dim), so no remapping is needed.
+      * It is the config the HF reference model (``Mistral4Model`` / ``Mistral4Attention`` /
+        ``Mistral4MoE``) requires. A namespace cannot drive those, and without them there is no
+        reference to take PCC against -- and no random-weight transformer run at all, since
+        ``create_hf_model`` builds the TT state_dict from an HF model instance.
+      * A namespace silently omits whatever nobody thought to list. ``attention_dropout`` and
+        ``initializer_range`` were both found missing only by hitting AttributeError at runtime.
 
-    YaRN: ``factor=128.0`` with ``mscale=1.0`` gives an attention softmax scale of
-    ``qk_head_dim**-0.5 * m**2`` where ``m = 0.1*mscale*ln(128) + 1 = 1.4852`` (``mla.py:382-385``),
-    i.e. ``128**-0.5 * 2.2058 = 0.19497`` rather than the bare ``0.08839``. Note ``mla.py`` hardcodes
-    that ``0.1``; Mistral's config exposes it as ``llama_4_scaling_beta: 0.1``. The two agree TODAY,
-    so no code change is needed — but a future Mistral shipping a different beta would be silently
-    mis-scaled. See the open questions in the training log.
+    Two fields still have to be attached by hand, because no HF config carries them:
+
+      * ``rope_theta`` -- Mistral nests it INSIDE ``rope_parameters``; ``tt/mla/rope.py`` reads it as
+        a top-level attribute. This is a hoist, not a rename.
+      * ``max_seq_len`` -- a convention of this model family.
+
+    Plus ``quantization_config``, which lives at the TOP level of Mistral's ``config.json`` (next to
+    the vision tower), not inside ``text_config``, so constructing from the text config alone drops
+    it. The honest per-tensor value is passed through; see the note at the bottom.
     """
-    return types.SimpleNamespace(
-        vocab_size=MistralSmall4Config.VOCAB_SIZE,
-        hidden_size=MistralSmall4Config.EMB_SIZE,
-        intermediate_size=MistralSmall4Config.INTERMEDIATE_SIZE,
-        moe_intermediate_size=MistralSmall4Config.MOE_INTERMEDIATE_SIZE,
-        num_attention_heads=MistralSmall4Config.NUM_ATTENTION_HEADS,
-        num_key_value_heads=MistralSmall4Config.NUM_KEY_VALUE_HEADS,
-        num_hidden_layers=MistralSmall4Config.NUM_LAYERS,
-        # --- MLA ---
-        kv_lora_rank=MistralSmall4Config.KV_LORA_RANK,
-        q_lora_rank=MistralSmall4Config.Q_LORA_RANK,
-        qk_nope_head_dim=MistralSmall4Config.QK_NOPE_HEAD_DIM,
-        qk_rope_head_dim=MistralSmall4Config.QK_ROPE_HEAD_DIM,
-        v_head_dim=MistralSmall4Config.V_HEAD_DIM,
-        rms_norm_eps=MistralSmall4Config.RMS_NORM_EPS,
-        attention_bias=False,
-        # --- fields the CPU *reference* needs that ttMLA itself does not ---
-        # `create_mla_reference` instantiates deepseek_v3/reference/modeling_deepseek.py's
-        # DeepseekV3Attention, which reads a wider field set than the device path. Omitting any of
-        # these is an AttributeError on a SimpleNamespace, ~11 s into the test, before the device is
-        # touched. Found by running it, not by reading:
-        #   attention_dropout        modeling_deepseek.py:657
-        #   max_position_embeddings  modeling_deepseek.py:660
-        #   rope_scaling["type"]     modeling_deepseek.py:714  (_init_rope dispatches on it)
-        attention_dropout=0.0,
-        max_position_embeddings=MistralSmall4Config.MAX_POSITION_EMBEDDINGS,
-        # Required by the `random_weights` test fixture (conftest.py:932), which scales every random
-        # MLA tensor by it. Not read by ttMLA itself, but a hand-built config that omits it makes
-        # every random-weight test fail with AttributeError before reaching the device.
-        initializer_range=MistralSmall4Config.INITIALIZER_RANGE,
-        # --- rope: rope_parameters -> rope_scaling, with rope_theta hoisted out ---
-        max_seq_len=max_seq,
-        rope_theta=float(MistralSmall4Config.ROPE_THETA),
-        rope_scaling={
-            # config.json carries BOTH "rope_type" and "type" (= "yarn"). The device path never reads
-            # either, but the reference's _init_rope dispatches on rope_scaling["type"], so it must be
-            # present or the reference silently is not YaRN. Keep both, as the checkpoint does.
-            "type": "yarn",
-            "rope_type": "yarn",
-            "factor": 128.0,
-            "mscale": 1.0,
-            "mscale_all_dim": 1.0,
-            "beta_fast": 32.0,
-            "beta_slow": 1.0,
-            # NOTE: config.json says 8192 — the PRE-extension training length, not max_seq. GLM's
-            # builder passes its own max_seq here because GLM's factor is 1.0 (YaRN disabled) so the
-            # value is inert. For Mistral factor=128 makes YaRN live, and the ramp
-            # (beta_fast/beta_slow -> low/high correction dims) is computed against THIS number.
-            # Substituting max_seq here would change the frequency ramp -> wrong rope. Keep 8192.
-            "original_max_position_embeddings": 8192,
-        },
-        # --- MoE structure read by the pretrained cache-build path ---
-        first_k_dense_replace=MistralSmall4Config.NUM_DENSE_LAYERS,
-        n_routed_experts=MistralSmall4Config.NUM_ROUTED_EXPERTS,
-        num_experts_per_tok=MistralSmall4Config.NUM_EXPERTS_PER_TOKEN,
-        n_shared_experts=MistralSmall4Config.NUM_SHARED_EXPERTS,
-        n_group=MistralSmall4Config.NUM_EXPERT_GROUPS,
-        topk_group=MistralSmall4Config.NUM_LIMITED_GROUPS,
+    from transformers.models.mistral4.configuration_mistral4 import Mistral4Config
+
+    C = MistralSmall4Config
+    cfg = Mistral4Config(
+        vocab_size=C.VOCAB_SIZE,
+        hidden_size=C.EMB_SIZE,
+        intermediate_size=C.INTERMEDIATE_SIZE,
+        moe_intermediate_size=C.MOE_INTERMEDIATE_SIZE,
+        num_hidden_layers=C.NUM_LAYERS,
+        num_attention_heads=C.NUM_ATTENTION_HEADS,
+        num_key_value_heads=C.NUM_KEY_VALUE_HEADS,
+        n_shared_experts=C.NUM_SHARED_EXPERTS,
+        n_routed_experts=C.NUM_ROUTED_EXPERTS,
+        routed_scaling_factor=C.ROUTE_SCALE,
+        kv_lora_rank=C.KV_LORA_RANK,
+        q_lora_rank=C.Q_LORA_RANK,
+        qk_rope_head_dim=C.QK_ROPE_HEAD_DIM,
+        qk_nope_head_dim=C.QK_NOPE_HEAD_DIM,
+        v_head_dim=C.V_HEAD_DIM,
+        n_group=C.NUM_EXPERT_GROUPS,
+        topk_group=C.NUM_LIMITED_GROUPS,
+        num_experts_per_tok=C.NUM_EXPERTS_PER_TOKEN,
+        first_k_dense_replace=C.NUM_DENSE_LAYERS,
         norm_topk_prob=True,
-        routed_scaling_factor=MistralSmall4Config.ROUTE_SCALE,
-        # --- quantization ---
-        # ⚠ Deliberately NOT the [128,128] block shape every other resident carries. Mistral ships
-        # PER-TENSOR fp8: `weight_block_size` is null in config.json, dense weights carry a rank-0
-        # scalar `*_scale_inv`, and the stacked expert tensors carry `[128,1,1]` (one scale per
-        # expert). The shared dequantizer (deepseek_v3/utils/hf_model_utils.py:208) asserts
-        # `tensor.ndim == inv_scale.ndim` and `len(block_shape) == tensor.ndim`, so it RAISES on both
-        # of Mistral's shapes rather than silently mis-scaling. Passing the honest value through
-        # keeps that a loud failure until a Mistral-specific dequant path exists.
-        quantization_config={
-            "quant_method": "fp8",
-            "fmt": "e4m3",
-            "activation_scheme": "static",
-            "weight_block_size": None,
-        },
+        max_position_embeddings=C.MAX_POSITION_EMBEDDINGS,
+        initializer_range=C.INITIALIZER_RANGE,
+        rms_norm_eps=C.RMS_NORM_EPS,
+        attention_bias=False,
+        attention_dropout=0.0,
+        rope_interleave=True,
     )
+
+    # --- the two hoists ---
+    # rope_parameters is populated by Mistral4Config.__post_init__ with the checkpoint's YaRN block.
+    cfg.rope_theta = float(cfg.rope_parameters["rope_theta"])
+    cfg.max_seq_len = max_seq
+
+    # Mistral carries a full YaRN block (factor=128, mscale=1, mscale_all_dim=1) but applies NO
+    # mscale amplitude anywhere: `Mistral4Attention.__init__` sets `self.scaling = qk_head_dim**-0.5`
+    # unconditionally, and `Mistral4RotaryEmbedding.attention_scaling` is 1.0 so nothing is baked
+    # into cos/sin either. DeepSeek folds mscale^2 into the softmax scale under exactly these config
+    # values, which at factor=128 is a 2.2058x multiplier on the attention logits -- a wrong softmax
+    # temperature, with no crash to reveal it. This flag turns that off in both tt/mla/mla.py and the
+    # CPU MLAReference. Verified against transformers 5.12's mistral4 implementation.
+    cfg.mla_disable_yarn_mscale = True
+
+    # --- quantization ---
+    # Deliberately NOT the [128,128] block shape every other resident carries. Mistral ships
+    # PER-TENSOR fp8: `weight_block_size` is null in config.json, dense weights carry a rank-0 scalar
+    # `*_scale_inv`, and the stacked expert tensors carry `[128,1,1]` (one scale per expert). The
+    # shared dequantizer (deepseek_v3/utils/hf_model_utils.py) asserts `tensor.ndim == inv_scale.ndim`
+    # and `len(block_shape) == tensor.ndim`, so it RAISES on both of Mistral's shapes rather than
+    # silently mis-scaling. Passing the honest value through keeps that a loud failure until the
+    # Mistral-specific dequant path exists.
+    cfg.quantization_config = {
+        "quant_method": "fp8",
+        "fmt": "e4m3",
+        "activation_scheme": "static",
+        "weight_block_size": None,
+    }
+
+    # Guard the invariants the device path depends on, so a transformers change fails here loudly
+    # rather than as a PCC drift 20 minutes into a galaxy run.
+    assert cfg.qk_head_dim == C.QK_HEAD_DIM, f"qk_head_dim {cfg.qk_head_dim} != {C.QK_HEAD_DIM}"
+    assert cfg.head_dim == C.HEAD_DIM, f"head_dim {cfg.head_dim} != {C.HEAD_DIM}"
+    assert cfg.num_local_experts == C.NUM_ROUTED_EXPERTS  # attribute_map alias used by Mistral4NaiveMoe
+    for key in ("factor", "original_max_position_embeddings", "beta_fast", "beta_slow", "mscale", "mscale_all_dim"):
+        assert key in cfg.rope_scaling, f"rope_scaling missing {key!r} that tt/mla/rope.py indexes"
+    return cfg

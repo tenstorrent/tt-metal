@@ -23,13 +23,14 @@ from loguru import logger
 from transformers import DynamicCache
 
 import ttnn
-from models.common.utility_functions import hf_cache_layer_kv, is_blackhole, profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import pretrained_mla_weights
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1 import glm_decoder_layer_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused, num_full_indexer_layers
@@ -49,10 +50,11 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_5K_PATH,
     PROMPT_25K_PATH,
     create_hf_model,
-    derive_mla_kvpe,
+    decoder_layer_kwargs,
     extract_layer_state_dict,
     get_4d_causal_mask,
     load_and_compute_layer_by_layer,
+    reference_kvpe_for_layer,
     tokenize_prompt_to_isl,
 )
 
@@ -72,6 +74,7 @@ class PrefillBlockThresholds:
 
 DSV3_THRESHOLDS = PrefillBlockThresholds()
 KIMI_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.950)
+MISTRAL4_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.950)
 
 # Determinism: every iteration must be bit-identical to the iter-0 baseline (strict).
 DETERMINISM_PCC_THRESHOLD = 1.0
@@ -280,34 +283,19 @@ def run_model(
             position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
             attention_mask = get_4d_causal_mask(torch.ones(1, isl_total), causal_only=True).to(torch.bfloat16)
             ref_cache = DynamicCache()
+            # Bind the layer call and derive the reference KVPE through the shared helpers --
+            # decoder_layer_kwargs also builds rope in fp32, which matters at these sequence lengths.
+            layer_kwargs = decoder_layer_kwargs(
+                hf_model.layers[layer_idx], hf_model, torch_input, attention_mask, position_ids, ref_cache
+            )
             with torch.no_grad():
-                layer_out = hf_model.layers[layer_idx](
-                    torch_input,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_value=ref_cache,
-                    use_cache=True,
-                )
-                torch_output = layer_out[0]
+                layer_out = hf_model.layers[layer_idx](torch_input, **layer_kwargs)
+                torch_output = layer_out[0] if isinstance(layer_out, (tuple, list)) else layer_out
             logger.info(f"Torch reference output shape: {torch_output.shape}")
             if ref_cache is not None:
-                ref_kvpe = hf_cache_layer_kv(ref_cache, layer_idx)[0]
-                # The vendored MLAReference caches the COMPRESSED MLA line -- [b, 1, seq,
-                # kv_lora_rank + qk_rope_head_dim] -- which is exactly what the device stores. A
-                # stock transformers attention (e.g. Mistral4Attention) caches EXPANDED per-head
-                # keys instead, so the shapes do not correspond at all and comp_pcc dies on a size
-                # mismatch. Rebuild the compressed line from the layer's own modules in that case;
-                # it is the same two ops the reference performs, not a re-implementation of
-                # attention.
-                expected_last = config.kv_lora_rank + config.qk_rope_head_dim
-                if ref_kvpe.shape[-1] != expected_last:
-                    logger.info(
-                        f"Reference caches expanded KV (last dim {ref_kvpe.shape[-1]} != {expected_last}); "
-                        "deriving the compressed MLA KVPE line from the layer instead"
-                    )
-                    ref_kvpe = derive_mla_kvpe(
-                        hf_model.layers[layer_idx], torch_input, layer_kwargs.get("position_embeddings"), config
-                    )
+                ref_kvpe = reference_kvpe_for_layer(
+                    hf_model.layers[layer_idx], layer_idx, torch_input, layer_kwargs, ref_cache, config
+                )
                 logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
             profiler.end("torch_reference")
 
@@ -1143,3 +1131,96 @@ def test_glm_prefill_block(
     _, pcc_msg = assert_with_pcc(ref.unsqueeze(0), tt_out, GLM_BLOCK_OUTPUT_PCC)
     logger.info(f"[glm block {layer_type}] block output PCC: {pcc_msg}")
     ttnn.synchronize_device(mesh_device)
+
+
+# Mistral Small 4 119B decoder block. Only `moe` is parametrized: first_k_dense_replace = 0, so there
+# are no dense layers in this model at all and layer 0 is already MoE (DeepSeek-V3 and GLM have 3
+# dense layers, Kimi 1). Gate mode is GPT_DEVICE, not DEVICE_FP32 -- Mistral routes with a softmax
+# affinity and the grouped-topk kernel implements only sigmoid/sqrtsoftplus; see the adapter
+# docstring for why GPT-OSS routing is the same rule. PCC runs use random weights: the reference is
+# `hf_model.layers[idx]` built from the SAME draw, so no checkpoint is needed.
+@pytest.mark.parametrize(
+    "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
+    [
+        ("random", False, 1024, 8),
+        ("abc_1k", True, 1024, 8),
+        ("prompt_5k", True, 5 * 1024, 8),
+    ],
+    ids=["smoke-random", "pcc-abc_1k", "pcc-prompt_5k"],
+)
+@pytest.mark.parametrize(
+    "layer_type, gate_fallback_mode",
+    [("moe", GateComputeMode.GPT_DEVICE)],
+    ids=["moe_gate_gpt_device"],
+)
+@pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["mistral_small4"], indirect=True, ids=["mistral4"])
+@pytest.mark.parametrize("determinism_check", [False], ids=["no_determinism"])
+@pytest.mark.parametrize("num_iterations", [1], ids=["iter1"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 bring-up targets Blackhole")
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
+def test_mistral4_prefill_block(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    is_balanced,
+    isl_total,
+    dispatch_buffer_capacity_factor,
+    layer_type,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    pcc_validation,
+    input_source,
+    tokenizer,
+    request,
+    is_ci_env,
+    is_ci_v2_env,
+    determinism_check,
+    num_iterations,
+    use_pretrained,
+):
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        is_balanced,
+        isl_total,
+        dispatch_buffer_capacity_factor,
+        layer_type,
+        gate_fallback_mode,
+        num_links,
+        topology,
+        pcc_validation,
+        input_source,
+        tokenizer,
+        request,
+        is_ci_env,
+        is_ci_v2_env,
+        determinism_check=determinism_check,
+        num_iterations=num_iterations,
+        thresholds=MISTRAL4_THRESHOLDS,
+        use_pretrained=use_pretrained,
+    )
