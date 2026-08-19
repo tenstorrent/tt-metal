@@ -25,6 +25,9 @@
 #include "ttnn-nanobind/nanobind_helpers.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include <tt-metalium/distributed.hpp>
+#if defined(TTNN_EMULE_VIRTUAL_RANKS)
+#include "tt_metal/impl/emulation/emule_virtual_ranks.hpp"
+#endif
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -1057,6 +1060,42 @@ void py_module(nb::module_& mod) {
                 >>>     rank = ttnn.distributed_context_get_rank()
         )doc");
 
+#if defined(TTNN_EMULE_VIRTUAL_RANKS)
+    // emule in-process virtual ranks: K host "ranks" as threads of one process, so blaze reaches its
+    // K>1 path (and real d2d sockets) with no MPI. See tt-emule docs/multi-rank-emulation.md.
+    mod.def(
+        "emule_install_virtual_ranks",
+        &tt::tt_metal::emule::install_virtual_ranks,
+        nb::arg("k"),
+        R"doc(
+            Install a world of `k` in-process virtual ranks (emule only). k <= 1 restores a single
+            rank. Call before building anything that latches the world size.
+        )doc");
+    mod.def(
+        "emule_set_virtual_rank",
+        &tt::tt_metal::emule::set_current_virtual_rank,
+        nb::arg("rank"),
+        R"doc(
+            Bind the CALLING THREAD to a virtual rank (emule only). Each of the k threads calls this
+            once, with a distinct rank, before touching ttnn.
+        )doc");
+    mod.def(
+        "emule_fault_virtual_ranks",
+        &tt::tt_metal::emule::fault_virtual_ranks,
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Abandon every rank parked in a collective (emule only), making each throw. A rank whose
+            thread is dying calls this so its peers do not block until the test timeout.
+        )doc");
+    mod.def(
+        "emule_virtual_rank_count",
+        &tt::tt_metal::emule::virtual_rank_count,
+        R"doc(
+            Number of in-process virtual ranks, or 1 when they are not installed. Returns 1 under
+            MPI even at K>1 — this answers "do the ranks share an address space", not "world size".
+        )doc");
+#endif
+
     // Get the rank of the current process
     mod.def(
         "get_rank",
@@ -1118,6 +1157,11 @@ void py_module(nb::module_& mod) {
             }
             DistributedContext::get_current_world()->barrier();
         },
+        // A barrier blocks. Holding the GIL across it is merely wasteful when the peers are separate
+        // MPI processes, but it is a hard freeze when they are threads of THIS process (emule's
+        // in-process virtual ranks): the first thread in would block every other thread out of the
+        // interpreter, so no peer could ever arrive.
+        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
             Synchronize all processes.
 
@@ -1150,6 +1194,7 @@ void py_module(nb::module_& mod) {
             return recv_buf;
         },
         nb::arg("value"),
+        nb::call_guard<nb::gil_scoped_release>(),  // blocks; see the barrier binding above
         R"doc(
             Allgather a single integer value from all processes.
 
