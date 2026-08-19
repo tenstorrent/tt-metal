@@ -11,6 +11,19 @@
 
 namespace ttnn::operations::experimental::topk_large_indices::program {
 
+// The worker grid this op uses — the single point every grid decision
+// (factory selection, program hash, work split, kernel placement) goes
+// through. With a sub_core_grids fence set (v1: exactly one rectangular
+// CoreRange) it returns the fence's DIMENSIONS; unset returns the device's
+// full compute grid (stock behavior). Placement additionally translates by
+// topk_li_worker_origin so the fence may sit anywhere in the device grid.
+CoreCoord topk_li_worker_grid(
+    tt::tt_metal::IDevice* device, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+
+// The fence's origin core ((0,0) when unset): every logical core coordinate
+// the factories construct from split indices is translated by this offset.
+CoreCoord topk_li_worker_origin(const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+
 struct TopkLargeIndicesSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle compute_kernel_id{};

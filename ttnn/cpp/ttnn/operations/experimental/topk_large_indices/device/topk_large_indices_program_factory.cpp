@@ -20,6 +20,38 @@ namespace ttnn::operations::experimental::topk_large_indices::program {
 
 namespace {
 
+// v1 fence contract: exactly one rectangular CoreRange. Enforced here (not
+// only in validate) because the hash/factory-selection path dereferences the
+// fence before validation runs.
+const CoreRange& single_fence_range(const tt::tt_metal::CoreRangeSet& sub_core_grids) {
+    TT_FATAL(
+        sub_core_grids.ranges().size() == 1,
+        "topk_large_indices sub_core_grids must be exactly one rectangular CoreRange, got {} ranges ({})",
+        sub_core_grids.ranges().size(),
+        sub_core_grids);
+    return sub_core_grids.ranges().front();
+}
+
+}  // namespace
+
+CoreCoord topk_li_worker_grid(
+    tt::tt_metal::IDevice* device, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    if (sub_core_grids.has_value()) {
+        const auto& range = single_fence_range(*sub_core_grids);
+        return CoreCoord(range.end_coord.x - range.start_coord.x + 1, range.end_coord.y - range.start_coord.y + 1);
+    }
+    return device->compute_with_storage_grid_size();
+}
+
+CoreCoord topk_li_worker_origin(const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    if (sub_core_grids.has_value()) {
+        return single_fence_range(*sub_core_grids).start_coord;
+    }
+    return CoreCoord(0, 0);
+}
+
+namespace {
+
 struct RuntimeShapeArgs {
     uint32_t num_rows = 0;
     uint32_t num_chunks = 0;
@@ -161,8 +193,12 @@ void set_runtime_args(
     // writers stay output-relative (the window's output has its own row 0).
     const uint32_t row_base = attrs.row_start.value_or(0);
     const uint32_t effective_rows = attrs.row_count.value_or(runtime_args.num_rows);
-    const auto work_split =
-        tt::tt_metal::split_work_to_cores(input.device()->compute_with_storage_grid_size(), effective_rows, true);
+    // The work split runs in the FENCE-LOCAL frame (origin (0,0), fence dims);
+    // shared.cores carries device-frame coordinates, so group membership is
+    // looked up on the un-translated coordinate below.
+    const CoreCoord origin = topk_li_worker_origin(attrs.sub_core_grids);
+    const auto work_split = tt::tt_metal::split_work_to_cores(
+        topk_li_worker_grid(input.device(), attrs.sub_core_grids), effective_rows, true);
     const auto num_active_cores = std::get<0>(work_split);
     const auto& core_group_1 = std::get<2>(work_split);
     const auto& core_group_2 = std::get<3>(work_split);
@@ -172,8 +208,9 @@ void set_runtime_args(
 
     uint32_t start_row = 0;
     for (const auto& core : shared.cores) {
+        const CoreCoord local_core(core.x - origin.x, core.y - origin.y);
         const uint32_t rows =
-            rows_for_core(core, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
+            rows_for_core(local_core, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
         TT_FATAL(
             rows <= num_rows_per_core_group_1,
             "topk_large_indices assigned {} rows to a core, expected at most {}",
@@ -218,8 +255,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t llk_k = to_uint32(llk_target_k);
     const uint32_t tiles_per_sequence = (llk_k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
 
-    const auto grid = input.device()->compute_with_storage_grid_size();
-    const CoreRangeSet all_cores(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+    const auto grid = topk_li_worker_grid(input.device(), operation_attributes.sub_core_grids);
+    const CoreCoord origin = topk_li_worker_origin(operation_attributes.sub_core_grids);
+    const CoreRangeSet all_cores(CoreRange({origin.x, origin.y}, {origin.x + grid.x - 1, origin.y + grid.y - 1}));
     const auto cores = corerange_to_cores(all_cores, std::nullopt, true);
     // Runtime row counts are intentionally patched through runtime args instead of the program hash.
     // Create kernels/CBs across the full worker grid so cache hits can use a different active core subset.
@@ -760,7 +798,8 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
     const auto& shape = input.logical_shape();
     const uint32_t n = shape[shape.rank() - 1];
     const uint32_t num_rows = operation_attributes.row_count.value_or(flattened_rows_excluding_last_dim(shape));
-    const auto grid = input.device()->compute_with_storage_grid_size();
+    const auto grid = topk_li_worker_grid(input.device(), operation_attributes.sub_core_grids);
+    const CoreCoord origin = topk_li_worker_origin(operation_attributes.sub_core_grids);
     const auto config =
         compute_column_split_config(k, n, num_rows, grid, operation_attributes.num_slices, /*allow_multi_row=*/true);
     TT_FATAL(config.enabled, "topk_large_indices multi-core factory selected for a shape it does not support");
@@ -781,8 +820,9 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
     std::vector<CoreRange> node_ranges;
     std::vector<std::vector<CoreCoord>> rect_cores(num_rects);
     for (uint32_t r = 0; r < num_rects; ++r) {
-        const uint32_t ox = (r % rects_x) * config.local_grid_x;
-        const uint32_t oy = (r / rects_x) * config.local_grid_y;
+        // Rectangle origins are fence-local; translate into the device frame.
+        const uint32_t ox = static_cast<uint32_t>(origin.x) + (r % rects_x) * config.local_grid_x;
+        const uint32_t oy = static_cast<uint32_t>(origin.y) + (r / rects_x) * config.local_grid_y;
         const CoreRange rect(CoreCoord(ox, oy), CoreCoord(ox + config.local_grid_x - 1, oy + config.local_grid_y - 1));
         all_ranges.push_back(rect);
         rect_cores[r] = corerange_to_cores(CoreRangeSet(rect), std::nullopt, true);

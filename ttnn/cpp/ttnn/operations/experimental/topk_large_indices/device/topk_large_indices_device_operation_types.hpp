@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 
+#include <tt-metalium/core_coord.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -52,6 +53,13 @@ struct operation_attributes_t {
     // already capture any structural difference.
     std::optional<uint32_t> row_start{};
     std::optional<uint32_t> row_count{};
+    // Optional core fence: run the op entirely inside this rectangle so a
+    // concurrent workload (e.g. a CCL) can own the remaining cores. v1 accepts
+    // exactly ONE rectangular CoreRange; it may sit anywhere in the device
+    // grid (the factories translate every placement by the fence origin).
+    // nullopt = the full compute grid (bit-identical to pre-fence behavior).
+    // Placement is program structure, so the fence is part of the program hash.
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids{};
     // Sequential tie-breaking: equal values return their indices in ascending
     // global-index order (the stable=True contract of ttnn.topk). Selects the
     // TOPK_XL_STABLE_TIES kernel compile, so it is part of the program hash.
