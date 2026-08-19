@@ -17,12 +17,17 @@
 # not contradict the read-only-git-is-allowed policy in ../CLAUDE.md and
 # ../codegen/CLAUDE.md — the codegen router legitimately uses `git log` / `git show`.
 #
-# Log line format (tab separated):
-#     <UTC timestamp>  <session id>  <OK|BLOCK>  <command, newlines flattened>
+# Log line format (tab separated). Every bash command is logged; a Write/Edit is logged only
+# when it is blocked, so the git-relevant lines are not buried:
+#     <UTC timestamp>  <session id>  <Bash|Write|Edit>  <OK|BLOCK>  <text, newlines flattened>
+# Match the verdict as "\tBLOCK\t" rather than by column index — the columns have changed once
+# already, and a hardcoded index fails silently by reporting zero blocks.
 #
-# Log location: $CODEGEN_GUARD_LOG, else $TMPDIR/codegen-git-guard-<session id>.log.
-# The pipeline points CODEGEN_GUARD_LOG at "$LOG_DIR/git-guard.log" so the audit trail
-# is stored exactly like state.json and the agent transcripts.
+# Log location: $CODEGEN_GUARD_LOG when set, else $TMPDIR/codegen-git-guard-<session id>.log.
+# The pipeline does not set that variable — it cannot, since the hook's environment is fixed
+# when Claude starts. It instead copies the session-scoped default to "$LOG_DIR/git-guard.log"
+# in execute_step_extract_transcripts, so the audit trail ends up stored exactly like
+# state.json and the agent transcripts. Set CODEGEN_GUARD_LOG only for a hand-started session.
 
 set -uo pipefail
 
@@ -30,16 +35,26 @@ BLIND="${CODEGEN_BLIND_RUN:-0}"
 
 payload=$(cat)
 
-# Line 1 = session id, line 2.. = the raw command (may span lines).
+# Line 1 = session id, 2 = tool name, 3 = file path (Write/Edit), 4.. = the text to scan:
+# the command for Bash, the written content for Write/Edit.
 meta=$(printf '%s' "$payload" | python3 -c 'import json,sys
 try:
     d = json.load(sys.stdin)
+    ti = d.get("tool_input") or {}
+    tool = str(d.get("tool_name") or "")
     print(str(d.get("session_id") or "nosession"))
-    print(d.get("tool_input", {}).get("command", "") or "")
+    print(tool)
+    print(str(ti.get("file_path") or ""))
+    if tool == "Bash":
+        print(ti.get("command", "") or "")
+    else:
+        print(ti.get("content") or ti.get("new_string") or "")
 except Exception:
-    print("nosession"); print("")' 2>/dev/null)
-sid=$(printf '%s' "$meta" | head -1)
-cmd=$(printf '%s' "$meta" | tail -n +2)
+    print("nosession"); print(""); print(""); print("")' 2>/dev/null)
+sid=$(printf '%s' "$meta" | sed -n 1p)
+tool=$(printf '%s' "$meta" | sed -n 2p)
+path=$(printf '%s' "$meta" | sed -n 3p)
+cmd=$(printf '%s' "$meta" | tail -n +4)
 
 # One log per run — a shared file would make lines unattributable. The default is keyed
 # by session id so a hand-started session still gets its own file. The pipeline collects
@@ -61,27 +76,66 @@ SUBCMD='(^|[^[:alnum:]_-])git([[:space:]]+(-[^[:space:]]+|-C[[:space:]]+[^[:spac
 # bare-SHA pattern is what stops `git worktree add <dir> <old-sha>` and
 # `git checkout <old-sha> -- <path>`; `worktree` itself stays allowed because the
 # pipeline creates its own worktrees.
-REVREF='HEAD~|HEAD\^|@\{|\.git/(logs|objects|refs|packed-refs)|(^|[^[:alnum:]])[0-9a-f]{7,40}([^[:alnum:]]|$)'
+REVREF='HEAD~|HEAD\^|@\{|\.git(/|$)|(^|[^[:alnum:]])[0-9a-f]{7,40}([^[:alnum:]]|$)'
 
-# Cheap gate: only inspect commands that mention git or a .git path at all.
-GITISH='(^|[^[:alnum:]_-])git([^[:alnum:]_-]|$)|\.git/'
+# Same, minus the bare-SHA clause, for scanning file content: a 7+ hex-digit token is
+# common in source (constants, masks) and would false-block legitimate writes.
+REVREF_CONTENT='HEAD~|HEAD\^|@\{|\.git(/|$)'
+
+# In script content the subcommand is often not space-separated —
+# `subprocess.run(["git", "reflog"])` puts quotes and a comma between the two tokens. Any
+# run of non-word characters counts as the separator. This cannot span an intervening word,
+# so `git status; cat build.log` still does not match.
+SUBCMD_LOOSE='(^|[^[:alnum:]_-])git[^[:alnum:]_]+(log|reflog|rev-list|cat-file|blame|stash|fsck|archive|show)([^[:alnum:]_-]|$)'
+
+# Cheap gate: only inspect text that mentions git or a .git path at all.
+GITISH='(^|[^[:alnum:]_-])git([^[:alnum:]_-]|$)|\.git(/|$)'
+
+# Writing a script and then running it defeats a command-text check: the Bash hook only
+# sees `bash x.sh`. Authoring the script *through bash* is already caught (the git text is
+# in the command), so the remaining route is the Write/Edit tool, which never touches a
+# shell. Scan written content too — but only for scripts, so prose that merely mentions
+# `git log` (analysis notes, reports) is not blocked.
+scan_text=0
+scan_revref="$REVREF"
+scan_loose=""
+case "$tool" in
+    Bash)
+        scan_text=1
+        ;;
+    Write|Edit|NotebookEdit)
+        scan_revref="$REVREF_CONTENT"
+        scan_loose="$SUBCMD_LOOSE"
+        case "$path" in
+            *.sh | *.bash | *.zsh | *.py | *.pl) scan_text=1 ;;
+        esac
+        # A shebang makes it a script whatever the extension.
+        printf '%s' "$cmd" | sed -n 1p | grep -q '^#!' && scan_text=1
+        ;;
+esac
 
 verdict=OK
-if [ "$BLIND" = "1" ] && printf '%s' "$cmd" | grep -qE "$GITISH"; then
-    if printf '%s' "$cmd" | grep -qE "$SUBCMD" || printf '%s' "$cmd" | grep -qE "$REVREF"; then
+if [ "$BLIND" = "1" ] && [ "$scan_text" = "1" ] && printf '%s' "$cmd" | grep -qE "$GITISH"; then
+    if printf '%s' "$cmd" | grep -qE "$SUBCMD" || printf '%s' "$cmd" | grep -qE "$scan_revref"; then
+        verdict=BLOCK
+    elif [ -n "$scan_loose" ] && printf '%s' "$cmd" | grep -qE "$scan_loose"; then
         verdict=BLOCK
     fi
 fi
 
-# Record the command and the verdict. Newlines and tabs are flattened so every command
-# is exactly one greppable line.
-cmd_flat=$(printf '%s' "$cmd" | tr '\n\t' '  ')
-mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
-printf '%s\t%s\t%s\t%s\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sid" "$verdict" "$cmd_flat" >> "$LOG" 2>/dev/null || true
+# Log every bash command, plus any blocked attempt through another tool. Logging every
+# Write as well would bury the git-relevant lines. Newlines and tabs are flattened so each
+# entry is exactly one greppable line.
+if [ "$tool" = "Bash" ] || [ "$verdict" = "BLOCK" ]; then
+    entry=$(printf '%s' "$cmd" | tr '\n\t' '  ')
+    [ "$tool" != "Bash" ] && entry="$path :: $entry"
+    mkdir -p "$(dirname "$LOG")" 2>/dev/null || true
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sid" "${tool:-?}" "$verdict" "$entry" >> "$LOG" 2>/dev/null || true
+fi
 
 if [ "$verdict" = "BLOCK" ]; then
-    reason="Blocked by git-guard: this codegen run is a blind regeneration, so reading git history (or an older revision) is not permitted. git status/add/commit and a bare 'git diff' are allowed."
+    reason="Blocked by git-guard: this codegen run is a blind regeneration, so reading git history — directly or from a script — is not permitted. git status/add/commit and a bare 'git diff' are allowed."
     printf '%s\n' "$reason" >&2
     python3 -c 'import json,sys; print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":sys.argv[1]}}))' "$reason"
 fi
