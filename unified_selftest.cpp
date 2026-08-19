@@ -341,7 +341,7 @@ void example_reduce() {
 
     ComputeBlock scaler = fill_reduce_scaler<1>(scaler_storage);
     ComputeBlock a = noc_load<1>(in_storage, t0, 0).wait();
-    noc_store<0>(out_storage.store(reduce_sum<ReduceGeometry<2, 2>, ReduceAxis::Rows>(a, scaler)), t2, 0);
+    noc_store<0>(out_storage.store(reduce_sum<ReduceAxis::Rows>(a, scaler)), t2, 0);
 }
 
 // Core-to-core hop, exercising NocAsyncCopyTx. The peer handshake is still not
@@ -375,10 +375,10 @@ void example_peer_hop() {
 void example_syntax_free() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
-    // One buffer set per SHAPE the probe needs, now that Storage::store checks that
-    // the destination is exactly what the expression produces. The old single set was
-    // silently inconsistent -- a MatmulGeometry<2,2,2> result stored into a
-    // Storage<Shape<1,2>> -- which is what the new assert caught.
+    // One buffer set per SHAPE the probe needs, now that Storage::store checks that the
+    // destination is exactly what the expression produces. The old single set was
+    // silently inconsistent -- a 2x2 matmul's Shape<2,2> output stored into a
+    // Storage<Shape<1,2>> -- which is what that assert caught.
     using Row2 = Shape<1, 2>;  // eltwise operands and result
     using Sq2 = Shape<2, 2>;   // matmul operands and output block
     using Col2 = Shape<2, 1>;  // reduce input
@@ -387,7 +387,6 @@ void example_syntax_free() {
     Storage<Sq2> mm_a(5), mm_b(6), mm_out(7);
     Storage<Col2> red_in(8);
     Storage<One> scaler(3), red_out(4);
-    using RG = ReduceGeometry</*ht=*/2, /*wt=*/1>;
 
     {  // Bin -- EVERY binary. Left-associated and non-commutative on purpose:
        // a swapped operand order shows up as swapped dst indices in the trace.
@@ -411,17 +410,17 @@ void example_syntax_free() {
     {  // ReduceNode -- likewise
         ComputeBlock sc = noc_load<1>(scaler, t0, 0).wait();  // resident operand
         ComputeBlock a = noc_load<1>(red_in, t0, 0).wait();
-        noc_store<0>(red_out.store(rsqrt(sqrt_(recip(exp_(relu(reduce_sum<RG, ReduceAxis::Rows>(a, sc))))))), t2, 0);
+        noc_store<0>(red_out.store(rsqrt(sqrt_(recip(exp_(relu(reduce_sum<ReduceAxis::Rows>(a, sc))))))), t2, 0);
     }
 }
 
 void example_syntax_method() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
-    // One buffer set per SHAPE the probe needs, now that Storage::store checks that
-    // the destination is exactly what the expression produces. The old single set was
-    // silently inconsistent -- a MatmulGeometry<2,2,2> result stored into a
-    // Storage<Shape<1,2>> -- which is what the new assert caught.
+    // One buffer set per SHAPE the probe needs, now that Storage::store checks that the
+    // destination is exactly what the expression produces. The old single set was
+    // silently inconsistent -- a 2x2 matmul's Shape<2,2> output stored into a
+    // Storage<Shape<1,2>> -- which is what that assert caught.
     using Row2 = Shape<1, 2>;  // eltwise operands and result
     using Sq2 = Shape<2, 2>;   // matmul operands and output block
     using Col2 = Shape<2, 1>;  // reduce input
@@ -430,7 +429,6 @@ void example_syntax_method() {
     Storage<Sq2> mm_a(5), mm_b(6), mm_out(7);
     Storage<Col2> red_in(8);
     Storage<One> scaler(3), red_out(4);
-    using RG = ReduceGeometry</*ht=*/2, /*wt=*/1>;
 
     {  // Bin -- EVERY binary. Left-associated and non-commutative on purpose:
        // a swapped operand order shows up as swapped dst indices in the trace.
@@ -454,7 +452,7 @@ void example_syntax_method() {
     {  // ReduceNode -- likewise
         ComputeBlock sc = noc_load<1>(scaler, t0, 0).wait();  // resident operand
         ComputeBlock a = noc_load<1>(red_in, t0, 0).wait();
-        noc_store<0>(red_out.store(reduce_sum<RG, ReduceAxis::Rows>(a, sc).relu().exp().recip().sqrt().rsqrt()), t2, 0);
+        noc_store<0>(red_out.store(reduce_sum<ReduceAxis::Rows>(a, sc).relu().exp().recip().sqrt().rsqrt()), t2, 0);
     }
 }
 

@@ -416,20 +416,20 @@ auto matmul(const ComputeBlock<SA>& a, const ComputeBlock<SB>& b) {
     return matmul(as_node(a), as_node(b));
 }
 
-template <typename Geometry, ReduceAxis Axis, typename SB, typename SC>
-ReduceNode<Geometry, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
+template <ReduceAxis Axis, typename SB, typename SC>
+ReduceNode<SB, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
     const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler) {
     return {{}, b.get_cb_id(), scaler.get_cb_id()};
 }
 
-template <typename Geometry, ReduceAxis Axis, typename SB, typename SC>
-ReduceNode<Geometry, Axis, ReducePool::Max, expr::UnaryChain<>> reduce_max(
+template <ReduceAxis Axis, typename SB, typename SC>
+ReduceNode<SB, Axis, ReducePool::Max, expr::UnaryChain<>> reduce_max(
     const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler) {
     return {{}, b.get_cb_id(), scaler.get_cb_id()};
 }
 
-template <typename Geometry, ReduceAxis Axis, typename SB, typename SC>
-ReduceNode<Geometry, Axis, ReducePool::Avg, expr::UnaryChain<>> reduce_mean(
+template <ReduceAxis Axis, typename SB, typename SC>
+ReduceNode<SB, Axis, ReducePool::Avg, expr::UnaryChain<>> reduce_mean(
     const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler) {
     return {{}, b.get_cb_id(), scaler.get_cb_id()};
 }

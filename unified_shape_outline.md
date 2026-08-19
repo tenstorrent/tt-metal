@@ -5,8 +5,9 @@ SPDX-License-Identifier: Apache-2.0
 
 # `Shape` as a template parameter -- what it looks like, and what it costs
 
-> **Status.** The `Extent` rename and Stages 1-3 have landed. Stage 4 (delete
-> `ReduceGeometry`) is still outlined below. Stage 1 came in at **+188/-158 lines** across
+> **Status.** COMPLETE. The `Extent` rename and all four stages have landed. Neither
+> geometry is declared by hand anywhere any more -- both are derived from the operand
+> shapes, and every stage kept the selftest traces byte-identical. Stage 1 came in at **+188/-158 lines** across
 > `api.h`, `impl_v1.hpp`, `shape.hpp`, seven kernels and the selftest, with all three
 > selftest traces byte-identical and all eight device tests passing.
 
@@ -291,3 +292,23 @@ at all -- which is why the trace stayed byte-identical through the whole stage.
 - **`matmul_init` needs the shapes before the buffers.** It programs the block
   dimensions, so in `matmul_mcast.cpp` the `using` aliases had to move above the
   `matmul_init` call they feed.
+
+## 10. What Stage 4 found
+
+`ReduceGeometry<Ht, Wt>` became `ReduceGeometry<S>`, derived from the operand's shape.
+It needed no other change: every member -- `out_tiles`, `elements`, `group`,
+`contributor` -- was already a pure function of `(rows, cols, axis)`, so only where the
+two extents come from moved. `reduce_sum<RG, Axis>(a, sc)` is `reduce_sum<Axis>(a, sc)`.
+
+`reduction_tree.cpp` is where it shows. Gone: both `using PerCore/PerColumn` lines, the
+hand-derived `reduced_tiles_per_block`, and the geometry argument to its `RT_REDUCE`
+macro. What remains is four shape aliases and the ops that read them.
+
+- **A batched reduce is now an explicit refusal rather than a silent wrong answer.**
+  `reduce_shape<Shape<2,4,4>, Cols>` correctly gives `Shape<2,4,1>`, so the shape
+  algebra handles a leading extent -- but `Strategy<ReduceFusion>` walks a single 2-D
+  grid and would have quietly reduced only the first slice. `ReduceGeometry` now
+  `static_assert`s `S::leading == 1` and says to loop per batch from the kernel.
+- **One legitimate geometry USE survives**, and it should:
+  `ReduceGeometry<In>::elements(kAxis)` supplies the mean scaler's 1/N. Querying a
+  derived property is the point; declaring the geometry was the problem.

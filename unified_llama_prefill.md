@@ -276,8 +276,14 @@ had, including bias -> bcast.
       hole doing it: `Accumulator` bypasses `store`, so its shape agreement was
       unchecked -- a `Shape<2,1>` accumulator on a `Shape<1,2>` matmul ran *correctly on
       device* because the page counts matched. Now a `static_assert`.
-- [ ] **Stage 4 -- infer reduce.** Delete `ReduceGeometry`; `reduce_*<Axis>(a, sc)`.
-      Update `reduction_tree` + selftest. Trace byte-identical.
+- [x] **Stage 4 -- infer reduce.** Done. `ReduceGeometry<Ht, Wt>` is now
+      `ReduceGeometry<S>`, derived from the operand's shape -- every member was already
+      a pure function of `(rows, cols, axis)`. `reduce_sum<RG, Axis>(a, sc)` is
+      `reduce_sum<Axis>(a, sc)`, and `reduction_tree`'s `RT_REDUCE(Geom, x)` macro loses
+      its geometry argument along with both `using PerCore/PerColumn` lines and the
+      hand-derived `reduced_tiles_per_block`. A batched reduce is now an explicit
+      `static_assert` rather than silently wrong: `reduce_shape` handles a leading
+      extent correctly but `Strategy<ReduceFusion>` walks one 2-D grid.
 
 ### Risks
 
