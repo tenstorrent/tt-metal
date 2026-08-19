@@ -87,7 +87,8 @@ struct LogicalCoord {
     bool operator!=(LogicalCoord o) const { return !(*this == o); }
 };
 
-struct Shape {
+// The h x w extent of a core rectangle. Not a tile shape -- see Shape.
+struct Extent {
     uint32_t h;
     uint32_t w;
 };
@@ -130,13 +131,13 @@ struct PhysicalMcast {
 
 struct LogicalMcast {
     LogicalCoord coord;
-    Shape shape;
+    Extent extent;
 
     PhysicalMcast to_physical() const;
 
     uint64_t get_noc_addr(uintptr_t l1_addr) const;
 
-    uint32_t volume() const { return shape.h * shape.w; }
+    uint32_t volume() const { return extent.h * extent.w; }
 };
 
 // ---------------------------------------------------------------------------
