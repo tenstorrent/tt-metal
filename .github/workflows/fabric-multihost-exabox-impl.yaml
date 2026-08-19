@@ -43,11 +43,11 @@ jobs:
 
       - name: Validate SKU exists
         run: |
-          if ! grep -q "bh_${{ inputs.sp-config }}:" .github/sku_config.yaml; then
-            echo "::error::SKU 'bh_${{ inputs.sp-config }}' not found in .github/sku_config.yaml"
+          if ! grep -q "bh_${{ inputs.sp-config | default('sc4') }}:" .github/sku_config.yaml; then
+            echo "::error::SKU 'bh_${{ inputs.sp-config | default('sc4') }}' not found in .github/sku_config.yaml"
             exit 1
           fi
-          echo "✓ SKU 'bh_${{ inputs.sp-config }}' exists in sku_config.yaml"
+          echo "✓ SKU 'bh_${{ inputs.sp-config | default('sc4') }}' exists in sku_config.yaml"
 
       - name: Verify test timeouts against budget
         run: |
