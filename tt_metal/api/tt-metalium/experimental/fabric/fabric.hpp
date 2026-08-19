@@ -115,13 +115,6 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
 
-// Logical ethernet core hosting the fabric router that link index `link_idx` (as returned by
-// get_forwarding_link_indices) uses when forwarding from src to dst. Lets a caller that opened a
-// fabric connection on a given link know WHICH eth core that connection actually lands on, e.g. to
-// place the worker driving it in the same physical column as its router.
-tt::tt_metal::CoreCoord get_forwarding_link_logical_eth_core(
-    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t link_idx);
-
 FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id);
 
 std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(

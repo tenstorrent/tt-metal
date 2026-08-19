@@ -5,7 +5,6 @@
 #pragma once
 
 #include <tt-metalium/core_coord.hpp>
-#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
@@ -36,8 +35,4 @@ uint32_t get_worker_noc_hop_distance(
     const CoreCoord& logical_src,
     const CoreCoord& logical_dst,
     NOC noc);
-
-// Returns the PHYSICAL (noc0) coordinate of a logical core of the given type.
-CoreCoord get_physical_core_from_logical_core(
-    IDevice* device, const CoreCoord& logical_core, const tt::CoreType& core_type);
 }  // namespace tt::tt_metal::experimental::Device
