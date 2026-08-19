@@ -85,7 +85,7 @@ runs:
         echo "Syncing to workers: ${workers[*]}"
 
         printf '%s\n' "${workers[@]}" | xargs -P 0 -I{} \
-          rsync -aW --inplace --partial "$GITHUB_WORKSPACE/" "{}:${GITHUB_WORKSPACE}/"
+          rsync -aW --inplace --partial -e 'ssh -l user' "$GITHUB_WORKSPACE/" "{}:${GITHUB_WORKSPACE}/"
 
     - name: Extract build and install wheel on all nodes
       shell: bash
