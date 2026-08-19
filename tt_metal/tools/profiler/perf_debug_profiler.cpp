@@ -2333,8 +2333,9 @@ void PerfDebugProfiler::decode_ranges(DeviceCtx& ctx, uint32_t sock_idx, uint32_
                         out[k++] = PerfDebugRec{(hi << 32) | lo, 0, (kRecCont << kRecTypeShift) | ml};
                     }
                 },
-                [&](const uint32_t* p, uint32_t nw, uint32_t lane, uint32_t bhi, uint32_t /*bprog*/) {
-                    if ((p[0] >> 27) == PP_ZONE_ATOMIC) {
+                [&](const uint32_t* p, uint32_t nw, uint32_t lane, uint32_t bhi) {
+                    const uint32_t kind = p[0] >> 27;
+                    if (kind == PP_ZONE_ATOMIC) {
                         // Device-paired 3-word records: {hash, end_lo, dur}. Counted as wire-equivalent
                         // START+END pairs so zones/Mzones stay comparable across modes (the actual wire
                         // is 12 B per zone vs the split pair's 16).

@@ -252,13 +252,18 @@ static constexpr uint32_t SPSC_MARKER_WORDS = 2;
 // is amortized over RING_CAPACITY-ish words instead of paid per marker.
 [[maybe_unused]] static uint32_t g_head_cache = 0;
 
-// Publish cadence for the atomic-zone path: fence + TAIL store amortized over batches of ring words
-// instead of paid per zone. finish_profiler()'s unconditional publish flushes the residue at kernel
-// end, and holding <= kPublishBatchWords unpublished can never deadlock the room wait (the head can
-// always reach wIndex - pending, and pending is far below RING_CAPACITY - need).
-[[maybe_unused]] static uint32_t g_last_pub = 0;
+// Publish cadence for the atomic-zone path: fence + TAIL store amortized over kPublishBatchWords-sized
+// batches instead of paid per zone. The trigger is wIndex's low bits -- an emit of 3-4 words lands in
+// [0,4) mod 16 iff it crossed a batch boundary -- so there is no cadence state and no extra load; the
+// same taken branch replenishes the room credit. The initial credit comes from init_profiler(), and
+// finish_profiler()'s unconditional publish flushes the residue at kernel end. Holding
+// <= kPublishBatchWords unpublished can never deadlock the room wait (the head can always reach
+// wIndex - pending, and pending is far below RING_CAPACITY - need).
 constexpr uint32_t kPublishBatchWords = 16;
 
+// Reading LOW latches HIGH (see c_tensix_core.h; Quasar names the register WALL_CLOCK_H_LATCHED), so
+// LOW-then-HIGH is one coherent 64-bit snapshot in two loads. HIGH read alone returns the latch from
+// whenever LOW was last read -- arbitrarily stale -- so the order is load-bearing.
 inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_t& lo) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     lo = p_reg[WALL_CLOCK_LOW_INDEX];
@@ -366,46 +371,61 @@ inline __attribute__((always_inline)) void mark_time(uint32_t timer_id, ZoneKind
     publish_tail();
 }
 
-// Emit one COMPLETE zone: {type|hash, end_low, duration} -- 3 words instead of the split pair's 4,
-// ONE ring transaction per zone instead of two, and the whole emit runs AFTER the end timestamp is
-// read, so none of it lands inside the measured window. Anchored on the END because records leave in
+// The >2^32-cycle (~3.2 s) zone path: a split pair with explicit stickies for BOTH halves (the
+// start's epoch is long gone from g_prev_timer_hi); the host's pairing path handles it. Out-of-line:
+// inlined at every zone call site its cold body cost ~2 cyc/zone of code layout alone.
+__attribute__((noinline)) void mark_zone_wide(uint32_t timer_id, uint64_t start, uint32_t hi, uint32_t lo) {
+    ring_ensure_room(6);
+    const uint32_t start_hi = static_cast<uint32_t>(start >> 32);
+    if (start_hi != g_prev_timer_hi) {
+        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, start_hi));
+    }
+    ring_write_word(ppfmt::zone_w0(timer_id, ZoneKind::Start));
+    ring_write_word(static_cast<uint32_t>(start));
+    ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));
+    g_prev_timer_hi = hi;
+    ring_write_word(ppfmt::zone_w0(timer_id, ZoneKind::End));
+    ring_write_word(lo);
+    publish_tail();
+}
+
+// Emit one COMPLETE zone: {type|hash, end_low, duration} -- 3 words and ONE ring transaction instead
+// of the split pair's 4 words and two, with the whole emit running AFTER the end timestamp is read,
+// so none of it lands inside the measured window. Anchored on the END because records leave in
 // completion order: ends are monotonic per lane (the STICKY_TIMER contract holds unchanged), starts
-// are not -- the host recovers start = full_end - duration. A duration that overflows 32 bits falls
-// back to the legacy split pair with explicit stickies for BOTH halves (the start's epoch is long
-// gone from g_prev_timer_hi); the host's pairing path still handles those.
+// are not -- the host recovers start = end - duration.
 inline __attribute__((always_inline)) void mark_zone_atomic(uint32_t timer_id, uint64_t start) {
     uint32_t hi, lo;
     read_wall_clock(hi, lo);
-    const uint64_t d = ((static_cast<uint64_t>(hi) << 32) | lo) - start;
-    if (d >> 32) {
-        ring_ensure_room(6);
-        const uint32_t start_hi = static_cast<uint32_t>(start >> 32);
-        if (start_hi != g_prev_timer_hi) {
-            ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, start_hi));
-        }
-        ring_write_word(ppfmt::zone_w0(timer_id, ZoneKind::Start));
-        ring_write_word(static_cast<uint32_t>(start));
-        ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));
-        g_prev_timer_hi = hi;
-        ring_write_word(ppfmt::zone_w0(timer_id, ZoneKind::End));
-        ring_write_word(lo);
-        publish_tail();
+    const uint64_t end = (static_cast<uint64_t>(hi) << 32) | lo;
+    const uint64_t d = end - start;
+    if (d >> 32) [[unlikely]] {
+        mark_zone_wide(timer_id, start, hi, lo);
         return;
     }
-    if (hi != g_prev_timer_hi) {
+    if (hi != g_prev_timer_hi) [[unlikely]] {
         ring_write_word(ppfmt::w0(ppfmt::T_STICKY_TIMER, hi));
         g_prev_timer_hi = hi;
     }
-    ring_write_word(ppfmt::w0(ppfmt::T_ZONE_ATOMIC, timer_id & ppfmt::HASH16_MASK));
-    ring_write_word(lo);
-    ring_write_word(static_cast<uint32_t>(d));
-    if (wIndex - g_last_pub >= kPublishBatchWords) {
+    // Straight-line 3-store burst: one index computation, no per-word wrap math (the wrap case is
+    // 3 words in 512).
+    const uint32_t idx = wIndex & (RING_CAPACITY - 1u);
+    if (idx <= RING_CAPACITY - 3u) [[likely]] {
+        volatile tt_l1_ptr uint32_t* q = &profiler_data_buffer[myRiscID].data[idx];
+        q[0] = ppfmt::w0(ppfmt::T_ZONE_ATOMIC, timer_id & ppfmt::HASH16_MASK);
+        q[1] = lo;
+        q[2] = static_cast<uint32_t>(d);
+        wIndex += 3;
+    } else {
+        ring_write_word(ppfmt::w0(ppfmt::T_ZONE_ATOMIC, timer_id & ppfmt::HASH16_MASK));
+        ring_write_word(lo);
+        ring_write_word(static_cast<uint32_t>(d));
+    }
+    // Credit for the NEXT batch is replenished in the same taken branch, so the compact path pays no
+    // per-zone room check: between two takings at most kPublishBatchWords + one record + one sticky
+    // land unchecked, and 2x the batch covers that.
+    if ((wIndex & (kPublishBatchWords - 1u)) < 4u) [[unlikely]] {
         publish_tail();
-        g_last_pub = wIndex;
-        // Credit for the NEXT batch, checked here so the compact path pays NO per-zone room check:
-        // between two takings of this branch at most kPublishBatchWords + one record + one sticky
-        // land unchecked, and 2x the batch covers that. A fresh kernel launch self-corrects: its
-        // statics re-zero, so wIndex - g_last_pub is huge and the first zone lands here.
         ring_ensure_room(2 * kPublishBatchWords);
     }
 }
@@ -471,6 +491,7 @@ inline __attribute__((always_inline)) void set_profiler_zone_valid(bool conditio
 __attribute__((noinline)) void init_profiler(
     uint16_t briscKernelID = 0, uint16_t ncriscKernelID = 0, uint16_t triscsKernelID = 0) {
     stackSize = 0;
+    ring_ensure_room(2 * kPublishBatchWords);
     for (int i = 0; i < SUM_COUNT; i++) {
         sumIDs[i] = 0;
         sums[i] = 0;

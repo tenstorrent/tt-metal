@@ -191,7 +191,7 @@ inline uint32_t spsc_walk_run(
         if ((lin[i] >> 27) <= PP_ZONE_END && spsc_have_avx2()) {
             const uint32_t blk = spsc_screen_zone_block(lin + i, n - i);
             if (blk != 0) {
-                emit_block(lin + i, blk, lane, hi, prog);
+                emit_block(lin + i, blk, lane, hi);
                 i += blk;
             }
             if (i + 1 >= n) {
@@ -211,14 +211,14 @@ inline uint32_t spsc_walk_run(
             if (i + 3 > n) {
                 break;  // partial record -> carry
             }
-            // 3-word complete zones dominate an atomic stream: hand the whole run to the block sink in
-            // one call (it distinguishes the kind by p[0]'s type), mirroring the screened-marker path's
-            // amortization. Sinks receive DURATION where markers carry prog.
+            // Zone-record runs go to the block sink whole (it distinguishes the kind by p[0]'s type),
+            // mirroring the screened-marker path's amortization. Sinks receive DURATION where markers
+            // carry prog.
             uint32_t j = i + 3;
             while (j + 3 <= n && pp_type(lin[j]) == PP_ZONE_ATOMIC) {
                 j += 3;
             }
-            emit_block(lin + i, j - i, lane, hi, prog);
+            emit_block(lin + i, j - i, lane, hi);
             i = j;
             continue;
         }
@@ -253,15 +253,16 @@ inline uint32_t spsc_walk_run(
 // Adapts a block (screened 2-word markers, or a 3-word atomic-zone run -- kind told by p[0]'s type)
 // back to per-record emit, for sinks that don't provide their own block path.
 template <typename Emit>
-inline void spsc_block_to_emit(Emit&& emit, const uint32_t* p, uint32_t nw, uint32_t bl, uint32_t bhi, uint32_t bprog) {
-    if ((p[0] >> 27) == PP_ZONE_ATOMIC) {
+inline void spsc_block_to_emit(Emit&& emit, const uint32_t* p, uint32_t nw, uint32_t bl, uint32_t bhi) {
+    const uint32_t kind = p[0] >> 27;
+    if (kind == PP_ZONE_ATOMIC) {
         for (uint32_t j = 0; j + 2 < nw; j += 3) {
             emit(bl, PP_ZONE_ATOMIC, p[j] & 0xFFFFu, pp_full_ts(bhi, p[j + 1]), p[j + 2]);
         }
         return;
     }
     for (uint32_t j = 0; j < nw; j += 2) {
-        emit(bl, p[j] >> 27, p[j] & 0xFFFFu, pp_full_ts(bhi, p[j + 1]), bprog);
+        emit(bl, p[j] >> 27, p[j] & 0xFFFFu, pp_full_ts(bhi, p[j + 1]), 0);
     }
 }
 
@@ -270,15 +271,8 @@ template <typename Emit, typename EmitData>
 inline uint32_t spsc_walk_run(
     const uint32_t* lin, uint32_t n, uint32_t lane, uint32_t& hi, uint32_t& prog, Emit&& emit, EmitData&& emit_data) {
     return spsc_walk_run(
-        lin,
-        n,
-        lane,
-        hi,
-        prog,
-        emit,
-        emit_data,
-        [&emit](const uint32_t* p, uint32_t nw, uint32_t bl, uint32_t bhi, uint32_t bprog) {
-            spsc_block_to_emit(emit, p, nw, bl, bhi, bprog);
+        lin, n, lane, hi, prog, emit, emit_data, [&emit](const uint32_t* p, uint32_t nw, uint32_t bl, uint32_t bhi) {
+            spsc_block_to_emit(emit, p, nw, bl, bhi);
         });
 }
 
@@ -550,16 +544,9 @@ inline void spsc_decode(
     uint32_t nl,
     Emit&& emit,
     EmitData&& emit_data = SpscIgnoreData{}) {
-    spsc_decode(
-        st,
-        in,
-        in_n,
-        nl,
-        emit,
-        emit_data,
-        [&emit](const uint32_t* p, uint32_t nw, uint32_t bl, uint32_t bhi, uint32_t bprog) {
-            spsc_block_to_emit(emit, p, nw, bl, bhi, bprog);
-        });
+    spsc_decode(st, in, in_n, nl, emit, emit_data, [&emit](const uint32_t* p, uint32_t nw, uint32_t bl, uint32_t bhi) {
+        spsc_block_to_emit(emit, p, nw, bl, bhi);
+    });
 }
 
 }  // namespace tt::tt_metal::profiler
