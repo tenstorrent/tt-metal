@@ -85,7 +85,7 @@ private:
     // Allocate the program-owned sharded config Buffer. Its contents are populated at launch.
     void allocate_config_buffer(BufferType config_buffer_type);
     // Build host config page images (Create or UpdateDynamic).
-    void rebuild_config_pages();
+    void build_config_pages();
     // Point at an external data ring address; drops any CrossNode-owned ring.
     void set_data_address(uint32_t data_address);
 

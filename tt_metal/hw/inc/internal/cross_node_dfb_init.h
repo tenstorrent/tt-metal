@@ -10,14 +10,15 @@
 #include "api/alignment.h"
 #include "api/debug/assert.h"
 #include "internal/risc_attribs.h"
-#include "hostdev/cross_node_dfb_constants.h"
+#include "hostdev/remote_dfb_constants.h"
+#include "hostdev/remote_dfb_config_layout.h"
 
-// Config page layout (8-word header, uniform for sender and receiver pages):
+// Config page layout (8-word CrossNode header, uniform for sender and receiver pages):
 //   word[0] = is_sender (1) | is_receiver (0)
 //   word[1] = num_receivers
 //   word[2] = fifo_start_addr
 //   word[3] = fifo_size (entry_size * num_entries)
-//   word[4] = fifo_wr/rd checkpoint (reserved for GlobalDFB; CrossNode ignores —
+//   word[4] = fifo_wr/rd checkpoint (reserved; CrossNode ignores —
 //             iface ptrs always init from fifo_start_addr on construction)
 //   word[5] = noc_xy_offset (page-relative → word[8])
 //   word[6] = aligned_pages_sent offset (page-relative)
@@ -25,8 +26,6 @@
 // Sender pages additionally store:
 //   words[8..8+2N-1] = NOC XY table: x0,y0,x1,y1,... for N receivers
 //   Then entries_sent[i] / entries_acked[i] pairs at L1_ALIGNMENT stride.
-//   There is no stored write-cursor state: the sender derives each receiver's write
-//   offset from that receiver's entries_sent counter (credits reset each launch).
 // Receiver pages additionally store:
 //   word[8] = sender_physical_coord.x
 //   word[9] = sender_physical_coord.y
@@ -54,14 +53,14 @@ FORCE_INLINE void setup_cross_node_dfb_interface(
 
     volatile tt_l1_ptr uint32_t* l1_config = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_page_ptr);
 
-    const bool is_sender = static_cast<bool>(l1_config[0]);
-    const uint32_t num_receivers = l1_config[1];
-    const uint32_t fifo_start_addr = l1_config[2];
-    const uint32_t fifo_size = l1_config[3];  // entry_size * num_entries
+    const bool is_sender = static_cast<bool>(l1_config[REMOTE_DFB_CFG_IS_SENDER]);
+    const uint32_t num_receivers = l1_config[REMOTE_DFB_CFG_NUM_RECEIVERS];
+    const uint32_t fifo_start_addr = l1_config[REMOTE_DFB_CFG_FIFO_START];
+    const uint32_t fifo_size = l1_config[REMOTE_DFB_CFG_FIFO_SIZE];  // entry_size * num_entries
     // Words 5–7 are page-relative offsets into this config page.
-    const uint32_t noc_xy_addr = config_page_ptr + l1_config[5];
-    const uint32_t aligned_cnt_ptr = config_page_ptr + l1_config[6];
-    const uint32_t remote_cnt_ptr = config_page_ptr + l1_config[7];
+    const uint32_t noc_xy_addr = config_page_ptr + l1_config[CROSS_NODE_DFB_CFG_NOC_XY_OFFSET];
+    const uint32_t aligned_cnt_ptr = config_page_ptr + l1_config[CROSS_NODE_DFB_CFG_PAGES_SENT_OFFSET];
+    const uint32_t remote_cnt_ptr = config_page_ptr + l1_config[CROSS_NODE_DFB_CFG_PAGES_ACKED_OFFSET];
 
     // Derived: largest multiple of entry_size that fits in fifo_size.
     const uint32_t size_aligned = fifo_size - (fifo_size % entry_size);

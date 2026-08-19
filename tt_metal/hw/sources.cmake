@@ -151,13 +151,15 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/endpoints.h
     inc/api/dataflow/circular_buffer.h
     inc/api/dataflow/cross_node_dfb.h
+    inc/api/dataflow/persistent_dfb.h
     inc/api/dataflow/dataflow_buffer.h
     inc/experimental/kernel_args.h
     inc/experimental/blaze_named_args.h
     inc/api/dataflow/noc_semaphore.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h
-    inc/hostdev/cross_node_dfb_constants.h
+    inc/hostdev/remote_dfb_constants.h
+    inc/hostdev/remote_dfb_config_layout.h
     inc/hostdev/dev_msgs.h
     inc/hostdev/device_print_common.h
     inc/hostdev/device_print_structures.h
@@ -171,6 +173,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/circular_buffer_interface.h
     inc/internal/circular_buffer_init.h
     inc/internal/cross_node_dfb_init.h
+    inc/internal/persistent_dfb_init.h
     inc/internal/cross_node_dfb_interface.h
     inc/internal/firmware_common.h
     inc/internal/mod_div_lib.h
