@@ -63,18 +63,17 @@ void check_semaphores_are_initialized(
     Program& program,
     const CoreRangeSet& core_range_set,
     const std::vector<uint32_t>& golden_sem_values) {
-    IDevice* device = unit_mesh.get_devices()[0];
     for (auto core_range : core_range_set.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 auto logical_core = CoreCoord{x, y};
                 std::vector<uint32_t> res;
-                auto sem_base_addr = program.impl().get_sem_base_addr(device, logical_core, CoreType::WORKER);
+                auto sem_base_addr = program.impl().get_sem_base_addr(&unit_mesh, logical_core, CoreType::WORKER);
                 slow_dispatch::ReadFromL1(
                     unit_mesh,
                     logical_core,
                     sem_base_addr,
-                    program.impl().get_sem_size(device, logical_core, CoreType::WORKER),
+                    program.impl().get_sem_size(&unit_mesh, logical_core, CoreType::WORKER),
                     res);
                 std::vector<uint32_t> filtered_res;
                 static uint32_t num_u32_to_skip =
