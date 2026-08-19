@@ -40,7 +40,6 @@ ALLOWED_PREFIXES = {
     "hostdevcommon",
     "internal",
     "tt-metalium",
-    "internal",
     "tt_stl",
     "umd",
     "fmt",

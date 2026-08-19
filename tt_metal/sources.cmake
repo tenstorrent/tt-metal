@@ -56,7 +56,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/forge_backdoor/global_semaphore.hpp
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
-    api/tt-metalium/experimental/internal/blitz_decode_pipeline.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
@@ -126,6 +125,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/hal_types.hpp
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
+    api/internal/blitz_decode_pipeline.hpp
     api/internal/cluster.hpp
     api/internal/cluster_noc_helpers.hpp
     api/internal/disaggregation/kv_chunk_address_table.hpp
