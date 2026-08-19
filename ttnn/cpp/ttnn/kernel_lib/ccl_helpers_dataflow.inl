@@ -159,6 +159,11 @@ FORCE_INLINE typename MuxConn<NumBuffers>::SenderT* MuxConn<NumBuffers>::sender(
     return valid_ ? &mux_ : nullptr;
 }
 
+template <uint8_t NumBuffers>
+FORCE_INLINE bool MuxConn<NumBuffers>::valid() const {
+    return valid_;
+}
+
 // ----------------------------------------------------------------------------
 // FabricStream — move ctor
 // ----------------------------------------------------------------------------

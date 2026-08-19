@@ -417,7 +417,7 @@ public:
         direction_(direction) {}
 
     /// Build a cursor starting at an EXPLICIT (possibly out-of-range; wrapped on first use) slice.
-    /// The dim-zero ring walk starts at my_chip_id -/+ 1 (dim_zero_ring_first_slice) instead of
+    /// The dim-zero ring walk starts at my_chip_id -/+ 1 (ring_neighbour_first_slice) instead of
     /// half-way across the ring; its advance and wrap are otherwise identical.
     static RingSliceCursor starting_at(int32_t first_slice, uint32_t ring_size, bool direction) {
         RingSliceCursor c(0, ring_size, direction);
@@ -756,9 +756,10 @@ private:
 // S8 — the DIM-ZERO RING reduce-scatter schedule pieces
 // ===========================================================================
 
-/// First slice a dim-zero ring worker processes: its nearest neighbour's, walking away from
-/// itself (the dim-3 ring starts half-way across instead). May be -1; RingSliceCursor wraps it.
-constexpr int32_t dim_zero_ring_first_slice(uint32_t my_chip_id, bool direction) {
+/// First slice of the NEIGHBOUR-FIRST ring walk (the dim-zero ring and strided families): the
+/// nearest neighbour's slice, walking away from this chip — where the dim-3 ring starts half-way
+/// across instead. May be -1; RingSliceCursor wraps it.
+constexpr int32_t ring_neighbour_first_slice(uint32_t my_chip_id, bool direction) {
     return direction ? static_cast<int32_t>(my_chip_id) - 1 : static_cast<int32_t>(my_chip_id) + 1;
 }
 

@@ -138,7 +138,7 @@ void kernel_main() {
     // pairing, and the chunks-per-sync signal cadence — comes from the shared header; this writer's
     // counter.inc()s pair with the next chip's reader waits through the same SyncCadence.
     auto slice_cursor = sched::RingSliceCursor::starting_at(
-        sched::dim_zero_ring_first_slice(my_chip_id, direction), ring_size, direction);
+        sched::ring_neighbour_first_slice(my_chip_id, direction), ring_size, direction);
     sched::DimZeroChunkWalk walk(slice_B, tile_granularity, start_tiles_read, start_tiles_to_read, direction);
     sched::SyncCadence cadence(chunks_per_sync);
 
