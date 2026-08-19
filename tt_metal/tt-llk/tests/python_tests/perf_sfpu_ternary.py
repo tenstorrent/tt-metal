@@ -48,7 +48,15 @@ from helpers.test_variant_parameters import (
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", 2.0))[0]
 
 
-def _run(formats, mathop, dest_acc, loop_factor, iterations, input_dimensions, fresh_cpp_impl=0):
+def _run(
+    formats,
+    mathop,
+    dest_acc,
+    loop_factor,
+    iterations,
+    input_dimensions,
+    fresh_cpp_impl=0,
+):
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
     )
@@ -245,6 +253,26 @@ def test_perf_fresh_cpp_addcmul(perf_report, formats, dest_acc, fresh_cpp_impl):
     _run(
         formats,
         MathOperation.SfpuAddcmul,
+        dest_acc,
+        loop_factor=16,
+        iterations=32,
+        input_dimensions=[128, 64],
+        fresh_cpp_impl=fresh_cpp_impl,
+    ).run(perf_report)
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    dest_acc=[DestAccumulation.No],
+    fresh_cpp_impl=[0, 1],
+)
+def test_perf_fresh_cpp_snake_beta(perf_report, formats, dest_acc, fresh_cpp_impl):
+    # Handwritten-shaped production snake_beta vs fresh typed-C++ body
+    # (fresh_cpp/snakebeta.h) A/B (mirrors test_perf_fresh_cpp_addcmul).
+    _run(
+        formats,
+        MathOperation.SfpuSnakeBeta,
         dest_acc,
         loop_factor=16,
         iterations=32,

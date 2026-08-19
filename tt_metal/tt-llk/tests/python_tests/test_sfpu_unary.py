@@ -1286,6 +1286,11 @@ _CAUSAL_LIFT_B2_F32_OPS = [
     MathOperation.Softplus,
     MathOperation.Expm1Cw,
     MathOperation.I1,
+    # Storm S4 (F32 corr rows; fresh bodies in fresh_cpp/<op>.h).
+    MathOperation.Rdiv,
+    MathOperation.Rpow,
+    MathOperation.Selu,
+    MathOperation.Sign,
 ]
 _CAUSAL_LIFT_B2_F16B_OPS = [
     MathOperation.Log,
@@ -1294,6 +1299,13 @@ _CAUSAL_LIFT_B2_F16B_OPS = [
     # Batch 3 (F16b corr rows).
     MathOperation.Hardsigmoid,
     MathOperation.Gelu,
+    # Storm S4 (F16b corr rows; fresh bodies in fresh_cpp/<op>.h — ReluMax is
+    # the relu op file's vehicle; Floor/Trunc/Frac are the rounding_ops file's
+    # remaining raw-TTI variants, Ceil's fresh row predates the storm).
+    MathOperation.ReluMax,
+    MathOperation.Floor,
+    MathOperation.Trunc,
+    MathOperation.Frac,
 ]
 
 

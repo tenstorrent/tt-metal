@@ -86,6 +86,9 @@ using namespace ckernel;
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpu_operations.h"
 #include "fresh_cpp_operations.h"
+// Storm-contract canonical per-op semantic bodies (new bodies never land in
+// the legacy aggregator above).
+#include "fresh_cpp/snakebeta.h"
 
 #ifndef FRESH_CPP_IMPL
 #define FRESH_CPP_IMPL 0
@@ -245,6 +248,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         0 /*DST_OUT*/,
                         VectorMode::RC,
                         SFPU_TERNARY_SCALAR);
+                }
+                else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_TERNARY_OPERATION == SfpuType::snake_beta)
+                {
+                    // The fresh snake_beta states the bf16-dest contract
+                    // (bf16 sin arm + single-iteration reciprocal).
+                    static_assert(
+                        FRESH_CPP_IMPL != 1 || SFPU_TERNARY_OPERATION != SfpuType::snake_beta || !is_fp32_dest_acc_en,
+                        "fresh snake_beta selector supports only bf16 dest");
+                    SFPU_TERNARY_CALL(
+                        dest_sync,
+                        is_fp32_dest_acc_en,
+                        calculate_snake_beta_fresh_cpp,
+                        (8),
+                        0 /*DST_IN0*/,
+                        1 /*DST_IN1*/,
+                        2 /*DST_IN2*/,
+                        0 /*DST_OUT*/,
+                        VectorMode::RC);
                 }
                 else if constexpr (TTNN_WHERE_IMPL == 0)
                 {

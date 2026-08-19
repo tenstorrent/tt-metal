@@ -104,6 +104,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "sfpu_operations.h"
 #include "fresh_cpp_operations.h"
+// Storm-contract canonical per-op semantic bodies (new bodies never land in
+// the legacy aggregator above).
+#include "fresh_cpp/shift.h"
 
 #ifndef FRESH_CPP_IMPL
 #define FRESH_CPP_IMPL 0
@@ -145,6 +148,16 @@ inline void run_selected_binary_sfpu(
         // Test-only fresh typed-C++ leg for the Int32 binary left shift
         // production path (metal ckernel_sfpu_shift.h raw-TTI kernel).
         call_left_shift_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
+    }
+    else if constexpr (
+        FRESH_CPP_IMPL == 1 && (SFPU_BINARY_OPERATION == ckernel::BinaryOp::RSHFT || SFPU_BINARY_OPERATION == ckernel::BinaryOp::LOGICAL_RSHFT) &&
+        static_cast<std::uint32_t>(formats.math) == static_cast<std::uint32_t>(DataFormat::Int32))
+    {
+        // Test-only fresh typed-C++ leg for the Int32 binary right shift
+        // production paths (metal ckernel_sfpu_shift.h raw-TTI kernels;
+        // LOGICAL selects zero fill vs the arithmetic sign fill).
+        constexpr bool is_logical = SFPU_BINARY_OPERATION == ckernel::BinaryOp::LOGICAL_RSHFT;
+        call_right_shift_fresh_cpp<DST_SYNC_MODE, is_fp32_dest_acc_en, is_logical, 8>(dst_in0, dst_in1, dst_out, VectorMode::RC);
     }
     else
     {

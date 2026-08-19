@@ -787,6 +787,32 @@ def test_fresh_cpp_left_shift(formats, dest_acc, mathop, fresh_cpp_impl):
 
 
 @parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[
+        MathOperation.SfpuElwRightShift,
+        MathOperation.SfpuElwLogicalRightShift,
+    ],
+    dest_acc=[DestAccumulation.Yes],
+    fresh_cpp_impl=[0, 1],
+)
+def test_fresh_cpp_right_shift(formats, dest_acc, mathop, fresh_cpp_impl):
+    """Handwritten (metal ckernel_sfpu_shift.h raw-TTI fixed-LREG kernels; the
+    arithmetic variant hand-synthesizes sign extension by ORing ~0 << (32-amount)
+    into negative lanes) vs fresh typed-C++ A/B over identical Int32
+    stimuli/golden; exact integer contract, stimuli/golden identical to
+    test_sfpu_binary_int's right-shift nodes (out-of-range shift amounts
+    produce 0; the in-range/negative-operand contract is carried by
+    test_sfpu_binary_int_shift_edge_cases, BH-xfailed for the production
+    kernels)."""
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     mathop=[MathOperation.SfpuMask],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
