@@ -94,13 +94,16 @@ namespace {
 // dropped, as are ASIC positions absent from this physical mesh. A group left with nothing to say is
 // skipped, so a group naming positions that only exist on some meshes constrains just those meshes. When
 // `require_present_positions` is true (map_mesh_to_physical), a group whose positions are ALL absent is an
-// error rather than a silent skip.
+// error rather than a silent skip. A mesh that declares pins must end up with at least one of them applied,
+// otherwise it would map unpinned without anyone noticing.
 std::optional<std::string> apply_pinning_groups(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const std::vector<PinningConstraint>& pinning_groups,
     MeshId logical_mesh_id,
     const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids,
     bool require_present_positions) {
+    bool any_group_for_mesh = false;
+    bool any_group_applied = false;
     for (const auto& group : pinning_groups) {
         std::set<FabricNodeId> fabric_nodes;
         for (const auto& fabric_node : group.fabric_nodes) {
@@ -112,6 +115,7 @@ std::optional<std::string> apply_pinning_groups(
         if (fabric_nodes.empty()) {
             continue;
         }
+        any_group_for_mesh = true;
 
         std::set<tt::tt_metal::AsicID> asic_ids;
         for (const auto& position : group.asic_positions) {
@@ -142,6 +146,14 @@ std::optional<std::string> apply_pinning_groups(
                 "fabric nodes in a pinning group have pinned ASIC positions present in the physical mesh but none "
                 "lie in each node's host-rank partition (conflicts with rank bindings)");
         }
+        any_group_applied = true;
+    }
+
+    if (any_group_for_mesh && !any_group_applied) {
+        return fmt::format(
+            "Pinned ASIC positions of every pinning group for mesh {} were not found among the physical ASICs "
+            "participating in this mesh",
+            logical_mesh_id.get());
     }
 
     return std::nullopt;
