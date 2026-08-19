@@ -96,11 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     t6_semaphore_get<>(semaphore::PACK_DONE);
 
     // ---- Restore under test (NO reconfig — uninit is the sole reset) ----
-#ifdef ARCH_WORMHOLE
     _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, num_faces, face_r_dim);
-#else
-    _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, num_faces);
-#endif
 
     // ---- Run 1: plain datacopy of each tilized tile (same format, no reconfig) ----
     run = 1;

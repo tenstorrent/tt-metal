@@ -89,12 +89,19 @@ def _regular_path(src_A, input_dimensions, formats, num_faces, torch_format):
     # Int32 is Int32→Int32 only (unpacker constraint); concatenated via same=True.
     # Intentionally added to both narrow and non-narrow sweeps to exercise the
     # Int32 unpack_to_dest tilize path in each.
+    # Fp8_e4m3 is added to the narrow sweep only: it is the one 8-bit format here, and the
+    # BH 8-bit tilize path is the only narrow path BH implements (tt-llk#1281 covers the rest).
     formats=lambda narrow_tile: (
         input_output_formats(
             [DataFormat.Float32, DataFormat.Float16, DataFormat.Float16_b]
             + ([DataFormat.Bfp8_b] if narrow_tile == NarrowTile.No else [])
         )
         + input_output_formats([DataFormat.Int32], same=True)
+        + (
+            input_output_formats([DataFormat.Fp8_e4m3], same=True)
+            if narrow_tile == NarrowTile.Yes
+            else []
+        )
     ),
     stoch_rnd_type=[StochasticRounding.No],
     transpose=[Transpose.No],
@@ -120,10 +127,35 @@ def test_unpack_tilize_comprehensive(
 
     # Get architecture for architecture-specific skips
     arch = get_chip_architecture()
+    is_8bit_input = formats.input_format.is_llk_8bit_format()
 
-    # BH narrow_tile unimplemented for non-8-bit formats (tt-llk#1281).
-    if narrow_tile == NarrowTile.Yes and arch == ChipArchitecture.BLACKHOLE:
+    if (
+        DataFormat.Fp8_e4m3 in (formats.input_format, formats.output_format)
+        and arch != ChipArchitecture.BLACKHOLE
+    ):
+        pytest.skip(
+            "Unpack Tilize does not support Fp8_e4m3 on non-BLACKHOLE architectures"
+        )
+
+    # BH narrow_tile unimplemented for non-8-bit formats (tt-llk#1281). 8-bit inputs fall back to
+    # the Wormhole per-face tilize protocol on BH, so their narrow path is implemented.
+    if (
+        narrow_tile == NarrowTile.Yes
+        and arch == ChipArchitecture.BLACKHOLE
+        and not is_8bit_input
+    ):
         pytest.skip("BH narrow_tile unimplemented for non-8-bit formats (tt-llk#1281)")
+
+    # BH cannot express a single 16x16 face for datums wider than one byte: its unpacker reads 32
+    # datums before applying the row stride, so a num_faces=1 tilize reads face_r_dim/2 full 32-wide
+    # source rows instead of face 0. _llk_unpack_tilize_init_ asserts this out; 8-bit datums read 16
+    # at a time and are covered by test_unpack_tilize.py.
+    if num_faces == 1 and arch == ChipArchitecture.BLACKHOLE and not is_8bit_input:
+        pytest.skip(
+            "BH unpack_tilize does not support num_faces=1 for non-8-bit formats: "
+            "UnpackRowWidth is 32 datums for datums wider than one byte, so a single UNPACR "
+            "reads full 32-wide source rows instead of face 0"
+        )
 
     # BFP8_b input format not supported by tilize unpacker
     # Tilize unpacker cannot correctly read row-major BFP8_b data with shared exponents

@@ -40,7 +40,9 @@ from helpers.utils import passed_test
             DataFormat.Fp8_e4m3,
         ]
     ),
-    num_faces=[2, 4],
+    # num_faces=1 is restricted to 8-bit inputs: it is unsupported on BH for wider datums, and the
+    # non-8-bit num_faces=1 path is already swept on WH by test_unpack_tilize_sweep.py.
+    num_faces=[2, 4, 1],
 )
 def test_unpack_tilize_float(
     formats,
@@ -52,6 +54,13 @@ def test_unpack_tilize_float(
     ) and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip(
             "Unpack Tilize does not support Fp8_e4m3 format on non-BLACKHOLE architectures"
+        )
+
+    if num_faces == 1 and not formats.input_format.is_llk_8bit_format():
+        pytest.skip(
+            "num_faces=1 is exercised here for 8-bit inputs only: BH unpack_tilize rejects it for "
+            "wider datums (UnpackRowWidth is 32 datums, so a single UNPACR reads full 32-wide "
+            "source rows instead of face 0), and WH coverage lives in test_unpack_tilize_sweep.py"
         )
 
     if formats.input_format == DataFormat.Bfp8_b:
@@ -95,7 +104,8 @@ def test_unpack_tilize_int(
 
 @parametrize(
     formats=input_output_formats([DataFormat.Int8]),
-    num_faces=[2, 4],
+    # Int8 is an 8-bit format, so num_faces=1 is supported on both architectures.
+    num_faces=[2, 4, 1],
 )
 def test_unpack_tilize_int8(
     formats,

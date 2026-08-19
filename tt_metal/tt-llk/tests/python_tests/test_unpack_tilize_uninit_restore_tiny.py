@@ -28,7 +28,6 @@ tilized golden.
 """
 
 import torch
-from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
@@ -43,13 +42,9 @@ from helpers.utils import passed_test
 TINY_NUM_FACES = 2
 
 
-# Blackhole's `_llk_unpack_tilize_uninit_` does honor `face_r_dim` (via its
-# `TensorShape` param), but the BH test wrapper `_llk_unpack_tilize_uninit_wrapper_`
-# is 2-arg (`dst, num_faces`) and drops `face_r_dim` (WH's wrapper is 3-arg), so the
-# tiny-tile (face_r_dim < 16) restore branch under test here cannot be expressed on BH
-# without extending that wrapper. The num_faces axis (face_r_dim=16) still runs on BH
-# via test_unpack_tilize_uninit_restore.py.
-@skip_for_blackhole
+# Runs on both architectures: `_llk_unpack_tilize_uninit_wrapper_` is 3-arg everywhere, so the
+# tiny-tile (face_r_dim < 16) restore branch is expressible on Blackhole too. This is the first
+# end-to-end Blackhole exercise of tiny-tile tilize.
 @parametrize(
     # Same input/output format for both ops so the second op needs NO data-format
     # reconfig — isolating the uninit restore as the only state reset.

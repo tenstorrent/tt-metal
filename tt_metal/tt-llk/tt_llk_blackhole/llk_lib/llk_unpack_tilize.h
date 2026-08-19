@@ -25,11 +25,12 @@ using namespace ckernel::unpacker;
  * Selects between unpacking to SrcA (with a SrcB dvalid NOP) or straight to dest, and applies the
  * Blackhole tilize workaround unless skipped (8-bit formats fall back to the Wormhole path).
  *
- * @param narrow_tile: Whether the tile is narrow (single column of faces).
+ * @param narrow_layout: One face per MOP run instead of two - set for a narrow tile (single column
+ *                       of faces) or a single-face tile.
  * @param unpack_to_dest: Unpack directly into the dest register (32-bit datums).
  * @param skip_bh_workaround: Skip the Blackhole tilize workaround (e.g. for 8-bit formats).
  */
-inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const bool unpack_to_dest = false, const bool skip_bh_workaround = false)
+inline void _llk_unpack_tilize_mop_config_(const bool narrow_layout = false, const bool unpack_to_dest = false, const bool skip_bh_workaround = false)
 {
     static constexpr std::uint32_t unpack_srca =
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
@@ -37,7 +38,7 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const
         TT_OP_UNPACR(0, 0b00010001 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 
-    const std::uint32_t outerloop = (!skip_bh_workaround || (skip_bh_workaround && narrow_tile)) ? 1 : 2;
+    const std::uint32_t outerloop = (!skip_bh_workaround || (skip_bh_workaround && narrow_layout)) ? 1 : 2;
     const std::uint32_t innerloop = 1;
 
     // ckernel_template is non-assignable, so build and program each variant in its own scope.
@@ -74,9 +75,9 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @param ct_dim: Number of column tiles in the block, used to size the column dimension.
- * @param face_r_dim: Rows per face, valid values = <2, 4, 8, 16>.
+ * @param face_r_dim: Rows per face, valid values = <1, 2, 4, 8, 16>.
  * @param narrow_tile: Whether the tile is narrow (single column of faces).
- * @param num_faces: Number of faces in the tile, valid values = <2, 4>.
+ * @param num_faces: Number of faces in the tile, valid values = <2, 4>, plus <1> for 8-bit source formats only.
  * @note Call @ref _llk_unpack_tilize_uninit_ to restore the modified tile-descriptor state.
  * @ref _llk_unpack_tilize_ is the matching execute call.
  * @ref _llk_math_eltwise_unary_datacopy_init_ (A2D, PackMode::Tilize) is the matching init on the math thread.
@@ -89,8 +90,17 @@ inline void _llk_unpack_tilize_init_(
     const bool narrow_tile                = false,
     const std::uint32_t num_faces         = 4)
 {
+    const bool is_8bit_format = IS_8BIT_FORMAT(unpack_src_format);
+
     LLK_ASSERT(face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be 1, 2, 4, 8, or 16 for tilize");
-    LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
+    // num_faces == 1 is expressible on the 8-bit path only. For datums wider than one byte the
+    // Blackhole unpacker reads 32 datums before applying the row stride, so a single-face request
+    // reads face_r_dim/2 full 32-wide source rows instead of face 0. 8-bit datums read 16 at a time,
+    // which is exactly one face, so that path matches Wormhole.
+    LLK_ASSERT(
+        num_faces == 2 || num_faces == 4 || (num_faces == 1 && is_8bit_format),
+        "num_faces must be 2 or 4 for tilize; num_faces == 1 requires an 8-bit unpack_src_format");
+    LLK_ASSERT(!(narrow_tile && num_faces == 4), "narrow_tile has a single face column, so num_faces must be 1 or 2 for tilize");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
     const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);
@@ -122,7 +132,6 @@ inline void _llk_unpack_tilize_init_(
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, THCON_SEC0_REG2_Out_data_format_ADDR32);
 
-    const bool is_8bit_format = IS_8BIT_FORMAT(unpack_src_format);
     // 8bit datums do not need the blackhole workaround therefore we fallback to regular tilize operation like for wormhole.
     if (is_8bit_format)
     {
@@ -143,7 +152,9 @@ inline void _llk_unpack_tilize_init_(
         TT_SETADCXX(p_setadc::UNP0, Tile_x_dim - 1, 0x0);
     }
 
-    _llk_unpack_tilize_mop_config_(narrow_tile, unpack_to_dest, is_8bit_format);
+    // A single-face tile has the same MOP shape as a narrow tile: one face per MOP run.
+    const bool narrow_layout = narrow_tile || (num_faces == 1);
+    _llk_unpack_tilize_mop_config_(narrow_layout, unpack_to_dest, is_8bit_format);
 }
 
 /**
@@ -158,7 +169,7 @@ inline void _llk_unpack_tilize_init_(
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @param face_r_dim: Rows per face.
- * @param num_faces: Number of faces in the tile, valid values = <2, 4>.
+ * @param num_faces: Number of faces in the tile, valid values = <2, 4>, plus <1> for 8-bit source formats only.
  * @param narrow_tile: Whether the tile is narrow (single column of faces).
  * @note Call @ref _llk_unpack_tilize_init_ before this function, and
  *       @ref _llk_unpack_tilize_uninit_ after it to restore modified state.
@@ -172,7 +183,13 @@ inline void _llk_unpack_tilize_(
     const std::uint32_t num_faces   = 4,
     const bool narrow_tile          = false)
 {
-    LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4 for tilize");
+    // Keep these guards identical to _llk_unpack_tilize_init_: num_faces == 1 is expressible on the
+    // 8-bit path only (Blackhole reads 32 datums per row step for wider datums), and narrow_tile has
+    // a single face column.
+    LLK_ASSERT(
+        num_faces == 2 || num_faces == 4 || (num_faces == 1 && IS_8BIT_FORMAT(unpack_src_format)),
+        "num_faces must be 2 or 4 for tilize; num_faces == 1 requires an 8-bit unpack_src_format");
+    LLK_ASSERT(!(narrow_tile && num_faces == 4), "narrow_tile has a single face column, so num_faces must be 1 or 2 for tilize");
 
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
@@ -190,16 +207,19 @@ inline void _llk_unpack_tilize_(
     if (IS_8BIT_FORMAT(unpack_src_format))
     {
         // Each iteration unpacks 2 face_r_dimx16 faces (1st 0,1 2nd 2,3 unless tile is <=16x32)
-        // For narrow tile we unpack 1 face in each iteration
+        // For a narrow tile we unpack 1 face in each iteration
+        // For num_faces == 1 there is a single face, so a single iteration
         // Offset address is in 16B words
         // Datum count = tile_index*face_r_dim (/16 to get word count)
 
-        const auto config_vec                 = read_unpack_config();
-        const std::uint32_t shift_amount      = config_vec[0].shift_amount;
-        std::uint32_t bot_face_offset_address = shift_amount * face_r_dim; // bytes for bottom faces
+        const auto config_vec            = read_unpack_config();
+        const std::uint32_t shift_amount = config_vec[0].shift_amount;
+        // shift_amount is the source block row length in 16B words, so this is face_r_dim source
+        // rows expressed in 16B words - the same unit as THCON_SEC0_REG3_Base_address.
+        std::uint32_t bot_face_offset_address = shift_amount * face_r_dim;
 
         // Program srcA and srcB base addresses
-        std::uint32_t num_loops = narrow_tile ? 2 : num_faces / 2;
+        std::uint32_t num_loops = (num_faces == 1) ? 1 : (narrow_tile ? 2 : num_faces / 2);
 
         volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 

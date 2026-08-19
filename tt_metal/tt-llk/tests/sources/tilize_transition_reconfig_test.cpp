@@ -103,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // ---- Transition under test: uninit (C1) + reconfig (C2) retarget G0 -> G1 ----
     if constexpr (DO_RESTORE)
     {
-        // C1: tear down the tilize-mutated SrcA baseline at the G0 geometry (WH 3-arg
+        // C1: tear down the tilize-mutated SrcA baseline at the G0 geometry (the 3-arg
         // uninit threads face_r_dim so it restores the G0 operand baseline exactly).
         _llk_unpack_tilize_uninit_wrapper_(formats_array[0].unpack_A_dst, g0_num_faces, g0_face_r_dim);
         // C2: the FACE_ROW_MAJOR reconfig re-commits the canonical SrcA Y/Z-stride AND
