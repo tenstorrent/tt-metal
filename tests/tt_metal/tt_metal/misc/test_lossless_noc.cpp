@@ -35,6 +35,22 @@ TEST(LosslessNocTest, ExtendedTimestampedDataReportsCompleteMarkerCount) {
     EXPECT_EQ(tt::tt_metal::timestamped_data_packet_marker_count(kernel_profiler::TS_DATA_24B), 4);
 }
 
+TEST(LosslessNocTest, RejectsPayloadWordsAsProfilerMarkerHeaders) {
+    EXPECT_TRUE(tt::tt_metal::is_valid_profiler_marker_word(kernel_profiler::PROFILER_MARKER_VALID));
+    EXPECT_FALSE(tt::tt_metal::is_valid_profiler_marker_word(0x15540000));
+    EXPECT_FALSE(tt::tt_metal::is_valid_profiler_marker_word(0));
+}
+
+TEST(LosslessNocTest, RejectsFalseRunSentinelIdentity) {
+    constexpr uint32_t risc_id = 4;
+    constexpr uint32_t flat_id = 17;
+    constexpr uint32_t valid_identity =
+        (flat_id << kernel_profiler::PROFILER_ID_FLAT_SHIFT) | (risc_id << kernel_profiler::PROFILER_ID_RISC_SHIFT);
+
+    EXPECT_TRUE(tt::tt_metal::profiler_run_identity_matches(valid_identity, risc_id, flat_id));
+    EXPECT_FALSE(tt::tt_metal::profiler_run_identity_matches(0, risc_id, flat_id));
+}
+
 TEST(LosslessNocTest, FullUint32ByteCountRoundTripsThroughSizeTrailer) {
     constexpr uint32_t expected_num_bytes = 0xFEDCBA98;
     static_assert(kernel_profiler::TimestampedDataSize<kernel_profiler::TS_DATA_16B>::size == 2);

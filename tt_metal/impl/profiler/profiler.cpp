@@ -1728,46 +1728,17 @@ void DeviceProfiler::readRiscProfilerResults(
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
                 if (!newRunStart && data_buffer.at(index) == 0 && data_buffer.at(index + 1) == 0) {
                     newRunStart = true;
-                    oneStartFound = true;
                     opTime_H = 0;
                     opTime_L = 0;
-                } else if (!oneStartFound) {
-                    uint32_t timer_id = (data_buffer.at(index) >> kernel_profiler::PROFILER_MARKER_TIMER_ID_SHIFT) &
-                                        kernel_profiler::PROFILER_MARKER_TIMER_ID_MASK;
-                    uint32_t time_H = data_buffer.at(index) & kernel_profiler::PROFILER_MARKER_TS_HIGH_MASK;
-                    if (timer_id || time_H) {
-                        kernel_profiler::PacketTypes pre_packet_type = get_packet_type(timer_id);
-                        if (pre_packet_type == kernel_profiler::TS_DATA ||
-                            pre_packet_type == kernel_profiler::TS_DATA_16B ||
-                            pre_packet_type == kernel_profiler::TS_DATA_24B) {
-                            uint32_t time_L = data_buffer.at(index + 1);
-                            const uint32_t marker_count = timestamped_data_packet_marker_count(pre_packet_type);
-                            int data_index = index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
-                            const int packet_end_index =
-                                index + marker_count * kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
-                            if (packet_end_index <= bufferRiscShift + bufferEndIndex) {
-                                uint64_t data_H = data_buffer.at(data_index);
-                                uint64_t data_L = data_buffer.at(data_index + 1);
-                                uint64_t data = (data_H << 32) | data_L;
-                                uint64_t timestamp = (static_cast<uint64_t>(time_H) << 32) | time_L;
-                                std::vector<uint64_t> trailers;
-                                trailers.reserve(marker_count - 2);
-                                for (uint32_t trailer_index = 2; trailer_index < marker_count; ++trailer_index) {
-                                    const int trailer_word_index =
-                                        index + trailer_index * kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
-                                    uint64_t trailer_H = data_buffer.at(trailer_word_index);
-                                    uint64_t trailer_L = data_buffer.at(trailer_word_index + 1);
-                                    trailers.push_back((trailer_H << 32) | trailer_L);
-                                }
-                                pre_sentinel_markers.push_back({timer_id, timestamp, data, std::move(trailers)});
-                            }
-                            index += (marker_count - 1) * kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
-                        }
-                    }
-                    continue;
                 } else if (newRunStart) {
                     newRunStart = false;
 
+                    if (!profiler_run_identity_matches(data_buffer.at(index), riscEndIndex, coreFlatID)) {
+                        index -= kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                        continue;
+                    }
+
+                    oneStartFound = true;
                     riscNumRead = data_buffer.at(index) & kernel_profiler::PROFILER_ID_RISC_MASK;
                     coreFlatIDRead = (data_buffer.at(index) >> kernel_profiler::PROFILER_ID_FLAT_SHIFT) &
                                      kernel_profiler::PROFILER_ID_FLAT_MASK;
@@ -1814,8 +1785,49 @@ void DeviceProfiler::readRiscProfilerResults(
                         }
                     }
                     pre_sentinel_markers.clear();
+                } else if (!oneStartFound) {
+                    if (!is_valid_profiler_marker_word(data_buffer.at(index))) {
+                        continue;
+                    }
 
+                    uint32_t timer_id = (data_buffer.at(index) >> kernel_profiler::PROFILER_MARKER_TIMER_ID_SHIFT) &
+                                        kernel_profiler::PROFILER_MARKER_TIMER_ID_MASK;
+                    uint32_t time_H = data_buffer.at(index) & kernel_profiler::PROFILER_MARKER_TS_HIGH_MASK;
+                    if (timer_id || time_H) {
+                        kernel_profiler::PacketTypes pre_packet_type = get_packet_type(timer_id);
+                        if (pre_packet_type == kernel_profiler::TS_DATA ||
+                            pre_packet_type == kernel_profiler::TS_DATA_16B ||
+                            pre_packet_type == kernel_profiler::TS_DATA_24B) {
+                            uint32_t time_L = data_buffer.at(index + 1);
+                            const uint32_t marker_count = timestamped_data_packet_marker_count(pre_packet_type);
+                            int data_index = index + kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                            const int packet_end_index =
+                                index + marker_count * kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                            if (packet_end_index <= bufferRiscShift + bufferEndIndex) {
+                                uint64_t data_H = data_buffer.at(data_index);
+                                uint64_t data_L = data_buffer.at(data_index + 1);
+                                uint64_t data = (data_H << 32) | data_L;
+                                uint64_t timestamp = (static_cast<uint64_t>(time_H) << 32) | time_L;
+                                std::vector<uint64_t> trailers;
+                                trailers.reserve(marker_count - 2);
+                                for (uint32_t trailer_index = 2; trailer_index < marker_count; ++trailer_index) {
+                                    const int trailer_word_index =
+                                        index + trailer_index * kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                                    uint64_t trailer_H = data_buffer.at(trailer_word_index);
+                                    uint64_t trailer_L = data_buffer.at(trailer_word_index + 1);
+                                    trailers.push_back((trailer_H << 32) | trailer_L);
+                                }
+                                pre_sentinel_markers.push_back({timer_id, timestamp, data, std::move(trailers)});
+                            }
+                            index += (marker_count - 1) * kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                        }
+                    }
+                    continue;
                 } else if (oneStartFound) {
+                    if (!is_valid_profiler_marker_word(data_buffer.at(index))) {
+                        continue;
+                    }
+
                     uint32_t timer_id = (data_buffer.at(index) >> kernel_profiler::PROFILER_MARKER_TIMER_ID_SHIFT) &
                                         kernel_profiler::PROFILER_MARKER_TIMER_ID_MASK;
                     kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);

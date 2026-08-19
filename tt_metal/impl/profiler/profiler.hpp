@@ -62,6 +62,18 @@ constexpr uint32_t timestamped_data_packet_marker_count(kernel_profiler::PacketT
     }
 }
 
+constexpr bool is_valid_profiler_marker_word(uint32_t word) {
+    return (word & kernel_profiler::PROFILER_MARKER_VALID) != 0;
+}
+
+constexpr bool profiler_run_identity_matches(uint32_t identity, uint32_t expected_risc_id, uint32_t expected_flat_id) {
+    const uint32_t risc_id =
+        (identity >> kernel_profiler::PROFILER_ID_RISC_SHIFT) & kernel_profiler::PROFILER_ID_RISC_MASK;
+    const uint32_t flat_id =
+        (identity >> kernel_profiler::PROFILER_ID_FLAT_SHIFT) & kernel_profiler::PROFILER_ID_FLAT_MASK;
+    return risc_id == expected_risc_id && flat_id == expected_flat_id;
+}
+
 template <typename T1, typename T2>
 struct pair_hash {
     size_t operator()(const std::pair<T1, T2>& p) const {
