@@ -36,6 +36,11 @@ def run_trace_pcc(device):
     dec = TTNNGPTTracedDecoder(
         device, preprocess_gpt_parameters(device, dtype=ttnn.bfloat16), max_seq=((S + 31) // 32) * 32
     )
+    # A shape _decode_matmul_cfg cannot express falls back to ttnn's heuristic, which stays
+    # correct and so passes the gate below while costing throughput. Catch it here.
+    missing = [n for n, c in dec._prg.items() if c is None]
+    assert not missing, f"decode matmuls fell back to the default program config: {missing}"
+
     dec.capture()
     latents = traced_decode_sequence(dec, inputs_embeds)  # driver owns the I/O + loop
 
