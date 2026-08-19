@@ -784,7 +784,11 @@ def run(
         **rope_call_kwargs,
     )
 
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if hasattr(device, "get_num_devices") else None)
+    output_tensor = mesh_tensor_to_torch(
+        output_tensor,
+        device if hasattr(device, "get_num_devices") else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     # In decode mode the input n_heads dim (e.g. 8) is tile-padded to 32 by
