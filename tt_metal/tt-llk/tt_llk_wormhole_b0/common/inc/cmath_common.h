@@ -120,7 +120,10 @@ inline void incr_counters(const std::uint32_t incr_a, const std::uint32_t incr_b
 
 inline void move_d2a_fixed_face(const std::uint8_t addrmod)
 {
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD); // MOVD2A for a whole face assumes unpacker will set a dummy data_valid, so we want to wait on that
+    // Drain preceding math instructions so their source-bank release is visible before testing
+    // the DVALID of the bank that MOVD2A will write. SRCA_VLD alone can observe stale state after
+    // a COL-broadcast / SETRWC predecessor and collide with dest-reuse dummy unpack (see BH #52256).
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 0, addrmod, p_movd2a::MOV_4_ROWS, 0);
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 4, addrmod, p_movd2a::MOV_4_ROWS, 4);
     TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 8, addrmod, p_movd2a::MOV_4_ROWS, 8);
@@ -129,7 +132,10 @@ inline void move_d2a_fixed_face(const std::uint8_t addrmod)
 
 inline void move_d2b_fixed_face(const std::uint8_t addrmod)
 {
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD); // MOVD2B for a whole face assumes unpacker will set a dummy data_valid, so we want to wait on that
+    // Drain preceding math instructions so their source-bank release is visible before testing
+    // the DVALID of the bank that MOVD2B will write. Required for COL-broadcast then DEST_TO_SRCB
+    // sequences (Welford-style). See #53522 / BH #52256.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
     TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, addrmod, p_movd2b::MOV_4_ROWS, 0);
     TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 4, addrmod, p_movd2b::MOV_4_ROWS, 4);
     TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, addrmod, p_movd2b::MOV_4_ROWS, 8);
