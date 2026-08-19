@@ -1100,7 +1100,11 @@ export PREFILL_TRACE_DIR=/data/kmabee/mistral4_golden_traces/mistral4_15360_36L
 > table, the setup block, the 8 commands, the traps, and what to report. Kept outside git because it
 > hard-codes `/data/kmabee` paths. Everything below is the longer form.
 
-
+> **Results from this re-run exist.** A 12 kW box ran the full 8-cell table plus overlap-efficiency,
+> device-op breakdown, TTFT, and repeatability follow-ups on 2026-08-19 — see
+> "[Questions and Answers — 12 kW re-run results](#questions-and-answers--12-kw-re-run-results-2026-08-19)"
+> near the end of this document. Short version: every number moved up except PP=4 at 5,120/25,600
+> (flat-to-slightly-down), and PP's advantage over single-rank shrank at every window.
 
 This box is **8 kW**; a **12 kW** machine should raise every number here, and prefill is exactly the
 regime that benefits (device-bound at large windows — at 25.6k eager and traced are within 1%, so
@@ -1886,6 +1890,168 @@ it needs no golden trace and no decode stack.
   `/data/kmabee/mistral4_golden_traces/mistral4_15360_36L`. Point `PREFILL_TRACE_DIR` at it;
   `prefill_trace_default` stays empty rather than hard-coding a personal path on a shared branch.
   `test_mistral4_prefill_transformer_chunked` (L1 / L10 / L36) reads it.
+
+## Questions and Answers — 12 kW re-run results (2026-08-19)
+
+The 8-cell table above was reproduced on a **12 kW** 32-chip Blackhole Galaxy (env identical to the
+"Re-running all of this on a higher-power machine" section above; caches hit as-is). Raw logs for
+every run are under `/data/kmabee/tt-metal/12kw_prefill_logs/` (`01`-`15`, one file per run).
+
+**Q: What are the 12 kW numbers, and how do they compare to the 8 kW reference table?**
+
+| config | 5,120 | 25,600 | 102,400 | 261,120 |
+|---|---|---|---|---|
+| single-rank SP=8 x TP=4 — 12 kW | 26,325 | 34,703 | 21,258 | 14,006 |
+| single-rank SP=8 x TP=4 — 8 kW (ref) | 26,203 | 33,552 | 18,381 | 10,494 |
+| ratio | 1.005x | 1.034x | 1.156x | 1.335x |
+| PP=4 x (8,1) — 12 kW | 33,435 | 41,297 | 23,562 | 16,367-16,398 * |
+| PP=4 x (8,1) — 8 kW (ref) | 34,270 | 41,384 | 22,917 | 12,332 |
+| ratio | 0.976x | 0.998x | 1.028x | 1.330x |
+
+\* three independent runs: 16,398 / 16,382 / 16,367 tok/s (<0.2% spread) — confirmed repeatable.
+
+Everything moved up except two PP cells, which were **flat-to-slightly-down** at 5,120 and 25,600.
+Long context (both configs) gained the most, consistent with "prefill is device-bound at large
+windows" — the more power went somewhere that helps big DRAM-bound chunked attention more than it
+helps small collective-bound single-shot forwards.
+
+**Q: Did the PP=4 advantage grow or shrink?**
+
+Per the diagnostic proposed in the handoff (PP tok/s ÷ single-rank tok/s at each window):
+
+| window | 8 kW | 12 kW |
+|---|---|---|
+| 5,120 | 1.31x | 1.27x |
+| 25,600 | 1.23x | 1.19x |
+| 102,400 | 1.25x | 1.11x |
+| 261,120 | 1.18x | 1.17x |
+
+**Shrunk at every window**, sharpest at 102,400 (1.25x -> 1.11x). Reading the handoff's own framing
+literally: the gap narrowing means the extra 4 kW is landing more on memory/interconnect bandwidth
+than on compute clocks — single-rank (which still pays the TP-axis collective cost) closed most of
+the ground that PP's collective-free design used to hold, rather than PP pulling further ahead.
+
+**Q: Did overlap efficiency improve?**
+
+No — it got **worse**, measured directly (not inferred). Isolated single-stage traced time (mesh-8x1,
+9 layers, `TT_VISIBLE_DEVICES=0-7`, `ttnn_cache_stage`) vs. the 4-stage concurrent driver's own steady
+time, at the same window:
+
+| window | one stage (traced) | 4-stage steady (traced) | overlap eff. = stage / steady |
+|---|---|---|---|
+| 5,120 | 116.0 ms (was 121.1 ms @ 8kW) | 153.1 ms (was 148.3 ms @ 8kW) | **75.8%** (was 81.6% @ 8kW) |
+| 25,600 | 387.3 ms (was 423.8 ms @ 8kW) | 619.9 ms (was ~618.7 ms @ 8kW) | **62.5%** (was ~68.5% @ 8kW) |
+
+Per-stage compute got measurably faster (higher clocks confirmed), but the 4-way concurrent steady
+time barely moved — the four submeshes' shared-galaxy-DRAM contention is not relieved by the extra
+power. This is the same conclusion the CCL-share diagnostic above points to, now with a second,
+independent measurement agreeing.
+
+**Q: What does a device-op breakdown of one PP=4 stage look like?**
+
+`profile_prefill.py::test_ops` under `python -m tracy` (mesh-8x1, `PROFILE_NUM_LAYERS=9`, window
+5,120 — the PP chunk size), eager, using the known-good non-traced recipe documented earlier in this
+file. Device busy: **100.1 ms/forward** (vs. 116.0 ms traced wall clock above -> ~13.7% host/dispatch
+overhead survives even under trace replay):
+
+| op | % device time |
+|---|---|
+| MoE Combine | 20.0% |
+| MatmulDeviceOperation | 21.6% |
+| UnifiedRoutedExpertFfn | 15.4% |
+| RingJointSDPA (attention) | 14.7% |
+| MoE Dispatch | 13.8% |
+| AllGather (true CCL) | 4.5% |
+| LayerNorm pre/post-gather | 3.4% |
+
+**MoE Dispatch + Combine together are 33.8% of device time — the single largest cost category**,
+bigger than matmul or attention. Both are SP-axis (`cluster_axis=0`) token routing, which
+`PP=4 x (8,1)` does not touch (PP only removes TP-axis collectives). So the biggest lever left for
+PP-stage throughput is no longer collective removal — it is overlapping/optimising SP-axis MoE
+dispatch and combine.
+
+Also worth flagging as a tooling trap: `analyze_ops_perf.py`'s CCL regex (`"AllGather|ReduceScatter
+|AllReduce|Broadcast"`) reports **8.0%**, not 4.5%, because it string-matches op *names* and
+`LayerNormPostAllGatherDeviceOperation`/`...PreAllGather...` contain the substring "AllGather" even
+though that gather is skipped/identity at TP=1 (the M2a fix, above). True remaining CCL for a PP
+stage is the standalone `AllGatherDeviceOperation` alone: 4.5%, from the MoE gate's SP-axis gather
+(routing needs global visibility across the 8 SP shards; PP does not touch the SP axis).
+
+**Q: Does tracy's device-trace-profiler work on the full 4-stage concurrent PP driver?**
+
+**No — reproducibly not, on this box, with this driver.** `--device-trace-profiler` on
+`test_prefill_pipeline_concurrent.py::test_mistral4_pp4_concurrent_longctx` (the 256k row) crashed
+**twice, identically**: `TT_FATAL: 918 start markers detected without corresponding end markers`,
+right after the test itself printed `PASSED` with a normal, correct throughput number — i.e. the
+crash is in profiler teardown/dump, not in the measured computation. The second attempt had every
+manual `ttnn.ReadDeviceProfiler()` call removed (signposts only, the same pattern
+`test_prefill_transformer_chunked.py` uses safely) and crashed with the **same marker count**, which
+rules out application-level instrumentation as the cause. Best-guess root cause: this driver's
+`SubDeviceTraceController` splits each stage's trace at the MoE sub-device swaps ("a single trace
+cannot span the MoE sub-device swaps" — see the file's own docstring), and that segmentation appears
+to break the profiler's zone-marker nesting under `TT_METAL_TRACE_PROFILER=1`. Consistent with M4's
+earlier, separate "blocked on tooling, not the model" note above. A crash also left the tracy-capture
+subprocess hung for 9+ minutes post-crash rather than exiting; `tt-smi -r` afterward found the
+cluster still healthy (32 devices, clean open/close) both times.
+
+**Workaround used:** profile one isolated stage instead (mesh-8x1, `PROFILE_NUM_LAYERS=9`, the
+existing eager `test_ops` recipe, no trace capture involved) — see the op breakdown above. Since all
+4 PP stages are structurally identical, this is representative of what happens *inside* the 4-stage
+run, just not the cross-stage contention/overlap itself (which the overlap-efficiency measurement
+above already covers, from wall-clock timing).
+
+A minimal, default-off diagnostic hook was added to `test_prefill_pipeline_concurrent.py` for next
+time someone wants to retry this once the tracy/segmented-trace incompatibility is fixed upstream:
+`PP_PROFILE_LAST_N` (env var, default `0` = no-op) brackets the last N full-pipeline steady-state
+iterations in `signpost("PP_LONGCTX_STEADY_START"/"_STOP")`. Deliberately does **not** call
+`ttnn.ReadDeviceProfiler()` anywhere (that was tried and is what looked, at first, like the cause,
+before the no-manual-calls retry crashed identically and exonerated it).
+
+**Q: What is TTFT for the 25k / 100k / 256k prefill cases?**
+
+TTFT = wall-clock time to finish prefilling the whole prompt (this server has no speculative/partial
+decode, so token 1 waits for the last chunk). For a single, non-pipelined request that is just the
+measured time directly:
+
+| context | single-rank TTFT | PP=4 x (8,1) TTFT |
+|---|---|---|
+| 5,120 | 194.5 ms | ~460-480 ms (estimated, not directly measured — see below) |
+| 25,600 | 737.7 ms | ~1.5 s (estimated, not directly measured — see below) |
+| 102,400 | 4.82 s | 4.96 s (PP **slower** here) |
+| 261,120 | 18.64 s | ~16.65 s (PP ~12% **faster** here) |
+
+Two things to know before quoting the PP column:
+
+1. **The 5,120/25,600 PP driver measures steady-state throughput across many back-to-back
+   independent requests, not one request's latency.** A lone request has nothing to overlap
+   against and must cross all 4 stages sequentially with no pipelining benefit — roughly 4x one
+   stage's traced time — which is *worse* than single-rank at these short windows. This was never
+   directly measured (would need a dedicated single-request-latency test); the table entries above
+   are back-of-envelope, not data.
+2. **100,400 and 261,120 PP entries above are genuine single-request TTFT** (one request's growing
+   KV flowing through all 4 stages via `test_mistral4_pp4_concurrent_longctx`'s `total_s`), and they
+   disagree in direction: PP is **slower** at 100k (pipeline-fill overhead, ~4 iterations, is a large
+   fraction of only 20 chunks) and **faster** at 256k (same fixed fill cost, now a small fraction of
+   51 chunks). This is the mechanism behind the bring-up's own "PP buys throughput, not
+   single-request latency, and only when the pipeline is full" caveat, now with a concrete
+   crossover example.
+
+**Q: Is real prompt data used in these measurements, or synthetic tokens?**
+
+**Synthetic random tokens for every number in this section**, not a real prompt:
+`torch.manual_seed(0); tokens = torch.randint(0, config.vocab_size, (1, CHUNK), dtype=torch.int64)`
+in both the chunked single-rank test and the PP `longctx` test. Two things worth knowing about what
+that does and does not simplify:
+
+- For the PP `longctx` test specifically, the **same token tensor is reused for all 51 chunks** — it
+  is baked into stage 0's captured trace once and replayed with only the per-chunk metadata scalars
+  (`slot_id`/`actual_start`/`actual_end`) changing. Content is fixed; position is not.
+- **KV growth itself is real**: each stage keeps its 9 layers' KV for the whole context, and chunk
+  *c* genuinely flows through stages 0->3 over 4 iterations, so attention at chunk 50 really does
+  attend over everything written by chunks 0-49. Attention's cost scaling with depth is faithfully
+  modeled; only the *content* being attended to is synthetic.
+- This is a pure device throughput/latency benchmark, not a quality or correctness check — numerics
+  were validated separately, elsewhere in this document, against real golden traces.
 
 ## Who to ask
 
