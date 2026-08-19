@@ -90,11 +90,6 @@ void kernel_main() {
     // WRITER
     constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
 
-    // WRITER
-    // single-tile
-    const uint32_t output_single_tile_size_bytes = get_tile_size(dfb_id_out0);
-    constexpr const uint32_t output_tile_hw = get_tile_hw(dfb_id_out0);
-
     Noc noc;
     DataflowBuffer dfb_in1(dfb_id_in1);
     DataflowBuffer dfb_out(dfb_id_out0);
@@ -103,6 +98,10 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     DataflowBuffer dfb_in3(dfb_id_in3);
 #endif
+
+    // WRITER
+    // single-tile
+    const uint32_t output_single_tile_size_bytes = dfb_out.get_tile_size();
 
     // WRITER
     const auto s = TensorAccessor(out_args, out_tensor_addr);

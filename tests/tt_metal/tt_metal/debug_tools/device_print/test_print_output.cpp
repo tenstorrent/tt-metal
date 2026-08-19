@@ -588,6 +588,21 @@ TEST_F(DevicePrintOutputFixture, PrintStringTypes) {
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_string_types.cpp", messages);
 }
 
+// Type names are extracted from __PRETTY_FUNCTION__ at compile time and resolved from the ELF on the
+// host, same as CTSTR. int/float are used over uint32_t/int8_t, whose spelling is typedef-dependent.
+TEST_F(DevicePrintOutputFixture, PrintTypeName) {
+    std::vector<std::string> messages = {
+        "builtin type: int",
+        "struct type: test::deep::Foo",
+        "enum type: test::deep::Bar",
+        "template type: test::deep::Wrapper<int>",
+        "decltype: float",
+        "with value: float = 1",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_type_name.cpp", messages);
+}
+
 TEST_F(DevicePrintOutputFixture, PrintReorder) {
     std::vector<std::string> messages = {
         "u16_1: 16 u16_2: 32 u32_1: 1 u32_2: 2 u32_3: 4 u32_4: 8",

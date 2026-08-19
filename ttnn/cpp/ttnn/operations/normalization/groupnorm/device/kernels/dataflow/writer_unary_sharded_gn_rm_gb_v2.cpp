@@ -119,16 +119,14 @@ void kernel_main() {
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(dfb_gamma_id);
-    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(dfb_input_mask_id);
+    const uint32_t input_mask_single_tile_size_bytes = dfb_input_mask.get_tile_size();
 
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
 
 #if defined(FUSE_NEGATIVE_MASK)
     constexpr uint32_t dfb_input_negative_mask_id = tt::CBIndex::c_14;
-    const uint32_t input_negative_mask_single_tile_size_bytes = get_tile_size(dfb_input_negative_mask_id);
-
     DataflowBuffer dfb_input_negative_mask(dfb_input_negative_mask_id);
+    const uint32_t input_negative_mask_single_tile_size_bytes = dfb_input_negative_mask.get_tile_size();
 
     constexpr auto negative_mask_args = TensorAccessorArgs<input_mask_args.next_compile_time_args_offset()>();
     const auto negative_mask_tensor_accessor = TensorAccessor(negative_mask_args, input_negative_mask_addr);
@@ -276,7 +274,7 @@ void kernel_main() {
                 generate_bcast_col_scalar(CircularBuffer(eps_dfb_id), eps);
 
                 if constexpr (fuse_gamma) {
-                    const uint32_t gamma_tile_bytes = get_tile_size(dfb_gamma_id);
+                    const uint32_t gamma_tile_bytes = dfb_gamma.get_tile_size();
                     const uint32_t gamma_element_bytes = gamma_tile_bytes / tt::constants::TILE_HW;
                     const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
@@ -292,7 +290,7 @@ void kernel_main() {
                 }
 
                 if constexpr (fuse_beta) {
-                    const uint32_t beta_tile_bytes = get_tile_size(dfb_beta_id);
+                    const uint32_t beta_tile_bytes = dfb_beta.get_tile_size();
                     const uint32_t beta_element_bytes = beta_tile_bytes / tt::constants::TILE_HW;
                     const auto beta = TensorAccessor(beta_args, beta_addr);
 
