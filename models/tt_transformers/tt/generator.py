@@ -574,17 +574,20 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         mesh_device = self.model_args[model_id].mesh_device
 
-        # Compile run. Its input buffers are transient; dropping the references frees them again. The
-        # output is a real prefill result for these ids, so deferred warmup callers can consume it instead
-        # of replaying a trace that has not been captured yet.
-        compile_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
-        prepared["compile_output"] = self._prefill_trace_forward(prepared, compile_inputs)
-        ttnn.synchronize_device(mesh_device)
-        del compile_inputs
-        logger.info("Done Compiling Model")
-
         # Persistent trace inputs: these outlive the capture and are refreshed in place on every replay.
+        # Allocated before the compile pass so that the compile pass can run over them directly.
         prepared["device_inputs"] = copy_host_to_device(host_inputs, mesh_device=mesh_device)
+
+        # Compile run, over the *persistent* inputs -- the exact buffers the capture will bind to, so every
+        # program it needs is cached against the specs it will actually see. Compiling over a separate
+        # transient copy would leave any program whose cache key differs between the two uncached, and it
+        # would then load inside the capture window, which the runtime rejects outright: "Cannot load new
+        # binaries during trace capture" (mesh_workload.cpp). Gemma-4's LM head hit this.
+        # The output is a real prefill result for these ids, so deferred warmup callers can consume it
+        # instead of replaying a trace that has not been captured yet.
+        prepared["compile_output"] = self._prefill_trace_forward(prepared, prepared["device_inputs"])
+        ttnn.synchronize_device(mesh_device)
+        logger.info("Done Compiling Model")
         return prepared
 
     def _record_trace_prefill(self, prepared):
@@ -598,13 +601,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # Release our handle on the compile-pass output before capturing, matching the pre-split behaviour.
         # A deferred warmup caller may still be holding it; that is its own reference to keep or drop.
         prepared.pop("compile_output", None)
-        # Warm the program cache over the *persistent* inputs before capturing. _prepare_trace_prefill's
-        # compile pass ran against transient buffers, so any program whose cache key differs between the two
-        # is still uncached here and would load inside the capture window, which the runtime rejects:
-        # "Cannot load new binaries during trace capture" (mesh_workload.cpp). Gemma-4's LM head hit this.
-        warmup_output = self._prefill_trace_forward(prepared, device_inputs)
-        ttnn.synchronize_device(mesh_device)
-        del warmup_output
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         tt_out_trace = self._prefill_trace_forward(prepared, device_inputs)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
