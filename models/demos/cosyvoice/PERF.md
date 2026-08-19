@@ -130,9 +130,12 @@ Three things about it are worth stating plainly:
 - **It applies at `T == 1` only.** The optimum is a property of `M = 1`; prefill runs the same linear
   at `M = 209`, where a 16-core grid would be a pessimisation. The flow and vocoder stage timings are
   bit-identical across the A/B, which is the evidence the guard holds.
-- **It is free on accuracy.** `test_device_end_to_end_rtf` asserts PCC against the goldens and passes
-  with the flag on; separately, bf8-alone and bf8-plus-grid measure identically to ten digits, so the
-  grid changes scheduling and not arithmetic.
+- **It is free on accuracy.** `bf8-alone` and `bf8-plus-grid` measure identically to ten digits, so the
+  grid changes scheduling and not arithmetic. Correction: `test_device_end_to_end_rtf` was previously
+  cited here as asserting PCC against the goldens; it does not -- its only assertion is `total_s > 0`,
+  and it is a timing harness, not a correctness gate (`tests/pcc/` is the accuracy suite). The
+  bf8-comparison above is the accuracy evidence for this flag; it was never re-verified against
+  `tests/pcc/` specifically with the flag on, and that gap is still open.
 - **It is opt-in because the best shape is not portable**, not because it is risky. `8x2` is a good
   choice on both parts measured, but a default tuned on one architecture and mediocre on another is
   worse than a flag that says so.
