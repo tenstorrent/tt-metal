@@ -7,6 +7,17 @@
 // state the math one row at a time: no fixed LREGs, raw instructions, replay slots,
 // SFPLOADMACRO templates, or hand-interleaved software schedule.
 #include <cstdint>
+
+// Storm-contract migrations: canonical per-op semantic bodies live in
+// fresh_cpp/<op>.h (see fresh_cpp/README.md); shared semantic helpers in
+// fresh_cpp/helpers.h.  The aggregator keeps including migrated bodies so
+// the existing selector wiring is unchanged; NEW bodies never land here.
+#include "fresh_cpp/helpers.h"
+#include "fresh_cpp/remainder.h"
+#include "fresh_cpp/rsqrt.h"
+#include "fresh_cpp/sigmoid.h"
+#include "fresh_cpp/silu.h"
+
 namespace ckernel::sfpu {
 
 template <int ITERATIONS>
@@ -606,37 +617,7 @@ __attribute__((noinline)) void calculate_tanh_derivative_lut_fresh_cpp()
     }
 }
 
-// Silu (production: _calculate_silu_ over the POLYVAL5 text macro with an
-// abs/1-x symmetry fold; the row measures causal exactly 0.0% — the passes
-// never engage the production structure).  Identical piecewise sigmoid math
-// (the golden tolerance is fitted to it), restated with plain locals and a
-// free loop so the compiler owns unrolling and delivery.
-template <int ITERATIONS>
-__attribute__((noinline)) void calculate_silu_fresh_cpp()
-{
-    for (int d = 0; d < ITERATIONS; ++d)
-    {
-        const sfpi::vFloat v   = sfpi::dst_reg[0];
-        const sfpi::vFloat mag = sfpi::abs(v);
-        sfpi::vFloat sig       = 1.0f;
-        v_if (mag <= 1.0f)
-        {
-            sig = mag * 0.229f + 0.5f;
-        }
-        v_elseif (mag < 5.0f)
-        {
-            sig = (((0.00144462f * mag + -0.01055479f) * mag + -0.01203685f) * mag + 0.24300185f) * mag + 0.50437757f;
-        }
-        v_endif;
-        v_if (v < 0.0f)
-        {
-            sig = 1.0f - sig;
-        }
-        v_endif;
-        sfpi::dst_reg[0] = v * sig;
-        sfpi::dst_reg++;
-    }
-}
+// calculate_silu_fresh_cpp: moved to fresh_cpp/silu.h (storm migration).
 
 // Binary left shift, Int32 (production: calculate_binary_left_shift — an
 // entirely raw TT_SFPLOAD/TTI_SFP* stream over fixed LREG0..4 with magic
@@ -689,54 +670,8 @@ sfpi_inline sfpi::vFloat fresh_round_nearest(const sfpi::vFloat z, sfpi::vInt& k
     return t - ROUNDING_BIAS;
 }
 
-// Shared: truncate-toward-zero via round-nearest + downward fixup on the
-// magnitude (exact for every finite input; pass-through for |v| >= 2^23,
-// inf, NaN — the same contract as the production kernels' exponent-shift
-// truncation).
-sfpi_inline sfpi::vFloat fresh_trunc_magnitude(const sfpi::vFloat v)
-{
-    constexpr float MANTISSA_SHIFT = 8388608.0f; // 2^23
-    sfpi::vFloat r                 = v;
-    sfpi::vFloat t                 = v + MANTISSA_SHIFT;
-    t                              = t - MANTISSA_SHIFT;
-    v_if (sfpi::exexp(v) < 23)
-    {
-        r = t;
-    }
-    v_endif;
-    // Nearest may round up; truncation of a non-negative value never does.
-    v_if (r > v)
-    {
-        r = r - 1.0f;
-    }
-    v_endif;
-    return r;
-}
-
-// fmod / remainder core (production: metal ckernel_sfpu_fmod.h /
-// ckernel_sfpu_remainder.h — divisor and reciprocal smuggled through
-// vConstFloatPrgm0/1 by init, exponent-shift truncation, unroll-0 pins).
-// Same algorithm: |v| minus trunc(|v|*recip)*s, the fixed residual mop-up,
-// and the |v|==s zero snap; divisor/recip are the golden's fixed dispatch
-// constants (2.0, 0.5) as plain locals.
-sfpi_inline sfpi::vFloat fresh_fmod_core(const sfpi::vFloat v_mag, const sfpi::vFloat s, const sfpi::vFloat recip)
-{
-    sfpi::vFloat v        = v_mag;
-    sfpi::vFloat quotient = fresh_trunc_magnitude(v * recip);
-    v                     = v - quotient * s;
-
-    // Residual mop-up (production-identical iteration count; value-bearing).
-    constexpr int MOP_UP_ITERATIONS = 10;
-    for (int l = 0; l < MOP_UP_ITERATIONS; ++l)
-    {
-        v_if (v >= s)
-        {
-            v = v - s;
-        }
-        v_endif;
-    }
-    return v;
-}
+// fresh_trunc_magnitude / fresh_fmod_core: moved to fresh_cpp/helpers.h
+// (storm migration).
 
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_fmod_fresh_cpp(const float divisor, const float divisor_recip)
@@ -764,42 +699,7 @@ __attribute__((noinline)) void calculate_fmod_fresh_cpp(const float divisor, con
     }
 }
 
-template <int ITERATIONS>
-__attribute__((noinline)) void calculate_remainder_fresh_cpp(const float divisor, const float divisor_recip)
-{
-    const sfpi::vFloat divisor_v = divisor;
-    const sfpi::vFloat s         = sfpi::abs(divisor_v);
-    const sfpi::vFloat recip     = sfpi::abs(sfpi::vFloat(divisor_recip));
-    for (int d = 0; d < ITERATIONS; ++d)
-    {
-        const sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::vFloat v         = fresh_fmod_core(sfpi::abs(val), s, recip);
-        // remainder folds onto the divisor's sign (torch.remainder contract).
-        v_if (val < 0.0f && v != 0.0f)
-        {
-            v = s - v;
-        }
-        v_endif;
-        v_if (divisor_v < 0.0f && v != 0.0f)
-        {
-            v = v + divisor_v;
-        }
-        v_endif;
-        v = sfpi::copysgn(v, divisor_v);
-        v_if (s == 0.0f)
-        {
-            v = std::numeric_limits<float>::quiet_NaN();
-        }
-        v_endif;
-        v_if (sfpi::abs(v) - s == 0.0f)
-        {
-            v = 0.0f;
-        }
-        v_endif;
-        sfpi::dst_reg[0] = v;
-        sfpi::dst_reg++;
-    }
-}
+// calculate_remainder_fresh_cpp: moved to fresh_cpp/remainder.h (storm migration).
 
 // Log, bf16 contract (production: tt_llk _calculate_log_body_ with the
 // pre-shifted Chebyshev coefficients split across vConstFloatPrgm1/2 and
@@ -891,63 +791,8 @@ __attribute__((noinline)) void calculate_expm1_fresh_cpp()
     }
 }
 
-// Sqrt / Rsqrt, non-approx bf16 contract (production: shared
-// _calculate_sqrt_body_ with the Kokosinski/Moroz integer seed and both
-// refinement coefficients parked in vConstIntPrgm0/vConstFloatPrgm1/2).
-// Identical SQRT_23-bits algorithm, seed and coefficients local.
-template <bool RECIPROCAL, int ITERATIONS>
-__attribute__((noinline)) void calculate_sqrt_rsqrt_fresh_cpp()
-{
-    constexpr int SEED = 0x5f1110a0; // Kokosinski/Moroz SQRT_23 seed (cited paper)
-    constexpr float K1 = 2.2825186f;
-    constexpr float K2 = 2.2533049f;
-    for (int d = 0; d < ITERATIONS; ++d)
-    {
-        const sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat y       = sfpi::as<sfpi::vFloat>(sfpi::vInt(SEED) - sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x) >> 1));
-
-        sfpi::vFloat xy                  = x * y;
-        const sfpi::vFloat c             = -y * xy;
-        const sfpi::vFloat infinity      = std::numeric_limits<float>::infinity();
-        const sfpi::vInt infinity_bits   = sfpi::as<sfpi::vInt>(infinity);
-        y                                = y * (K1 + c * (K2 + c));
-        xy                               = x * y;
-        const sfpi::vFloat one_minus_xyy = 1.0f + (-y * xy);
-
-        if constexpr (RECIPROCAL)
-        {
-            const sfpi::vFloat half_y              = sfpi::addexp(y, -1);
-            const sfpi::vInt infinity_minus_x_bits = infinity_bits - sfpi::as<sfpi::vInt>(x);
-            v_if (infinity_minus_x_bits != 0 && sfpi::as<sfpi::vInt>(x) != 0)
-            {
-                y = one_minus_xyy * half_y + y;
-            }
-            v_else
-            {
-                // x = 0 -> inf; x = inf -> 0.
-                y = sfpi::as<sfpi::vFloat>(infinity_minus_x_bits);
-            }
-            v_endif;
-        }
-        else
-        {
-            const sfpi::vFloat half_xy = 0.5f * xy;
-            v_if (sfpi::as<sfpi::vInt>(x) < infinity_bits)
-            {
-                y = one_minus_xyy * half_xy + xy;
-            }
-            v_endif;
-        }
-
-        v_if (x < 0.0f)
-        {
-            y = std::numeric_limits<float>::quiet_NaN();
-        }
-        v_endif;
-        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
-        sfpi::dst_reg++;
-    }
-}
+// calculate_sqrt_rsqrt_fresh_cpp: moved to fresh_cpp/rsqrt.h (storm migration;
+// shared sqrt/rsqrt template, RECIPROCAL selects the arm).
 
 // Unary power, bf16 exp_21f contract (production: metal
 // _sfpu_unary_power_21f_ with 1/ln2, the -127 clamp, and NaN parked in
@@ -1110,76 +955,9 @@ __attribute__((noinline)) void calculate_xielu_fresh_cpp(const std::uint32_t par
 // Lane BR causal-tier lift, batch 3.  Same doctrine.
 // ---------------------------------------------------------------------------
 
-// Shared: exp(x) by the exp_21f exponent/mantissa recombination, clamped form
-// (the production _sfpu_exp_21f_bf16_<true> contract: fp32 result, no bf16
-// store rounding — callers own the store).  Same golden-math constants as
-// calculate_exp_fresh_cpp; kept separate so the measured exp row's fresh body
-// stays byte-stable.
-sfpi_inline sfpi::vFloat fresh_exp_21f(const sfpi::vFloat val)
-{
-    constexpr float ONE_LN2 = 1.4426950216293334961f;
-    constexpr float C0      = 1.0017248f;
-    constexpr float C1      = 7.839635491371155e-08f;
-    constexpr float C2      = 4.791750143340323e-15f;
+// fresh_exp_21f / fresh_recip: moved to fresh_cpp/helpers.h (storm migration).
 
-    sfpi::vFloat xlog2   = val * ONE_LN2 + 127.0f;
-    xlog2                = sfpi::clamp(xlog2, 0.0f, 255.0f);
-    const sfpi::vInt zi  = sfpi::shft(sfpi::exman(xlog2, sfpi::MantissaMode::ImplicitOne), sfpi::exexp(xlog2), sfpi::ShiftMode::Logical);
-    const sfpi::vFloat z = sfpi::as<sfpi::vFloat>(zi);
-
-    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(sfpi::exman(z), sfpi::RoundMode::Nearest);
-    frac              = (C2 * frac + C1) * frac + C0;
-    return sfpi::setexp(frac, sfpi::exexp(z, sfpi::ExponentMode::Biased));
-}
-
-// Shared: reciprocal with Newton refinement, all constants literal (the
-// production sfpu_reciprocal_iter reads its 2.0 from vConstFloatPrgm0 —
-// the hand-ism these bodies remove).  Same NaN-by-sign-check contract.
-template <int NEWTON_ITERATIONS>
-sfpi_inline sfpi::vFloat fresh_recip(const sfpi::vFloat x)
-{
-    sfpi::vFloat y = sfpi::approx_recip(x);
-    if constexpr (NEWTON_ITERATIONS > 0)
-    {
-        sfpi::vFloat t = x * y - 2.0f;
-        if constexpr (NEWTON_ITERATIONS > 1)
-        {
-            const sfpi::vFloat y1 = y * -t - 0.0f;
-            v_if (t < 0.0f)
-            {
-                t = x * y1 - 2.0f;
-                y = y1 * -t - 0.0f;
-            }
-            v_endif;
-        }
-        else
-        {
-            v_if (t < 0.0f)
-            {
-                y = y * -t - 0.0f;
-            }
-            v_endif;
-        }
-    }
-    return y;
-}
-
-// Sigmoid, bf16 non-approx contract (production: _sfpu_sigmoid_ spread across
-// three headers — exp_21f helper + sfpu_reciprocal_iter<1> reading its 2.0
-// from vConstFloatPrgm0).  sigmoid(x) = 1/(1 + exp(-x)) stated in one place,
-// every constant local.
-template <int ITERATIONS>
-__attribute__((noinline)) void calculate_sigmoid_fresh_cpp()
-{
-    for (int d = 0; d < ITERATIONS; ++d)
-    {
-        const sfpi::vFloat x = sfpi::dst_reg[0];
-        const sfpi::vFloat e = fresh_exp_21f(-x);
-        const sfpi::vFloat y = fresh_recip<1>(1.0f + e);
-        sfpi::dst_reg[0]     = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
-        sfpi::dst_reg++;
-    }
-}
+// calculate_sigmoid_fresh_cpp: moved to fresh_cpp/sigmoid.h (storm migration).
 
 // Cube root, bf16 contract (production: calculate_cube_root — Moroz magic
 // seed via float-MAD-as-integer-divide with the refinement polynomial parked
