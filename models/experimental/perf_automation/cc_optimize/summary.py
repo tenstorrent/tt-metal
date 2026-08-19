@@ -1082,6 +1082,21 @@ def _share_and_basis(mf, stage):
     )
 
 
+def _per_request_stages() -> set:
+    """Stages the run recorded a PER-REQUEST item count for -- i.e. that consume the prompt.
+
+    The legacy PERF_ISL_TOKENS marker names exactly the stage that takes the prompt, which is the
+    stage that writes the KV the recurring stage later reads. Used to tell a stage inside the
+    autoregressive loop from one outside it, without asking what any of them are called.
+    """
+    try:
+        from cc_optimize.perf_mcp import read_stage_isl_per_request_map
+
+        return {str(k) for k in (read_stage_isl_per_request_map() or {})}
+    except Exception:  # noqa: BLE001 -- unknown means the recurring test alone decides
+        return set()
+
+
 def _stage_units(stage, prompt_tokens) -> int:
     """How many items this stage retires in one unit of work.
 
@@ -1229,9 +1244,25 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
             # 32 layers it does not have. None for a single-block model, where root geometry IS the
             # block's and nothing changes.
             _blk = _stage_block(stage)
-            _extra = float(_ab(mf, regime=stage, seq_len=_seq, batch=_b, items=_items, block=_blk) or 0.0) - float(
-                _ab(mf, regime=stage, seq_len=0, batch=1, items=0, block=_blk) or 0.0
-            )
+            # A KV TERM BELONGS TO A STAGE IN THE KV LOOP, AND NOTHING ELSE PRICES IT OUT.
+            #
+            # `_seq` is the WORKLOAD's prompt, and active_bytes turns any non-zero seq_len into a KV
+            # read of 2 x layers x kv_heads x head_dim x seq_len x batch. For voxtral's audio encoder
+            # that is 32 layers x 20 kv heads x 64 head_dim x 128 text tokens x 8 -- about 168 MB of
+            # cache traffic charged to a stage that never sees the text prompt and keeps no cache at
+            # all. A Whisper-style encoder attends bidirectionally within one forward pass; its K and
+            # V are intermediates, and the activation term below already prices those.
+            #
+            # WHICH STAGES ARE IN THE LOOP is recorded, not guessed. The recurring stage retires one
+            # item per unit and reads the accumulated history; the prompt-consuming stage is the one
+            # the per-request marker names, and it writes the cache the recurring stage then reads.
+            # A stage that is neither -- an encoder, a vocoder, a diffusion step -- gets seq_len 0,
+            # which zeroes the KV term and leaves its activations untouched.
+            _in_kv_loop = int(_items or 0) <= 1 or str(stage) in _per_request_stages()
+            _seq_for_stage = _seq if _in_kv_loop else 0
+            _extra = float(
+                _ab(mf, regime=stage, seq_len=_seq_for_stage, batch=_b, items=_items, block=_blk) or 0.0
+            ) - float(_ab(mf, regime=stage, seq_len=0, batch=1, items=0, block=_blk) or 0.0)
         except Exception:  # noqa: BLE001 -- regime unknown to the byte model, or no byte model at all
             return base
         return base + max(0.0, _extra) / tp
