@@ -19,6 +19,10 @@
 #include <unordered_map>
 #include <vector>
 
+#if defined(__x86_64__)
+#include <xmmintrin.h>
+#endif
+
 #include "hostdevcommon/profiler_common.h"
 #include "spsc_packet.h"
 
@@ -84,6 +88,14 @@ struct SpscIgnoreProg {
     void operator()(uint32_t /*core*/, uint32_t /*prog*/) const {}
 };
 
+inline void spsc_prefetch(const void* p) {
+#if defined(__x86_64__)
+    _mm_prefetch(static_cast<const char*>(p), _MM_HINT_T0);
+#else
+    (void)p;
+#endif
+}
+
 // Decode ONE whole BULK_SPAN frame in place. For each marker calls
 //   emit(lane, wire_type, hash16, full_ts, prog)     (ZONE_START/END; ZONE_TOTAL with full_ts = the sum)
 // and for each PP_DATA/PP_EVENT
@@ -141,6 +153,11 @@ inline void spsc_decode_frame(
         }
         st.live_words += run;
         const uint32_t hm = head & kSpscRingMask;
+        // The frame is DMA-fresh host memory the walk is about to miss on line by line; fetching the whole
+        // live window up front overlaps those misses with the walk instead of serializing on them.
+        for (uint32_t off = 0; off < run; off += 16) {
+            spsc_prefetch(ring + ((hm + off) & kSpscRingMask));
+        }
         uint32_t th = st.timer_hi[lane];
         uint32_t i = 0;
         while (i < run) {
