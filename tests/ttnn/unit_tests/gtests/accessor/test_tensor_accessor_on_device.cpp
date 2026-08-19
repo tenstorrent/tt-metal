@@ -478,6 +478,82 @@ static void test_single_core_copy_abstract_wrapper(
     EXPECT_EQ(output_vec, src);
 }
 
+template <typename T>
+static void test_single_core_copy_num_contiguous_pages(
+    const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device, bool is_interleaved) {
+    MemoryConfig mem_config = is_interleaved ? MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.buffer_type)
+                                             : MemoryConfig(params.buffer_type, params.input_shard_spec);
+    tt::tt_metal::TensorSpec tensor_spec(
+        params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
+
+    const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
+
+    auto input_tensor = Tensor::from_vector(src, tensor_spec, mesh_device);
+    auto output_tensor = Tensor::from_vector(std::vector<T>(params.tensor_shape.volume()), tensor_spec, mesh_device);
+
+    auto input_buffer = input_tensor.buffer();
+    auto output_buffer = output_tensor.buffer();
+    auto aligned_page_size = input_buffer->aligned_page_size();
+    if (output_buffer->aligned_page_size() != aligned_page_size) {
+        GTEST_SKIP() << "Input and output buffers must have the same aligned page size!";
+    }
+
+    auto program = CreateProgram();
+
+    constexpr CoreCoord grid = {0, 0};
+    const auto data_format = datatype_to_dataformat_converter(params.dtype);
+
+    // Several pages per transfer, so runs longer than one page are actually exercised.
+    constexpr uint32_t cb_num_pages = 4;
+    CBHandle cb_idx = tt::CBIndex::c_0;
+    auto cb_config = CircularBufferConfig(aligned_page_size * cb_num_pages, {{cb_idx, data_format}})
+                         .set_page_size(cb_idx, aligned_page_size);
+    CreateCircularBuffer(program, grid, cb_config);
+
+    const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
+    const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
+
+    std::vector<uint32_t> compile_time_args = input_accessor_args.get_compile_time_args();
+    const auto output_compile_time_args = output_accessor_args.get_compile_time_args();
+    compile_time_args.insert(compile_time_args.end(), output_compile_time_args.begin(), output_compile_time_args.end());
+    compile_time_args.push_back(cb_idx);
+    compile_time_args.push_back(aligned_page_size);
+    compile_time_args.push_back(input_buffer->num_pages());
+    compile_time_args.push_back(cb_num_pages);
+
+    std::map<std::string, std::string> kernel_defines;
+    if (is_interleaved) {
+        kernel_defines["INTERLEAVED_LAYOUT"] = "1";
+    }
+
+    KernelHandle kernel_id = CreateKernel(
+        program,
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_all_pages_contiguous_runs.cpp",
+        grid,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = compile_time_args,
+            .defines = kernel_defines,
+        });
+
+    std::vector<uint32_t> runtime_args{
+        input_buffer->address(),
+        output_buffer->address(),
+    };
+    SetCommonRuntimeArgs(program, kernel_id, runtime_args);
+
+    auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
+    mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
+
+    auto output_tensor_cpu = output_tensor.cpu(true);
+    Tensor output_tensor_device = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
+    auto output_vec = output_tensor_device.to_vector<T>();
+
+    EXPECT_EQ(output_vec, src);
+}
+
 }  // namespace tensor_accessor_device_tests
 
 using namespace tensor_accessor_device_tests;
@@ -803,6 +879,23 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, SingleCoreCopyAllPages) {
     }
 }
 
+TEST_P(ShardedAccessorTestsCopyOnDevice, SingleCoreCopyAllPagesNumContiguousPages) {
+    const auto& params = GetParam();
+
+    switch (params.dtype) {
+        case DataType::UINT8:
+            test_single_core_copy_num_contiguous_pages<uint8_t>(params, mesh_device_.get(), false);
+            break;
+        case DataType::UINT16:
+            test_single_core_copy_num_contiguous_pages<uint16_t>(params, mesh_device_.get(), false);
+            break;
+        case DataType::BFLOAT16:
+            test_single_core_copy_num_contiguous_pages<bfloat16>(params, mesh_device_.get(), false);
+            break;
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
 class InterleavedAccessorTestsCopyOnDevice : public GenericMeshDeviceFixture,
                                              public ::testing::WithParamInterface<CopyParams> {};
 
@@ -824,6 +917,23 @@ TEST_P(InterleavedAccessorTestsCopyOnDevice, SingleCoreCopyAllPagesAbstractWrapp
         case DataType::UINT8: test_single_core_copy_abstract_wrapper<uint8_t>(params, mesh_device_.get()); break;
         case DataType::UINT16: test_single_core_copy_abstract_wrapper<uint16_t>(params, mesh_device_.get()); break;
         case DataType::BFLOAT16: test_single_core_copy_abstract_wrapper<bfloat16>(params, mesh_device_.get()); break;
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
+TEST_P(InterleavedAccessorTestsCopyOnDevice, SingleCoreCopyAllPagesNumContiguousPages) {
+    const auto& params = GetParam();
+
+    switch (params.dtype) {
+        case DataType::UINT8:
+            test_single_core_copy_num_contiguous_pages<uint8_t>(params, mesh_device_.get(), true);
+            break;
+        case DataType::UINT16:
+            test_single_core_copy_num_contiguous_pages<uint16_t>(params, mesh_device_.get(), true);
+            break;
+        case DataType::BFLOAT16:
+            test_single_core_copy_num_contiguous_pages<bfloat16>(params, mesh_device_.get(), true);
+            break;
         default: TT_THROW("Unsupported data type");
     }
 }
