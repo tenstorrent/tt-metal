@@ -39,7 +39,7 @@ class TtPrefillRuntimeConfig:
     gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL
     routed_expert_activations_dtype: ttnn.DataType = ttnn.bfloat8_b
     routed_expert_weights_dtype: ttnn.DataType = ttnn.bfloat4_b
-    routed_expert_implementation: "ttnn.RoutedExpertImplementation" = ttnn.RoutedExpertImplementation.Unified
+    routed_expert_implementation: "ttnn.RoutedExpertImplementation | None" = None
     routed_expert_weight_memory_layout: "ttnn.TensorMemoryLayout | None" = None
     shared_expert_activations_dtype: ttnn.DataType = ttnn.bfloat16
     shared_expert_weights_dtype: ttnn.DataType = ttnn.bfloat8_b

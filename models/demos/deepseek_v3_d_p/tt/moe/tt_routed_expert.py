@@ -309,7 +309,7 @@ class TtRoutedExpert(LightweightModule):
         cache_name_prefix: Optional[str] = None,
         *,
         activation: "ttnn.RoutedExpertActivation",
-        implementation: "ttnn.RoutedExpertImplementation" = ttnn.RoutedExpertImplementation.Unified,
+        implementation: "ttnn.RoutedExpertImplementation | None" = None,
         weight_memory_layout: "ttnn.TensorMemoryLayout | None" = None,
     ):
         """
@@ -341,8 +341,9 @@ class TtRoutedExpert(LightweightModule):
                           (byte-identical) or RoutedExpertActivation.SwiGluOai for the
                           MiniMax-M3 / gpt-oss clamped swigluoai activation. Keyword-only and
                           without a default so the caller must choose explicitly.
-            implementation: Routed-expert device implementation. Unified preserves the
-                          established kernel; MoeFusedSwiGlu selects the new fused kernel.
+            implementation: Routed-expert device implementation. When omitted, Blackhole
+                          selects MoeFusedSwiGlu; other architectures retain the established
+                          fallback path.
             weight_memory_layout: INTERLEAVED or ND_SHARDED. When omitted, Unified uses
                           interleaved weights and MoeFusedSwiGlu uses its preferred DRAM
                           ND-sharded placement.
@@ -371,6 +372,12 @@ class TtRoutedExpert(LightweightModule):
                 "TtRoutedExpert requires an explicit `activation` (ttnn.RoutedExpertActivation.Silu or .SwiGluOai)"
             )
         self.activation = activation
+        if implementation is None:
+            implementation = (
+                ttnn.RoutedExpertImplementation.MoeFusedSwiGlu
+                if is_blackhole()
+                else ttnn.RoutedExpertImplementation.Unified
+            )
         self.implementation = implementation
         self.weight_memory_layout, target_memory_configs = self._resolve_weight_placement(
             mesh_device, emb_dim, hidden_dim, implementation, weight_memory_layout

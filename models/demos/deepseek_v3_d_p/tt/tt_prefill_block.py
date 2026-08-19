@@ -217,7 +217,7 @@ class TtPrefillBlock(LightweightModule):
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
-        routed_expert_implementation=ttnn.RoutedExpertImplementation.Unified,
+        routed_expert_implementation=None,
         routed_expert_weight_memory_layout=None,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,

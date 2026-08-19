@@ -151,7 +151,7 @@ class TtMoe(LightweightModule):
         shared_expert_weights: dict = None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
-        routed_expert_implementation=ttnn.RoutedExpertImplementation.Unified,
+        routed_expert_implementation=None,
         routed_expert_weight_memory_layout=None,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
@@ -190,8 +190,8 @@ class TtMoe(LightweightModule):
                                    for shared expert.
             routed_expert_activations_dtype: Data type for routed expert activations
             routed_expert_weights_dtype: Data type for routed expert weights
-            routed_expert_implementation: Routed expert kernel implementation selected
-                explicitly from Python. Defaults to the established Unified path.
+            routed_expert_implementation: Optional routed expert kernel implementation.
+                Blackhole defaults to fused SwiGLU; other architectures retain their fallback.
             routed_expert_weight_memory_layout: Optional INTERLEAVED or ND_SHARDED
                 placement. Defaults to the selected implementation's preferred layout.
             shared_expert_activations_dtype: Data type for shared expert activations
