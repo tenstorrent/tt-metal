@@ -26,21 +26,11 @@ using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
-// Kernel source paths (file-path instantiated from this op's own directory).
-constexpr const char* kDramReaderSrc =
-    "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_reader.cpp";
-constexpr const char* kDramWriterSrc =
-    "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp";
-constexpr const char* kShardedReaderSrc =
-    "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_sharded_reader.cpp";
-constexpr const char* kShardedWriterSrc =
-    "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_sharded_writer.cpp";
-constexpr const char* kComputeSrc =
-    "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp";
-
-// The mask-generation / fill defines shared by the kernels (same content the legacy
-// factory emitted; passed to every kernel, unused defines are harmless).
+// The mask-generation / fill defines shared by both factories (same content the legacy
+// factory emitted; passed to every kernel, unused defines are harmless). Kept file-local
+// inside CMAKE_UNIQUE_NAMESPACE so the symbol stays collision-free under unity builds.
 KernelSpec::CompilerOptions::Defines build_kernel_defines(
     const Tensor& input_tensor,
     tt::DataFormat cb_data_format,
@@ -59,6 +49,7 @@ KernelSpec::CompilerOptions::Defines build_kernel_defines(
     return d;
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_artifacts(
@@ -158,9 +149,17 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = DATA_OUT, .entry_size = tile_bytes, .num_entries = 2, .data_format_metadata = cb_data_format});
 
+    // ---- Kernel source paths (this op's own directory) ----
+    constexpr const char* kDramReaderSrc =
+        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_reader.cpp";
+    constexpr const char* kDramWriterSrc =
+        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp";
+    constexpr const char* kComputeSrc =
+        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp";
+
     // ---- Defines ----
-    const auto fill_defines =
-        build_kernel_defines(input_tensor, cb_data_format, input_element_size_bytes, is_float_type, is_fp32);
+    const auto fill_defines = CMAKE_UNIQUE_NAMESPACE::build_kernel_defines(
+        input_tensor, cb_data_format, input_element_size_bytes, is_float_type, is_fp32);
     // has_right_pad / has_bottom_pad are promoted to preprocessor defines on the writer and
     // compute kernels (they gate the conditionally-bound right / bottom mask DFBs).
     auto mask_defines = fill_defines;
@@ -519,8 +518,16 @@ ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = DATA_OUT, .entry_size = tile_bytes, .num_entries = 2, .data_format_metadata = cb_data_format});
 
-    const auto fill_defines =
-        build_kernel_defines(input_tensor, cb_data_format, input_element_size_bytes, is_float_type, is_fp32);
+    // ---- Kernel source paths (this op's own directory) ----
+    constexpr const char* kShardedReaderSrc =
+        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_sharded_reader.cpp";
+    constexpr const char* kShardedWriterSrc =
+        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_sharded_writer.cpp";
+    constexpr const char* kComputeSrc =
+        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/compute/fill_pad_compute.cpp";
+
+    const auto fill_defines = CMAKE_UNIQUE_NAMESPACE::build_kernel_defines(
+        input_tensor, cb_data_format, input_element_size_bytes, is_float_type, is_fp32);
 
     // ---- Build kernels + work units per group ----
     struct GroupInfo {
