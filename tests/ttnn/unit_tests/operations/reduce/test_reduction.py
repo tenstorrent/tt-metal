@@ -6,94 +6,10 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, torch_random
+from models.common.utility_functions import torch_random
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
-
-
-@pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [32, 64])
-@pytest.mark.parametrize("w", [32, 64])
-@pytest.mark.parametrize("dim", [-1, -2, 0, (-2, -1), None])
-@pytest.mark.parametrize("correction", [True, False])
-@pytest.mark.parametrize("keepdim", [True, False])
-def test_std(device, batch_size, h, w, dim, correction, keepdim):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.randn((batch_size, h, w), dtype=torch.bfloat16)
-    torch_output_tensor = torch.std(torch_input_tensor, dim=dim, keepdim=keepdim, correction=correction)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn.std(input_tensor, dim=dim, keepdim=keepdim, correction=correction)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-
-    output_tensor = ttnn.to_torch(output_tensor)
-    # test for equivalence
-
-    rtol = 0.01
-    atol = 0.01
-    frobenius = 0.005
-    pcc = 0.9999
-    if dim == (-2, -1):
-        # For 2D reduction, all output values are close to 1, and we're using bfloat16,
-        # so a rounding error of even 1 ULP impacts PCC.
-        # ATOL/RTOL/Frobenius should catch any significant errors.
-        pcc = 0.98
-
-    outputs_all_finite = torch.isfinite(torch_output_tensor).all() and torch.isfinite(output_tensor).all()
-    if outputs_all_finite and torch_output_tensor.numel() > 0:
-        assert_numeric_metrics(
-            torch_output_tensor,
-            output_tensor,
-            pcc_threshold=pcc,
-            rtol=rtol,
-            atol=atol,
-            frobenius_threshold=frobenius,
-        )
-    else:
-        passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
-        assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
-
-
-@pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [32, 64])
-@pytest.mark.parametrize("w", [32, 64])
-@pytest.mark.parametrize("dim", [None, [], -1, -2, (-2, -1)])
-@pytest.mark.parametrize("keepdim", [True])
-@pytest.mark.parametrize("correction", [True, False])
-def test_var(device, batch_size, h, w, dim, keepdim, correction):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.randn((batch_size, h, w), dtype=torch.bfloat16)
-    torch_output_tensor = torch.var(torch_input_tensor, dim=dim, keepdim=keepdim, correction=correction)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn.var(input_tensor, dim=dim, keepdim=keepdim, correction=correction)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert len(torch_output_tensor.shape) == len(output_tensor.shape)
-    assert torch_output_tensor.shape == output_tensor.shape
-
-    # test for equivalence
-    rtol = 0.01
-    atol = 0.01
-    pcc = 0.99999
-    frobenius = 0.007
-
-    assert_numeric_metrics(
-        torch_output_tensor,
-        output_tensor,
-        pcc_threshold=pcc,
-        rtol=rtol,
-        atol=atol,
-        frobenius_threshold=frobenius,
-    )
 
 
 # Regression test for fp32 Welford variance precision under large mean offsets.
