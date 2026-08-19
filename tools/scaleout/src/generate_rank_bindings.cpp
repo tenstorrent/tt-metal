@@ -979,7 +979,11 @@ int main(int argc, char** argv) {
                     ++emitted;
 
                     std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(
-                        psd, *solution, mesh_graphs_for_extract, /*per_part_local_to_global_mesh_ids=*/{});
+                        psd,
+                        *solution,
+                        mesh_graphs_for_extract,
+                        /*per_part_local_to_global_mesh_ids=*/{},
+                        /*emit_local_mesh_ids_for_mgd_partition=*/false);
 
                     const std::set<std::string> hosts = solution_host_set(rank_bindings);
                     if (args.distinct_host_sets && !seen_host_sets.insert(hosts).second) {
