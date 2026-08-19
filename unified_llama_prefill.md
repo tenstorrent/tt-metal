@@ -263,10 +263,12 @@ had, including bias -> bcast.
       `ComputeBlock<S>`, `Accumulator<Mode,S>`, the four `NocAsync*Tx<thread,S>` types.
       Keep both geometries and every existing template argument. Add no checks. ~35
       signatures across `api.h` and `impl_v1.hpp`. Trace byte-identical.
-- [ ] **Stage 2 -- the checks.** `node_shape<>`; `store` conformance; operator shape
-      equality; `noc_core_read/write` src/dst agreement; bias is `Tiles<1,Ct>`; scaler
-      is `Tiles<1,1>`. Every check proven by a deliberate violation that must fail to
-      compile, the way the four FPU-fusion guards were. Trace byte-identical.
+- [x] **Stage 2 -- the checks.** `node_shape<>`; `store` conformance; strict eltwise
+      shape equality; matmul operands against the geometry; `noc_core` fit-and-tile;
+      scaler as `Shape<1,1>`; `.bias()` compile-time. Each proven by a violation that
+      must fail to compile, plus a control for the legal gather. See *What Stage 2
+      found* in unified_shape_outline.md -- the core-copy invariant turned out not to
+      be equality.
 - [ ] **Stage 3 -- infer matmul.** Delete `RtDim`/`CtDim`/`KtDim`/`NumBlocks`/
       `In1RowStride`; `MatmulGeometry` shrinks to a transpose tag or disappears. The
       DST-budget `static_assert` re-keys on the inferred output shape. Update 4 kernels
