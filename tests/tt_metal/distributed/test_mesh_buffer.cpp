@@ -1068,6 +1068,33 @@ TEST_F(MeshBufferTestSuite, PinnedMemoryCacheCreatesBestSupportedReadOnlyMapping
     EXPECT_EQ(pinned->get_device_access(), expected_access);
 }
 
+// The mirror image of the read-only tests above: they need the feature present, this one needs it absent. That
+// makes it the only one of the group that runs on the current fleet, which is still below the KMD 2.9.0 floor,
+// and the only coverage of PinnedMemory::Create's public contract. PinnedMemoryCache::try_pin cannot cover it:
+// try_pin widens an unsupported read-only request to ReadWrite, while Create -- reachable directly by callers --
+// must reject it up front rather than let a raw UMD error escape a tt-metal API.
+TEST_F(MeshBufferTestSuite, PinnedMemoryCreateRejectsReadOnlyWhenUnsupported) {
+    const auto pinning_params = experimental::GetMemoryPinningParameters(*mesh_device_);
+    if (pinning_params.supports_read_only) {
+        GTEST_SKIP() << "Requires a system without device-read-only pinning support";
+    }
+
+    auto storage = std::make_shared<vector_aligned<uint32_t>>(1024, 0);
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(storage->data(), storage->size()), MemoryPin(storage));
+    const auto coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
+    const auto range = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+
+    try {
+        experimental::PinnedMemory::Create(
+            *mesh_device_, range, host_buffer, /*map_to_noc=*/true, experimental::PinnedMemoryDeviceAccess::ReadOnly);
+        FAIL() << "Create() must reject a ReadOnly request on a system without support for it";
+    } catch (const std::exception& e) {
+        // Checking the text, not just that something threw: the contract is that the caller is told which
+        // parameter to consult, so a bare throw from somewhere else in Create() would not satisfy it.
+        EXPECT_NE(std::string(e.what()).find("supports_read_only"), std::string::npos) << e.what();
+    }
+}
+
 TEST_F(MeshBufferTestSuite, PinnedMemoryCacheReadWriteRequestReplacesUnreferencedReadOnlyMapping) {
     const auto pinning_params = experimental::GetMemoryPinningParameters(*mesh_device_);
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0 ||

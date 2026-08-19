@@ -939,12 +939,15 @@ TEST_F(MeshTensorDeviceTest, LargeWriteRoundtrip_PinnedMemoryPath) {
     expect_host_tensors_eq(host_tensor, result);
 }
 
-TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnlyPinnedMemory) {
+// Shared body for the two read-only file-backed cases below. `mapping_flags` selects how the device-visible
+// mapping is created; both modes have to be pinned read-only on their own, because the kernel treats them
+// differently (see the call sites).
+void run_large_read_only_file_backed_write_test(distributed::MeshDevice& mesh_device, int mapping_flags) {
     const Shape shape{1, 1, 1024, 9216};
     const size_t buffer_size = static_cast<size_t>(shape.volume()) * sizeof(uint32_t);
     ASSERT_GT(buffer_size, kPinnedWriteThresholdBytesForTest);
 
-    const auto pinning_params = tt::tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_);
+    const auto pinning_params = tt::tt_metal::experimental::GetMemoryPinningParameters(mesh_device);
     if (!pinning_params.can_map_to_noc || !pinning_params.supports_read_only) {
         GTEST_SKIP() << "Device-read-only pinned NOC mappings are not available";
     }
@@ -962,8 +965,9 @@ TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnl
     int writable_fd = mkstemp(file_name.data());
     ASSERT_NE(writable_fd, -1);
     // The device-visible mapping has to come from a read-only descriptor: that is the shape real callers have (an
-    // mmap of a weights file opened O_RDONLY), and it is what clears VM_MAYWRITE so the mapping cannot be widened
-    // to writable behind the pin. Open it now, while the name still exists, and drop the name immediately -- the
+    // mmap of a weights file opened O_RDONLY). Whether the mapping can still be widened to writable depends on
+    // `mapping_flags`, not on the descriptor -- see the call sites. Open it now, while the name still exists, and
+    // drop the name immediately -- the
     // two descriptors keep the inode alive for the rest of the test, so no exit path, including an ASSERT failure
     // below or a crash, can leave 36 MiB on disk. The file is still empty here; the ftruncate below extends the
     // inode, which both descriptors see.
@@ -983,7 +987,7 @@ TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnl
     ASSERT_EQ(munmap(writable_mapping, buffer_size), 0);
     ASSERT_EQ(close(writable_fd), 0);
 
-    void* read_only_mapping = mmap(nullptr, buffer_size, PROT_READ, MAP_SHARED, read_only_fd, 0);
+    void* read_only_mapping = mmap(nullptr, buffer_size, PROT_READ, mapping_flags, read_only_fd, 0);
     ASSERT_NE(read_only_mapping, MAP_FAILED);
     ASSERT_EQ(close(read_only_fd), 0);
 
@@ -991,15 +995,15 @@ TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnl
         read_only_mapping, [buffer_size](void* mapping) { EXPECT_EQ(munmap(mapping, buffer_size), 0); });
     HostBuffer file_buffer(
         ttsl::Span<uint32_t>(static_cast<uint32_t*>(read_only_mapping), shape.volume()), MemoryPin(mapping_owner));
-    auto distributed_buffer = DistributedHostBuffer::create(mesh_device_->shape());
-    const auto coord = *distributed::MeshCoordinateRange(mesh_device_->shape()).begin();
+    auto distributed_buffer = DistributedHostBuffer::create(mesh_device.shape());
+    const auto coord = *distributed::MeshCoordinateRange(mesh_device.shape()).begin();
     distributed_buffer.emplace_shard(coord, [&file_buffer]() { return file_buffer; });
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    auto topology = TensorTopology::create_sharded_tensor_topology(mesh_device_->shape());
+    auto topology = TensorTopology::create_sharded_tensor_topology(mesh_device.shape());
     auto host_tensor = host_tensor_from_buffer_with_topology(std::move(distributed_buffer), spec, topology);
 
     auto& cache = tt::tt_metal::experimental::PinnedMemoryCache::instance();
-    auto& cq = mesh_device_->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     const size_t entries_before = cache.num_entries();
     MeshTensor device_tensor = cq.enqueue_write_tensor(host_tensor);
     cq.finish();
@@ -1011,8 +1015,8 @@ TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnl
     auto shard = host_tensor.buffer().get_shard(coord);
     ASSERT_TRUE(shard.has_value());
     const auto range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
-    auto pinned = cache.try_pin(
-        *mesh_device_, range, *shard, true, tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadOnly);
+    auto pinned =
+        cache.try_pin(mesh_device, range, *shard, true, tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadOnly);
     ASSERT_TRUE(pinned);
     // No new entry: this is the mapping the write created, not a second one, so its permissions are the write's.
     EXPECT_EQ(cache.num_entries(), entries_before + 1);
@@ -1020,6 +1024,22 @@ TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnl
 
     HostTensor result = cq.enqueue_read_tensor(device_tensor);
     expect_host_tensors_eq(host_tensor, result);
+}
+
+// MAP_SHARED of an O_RDONLY descriptor clears VM_MAYWRITE, so the kernel will not let this mapping become
+// writable at all: mprotect(PROT_WRITE) on it fails with EACCES. That makes it the strict case -- read-only
+// pinning has to work on memory that genuinely cannot be widened, not merely on memory nobody widened yet.
+TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnlyPinnedMemory) {
+    run_large_read_only_file_backed_write_test(*mesh_device_, MAP_SHARED);
+}
+
+// MAP_PRIVATE is what the Python load_tensor() API actually creates (serialization.cpp maps the file
+// PROT_READ | MAP_PRIVATE), so this is the case the feature exists for. It is the weaker case for the pin -- a private
+// PROT_READ mapping keeps VM_MAYWRITE, so mprotect(PROT_WRITE) on it succeeds -- but a read/write pin still
+// fails on it, since VM_WRITE is clear. Covering only MAP_SHARED above would leave the production mapping
+// mode unproven, and covering only this one would drop the strict case.
+TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyPrivateFileBackedWriteUsesReadOnlyPinnedMemory) {
+    run_large_read_only_file_backed_write_test(*mesh_device_, MAP_PRIVATE);
 }
 
 TEST_F(MeshTensorDeviceTest, LargeWriteRoundtrip_HeightShardedDeviceRequiringShardPadding) {
