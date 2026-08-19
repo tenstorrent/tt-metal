@@ -95,7 +95,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
 
         r = r * s + m;
         e_float = sfpi::copysgn(e_float, sfpi::as<sfpi::vFloat>(e));
-        if constexpr (BASE_IS_TWO) {
+        if constexpr (IS_BASE_TWO) {
             // log2 takes an exact path.  Scaling the finished natural-log sum, as
             // result *= 1/ln(2), also scales the exponent contribution by
             // ln(2) * (1/ln(2)), which does not round to exactly 1 in float, so log2 of
@@ -138,11 +138,11 @@ template <
     bool HAS_BASE_SCALING,
     bool is_fp32_dest_acc_en,
     int ITERATIONS = 8,
-    bool BASE_IS_TWO = false>
+    bool IS_BASE_TWO = false>
 inline void calculate_log(uint log_base_scale_factor) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, BASE_IS_TWO>(
+        sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, IS_BASE_TWO>(
             sfpi::dst_reg[0], log_base_scale_factor);
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
