@@ -59,17 +59,49 @@ def _medians(frames):
     return {k: median(v) for k, v in samples.items()}
 
 
-def compare_runs(current_csvs, baseline_csvs, *, threshold=0.05):
+# Defaults are measured, not guessed: five runs of one commit on one card, over
+# 108,377 points (L1_TO_L1) and 311,352 (isolates). The numbers below come from
+# docs/perf_evaluation/results/blackhole-nonsol/README.md.
+#
+#   THRESHOLD   No TILE_LOOP or KERNEL measurement moved more than 1.9% between
+#               identical runs. 2% sits above every observed sample and is still
+#               tight enough to catch a real regression.
+#   MIN_CYCLES  INIT and UNINIT are a few hundred cycles and wobble by up to 25.
+#               That is a large *percentage* of a small number. 30 cycles clears
+#               every wobble we saw.
+#
+# A point must exceed BOTH. Either clause alone is wrong: percentage-only fires on
+# the small markers (474 of 108,377 points, all moving 25 cycles or less), and
+# cycles-only fires on the big ones (TILE_LOOP moves up to 5,110 cycles and that
+# is still only 1.9%). Together they flagged nothing across four of the five
+# configurations measured.
+DEFAULT_THRESHOLD = 0.02
+DEFAULT_MIN_CYCLES = 30.0
+
+
+def compare_runs(
+    current_csvs,
+    baseline_csvs,
+    *,
+    threshold=DEFAULT_THRESHOLD,
+    min_cycles=DEFAULT_MIN_CYCLES,
+):
     """Median-vs-median comparison.
 
-    Returns ``{records, regressions, improvements, new_points}``. ``delta`` is the
-    fractional change vs baseline (0.12 = 12% slower, -0.12 = 12% faster), so a
-    regression is ``delta > threshold`` and an improvement ``delta < -threshold``.
+    Returns ``{records, regressions, improvements, new_points, noise_filtered}``.
+    ``delta`` is the fractional change vs baseline (0.12 = 12% slower, -0.12 = 12%
+    faster) and ``abs_delta`` is the same change in cycles. A regression needs
+    ``delta > threshold`` AND ``abs_delta > min_cycles``; an improvement is the
+    mirror image. See the constants above for why both are required.
+
+    ``noise_filtered`` counts points that cleared the percentage but not the cycle
+    floor — exactly the points a relative-only rule would have failed on.
     """
     cur = _medians([pd.read_csv(p) for p in current_csvs])
     base = _medians([pd.read_csv(p) for p in baseline_csvs])
 
     records, regressions, improvements, new_points = [], [], [], []
+    noise_filtered = 0
     for (key, mean_col), cval in cur.items():
         marker, config = key
         run_type = mean_col[len("mean(") : -1]
@@ -84,12 +116,17 @@ def compare_runs(current_csvs, baseline_csvs, *, threshold=0.05):
             new_points.append(point)  # no baseline (new config / new test)
             continue
         delta = (cval - bval) / bval if bval else 0.0
+        abs_delta = cval - bval
+        big_enough = abs(abs_delta) > min_cycles
+        if abs(delta) > threshold and not big_enough:
+            noise_filtered += 1
         record = {
             **point,
             "baseline": bval,
             "delta": delta,
-            "regression": delta > threshold,
-            "improvement": delta < -threshold,
+            "abs_delta": abs_delta,
+            "regression": delta > threshold and big_enough,
+            "improvement": delta < -threshold and big_enough,
         }
         records.append(record)
         if record["regression"]:
@@ -101,6 +138,7 @@ def compare_runs(current_csvs, baseline_csvs, *, threshold=0.05):
         "regressions": regressions,
         "improvements": improvements,
         "new_points": new_points,
+        "noise_filtered": noise_filtered,
     }
 
 
@@ -119,8 +157,8 @@ def _delta_table(rows, *, caption):
     lines = [
         f"## {caption}",
         "",
-        "| marker | run type | current | baseline | Δ | config |",
-        "|---|---|--:|--:|--:|---|",
+        "| marker | run type | current | baseline | Δ | Δ cycles | config |",
+        "|---|---|--:|--:|--:|--:|---|",
     ]
     for r in rows:
         cfg = ", ".join(f"{k}={v}" for k, v in sorted(r["config"].items()))
@@ -128,7 +166,8 @@ def _delta_table(rows, *, caption):
             cfg = cfg[:87] + "…"
         lines.append(
             f"| {r['marker']} | {r['run_type']} | {r['current']:.1f} | "
-            f"{r['baseline']:.1f} | {r['delta'] * 100:+.1f}% | {cfg} |"
+            f"{r['baseline']:.1f} | {r['delta'] * 100:+.1f}% | "
+            f"{r.get('abs_delta', 0.0):+.0f} | {cfg} |"
         )
     return lines
 
@@ -140,6 +179,7 @@ def render_report(
     test,
     baseline_sha,
     current_sha,
+    min_cycles=DEFAULT_MIN_CYCLES,
     baseline_iters=None,
     current_iters=None,
     baseline_label=None,
@@ -161,15 +201,27 @@ def render_report(
     lines = [
         f"# Perf compare — {test}",
         "",
-        f"**{verdict}** (threshold {threshold * 100:.0f}%, median-vs-median)",
+        f"**{verdict}**",
+        "",
+        f"Rule: a point is a regression when it is **more than {threshold * 100:.0f}% "
+        f"slower AND more than {min_cycles:.0f} cycles slower**. Both must hold. "
+        "Comparison is median-vs-median, per (marker, run type, sweep config).",
         "",
         _side_line("baseline", baseline_sha, baseline_label, baseline_iters),
         _side_line("current", current_sha, current_label, current_iters),
         f"- {len(result['records'])} points compared, "
         f"**{len(regs)} regression(s)**, {len(imps)} improvement(s), "
         f"{len(result['new_points'])} new point(s)",
-        "",
     ]
+    filtered = result.get("noise_filtered", 0)
+    if filtered:
+        lines.append(
+            f"- {filtered} point(s) moved more than {threshold * 100:.0f}% but by "
+            f"{min_cycles:.0f} cycles or fewer, so they are ignored. Small markers "
+            "(INIT, UNINIT) are a few hundred cycles, where a handful of cycles of "
+            "jitter looks like a large percentage."
+        )
+    lines.append("")
     if regs:
         shown = regs[:_TOP_N]
         lines += _delta_table(
@@ -212,6 +264,7 @@ def _points_csv(records):
             "current": r["current"],
             "baseline": r["baseline"],
             "delta_pct": round(r["delta"] * 100, 2),
+            "delta_cycles": round(r.get("abs_delta", 0.0), 1),
         }
         row.update(r["config"])
         rows.append(row)
@@ -224,7 +277,20 @@ def main(argv=None):
     )
     ap.add_argument("--current", required=True, help="glob for current-run CSVs")
     ap.add_argument("--baseline", required=True, help="glob for baseline-run CSVs")
-    ap.add_argument("--threshold", type=float, default=0.05)
+    ap.add_argument(
+        "--threshold",
+        type=float,
+        default=DEFAULT_THRESHOLD,
+        help=f"relative slowdown that counts as a regression (default {DEFAULT_THRESHOLD})",
+    )
+    ap.add_argument(
+        "--min-cycles",
+        type=float,
+        default=DEFAULT_MIN_CYCLES,
+        help="absolute slowdown, in cycles, that a point must ALSO exceed "
+        f"(default {DEFAULT_MIN_CYCLES:.0f}). Stops small markers such as INIT "
+        "from failing the gate on a few cycles of jitter. 0 disables the clause.",
+    )
     ap.add_argument("--report", default="regression_report.md")
     ap.add_argument("--test", default="?")
     ap.add_argument("--baseline-sha", default="?")
@@ -243,10 +309,13 @@ def main(argv=None):
             f"no CSVs matched (current={len(current)}, baseline={len(baseline)})"
         )
 
-    result = compare_runs(current, baseline, threshold=a.threshold)
+    result = compare_runs(
+        current, baseline, threshold=a.threshold, min_cycles=a.min_cycles
+    )
     report = render_report(
         result,
         threshold=a.threshold,
+        min_cycles=a.min_cycles,
         test=a.test,
         baseline_sha=a.baseline_sha,
         current_sha=a.current_sha,

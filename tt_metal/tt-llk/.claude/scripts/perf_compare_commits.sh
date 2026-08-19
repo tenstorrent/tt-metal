@@ -11,7 +11,9 @@
 #   --baseline <ref>     what to compare against  (default: merge-base origin/main HEAD)
 #   --current  <ref>     what to judge            (default: HEAD)
 #   --iterations <N>     runs per side            (default: 3, median-vs-median)
-#   --threshold <T>      regression threshold     (default: 0.05 = 5%)
+#   --threshold <T>      relative slowdown that counts  (default: 0.02 = 2%)
+#   --min-cycles <N>     absolute slowdown it must ALSO exceed, in cycles
+#                        (default: 30; 0 disables the clause)
 #   --speed-of-light     compile-time-parameter build; applied to BOTH sides
 #   --refresh            ignore cached runs and re-measure both sides
 #   --keep-worktrees     leave the per-commit worktrees behind (for debugging)
@@ -89,7 +91,8 @@ Usage: perf_compare_commits.sh <arch> <test> [options]
   --baseline <ref>     what to compare against  (default: merge-base origin/main HEAD)
   --current  <ref>     what to judge            (default: HEAD)
   --iterations <N>     runs per side            (default: 3, median-vs-median)
-  --threshold <T>      regression threshold     (default: 0.05 = 5%)
+  --threshold <T>      relative slowdown that counts  (default: 0.02 = 2%)
+  --min-cycles <N>     absolute slowdown it must ALSO exceed, in cycles (default: 30)
   --speed-of-light     compile-time-parameter build; applied to BOTH sides
   --refresh            ignore cached runs and re-measure both sides
   --keep-worktrees     leave the per-commit worktrees behind (for debugging)
@@ -112,7 +115,11 @@ shift 2
 BASELINE_REF=""
 CURRENT_REF="HEAD"
 ITERATIONS=3
-THRESHOLD=0.05
+# Measured on a 5-run baseline of unchanged code, not guessed. See
+# docs/perf_evaluation/results/blackhole-nonsol/README.md and the constants in
+# perf_regression_compare.py.
+THRESHOLD=0.02
+MIN_CYCLES=30
 SPEED_OF_LIGHT=0
 REFRESH=0
 KEEP_WORKTREES=0
@@ -135,6 +142,10 @@ while [ $# -gt 0 ]; do
         ;;
     --threshold)
         THRESHOLD="${2:?--threshold needs a number}"
+        shift 2
+        ;;
+    --min-cycles)
+        MIN_CYCLES="${2:?--min-cycles needs a number}"
         shift 2
         ;;
     --out-dir)
@@ -213,10 +224,36 @@ fi
 REPORT_DIR="${OUT_DIR:-$BASE_HOME/reports/$ARCH/$TEST/${BASELINE_SHORT}_vs_${CURRENT_SHORT}_$VARIANT}"
 mkdir -p "$REPORT_DIR" "$WORK_ROOT"
 
-echo "== comparing $TEST on $ARCH ($VARIANT build, ${ITERATIONS} iteration(s)/side)"
-echo "   baseline: $BASELINE_SHORT  ($BASELINE_LABEL)"
-echo "   current:  $CURRENT_SHORT  ($CURRENT_LABEL)"
-echo "   report:   $REPORT_DIR"
+# Everything that decides the verdict, stated before any of it runs. A reader must
+# not have to guess which defaults applied, which refs a shorthand resolved to, or
+# what the pass/fail rule actually is.
+cat <<BANNER
+
+  Perf compare
+  ------------------------------------------------------------------
+  test          $TEST
+  arch          $ARCH
+  build         $VARIANT $([ "$SPEED_OF_LIGHT" = 1 ] && echo "(--speed-of-light, applied to BOTH sides)" || echo "(runtime parameters; pass --speed-of-light for the compile-time build)")
+  iterations    $ITERATIONS per side, interleaved; median vs median
+
+  baseline      $BASELINE_SHORT  $BASELINE_LABEL
+  current       $CURRENT_SHORT  $CURRENT_LABEL
+
+  verdict rule  slower by more than $(awk -v t="$THRESHOLD" 'BEGIN{printf "%g", t*100}')% AND more than $MIN_CYCLES cycles
+                Both must hold. The percentage alone fires on small markers such
+                as INIT, where a few cycles of jitter is a large percentage; the
+                cycle count alone fires on large markers, where a real 2% is
+                thousands of cycles. Defaults are measured, not guessed --
+                docs/perf_evaluation/results/blackhole-nonsol/README.md.
+
+  compared per  (marker, run type, sweep config) -- every row, matched
+  measured on   $(hostname)
+  parallelism   producer -n $PRODUCER_JOBS, consumer -n $CONSUMER_JOBS
+  cache         $BASE_HOME
+  report        $REPORT_DIR
+  ------------------------------------------------------------------
+
+BANNER
 
 # --- worktrees: one per commit, removed on exit unless asked to keep them
 WORKTREES=()
@@ -460,6 +497,7 @@ python3 "$COMPARE_PY" \
     --baseline "$BASELINE_CACHE/run_*.csv" \
     --current "$CURRENT_CACHE/run_*.csv" \
     --threshold "$THRESHOLD" \
+    --min-cycles "$MIN_CYCLES" \
     --report "$REPORT_DIR/regression_report.md" \
     --test "$TEST" \
     --baseline-sha "$BASELINE_SHA" --current-sha "$CURRENT_SHA" \
