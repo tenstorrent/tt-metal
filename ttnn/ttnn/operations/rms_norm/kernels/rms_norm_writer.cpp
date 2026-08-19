@@ -61,7 +61,7 @@ constexpr uint32_t COALESCE = get_compile_time_arg_val(21);
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t NUM_SCALE_CHUNKS = Wt_core / WT_SCALE_BLOCK;
 
-constexpr auto output_args = TensorAccessorArgs<22>();
+constexpr auto output_args = TensorAccessorArgs<23>();
 
 FORCE_INLINE uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
 

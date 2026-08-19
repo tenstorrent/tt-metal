@@ -71,6 +71,21 @@ constexpr uint32_t WT_SCALE_BLOCK = get_compile_time_arg_val(8);
 constexpr uint32_t Rt = get_compile_time_arg_val(9);
 constexpr uint32_t DEST_BLOCK_CT = get_compile_time_arg_val(15);
 constexpr uint32_t GAMMA_INGEST_BLOCK = get_compile_time_arg_val(18);
+// Regime B reduce datapath (host-chosen, see blocking_plan.reduce_via_add):
+//   1 = AccumulateViaAdd - pairwise FPU add_tiles into ONE DST register, then a
+//       single SFPU within-tile finalize on the LAST chunk.
+//   0 = ReduceTile       - the Phase-0 datapath, one FPU matmul-with-ones per
+//       input tile accumulating straight into DEST.
+// WHY this is a knob and why 1 is the default: at fp32_dest_acc_en=False the
+// DEST datum is 16-bit, and ReduceTile's long per-tile DEST accumulation carries
+// a systematic sum-of-squares OVERESTIMATE that grows with the reduced width
+// (measured: +0.84% at Wt=32, +1.9% at 64, +5.6% at 128, +10.4% at 224, which
+// shows up as a uniform ~5% low output scale at W=7168).  It is invariant to the
+// W-chunk size, the accumulator CB format and DEST_BLOCK, so it is the datapath
+// and not the blocking.  Regime A's element-wise accumulate never had it, and
+// AccumulateViaAdd is that same pairwise-accumulate shape - the helper documents
+// it as "more accurate ... wins for wide reduces (many tiles per output)".
+constexpr uint32_t REDUCE_VIA_ADD = get_compile_time_arg_val(22);
 
 constexpr uint32_t NUM_REDUCE_CHUNKS = Wt_core / WT_REDUCE_BLOCK;
 constexpr uint32_t NUM_SCALE_CHUNKS = Wt_core / WT_SCALE_BLOCK;
@@ -78,6 +93,14 @@ constexpr uint32_t NUM_SCALE_CHUNKS = Wt_core / WT_SCALE_BLOCK;
 // The host-chosen DEST block knob, clamped against the REAL hardware constant.
 // Never a literal 4 or 8.
 constexpr uint32_t DEST_BLOCK = (DEST_BLOCK_CT < ckl::DEST_AUTO_LIMIT) ? DEST_BLOCK_CT : ckl::DEST_AUTO_LIMIT;
+
+// The two datapaths differ in ONE more thing than the algorithm enum: cross-call
+// Accumulate on AccumulateViaAdd is BulkWaitBulkPop-only (helper contract).  Both
+// aliases are derived from the single REDUCE_VIA_ADD arg so they cannot drift.
+constexpr auto REDUCE_ALGORITHM =
+    REDUCE_VIA_ADD ? ckl::ReduceAlgorithm::AccumulateViaAdd : ckl::ReduceAlgorithm::ReduceTile;
+constexpr auto REDUCE_POLICY =
+    REDUCE_VIA_ADD ? ckl::ReduceInputPolicy::BulkWaitBulkPop : ckl::ReduceInputPolicy::WaitAndPopPerTile;
 
 // The no-gamma path writes the 1/rms scale straight into the output CB, so it
 // pays zero extra copies.
@@ -184,15 +207,24 @@ void kernel_main() {
                     ckl::output(cb_squared, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                     ckl::IterationShape::grid(BLOCK_HT, WT_REDUCE_BLOCK).block_size(DEST_BLOCK));
 
+                // `at_last` marks the finalizing chunk: on the AccumulateViaAdd
+                // datapath cb_sumsq holds the RAW partial sum between chunks and
+                // the within-tile collapse runs exactly once, on the last one.
+                // ReduceTile ignores the flag (it finalizes every chunk), so the
+                // same call site is correct for both datapaths.
                 ckl::reduce<
                     ckernel::PoolType::SUM,
                     ckernel::ReduceDim::REDUCE_ROW,
                     cb_squared,
                     cb_reduce_scaler,
-                    cb_sumsq>(
+                    cb_sumsq,
+                    REDUCE_POLICY,
+                    ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    ReduceFp32Mode::Fast,  // default (global scope, not in ckl)
+                    REDUCE_ALGORITHM>(
                     ckl::ReduceInputBlockShape::of(BLOCK_HT, WT_REDUCE_BLOCK, 1),
                     ckl::ReduceInputMemoryLayout::contiguous(),
-                    ckl::Accumulate::at(cb_sumsq, c),
+                    is_last ? ckl::Accumulate::at_last(cb_sumsq, c) : ckl::Accumulate::at(cb_sumsq, c),
                     ckl::NoOp{},
                     is_last ? partial_scaler : ckl::ReducePartialScaler::none());
             }

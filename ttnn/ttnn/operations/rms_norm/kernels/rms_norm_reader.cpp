@@ -94,7 +94,7 @@ constexpr uint32_t NUM_REDUCE_CHUNKS = Wt_core / WT_REDUCE_BLOCK;
 constexpr uint32_t NUM_SCALE_CHUNKS = Wt_core / WT_SCALE_BLOCK;
 constexpr uint32_t LAST_RT = Rt - 1;
 
-constexpr auto input_args = TensorAccessorArgs<22>();
+constexpr auto input_args = TensorAccessorArgs<23>();
 [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
 FORCE_INLINE uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }

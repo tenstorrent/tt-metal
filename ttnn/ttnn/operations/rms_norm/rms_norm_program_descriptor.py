@@ -55,6 +55,14 @@ LEVER_DEFAULTS = {
     "block_ht": 0,  # compute_block_size - 0: solver; N: force BLOCK_HT
     "dest_block": 0,  # compute_block_size - 0: solver; N: force DEST_BLOCK
     "coarse_chunk": 1,  # block-size fidelity - 0: force the W-chunk to 1 tile
+    "wt_block": 0,  # 0: solver; N: cap WT_REDUCE_BLOCK / WT_SCALE_BLOCK at N
+    # Regime B reduce datapath.  1 = AccumulateViaAdd (pairwise FPU accumulate +
+    # ONE SFPU within-tile finalize), 0 = the Phase-0 ReduceTile datapath.  The
+    # applied default is 1 because ReduceTile's long per-tile DEST accumulation
+    # carries a systematic sum-of-squares overestimate at 16-bit DEST that grows
+    # with the reduced width (+0.8% at Wt=32 -> +10.4% at Wt=224); see the
+    # rationale block in kernels/rms_norm_compute.cpp.
+    "reduce_via_add": 1,
     "coalesce": 1,  # B5/B6 - 0: split each tile transfer into two half-tile ones
     # F-group (precision cost): 1 = the accumulator CBs carry the CHEAPEST format
     # that loses nothing (fp32 only when DEST actually accumulates in fp32);
@@ -233,6 +241,7 @@ class BlockingPlan:
     RM_BUF_DEPTH: int
     # --- derived ------------------------------------------------------------
     regime: str
+    reduce_via_add: int
     num_row_blocks: int
     l1_cb_budget: int
     # The frozen CB set this plan implies: ((cb_index, num_pages, page_bytes,
@@ -442,7 +451,9 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         # must be a multiple of BOTH access granularities.
         wr = wsc = 1
         if _lever(levers, "coarse_chunk"):
-            for cand in range(Wt_core, 0, -1):
+            forced_wt = _lever(levers, "wt_block")
+            chunk_cap = min(Wt_core, forced_wt) if forced_wt else Wt_core
+            for cand in range(chunk_cap, 0, -1):
                 if Wt_core % cand != 0:
                     continue
                 if ws_bytes("B", 1, 1, 1, 1, cand, cand) <= l1_cb_budget:
@@ -515,6 +526,10 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         OUT_BUF_DEPTH=out_depth,
         RM_BUF_DEPTH=rm_depth,
         regime=regime,
+        # Regime A never accumulates across reduce() calls (its reduce is the
+        # single within-tile finalize of sum_of_squares' accumulator), so the
+        # datapath knob only has meaning in Regime B.
+        reduce_via_add=(1 if (regime == "B" and _lever(levers, "reduce_via_add")) else 0),
         num_row_blocks=_div_up(Rt, block_ht),
         l1_cb_budget=l1_cb_budget,
         cb_layout=tuple(
@@ -615,6 +630,7 @@ def create_program_descriptor(
         _lever(levers, "barrier_per_block"),  # 19 (lever B7 off-arm)
         _lever(levers, "stub_dm"),  # 20 (ablation arm)
         _lever(levers, "coalesce"),  # 21 (lever B5/B6 off-arm)
+        plan.reduce_via_add,  # 22 (Regime B reduce datapath)
     ]
 
     # ---------------- reader --------------------------------------------------
