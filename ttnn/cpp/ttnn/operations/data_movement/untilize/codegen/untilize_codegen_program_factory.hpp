@@ -14,11 +14,10 @@ struct UntilizeCodegenOperationAttributes;
 struct UntilizeCodegenTensorArgs;
 
 struct UntilizeCodegenProgramFactory {
-    // Builds the codegen untilize program for the (already validated, already output-allocated)
-    // case. This is also the op's ONLY live-L1 decision point: it samples the free L1 headroom
-    // once and, if no codegen CB plan fits below the resident L1 buffers, emits the native
-    // untilize program for the same tensors instead of failing. Runs only on a program-cache
-    // miss; cache hits patch the cached program's buffer addresses without re-entering here.
+    // Builds the codegen untilize program (or native-equivalent) for the already-validated,
+    // already output-allocated case. Live L1 is sampled on every dispatch in
+    // compute_program_hash (choose_codegen_cb_plan) so a CB-tier / Native-block-split change
+    // is a cache miss. create_descriptor itself still runs only on a miss.
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const UntilizeCodegenOperationAttributes& operation_attributes,
         const UntilizeCodegenTensorArgs& tensor_args,

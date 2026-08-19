@@ -3056,8 +3056,9 @@ def test_untilize_sub_core_grids_single_tile_height(device):
     assert_equal(input_torch, ttnn.to_torch(output))
 
 
+@pytest.mark.parametrize("warmup", [False, True], ids=["cold", "warmup_then_constrain"])
 @pytest.mark.parametrize("headroom_regime", ["shallower_cb_plan", "no_cb_plan_fits"])
-def test_untilize_codegen_with_resident_l1_buffers(device, headroom_regime):
+def test_untilize_codegen_with_resident_l1_buffers(device, headroom_regime, warmup):
     """Regression: the codegen CB plan must be budgeted against LIVE L1 occupancy.
 
     Statically allocated CBs grow upward from the allocator's base L1 address while L1 tensors are
@@ -3079,9 +3080,11 @@ def test_untilize_codegen_with_resident_l1_buffers(device, headroom_regime):
       - no_cb_plan_fits: not even the single-buffered codegen plan fits, so the program factory
         must build the native-equivalent program instead of failing.
 
-    This asserts only on the result, never on which implementation served it: the choice is made
-    inside the program factory (once per program-cache miss, against one L1 snapshot) precisely so
-    that no observer outside it -- including this test -- has to reason about live L1 state.
+    This asserts only on the result, never on which implementation served it.
+
+    warmup=True first untilizes with free L1 (caches a roomier plan), deallocates that
+    output, then constrains L1. The CB-tier / Native-block-split is in the program-cache
+    key, so the second call must miss and rebuild rather than clash.
     """
     torch.manual_seed(42)
 
@@ -3123,6 +3126,11 @@ def test_untilize_codegen_with_resident_l1_buffers(device, headroom_regime):
     # untilize only relayouts values, so the input is its own golden.
     input_torch_tensor = torch.randn([1, 1, 32 * height_tiles, 32 * wt], dtype=torch.bfloat16)
     input_ttnn_tensor = ttnn.from_torch(input_torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if warmup:
+        warmup_output = ttnn.untilize(input_ttnn_tensor)
+        assert_equal(input_torch_tensor, ttnn.to_torch(warmup_output))
+        ttnn.deallocate(warmup_output)
 
     # Interleaved L1 spreads pages round-robin over every bank, so tiles_per_bank tiles per bank
     # pushes the lowest occupied L1 address down on all of them. Allocated directly on device: the

@@ -22,6 +22,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/device/untilize_with_unpadding_device_operation.hpp"
+#include "untilize_codegen_cb_plan.hpp"
 #include "untilize_codegen_device_operation.hpp"
 #include "untilize_codegen_supported.hpp"
 
@@ -40,86 +41,17 @@ constexpr uint32_t kSeqIdentity = 0;  // mirrors common/templates/sequencers.h S
 
 std::string kernel_path(const char* name) { return std::string(kKernelDir) + "/" + name; }
 
-// 32-bit datums need 32-bit DEST accumulation in pack_untilize. Always false for the current
-// supported_by_codegen scope (bf16/bf8_b only); kept general so widening that scope does not
-// need this rule rediscovered.
+// Mirrors spec.py's _needs_dst_accum: 32-bit datums need 32-bit DEST accumulation in
+// pack_untilize. Always false for this port's supported_by_codegen scope (bf16/bf8_b only);
+// kept general to stay a faithful transliteration of the source builder.
 bool needs_dst_accum(DataType dtype) {
     return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32;
 }
 
-// Mirrors compute_untilize.cpp's compute_num_blocks_per_column: the largest bct <= max_bct
-// that evenly divides wt. The host must replicate this to size CB depths in the same units
-// the kernel will actually consume per pack_untilize_block call.
-uint32_t compute_block_ct_dim(uint32_t wt, bool fp32) {
-    uint32_t max_bct = fp32 ? 4 : 8;
-    for (uint32_t bct = max_bct; bct >= 1; --bct) {
-        if (wt % bct == 0) {
-            return bct;
-        }
-    }
-    return 1;
-}
-
-struct CbPlan {
-    uint32_t cb_in_depth;
-    uint32_t cb_out_depth;
-    uint32_t read_batch;
-};
-
-// Mirrors codegen_common.factory.cb_policy.plan_cb_depths exactly: 3-tier asymmetric CB
-// depth selection (double-buffer both -> double-buffer input only -> single-buffer both).
-//
-// `usable_l1` is the budget measured ONCE per program build by create_descriptor (see
-// kUsableL1Note there): the L1 gap actually free below whatever buffers are already resident,
-// not the whole-core L1 size. Statically allocated CBs grow up from the allocator base while
-// L1 buffers grow down from the top, so planning against total L1 is what let a program whose
-// CBs overlap a resident trace/weight buffer get built at all -- it then died later in
-// ProgramImpl::validate_circular_buffer_region() with "Statically allocated circular buffers
-// ... clash with L1 buffers".
-//
-// Tightening the budget cannot change any plan that previously worked: the three tiers are
-// strictly ordered by size, the live gap is always <= the whole-L1 budget, so the only plans
-// that differ are exactly those the old budget accepted but the allocator would have rejected.
-//
-// The Python source has no 4th "chunked" tier -- it raises when even the single-buffer plan
-// overflows. Returning nullopt instead lets create_descriptor build a native-equivalent
-// program for that case rather than failing the op; the codegen builders themselves still have
-// no depth below single-buffer to fall back to (compute_untilize.cpp reserves a full unit in
-// cb_out per pass), which is exactly why the fallback has to be a different program.
-std::optional<CbPlan> plan_cb_depths(
-    uint64_t usable_l1, uint32_t pages_per_unit, uint32_t page_size, uint32_t block_units) {
-    uint64_t p = pages_per_unit;
-    uint64_t ts = page_size;
-    uint64_t double_both = (2 * p + 2 * p) * ts;
-    uint64_t double_in = (2 * p + p) * ts;
-    uint64_t single_both = (p + p) * ts;
-    if (double_both <= usable_l1) {
-        return CbPlan{static_cast<uint32_t>(2 * p), static_cast<uint32_t>(2 * p), pages_per_unit};
-    }
-    if (double_in <= usable_l1) {
-        return CbPlan{static_cast<uint32_t>(2 * p), pages_per_unit, pages_per_unit};
-    }
-    if (single_both <= usable_l1) {
-        return CbPlan{pages_per_unit, pages_per_unit, block_units};
-    }
-    return std::nullopt;
-}
-
-// Largest divisor of wt (>=2) such that every tile-row x column-block unit still gets its own
-// core; returns 1 ("don't use the 2D path") otherwise.
-uint32_t choose_2d_ncol(uint32_t total_tile_rows, uint32_t wt, uint32_t valid_cores) {
-    if (total_tile_rows >= valid_cores || wt < 2) {
-        return 1;
-    }
-    uint32_t max_ncol = std::min(valid_cores / total_tile_rows, wt);
-    uint32_t best = 1;
-    for (uint32_t d = 2; d <= max_ncol; ++d) {
-        if (wt % d == 0) {
-            best = d;
-        }
-    }
-    return best;
-}
+using untilize_codegen_detail::CbPlan;
+using untilize_codegen_detail::choose_2d_ncol;
+using untilize_codegen_detail::compute_block_ct_dim;
+using untilize_codegen_detail::plan_cb_depths;
 
 // DRAM-interleaved tile CBs must step at the device's real DRAM page pitch, not the raw tile
 // byte size (a no-op for bf16/bf8_b tile sizes, both already multiples of every supported
@@ -154,8 +86,8 @@ KernelDescriptor make_reader(const CoreRangeSet& cores, Buffer* in_buf, uint32_t
         {"seq_id", kSeqIdentity},
         {"cb_id", kCbIn},
         {"batch", read_batch},
-        // reader_tile_interleaved_unified reads get_named_compile_time_arg_val("src_page_pitch")
-        // unconditionally (0 = use the accessor's page size). Absent -> JIT compile fails.
+        // reader_tile_interleaved_unified reads get_named_compile_time_arg_val("src_page_pitch");
+        // builder_utils injects it (0 = use the accessor's page size). Absent -> JIT compile fails.
         {"src_page_pitch", 0},
     };
     reader.config = ReaderConfigDescriptor{};
@@ -242,8 +174,9 @@ std::optional<ProgramDescriptor> build_main_split(const CommonArgs& a, uint32_t 
     emit_group(cg1, tpc1);
     emit_group(cg2, tpc2);
 
-    // Kernel order is [reader, writer, compute...] on both the single-compute and cliff cases --
-    // the legacy order the rest of the untilize stack expects, not [reader, compute, writer].
+    // Kernel order [reader, writer, compute...] mirrors spec.py's build_untilize_tile: the
+    // single-compute case reorders assemble()'s [reader, compute, writer] back to legacy order,
+    // and the cliff case builds its kernel list in legacy order directly.
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(writer));
     if (cg2.empty()) {
@@ -377,9 +310,10 @@ std::optional<ProgramDescriptor> build_2d_column(
     return desc;
 }
 
-// Counts sticks in [start, start+count) whose position within a `batch_h`-sized physical batch
-// falls below `valid_per_batch`. The with-unpadding writer's running out_page_offset needs this to
-// skip padding rows and land on a compact stick numbering.
+// Mirrors spec.py's _count_valid_sticks: counts sticks in [start, start+count) whose position
+// within a `batch_h`-sized physical batch falls below `valid_per_batch`. The with-unpadding
+// writer's running out_page_offset needs this to skip padding rows and land on the same compact
+// stick numbering the reference (build_untilize_with_unpadding) produces.
 uint32_t count_valid_sticks(uint32_t start, uint32_t count, uint32_t batch_h, uint32_t valid_per_batch) {
     if (valid_per_batch == 0 || batch_h == 0) {
         return count;
@@ -441,8 +375,8 @@ std::optional<ProgramDescriptor> build_with_unpadding(
     writer.compile_time_args.push_back(wt);
     writer.config = WriterConfigDescriptor{};
 
-    // out_page_offset is a running accumulator carried across cores in ascending order, so the
-    // groups below must be emitted in that order.
+    // out_page_offset is a running accumulator carried across cores in ascending order (mirrors
+    // spec.py's stateful `_state["off"]` closure, invoked once per core by emit_per_core_rt).
     uint32_t assigned = 0;
     uint32_t out_page_offset = 0;
     auto emit_group = [&](const CoreRangeSet& group, uint32_t wpc) {
@@ -573,30 +507,22 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
     a.out_elem_size = output.element_size();
     a.in_buf = input.buffer();
     a.out_buf = output.buffer();
-    // kUsableL1Note: THE single live-L1 decision point for this op.
+    // kUsableL1Note: live-L1 is sampled here on a cache MISS so every builder plans against one
+    // snapshot (get_max_l1_space: lowest_occupied_compute_l1_address ?: l1_size_per_core, minus
+    // allocator base). The SAME chooser (choose_codegen_cb_plan) also runs on every dispatch from
+    // compute_program_hash, so a later occupancy change that crosses a CB tier (or Native
+    // block-split) is a new cache key rather than a hit with a frozen plan.
     //
-    // Sampled exactly here, once, and threaded through CommonArgs so every builder plans against
-    // one consistent snapshot. get_max_l1_space() is the same helper the native untilize path
-    // uses: (lowest_occupied_compute_l1_address ?: l1_size_per_core) - allocator base, i.e. the
-    // gap between where statically allocated CBs start growing up and where the lowest resident
-    // L1 buffer sits. Taken after create_output_tensors() has already allocated the output, so it
-    // accounts for that too.
-    //
-    // Cost on the hot path: zero. create_descriptor runs only on a program-cache MISS. Every
-    // builder below (and every native factory the fallback can delegate to) emits
-    // emplace_runtime_args with a Buffer* first argument on every core, so buffer bindings are
-    // always populated and resolve; cache HITS therefore take apply_descriptor's
-    // apply_resolved_bindings path, which patches addresses in the cached Program without ever
-    // calling create_descriptor again. (The one exception is the opt-in
-    // ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK build, OFF by default, which re-invokes
-    // create_descriptor on every hit purely to diff it -- see the note in create_descriptor's
-    // tail.)
-    //
-    // No previously-working program changes shape because of this. plan_cb_depths' three tiers
-    // are strictly ordered by size and the live gap is always <= the whole-L1 budget it used
-    // before, so the only plans that differ are exactly the ones the allocator would have
-    // rejected anyway in ProgramImpl::validate_circular_buffer_region().
+    // get_max_l1_space is therefore on the untilize-codegen hot path (hash), not miss-only: it
+    // takes the allocator mutex and walks the L1 free list per sub-device. create_descriptor
+    // itself still runs only on a miss; cache hits patch addresses via apply_resolved_bindings
+    // (except ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK, OFF by default).
     a.usable_l1 = ttnn::operations::data_movement::get_max_l1_space(input);
+
+    auto chosen = untilize_codegen_detail::choose_codegen_cb_plan(operation_attributes, tensor_args);
+    if (chosen.tier == untilize_codegen_detail::CodegenCbPlan::Native) {
+        return build_native_equivalent(operation_attributes, input, output);
+    }
 
     // Wt/Ht/NC are derived from the PADDED (physical, tile-aligned) shape, which the reader/
     // compute stages need regardless of dispatch branch below (even the with-unpadding path
