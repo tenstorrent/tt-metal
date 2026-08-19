@@ -3690,6 +3690,65 @@ def test_matmul_default_width_sharded(
 
 
 @pytest.mark.parametrize(
+    "batch_size, m_size, n_size, expected_shard_shape",
+    [
+        (1, 400, 400, (416, 416)),
+        (1, 400, 128, (416, 128)),
+        (1, 512, 512, (512, 512)),
+        pytest.param(
+            5,
+            400,
+            400,
+            (416, 416),
+            marks=pytest.mark.skip(
+                reason="Blocked on a separate bug, not on the per-core cap. compute_output_specs "
+                "derives the output shard grid with fuse_batch=true (M=65 tiles -> 5 cores) while "
+                "the 2D mcast factory derives its work grid from program_config.fuse_batch=false "
+                "(Mt=13 tiles -> 1 core), so batched A on this path allocates an output the factory "
+                "never fully writes. The cap corrects the shard shape but not that mismatch."
+            ),
+        ),
+    ],
+    ids=["reported_13x13", "asymmetric_13x4", "cap_is_noop_16x16", "reported_batched"],
+)
+def test_matmul_default_block_sharded_single_core(device, batch_size, m_size, n_size, expected_shard_shape):
+    """BLOCK_SHARDED output with no program_config: the shard shape must follow the output size.
+
+    Issue #32435: the per-core block was sized to fit L1 (starting at 16x16 tiles) and never
+    capped to the output, so a 13x13 tile output got a 16x16 block and a requested 416x416
+    shard came back as 512x512.
+
+    Keep the shard grid 1x1, else matmul takes the 1D mcast path, which never runs this code.
+    """
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.randn((batch_size, m_size, 32), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((batch_size, 32, n_size), dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+
+    output_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            expected_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+
+    actual_memory_config = output_tensor.memory_config()
+    # Guards against passing via the 1D path, which would rewrite the layout to HEIGHT_SHARDED.
+    assert actual_memory_config.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    assert tuple(actual_memory_config.shard_spec.shape) == expected_shard_shape
+    assert_with_pcc(torch_output_tensor, ttnn.to_torch(output_tensor), pcc=0.99)
+
+
+@pytest.mark.parametrize(
     "memory_layout, m_size, k_size, n_size",
     [
         (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 384, 32, 32),
