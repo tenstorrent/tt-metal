@@ -122,3 +122,32 @@ def test_block_size_clamp_identity(device):
     golden = torch_in.to(torch.float32)
     out = ttnn.to_torch(output).to(torch.float32)
     assert torch.equal(golden, out)
+
+
+# =============================================================================
+# Exhaustive classification. An element without a kind tag (CB reader / CB writer /
+# DEST-only) must be rejected at compile time instead of silently no-opping
+# through every chain stage.
+# =============================================================================
+UNCLASSIFIED_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/oob/unclassified_element.cpp"
+UNCLASSIFIED_MSG = "every element must carry exactly one kind tag"
+
+
+def test_unclassified_element_rejected(device, expect_error):
+    """A tag-less element in the chain must fail to compile, not silently no-op."""
+    num_tiles = 2
+    dt = ttnn.bfloat16
+    shape = [1, 1, 32, 32 * num_tiles]
+    core_grid = lib.single_core_grid()
+
+    torch_in, tt_in = lib.make_input(shape, dt, device, seed=131)
+    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    cbs = [lib.cb_descriptor(0, dt, 2, core_grid), lib.cb_descriptor(16, dt, 2, core_grid)]
+    reader = lib.build_reader_kernel([tt_in], num_tiles, core_grid)
+    writer = lib.build_writer_1out_kernel(tt_out, num_tiles, core_grid)
+    compute = lib.build_compute_kernel(UNCLASSIFIED_KERNEL, [num_tiles], core_grid)
+    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+
+    with expect_error(Exception, UNCLASSIFIED_MSG):
+        ttnn.generic_op([tt_in, tt_out], program)
+    logger.debug("tag-less chain element correctly rejected at compile time")

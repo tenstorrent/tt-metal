@@ -487,6 +487,18 @@ template <class T>
 inline constexpr bool is_runtime_conditional_op_v = std::is_base_of_v<RuntimeConditionalTag, T>;
 template <class T>
 inline constexpr bool is_runtime_conditional_sequence_op_v = std::is_base_of_v<RuntimeConditionalSequenceTag, T>;
+
+struct DisabledChainElement;  // defined in optional.hpp — the inert compile-time-disabled Optional marker
+
+/// Chain-element classification is exhaustive: every element must carry exactly one
+/// data-direction kind tag (CB reader, CB writer, or DEST-only). The tag-less
+/// `DisabledChainElement` is the one sanctioned exception. Anything else without a kind tag
+/// would flow through every pipeline stage as an `UnselectedElement` no-op — a silently inert
+/// chain position — so `eltwise_chain` rejects it up front instead.
+template <class T>
+inline constexpr bool is_classified_chain_element_v =
+    (uint32_t{is_cb_reader_op_v<T>} + uint32_t{is_cb_writer_op_v<T>} + uint32_t{is_dest_only_op_v<T>}) == 1 ||
+    std::is_same_v<T, DisabledChainElement>;
 /// SFPU (DEST-internal, non-RNG, non-fill) element predicate. SFPU ops inherit
 /// from `DestOnlyTag` via `UnaryOp` / `BinaryOp` / `TernaryOp`;
 /// Fill / Rand share the `DestOnlyTag` lineage but their init programs PRNG /
@@ -2876,6 +2888,10 @@ ALWI void emit_push_per_row(uint32_t cb) {
 template <InitReconfigOwner Owner = InitReconfigOwner::Chain, std::size_t... Is, class... Es>
 ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices, IterationShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
+    static_assert(
+        (is_classified_chain_element_v<Es> && ...),
+        "eltwise_chain: every element must carry exactly one kind tag (CB reader, CB writer, or DEST-only); "
+        "an unclassified element would silently no-op through every stage");
     static_assert(
         detail::ChainTraits<Es...>::any_dest_accumulation ==
             detail::ChainTraits<Es...>::any_dest_accumulation_lifecycle,
