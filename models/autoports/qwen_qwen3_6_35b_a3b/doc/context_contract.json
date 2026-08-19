@@ -1,7 +1,7 @@
 {
   "model_id": "Qwen/Qwen3.6-35B-A3B",
   "autoport_dir": "models/autoports/qwen_qwen3_6_35b_a3b",
-  "stage": "multichip_decoder",
+  "stage": "full_model",
   "hf_text_config": {
     "advertised_context_length_tokens": 262144,
     "hidden_size": 2048,
@@ -180,6 +180,49 @@
       "moe_prefill_path": "Gate-selected active sparse route; tokens>1 are sliced and processed through the per-token _routed_decode path because moe_routing_remap accepts one routing row [1,E].",
       "residual_topology_audit_recorded": true,
       "active_sparse_prefill_probe_rejected": "Broad token-by-expert SparseMatmulDeviceOperation probe on 2x2 mesh hung; triage artifacts are in doc/multichip_decoder/triage/active_prefill_sparse_probe_*."
+    },
+    "full_model": {
+      "hf_advertised_context_tokens": 262144,
+      "context_capability_reduced_from_optimized_multichip_decoder": false,
+      "largest_supported_context_tokens": 262144,
+      "largest_feasible_context_tokens": 262144,
+      "hard_physical_limit_evidence": null,
+      "context_limit_evidence": "No hard physical limit was hit. Real full-model load and batch-1 full-context cache allocation passed at 262144 tokens; logical long-context behavior is inherited from completed functional/optimized decoder probes.",
+      "real_full_model_load_and_cache_allocation": {
+        "artifact": "doc/full_model/logs/real_full_model_load_context_alloc.log",
+        "result": "REAL_FULL_MODEL_LOAD_OK",
+        "load_seconds": 325.024,
+        "cache_alloc_seconds": 4.46,
+        "max_seq_len": 262144,
+        "full_attention_layers": 10,
+        "linear_attention_layers": 30,
+        "page_table_shape": [
+          1,
+          8192
+        ],
+        "mesh_shape": [
+          2,
+          2
+        ],
+        "num_devices": 4,
+        "dram_grid": "8-1"
+      },
+      "public_prompt_length_contract": {
+        "supports_valid_prompt_lengths_up_to_context": true,
+        "non_aligned_prompt_lengths_supported": true,
+        "internal_prefill_chunk_size": 64,
+        "public_generator_owns_padding_masking_cache_fill_positions_and_slicing": true,
+        "synthetic_non_aligned_lengths_tested_current_stage": [
+          5
+        ],
+        "mixed_prompt_and_inactive_rows_tested_current_stage": true
+      },
+      "batch_and_slot_contract": {
+        "default_optimized_measured_batch": 1,
+        "fixed_slot_cache_supported": true,
+        "inactive_rows_supported": true,
+        "mixed_rows_synthetic_artifact": "doc/full_model/logs/runtime_fallback_audit_synthetic.log"
+      }
     }
   },
   "capability_reduction": {
@@ -204,6 +247,18 @@
         "doc/functional_decoder/logs/autofix_chunked_linear_context_1025.log"
       ],
       "hard_physical_limit_evidence": null
+    },
+    "full_model": {
+      "prefill_reduced_from_hf_advertised_context": false,
+      "decode_reduced_from_hf_advertised_context": false,
+      "largest_feasible_context_tokens": 262144,
+      "hard_physical_limit_evidence": null,
+      "evidence": [
+        "doc/full_model/logs/real_full_model_load_context_alloc.log",
+        "doc/full_model/capacity.md",
+        "doc/functional_decoder/logs/context_probe_full_prefill_262144_sparse.log",
+        "doc/functional_decoder/logs/context_probe_linear_prefill_262144_chunked.log"
+      ]
     }
   },
   "correctness_evidence": {
@@ -318,6 +373,102 @@
         "doc/multichip_decoder/residual_topology_audit.md",
         "doc/multichip_decoder/logs/residual_topology_audit.log"
       ]
+    },
+    "full_model": {
+      "topk_acceptance_bar": {
+        "top5_minimum": 0.98,
+        "top100_required": 1.0
+      },
+      "fresh_aime24_chat_reference": {
+        "artifact": "doc/full_model/artifacts/aime24_chat_100.refpt",
+        "model_id": "Qwen/Qwen3.6-35B-A3B",
+        "chat_template": true,
+        "prompt_tokens": 161,
+        "generated_tokens": 100,
+        "top_k": 100,
+        "generation_log": "doc/full_model/logs/generate_aime24_chat_100.log"
+      },
+      "run_prefill_check": {
+        "artifact": "doc/full_model/logs/run_prefill_check_aime24_chat_100.log",
+        "top1": {
+          "count": 96,
+          "total": 100,
+          "ratio": 0.96
+        },
+        "top5": {
+          "count": 100,
+          "total": 100,
+          "ratio": 1.0
+        },
+        "top100": {
+          "count": 100,
+          "total": 100,
+          "ratio": 1.0
+        }
+      },
+      "run_teacher_forcing": {
+        "artifact": "doc/full_model/logs/run_teacher_forcing_aime24_chat_100.log",
+        "top1": {
+          "count": 99,
+          "total": 100,
+          "ratio": 0.99
+        },
+        "top5": {
+          "count": 100,
+          "total": 100,
+          "ratio": 1.0
+        },
+        "top100": {
+          "count": 100,
+          "total": 100,
+          "ratio": 1.0
+        },
+        "ttft_ms": 8747.52,
+        "decode_t_s_u": 16.35,
+        "e2e_t_s_u": 6.76,
+        "sampling_mode": "traced low-level decode with host-token teacher-forcing callback"
+      },
+      "run_autoregressive": {
+        "artifact": "doc/full_model/logs/run_autoregressive_default_prompt_100.log",
+        "output_dir": "doc/full_model/artifacts/autoregressive_default_prompt_100",
+        "hf_tokens": 100,
+        "tt_tokens": 100,
+        "qualitative_verdict": "TT completion is coherent English, diverges naturally after the shared opening, with no repetition loop, no wrong-language drift, and no early duplicate-token failure.",
+        "degenerate_output_artifact": "doc/full_model/artifacts/autoregressive_degenerate_output_report.json",
+        "degenerate_output_result": "no findings; hf/tt token agreement informational at 14/100"
+      },
+      "qualitative_chat_suite": {
+        "artifact_dir": "doc/full_model/artifacts/qualitative_chat_suite_64",
+        "log": "doc/full_model/logs/run_qualitative_chat_suite_64.log",
+        "prompt_source": "models/common/readiness_check/vllm_prompts.txt",
+        "chat_template": true,
+        "prompts": 6,
+        "max_new_tokens": 64,
+        "trace_present": true,
+        "trace_generated_steps_per_prompt": 63,
+        "hf_exact_matches": {
+          "prompts_0_through_4": "64/64 generated tokens",
+          "prompt_5": "first_diff=44; coherent Python/Fibonacci continuation"
+        },
+        "degenerate_output_artifact": "doc/full_model/artifacts/qualitative_chat_suite_64/degenerate_output_report.json",
+        "qualitative_verdict": "pass; no repetition loops, no wrong-language drift, and no early divergence symptoms"
+      },
+      "synthetic_full_model_smoke": {
+        "default_artifact": "doc/full_model/logs/pytest_full_model_default.log",
+        "default_result": "2 passed, 4 skipped",
+        "runtime_fallback_artifact": "doc/full_model/logs/runtime_fallback_audit_synthetic.log",
+        "runtime_fallback_result": "6 passed, 2 warnings in 46.56s",
+        "watcher_artifact": "doc/full_model/logs/watcher_synthetic_composite_gather.log",
+        "watcher_result": "6 passed, 2 warnings in 50.05s",
+        "covered": [
+          "readiness generator exports",
+          "runtime fallback audit strings",
+          "non-aligned prompt length",
+          "mixed prompt fixed slots with inactive row",
+          "changed page-table decode override including traced decode coverage",
+          "traced token-out greedy comparison against host compatibility"
+        ]
+      }
     }
   },
   "performance_evidence": {
@@ -427,6 +578,46 @@
       "sparse_nnz_evidence": "Final report CSVs show optimized baseline linear seq5 prefill active=256/256. Optimized baseline full seq33 prefill has active=256/256 rows for the 32-token all-expert chunk and active=8/256 rows for the 1-token active-routed tail. Optimized baseline decode uses active=8/256. Multichip active MoE prefill/decode uses active=4/256 per EP row after moe_routing_remap.",
       "prefill_performance_note": "Gate-selected active MoE prefill is token-serialized on the mesh path because the supported routing remap is single-token. This is slower than the rejected broad EP-mask prefill but satisfies the active-expert contract.",
       "residual_topology_audit": "doc/multichip_decoder/residual_topology_audit.md; generated source/report audit is doc/multichip_decoder/logs/residual_topology_audit.log."
+    },
+    "full_model": {
+      "token_out_traced_batch1": {
+        "artifact": "doc/full_model/logs/token_out_trace_perf_default_prompt_100.log",
+        "prompt_len": 59,
+        "generated_tokens": 100,
+        "ttft_ms": 2930.0258811563253,
+        "decode_seconds": 6.028181618079543,
+        "e2e_seconds": 8.958207499235868,
+        "decode_tokens": 99,
+        "trace_decode_t_s_u": 16.422862858524724,
+        "e2e_t_s_u": 11.162947499098449,
+        "trace_present": true,
+        "trace_generated_steps": 99,
+        "position_end_expected_exclusive": 159,
+        "sampling_mode": "on-device greedy split sampling, first token sampled on device from prefill logits"
+      },
+      "teacher_forcing": {
+        "artifact": "doc/full_model/logs/run_teacher_forcing_aime24_chat_100.log",
+        "ttft_ms": 8747.52,
+        "decode_t_s_u": 16.35,
+        "e2e_t_s_u": 6.76,
+        "sampling_mode": "traced low-level decode with readiness callback host-token input"
+      },
+      "terminal_path_profile": {
+        "artifact": "doc/full_model/artifacts/terminal_path_profile_summary.json",
+        "reports_dir": "doc/full_model/tracy/terminal_path_reports",
+        "blackhole_csv_normalization": "Raw Tracy ops CSV emitted blank DEVICE ARCH and AVAILABLE WORKER CORE COUNT; derived /tmp report input set DEVICE ARCH=blackhole and AVAILABLE WORKER CORE COUNT=110 before tt-perf-report. Only compact report outputs are committed.",
+        "lm_head_seconds": 0.0005097696557641029,
+        "sampler_seconds": 0.010938460938632488,
+        "terminal_path_seconds": 0.011463640723377466,
+        "terminal_path_signposted_seconds": 0.011334134265780449,
+        "sampler_fraction_of_terminal": 0.9541873478576492,
+        "token_out_decode_ms_per_token": 60.89072341494488,
+        "sampler_fraction_of_token_out_decode": 0.179640843878491,
+        "dominant_sampler_op": "TopKDeviceOperation",
+        "dominant_sampler_op_device_time_us": 10608.05,
+        "sampler_dominates_token_out_decode": false
+      },
+      "reported_separately": true
     }
   },
   "runtime_fallback_audit": {
@@ -450,6 +641,35 @@
       ],
       "artifact": "doc/multichip_decoder/logs/runtime_fallback_audit_exact_nnz.log",
       "result": "9 passed, 5 deselected in 144.83s with throw_exception_on_fallback=true; covers source audit, synthetic multi-token prefill/decode, non-aligned lengths, batch 2, and real-weight layers"
+    },
+    "full_model": {
+      "source_audit_clean": true,
+      "throw_exception_on_fallback_run_clean": true,
+      "artifact": "doc/full_model/runtime_fallback_audit.md",
+      "dynamic_artifact": "doc/full_model/logs/runtime_fallback_audit_synthetic.log",
+      "dynamic_result": "6 passed, 2 warnings in 46.56s with throw_exception_on_fallback=true",
+      "covered_boundaries": [
+        "model wrapper",
+        "generator contract",
+        "cache ownership",
+        "page-table row selection",
+        "non-aligned prefill",
+        "mixed fixed slots and inactive rows",
+        "changed page-table decode override",
+        "host-logit boundaries",
+        "on-device sampling",
+        "reset/teardown behavior"
+      ],
+      "optimized_token_out_forbidden_boundaries_absent": [
+        "single-chip decoder fallback",
+        "replicated host-side decoder",
+        "host argmax",
+        "full-logits readback",
+        "untraced sampling",
+        "python token feedback loop",
+        "per-token host page-table rebuild"
+      ],
+      "host_sampling_compatibility_mode": "available explicitly for readiness checks and tests; excluded from optimized token-out perf claim"
     }
   },
   "watcher": {
@@ -480,6 +700,14 @@
       },
       "result": "10 passed, 4 deselected in 167.62s",
       "scan_result": "Narrow scan of accepted ETH-disabled watcher, fallback, perf, and tt-smi final logs matched only pytest timeout plugin configuration lines; the active-ETH watcher attempt is a separate failing watcher-mode artifact and is not used as clean watcher evidence."
+    },
+    "full_model": {
+      "enabled": "TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1",
+      "clean": true,
+      "artifact": "doc/full_model/logs/watcher_synthetic_composite_gather.log",
+      "result": "6 passed, 2 warnings in 50.05s",
+      "device_health_after_watcher": "doc/full_model/logs/tt_smi_post_watcher.log",
+      "active_eth_watcher_classification": "same p300c active-Ethernet watcher lifecycle limitation recorded by decoder stages; accepted watcher evidence disables ETH"
     }
   },
   "source_revision": {
@@ -490,7 +718,11 @@
     "stage_commit_sha": null,
     "stage_commit_sha_note": "Recorded after final local commit; a commit cannot contain its own final SHA.",
     "multichip_decoder_stage_commit_sha": null,
-    "multichip_decoder_stage_commit_sha_note": "Recorded after final local commit; a commit cannot contain its own final SHA."
+    "multichip_decoder_stage_commit_sha_note": "Recorded after final local commit; a commit cannot contain its own final SHA.",
+    "full_model_stage_base_sha": "8a04ad9fb674e2d0a9d14917f836019e44bbc3e6",
+    "full_model_stage_base_sha_note": "Live HEAD before final full-model local commit; evidence artifacts were generated from the dirty worktree on top of this commit.",
+    "full_model_stage_commit_sha": null,
+    "full_model_stage_commit_sha_note": "Recorded after final local commit; a commit cannot contain its own final SHA."
   },
   "multichip_decoder_contract": {
     "single_chip_baseline": "models/autoports/qwen_qwen3_6_35b_a3b/tt/optimized_decoder.py::OptimizedDecoder",
@@ -671,5 +903,141 @@
     ],
     "final_verdict": "clean-pass",
     "final_review_artifact": "stage-review subagent 01a0189f-424e-7311-a94c-d033f9aa7c0e"
+  },
+  "capacity_evidence": {
+    "full_model": {
+      "hf_text_checkpoint": {
+        "text_tensor_count": 693,
+        "text_parameter_count": 34660610688,
+        "raw_bf16_bytes": 69321221376,
+        "raw_bf16_gib": 64.5604
+      },
+      "per_device_context_262144_batch1": {
+        "context_tokens": 262144,
+        "batch": 1,
+        "block_size": 32,
+        "max_num_blocks": 8192,
+        "transformed_tt_weight_bytes": 15985073536,
+        "transformed_tt_weight_gib": 14.8873,
+        "runtime_state_excluding_weights_bytes": 2768207872,
+        "runtime_state_excluding_weights_gib": 2.5781,
+        "weight_plus_runtime_state_bytes": 18753281408,
+        "weight_plus_runtime_state_gib": 17.4654,
+        "capacity_reduced": false,
+        "hard_physical_limit_evidence": null
+      },
+      "runtime_state_breakdown_bytes": {
+        "full_attention_kv_per_layer": 268435456,
+        "full_attention_kv_all_10_layers": 2684354560,
+        "linear_conv_and_recurrent_all_30_layers": 16711680,
+        "page_table": 32768,
+        "decode_rope_tables": 67108864
+      },
+      "weight_breakdown_bytes_per_device": {
+        "embedding_bf16_replicated": 1017118720,
+        "final_norm_bf16_replicated": 4096,
+        "lm_head_bf8_flat_vocab_4way": 127139840,
+        "decoder_full_attention_bf8_tp_sharded": 136314880,
+        "full_attention_norms": 92160,
+        "decoder_linear_attention_bf8_tp_sharded": 505282560,
+        "linear_conv_bf16_tp_sharded": 983040,
+        "linear_state_params_bf16_sharded": 1920,
+        "linear_norms": 253440,
+        "moe_router_gate_bf16_replicated": 42106880,
+        "moe_shared_bf8_tp_sharded": 62914560,
+        "moe_routed_full_attention_layers_bf4_tp_sharded": 2013265920,
+        "moe_routed_linear_attention_layers_bf8_tp_sharded": 12079595520
+      },
+      "artifact": "doc/full_model/capacity.md"
+    }
+  },
+  "full_model_contract": {
+    "implementation": "models/autoports/qwen_qwen3_6_35b_a3b/tt/model.py::QwenFullModel",
+    "generator": "models/autoports/qwen_qwen3_6_35b_a3b/tt/generator.py::QwenReadinessGenerator",
+    "build_generator": "models/autoports/qwen_qwen3_6_35b_a3b/tt/generator.py::build_generator",
+    "target_hardware": {
+      "mesh_shape": [
+        2,
+        2
+      ],
+      "num_devices": 4,
+      "arch": "blackhole",
+      "observed_product": "p300c",
+      "fabric_config": "FABRIC_1D_RING"
+    },
+    "decoder_strategy": {
+      "stack": "MultichipDecoder",
+      "layers": 40,
+      "linear_attention_layers": 30,
+      "full_attention_layers": 10,
+      "tensor_parallel_axis": "mesh columns",
+      "expert_parallel_axis": "mesh rows",
+      "ccl": "two-link BF16 Ring all_reduce inherited from optimized multichip decoder",
+      "residual_layout": "replicated BF16 DRAM/interleaved at inter-layer boundaries",
+      "fallback_to_single_chip_or_host_decoder_allowed": false
+    },
+    "dtype_policy": {
+      "embedding": "BF16 replicated",
+      "final_norm": "BF16 replicated",
+      "lm_head": "BF8 flat vocab sharded over four devices",
+      "activations": "BF16 residual/intermediate policy inherited from optimized multichip decoder",
+      "full_attention_kv_cache": "BF16 paged and TP-split by KV head",
+      "linear_attention_state": "BF16 TP-split conv/recurrent state",
+      "page_table": "replicated int32",
+      "decoder_weights": "inherited optimized multichip decoder BF8/BF4/BF16 policy"
+    },
+    "low_level_api": {
+      "allocate_kv_cache": "explicit max_batch_size, max_seq_len, optional page_table",
+      "prefill_forward": "explicit tokens, page_table, kv_cache, prompt_lens, return_all_logits",
+      "decode_forward": "explicit tokens, start_pos, page_table, kv_cache, optional TT logits or device sampling",
+      "supports_mixed_prompts": true,
+      "supports_fixed_slots": true,
+      "supports_inactive_rows": true
+    },
+    "prompt_length_contract": {
+      "max_supported_context_tokens": 262144,
+      "non_aligned_prompt_lengths": true,
+      "prefill_chunk_size": 64,
+      "generator_owns_padding_masking_cache_fill_position_handling_and_output_slicing": true
+    },
+    "sampling": {
+      "selected_common_sampler": "models.common.sampling.tt_sampling.SamplingGenerator",
+      "rejected_common_sampler": "models.common.modules.sampling.sampling_1d.Sampling1D",
+      "custom_sampler_written": false,
+      "greedy_semantics": true,
+      "max_top_k": 32,
+      "top_k_used_for_greedy": 1,
+      "composite_topk_all_gather": true,
+      "artifact": "doc/full_model/sampling_trace_audit.md"
+    },
+    "trace": {
+      "decode_logits_and_sampler_captured_together": true,
+      "persistent_decode_input_buffer": true,
+      "persistent_sampler_output_buffer": true,
+      "device_side_token_feedback_copy": true,
+      "persistent_current_position_tensor": true,
+      "device_side_position_increment": true,
+      "changed_page_table_override_traced": true,
+      "page_table_reused_without_per_token_host_rebuild": true,
+      "first_token_sampled_on_device_from_prefill_logits": true,
+      "no_host_argmax_or_full_logit_readback_on_optimized_path": true,
+      "artifact": "doc/full_model/sampling_trace_audit.md"
+    },
+    "host_sampling_compatibility": {
+      "available": true,
+      "enabled_by": "QwenReadinessGenerator.host_sampling_compat or readiness teacher-forcing callback",
+      "excluded_from_optimized_token_out_measurement": true
+    }
+  },
+  "full_model_stage_review": {
+    "initial_verdict": "more-work-needed",
+    "initial_findings_fixed": [
+      "teacher-forcing now uses traced low-level decode when enable_trace=True",
+      "decode page-table overrides are honored when a caller also supplies kv_cache",
+      "shared HF-tokenizer chat-template qualitative suite and degenerate-output checks are recorded",
+      "terminal-path profiling records LM-head and sampler costs; sampler does not dominate full token-out decode"
+    ],
+    "final_verdict": "clean-pass",
+    "final_review_artifact": "stage-review subagent 01a019fe-bb4f-77e2-9669-be816d42d0c0"
   }
 }

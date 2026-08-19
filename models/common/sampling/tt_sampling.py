@@ -108,6 +108,7 @@ class TTSampling(LightweightModule):
         self._line_all_gather_supports_buffer_key = False
         self._line_all_gather_supports_dtype = False
         self.pad_to_power_of_2 = getattr(args, "pad_logits_to_power_of_2", False)
+        self._use_composite_topk_all_gather = getattr(args, "use_composite_topk_all_gather", False)
         if callable(self._line_all_gather):
             try:
                 line_all_gather_sig = inspect.signature(self._line_all_gather)
@@ -322,6 +323,17 @@ class TTSampling(LightweightModule):
         - If `tt_ccl` exposes `line_all_gather`, prefer it (enables persistent buffer usage on some stacks).
         - Otherwise fall back to `ttnn.all_gather`.
         """
+        gather_input = tensor
+        use_composite_topk_all_gather = (
+            self._use_composite_topk_all_gather
+            and not callable(self._line_all_gather)
+            and tensor.layout == ttnn.TILE_LAYOUT
+        )
+        if use_composite_topk_all_gather:
+            # Row-major inputs force ttnn.all_gather's composite all_broadcast+concat path.
+            # This is useful for small top-k tensors on meshes where the native AG kernel is unavailable.
+            gather_input = ttnn.untilize(tensor, use_multicore=True, sub_core_grids=self.sub_core_grids)
+
         if callable(self._line_all_gather):
             # Some implementations accept `buffer_key` (for persistent buffers), others may not.
             line_all_gather_kwargs = {
@@ -334,16 +346,23 @@ class TTSampling(LightweightModule):
                 line_all_gather_kwargs["buffer_key"] = buffer_key
             if self._line_all_gather_supports_dtype and dtype is not None:
                 line_all_gather_kwargs["dtype"] = dtype
-            return self._line_all_gather(tensor, **line_all_gather_kwargs)
+            return self._line_all_gather(gather_input, **line_all_gather_kwargs)
 
-        return ttnn.all_gather(
-            tensor,
+        gathered = ttnn.all_gather(
+            gather_input,
             dim=dim,
             num_links=num_links,
             memory_config=memory_config,
             cluster_axis=cluster_axis,
             topology=ttnn.Topology.Linear,
         )
+        if not use_composite_topk_all_gather:
+            return gathered
+
+        ttnn.deallocate(gather_input)
+        tiled_gathered = ttnn.tilize(gathered, memory_config=memory_config)
+        ttnn.deallocate(gathered)
+        return tiled_gathered
 
     def _get_sampling_cluster_axis(self):
         if self.mesh_device.get_num_devices() <= 1:

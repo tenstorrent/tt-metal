@@ -1,0 +1,14 @@
+{
+  "hf_model_id": "Qwen/Qwen3.6-35B-A3B",
+  "load_s": 320.36217855429277,
+  "terminal_path_s": 0.011463640723377466,
+  "lm_head_s": 0.0005097696557641029,
+  "sampler_s": 0.010938460938632488,
+  "terminal_path_signposted_s": 0.011334134265780449,
+  "sampler_fraction_of_terminal": 0.9541873478576492,
+  "mesh_shape": [
+    2,
+    2
+  ],
+  "num_devices": 4
+}

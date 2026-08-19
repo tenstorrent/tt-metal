@@ -1,0 +1,8 @@
+<frozen runpy>:128: RuntimeWarning: 'models.common.readiness_check.generate' found in sys.modules after import of package 'models.common.readiness_check', but prior to execution of 'models.common.readiness_check.generate'; this may result in unpredictable behaviour
+Loading model Qwen/Qwen3.6-35B-A3B on cpu...
+Fetching 26 files:   0%|          | 0/26 [00:00<?, ?it/s]Fetching 26 files: 100%|██████████| 26/26 [00:00<00:00, 51561.18it/s]
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+Loading weights:   0%|          | 0/693 [00:00<?, ?it/s]Loading weights: 100%|██████████| 693/693 [00:00<00:00, 35777.71it/s]
+Using aime24 prompt with 161 tokens after chat-template tokenization
+Generated 100 continuation tokens
+Reference saved to: models/autoports/qwen_qwen3_6_35b_a3b/doc/full_model/artifacts/aime24_chat_100.refpt

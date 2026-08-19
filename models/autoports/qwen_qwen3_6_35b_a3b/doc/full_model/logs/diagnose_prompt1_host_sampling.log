@@ -1,0 +1,185 @@
+2026-08-19 11:26:37.327 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-19 11:26:38.029 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-19 11:26:38.029 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-19 11:26:38.030 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-19 11:26:38.030 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-19 11:26:38.031 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-19 11:26:38.031 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-19 11:26:38.034 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-19 11:26:38.256 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-19 11:26:38.256 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-19 11:26:38.256 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-19 11:26:38.256 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-19 11:26:38.258 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-19 11:26:38.500 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-19 11:26:38.615 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 11:26:38.615 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 11:26:38.615 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:26:38.615 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:26:38.615 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:26:38.615 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:26:38.615 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:26:38.615 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:26:38.615 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:26:38.615 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:26:38.615 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 11:26:38.615 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 11:26:38.616 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 11:26:38.616 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 11:26:38.654 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-19 11:26:38.670 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-19 11:26:38.676 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-19 11:26:38.677 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-19 11:26:38.677 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-19 11:26:38.677 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-19 11:26:38.677 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-08-19 11:26:38.716 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929248_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 11:26:38.716 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929249_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 11:26:38.716 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931936_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 11:26:38.716 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931937_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 11:26:39.295 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349988 GHz, device_time_at_sync=5374078105261 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 11:26:39.295 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349988 GHz, device_time_at_sync=5377291709518 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 11:26:39.295 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349990 GHz, device_time_at_sync=5380479991793 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 11:26:39.296 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349988 GHz, device_time_at_sync=5399669284246 cycles (realtime_profiler_manager.cpp:1127)
+{
+  "prompt_len": 25,
+  "prompt_ids": [
+    248045,
+    846,
+    198,
+    814,
+    20139,
+    279,
+    6463,
+    1881,
+    56994,
+    321,
+    6758,
+    446,
+    75318,
+    6618,
+    303,
+    4145,
+    3665,
+    13,
+    248046,
+    198,
+    248045,
+    74455,
+    198,
+    248068,
+    198
+  ]
+}
+{
+  "tokens": [
+    8160,
+    579,
+    264,
+    7047,
+    1817,
+    25,
+    271,
+    16,
+    13,
+    220,
+    2972,
+    15771,
+    2598,
+    2570,
+    5952,
+    64700,
+    198,
+    256,
+    471,
+    2972,
+    25562,
+    64700,
+    59740,
+    3920,
+    5972,
+    13,
+    1188,
+    12410,
+    75318,
+    20271,
+    198,
+    256,
+    471,
+    2972,
+    73211,
+    64700,
+    79091,
+    303,
+    4145,
+    3665,
+    198,
+    256,
+    471,
+    2972,
+    38663,
+    64700,
+    7170,
+    424,
+    15156,
+    310,
+    4184,
+    1973,
+    264,
+    10597,
+    3870,
+    1345,
+    19720,
+    13016,
+    271,
+    17,
+    13,
+    220,
+    2972,
+    27382
+  ],
+  "text": "Here's a thinking process:\n\n1.  **Understand User Request:**\n   - **Topic:** Supervised vs. Unsupervised Learning\n   - **Requirement:** Explain in simple terms\n   - **Goal:** Make it accessible to someone without a technical background while maintaining accuracy\n\n2.  **Ident",
+  "timings": {
+    "ttft_s": 1.9797110999934375,
+    "decode_s": 9.177727754227817,
+    "e2e_s": 11.157438854221255,
+    "generated_tokens": 64.0,
+    "decode_tokens": 63.0
+  }
+}
+nanobind: leaked 2 instances!
+ - leaked instance 0x79dd764965c8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x79ddc71d2268 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 305 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__iter__"
+ - leaked function ""
+ - leaked function "__hash__"
+ - leaked function "num_program_cache_entries"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "IsProgramRealtimeProfilerActive"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-19 11:32:10.255 | info     |    BuildKernels | JIT cache stats: 523/527 hits (99.2%) [523 cached, 559 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-19 11:32:10.255 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-19 11:32:10.274 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-19 11:32:10.274 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-19 11:32:10.837 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-19 11:32:10.838 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-19 11:32:10.838 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

@@ -1,0 +1,97 @@
+2026-08-19 09:58:52.200 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-19 09:58:53.571 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-19 09:58:53.571 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-19 09:58:53.571 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-19 09:58:53.571 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-19 09:58:53.573 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-19 09:58:53.573 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-19 09:58:53.577 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-19 09:58:53.797 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-19 09:58:53.797 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-19 09:58:53.797 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-19 09:58:53.797 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-19 09:58:53.798 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-19 09:58:54.037 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-19 09:58:54.159 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 09:58:54.159 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 09:58:54.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 09:58:54.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 09:58:54.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 09:58:54.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 09:58:54.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 09:58:54.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 09:58:54.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 09:58:54.159 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 09:58:54.159 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 09:58:54.159 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 09:58:54.160 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 09:58:54.160 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 09:58:54.215 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 09:58:54.215 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 09:58:54.215 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 09:58:54.215 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 09:58:54.215 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 09:58:54.215 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 09:58:54.215 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 09:58:54.219 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 09:58:54.221 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-19 09:58:54.226 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 09:58:54.232 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 09:58:54.247 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-19 09:58:54.248 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-19 09:58:54.248 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-19 09:58:54.249 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-19 09:58:54.249 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-19 09:58:54.249 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-08-19 09:58:54.393 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929248_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 09:58:54.393 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929249_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 09:58:54.393 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931936_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 09:58:54.393 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931937_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 09:58:54.973 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349988 GHz, device_time_at_sync=141580205838 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 09:58:54.973 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=141346766096 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 09:58:54.973 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=141056371650 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 09:58:54.975 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349989 GHz, device_time_at_sync=140851342754 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 09:59:04.297 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 09:59:04.297 | warning  |           Metal | Watcher stopped the device due to tripped assert, see watcher log for more details (watcher_device_reader.cpp:805)
+2026-08-19 09:59:04.297 | warning  |           Metal | Device 0 worker core(x= 1,y= 0) virtual(x= 2,y= 2): BRISC tripped an assert on line 123. Note that file name reporting is not yet implemented, and the reported line number for the assert may be from a different file. Current kernel: ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp. (watcher_device_reader.cpp:806)
+2026-08-19 09:59:04.297 | info     |           Metal | Last waypoint:    K,   W,   W,   W,   W (watcher_device_reader.cpp:1072)
+2026-08-19 09:59:04.297 | info     |           Metal | While running kernels: (watcher_device_reader.cpp:1288)
+2026-08-19 09:59:04.297 | info     |           Metal |  BRISC: ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp (watcher_device_reader.cpp:1290)
+2026-08-19 09:59:04.297 | info     |           Metal |  NCRISC: ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_reader.cpp (watcher_device_reader.cpp:1290)
+2026-08-19 09:59:04.297 | info     |           Metal |  TRISC0: blank (watcher_device_reader.cpp:1290)
+2026-08-19 09:59:04.297 | info     |           Metal |  TRISC1: blank (watcher_device_reader.cpp:1290)
+2026-08-19 09:59:04.297 | info     |           Metal |  TRISC2: blank (watcher_device_reader.cpp:1290)
+2026-08-19 09:59:04.297 | critical |          Always | TT_THROW: Watcher detected tripped assert and stopped device. (assert.hpp:104)
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/impl/debug/watcher_device_reader.cpp:811: tt::exception
+info:
+Watcher detected tripped assert and stopped device.
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3c4f52) [0x798e6e9c4f52]
+ --- tt::tt_metal::WatcherDeviceReader::Core::DumpAssertStatus() const
+ --- tt::tt_metal::WatcherDeviceReader::Core::Dump() const
+ --- tt::tt_metal::WatcherDeviceReader::Dump(_IO_FILE*)
+ --- tt::tt_metal::WatcherServer::Impl::dump(_IO_FILE*)
+ --- tt::tt_metal::WatcherServer::Impl::poll_watcher_data()
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x798e9b2f5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x798eb2e9cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x798eb2f29d6c]
+
+[qb2-120-p02t01:1423347] *** Process received signal ***
+[qb2-120-p02t01:1423347] Signal: Aborted (6)
+[qb2-120-p02t01:1423347] Signal code:  (-6)
+[qb2-120-p02t01:1423347] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x798eb2e45330]
+[qb2-120-p02t01:1423347] [ 1] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x798eb2e9ec0c]
+[qb2-120-p02t01:1423347] [ 2] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x798eb2e4527e]
+[qb2-120-p02t01:1423347] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x798eb2e288ff]
+[qb2-120-p02t01:1423347] [ 4] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xac2b5)[0x798e9b2ac2b5]
+[qb2-120-p02t01:1423347] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xc31ea)[0x798e9b2c31ea]
+[qb2-120-p02t01:1423347] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(_ZSt10unexpectedv+0x0)[0x798e9b2abcac]
+[qb2-120-p02t01:1423347] [ 7] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xabcc6)[0x798e9b2abcc6]
+[qb2-120-p02t01:1423347] [ 8] /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(_ZN2tt8tt_metal13WatcherServer4Impl17poll_watcher_dataEv+0x7ee)[0x798e6bb477ae]
+[qb2-120-p02t01:1423347] [ 9] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79)[0x798e9b2f5c79]
+[qb2-120-p02t01:1423347] [10] /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84)[0x798eb2e9cb84]
+[qb2-120-p02t01:1423347] [11] /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c)[0x798eb2f29d6c]
+[qb2-120-p02t01:1423347] *** End of error message ***
+timeout: the monitored command dumped core

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from typing import Any
 
 #: Label → (mesh rows, mesh cols). N300 (2 chips) is openable as N150 by
@@ -14,6 +15,7 @@ from typing import Any
 MESH_SHAPES: dict[str, tuple[int, int]] = {
     "N150": (1, 1),
     "N300": (1, 2),
+    "P300C": (2, 2),
     "T3K": (1, 8),
     "TG": (8, 4),
 }
@@ -60,7 +62,8 @@ def open_readiness_mesh_device(mesh_device_label: str, fabric_config: str | None
         }[fabric_config]
         ttnn.set_fabric_config(fabric)
 
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*shape))
+    trace_region_size = int(os.environ.get("TT_READINESS_TRACE_REGION_SIZE", "0"))
+    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*shape), trace_region_size=trace_region_size)
 
 
 def close_readiness_mesh_device(mesh_device: Any, fabric_config: str | None = None) -> None:

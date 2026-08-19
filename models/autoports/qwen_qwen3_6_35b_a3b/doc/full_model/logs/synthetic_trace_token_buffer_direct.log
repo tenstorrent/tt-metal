@@ -1,0 +1,272 @@
+2026-08-19 11:40:06.287 | DEBUG    | ttnn:<module>:76 - Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES
+2026-08-19 11:40:06.287 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=true,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /localdev/vkovacevic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/vkovacevic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, cov-7.0.0, benchmark-5.2.3, anyio-4.14.2, split-0.11.0, dash-2.15.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py::test_full_model_traced_token_out_smoke 2026-08-19 11:40:08.281 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-19 11:40:08.281 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-19 11:40:08.281 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-19 11:40:08.281 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-19 11:40:08.283 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-19 11:40:08.283 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-19 11:40:08.286 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-19 11:40:08.507 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-19 11:40:08.507 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-19 11:40:08.507 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-19 11:40:08.507 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-19 11:40:08.509 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-19 11:40:08.694 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-19 11:40:08.808 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 11:40:08.808 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 11:40:08.808 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:40:08.808 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:40:08.808 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:40:08.808 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:40:08.808 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:40:08.808 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:40:08.808 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:40:08.808 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 11:40:08.808 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 11:40:08.808 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 11:40:08.809 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 11:40:08.809 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 11:40:08.852 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-19 11:40:08.873 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-19 11:40:08.874 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-19 11:40:08.875 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-19 11:40:08.876 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-19 11:40:08.876 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-19 11:40:08.876 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-08-19 11:40:08.915 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929248_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 11:40:08.915 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929249_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 11:40:08.915 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931936_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 11:40:08.915 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931937_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 11:40:09.495 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349992 GHz, device_time_at_sync=6392542479395 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 11:40:09.495 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=6411057258948 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 11:40:09.495 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=6389134482459 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 11:40:09.496 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=6385678686146 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 11:40:22.165 | critical |          Always | TT_FATAL: Sampling preallocated output logical shape must be [1,1,1,32] (input dim 2), got [1,1,1,1] (assert.hpp:104)
+2026-08-19 11:40:22.322 | critical |          Always | TT_FATAL: cq_id 0 is out of range (assert.hpp:104)
+2026-08-19 11:40:22.323 | critical |          Always | TT_FATAL: cq_id 0 is out of range (assert.hpp:104)
+2026-08-19 11:40:22.323 | critical |          Always | TT_FATAL: cq_id 0 is out of range (assert.hpp:104)
+2026-08-19 11:40:22.324 | critical |          Always | TT_FATAL: cq_id 0 is out of range (assert.hpp:104)
+2026-08-19 11:40:22.324 | critical |          Always | TT_FATAL: cq_id 0 is out of range (assert.hpp:104)
+FAILED
+
+=================================== FAILURES ===================================
+____________________ test_full_model_traced_token_out_smoke ____________________
+
+    @pytest.mark.skipif(
+        os.environ.get("RUN_QWEN36_FULL_MODEL_SMOKE") != "1",
+        reason="set RUN_QWEN36_FULL_MODEL_SMOKE=1 to run the 2x2 synthetic full-model smoke",
+    )
+    def test_full_model_traced_token_out_smoke():
+        def run(mesh_device):
+            model, _ = _synthetic_full_model(mesh_device)
+            generator = QwenReadinessGenerator(
+                model_dir="models/autoports/qwen_qwen3_6_35b_a3b",
+                mesh_device=mesh_device,
+                model=model,
+                max_batch_size=1,
+                max_seq_len=64,
+            )
+            traced_tokens = generator.generate([1, 2, 3, 4, 5], 4, enable_trace=True)
+            assert len(traced_tokens) == 4
+            assert generator._trace is not None
+            assert generator.last_timings["decode_tokens"] == 3
+            generator.host_sampling_compat = True
+            host_tokens = generator.generate([1, 2, 3, 4, 5], 4, enable_trace=True)
+            assert traced_tokens == host_tokens
+
+            forced_inputs = [6, 7, 8, 9]
+            traced_seen = []
+
+            def traced_next_input(step: int, predicted: int) -> int:
+                traced_seen.append((step, predicted))
+                return forced_inputs[step]
+
+            generator.host_sampling_compat = False
+            traced_teacher = generator.generate([1, 2, 3, 4, 5], 4, next_input=traced_next_input, enable_trace=True)
+            assert len(traced_teacher) == 4
+            assert len(traced_seen) == 4
+            assert generator._trace is not None
+            assert generator.last_timings["decode_tokens"] == 3
+
+            host_seen = []
+
+            def host_next_input(step: int, predicted: int) -> int:
+                host_seen.append((step, predicted))
+                return forced_inputs[step]
+
+            generator.host_sampling_compat = True
+            host_teacher = generator.generate([1, 2, 3, 4, 5], 4, next_input=host_next_input, enable_trace=True)
+            assert traced_teacher == host_teacher
+            assert traced_seen == host_seen
+            generator.teardown()
+            assert generator._trace is None
+
+>       _run_with_target_mesh(run, trace_region_size=64_000_000)
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py:226:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py:119: in _run_with_target_mesh
+    return func(mesh_device)
+           ^^^^^^^^^^^^^^^^^
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py:191: in run
+    traced_tokens = generator.generate([1, 2, 3, 4, 5], 4, enable_trace=True)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/qwen_qwen3_6_35b_a3b/tt/generator.py:170: in generate
+    self._warmup_traced_decode(prompt_len=prompt_len, max_seq_len=max_seq_len)
+models/autoports/qwen_qwen3_6_35b_a3b/tt/generator.py:333: in _warmup_traced_decode
+    self._decode_sample_body(token_buffer=token_buffer, current_pos=current_pos, cache=compile_cache)
+models/autoports/qwen_qwen3_6_35b_a3b/tt/generator.py:349: in _decode_sample_body
+    sampled = self.model.sampling.sample(logits, enable_trace=False, tt_out_tok=token_buffer)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/common/sampling/generator.py:403: in sample
+    tt_out = self._run_sampling(
+models/common/sampling/generator.py:308: in _run_sampling
+    tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/common/lightweightmodule.py:12: in __call__
+    return self.forward(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/common/sampling/tt_sampling.py:645: in forward
+    tt_out_tok = ttnn.sampling(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.sampling', function=<ttnn._ttnn.operations.reduction.sampling_t object...uts=None, golden_function=None, postprocess_golden_function_outputs=None, is_cpp_operation=True, is_experimental=False)
+function_args = (<[RuntimeError('TT_FATAL @ /localdev/vkovacevic/tt-metal/tt_metal/distributed/mesh_device.cpp:774: id < mesh_command_...7a2a28b]\n --- ./python_env/bin/python(_start+0x29) [0x1795ced]\n') raised in repr()] Tensor object at 0x78dd380c0870>)
+function_kwargs = {'k': <[RuntimeError('TT_FATAL @ /localdev/vkovacevic/tt-metal/tt_metal/distributed/mesh_device.cpp:774: id < mesh_com...in/python(_start+0x29) [0x1795ced]\n') raised in repr()] Tensor object at 0x78fe97e5ecf0>, 'sub_core_grids': None, ...}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_FATAL @ /localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/reduction/sampling/device/sampling_device_operation.cpp:139: sampling_pre_out_shape[0] == 1 && sampling_pre_out_shape[1] == 1 && sampling_pre_out_shape[2] == 1 && sampling_pre_out_shape[3] == input_shape[2]
+E               info:
+E               Sampling preallocated output logical shape must be [1,1,1,32] (input dim 2), got [1,1,1,1]
+E               backtrace:
+E                --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(+0xf4f71d) [0x78ff3234f71d]
+E                --- ttnn::prim::SamplingDeviceOperation::validate_on_program_cache_miss(ttnn::prim::SamplingParams const&, ttnn::prim::SamplingInputs const&)
+E                --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim23SamplingDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x207) [0x78ff32e92d97]
+E                --- /localdev/vkovacevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim23SamplingDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2ba) [0x78ff32e851ca]
+E                --- ttnn::prim::sampling(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<unsigned int> const&, std::optional<tt::tt_metal::CoreRangeSet> const&, std::optional<tt::tt_metal::Tensor> const&)
+E                --- ttnn::sampling(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<unsigned int> const&, std::optional<tt::tt_metal::CoreRangeSet> const&, std::optional<tt::tt_metal::Tensor> const&)
+E                --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x463014) [0x78ff33663014]
+E                --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x78ff335155d5]
+E                --- ./python_env/bin/python() [0x1876122]
+E                --- ./python_env/bin/python() [0x1686e59]
+E                --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+E                --- ./python_env/bin/python() [0x1876122]
+E                --- ./python_env/bin/python() [0x1686e59]
+E                --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+E                --- ./python_env/bin/python() [0x1612910]
+E                --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x11b30) [0x1624cb0]
+E                --- ./python_env/bin/python() [0x1876122]
+E                --- ./python_env/bin/python() [0x1686e59]
+E                --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+E                --- ./python_env/bin/python() [0x1876122]
+E                --- ./python_env/bin/python() [0x1686e59]
+E                --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+E                --- ./python_env/bin/python() [0x1876122]
+E                --- ./python_env/bin/python() [0x1686e59]
+E                --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+E                --- ./python_env/bin/python() [0x1876122]
+E                --- ./python_env/bin/python() [0x1686e59]
+E                --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+E                --- ./python_env/bin/python() [0x1876122]
+E                --- ./python_env/bin/python() [0x1686e59]
+E                --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+E                --- ./python_env/bin/python() [0x1876122]
+E                --- ./python_env/bin/python() [0x1686e59]
+E                --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+E                --- ./python_env/bin/python(PyEval_EvalCode+0xe2) [0x1684e62]
+E                --- ./python_env/bin/python() [0x167e008]
+E                --- ./python_env/bin/python() [0x1604927]
+E                --- ./python_env/bin/python(_PyEval_EvalFrameDefault+0x3887) [0x1616a07]
+E                --- ./python_env/bin/python() [0x171f85f]
+E                --- ./python_env/bin/python(Py_RunMain+0x20a) [0x171f260]
+E                --- ./python_env/bin/python() [0x17406fa]
+E                --- ./python_env/bin/python() [0x17404ed]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x78ff37a2a1ca]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x78ff37a2a28b]
+E                --- ./python_env/bin/python(_start+0x29) [0x1795ced]
+
+ttnn/ttnn/decorators.py:473: RuntimeError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+14.01s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py::test_full_model_traced_token_out_smoke
+
+(2 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+FAILED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_full_model.py::test_full_model_traced_token_out_smoke
+======================== 1 failed, 2 warnings in 15.39s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x78feb7cfd878 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x78feb7bedc38 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 305 functions!
+ - leaked function "CloseDevices"
+ - leaked function ""
+ - leaked function "CloseDevice"
+ - leaked function ""
+ - leaked function "get_device_ids"
+ - leaked function "GetDefaultDevice"
+ - leaked function ""
+ - leaked function "to_torch"
+ - leaked function "is_sharded"
+ - leaked function "extract_shard"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-19 11:40:24.184 | info     |    BuildKernels | JIT cache stats: 447/449 hits (99.6%) [447 cached, 229 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-19 11:40:24.184 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-19 11:40:24.197 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-19 11:40:24.197 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-19 11:40:24.794 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-19 11:40:24.794 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-19 11:40:24.794 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

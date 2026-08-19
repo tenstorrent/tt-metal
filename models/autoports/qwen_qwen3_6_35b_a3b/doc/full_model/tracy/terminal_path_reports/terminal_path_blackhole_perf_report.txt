@@ -1,0 +1,15 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Warning: Ignoring user-specified architecture: blackhole, CSV detected blackhole architecture
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'QWEN_FULL_DECODE_TERMINAL'.
+Using operations until 'QWEN_FULL_DECODE_TERMINAL_END'.
+Detected data from 4 devices. Merging device data...
+Writing CSV output to models/autoports/qwen_qwen3_6_35b_a3b/doc/full_model/tracy/terminal_path_reports/terminal_path_blackhole_perf_report.csv
+Overall DRAM roofline (modeled ops): 2.3% (12 GB/s)
+Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'AllBroadcastDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ManualSeedDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SamplingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/qwen_qwen3_6_35b_a3b/doc/full_model/tracy/terminal_path_reports/terminal_path_blackhole_summary.csv
+Plotting PNG stacked report to models/autoports/qwen_qwen3_6_35b_a3b/doc/full_model/tracy/terminal_path_reports/terminal_path_blackhole_summary.png
