@@ -1,6 +1,9 @@
 name: "[internal] Fabric Multihost Exabox Tests"
 
 on:
+  push:
+    branches:
+      - jj-test-rsync
   workflow_call:
     inputs:
       docker-image:
@@ -86,13 +89,14 @@ jobs:
       PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
-      TT_METAL_HOME: /home/user/tt-metal
-      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
-      PYTHONPATH: /home/user/tt-metal
+      TT_METAL_HOME: ${{ github.workspace }}
+      TT_METAL_RUNTIME_ROOT: ${{ github.workspace }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+      PYTHONPATH: ${{ github.workspace }}
       # Per-job NFS scratch for logs + automapper empty cwd / ranklogs.
       PIPELINE_DIR: /ci/fabric-${{ github.run_id }}-${{ strategy.job-index }}
       TTRUN_CWD: /ci/fabric-${{ github.run_id }}-${{ strategy.job-index }}/ttrun-cwd
-      TTRUN_PY: /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py
+      TTRUN_PY: ${{ github.workspace }}/ttnn/ttnn/distributed/ttrun.py
     strategy:
       fail-fast: false
       matrix:
@@ -117,10 +121,14 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           check-mnt-models: "false"
 
+      - name: Create pipeline directory
+        shell: bash
+        run: mkdir -p "$PIPELINE_DIR"
+
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        working-directory: /home/user/tt-metal
+        working-directory: ${{ github.workspace }}
         run: |
           CMD=$(cat << 'EOF'
           ${{ matrix.test-group.cmd }}

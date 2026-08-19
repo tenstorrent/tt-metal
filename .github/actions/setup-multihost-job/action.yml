@@ -1,10 +1,9 @@
 name: Setup Multihost Job
 description: >
-  Shared exabox multihost setup: download build/wheel artifacts, fan them out to
-  workers with mpirun --pernode, run ttop-recovery (runner ConfigMap) to IPMI-reset
-  + validate the cluster, and sanity-check ttnn (and optionally /mnt/models).
-  Callers must already have checked out the repo and set PIPELINE_DIR when using
-  scratch staging.
+  Shared exabox multihost setup: download build/wheel artifacts into GITHUB_WORKSPACE,
+  rsync the entire workspace to all workers, extract the build archive and install the
+  wheel on every node via mpirun --pernode, run ttop-recovery (runner ConfigMap) to
+  IPMI-reset + validate the cluster, and sanity-check ttnn (and optionally /mnt/models).
 
 inputs:
   build-artifact-name:
@@ -13,20 +12,12 @@ inputs:
   wheel-artifact-name:
     description: Name of the ttnn wheel artifact
     required: true
-  artifacts-path:
-    description: Directory to download artifacts into (shared NFS recommended)
-    required: false
-    default: /home/user/artifacts
   extra-pip-packages:
     description: >
       Extra packages to install alongside the ttnn wheel on every worker
       (space-separated). Models e2e/unit pass pytest + pytest-timeout.
     required: false
     default: ""
-  create-pipeline-dir:
-    description: Create $PIPELINE_DIR if set (NFS scratch for ranklogs / automapper cwd)
-    required: false
-    default: "true"
   check-mnt-models:
     description: Verify /mnt/models is readable on every worker
     required: false
@@ -36,7 +27,7 @@ inputs:
       Path to run_cluster_validation (arg 1 to ttop-recovery). Must exist on
       workers after unpack (default matches the ConfigMap script default).
     required: false
-    default: /home/user/tt-metal/build/tools/scaleout/run_cluster_validation
+    default: build/tools/scaleout/run_cluster_validation
   cabling-descriptor-path:
     description: >
       Cabling descriptor for ttop-recovery (arg 3). Defaults match the runner
@@ -52,88 +43,70 @@ inputs:
     required: false
     default: "10"
   prefer-wheel-libs:
-    description: Prepend the wheel's build/lib onto LD_LIBRARY_PATH (manylinux). Leave false for inplace.
+    description: >
+      Prepend the wheel's ttnn/build/lib onto LD_LIBRARY_PATH before the tarball's
+      build/lib. True for a manylinux wheel (P&R); false for an inplace wheel (T1).
     required: false
     default: "false"
 
 runs:
   using: "composite"
   steps:
-    - name: Create user directory
-      shell: bash
-      run: |
-        sudo mkdir -p /home/user/tt-metal
-        sudo chown -R "$(id -u):$(id -g)" /home/user
-
     - name: Download Build Artifact
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
         name: ${{ inputs.build-artifact-name }}
-        path: ${{ inputs.artifacts-path }}
+        path: ${{ github.workspace }}
 
     - name: Download Python Wheel
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
         name: ${{ inputs.wheel-artifact-name }}
-        path: ${{ inputs.artifacts-path }}
+        path: ${{ github.workspace }}
 
-    - name: Unpack artifacts & install
+    - name: Install rsync on all workers
       shell: bash
-      env:
-        ARTIFACTS_PATH: ${{ inputs.artifacts-path }}
-        EXTRA_PIP_PACKAGES: ${{ inputs.extra-pip-packages }}
-        CREATE_PIPELINE_DIR: ${{ inputs.create-pipeline-dir }}
       run: |
         set -euo pipefail
-        shopt -s globstar nullglob
+        mpirun --pernode bash -c 'command -v rsync || sudo apt-get install -y --no-install-recommends rsync'
 
-        build_archives=("${ARTIFACTS_PATH}"/**/*.tar.zst)
-        echo "Found ${#build_archives[@]} .tar.zst candidate(s) under ${ARTIFACTS_PATH}"
-        printf ' - %s\n' "${build_archives[@]}"
-        if [ ${#build_archives[@]} -eq 0 ]; then
-          echo "ERROR: Could not find any .tar.zst under ${ARTIFACTS_PATH}"
-          echo "Artifact directory layout:"
-          ls -R "${ARTIFACTS_PATH}"
-          exit 1
-        fi
-        BUILD_ARCHIVE="${build_archives[0]}"
-        echo "Using build archive: ${BUILD_ARCHIVE}"
+    - name: Create workspace directory on all workers
+      shell: bash
+      run: |
+        set -euo pipefail
+        mpirun --pernode mkdir -p "$GITHUB_WORKSPACE"
 
-        ttnn_wheels=("${ARTIFACTS_PATH}"/**/ttnn-*.whl)
-        echo "Found ${#ttnn_wheels[@]} ttnn wheel candidate(s) under ${ARTIFACTS_PATH}"
-        printf ' - %s\n' "${ttnn_wheels[@]}"
-        if [ ${#ttnn_wheels[@]} -eq 0 ]; then
-          echo "ERROR: Could not find ttnn-*.whl under ${ARTIFACTS_PATH}"
-          echo "Artifact directory layout:"
-          ls -R "${ARTIFACTS_PATH}"
-          exit 1
-        fi
+    - name: Rsync GITHUB_WORKSPACE to workers
+      shell: bash
+      run: |
+        set -euo pipefail
 
-        # Workers + runner local copy for runtime (local disk).
-        cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
-        cp -r "$GITHUB_WORKSPACE" /home/user/
-        cp "${BUILD_ARCHIVE}" /ci/tt-metal/
-        cp "${ttnn_wheels[0]}" /ci/tt-metal/
-        tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+        mapfile -t workers < <(mpirun --pernode hostname | grep -v "$(hostname)" | sort -u)
+        echo "Syncing to workers: ${workers[*]}"
 
-        mpirun --pernode bash -lc 'cp -r /ci/tt-metal /home/user/'
-        mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
-        mpirun --pernode tar --zstd -xf "/home/user/tt-metal/$(basename "${BUILD_ARCHIVE}")" -C /home/user/tt-metal
-        mpirun --pernode uv pip install "/home/user/tt-metal/$(basename "${ttnn_wheels[0]}")" ${EXTRA_PIP_PACKAGES}
+        printf '%s\n' "${workers[@]}" | xargs -P 0 -I{} \
+          rsync -aW --inplace --partial "$GITHUB_WORKSPACE/" "{}:${GITHUB_WORKSPACE}/"
 
-         if [ "${CREATE_PIPELINE_DIR}" = "true" ] && [ -n "${PIPELINE_DIR:-}" ]; then
-          # Per-job NFS scratch (ranklogs, automapper cwd). Do NOT copy the full
-          # tt-metal tree here — that OOMs the 4Gi Actions runner.
-          mkdir -p "$PIPELINE_DIR"
-        fi
+    - name: Extract build and install wheel on all nodes
+      shell: bash
+      env:
+        EXTRA_PIP_PACKAGES: ${{ inputs.extra-pip-packages }}
+      run: |
+        set -euo pipefail
+
+        BUILD_ARCHIVE="$GITHUB_WORKSPACE/ttm_any.tar.zst"
+        WHEEL=$(ls "$GITHUB_WORKSPACE"/ttnn-*.whl)
+
+        # Workspace (including artifacts) already on every node via rsync
+        tar --zstd -xf "$BUILD_ARCHIVE" -C "$GITHUB_WORKSPACE"
+        mpirun --pernode tar --zstd -xf "$BUILD_ARCHIVE" -C "$GITHUB_WORKSPACE"
+        mpirun --pernode uv pip install "$WHEEL" ${EXTRA_PIP_PACKAGES}
 
     - name: Put the installed wheel's native libs first on LD_LIBRARY_PATH
       if: ${{ inputs.prefer-wheel-libs == 'true' }}
       shell: bash
       run: |
         set -euo pipefail
-        # Wheel libs first so they win over the tarball when the two were compiled
-        # separately. Glob on a worker: the venv lives there, not on the control runner.
         wheel_lib=$(mpirun --pernode bash -lc \
           'ls -d /opt/venv/lib/python*/site-packages/ttnn/build/lib' | tr -d '\r' | sort -u) || true
         if [ "$(printf '%s' "$wheel_lib" | grep -c '^')" -ne 1 ]; then
@@ -153,9 +126,10 @@ runs:
         # Pinned to the tarball alone: the validation binary is a cmake build-tree
         # executable, so it must not pick up the wheel's separately-compiled copies that
         # the previous step puts ahead of it for the test itself.
-        LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
+        LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
       run: |
         set -euo pipefail
+        [[ "$CLUSTER_VALIDATION" != /* ]] && CLUSTER_VALIDATION="$GITHUB_WORKSPACE/$CLUSTER_VALIDATION"
         if ! command -v ttop-recovery >/dev/null 2>&1; then
           echo "ERROR: ttop-recovery not on PATH (expected from multihost-ci runner ConfigMap)"
           exit 1

@@ -45,15 +45,15 @@ jobs:
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
       PIP_CACHE_DIR: /home/user/.cache/pip
-      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
-      TT_METAL_HOME: /home/user/tt-metal
-      TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
+      TT_METAL_HOME: ${{ github.workspace }}
+      TT_METAL_RUNTIME_ROOT: ${{ github.workspace }}
       TT_METAL_CACHE: /home/user/.cache
-      PYTHONPATH: /home/user/tt-metal
+      PYTHONPATH: ${{ github.workspace }}
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
       # Shared NFS scratch for automapper launches (empty ttrun-cwd + ranklogs).
       PIPELINE_DIR: /ci/models-unit-${{ github.run_id }}-${{ strategy.job-index }}
       TTRUN_CWD: /ci/models-unit-${{ github.run_id }}-${{ strategy.job-index }}/ttrun-cwd
-      TTRUN_PY: /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py
+      TTRUN_PY: ${{ github.workspace }}/ttnn/ttnn/distributed/ttrun.py
       # Forwarded to the mpirun ranks (PRTE_MCA_prte_fwd_environment) so gated HF models can be
       # downloaded. Requires the token's HF account to have accepted the model's license.
       HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
@@ -77,12 +77,16 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           extra-pip-packages: pytest==9.0.3 pytest-timeout==2.4.0
 
+      - name: Create pipeline directory
+        shell: bash
+        run: mkdir -p "$PIPELINE_DIR"
+
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
         # Automapper cmds cd to $PIPELINE_DIR/ttrun-cwd (empty NFS dir) themselves.
         # Keep runtime compilation and tt-run working directory on a single source root.
-        working-directory: /home/user/tt-metal
+        working-directory: ${{ github.workspace }}
         run: |
           # Store command safely using heredoc
           CMD=$(cat << 'EOF'
