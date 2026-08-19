@@ -7,8 +7,9 @@
 The vocoder is compiled and traced at a fixed set of frame counts (VOC_BUCKETS); each request
 pads z up to its bucket and trims the waveform back. Three properties: the bucket a length maps
 to, that the padding is inert (the trimmed waveform must not depend on how much zero padding
-followed it, which is what lets a short utterance skip the 2634-frame cap), and that replaying
-one bucket's trace leaves the other buckets' output unchanged.
+followed it, which is what lets a short utterance skip the 2634-frame cap), that replaying one
+bucket's trace leaves the other buckets' output unchanged, and that the prepared conv weights the
+buckets share are deduplicated rather than held per length.
 """
 import types
 
@@ -26,6 +27,9 @@ from models.experimental.xtts_v2.tt.ttnn_xtts_hifigan import (
 from models.experimental.xtts_v2.tt.ttnn_xtts_model import HOP, VOC_BUCKETS, VOC_L, XttsV2, _voc_bucket
 
 TARGET_PCC = 0.999
+NUM_CONVS = 78  # conv_pre + conv_post + 4 upsamples + 12 resblocks x 6
+MAX_LAYOUTS = 84  # measured: only 6 convs prepare a second layout, at one length boundary each
+MAX_LAYOUT_MB = 100  # 70.4 MB measured; without deduplication it is 276.8 MB
 
 
 def run_voc_bucket_invariance(device):
@@ -73,6 +77,21 @@ def run_voc_trace_replay(device):
     return maxabs == 0.0, f"maxabs {maxabs:.3e}"
 
 
+def run_voc_prepared_weight_dedup(device):
+    """Every bucket eagerly, then check the prepared weights collapsed to distinct layouts."""
+    g = torch.randn(1, 512, 1, generator=torch.Generator().manual_seed(0))
+    voc = TTNNHifiganGenerator(device, preprocess_hifigan_parameters(device))
+    model = types.SimpleNamespace(mesh_device=device, vocoder=voc, _voc_traces={})
+    for Lb in VOC_BUCKETS:
+        XttsV2._vocode(model, torch.zeros(1, 1024, Lb), g)
+
+    pairs, distinct, mb = voc.prepared_weight_stats()
+    print(f"prepared weights: {pairs} (conv, length) pairs -> {distinct} layouts, {mb:.1f} MB")
+    expected = NUM_CONVS * len(VOC_BUCKETS)
+    passed = pairs == expected and distinct <= MAX_LAYOUTS and mb < MAX_LAYOUT_MB
+    return passed, f"{pairs} pairs (expected {expected}), {distinct} layouts, {mb:.1f} MB"
+
+
 def run_voc_bucket_selection():
     assert VOC_BUCKETS[-1] == VOC_L, "the top bucket must be the model cap, or long utterances have none"
     assert list(VOC_BUCKETS) == sorted(VOC_BUCKETS), "_voc_bucket scans in order, so buckets must ascend"
@@ -103,6 +122,12 @@ def test_voc_trace_replay(device):
     assert passed, f"replaying other buckets changed the largest bucket's output: {msg}"
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 262144}], indirect=True)
+def test_voc_prepared_weight_dedup(device):
+    passed, msg = run_voc_prepared_weight_dedup(device)
+    assert passed, f"prepared conv weights are not deduplicated as expected: {msg}"
+
+
 if __name__ == "__main__":
     import sys
 
@@ -112,7 +137,9 @@ if __name__ == "__main__":
         dev.enable_program_cache()
         ok, msg = run_voc_bucket_invariance(dev)
         ok2, msg2 = run_voc_trace_replay(dev)
+        ok3, msg3 = run_voc_prepared_weight_dedup(dev)
     finally:
         ttnn.close_device(dev)
-    print(("PASSED " if ok and ok2 else "FAILED ") + f"{msg}; {msg2}")
-    sys.exit(0 if ok and ok2 else 1)
+    all_ok = ok and ok2 and ok3
+    print(("PASSED " if all_ok else "FAILED ") + f"{msg}; {msg2}; {msg3}")
+    sys.exit(0 if all_ok else 1)
