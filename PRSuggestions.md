@@ -4,7 +4,7 @@ We took Voxtral-TTS, a 4B text to speech model with three stacks, through the wh
 single p150b. Eight things worth fixing. Point 4 is the root of point 5, so they are one job. Points
 6 and 7 are one line each.
 
-## 1. Add these optimizations
+## 1. Add these eleven optimizations
 
 - Each is measured on our port and comes with the condition for when it applies. None of them is
   named in the optimizer's list of steps to try:
