@@ -87,9 +87,10 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_unreduced_backward_impl_2d(
 
     if (weight_has_value) {
         // This CB will be used as scratch storage when reading data from DRAM into L1
-        push_cb(desc, all_cores, static_cast<uint8_t>(tt::CBIndex::c_7), 1, data_format);
+        push_cb(desc, all_cores, static_cast<uint8_t>(tt::CBIndex::c_7), 1, data_format);  // weight scratch
     }
-    push_cb(desc, all_cores, static_cast<uint8_t>(tt::CBIndex::c_8), 1, data_format);
+    // Need another scratch CB for output_grad reading data from DRAM into L1.
+    push_cb(desc, all_cores, static_cast<uint8_t>(tt::CBIndex::c_8), 1, data_format);  // output_grad scratch
 
     // create read/write kernel
     KernelDescriptor::CompileTimeArgs reader_compile_time_args{};
@@ -222,7 +223,7 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_unreduced_backward_impl_3d(
 
     if (weight_has_value) {
         // This CB will be used as scratch storage when reading data from DRAM into L1
-        push_cb(desc, all_cores, static_cast<uint8_t>(tt::CBIndex::c_7), 1, data_format);
+        push_cb(desc, all_cores, static_cast<uint8_t>(tt::CBIndex::c_7), 1, data_format);  // weight scratch
     }
 
     // create read/write kernel
@@ -359,7 +360,7 @@ tt::tt_metal::ProgramDescriptor moreh_nll_loss_unreduced_backward_impl_4d(
 
     if (weight_has_value) {
         // This CB will be used as scratch storage when reading data from DRAM into L1
-        push_cb(desc, all_cores, static_cast<uint8_t>(tt::CBIndex::c_7), 1, data_format);
+        push_cb(desc, all_cores, static_cast<uint8_t>(tt::CBIndex::c_7), 1, data_format);  // weight scratch
     }
 
     // create read/write kernel
