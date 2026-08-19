@@ -125,13 +125,31 @@ class MLP(LightweightModule):
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
 
+    def fc1_plan(self, seq_len: int, in0_dtype=ttnn.bfloat16):
+        """The fc1 matmul's plan -- `VisionBlock` reads `.in0_memory_config` off it so `ff_norm`
+        writes fc1's input where it is fastest to read."""
+        return self.args.vision_mm_plan(
+            "mlp_fc1",
+            rows=seq_len,
+            k=self.dim,
+            n=self.args.hidden_dim // self.tp,
+            in0_dtype=in0_dtype,
+            in1_dtype=self.linear_fc1_weight.dtype,
+            out_dtype=in0_dtype,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, False),
+        )
+
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         """
         HF reference: self.linear_fc2(self.act_fn(self.linear_fc1(hidden_state)))
         """
         seq_len = x.shape[-2]
-        if seq_len >= 1024:
-            x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
+        hidden_local = self.args.hidden_dim // self.tp
+
+        # GELU goes in the program config, not `activation=` -- see vision_mm_plan's docstring.
+        fc1_plan = self.fc1_plan(seq_len, in0_dtype=x.dtype)
+        if fc1_plan.chunk != seq_len:
+            x = ttnn.reshape(x, [1, seq_len // fc1_plan.chunk, fc1_plan.chunk, -1])
 
         # fc1: column-sharded matmul + bias + GELU. Output is column-sharded
         # along the intermediate dim; no comm yet.
@@ -139,12 +157,34 @@ class MLP(LightweightModule):
             x,
             self.linear_fc1_weight,
             bias=self.linear_fc1_bias,
-            activation="gelu",
+            # Only reachable when the plan fell back to ttnn's auto config, which cannot fuse.
+            activation=None if fc1_plan.program_config is not None else "gelu",
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
-            else self.args.compute_kernel_config_hifi2_fp16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            else fc1_plan.compute_kernel_config,
+            memory_config=fc1_plan.memory_config,
+            program_config=fc1_plan.program_config,
         )
+
+        # Release the norm output the moment fc1 has consumed it. Holding it until the caller returns
+        # keeps 432 KB/core of L1 occupied across fc2 too (ff_in + fc2 in + fc2 out + CBs = 1769 KB
+        # against 1432), which clashes. Ownership matches VisionAttention, which also frees its input.
+        ttnn.deallocate(x)
+
+        # fc2 picks its own row chunk; the reshape between the two is metadata-only on a TILE tensor.
+        fc2_plan = self.args.vision_mm_plan(
+            "mlp_fc2",
+            rows=seq_len,
+            k=hidden_local,
+            n=self.dim,
+            in0_dtype=w1_out.dtype,
+            in1_dtype=self.linear_fc2_weight.dtype,
+            out_dtype=w1_out.dtype,
+            # fc2 reads fc1's output: not fc2's choice, but it spends fc2's L1 budget.
+            in0_already_l1=fc1_plan.memory_config is ttnn.L1_MEMORY_CONFIG,
+        )
+        if fc2_plan.chunk != w1_out.shape[-2]:
+            w1_out = ttnn.reshape(w1_out, [1, seq_len // fc2_plan.chunk, fc2_plan.chunk, -1])
 
         # fc2: row-sharded matmul. Each device computes a partial sum of the
         # full output dim. We fold the bias in *after* the all-reduce.
@@ -153,8 +193,9 @@ class MLP(LightweightModule):
             self.linear_fc2_weight,
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
-            else self.args.compute_kernel_config_hifi2_fp16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            else fc2_plan.compute_kernel_config,
+            memory_config=fc2_plan.memory_config,
+            program_config=fc2_plan.program_config,
         )
         ttnn.deallocate(w1_out)
 

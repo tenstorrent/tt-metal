@@ -170,14 +170,28 @@ class VisionEmbed(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        plan = self.args.vision_mm_plan(
+            "patch_embed",
+            rows=rows,
+            k=self.patch_dim,
+            n=self.embed_dim if self.replicated_acts else self.embed_dim // self.tp,
+            in0_dtype=x_tt.dtype,
+            in1_dtype=self.proj_weight.dtype,
+            out_dtype=ttnn.bfloat16,
+        )
+        if plan.chunk != rows:
+            x_tt = ttnn.reshape(x_tt, [1, rows // plan.chunk, plan.chunk, self.patch_dim])
         h = ttnn.linear(
             x_tt,
             self.proj_weight,
             bias=self.proj_bias,
-            compute_kernel_config=self.args.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=plan.compute_kernel_config,
+            memory_config=plan.memory_config,
+            program_config=plan.program_config,
         )
         ttnn.deallocate(x_tt)
+        if plan.chunk != rows:
+            h = ttnn.reshape(h, [1, 1, rows, -1])
 
         # --- interpolated positional embedding: sum_c w_c * table[idx_c] ---
         idx = bilinear_indices.to(torch.int32)
