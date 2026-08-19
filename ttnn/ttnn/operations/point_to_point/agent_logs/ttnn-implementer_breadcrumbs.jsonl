@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"test_point_to_point_program_cache","detail":"first run green incl. 3 program-cache hits (semaphore re-arm validated)","ts":"2026-08-19T02:56:57+00:00"}
