@@ -193,6 +193,7 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
  * a user wants to compile a program with Slow Dispatch Force Enabled (advanced feature, currently used internally to
  * launch Fast Dispatch Firmware and in the Device Performance Profiler)           | bool      | | No |
  */
+[[deprecated("Use MakeProgramFromSpec instead. CompileProgram will be removed after 2026-09-20.")]]
 void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**

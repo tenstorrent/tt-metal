@@ -437,7 +437,7 @@ TEST_F(UnitMeshFixture, AliasDFBAddressEquality1Sx1S) {
 
     Program program = MakeProgramFromSpec(this->device(), spec);
 
-    slow_dispatch::CompileProgram(this->device(), program);
+    program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
@@ -771,7 +771,7 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryAddressEquality) {
 
     Program program = MakeProgramFromSpec(this->device(), spec);
 
-    slow_dispatch::CompileProgram(this->device(), program);
+    program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 

@@ -542,7 +542,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     // Pre-fill each DFB's L1 ring directly via uniform_alloc_addr after manual
     // finalize+allocate. No borrowed_from / ring tensor needed; the compute
     // kernel is TRISC-only and can't carry tensor bindings.
-    slow_dispatch::CompileProgram(this->device(), program);
+    program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 

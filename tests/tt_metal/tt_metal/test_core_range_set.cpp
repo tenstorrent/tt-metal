@@ -162,7 +162,7 @@ TEST_F(UnitMeshFixture, CoreRangeSet) {
 
     check_program_is_mapped_to_correct_cores(program, core_ranges, compute_kernel_args);
 
-    slow_dispatch::CompileProgram(this->device(), program);
+    program.impl().compile(&this->device());
 
     std::vector<uint32_t> src_vec =
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());

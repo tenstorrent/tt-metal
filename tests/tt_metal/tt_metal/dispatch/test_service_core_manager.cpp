@@ -27,6 +27,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 
 #include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
@@ -236,7 +237,7 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
         SetRuntimeArgs(
             prog, kernel, svc_core, {(uint32_t)stop_addr, (uint32_t)counter_addr, (uint32_t)service_done_addr});
 
-        tt::tt_metal::detail::CompileProgram(device, prog, /*force_slow_dispatch=*/true);
+        prog.impl().compile(device, /*force_slow_dispatch=*/true);
         tt::tt_metal::detail::WriteRuntimeArgsToDevice(device, prog, /*force_slow_dispatch=*/true);
         tt::tt_metal::detail::LaunchProgram(
             device, prog, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
