@@ -324,28 +324,29 @@ def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> i
     return drained
 
 
-def _time_request_ack_boundaries(ack_channel, boundaries, out, poll_s: float = 0.001, timeout_s: float = 600.0):
-    """Stamp the host wall-clock epoch at which the cumulative LayerAck count crosses each ascending
-    boundary in `boundaries`, appending (cumulative_acks, epoch) to `out`.
+def _record_ack_timeline(ack_channel, out, stop_at: int, poll_s: float = 0.001, timeout_s: float = 600.0):
+    """Record the full LayerAck arrival timeline into `out` as (cumulative_acks, epoch) samples, one per
+    poll on which the counter advanced, until the cumulative count reaches `stop_at` or `timeout_s` elapses.
 
-    Meant to run in a background thread so crossings are observed live while the main thread is still
-    pushing. The stamp is ack-ARRIVAL time at the host, so a per-ack transport latency is constant across
-    boundaries and cancels in any boundary-to-boundary delta (that delta is the async per-request span).
-    Sole consumer of the counter: try_consume_all() REMOVES completions, so nothing else may drain it."""
-    if ack_channel is None or not boundaries:
+    Meant to run in a background thread so arrivals are observed live while the main thread is still
+    pushing. The counter carries only a COUNT (try_consume_all() returns an int, no per-ack identity or
+    device timestamp), so the finest resolvable time is per-poll: acks landing inside one `poll_s` interval
+    collapse into a single sample sharing one host-arrival epoch. All boundary/e2e interpretation is left to
+    the caller, which owns the schedule shape. Sole consumer of the counter: try_consume_all() REMOVES
+    completions, so nothing else may drain it."""
+    if ack_channel is None or stop_at <= 0:
         return
     drained = 0
-    bi = 0
     start = time.perf_counter()
-    while bi < len(boundaries):
-        drained += ack_channel.try_consume_all()
-        while bi < len(boundaries) and drained >= boundaries[bi]:
-            out.append((boundaries[bi], time.time()))
-            bi += 1
-        if bi >= len(boundaries):
+    while drained < stop_at:
+        n = ack_channel.try_consume_all()
+        if n:
+            drained += n
+            out.append((drained, time.time()))
+        if drained >= stop_at:
             break
         if time.perf_counter() - start > timeout_s:
-            logger.warning(f"[producer] ack-timer timed out at {drained}/{boundaries[-1]} acks after {timeout_s}s")
+            logger.warning(f"[producer] ack-timer timed out at {drained}/{stop_at} acks after {timeout_s}s")
             break
         time.sleep(poll_s)
 
@@ -1235,7 +1236,7 @@ def main() -> None:
     # If we're not performing golden trace PCC-validation, then don't consume these and allow loopback
     # migration test in prefill_runner.py to consume acks and perform the testing of loopback migration
     # ACK_TIMING derives async per-request throughput from the LayerAck stream (see
-    # _time_request_ack_boundaries). It needs the channel connected but no KV table, so it is independent
+    # _record_ack_timeline). It needs the channel connected but no KV table, so it is independent
     # of CHECK_PCC.
     ack_timing = os.environ.get("PREFILL_PRODUCER_ACK_TIMING", "0") == "1"
     ack_channel = _connect_layer_ack_channel(timeout_s) if (cfg.verify or ack_timing) else None
@@ -1274,12 +1275,12 @@ def main() -> None:
         service.forward_to_tensor_bytes(chunk_bytes, metadata=_pack_metadata(slot_id, actual_start, actual_end))
         return (time.perf_counter() - push_start) * 1000.0
 
-    # ACK_TIMING: watch the ack counter in a background thread so per-request boundary crossings are
-    # stamped live, while this thread is still pushing. Only well-defined for a single-user, fixed-depth
-    # schedule (deterministic per-request ack count = NUM_LAYERS * chunks_per_req); reject anything else
-    # rather than stamp meaningless boundaries.
+    # ACK_TIMING: record the full ack arrival timeline in a background thread while this thread is still
+    # pushing; boundary/e2e interpretation happens in post-processing below. Only well-defined for a
+    # single-user, fixed-depth schedule (deterministic per-request ack count = NUM_LAYERS * chunks_per_req);
+    # reject anything else rather than derive meaningless boundaries.
     ack_boundaries = []
-    ack_stamps = []
+    ack_timeline = []
     ack_timer = None
     if ack_timing:
         if cfg.num_users != 1 or cfg.chunks_min != cfg.chunks_max:
@@ -1288,7 +1289,7 @@ def main() -> None:
         chunks_per_req = cfg.chunks_min
         ack_boundaries = [NUM_LAYERS * chunks_per_req * k for k in range(1, cfg.max_requests + 1)]
         ack_timer = threading.Thread(
-            target=_time_request_ack_boundaries, args=(ack_channel, ack_boundaries, ack_stamps), daemon=True
+            target=_record_ack_timeline, args=(ack_channel, ack_timeline, ack_boundaries[-1]), daemon=True
         )
         ack_timer.start()
 
@@ -1307,6 +1308,23 @@ def main() -> None:
     if ack_timing:
         if ack_timer is not None:
             ack_timer.join(timeout=600.0)
+        # Optionally persist the raw timeline (every count-change sample) for offline analysis.
+        trace_path = os.environ.get("PREFILL_PRODUCER_ACK_TRACE", "")
+        if trace_path:
+            with open(trace_path, "w") as f:
+                f.write("cum_acks,epoch\n")
+                for cum, t in ack_timeline:
+                    f.write(f"{cum},{t:.6f}\n")
+            logger.info(f"[producer] wrote ack timeline ({len(ack_timeline)} samples) to {trace_path}")
+        # Per-request boundary crossing = first sample whose cumulative count reached that boundary.
+        ack_stamps = []
+        ti = 0
+        for b in ack_boundaries:
+            while ti < len(ack_timeline) and ack_timeline[ti][0] < b:
+                ti += 1
+            if ti >= len(ack_timeline):
+                break
+            ack_stamps.append((b, ack_timeline[ti][1]))
         for cum, t in ack_stamps:
             logger.info(f"[producer] ACK_REQ_DONE cum_acks={cum} t={t:.6f}")
         # The last request is the warm push; its e2e is the gap between the two most recent completions.
