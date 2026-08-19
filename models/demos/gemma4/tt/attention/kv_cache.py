@@ -88,8 +88,16 @@ def init_kv_cache(
     # downstream where SDPA expects the narrower format.
     dtype_suffix = f"_{dtype_to_str(cache_dtype)}"
 
+    # Stage in bf16, not torch's default float32. This tensor is
+    # [max_num_blocks, kv_heads, block_size, head_dim], which reaches 1.00 GiB at a 256k
+    # context -- the same size as the per-device sysmem window -- and it is built for every
+    # layer, K and V, replicated to every device. bf16 halves that. It is also the
+    # intermediate ttnn itself uses for the bfp8/bfp4 targets this cache actually runs at
+    # (from_torch converts source -> bf16 -> bf8/4 and deliberately avoids float32), so the
+    # fp32 source only bought an extra conversion. The values are zeros, which round-trip
+    # exactly in any dtype, so nothing is lost.
     k_cache = ttnn.as_tensor(
-        torch.zeros(cache_shape),
+        torch.zeros(cache_shape, dtype=torch.bfloat16),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
@@ -99,7 +107,7 @@ def init_kv_cache(
     )
 
     v_cache = ttnn.as_tensor(
-        torch.zeros(cache_shape),
+        torch.zeros(cache_shape, dtype=torch.bfloat16),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
@@ -142,7 +150,7 @@ def init_kv_staging(
 
     def _zeros():
         return ttnn.as_tensor(
-            torch.zeros(stage_shape),
+            torch.zeros(stage_shape, dtype=torch.bfloat16),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=cache_dtype,
