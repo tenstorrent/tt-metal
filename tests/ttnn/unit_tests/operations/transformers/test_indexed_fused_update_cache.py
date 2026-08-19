@@ -5,14 +5,16 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import skip_for_slow_dispatch
 
 
-def _device_tensor(tensor, device, *, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+def _device_tensor(tensor, device, *, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=None):
     return ttnn.from_torch(
         tensor,
         device=device,
         dtype=dtype,
         layout=layout,
+        tile=tile,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -141,6 +143,7 @@ def test_indexed_fused_update_cache_program_cache_reuses_runtime_positions(devic
 
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+@skip_for_slow_dispatch()
 def test_indexed_fused_update_cache_trace_replay(device):
     torch.manual_seed(27)
     cache_shape = (2, 2, 64, 64)
@@ -258,6 +261,11 @@ def test_indexed_fused_update_cache_golden_function():
         ("input_shape_mismatch", "input_tensor1 and input_tensor2 must have identical shapes"),
         ("cache_requires_padding", "cache_tensor1 rows per physical page must be tile aligned"),
         ("too_many_source_rows", "input_tensor1 supports at most 256 source rows"),
+        ("cache1_custom_tile", "cache_tensor1 must use the default non-transposed 32x32 tile"),
+        ("cache2_custom_tile", "cache_tensor2 must use the default non-transposed 32x32 tile"),
+        ("input1_custom_tile", "input_tensor1 must use the default non-transposed 32x32 tile"),
+        ("input2_transposed_tile", "input_tensor2 must use the default non-transposed 32x32 tile"),
+        ("positions_too_wide", "physical_update_idxs_tensor supports at most 256 entries"),
     ],
 )
 def test_indexed_fused_update_cache_validation(device, invalid_case, expected_message, expect_error):
@@ -307,6 +315,25 @@ def test_indexed_fused_update_cache_validation(device, invalid_case, expected_me
     elif invalid_case == "too_many_source_rows":
         input1 = _device_tensor(torch.zeros((1, 2, 257, 64), dtype=torch.bfloat16), device)
         input2 = _device_tensor(torch.zeros((1, 2, 257, 64), dtype=torch.bfloat16), device)
+        positions = _device_tensor(
+            torch.arange(257, dtype=torch.int32).reshape(1, -1),
+            device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+    elif invalid_case == "cache1_custom_tile":
+        cache1 = _device_tensor(torch.zeros(cache_shape, dtype=torch.bfloat16), device, tile=ttnn.Tile((16, 32)))
+    elif invalid_case == "cache2_custom_tile":
+        cache2 = _device_tensor(torch.zeros(cache_shape, dtype=torch.bfloat16), device, tile=ttnn.Tile((16, 32)))
+    elif invalid_case == "input1_custom_tile":
+        input1 = _device_tensor(torch.zeros(input_shape, dtype=torch.bfloat16), device, tile=ttnn.Tile((16, 32)))
+    elif invalid_case == "input2_transposed_tile":
+        input2 = _device_tensor(
+            torch.zeros(input_shape, dtype=torch.bfloat16),
+            device,
+            tile=ttnn.Tile((32, 32), transpose_tile=True),
+        )
+    elif invalid_case == "positions_too_wide":
         positions = _device_tensor(
             torch.arange(257, dtype=torch.int32).reshape(1, -1),
             device,
