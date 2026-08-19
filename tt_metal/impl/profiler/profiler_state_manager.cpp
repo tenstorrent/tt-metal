@@ -188,7 +188,7 @@ void ProfilerStateManager::start_debug_dump_thread(
     TT_ASSERT(!this->debug_dump_thread.joinable());
     // Reset stop flag in case it was set by a previous cleanup_device_profilers() call
     this->stop_debug_dump_thread = false;
-    // Faster polling to unblock cores quickly at the expensive of more NoC PCIe traffic.
+    // Faster polling to unblock cores quickly at the expense of more NoC PCIe traffic.
     // Tunable via TT_METAL_NOC_DEBUG_POLL_INTERVAL_MS.
     const auto interval = this->env_.get_rtoptions().get_noc_debug_poll_interval();
     const auto full_read_interval = this->env_.get_rtoptions().get_noc_debug_full_read_interval();

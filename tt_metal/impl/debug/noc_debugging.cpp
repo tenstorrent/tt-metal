@@ -503,12 +503,13 @@ void NOCDebugState::print_aggregated_errors() const {
     };
     std::map<std::string, CoreIssues> issues_by_core;
 
-    for (const auto& [core, state] : cores) {
+    for (auto& [core, state] : cores) {
         for (size_t proc = 0; proc < CoreDebugState::MAX_PROCESSORS; ++proc) {
-            const auto& issue = state.issue[proc];
+            auto& issue = state.issue[proc];
             if (!issue.any_issue()) {
                 continue;
             }
+            issue.unreported.clear();
 
             std::string core_key = fmt::format("Device {} ({},{}) Processor {}", core.chip, core.x, core.y, proc);
             CoreIssues& core_issues = issues_by_core[core_key];

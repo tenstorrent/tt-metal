@@ -1033,6 +1033,58 @@ uint32_t marker_test_iterations() {
     return 20;
 }
 
+// Retunes the background debug-dump thread for the lifetime of this object, then restores the previous settings.
+//
+// The thread reads the three knobs once and captures them BY VALUE when it starts (see
+// ProfilerStateManager::start_debug_dump_thread), and it is started at device open. So setting rtoptions from a test
+// body has no effect on the running thread -- the knobs only take hold across a stop/relaunch, which is what this
+// does. Restoring in the destructor means the rest of the suite keeps the defaults even if the test body aborts
+// early on a failed assertion.
+class ScopedDebugDumpTuning {
+public:
+    ScopedDebugDumpTuning(
+        std::vector<tt::tt_metal::IDevice*> devices,
+        std::chrono::milliseconds poll,
+        std::chrono::milliseconds full_read,
+        std::chrono::milliseconds margin) :
+        devices_{std::move(devices)},
+        prev_poll_{rtoptions().get_noc_debug_poll_interval()},
+        prev_full_read_{rtoptions().get_noc_debug_full_read_interval()},
+        prev_margin_{rtoptions().get_noc_debug_watermark_margin()} {
+        restart(poll, full_read, margin);
+    }
+
+    ~ScopedDebugDumpTuning() { restart(prev_poll_, prev_full_read_, prev_margin_); }
+
+    ScopedDebugDumpTuning(const ScopedDebugDumpTuning&) = delete;
+    ScopedDebugDumpTuning& operator=(const ScopedDebugDumpTuning&) = delete;
+
+private:
+    static tt::llrt::RunTimeOptions& rtoptions() { return tt::tt_metal::MetalContext::instance().rtoptions(); }
+
+    void restart(
+        std::chrono::milliseconds poll, std::chrono::milliseconds full_read, std::chrono::milliseconds margin) {
+        auto& psm = tt::tt_metal::MetalContext::instance().profiler_state_manager();
+        if (psm->debug_dump_thread.joinable()) {
+            psm->stop_debug_dump_thread = true;
+            psm->stop_debug_dump_thread_cv.notify_all();
+            psm->debug_dump_thread.join();
+        }
+        rtoptions().set_noc_debug_poll_interval(poll);
+        rtoptions().set_noc_debug_full_read_interval(full_read);
+        rtoptions().set_noc_debug_watermark_margin(margin);
+        // start_debug_dump_thread() clears the stop flag, so the thread is live again after this.
+        // Must cover EVERY device the thread originally covered (profiler_initializer.cpp launches it with all of
+        // them): a device left out stops being drained, and later tests running on it see no events at all.
+        tt::tt_metal::LaunchIntervalBasedProfilerReadThread(devices_);
+    }
+
+    std::vector<tt::tt_metal::IDevice*> devices_;
+    std::chrono::milliseconds prev_poll_;
+    std::chrono::milliseconds prev_full_read_;
+    std::chrono::milliseconds prev_margin_;
+};
+
 // Exposes the core "days-long workload" problem. During a long kernel the background debug-dump poll READS events off
 // the device but does not PROCESS or REPORT them -- detection, reporting and discharge only happen on a user read. So
 // before any user read the pending-event queue and the marker set grow with total events and NO issue has been
@@ -1073,6 +1125,72 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingDuringLongKernel) {
             // With incremental processing the poll detects issues as they happen (not deferred to a read)...
             EXPECT_GT(summary.issues, 0u) << "no issue detected before a user read -- processing is deferred to reads";
             // ...and discharges events + markers so host memory stays bounded regardless of run length.
+            EXPECT_LT(summary.pending_events, writes / 2) << "pending events accumulated unprocessed";
+            EXPECT_LT(markers, writes / 2) << "marker set accumulated undischarged";
+        },
+        this->devices_[0]);
+}
+
+// Same behaviour as the stress test above, but cheap enough to run in CI on every commit, so the background
+// processing path (self-triggered full read -> watermark -> incremental report -> marker discharge) actually has
+// regression protection.
+//
+// It is a short kernel rather than a huge one because the event COUNT was never what the stress test needed. What
+// matters is the event time SPAN: process_accumulated_events_up_to() holds back everything within margin_ticks of the
+// newest event it has seen, so events only become processable once the span exceeds the margin. At the 3000 ms
+// default no short kernel can ever qualify. Shrinking the margin to 60 ms (and the full-read period to 20 ms, so
+// several passes land while the kernel is still running) gets the same coverage from a sub-second kernel.
+TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
+    // Collected here (where the fixture's device list is in scope) because the retuned thread has to be relaunched
+    // covering every device, not just the one this test runs on -- see ScopedDebugDumpTuning.
+    std::vector<tt::tt_metal::IDevice*> all_devices;
+    for (const auto& md : this->devices_) {
+        for (auto* d : md->get_devices()) {
+            all_devices.push_back(d);
+        }
+    }
+    this->RunTestOnDevice<NOCDebuggingFixture>(
+        [all_devices](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state();
+            ASSERT_TRUE(noc_debug_state != nullptr);
+            const auto device_id = mesh_device->get_devices()[0]->id();
+
+            // The margin must exceed the poll interval (start_debug_dump_thread enforces that) and must be well
+            // under the kernel's event span, or nothing ever falls behind the watermark. That threshold is what this
+            // test actually pins: raising the margin above the kernel's span flips the results to
+            // pending_events=401/issues=0 (nothing processed) instead of 121/1, so the assertions below fail if
+            // mid-run processing regresses to being deferred to a user read.
+            ScopedDebugDumpTuning tuning{
+                all_devices,
+                /*poll=*/std::chrono::milliseconds(10),
+                /*full_read=*/std::chrono::milliseconds(10),
+                /*margin=*/std::chrono::milliseconds(30)};
+            // Relaunching the thread above drains the device once, which can push leftovers from earlier tests.
+            noc_debug_state->reset_state();
+
+            // 400 writes in 10 bursts, each burst followed by an on-device idle, giving a sub-second kernel. The
+            // source slot wraps after SRC_SLOTS(=128) writes, so the unbarriered source reuse -- the violation this
+            // asserts on -- happens around burst 4, early enough to fall behind the watermark before the kernel ends.
+            constexpr uint32_t writes = 400;
+            constexpr uint32_t burst = 40;
+            constexpr uint32_t wait_iters = 8'000'000u;
+
+            // NO user read: only the background thread drains, processes, reports and discharges.
+            run_stress_write_program(fixture, mesh_device, writes, /*read_after=*/false, wait_iters, burst);
+            // Let the last full-read pass land after the kernel finished.
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+            const auto summary = noc_debug_state->get_state_summary();
+            const size_t markers = total_device_marker_count(device_id);
+            log_info(
+                tt::LogMetal,
+                "[incremental-fast] before any user read: pending_events={}, issues={}, markers={} (writes={})",
+                summary.pending_events,
+                summary.issues,
+                markers,
+                writes);
+
+            EXPECT_GT(summary.issues, 0u) << "no issue detected before a user read -- processing is deferred to reads";
             EXPECT_LT(summary.pending_events, writes / 2) << "pending events accumulated unprocessed";
             EXPECT_LT(markers, writes / 2) << "marker set accumulated undischarged";
         },
