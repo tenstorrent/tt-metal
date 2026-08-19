@@ -48,7 +48,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
-from models.demos.deepseek_v3_d_p.utils.test_utils import save_intermediate_output
+from models.demos.deepseek_v3_d_p.utils.test_utils import save_intermediate_output, token_normalized
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_1K_PATH,
     ReferenceCacheKey,
@@ -87,7 +87,21 @@ SEQ_LEN_5K = 5120
 SEQ_LEN_25K = 25600
 
 
-def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_padded_tokens, padding_side):
+def _compare_intermediate_pcc(
+    reference_items, tt_intermediates, number_of_non_padded_tokens, padding_side, robust_out=None
+):
+    """Per-stage PCC of TT intermediates against the reference, as [(label, pcc), ...].
+
+    `robust_out`, if given, is additionally filled with a per-token RMS-normalized PCC per label.
+    That second number exists because raw PCC on late-layer hidden states measures almost nothing
+    but outliers: this model develops massive activations (measured on the 1k reference — absmax
+    429 vs rms 0.35 at layer 5, where the top 0.01% of elements hold 95% of the total squared
+    energy, and max/rms is still ~120-165 through layers 30-35). A handful of channels therefore
+    set the raw PCC, which is why the tail layers can read ~0.17 while `norm` — computed from
+    layer 35's own output, but per-token rescaled by RMSNorm — reads 0.959 and the sampled first
+    token matches the reference exactly. Normalizing the same way makes the per-layer curve
+    comparable across depth. The pass/fail gate stays on the raw metric; this is an instrument.
+    """
     pcc_results = []
     for label, ref_host in reference_items:
         # For lm_head TT only emits logits at the next-token position, not the full sequence.
@@ -116,12 +130,17 @@ def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_p
 
         tt_host = tt_intermediates[label]
         try:
-            _, pcc = comp_pcc(
-                slice_non_padded(ref_host, number_of_non_padded_tokens, padding_side).float(),
-                slice_non_padded(tt_host, number_of_non_padded_tokens, padding_side).float(),
-            )
+            ref_slice = slice_non_padded(ref_host, number_of_non_padded_tokens, padding_side).float()
+            tt_slice = slice_non_padded(tt_host, number_of_non_padded_tokens, padding_side).float()
+            _, pcc = comp_pcc(ref_slice, tt_slice)
             logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
             pcc_results.append((label, pcc))
+            if robust_out is not None:
+                try:
+                    _, npcc = comp_pcc(token_normalized(ref_slice), token_normalized(tt_slice))
+                    robust_out[label] = npcc
+                except Exception as e:  # the raw number is the gate; this one is diagnostic
+                    logger.debug(f"{label:<20s}  normalized PCC unavailable: {e}")
         except Exception as e:
             logger.error(f"{label:<20s}  PCC comparison failed: {e}")
             pcc_results.append((label, -1.0))
@@ -637,12 +656,14 @@ def run_model(
             ref_labels = ["embed"] + [f"layer_{i}" for i in range(num_layers)] + ["norm", "lm_head"]
             reference_items = zip(ref_labels, ref_snapshots)
 
+        robust_pcc = {}
         pcc_results.extend(
             _compare_intermediate_pcc(
                 reference_items,
                 tt_intermediates,
                 number_of_non_padded_tokens,
                 padding_side,
+                robust_out=robust_pcc,
             )
         )
 
@@ -657,6 +678,17 @@ def run_model(
             if is_balanced:
                 tt_kvpe_all_layers = reverse_reorder_tensor_chunks(tt_kvpe_all_layers, chunk_order, seq_dim=2)
             kv_lora_rank = config.kv_lora_rank
+            # A reference that stores anything other than the compressed [kv | pe] line cannot be
+            # compared against the device's latent cache, and the slices below would not say so:
+            # `[..., :kv_lora_rank]` on a narrower last dim just clamps. Name the mismatch instead.
+            expected_last = kv_lora_rank + config.qk_rope_head_dim
+            if ref_kvpe_list and ref_kvpe_list[0].shape[-1] != expected_last:
+                raise AssertionError(
+                    f"reference KVPE last dim {ref_kvpe_list[0].shape[-1]} != {expected_last} "
+                    f"(kv_lora_rank {kv_lora_rank} + qk_rope_head_dim {config.qk_rope_head_dim}); "
+                    f"shape {tuple(ref_kvpe_list[0].shape)} is not the compressed MLA line the "
+                    "device caches -- see reference_kvpe_for_layer"
+                )
             for i, ref_kvpe in enumerate(ref_kvpe_list):
                 tt_kvpe_layer = tt_kvpe_all_layers[i : i + 1, :, :, :]
                 label = f"layer_{i}_kvpe"
@@ -713,16 +745,20 @@ def run_model(
         profiler.end("pcc_validation")
 
         # --- Summary table ---
-        logger.info(f"\n{'='*50}")
-        logger.info(f"{'Stage':<20s}  {'PCC':>10s}  {'Status':>8s}")
-        logger.info(f"{'-'*50}")
+        logger.info(f"\n{'='*64}")
+        logger.info(f"{'Stage':<20s}  {'PCC':>10s}  {'nPCC':>10s}  {'Status':>8s}")
+        logger.info(f"{'-'*64}")
         failures = []
         for label, pcc in pcc_results:
             status = "PASS" if pcc >= threshold else ("FAIL" if pcc >= 0 else "ERROR")
-            logger.info(f"{label:<20s}  {pcc:>10.6f}  {status:>8s}")
+            # nPCC = per-token RMS-normalized PCC; see _compare_intermediate_pcc. Blank where it
+            # does not apply (KVPE rows, logits).
+            npcc = robust_pcc.get(label)
+            npcc_s = f"{npcc:>10.6f}" if npcc is not None else f"{'-':>10s}"
+            logger.info(f"{label:<20s}  {pcc:>10.6f}  {npcc_s}  {status:>8s}")
             if pcc < threshold:
                 failures.append((label, pcc))
-        logger.info(f"{'='*50}")
+        logger.info(f"{'='*64}")
 
         # --- First token info ---
         tok = tokenizer
@@ -1207,9 +1243,11 @@ def test_glm_prefill_transformer(
     [
         2,
         5,
+        # 9 = 36/4, one PP=4 stage's depth. Pair with mesh-8x1 to run exactly what a stage would.
+        9,
         pytest.param(36, marks=pytest.mark.skipif(not is_galaxy(), reason="Full 36-layer model only on Galaxy")),
     ],
-    ids=["2_layers", "5_layers", "36_layers"],
+    ids=["2_layers", "5_layers", "9_layers", "36_layers"],
 )
 @pytest.mark.parametrize(
     "n_routed_experts, gate_fallback_mode",
@@ -1233,6 +1271,45 @@ def test_glm_prefill_transformer(
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4",
+        ),
+        # TP=1 probe for the PP=4 x (8,1) proposal. A PP stage is SP=8 x TP=1; (32,1) is the closest
+        # shape reachable without an 8-chip TT_VISIBLE_DEVICES carve, and it is CI-listed for
+        # BLACKHOLE_GALAXY with FABRIC_1D (conftest CI_ALLOWED_FABRICS). It keeps experts_per_chip at
+        # 128/32 = 4, the same as mesh-8x4, so the MoE side is unchanged and TP=1 is the only variable.
+        # What this actually tests: that the whole stack (embedding, MLA, MoE, norms, LM head) builds
+        # and runs with no TP axis at all — every collective in the dense path is on the TP axis, so
+        # TP=1 is the one shape where they all disappear.
+        pytest.param(
+            (32, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2,
+            ttnn.Topology.Linear,
+            id="mesh-32x1",
+        ),
+        # The ACTUAL PP=4 stage geometry: SP=8 x TP=1 on 8 chips. Needs an 8-chip carve
+        # (TT_VISIBLE_DEVICES=0..7) since every BLACKHOLE_GALAXY CI_ALLOWED_FABRICS entry uses all 32.
+        #
+        # Why this and not mesh-32x1: (32,1) over-shards the sequence. SP=32 leaves isl/32 tokens per
+        # chip — 32 at isl 1k — and masked_bincount (the MoE routing setup) TT_FATALs unless the
+        # per-chip token count is a multiple of its 64-core grid. At SP=8 it is isl/8 = 128, which is
+        # fine. That also constrains PP chunk sizes: chunk/8 must be a multiple of 64, i.e. chunk must
+        # be a multiple of 512 (CHUNK=5120 -> 640/chip, OK).
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2,
+            ttnn.Topology.Linear,
+            id="mesh-8x1",
         ),
     ],
     indirect=["mesh_device", "device_params"],

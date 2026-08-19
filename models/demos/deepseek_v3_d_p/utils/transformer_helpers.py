@@ -454,6 +454,7 @@ def extract_routed_experts(full_sd, n_routed=None, prefix="", hf_layer=None):
         for j in range(num_experts)
     ]
 
+
 def extract_layer_state_dict(variant, full_sd, layer_idx, hf_layer):
     """Extract one layer's weights from HF state_dict into TtPrefillBlock format."""
     prefix = f"layers.{layer_idx}."
