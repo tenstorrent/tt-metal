@@ -42,8 +42,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
-import subprocess
 from pathlib import Path
 
 # ONE state directory for every durable temp artifact -- see cc_optimize/tmpstate.py.
@@ -78,6 +76,26 @@ class _Unknown:
 
 
 UNKNOWN = _Unknown()
+
+
+def ask_cli(prompt: str, timeout: int = 120) -> str:
+    """Ask the local `claude` CLI one question and return its text. "" when it cannot be asked.
+
+    THE SAME FOUR LINES, THREE TIMES -- twice in this file and once in summary.py: resolve the
+    binary, run it with -p and --output-format text, guard the timeout, take stdout. What each
+    caller does with the answer differs and is worth keeping separate; getting the answer is not.
+    """
+    import shutil as _shutil
+    import subprocess as _sp
+
+    claude = _shutil.which("claude")
+    if not claude:
+        return ""
+    try:
+        r = _sp.run([claude, "-p", prompt, "--output-format", "text"], capture_output=True, text=True, timeout=timeout)
+    except Exception:  # noqa: BLE001 -- an unanswerable question is "", never a failed run
+        return ""
+    return (r.stdout or "") if r.returncode == 0 else ""
 
 
 def normalise(token) -> str:
@@ -124,9 +142,6 @@ def _ask_agent(question: str, options) -> str:
     """One Claude Code call, answer constrained to `options`. Empty string when unavailable."""
     if os.environ.get("PERF_MCP_NO_AGENT_CLASSIFY") == "1":
         return ""
-    claude = shutil.which("claude")
-    if not claude:
-        return ""
     opts = [str(o) for o in options]
     prompt = (
         question
@@ -135,10 +150,8 @@ def _ask_agent(question: str, options) -> str:
         + "\nIf none genuinely applies, answer: unknown"
     )
     try:
-        r = subprocess.run(
-            [claude, "-p", prompt, "--output-format", "text"], capture_output=True, text=True, timeout=120
-        )
-        ans = normalise((r.stdout or "").strip().splitlines()[-1] if (r.stdout or "").strip() else "")
+        _out = ask_cli(prompt)
+        ans = normalise(_out.strip().splitlines()[-1] if _out.strip() else "")
         return ans if ans in {normalise(o) for o in opts} else ""
     except Exception:  # noqa: BLE001
         return ""
@@ -195,9 +208,7 @@ def ask_number(question: str, lo: float, hi: float, cache_key: str = "") -> floa
             return max(lo, min(hi, float(hit)))
         except (TypeError, ValueError):
             return 0.0
-    claude = shutil.which("claude")
-    if not claude:
-        return 0.0
+    # ask_cli resolves the binary and returns "" when there is none.
     prompt = (
         question
         + "\n\nAnswer with ONE integer number of seconds and nothing else. It must be between "
@@ -206,10 +217,7 @@ def ask_number(question: str, lo: float, hi: float, cache_key: str = "") -> floa
         "from evidence)." % (int(lo), int(hi))
     )
     try:
-        r = subprocess.run(
-            [claude, "-p", prompt, "--output-format", "text"], capture_output=True, text=True, timeout=120
-        )
-        digits = "".join(ch for ch in (r.stdout or "") if ch.isdigit() or ch == " ").split()
+        digits = "".join(ch for ch in ask_cli(prompt) if ch.isdigit() or ch == " ").split()
         if not digits:
             return 0.0
         val = max(lo, min(hi, float(digits[-1])))

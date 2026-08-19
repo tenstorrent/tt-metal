@@ -13,8 +13,6 @@ import importlib.util
 import json
 import os
 import sys
-import shutil
-import subprocess
 from pathlib import Path
 
 # ONE state directory for every durable temp artifact -- see cc_optimize/tmpstate.py. Loaded by path
@@ -218,9 +216,7 @@ def _alias_cache_put(key: str, col: str) -> None:
 def _classify_via_agent(kind: str, note: str, op_signature: str) -> str:
     if os.environ.get("PERF_MCP_NO_AGENT_CLASSIFY") == "1":
         return "other"
-    claude = shutil.which("claude")
-    if not claude:
-        return "other"
+    # ask_cli resolves the binary and returns "" when there is none.
     prompt = (
         "Classify ONE optimization attempt into exactly one ladder column.\n\n"
         f"columns: {', '.join(_LEVEL_COLS)}, other\n"
@@ -232,10 +228,10 @@ def _classify_via_agent(kind: str, note: str, op_signature: str) -> str:
         'Reply with ONLY: {"column":"<one of the above>"}'
     )
     try:
-        r = subprocess.run(
-            [claude, "-p", prompt, "--output-format", "text"], capture_output=True, text=True, timeout=120
-        )
-        out = (r.stdout or "").strip()
+        # integrity owns the CLI call; this was the third copy of it.
+        from agent.integrity import ask_cli
+
+        out = ask_cli(prompt).strip()
         i, j = out.find("{"), out.rfind("}")
         col = json.loads(out[i : j + 1]).get("column", "other")
         return col if (col in _LEVEL_COLS or col == "other") else "other"

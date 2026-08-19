@@ -2116,30 +2116,13 @@ def check_pcc() -> dict:
 
 
 def _pg_cpu_jiffies(pgid):
-    total = 0
+    # probes owns the /proc walk; this was one of four copies of it.
     try:
-        entries = os.listdir("/proc")
-    except OSError:
+        from agent.probes import _pgroup_cpu_jiffies
+
+        return _pgroup_cpu_jiffies(pgid)
+    except Exception:  # noqa: BLE001
         return 0
-    target = str(pgid)
-    for entry in entries:
-        if not entry.isdigit():
-            continue
-        try:
-            with open("/proc/%s/stat" % entry) as fh:
-                data = fh.read()
-        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
-            continue
-        rp = data.rfind(")")
-        if rp == -1:
-            continue
-        fields = data[rp + 2 :].split()
-        if len(fields) > 12 and fields[2] == target:
-            try:
-                total += int(fields[11]) + int(fields[12])
-            except ValueError:
-                pass
-    return total
 
 
 class _AdaptiveResult:

@@ -3027,30 +3027,14 @@ def _reclaim_device(devices: str, error_text: str = "", after_kill: bool = False
 
 
 def _pg_cpu_jiffies(pgid: int) -> int:
-    total = 0
+    # PROBES OWNS THE /proc WALK. This was a verbatim copy of probes._pgroup_cpu_jiffies.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
-        entries = os.listdir("/proc")
-    except OSError:
+        from agent.probes import _pgroup_cpu_jiffies
+
+        return _pgroup_cpu_jiffies(pgid)
+    except Exception:  # noqa: BLE001
         return 0
-    target = str(pgid)
-    for entry in entries:
-        if not entry.isdigit():
-            continue
-        try:
-            with open(f"/proc/{entry}/stat") as fh:
-                data = fh.read()
-        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
-            continue
-        rp = data.rfind(")")
-        if rp == -1:
-            continue
-        fields = data[rp + 2 :].split()
-        if len(fields) > 12 and fields[2] == target:
-            try:
-                total += int(fields[11]) + int(fields[12])
-            except ValueError:
-                pass
-    return total
 
 
 def _tree_cpu_jiffies(root_pid: int) -> int:
@@ -3059,75 +3043,36 @@ def _tree_cpu_jiffies(root_pid: int) -> int:
     (its own pgrp), so _pg_cpu_jiffies(pgid) cannot see its CPU -- and the no-output watchdog would
     then false-kill a validation that is actually pegging the device (observed on XTTS: a ~10 min
     perf-test validation killed as a wedge). Walking the tree counts that busy child as progress."""
-    ppid_of: dict[int, int] = {}
-    cpu_of: dict[int, int] = {}
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
-        entries = os.listdir("/proc")
-    except OSError:
+        from agent.probes import _proc_stat_fields
+    except Exception:  # noqa: BLE001
         return 0
-    for entry in entries:
-        if not entry.isdigit():
-            continue
-        try:
-            with open(f"/proc/{entry}/stat") as fh:
-                data = fh.read()
-        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
-            continue
-        rp = data.rfind(")")
-        if rp == -1:
-            continue
-        fields = data[rp + 2 :].split()  # [0]=state [1]=ppid [2]=pgrp ... [11]=utime [12]=stime
-        if len(fields) <= 12:
-            continue
-        try:
-            ppid_of[int(entry)] = int(fields[1])
-            cpu_of[int(entry)] = int(fields[11]) + int(fields[12])
-        except (ValueError, IndexError):
-            continue
-    children: dict[int, list] = {}
-    for pid, ppid in ppid_of.items():
-        children.setdefault(ppid, []).append(pid)
-    total = 0
-    stack = [int(root_pid)]
-    seen: set = set()
+    kids: dict = {}
+    jiff: dict = {}
+    for pid, f in _proc_stat_fields():
+        if len(f) > 12:
+            kids.setdefault(int(f[1]), []).append(pid)
+            try:
+                jiff[pid] = int(f[11]) + int(f[12])
+            except ValueError:
+                jiff[pid] = 0
+    total, stack = jiff.get(int(root_pid), 0), [int(root_pid)]
     while stack:
-        pid = stack.pop()
-        if pid in seen:
-            continue
-        seen.add(pid)
-        total += cpu_of.get(pid, 0)
-        stack.extend(children.get(pid, []))
+        for kid in kids.get(stack.pop(), ()):
+            total += jiff.get(kid, 0)
+            stack.append(kid)
     return total
 
 
 def _llm_child_alive(pgid: int) -> bool:
-    target = str(pgid)
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
-        entries = os.listdir("/proc")
-    except OSError:
+        from agent.probes import _proc_stat_fields
+    except Exception:  # noqa: BLE001
         return False
-    for entry in entries:
-        if not entry.isdigit():
-            continue
-        try:
-            with open(f"/proc/{entry}/stat") as fh:
-                data = fh.read()
-        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
-            continue
-        rp = data.rfind(")")
-        if rp == -1:
-            continue
-        fields = data[rp + 2 :].split()
-        if len(fields) <= 2 or fields[2] != target:
-            continue
-        try:
-            with open(f"/proc/{entry}/cmdline", "rb") as fh:
-                cmd = fh.read().replace(b"\x00", b" ").decode("utf-8", "ignore").lower()
-        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
-            continue
-        if "claude" in cmd:
-            return True
-    return False
+    target = str(pgid)
+    return any(len(f) > 2 and f[2] == target for _pid, f in _proc_stat_fields())
 
 
 # Defined by perf_mcp, which emits them; named here so the watchdog can recognise a cooling child.
@@ -3565,13 +3510,12 @@ def _baseline_ceiling(repo_root: Path) -> tuple[float, int]:
             ceil = int(cfg.get("timeout", ceil) or ceil)
         except Exception:  # noqa: BLE001
             pass
+        # probes owns this parse; it was written out identically in three places.
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         try:
-            for ln in (mani.parent / "events.jsonl").read_text().splitlines():
-                if not ln.strip():
-                    continue
-                e = json.loads(ln)
-                if e.get("stage") == "tracy_baseline" and e.get("event") == "done" and e.get("seconds"):
-                    base = float(e["seconds"])
+            from agent.probes import observed_tracy_baseline_seconds
+
+            base = observed_tracy_baseline_seconds(mani) or base
         except Exception:  # noqa: BLE001
             pass
     return base, ceil

@@ -27,6 +27,29 @@ from typing import Any, Callable
 from .environment import EnvironmentError_
 
 
+def observed_tracy_baseline_seconds(manifest_path) -> float:
+    """Seconds the tracy baseline took, from the run's own events.jsonl. 0.0 when not recorded.
+
+    THREE PLACES PARSED THIS, identically: adaptive_backstop and adaptive_op_timeout here, and
+    run.py's _baseline_ceiling -- each opening events.jsonl beside the manifest, skipping blank
+    lines, json-loading each one and matching stage == "tracy_baseline" with event == "done". Three
+    copies of one file format is three places to change when the event is renamed, and nothing to
+    keep them agreeing meanwhile.
+    """
+    try:
+        import json as _json
+
+        for ln in (Path(manifest_path).parent / "events.jsonl").read_text().splitlines():
+            if not ln.strip():
+                continue
+            e = _json.loads(ln)
+            if e.get("stage") == "tracy_baseline" and e.get("event") == "done" and e.get("seconds"):
+                return float(e["seconds"])
+    except Exception:  # noqa: BLE001 -- an unreadable log is no observation, never a failure
+        return 0.0
+    return 0.0
+
+
 def adaptive_backstop(floor_default: int = 3600, mult: int = 3, env_key: str = "PERF_MCP_MEASURE_BACKSTOP") -> int:
     """Hard backstop for a long device operation.
 
@@ -56,15 +79,7 @@ def adaptive_backstop(floor_default: int = 3600, mult: int = 3, env_key: str = "
             ceil = int(cfg.get("timeout", ceil) or ceil)
         except Exception:  # noqa: BLE001
             pass
-        try:
-            for ln in (m.parent / "events.jsonl").read_text().splitlines():
-                if not ln.strip():
-                    continue
-                e = json.loads(ln)
-                if e.get("stage") == "tracy_baseline" and e.get("event") == "done" and e.get("seconds"):
-                    base = float(e["seconds"])
-        except Exception:  # noqa: BLE001
-            pass
+        base = observed_tracy_baseline_seconds(m) or base
     if ceil < floor:
         ceil = floor
     return min(ceil, max(floor, int(mult * base)))
@@ -111,15 +126,7 @@ def adaptive_op_timeout(op: str, *, env_key: str = "", mult: float = 0.0) -> int
         except Exception:  # noqa: BLE001
             pass
         if cost <= 0:
-            try:
-                for ln in (m.parent / "events.jsonl").read_text().splitlines():
-                    if not ln.strip():
-                        continue
-                    e = json.loads(ln)
-                    if e.get("stage") == "tracy_baseline" and e.get("event") == "done" and e.get("seconds"):
-                        base = float(e["seconds"])
-            except Exception:  # noqa: BLE001
-                pass
+            base = observed_tracy_baseline_seconds(m) or base
 
     if cost > 0:
         # OBSERVED cost for this very operation on this very model: the only precise input.
@@ -480,94 +487,71 @@ def build_tracy_command(perf_test: str, case: str | None, out_dir: str | Path) -
     return cmd
 
 
+def _proc_stat_fields():
+    """(pid, fields) for every live process, with the comm field already stepped over.
+
+    THE SAME EIGHT LINES, FOUR TIMES. Walking /proc, opening <pid>/stat, skipping past the comm --
+    which is parenthesised and may itself contain spaces or a ')', so the split must start after the
+    LAST one -- and splitting the rest, was written out in _pgroup_cpu_jiffies, _descendant_pids,
+    the pids-in-group helper below, and again verbatim as run.py's _pg_cpu_jiffies. Only the fields
+    each wanted differed: 11 and 12 for jiffies, 1 for the parent, 2 for the process group.
+
+    A generator, so a caller reads the fields it needs and nothing accumulates a list of every
+    process on the machine.
+    """
+    import os as _os
+
+    try:
+        entries = _os.listdir("/proc")
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        try:
+            with open("/proc/%s/stat" % entry) as fh:
+                data = fh.read()
+        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+            continue
+        rp = data.rfind(")")
+        if rp == -1:
+            continue
+        yield int(entry), data[rp + 2 :].split()
+
+
 def _pgroup_cpu_jiffies(pgid: int) -> int:
     """Sum utime+stime (jiffies) over all live PIDs in process group `pgid`, from /proc.
     Liveness signal: a process doing real work (e.g. compiling kernels) keeps accruing CPU;
     a hung/deadlocked one blocked on a lock or I/O accrues ~none. Best-effort; 0 on any error."""
     total = 0
-    try:
-        entries = os.listdir("/proc")
-    except OSError:
-        return 0
     target = str(pgid)
-    for entry in entries:
-        if not entry.isdigit():
-            continue
-        try:
-            with open(f"/proc/{entry}/stat") as fh:
-                data = fh.read()
-        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
-            continue
-        rp = data.rfind(")")
-        if rp == -1:
-            continue
-        fields = data[rp + 2 :].split()
+    for _pid, fields in _proc_stat_fields():
         if len(fields) > 12 and fields[2] == target:
             try:
                 total += int(fields[11]) + int(fields[12])
             except ValueError:
-                pass
+                continue
     return total
 
 
 def _descendant_pids(root_pid: int) -> list[int]:
     children: dict[int, list[int]] = {}
-    try:
-        entries = os.listdir("/proc")
-    except OSError:
-        return []
-    for entry in entries:
-        if not entry.isdigit():
-            continue
-        try:
-            with open(f"/proc/{entry}/stat") as fh:
-                data = fh.read()
-        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
-            continue
-        rp = data.rfind(")")
-        if rp == -1:
-            continue
-        fields = data[rp + 2 :].split()
+    for pid, fields in _proc_stat_fields():
         if len(fields) > 1:
-            children.setdefault(int(fields[1]), []).append(int(entry))
+            children.setdefault(int(fields[1]), []).append(pid)
     out, stack = [], [root_pid]
     while stack:
         pid = stack.pop()
-        for c in children.get(pid, []):
-            out.append(c)
-            stack.append(c)
+        for kid in children.get(pid, ()):
+            out.append(kid)
+            stack.append(kid)
     return out
 
 
 def _pgroup_members(pgid) -> list:
     """Live PIDs whose process group is `pgid`, from /proc. Best-effort; [] on any error."""
-    out = []
-    try:
-        target = int(pgid)
-    except (TypeError, ValueError):
-        return out
-    if target <= 0:
-        return out
-    try:
-        entries = os.listdir("/proc")
-    except OSError:
-        return out
-    for entry in entries:
-        if not entry.isdigit():
-            continue
-        try:
-            with open(f"/proc/{entry}/stat") as fh:
-                data = fh.read()
-        except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
-            continue
-        rp = data.rfind(")")
-        if rp == -1:
-            continue
-        fields = data[rp + 2 :].split()
-        # after comm: state(0) ppid(1) pgrp(2)
-        if len(fields) > 2 and fields[2] == str(target):
-            out.append(int(entry))
-    return out
+    target = str(pgid)
+    return [pid for pid, fields in _proc_stat_fields() if len(fields) > 2 and fields[2] == target]
 
 
 def _reap_process_group(pgid) -> list:

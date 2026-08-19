@@ -36,14 +36,8 @@ import subprocess
 from pathlib import Path
 
 # ONE state directory for every durable temp artifact -- see cc_optimize/tmpstate.py.
-import importlib.util as _ilu_ts
-
-_ts_spec = _ilu_ts.spec_from_file_location(
-    "_tmpstate", str(Path(__file__).resolve().parent.parent / "cc_optimize" / "tmpstate.py")
-)
-_tmpstate = _ilu_ts.module_from_spec(_ts_spec)
-_ts_spec.loader.exec_module(_tmpstate)
-state_dir = _tmpstate.state_dir
+# agent/state_dir.py loads cc_optimize/tmpstate.py by path, once, for the four modules that need it.
+from .state_dir import state_dir
 
 
 TT_SMI = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
