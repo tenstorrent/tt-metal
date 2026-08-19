@@ -353,8 +353,6 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
                                the run-0 init (W-stride -> 32 rows) and the uninit
                                (W-stride -> 64 rows). The two must agree: a block packed
                                dense and torn down non-dense is not a supported call.
-    ``UNINIT_RESTORE_MOP``     the ``restore_tile_pack_mop`` template argument, i.e.
-                               whether the uninit reinstalls the Default tile-pack MOP.
     ``UNINIT_SKIP``            negative control -- drop the uninit entirely. Not a
                                supported configuration; it exists to prove the restores
                                are load-bearing rather than incidentally redundant.
@@ -368,7 +366,6 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
     """
 
     dense_packing: bool = False
-    restore_mop: bool = False
     skip: bool = False
     block_mop_num_faces: int = 2
 
@@ -376,7 +373,6 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
         return "\n".join(
             [
                 f"constexpr bool UNINIT_DENSE_PACKING = {str(self.dense_packing).lower()};",
-                f"constexpr bool UNINIT_RESTORE_MOP = {str(self.restore_mop).lower()};",
                 f"constexpr bool UNINIT_SKIP = {str(self.skip).lower()};",
                 f"constexpr std::uint32_t BLOCK_MOP_NUM_FACES = {self.block_mop_num_faces}u;",
             ]

@@ -2,50 +2,50 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Cross-op packer-state restore test for custom_mm_block_uninit /
+// Packer W-stride restore test for custom_mm_block_uninit /
 // compressed_custom_mm_block_uninit
-// (api/compute/experimental/{custom_mm,compressed_custom_mm}.h, promoted by
+// (api/compute/experimental/{custom_mm,compressed_custom_mm}.h, merged to main by
 // tt-metal #52727).
 //
-// Both uninits do nothing but conditionally undo two pieces of packer state:
+// As merged, both uninits do exactly one thing:
 //
-//   dense_packing         -> cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>
-//                            back to the default 64-row tile-to-tile stride
-//   restore_tile_pack_mop -> _llk_pack_mop_config_<PackMode::Default>() , reinstalling
-//                            the fixed 32x32 / 4-face tile-pack MOP
+//   dense_packing -> cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW> back to the
+//                    default 64-row tile-to-tile stride
 //
-// Nothing in tt-llk called either uninit before this test, and the pack-MOP restore is
-// the one codegen change in #52727 — so both were entirely unexercised.
+// An earlier revision of #52727 also restored the tile-pack MOP, first unconditionally
+// and then behind a restore_tile_pack_mop flag. **Neither survived review** -- main's
+// uninit has no MOP restore and no such flag, and the fused caller is expected to pair
+// pack_block_contiguous_init with its own uninit instead. This test was written against
+// that earlier revision and has been narrowed to what actually shipped; the MOP-restore
+// coverage is gone because the behaviour is gone.
 //
 // Shape of the test (the established tt-llk uninit-restore pattern, cf.
-// unpack_tilize_uninit_restore_test.cpp and unpack_bcastA_B_uninit_restore_test.cpp):
+// unpack_tilize_uninit_restore_test.cpp):
 //
 //   run 0  Establish the Default pack baseline, apply the dense_packing W-stride if
-//          selected, then swap in the block-contiguous packer MOP -- this is what a
-//          caller's pack_block_contiguous_init (experimental/pack_block.h) does, and
-//          the case the uninit's comment is about: that init "replaces the packer MOP
-//          without owning it". Pack once through it.
+//          selected, then swap in the block-contiguous packer MOP -- what a caller's
+//          pack_block_contiguous_init (experimental/pack_block.h) does. Pack once
+//          through it; output deliberately NOT asserted, since with dense_packing the
+//          stride the packer assumes (32 rows) disagrees with where the datacopy put the
+//          tiles (64 rows) on purpose.
 //
-//          run 0's output is deliberately NOT asserted. Its only job is to leave the
-//          packer in the non-default state; with dense_packing the DEST stride the
-//          packer assumes (32 rows) disagrees with where a plain datacopy put the
-//          tiles (64 rows) on purpose, so its output is expected garbage.
+//   uninit The function under test, replicated statement-for-statement from the compute
+//          API -- which is now just the conditional W-stride write.
 //
-//   uninit The function under test, replicated call-for-call from the compute API,
-//          including the no-argument _llk_pack_mop_config_<Default>() the header
-//          actually issues (all defaults: face_r_dim=16, tile_c_dim=32, num_faces=4,
-//          num_tiles=1).
+//   run 1  A plain per-tile _llk_pack_<PackMode::Default>, with NO packer re-init, so it
+//          packs through whatever state the uninit left.
 //
-//   run 1  A plain per-tile _llk_pack_<PackMode::Default>, with NO packer re-init.
-//          _llk_pack_ executes whatever MOP is installed (ckernel_template::run), so
-//          this reads the restored state directly. On a correct restore it is an
-//          identity copy of the DEST tiles the math thread datacopied in.
+// BLOCK_MOP_NUM_FACES must be 4 here, i.e. the same geometry run 1 needs. That is what
+// isolates the stride: the pack MOP bakes in tile geometry, so at a mismatched geometry
+// (2 faces) run 1 is wrong no matter what the stride is, and the stride restore would be
+// unobservable. At 4 faces the MOP is not a confound and run 1 is correct exactly when
+// the W-stride was restored.
 //
 // Expectation, owned by the python side:
-//   run 1 is correct  <=>  the uninit ran AND restore_tile_pack_mop was set,
-// because run 0 always leaves the block-contiguous MOP installed and only the MOP
-// restore can undo it. UNINIT_SKIP is a negative control that drops the uninit
-// entirely, proving both restores are load-bearing rather than incidental.
+//   run 1 is correct  <=>  dense_packing was not set, OR the uninit ran and restored the
+//                          stride.
+// UNINIT_SKIP is the negative control that drops the uninit entirely, proving the stride
+// restore is load-bearing rather than incidental.
 
 #include <cstdint>
 
@@ -175,11 +175,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (UNINIT_DENSE_PACKING)
         {
             cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(DEFAULT_WSTRIDE);
-        }
-        if constexpr (UNINIT_RESTORE_MOP)
-        {
-            // Exactly the no-argument call the compute API issues.
-            _llk_pack_mop_config_<PackMode::Default>();
         }
     }
 

@@ -2,68 +2,51 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Cross-op packer-state restore test for the custom_mm family's block_uninit
-(Blackhole only).
+Packer W-stride restore test for the custom_mm family's block_uninit (Blackhole only).
 
 ``custom_mm_block_uninit`` and ``compressed_custom_mm_block_uninit``
-(api/compute/experimental/{custom_mm,compressed_custom_mm}.h, promoted by tt-metal
-#52727) are the one behavioural change in that PR, and neither had a caller in tt-llk
-before this test. Both bodies consist entirely of two conditional packer-state restores:
+(api/compute/experimental/{custom_mm,compressed_custom_mm}.h) reached main via tt-metal
+#52727. **As merged, both do exactly one thing:**
 
-    dense_packing         -> W-stride back to the default 64-row tile-to-tile spacing
-    restore_tile_pack_mop -> _llk_pack_mop_config_<PackMode::Default>()
+    dense_packing -> W-stride back to the default 64-row tile-to-tile spacing
 
-Since the two uninits have identical bodies, one driver covers both. Note what that does
-*not* buy: the driver replicates the shared body rather than calling either compute-API
-function, because a tt-llk test cannot include tt_metal/hw/inc/api/compute. So this test
-pins the behaviour the two headers currently share, and a future divergence between them
-is exactly what it cannot catch -- that needs a test on the metal side that calls the
-real entry points.
+Scope changed under this test, and that is worth stating plainly. Earlier revisions of
+#52727 also restored the tile-pack MOP -- first unconditionally, then behind a
+``restore_tile_pack_mop`` flag -- and this file was originally written against that,
+sweeping both polarities of the flag. **Neither restore survived review.** Main has no MOP
+restore and no such flag; the fused caller is expected to pair ``pack_block_contiguous_init``
+with its own uninit instead. The MOP-restore coverage is therefore gone, because the
+behaviour is gone, and what replaces it is a test that the uninit does *not* touch the MOP.
+
+Note what the driver does NOT do: it replicates the uninit body rather than calling either
+compute-API function, because a tt-llk test cannot include tt_metal/hw/inc/api/compute. So
+this pins the behaviour the two headers share, and a divergence between them is what it
+cannot catch. ``test_custom_mm_uninit_parity.py`` guards that textually;
+catching it properly needs a metal-side test calling the real entry points.
 
 How it works
 ------------
-The driver runs two packs separated by the uninit (see the header comment in
-sources/custom_mm_uninit_restore_test.cpp for the full sequence):
+Three runs, per the header comment in sources/custom_mm_uninit_restore_test.cpp:
 
-  run 0  Default pack baseline + optional dense W-stride, then the block-contiguous
-         packer MOP swapped in -- what a caller's ``pack_block_contiguous_init`` does,
-         and precisely the situation the uninit's comment describes ("replaces the
-         packer MOP without owning it"). Output not asserted.
-  uninit The function under test.
-  run 1  Plain per-tile ``_llk_pack_<PackMode::Default>``, no packer re-init. Because
-         ``_llk_pack_`` executes whatever MOP is installed, this reads the restored
-         state directly, and on a correct restore is an identity copy of the DEST tiles.
+  run 0  Default pack baseline + the dense W-stride if selected, then the
+         block-contiguous packer MOP swapped in -- what a caller's
+         ``pack_block_contiguous_init`` does. Output not asserted.
+  uninit The function under test: the conditional W-stride write, and nothing else.
+  run 1  Plain per-tile ``_llk_pack_<PackMode::Default>``, no packer re-init, so it packs
+         through whatever the uninit left.
 
-So run 1 is correct if and only if the uninit ran *and* ``restore_tile_pack_mop`` was
-set -- run 0 always leaves the block MOP installed, and only the MOP restore undoes it.
+``BLOCK_MOP_NUM_FACES`` is what decides which of the two packer states run 1 measures, and
+the two tests below use it deliberately:
 
-Both polarities are asserted, deliberately
-------------------------------------------
-``restore_tile_pack_mop`` defaults to **false**, and that default is documented as
-intentional: the MOP belongs to whichever init programmed it, and an unconditional
-``_llk_pack_mop_config_<Default>()`` would install fixed 32x32 geometry and clobber the
-1x32 configuration this family targets. So `False` is a supported configuration whose
-contract is "the block MOP is still installed on exit", and this test pins that too --
-otherwise a future change making the restore unconditional would look like a pure
-improvement while breaking the fused callers that rely on inheriting the MOP.
+  4 faces  the geometry run 1 wants, so the MOP is not a confound and run 1 is correct
+           exactly when the W-stride was restored. Used by the positive test and by the
+           skip-uninit control.
+  2 faces  a 16x32 tiny tile, a geometry run 1 does not want. Run 1 can only come back
+           correct if something reinstalled the Default MOP -- which main's uninit must
+           not do. Used by the leaves-the-caller-MOP-installed test.
 
 ``skip_uninit`` is a negative control rather than a supported call: it drops the uninit
-entirely, so that "restore worked" cannot be confused with "nothing needed restoring".
-
-Why the run-0 block MOP is programmed with 2 faces
---------------------------------------------------
-The pack MOP bakes in tile geometry, so the MOP restore is only observable when the
-run-0 MOP carries a *different* geometry than the run-1 pack needs. Measured on BH
-p100a, with the block MOP programmed at 4 faces (the same geometry the restore
-installs), run 1 is byte-correct whether or not the restore runs -- the flag is
-unobservable. At 2 faces (a 16x32 tiny tile) the un-restored MOP packs half of each
-tile, giving a 0.50 per-tile match, which is the hazard the uninit's own comment names:
-"installs fixed 32x32 tile geometry -- wrong for 1x32 follow-ons".
-
-test_custom_mm_uninit_pack_mop_restore_is_noop_at_matching_geometry pins that
-observation, because it is the reason the flag is opt-in rather than unconditional: a
-caller whose follow-on geometry already matches gains nothing from the restore and
-would only pay for it.
+entirely, so "the stride was restored" cannot be confused with "nothing needed restoring".
 """
 
 import pytest
@@ -99,9 +82,7 @@ NUM_TILES = 4
 # that divergence needs a test on the metal side that calls the real entry points.
 
 
-def _run(
-    formats, dest_acc, dense_packing, restore_mop, skip_uninit, block_mop_num_faces=2
-):
+def _run(formats, dest_acc, dense_packing, skip_uninit, block_mop_num_faces=4):
     torch.manual_seed(0)
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -118,7 +99,6 @@ def _run(
             PACK_NUM_TILES(NUM_TILES),
             CUSTOM_MM_UNINIT(
                 dense_packing=dense_packing,
-                restore_mop=restore_mop,
                 skip=skip_uninit,
                 block_mop_num_faces=block_mop_num_faces,
             ),
@@ -203,96 +183,72 @@ def _skip_unsupported(formats, dest_acc):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dense_packing=[False, True],
 )
-def test_custom_mm_uninit_restores_pack_mop(request, formats, dest_acc, dense_packing):
-    """restore_tile_pack_mop=True must leave the packer able to pack plain tiles."""
+def test_custom_mm_uninit_restores_dense_wstride(
+    request, formats, dest_acc, dense_packing
+):
+    """The uninit must put the 64-row tile-to-tile W-stride back.
+
+    This is the whole of what ``*_block_uninit`` does as merged. The run-0 block MOP is
+    programmed at the geometry run 1 needs (4 faces), so the MOP is not a confound and
+    run 1 is correct exactly when the stride was restored. With ``dense_packing=False``
+    there is nothing to restore and run 1 must be correct trivially -- that arm is the
+    baseline proving the driver itself is sound.
+    """
     _skip_unsupported(formats, dest_acc)
     if dense_packing and formats.output_format.is_32_bit():
         request.node.add_marker(
             pytest.mark.xfail(reason=_DENSE_FP32_XFAIL, strict=False)
         )
 
-    golden, device = _run(
-        formats, dest_acc, dense_packing, restore_mop=True, skip_uninit=False
-    )
+    golden, device = _run(formats, dest_acc, dense_packing, skip_uninit=False)
 
     assert passed_test(golden, device, formats.output_format), (
-        f"custom_mm/compressed_custom_mm _block_uninit<dense_packing={dense_packing}, "
-        "restore_tile_pack_mop=true> did not restore a usable tile-pack state: the "
-        "following plain _llk_pack_ did not reproduce the DEST tiles"
+        f"custom_mm/compressed_custom_mm _block_uninit<dense_packing={dense_packing}> "
+        "did not leave the packer able to pack plain tiles: the following plain "
+        "_llk_pack_ did not reproduce the DEST tiles"
     )
 
 
 @parametrize(
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    dense_packing=[False, True],
 )
-def test_custom_mm_uninit_keeps_pack_mop_when_not_asked(
-    formats, dest_acc, dense_packing
-):
-    """restore_tile_pack_mop=False must leave the caller's block MOP installed.
+def test_custom_mm_uninit_is_load_bearing(formats, dest_acc):
+    """Negative control: drop the uninit and the dense stride must still be wrong.
 
-    The inverse of the test above, and a real contract rather than an accident: fused
-    callers deliberately inherit the block-contiguous MOP across ops, which is why the
-    flag defaults to false. If this starts passing, the restore has become unconditional
-    and those callers are silently getting 32x32 tile geometry.
+    Without this, "the stride was restored" cannot be told apart from "nothing needed
+    restoring". Only ``dense_packing=True`` is driven, because that is the only case in
+    which the uninit writes anything at all.
     """
     _skip_unsupported(formats, dest_acc)
 
-    golden, device = _run(
-        formats, dest_acc, dense_packing, restore_mop=False, skip_uninit=False
-    )
+    golden, device = _run(formats, dest_acc, dense_packing=True, skip_uninit=True)
 
     assert not passed_test(golden, device, formats.output_format, print_errors=False), (
-        "custom_mm/compressed_custom_mm _block_uninit<restore_tile_pack_mop=false> left "
-        "the packer in a state where a plain _llk_pack_ reproduced the DEST tiles -- the "
-        "block MOP installed before the uninit appears to have been restored anyway"
+        "run 1 reproduced the DEST tiles even though the uninit was skipped and the "
+        "dense 32-row W-stride was left in place. Either the stride no longer affects "
+        "the pack, or the driver is not actually applying it -- in both cases the "
+        "positive test above proves nothing."
     )
 
 
 @parametrize(
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    dense_packing=[False, True],
 )
-def test_custom_mm_uninit_is_load_bearing(formats, dest_acc, dense_packing):
-    """Negative control: with the uninit dropped entirely, run 1 must be wrong.
+def test_custom_mm_uninit_leaves_the_caller_mop_installed(formats, dest_acc):
+    """The uninit must NOT touch the packer MOP -- that is the merged contract.
 
-    Guards against the whole test degenerating into a tautology -- if run 1 passed
-    without any uninit at all, then neither restore would be doing anything and the
-    two tests above would be measuring nothing.
-    """
-    _skip_unsupported(formats, dest_acc)
+    An earlier revision of #52727 restored the tile-pack MOP here, first unconditionally
+    and then behind a ``restore_tile_pack_mop`` flag; neither survived review. Main leaves
+    the MOP to whichever init programmed it, and the fused caller is expected to pair
+    ``pack_block_contiguous_init`` with its own uninit.
 
-    golden, device = _run(
-        formats, dest_acc, dense_packing, restore_mop=True, skip_uninit=True
-    )
-
-    assert not passed_test(golden, device, formats.output_format, print_errors=False), (
-        "run 1 reproduced the DEST tiles with no uninit at all, so neither the "
-        "W-stride nor the pack-MOP restore is observable here -- this test has lost "
-        "its teeth and the setup needs revisiting"
-    )
-
-
-@parametrize(
-    formats=FORMATS,
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    restore_mop=[False, True],
-)
-def test_custom_mm_uninit_pack_mop_restore_is_noop_at_matching_geometry(
-    formats, dest_acc, restore_mop
-):
-    """With the block MOP at the same geometry the restore installs, the flag is inert.
-
-    Both polarities must produce a correct run 1. This is the counterpart to
-    test_custom_mm_uninit_keeps_pack_mop_when_not_asked: there the block MOP carries a
-    different face count and the flag decides correctness, here it carries the same one
-    and the flag cannot be observed at all.
-
-    Pinning it documents the scope of the restore -- it re-establishes *geometry*, not
-    some broader packer reset -- and explains why an opt-in flag is the right shape:
-    callers already at 32x32 gain nothing from paying for it.
+    So this pins the *absence* of a restore, which is what a future change re-adding one
+    would break. The run-0 block MOP is programmed at 2 faces (a 16x32 tiny tile), a
+    geometry run 1 does not want: if the uninit reinstalled the Default 32x32/4-face MOP
+    the pack would come back correct, and it must not. ``dense_packing`` is off so the
+    stride is not a second reason to fail.
     """
     _skip_unsupported(formats, dest_acc)
 
@@ -300,14 +256,13 @@ def test_custom_mm_uninit_pack_mop_restore_is_noop_at_matching_geometry(
         formats,
         dest_acc,
         dense_packing=False,
-        restore_mop=restore_mop,
         skip_uninit=False,
-        block_mop_num_faces=4,
+        block_mop_num_faces=2,
     )
 
-    assert passed_test(golden, device, formats.output_format), (
-        f"custom_mm/compressed_custom_mm _block_uninit<restore_tile_pack_mop="
-        f"{restore_mop}> did not leave a usable tile-pack state even though the block MOP "
-        "already carried the matching 4-face geometry -- something other than geometry is "
-        "being disturbed"
+    assert not passed_test(golden, device, formats.output_format, print_errors=False), (
+        "run 1 packed correctly through a 2-face block MOP that nothing reinstalled, "
+        "which means the uninit restored the Default tile-pack MOP. Main's uninit does "
+        "not do that, and callers inheriting the block MOP across ops depend on it not "
+        "doing it -- see the note in sources/custom_mm_uninit_restore_test.cpp."
     )
