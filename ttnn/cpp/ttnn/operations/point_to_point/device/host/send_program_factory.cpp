@@ -28,12 +28,16 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
     // basic accounting
     const uint32_t input_num_pages = data_movement::get_num_pages(input_tensor);
     const uint32_t input_page_size_bytes = input_tensor.tensor_spec().compute_page_size_bytes();
-    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    // Framing (packet dims, CB sizing, local packet-stride ct arg) must use the input tensor's OWN
+    // buffer alignment (DRAM alignment on Blackhole is 64B, not L1's 16B) -- otherwise CBs sized for
+    // an under-aligned page overflow once the reader/writer TensorAccessors below read/write the
+    // buffer's true aligned page size.
+    const uint32_t buffer_alignment = input_tensor.buffer()->alignment();
 
     // figure out packets
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
         ::ttnn::ccl::dataflow::ccl_packet_dims(
-            input_tensor.dtype(), input_page_size_bytes, input_num_pages, l1_alignment);
+            input_tensor.dtype(), input_page_size_bytes, input_num_pages, buffer_alignment);
 
     // eventually add more cores for multi-link
     const CoreCoord use_cores = {1, 1};
@@ -48,7 +52,7 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
     // Note this ID is hardcoded in the reader kernel
     constexpr auto sender_cb_id = tt::CBIndex::c_0;
     constexpr auto cb_num_pages = 2;
-    const uint32_t aligned_input_page_size_bytes = tt::round_up(input_page_size_bytes, l1_alignment);
+    const uint32_t aligned_input_page_size_bytes = tt::round_up(input_page_size_bytes, buffer_alignment);
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = cb_num_pages * aligned_input_page_size_bytes,
@@ -93,7 +97,7 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
     const auto [num_hops, dst_is_forward, next_fabric_id] =
         ::ttnn::ccl::dataflow::ccl_dm_route(mesh_device, send_coord, receive_coord, topology);
 
-    std::vector<uint32_t> writer_ct_args = {sender_cb_id, packet_cb_id, l1_alignment};
+    std::vector<uint32_t> writer_ct_args = {sender_cb_id, packet_cb_id, buffer_alignment};
     tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(writer_ct_args);
 
     tt::tt_metal::KernelDescriptor writer_kernel_desc;
@@ -134,7 +138,11 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
         reader_rt_args.push_back(input_tensor.buffer());
         reader_rt_args.push_back(increment);
         reader_rt_args.push_back(page_idx_start);
-        reader_rt_args.push_back(input_page_size_bytes);
+        // arg[3] is consumed by reader_unary_interleaved_start_id_gen.cpp's TensorAccessor ctor as an
+        // override of TensorAccessorArgs::AlignedPageSize -- it must be the buffer's ALIGNED page size
+        // (matches s.get_aligned_page_size() used for the noc_async_read below), not the raw/logical
+        // page size, or odd-indexed pages address wrong when raw != aligned (e.g. unaligned RM DRAM).
+        reader_rt_args.push_back(static_cast<uint32_t>(input_tensor.buffer()->aligned_page_size()));
         desc.kernels[send_unary_reader_kernel_id].emplace_runtime_args(c, reader_rt_args);
 
         // Writer RT args. The fabric-connection block (built by the host helper, which owns its
