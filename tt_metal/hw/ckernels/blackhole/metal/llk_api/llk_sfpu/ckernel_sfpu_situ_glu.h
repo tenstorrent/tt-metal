@@ -33,11 +33,14 @@ struct SituGluConfigKimi {
 
 // Newton reciprocal with 2.0 as a literal. The stock sfpu_reciprocal_iter reads that
 // constant from vConstFloatPrgm0, which tanh_init has loaded with a tanh coefficient.
-// Identical to sfpu_reciprocal_iter for MAX_ITER >= 1, the only values instantiated here;
-// it drops the stock MAX_ITER == 0 case, which returns the raw estimate. Keep in sync with recip.h.
+// Identical to sfpu_reciprocal_iter: MAX_ITER == 0 returns the raw estimate and positive values
+// apply the same guarded Newton refinements. Keep in sync with recip.h.
 template <int MAX_ITER>
 sfpi_inline sfpi::vFloat _situ_glu_reciprocal_(const sfpi::vFloat x) {
     sfpi::vFloat y = sfpi::approx_recip(x);
+    if constexpr (MAX_ITER == 0) {
+        return y;
+    }
     // t is negated so NaN detection is a sign check (comparisons against NaN are all
     // false, keeping the correct seed for x=0/inf). `- 0.0f` is SFPMAD shape and
     // preserves signed zero.
@@ -80,9 +83,16 @@ inline void calculate_situ_glu(const uint gate_tile_idx, const uint up_tile_idx,
         sfpi::vFloat gate = sfpi::dst_reg[gate_tile_idx * dst_tile_size];
         sfpi::vFloat up = sfpi::dst_reg[up_tile_idx * dst_tile_size];
 
-        // sigmoid takes the raw gate, not the capped value.
-        sfpi::vFloat situ_a =
-            _sfpu_softcap_(gate, beta_gate, inv_beta_gate) * _situ_glu_sigmoid_<is_fp32_dest_acc_en>(gate);
+        sfpi::vFloat gate_tanh = _sfpu_tanh_polynomial_(gate * inv_beta_gate);
+        sfpi::vFloat sigmoid;
+        if constexpr (is_fp32_dest_acc_en) {
+            sigmoid = _situ_glu_sigmoid_<true>(gate);
+        } else {
+            // With t=tanh(gate/4), tanh(gate/2)=2t/(1+t^2). Reusing the gate softcap's t
+            // removes a third polynomial from sigmoid(x)=0.5*(tanh(x/2)+1).
+            sigmoid = 0.5f * (2.0f * gate_tanh * _situ_glu_reciprocal_<0>(1.0f + gate_tanh * gate_tanh) + 1.0f);
+        }
+        sfpi::vFloat situ_a = beta_gate * gate_tanh * sigmoid;
 
         sfpi::vFloat result = situ_a * _sfpu_softcap_(up, beta_up, inv_beta_up);
         if constexpr (!is_fp32_dest_acc_en) {
