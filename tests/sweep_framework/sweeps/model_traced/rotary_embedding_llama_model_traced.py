@@ -784,10 +784,11 @@ def run(
         **rope_call_kwargs,
     )
 
+    # NOT wired to scatter_placement: in prefill mode the golden is built GLOBAL, explicitly "to match
+    # what mesh_tensor_to_torch reassembles", so this gather must concat rather than collapse.
     output_tensor = mesh_tensor_to_torch(
         output_tensor,
         device if hasattr(device, "get_num_devices") else None,
-        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
     )
     e2e_perf = stop_measuring_time(start_time)
 

@@ -708,6 +708,9 @@ def _run_kshard_replicated_matmul(
     # dev/is_mesh and never receives the vector's input placement, so there is nothing correct to key
     # the collapse decision off here. Keying it off the caller's placement would describe a scatter
     # this function did not perform.
+    # NOT wired to scatter_placement: the partial-reduce fallback below depends on the reassembler
+    # CONCATENATING per-chip partials so it can reshape+sum them into the global result. Collapsing to
+    # chip 0 would hand it a single partial and silently compare that against the global golden.
     res = mesh_tensor_to_torch(out, dev if is_mesh else None)
     e2e_perf = stop_measuring_time(start_time)
     return [check_with_pcc_safe(golden, res, 0.99), e2e_perf]
@@ -1497,7 +1500,6 @@ def run(
     output_tensor = mesh_tensor_to_torch(
         output_tensor,
         device if is_mesh_device else None,
-        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
     )
 
     # Partial-reduce fallback: if a K-sharded matmul produces per-chip partial
