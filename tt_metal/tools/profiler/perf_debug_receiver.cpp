@@ -81,6 +81,7 @@ PerfDebugReceiver::PerfDebugReceiver(ReceiverConfig config, std::vector<Receiver
     cfg_(std::move(config)), devices_(std::move(devices)) {
     TT_FATAL(devices_.size() <= kPerfDebugMaxDevices, "record dev field holds {} devices", kPerfDebugMaxDevices);
     no_decode_ = env_flag("TT_METAL_PERF_DEBUG_NO_DECODE");
+    read_only_ = env_flag("TT_METAL_PERF_DEBUG_READ_ONLY");
     stall_only_ = env_flag("TT_METAL_PERF_DEBUG_STALL_ONLY");
     die_after_ = env_u32("TT_METAL_PERF_DEBUG_WRITER_DIE_AFTER", 0);
     watchdog_ = std::chrono::seconds(env_u32("TT_METAL_PERF_DEBUG_WRITER_TIMEOUT_S", 120));
@@ -158,6 +159,24 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     }
     if (no_decode_) {
         s.sock->pop(npages, true);
+        s.frames += nframes;
+        s.passes++;
+        return true;
+    }
+    if (read_only_) {
+        const auto v = s.sock->peek(npages);
+        const uint64_t t0 = tsc_now();
+        uint64_t acc = 0;
+        for (size_t i = 0; i < v.first_bytes / 4; i += 16) {
+            acc += v.first[i];
+        }
+        for (size_t i = 0; i < v.second_bytes / 4; i += 16) {
+            acc += v.second[i];
+        }
+        s.checksum ^= acc;
+        s.decode_ticks += tsc_now() - t0;
+        s.sock->pop(npages, true);
+        s.last_commit_tsc = tsc_now();
         s.frames += nframes;
         s.passes++;
         return true;

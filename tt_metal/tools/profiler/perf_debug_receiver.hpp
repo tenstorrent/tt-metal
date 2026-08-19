@@ -99,6 +99,7 @@ private:
         uint64_t order_regressions = 0, partial_frame_polls = 0, bad_frames = 0;
         uint64_t first_data_tsc = 0, last_commit_tsc = 0;
         uint64_t min_zone_ts = 0, max_zone_ts = 0;
+        uint64_t checksum = 0;  // READ_ONLY ablation: defeats elision of the bandwidth-probe reads
         bool desync_warned = false;
         bool watchdog_fired = false;
         std::chrono::steady_clock::time_point last_progress;
@@ -133,6 +134,7 @@ private:
     std::once_flag names_once_;
 
     bool no_decode_ = false;
+    bool read_only_ = false;  // peek + line-stride read + pop: isolates pinned-FIFO read bandwidth
     bool stall_only_ = false;
     uint32_t die_after_ = 0;
     std::chrono::seconds watchdog_{120};
