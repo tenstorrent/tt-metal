@@ -103,7 +103,7 @@
 - name: Sampling module sweep (common)
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
-    pytest --timeout 600 models/common/tests/tt_sampling_tests.py
+    pytest --timeout 600 models/common/tests/test_tt_sampling.py
   model: sampling-common
   skus:
     wh_n150:

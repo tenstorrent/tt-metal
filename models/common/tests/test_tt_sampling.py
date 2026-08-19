@@ -63,6 +63,8 @@ class _SamplingArgs:
     sampling_all_gather_axis: int
     sampling_dp: int
     sub_core_grids: ttnn.CoreRangeSet | None
+    sub_core_grid_topk: ttnn.CoreRangeSet | None
+    start_core: ttnn.CoreCoord
     model_config: dict
 
 
@@ -86,6 +88,23 @@ def safe_sync(mesh_device):
         pass
 
 
+def default_sub_core_grids(mesh_device) -> ttnn.CoreRangeSet:
+    """The full Tensix compute grid, as the pool TTSampling carves its lane cores from.
+
+    This must be set. ttnn.manual_seed maps seed[i] -> the core whose index in the
+    enumerated core grid equals user_ids[i] (arange(max_batch_size)), and ttnn.sampling
+    assigns lanes to cores over its own grid. Per-lane seeding is only correct when both
+    ops see the SAME core set in the SAME order, which TTSampling guarantees by carving
+    exactly max_batch_size cores out of `sub_core_grids` and passing that one set to both
+    (see tt_sampling.py `_sampling_sub_core_grids`). Leaving this None makes both ops fall
+    back to the unrestricted grid independently, so the mapping is no longer pinned and
+    per-lane seeds land on the wrong lanes. Mirrors the construction in
+    models/common/tests/test_sampling.py::_single_device_sampling_args. (#38316)
+    """
+    grid = mesh_device.compute_with_storage_grid_size()
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+
+
 def make_sampling_args(mesh_device, sampling_dp: int = 1) -> _SamplingArgs:
     """Build sampling args for synthetic tests on the current mesh shape."""
     cluster_shape = tuple(mesh_device.shape)
@@ -99,6 +118,7 @@ def make_sampling_args(mesh_device, sampling_dp: int = 1) -> _SamplingArgs:
     num_tp = cluster_shape[sampling_all_gather_axis] if cluster_shape[sampling_all_gather_axis] > 0 else 1
     per_device_vocab = compute_per_device_vocab(VOCAB_SIZE, num_tp)
     padded_vocab_size = per_device_vocab * num_tp
+    sub_core_grids = default_sub_core_grids(mesh_device)
     return _SamplingArgs(
         vocab_size=VOCAB_SIZE,
         padded_vocab_size=padded_vocab_size,
@@ -107,7 +127,9 @@ def make_sampling_args(mesh_device, sampling_dp: int = 1) -> _SamplingArgs:
         cluster_shape=cluster_shape,
         sampling_all_gather_axis=sampling_all_gather_axis,
         sampling_dp=sampling_dp,
-        sub_core_grids=None,
+        sub_core_grids=sub_core_grids,
+        sub_core_grid_topk=sub_core_grids,
+        start_core=ttnn.CoreCoord(0, 0),
         model_config={},
     )
 
@@ -359,6 +381,7 @@ def run_sampling_generator(
     batch_size: int | None = None,
     device_idx: int = 0,
     state_setup=None,
+    enable_trace: bool = False,
 ) -> list[list[int]]:
     """Run SamplingGenerator for num_steps and return per-step token lists."""
     effective_batch_size = infer_effective_batch_size(torch_logits, batch_size, max_batch_size=BATCH_SIZE)
@@ -395,25 +418,43 @@ def run_sampling_generator(
         if state_setup is not None:
             state_setup(sg)
 
+        if enable_trace and sg._penalties_active:
+            raise ValueError(
+                "enable_trace=True is incompatible with penalties in this harness: TTPenalties.apply() "
+                "rewrites the traced input tensor in place, and trace replay cannot re-upload it."
+            )
+
         if write_seed_values_to_device:
             if seed_values is None:
                 raise ValueError("write_seed_values_to_device=True requires seed_values")
             sg.seed_manager.write_device_seed_values(seed_values)
+
+        # Trace replay binds the captured input address, so `_validate_trace_inputs`
+        # requires the SAME logits tensor object on every step after capture. Upload it
+        # once up front for traced runs; penalties are rejected below because
+        # TTPenalties.apply() would rewrite that one tensor in place.
+        if enable_trace:
+            tt_input = make_sharded_logits(padded_logits, mesh_device, args)
 
         for _ in range(num_steps):
             # SamplingGenerator keeps per-user RNG state in SeedManager.
             if advance_seeds:
                 sg.seed_manager.get_new_values()
 
-            # TTPenalties.apply() rewrites the logits tensor in place, so upload a
-            # pristine copy every step. Reusing one device tensor would compound
-            # each step's penalties onto the previous step's already-penalised
-            # logits, whereas real decode gets fresh logits from the LM head.
-            if tt_input is not None:
-                ttnn.deallocate(tt_input)
-            tt_input = make_sharded_logits(padded_logits, mesh_device, args)
+            if not enable_trace:
+                # TTPenalties.apply() rewrites the logits tensor in place, so upload a
+                # pristine copy every step. Reusing one device tensor would compound
+                # each step's penalties onto the previous step's already-penalised
+                # logits, whereas real decode gets fresh logits from the LM head.
+                if tt_input is not None:
+                    ttnn.deallocate(tt_input)
+                tt_input = make_sharded_logits(padded_logits, mesh_device, args)
 
-            tt_tokens, tt_log_probs = sg.sample(tt_input, enable_trace=False)
+            tt_tokens, tt_log_probs = sg.sample(tt_input, enable_trace=enable_trace)
+            if enable_trace:
+                # ttnn.execute_trace replays with blocking=False, so the output buffer is
+                # only valid once the device has caught up.
+                ttnn.synchronize_device(mesh_device)
             outputs.append(extract_tokens(tt_tokens, effective_batch_size, device_idx=device_idx))
 
         return outputs
@@ -947,20 +988,20 @@ class TestSeededSamplingPerRequest:
             )
 
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
-    @pytest.mark.xfail(
-        reason="Per-request seeding change in #50685: batched per-lane seeds collapse to one draw "
-        "(lanes 1-31 come out identical despite distinct seeds). Kept running to keep detecting the "
-        "issue; under investigation with the sampling owners. See #38316. Remove when resolved.",
-        strict=False,
-    )
-    def test_different_seeds_produce_different_outputs(self, mesh_device):
+    def test_seeded_replay_is_deterministic(self, mesh_device):
+        """Same seed vector must replay exactly across independent generator instances.
+
+        Split out of the per-lane seed investigation below so that these invariants --
+        replay determinism, token range, and top-k containment -- keep gating CI while the
+        per-lane seed question is still open. A regression to argmax-only sampling or an
+        out-of-range token fails here, not silently as an xfail. (#38316)
+        """
         args = make_sampling_args(mesh_device)
         hot_tokens = [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007]
         hot_token_set = set(hot_tokens)
         logits = build_hot_logits(args, hot_tokens=hot_tokens)
         params = SamplingParams(temperature=1.5, top_k=8, top_p=1.0)
 
-        # Same seed vector should replay exactly across fresh generator instances.
         seeds_a = list(range(BATCH_SIZE))
         out_a1 = run_sampling_generator(
             mesh_device, args, logits, params, num_steps=1, advance_seeds=True, seed_values=seeds_a
@@ -971,28 +1012,60 @@ class TestSeededSamplingPerRequest:
 
         assert out_a1 == out_a2, "Same seed vector should replay exactly across independent runs"
 
-        # Shift every seed; when backend RNG path is active, at least one slot should change.
-        seeds_b = [s + 12345 for s in seeds_a]
-        out_b = run_sampling_generator(
-            mesh_device, args, logits, params, num_steps=1, advance_seeds=True, seed_values=seeds_b
-        )[0]
-
-        # A functioning RNG path must change at least one of the 32 independently
-        # seeded lanes for this flat-ish top-8 distribution. Assert it (rather than
-        # xfail) so a regression to argmax-only sampling actually fails CI.
-        changed_indices = [i for i, (a, b) in enumerate(zip(out_a1, out_b)) if a != b]
-        assert len(changed_indices) > 0, (
-            "Different seed vector produced identical outputs for this stochastic config; "
-            f"backend appears argmax-only (seed/RNG regression). out_a1={out_a1}, out_b={out_b}"
-        )
-
-        # Sanity checks: valid token range and no sampling outside the hot set.
-        for outputs in (out_a1, out_a2, out_b):
+        for outputs in (out_a1, out_a2):
             assert_tokens_in_vocab(outputs, args.vocab_size)
             unexpected = [tok for tok in outputs if tok not in hot_token_set]
             assert not unexpected, (
                 f"Sampled tokens outside expected hot set {sorted(hot_token_set)}: {unexpected}. " f"outputs={outputs}"
             )
+
+    @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+    @pytest.mark.xfail(
+        reason="Per-lane seed behaviour under investigation (#38316). ttnn.manual_seed maps "
+        "seed[i] onto the core whose grid index equals user_ids[i], and ttnn.sampling assigns "
+        "lanes to cores independently; the mapping is only pinned when both ops receive the "
+        "same carved core set. The harness now sets sub_core_grids so it is pinned (see "
+        "default_sub_core_grids), which is the suspected fix -- if this XPASSes, the mapping "
+        "was the cause, #50685 is exonerated and this marker must be deleted. If it still "
+        "fails, the per-lane seed defect is real and needs its own issue.",
+        strict=True,
+    )
+    def test_different_seeds_produce_different_outputs(self, mesh_device):
+        """Distinct per-lane seeds must produce a distinct draw per lane.
+
+        This is the only assertion in the seed family that is still open, so it is the only
+        one marked xfail -- everything else it used to cover now lives in
+        test_seeded_replay_is_deterministic and runs for real.
+        """
+        args = make_sampling_args(mesh_device)
+        hot_tokens = [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007]
+        logits = build_hot_logits(args, hot_tokens=hot_tokens)
+        params = SamplingParams(temperature=1.5, top_k=8, top_p=1.0)
+
+        seeds_a = list(range(BATCH_SIZE))
+        out_a1 = run_sampling_generator(
+            mesh_device, args, logits, params, num_steps=1, advance_seeds=True, seed_values=seeds_a
+        )[0]
+
+        # 32 distinct seeds over a flat-ish top-8 distribution: the lanes must not all
+        # land on the same token. This is the reported symptom -- lanes 1..31 coming out
+        # identical despite distinct seeds.
+        assert len(set(out_a1)) > 1, (
+            f"32 distinct per-lane seeds produced one token across all lanes: {out_a1}. "
+            "Per-lane seeding is not taking effect."
+        )
+
+        # Shifting every seed must move at least one lane; identical output for a different
+        # seed vector means the RNG path is inert (argmax-only).
+        seeds_b = [s + 12345 for s in seeds_a]
+        out_b = run_sampling_generator(
+            mesh_device, args, logits, params, num_steps=1, advance_seeds=True, seed_values=seeds_b
+        )[0]
+        changed_indices = [i for i, (a, b) in enumerate(zip(out_a1, out_b)) if a != b]
+        assert len(changed_indices) > 0, (
+            "Different seed vector produced identical outputs for this stochastic config; "
+            f"backend appears argmax-only (seed/RNG regression). out_a1={out_a1}, out_b={out_b}"
+        )
 
     @pytest.mark.parametrize("mesh_device", MULTI_DEVICE_MESHES, indirect=True)
     @pytest.mark.parametrize(
@@ -1228,13 +1301,12 @@ class TestBatchIsolation:
             )[0]
             assert device_tokens == tokens, f"Device view mismatch for device_idx={device_idx} in batch isolation test"
 
-    @pytest.mark.xfail(
-        reason="Per-request seeding change in #50685: the uniform-seed sub-case no longer yields an "
-        "identical token across lanes (per-lane seed collapse). Kept running to keep detecting the "
-        "issue; under investigation with the sampling owners. See #38316. Remove when resolved.",
-        strict=False,
-    )
     def test_same_prompt_users_get_identical_logits(self, mesh_device, device_params):
+        """Identical prompts must agree under greedy, and vary under distinct seeds.
+
+        Split out of the uniform-seed sub-case below (#38316): these two invariants have
+        nothing to do with per-lane seeding and must keep gating CI.
+        """
         args = make_sampling_args(mesh_device)
         # All users share the exact same hot-token distribution.
         hot_tokens = [2500, 2501, 2502, 2503, 2504, 2505, 2506, 2507]
@@ -1256,30 +1328,15 @@ class TestBatchIsolation:
             greedy_tokens[0] == hot_tokens[0]
         ), f"Greedy should pick the highest-logit token {hot_tokens[0]}, got {greedy_tokens[0]}"
 
-        # --- Stochastic with uniform seed: all users should agree. ---
-        # Use full-length lists (like the greedy sub-case above) so temperature
-        # applies uniformly to every lane. A scalar temperature would only
-        # configure lane 0 and leave lanes 1..31 on the greedy default.
-        uniform_seed = [7777] * BATCH_SIZE
+        # --- Stochastic with different seeds: should see variation. ---
+        # Use full-length lists (like the greedy sub-case above) so temperature applies
+        # uniformly to every lane. A scalar temperature would only configure lane 0 and
+        # leave lanes 1..31 on the greedy default.
         stochastic_params = SamplingParams(
             temperature=[1.5] * BATCH_SIZE,
             top_k=[8] * BATCH_SIZE,
             top_p=[1.0] * BATCH_SIZE,
         )
-        out_uniform = run_sampling_generator(
-            mesh_device,
-            args,
-            logits,
-            stochastic_params,
-            num_steps=1,
-            advance_seeds=True,
-            seed_values=uniform_seed,
-        )[0]
-        assert (
-            len(set(out_uniform)) == 1
-        ), f"All users with same prompt and same seed should sample the same token, got {out_uniform}"
-
-        # --- Stochastic with different seeds: should see variation. ---
         diverse_seeds = [5000 + i for i in range(BATCH_SIZE)]
         out_diverse = run_sampling_generator(
             mesh_device,
@@ -1297,6 +1354,41 @@ class TestBatchIsolation:
         assert_tokens_in_vocab(all_tokens, args.vocab_size)
         unexpected = [tok for tok in all_tokens if tok not in set(hot_tokens)]
         assert not unexpected, f"Sampled tokens outside expected hot set: {unexpected}"
+
+    @pytest.mark.xfail(
+        reason="Per-lane seed behaviour under investigation (#38316). One request seed shared by "
+        "every lane hashes to ONE device seed (generator.py _hash_request_seed_to_device_seed mixes "
+        "no slot index), and manual_seed's compute kernel calls rand_tile_init(seed) per core with "
+        "no lane salt, so identical seeds must give an identical token -- provided manual_seed and "
+        "ttnn.sampling agree on the lane->core mapping. The harness now pins that by setting "
+        "sub_core_grids (see default_sub_core_grids), which is the suspected fix: if this XPASSes, "
+        "the mapping was the cause, #50685 is exonerated and this marker must be deleted. If it "
+        "still fails, the defect is real and needs its own issue.",
+        strict=True,
+    )
+    def test_same_prompt_uniform_seed_agrees(self, mesh_device, device_params):
+        """One seed shared across all lanes, identical logits => one identical token."""
+        args = make_sampling_args(mesh_device)
+        hot_tokens = [2500, 2501, 2502, 2503, 2504, 2505, 2506, 2507]
+        logits = build_hot_logits(args, hot_tokens=hot_tokens)
+        stochastic_params = SamplingParams(
+            temperature=[1.5] * BATCH_SIZE,
+            top_k=[8] * BATCH_SIZE,
+            top_p=[1.0] * BATCH_SIZE,
+        )
+        uniform_seed = [7777] * BATCH_SIZE
+        out_uniform = run_sampling_generator(
+            mesh_device,
+            args,
+            logits,
+            stochastic_params,
+            num_steps=1,
+            advance_seeds=True,
+            seed_values=uniform_seed,
+        )[0]
+        assert (
+            len(set(out_uniform)) == 1
+        ), f"All users with same prompt and same seed should sample the same token, got {out_uniform}"
 
     def _state_setup(self, sg):
         seen = torch.full((BATCH_SIZE, 1), 2000, dtype=torch.int64)
@@ -1755,3 +1847,101 @@ class TestSingleGreedyLaneInStochasticBatch:
             f"Lane {odd_lane} requested top_k={BAND_TOKENS_PER_USER} but the batch still took the "
             "force-argmax fast path, which skips top-k/top-p/RNG entirely"
         )
+
+
+# --- Test: traced sampling path ---
+
+# Production decode calls SamplingGenerator.sample(..., enable_trace=True) -- that is the
+# signature default. Every other test in this file runs enable_trace=False, so
+# _trace_slot / capture_trace / _execute_trace / _validate_trace_inputs are otherwise
+# never executed. Two things constrain what a traced test can look like:
+#   * sample() computes `use_internal_trace = enable_trace and not
+#     seed_manager.has_active_request_seed()`, so a test with explicit request seeds
+#     silently falls back to the eager path and proves nothing. These use unseeded runs.
+#   * trace replay binds the captured input address, so the same logits tensor object must
+#     be reused on every step (run_sampling_generator does this when enable_trace=True) and
+#     penalties -- which rewrite that tensor in place -- cannot be combined with it.
+# A trace region has to be reserved at device open, hence the device_params override; the
+# rest of the suite opens with none ("No trace region size for 1" in the CI log).
+_TRACE_DEVICE_PARAMS = [{"trace_region_size": 23887872}]
+
+
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+@pytest.mark.parametrize("device_params", _TRACE_DEVICE_PARAMS, indirect=True)
+class TestTracedSampling:
+    def test_traced_greedy_matches_untraced(self, mesh_device, device_params):
+        """Capture-then-replay must return exactly what the eager path returns.
+
+        Greedy (temperature=0.0, top_k=1) makes the expected token independent of RNG state,
+        so the traced result is directly comparable to the untraced one across replays --
+        step 1 captures, steps 2 and 3 go through _execute_trace.
+        """
+        args = make_sampling_args(mesh_device)
+        hot_tokens = [3300, 3301, 3302, 3303]
+        logits = build_hot_logits(args, hot_tokens=hot_tokens)
+        params = SamplingParams(
+            temperature=[0.0] * BATCH_SIZE,
+            top_k=[1] * BATCH_SIZE,
+            top_p=[1.0] * BATCH_SIZE,
+        )
+
+        untraced = run_sampling_generator(
+            mesh_device, args, logits, params, num_steps=1, advance_seeds=True, enable_trace=False
+        )[0]
+        traced = run_sampling_generator(
+            mesh_device, args, logits, params, num_steps=3, advance_seeds=True, enable_trace=True
+        )
+
+        assert all(
+            tok == hot_tokens[0] for tok in untraced
+        ), f"Eager greedy should pick the max-logit token {hot_tokens[0]}, got {untraced}"
+        for step, tokens in enumerate(traced):
+            assert tokens == untraced, (
+                f"Traced step {step} diverged from the eager result. " f"traced={tokens}, untraced={untraced}"
+            )
+
+    def test_trace_rejects_mismatched_logits_tensor(self, mesh_device, device_params, expect_error):
+        """_validate_trace_inputs must reject a logits tensor the trace was not captured on.
+
+        Replay reuses the captured input buffer, so silently accepting a different tensor
+        would sample stale logits. Exercised directly because run_sampling_generator always
+        reuses one tensor by construction.
+        """
+        args = make_sampling_args(mesh_device)
+        logits = build_hot_logits(args, hot_tokens=[3400, 3401, 3402])
+        padded = pad_logits_to_max_batch(logits, max_batch_size=BATCH_SIZE)
+        params = SamplingParams(
+            temperature=[0.0] * BATCH_SIZE,
+            top_k=[1] * BATCH_SIZE,
+            top_p=[1.0] * BATCH_SIZE,
+        )
+
+        sg = None
+        captured_input = None
+        other_input = None
+        try:
+            sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
+            sg.reset_sampling_params(format_sampling_params(params, BATCH_SIZE))
+            # Unseeded, or sample() would bypass the trace entirely.
+            sg.seed_manager.reset_seed(None, list(range(BATCH_SIZE)))
+            sg.seed_manager.get_new_values()
+
+            captured_input = make_sharded_logits(padded, mesh_device, args)
+            sg.sample(captured_input, enable_trace=True)  # captures
+            ttnn.synchronize_device(mesh_device)
+
+            other_input = make_sharded_logits(padded, mesh_device, args)
+            with expect_error(ValueError, r"does not match the tensor used during trace capture"):
+                sg.sample(other_input, enable_trace=True)
+        finally:
+            if sg is not None:
+                try:
+                    sg.reset_trace()
+                except Exception:
+                    pass
+            for tensor in (captured_input, other_input):
+                if tensor is not None:
+                    del tensor
+            if sg is not None:
+                del sg
+            safe_sync(mesh_device)
