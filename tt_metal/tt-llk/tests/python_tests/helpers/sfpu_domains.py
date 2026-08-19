@@ -409,9 +409,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Selu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
-    # i0: modified Bessel I0; kernel poly approx is only valid on |x| <= 3.75
+    # i0: modified Bessel I0; sweep past the handover so tests reach the asymptotic branch.
     MathOperation.I0: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-3.75, high=3.75)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=40.0)
     ),
     # i1: modified Bessel I1; poly path valid on |x| <= ~3.75 (asymptotic beyond)
     MathOperation.I1: OperandSpecs(

@@ -2762,7 +2762,7 @@ class UnarySFPUGolden:
         return self._torch_unary(x, torch.nn.functional.selu)
 
     def _i0(self, x):
-        # modified Bessel I0; kernel uses a poly approx valid on |x| <= 3.75.
+        # modified Bessel I0.
         return self._torch_unary(x, torch.special.i0)
 
     def _rdiv(self, x, value=2.0):

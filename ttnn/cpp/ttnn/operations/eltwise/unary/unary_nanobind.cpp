@@ -1731,8 +1731,8 @@ void py_module(nb::module_& mod) {
     bind_unary_operation_subcoregrids<"i0">(
         mod,
         &ttnn::i0,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|i0|(\mathrm{{input\_tensor}}_i))doc",
-        "",
+        R"doc(\mathrm{{output\_tensor}}_i = I_0(\mathrm{{input\_tensor}}_i))doc",
+        "[Validated range: -88.5 to 88.5]",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_subcoregrids<"i1">(
         mod,
