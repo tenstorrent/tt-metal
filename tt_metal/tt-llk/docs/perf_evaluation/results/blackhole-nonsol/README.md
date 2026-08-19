@@ -1,81 +1,104 @@
 # Blackhole perf gate baseline — non speed-of-light
 
-Measured on one `bh_p150b` card, `main` + the `--perf-run-types` harness commit,
-markers `perf and not accuracy`, compile `-n 10`, measure `-n 15`.
-Speed of light is off throughout: CI's perf job uses it, this gate is being
+One `bh_p150b` card. `main` plus the `--perf-run-types` harness commit.
+Test selection `perf and not accuracy`, compile `-n 10`, measure `-n 15`.
+Speed of light is off throughout. CI's perf job uses it; this gate is being
 designed without it.
 
-## 1. Cost — how long a gate run takes
+Two questions were asked.
 
-Cold build tree per configuration, because a gate on a fresh runner pays the compile.
+## 1. How long does a gate run take?
 
-| config | run types | compile | measure | total | vs full |
-|---|---|--:|--:|--:|--:|
-| full | all declared | 15:33 | 4:08 | 19:41 | 100% |
-| isolates | UNPACK_ISOLATE, MATH_ISOLATE, PACK_ISOLATE | 9:55 | 2:45 | 12:40 | 64% |
-| l1 | L1_TO_L1 | 4:21 | 1:56 | 6:17 | 32% |
+Cold build tree each time, because a gate on a fresh runner pays the compile.
 
-Raw seconds in `timings/`. Detail in `cost_summary.md`.
+| config | run types | compile | measure | total |
+|---|---|--:|--:|--:|
+| full | all declared | 15:33 | 4:08 | **19:41** |
+| isolates | UNPACK_ISOLATE, MATH_ISOLATE, PACK_ISOLATE | 9:55 | 2:45 | **12:40** |
+| l1 | L1_TO_L1 | 4:21 | 1:56 | **6:17** |
 
-Findings:
+Raw seconds in `timings/`.
 
-- Cost tracks (module x run-type) pairs almost linearly. Isolates cover 61% of
-  the 70 pairs and cost 64% of the time; L1_TO_L1 covers 26% and costs 32%. The
-  gap is fixed per-variant overhead that run-type selection cannot remove — that
-  is the argument for reducing test variants.
-- **Compile is 74-79% of every configuration.** A warm build cache on the gate
-  runner would save more than any run-type choice.
-- The whole suite, unsharded, on one card, is under 20 minutes. A non-SoL gate
-  is affordable.
+Three things follow:
 
-## 2. Noise — how large a difference must be to mean anything
+- The whole suite, on one card, is under 20 minutes. A non-SoL gate is affordable.
+- Compile is 74-79% of every configuration. Build caching on the gate runner
+  would save more than any run-type choice.
+- Cost tracks the number of (module x run-type) pairs almost linearly. Isolates
+  cover 61% of the 70 pairs and cost 64% of the time. L1_TO_L1 covers 26% and
+  costs 32%. The gap is fixed per-variant overhead, which run-type selection
+  cannot remove — that is the case for reducing test variants.
 
-Five runs of the SAME commit on the SAME card. Every difference is noise.
-`noise_l1_to_l1.md` is the full report; 108,377 points, 2.17M simulated
-comparisons.
+## 2. How much do results move on their own?
 
-Median-of-1, which is what a "latest main vs this run" gate does:
+We ran the same code five times on the same card. Nothing changed between runs,
+so every difference is measurement noise. 108,377 numbers were measured.
 
-| marker | p95 | p99 | max |
-|---|--:|--:|--:|
-| TILE_LOOP | 0.00% | 0.01% | 1.91% |
-| KERNEL | 0.00% | 0.01% | 1.90% |
-| UNINIT | 0.00% | 0.93% | 3.57% |
-| INIT | 0.00% | 1.36% | 7.91% |
+`move` = (largest of the 5 runs - smallest) / median.
 
-Findings:
+| marker | numbers measured | moved >0.5% | >1% | >2% | >5% | worst move | worst move in cycles |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| TILE_LOOP | 35,576 | 26 | 7 | **0** | 0 | 1.88% | 5110 |
+| KERNEL | 35,576 | 28 | 7 | **0** | 0 | 1.87% | 5108 |
+| INIT | 35,576 | 2,184 | 1,390 | 464 | 14 | 7.91% | **25** |
+| UNINIT | 1,649 | 91 | 35 | 10 | 0 | 3.57% | **9** |
+| all | 108,377 | 2,329 | 1,439 | 474 | 14 | 7.91% | 5110 |
 
-- **TILE_LOOP is essentially deterministic.** p99 of 0.01%. Half of all
-  comparisons are exactly zero — identical code returns identical cycle counts.
-- **All the noise is in INIT and UNINIT.** Every one of the 25 least stable
-  points is INIT, median 300-450 cycles, absolute spread 14-25 cycles. It is a
-  small fixed jitter that looks large only because the denominator is small.
-- **A single global relative threshold is the wrong design.** One threshold
-  clearing every sample must be 8%, set entirely by INIT. TILE_LOOP alone could
-  use 2% — four times tighter, on the marker that carries the detection value.
-- **Repeating runs does not help.** median-of-2 has a slightly WORSE p99 (0.51%
-  vs 0.41%); only the extreme tail improves. Do not pay for a second run.
+Full detail, including the per-point data, is in `noise_l1_to_l1.md` and
+`how_much_results_move.md`.
 
-Recommended:
+### What this says
 
-| scope | threshold | basis |
-|---|---|---|
-| TILE_LOOP, KERNEL | 2% | clears all 1.4M observed comparisons |
-| INIT, UNINIT | absolute cycles, not % | observed jitter is 14-25 cycles |
+TILE_LOOP is the steady-state per-tile cost — the number anyone optimizing LLK
+cares about. **Not one of its 35,576 measurements moved by more than 2%.** KERNEL
+behaves the same. Most measurements did not move at all: identical code returns
+identical cycle counts.
 
-## 3. Caveats
+All the noise is in INIT and UNINIT. Those are small numbers, around 350 cycles,
+and they wobble by up to 25 cycles. That is a large percentage of a small number,
+which is why they look noisy and TILE_LOOP does not.
 
-- **Lower bound.** All five runs used one card, one session, and a build tree
-  cached after run 1. A real gate compares runs from different runners on
-  different days. Machine and day drift are not in these numbers.
-- Blackhole only. Wormhole needs its own baseline; thresholds do not transfer.
-- L1_TO_L1 only. The isolates noise baseline is pending. L1_CONGESTION is
-  untested and, being a contention measurement, is likely the noisiest.
-- `cost_summary.md` omits the yield columns: the budget script counts rows in
-  the wrong directory (`tests/python_tests/perf_data` instead of
-  `tt-llk/perf_data`). Timings are unaffected.
+## The threshold
 
-## 4. Reproduce
+> **Flag a regression when a number is more than 2% slower AND more than 30
+> cycles slower.**
+
+On five runs of unchanged code, this rule fires **zero times** out of 108,377
+measurements.
+
+Each clause handles one failure mode:
+
+- The percentage catches large numbers drifting. On TILE_LOOP nothing reached 2%.
+- The cycle count removes the small INIT numbers. Their worst move was 25 cycles,
+  below the 30-cycle floor, so none of the 464 that exceeded 2% survive the rule.
+
+The absolute clause never binds on TILE_LOOP: 2% of a large number is thousands
+of cycles, far above 30.
+
+**The trade-off:** the rule cannot detect an INIT regression smaller than 30
+cycles, about 8% of a typical INIT. That is a fair price. INIT is one-time setup
+cost, not the steady-state number. For TILE_LOOP there is no compromise — 2% is
+real detection.
+
+**Repeating runs does not help.** We checked whether averaging two runs per side
+gives a quieter gate. It does not improve the typical case at all; only the
+extreme tail. Use one run per side and do not pay for a second.
+
+## What this does not cover
+
+- **Blackhole only.** Wormhole needs its own five runs. Thresholds do not
+  transfer between architectures.
+- **L1_TO_L1 only.** The isolates baseline is pending. L1_CONGESTION has not been
+  measured and, being a contention metric, is likely the noisiest.
+- **One card, one session.** The build tree was cached after run 1. A real gate
+  compares runs from different runners on different days, so this is a lower
+  bound on the noise a gate will see.
+- **How big real regressions are.** Everything here constrains the threshold from
+  below: it must exceed the noise. Nothing yet constrains it from above: it must
+  be small enough to catch a real regression. That answer is in the commit
+  history, not on the card.
+
+## Reproduce
 
     .claude/scripts/perf_gate_budget.sh --arch blackhole --configs full,isolates,l1 \
       --build-root $HOME/llk-build --out $HOME/perf_gate_budget
