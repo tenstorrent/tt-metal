@@ -293,6 +293,26 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 **self.model_capabilities,
                 "supports_async_decode": False,
             }
+        # On-device decode sampling only exists when Gemma4Model actually built a
+        # SamplingGenerator. That needs the per-device vocab shard to fit ttnn's
+        # 64k topk width: Gemma4's vocab is 262144, so TP>=4 shards to <=65536 and
+        # works, but TP=2 (WH N300 1x2) shards to 131072 and Gemma4Model leaves
+        # ``self.sampling = None``. Advertising the capability anyway made vLLM
+        # request on-device decode logits and the engine died on the
+        # ``self.sampling is not None`` assert in ``ttnn_decode_forward``. Report
+        # what the model can really do so the platform falls back to host
+        # sampling (which all-gathers the full vocab and is correct, just slower).
+        if model0 is not None and not bool(getattr(model0, "_supports_on_device_sampling", True)):
+            self.model_capabilities = {
+                **self.model_capabilities,
+                "supports_sample_on_device": False,
+            }
+            _tp = getattr(getattr(model0, "mesh_config", None), "tp", "?")
+            logger.info(
+                f"Gemma4: on-device sampling unavailable on this mesh (tp={_tp}, "
+                f"vocab={getattr(model0, 'vocab_size', '?')} shards wider than ttnn topk's 64k); "
+                "advertising supports_sample_on_device=False so decode samples on host."
+            )
         # Host-side TTFT / decode tok/s for metal↔server parity checks.
         # Compare these to demo ``inference_prefill`` / decode tok/s/user logs.
         self._perf_decode_tokens = 0
