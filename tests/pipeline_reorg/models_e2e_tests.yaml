@@ -277,21 +277,11 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
-# The two small Qwen3 models carry the full 151936 vocab on a single card, which exercises
-# TTSampling's N-way (here 4-way) single-device vocab split for on-device sampling (#53064);
-# Gemma-2-2B on wh_n150 covers the same path with a 256000 vocab. No reference tokens exist
-# yet, so these run the functional CI demos; add ci-token-matching once a refpt is generated.
 - name: Qwen3-0.6B e2e tests
   cmd: |
-    # MESH_DEVICE is set by the runner (this entry runs on both wh_n150 and bh_p150).
     export HF_MODEL=Qwen/Qwen3-0.6B HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-0.6B
-    # Extra time budget vs a warm run: the first CI run must download the checkpoint into
-    # HF_HOME and generate the weight cache at TT_CACHE_PATH; warm re-runs are faster.
     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1"
     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-32"
-    # The greedy CI config takes the argmax fast path and never reaches top-k (see #52928), so
-    # run once with k=1/p=0.5/temp=1: still deterministic, but p not in {0, 1} declines the
-    # fast path and exercises the 4-way vocab split every decode step.
     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
   model: qwen3-0.6b
   model_family: Qwen
@@ -309,15 +299,9 @@
 
 - name: Qwen3-1.7B e2e tests
   cmd: |
-    # MESH_DEVICE is set by the runner (this entry runs on both wh_n150 and bh_p150).
     export HF_MODEL=Qwen/Qwen3-1.7B HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-1.7B
-    # Extra time budget vs a warm run: the first CI run must download the checkpoint into
-    # HF_HOME and generate the weight cache at TT_CACHE_PATH; warm re-runs are faster.
     pytest --timeout 720 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1"
     pytest --timeout 720 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-32"
-    # The greedy CI config takes the argmax fast path and never reaches top-k (see #52928), so
-    # run once with k=1/p=0.5/temp=1: still deterministic, but p not in {0, 1} declines the
-    # fast path and exercises the 4-way vocab split every decode step.
     pytest --timeout 720 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-1" --sampling_params '{"temperature": 1.0, "top_k": 1, "top_p": 0.5}'
   model: qwen3-1.7b
   model_family: Qwen
