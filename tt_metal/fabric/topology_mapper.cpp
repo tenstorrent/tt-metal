@@ -299,11 +299,9 @@ TopologyMapper::TopologyMapper(
         info->physical_chip_id = physical_chip_id;
         info->mesh_coord = mesh_graph_.chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
 
-        // Get hostname and MPI rank from physical system descriptor
+        // The mapping contains only this rank's visible ASICs, even when emulated ranks share a hostname.
         info->hostname = physical_system_descriptor_.get_host_name_for_asic(info->asic_id);
-        info->mpi_rank = (!info->hostname.empty())
-                             ? static_cast<int>(physical_system_descriptor_.get_rank_for_hostname(info->hostname))
-                             : -1;
+        info->mpi_rank = static_cast<int>(*distributed_context_.get().rank());
 
         // Assign mesh host rank: if local_mesh_binding.host_rank is set (not UNSET),
         // use it for all fabric nodes on the current physical host to ensure get_local_host_rank() works correctly.
@@ -377,6 +375,7 @@ void TopologyMapper::initialize_chip_topology_mapping_map() {
 
     // Get local cluster for physical_chip_id lookup
     const auto& my_host = physical_system_descriptor_.my_host_name();
+    const auto my_rank = static_cast<int>(*distributed_context_.get().rank());
 
     // Create MappedChipInfo entry for each ASIC
     for (const auto& [asic_id, asic_descriptor] : asic_descriptors) {
@@ -397,6 +396,8 @@ void TopologyMapper::initialize_chip_topology_mapping_map() {
             for (const auto& [physical_chip_id, unique_id] : this->cluster_.get().get_unique_chip_ids()) {
                 if (unique_id == *asic_id) {
                     info.physical_chip_id = physical_chip_id;
+                    // Multiple emulated ranks can share a hostname; local ASIC presence is the ownership proof.
+                    info.mpi_rank = my_rank;
                     break;
                 }
             }
@@ -760,19 +761,14 @@ void TopologyMapper::broadcast_chip_info_to_hosts(const std::vector<std::size_t>
     std::vector<const MappedChipInfo*> entries_to_broadcast;
     entries_to_broadcast.reserve(chip_topology_mapping_.size());
     std::unordered_set<std::size_t> host_rank_set(host_ranks.begin(), host_ranks.end());
-    const auto& host_to_rank_map = physical_system_descriptor_.get_host_to_rank_map();
     for (const auto& info : chip_topology_mapping_) {
         // If host_ranks is empty, include all entries
         // Otherwise, only include entries whose host's rank is in the list
         if (host_ranks.empty()) {
             entries_to_broadcast.push_back(&info);
         } else {
-            // Get the rank for this ASIC's hostname
-            if (!info.hostname.empty() && host_to_rank_map.contains(info.hostname)) {
-                auto host_rank = host_to_rank_map.at(info.hostname);
-                if (host_rank_set.contains(host_rank)) {
-                    entries_to_broadcast.push_back(&info);
-                }
+            if (info.mpi_rank >= 0 && host_rank_set.contains(static_cast<std::size_t>(info.mpi_rank))) {
+                entries_to_broadcast.push_back(&info);
             }
         }
     }
