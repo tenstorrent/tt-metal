@@ -83,17 +83,35 @@ inline void _configure_src_zero_flag_(const bool disable)
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(next);
 }
 
-// DEFAULT: the flag follows the operand formats. Re-applies when the state or cached formats change.
-inline __attribute__((noinline)) void _configure_default_zero_flag_state_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
+// DEFAULT slow path: the actual state update + flag write. Kept out-of-line so the hot-loop fast path
+// below stays call-free and so the STALLWAIT + RMW exist in a single copy (code size — a matmul kernel
+// otherwise overflows its slot).
+inline __attribute__((noinline)) void _apply_default_zero_flag_state_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
 {
-    if (src_zero_flag_state == SrcZeroFlagState::DEFAULT && src_zero_flag_srca_fmt == srca_dst_format && src_zero_flag_srcb_fmt == srcb_dst_format)
-    {
-        return;
-    }
     src_zero_flag_srca_fmt = srca_dst_format;
     src_zero_flag_srcb_fmt = srcb_dst_format;
     src_zero_flag_state    = SrcZeroFlagState::DEFAULT;
+    // TODO(tt-metal#53652): per mcraigheadTT / ttsim#713 the flag must be CLEARED for all FPU compute;
+    // once that lands this becomes _configure_src_zero_flag_(false) and requires_disabled_src_zero_flag()
+    // is dropped entirely (it is only reachable from here).
     _configure_src_zero_flag_(requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format));
+}
+
+// DEFAULT: the flag follows the operand formats. The fast path is inlined at every init call site and
+// returns when the flag already holds the required value while in DEFAULT -- the steady state inside hot
+// loops (e.g. groupnorm's mul_bcast, whose operand formats change each iteration but all map to the same
+// flag value). Gating on the resulting value rather than the formats keeps that loop call-free; only a
+// genuine policy/value change pays the out-of-line _apply_. (tt-metal#49924.)
+inline void _configure_default_zero_flag_state_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
+{
+    // TODO(tt-metal#53652): when DEFAULT always clears, this fast path reduces to
+    // (src_zero_flag_state == DEFAULT && src_zero_flag_hw == 0) -- no requires_disabled_src_zero_flag call.
+    const std::uint32_t want = requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format) ? 1u : 0u;
+    if (src_zero_flag_state == SrcZeroFlagState::DEFAULT && src_zero_flag_hw == want)
+    {
+        return;
+    }
+    _apply_default_zero_flag_state_(srca_dst_format, srcb_dst_format);
 }
 
 // PRESERVE: data-movement ops (datacopy / copy_init / transpose_dest / reduce mov-phase) keep the
