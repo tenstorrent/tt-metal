@@ -592,6 +592,17 @@ def test_multichip_decoder_graph_summary():
     assert summary.target_mesh_shape == (2, 2)
     assert summary.tensor_parallel_size == 2
     assert summary.expert_parallel_size == 2
+    if not any(
+        os.environ.get(name)
+        for name in (
+            "QWEN36_MULTICHIP_NUM_LINKS",
+            "QWEN36_MULTICHIP_CCL_MODE",
+            "QWEN36_MULTICHIP_CCL_DTYPE",
+        )
+    ):
+        assert summary.ccl_num_links == 2
+        assert summary.ccl_mode == "all_reduce"
+        assert summary.ccl_dtype == "bf16"
     assert summary.replicated_residual_contract
     assert summary.full_attention_q_heads_per_device == 8
     assert summary.full_attention_kv_heads_per_device == 1

@@ -1,0 +1,6 @@
+# Raw Tracy op CSVs are committed as split compressed artifacts.
+tracy/*_raw/reports/*/ops_perf_results_*.csv
+
+# Large raw watcher text artifacts are committed as .gz files.
+watcher/final/generated/watcher/kernel_names.txt
+watcher/final/generated/watcher/watcher.log

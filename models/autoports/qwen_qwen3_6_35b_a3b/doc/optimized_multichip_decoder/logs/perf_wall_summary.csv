@@ -1,0 +1,17 @@
+run,segment,wall_ms
+baseline,base_linear_prefill,19.836
+baseline,mc_linear_prefill,22.126
+baseline,base_full_prefill,8.995
+baseline,mc_full_prefill,39.712
+baseline,base_linear_decode,1.553
+baseline,mc_linear_decode,1.400
+baseline,base_full_decode,1.219
+baseline,mc_full_decode,1.203
+final,base_linear_prefill,19.773
+final,mc_linear_prefill,25.747
+final,base_full_prefill,8.876
+final,mc_full_prefill,39.202
+final,base_linear_decode,1.541
+final,mc_linear_decode,1.346
+final,base_full_decode,1.221
+final,mc_full_decode,1.152

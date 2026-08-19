@@ -1,0 +1,32 @@
+models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/logs/perf_report_family_summary.csv
+models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/logs/perf_report_top_ops.csv
+models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/logs/perf_wall_summary.csv
+{'run': 'baseline', 'segment': 'mc_linear_prefill', 'total_us': 6234.459, 'ccl_us': 269.703, 'matmul_us': 2200.746, 'sparse_matmul_us': 401.207, 'movementish_us': 1313.248, 'norm_us': 65.116, 'elementwise_or_reduction_us': 1934.802, 'other_us': 49.637}
+{'run': 'baseline', 'segment': 'mc_full_prefill', 'total_us': 19200.155, 'ccl_us': 1535.556, 'matmul_us': 232.852, 'sparse_matmul_us': 2641.995, 'movementish_us': 6673.785, 'norm_us': 64.983, 'elementwise_or_reduction_us': 7916.585, 'other_us': 134.398}
+{'run': 'baseline', 'segment': 'mc_linear_decode', 'total_us': 1165.495, 'ccl_us': 89.982, 'matmul_us': 246.352, 'sparse_matmul_us': 81.221, 'movementish_us': 294.08, 'norm_us': 66.229, 'elementwise_or_reduction_us': 384.255, 'other_us': 3.376}
+{'run': 'baseline', 'segment': 'mc_full_decode', 'total_us': 982.739, 'ccl_us': 93.984, 'matmul_us': 156.406, 'sparse_matmul_us': 80.154, 'movementish_us': 242.892, 'norm_us': 64.478, 'elementwise_or_reduction_us': 320.392, 'other_us': 24.433}
+{'run': 'final', 'segment': 'mc_linear_prefill', 'total_us': 6192.94, 'ccl_us': 228.146, 'matmul_us': 2200.111, 'sparse_matmul_us': 403.241, 'movementish_us': 1314.167, 'norm_us': 64.918, 'elementwise_or_reduction_us': 1932.671, 'other_us': 49.686}
+{'run': 'final', 'segment': 'mc_full_prefill', 'total_us': 18951.233, 'ccl_us': 1318.758, 'matmul_us': 233.078, 'sparse_matmul_us': 2642.171, 'movementish_us': 6671.882, 'norm_us': 65.12, 'elementwise_or_reduction_us': 7885.788, 'other_us': 134.436}
+{'run': 'final', 'segment': 'mc_linear_decode', 'total_us': 1152.415, 'ccl_us': 75.97, 'matmul_us': 246.998, 'sparse_matmul_us': 80.585, 'movementish_us': 295.065, 'norm_us': 66.624, 'elementwise_or_reduction_us': 383.799, 'other_us': 3.375}
+{'run': 'final', 'segment': 'mc_full_decode', 'total_us': 968.534, 'ccl_us': 77.437, 'matmul_us': 156.819, 'sparse_matmul_us': 80.36, 'movementish_us': 245.413, 'norm_us': 64.428, 'elementwise_or_reduction_us': 319.809, 'other_us': 24.268}
+models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/logs/perf_screen_wall_summary.csv
+{'run': 'baseline_tracy', 'segment': 'mc_linear_prefill', 'wall_ms': '22.126', 'artifact': 'logs/tracy_perf_baseline_summary.log'}
+{'run': 'baseline_tracy', 'segment': 'mc_full_prefill', 'wall_ms': '39.712', 'artifact': 'logs/tracy_perf_baseline_summary.log'}
+{'run': 'baseline_tracy', 'segment': 'mc_linear_decode', 'wall_ms': '1.400', 'artifact': 'logs/tracy_perf_baseline_summary.log'}
+{'run': 'baseline_tracy', 'segment': 'mc_full_decode', 'wall_ms': '1.203', 'artifact': 'logs/tracy_perf_baseline_summary.log'}
+{'run': 'final_tracy', 'segment': 'mc_linear_prefill', 'wall_ms': '25.747', 'artifact': 'logs/tracy_perf_final_summary.log'}
+{'run': 'final_tracy', 'segment': 'mc_full_prefill', 'wall_ms': '39.202', 'artifact': 'logs/tracy_perf_final_summary.log'}
+{'run': 'final_tracy', 'segment': 'mc_linear_decode', 'wall_ms': '1.346', 'artifact': 'logs/tracy_perf_final_summary.log'}
+{'run': 'final_tracy', 'segment': 'mc_full_decode', 'wall_ms': '1.152', 'artifact': 'logs/tracy_perf_final_summary.log'}
+{'run': 'baseline_num_links_1_screen', 'segment': 'mc_linear_prefill', 'wall_ms': '19.408', 'artifact': 'logs/baseline_num_links_1_perf_screen.log'}
+{'run': 'baseline_num_links_1_screen', 'segment': 'mc_full_prefill', 'wall_ms': '31.912', 'artifact': 'logs/baseline_num_links_1_perf_screen.log'}
+{'run': 'baseline_num_links_1_screen', 'segment': 'mc_linear_decode', 'wall_ms': '1.327', 'artifact': 'logs/baseline_num_links_1_perf_screen.log'}
+{'run': 'baseline_num_links_1_screen', 'segment': 'mc_full_decode', 'wall_ms': '1.067', 'artifact': 'logs/baseline_num_links_1_perf_screen.log'}
+{'run': 'final_default_screen', 'segment': 'mc_linear_prefill', 'wall_ms': '20.733', 'artifact': 'logs/final_perf_screen.log'}
+{'run': 'final_default_screen', 'segment': 'mc_full_prefill', 'wall_ms': '32.504', 'artifact': 'logs/final_perf_screen.log'}
+{'run': 'final_default_screen', 'segment': 'mc_linear_decode', 'wall_ms': '1.281', 'artifact': 'logs/final_perf_screen.log'}
+{'run': 'final_default_screen', 'segment': 'mc_full_decode', 'wall_ms': '1.096', 'artifact': 'logs/final_perf_screen.log'}
+{'run': 'candidate_num_links_2_screen', 'segment': 'mc_linear_prefill', 'wall_ms': '19.459', 'artifact': 'logs/candidate_num_links_2_perf.log'}
+{'run': 'candidate_num_links_2_screen', 'segment': 'mc_full_prefill', 'wall_ms': '31.420', 'artifact': 'logs/candidate_num_links_2_perf.log'}
+{'run': 'candidate_num_links_2_screen', 'segment': 'mc_linear_decode', 'wall_ms': '1.326', 'artifact': 'logs/candidate_num_links_2_perf.log'}
+{'run': 'candidate_num_links_2_screen', 'segment': 'mc_full_decode', 'wall_ms': '1.084', 'artifact': 'logs/candidate_num_links_2_perf.log'}

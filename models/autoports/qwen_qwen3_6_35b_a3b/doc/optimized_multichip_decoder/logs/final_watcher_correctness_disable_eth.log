@@ -1,0 +1,647 @@
+2026-08-19 06:57:01.428 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /localdev/vkovacevic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/vkovacevic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, cov-7.0.0, benchmark-5.2.3, anyio-4.14.2, split-0.11.0, dash-2.15.0, github-actions-annotate-failures-0.3.0
+timeout: 900.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 14 items / 4 deselected / 10 selected
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_multichip_decoder_graph_summary PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_multichip_runtime_fallback_audit_source PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_prefill_decode_against_optimized[linear_seq5] 2026-08-19 06:57:03.619 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-19 06:57:03.619 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-19 06:57:03.619 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-19 06:57:03.619 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-19 06:57:03.620 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-19 06:57:03.620 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-19 06:57:03.624 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-19 06:57:03.845 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-19 06:57:03.845 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-19 06:57:03.845 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-19 06:57:03.845 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-19 06:57:03.847 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-19 06:57:04.030 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-19 06:57:04.156 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 06:57:04.156 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 06:57:04.156 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:04.156 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:04.156 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:04.156 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:04.156 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:04.156 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:04.157 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:04.157 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:04.157 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 06:57:04.157 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 06:57:04.157 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:57:04.157 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:57:04.212 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:57:04.212 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:57:04.212 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:57:04.212 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:57:04.212 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:57:04.212 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:57:04.212 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:04.212 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 06:57:04.216 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:04.220 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:04.224 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:04.267 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929248_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 06:57:04.267 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929249_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 06:57:04.267 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931936_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 06:57:04.267 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931937_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 06:57:04.847 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=3892743749669 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 06:57:14.234 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:14.239 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:14.243 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:14.247 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:15.559 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-08-19 06:57:15.559 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 06:57:15.559 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 06:57:15.559 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:15.559 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:15.559 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:15.559 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:15.559 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:15.559 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:15.559 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:15.559 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:15.559 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 06:57:15.559 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 06:57:15.560 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:57:15.560 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:57:15.560 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:57:15.560 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:57:15.560 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:57:15.560 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:57:15.560 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:57:15.622 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:57:15.622 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:57:15.622 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:57:15.622 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:57:15.622 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:57:15.622 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:57:15.622 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:15.625 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-19 06:57:15.628 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:15.635 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:15.639 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:15.653 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-19 06:57:15.653 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-19 06:57:15.654 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-19 06:57:15.655 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-19 06:57:15.655 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-19 06:57:15.655 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-08-19 06:57:16.378 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=3885823717265 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 06:57:16.378 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349989 GHz, device_time_at_sync=3884078332678 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 06:57:16.379 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=3887572491272 cycles (realtime_profiler_manager.cpp:1127)
+multichip prefill 0.9999484087608499
+multichip traced decode 0.9999441730343133
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_prefill_decode_against_optimized[full_seq33] 2026-08-19 06:57:23.467 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:57:23.467 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:57:23.468 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:57:23.468 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:57:23.468 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:57:23.468 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:57:23.468 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:57:23.531 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:57:23.531 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:57:23.531 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:57:23.531 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:57:23.531 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:57:23.531 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:57:23.531 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 06:57:23.531 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:23.536 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:23.540 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:23.544 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:33.553 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:33.558 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:33.562 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:33.566 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:34.080 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-08-19 06:57:34.081 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 06:57:34.081 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 06:57:34.081 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:34.081 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:34.081 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:34.081 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:34.081 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:34.081 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:34.081 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:34.081 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:34.081 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 06:57:34.081 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 06:57:34.081 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:57:34.081 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:57:34.081 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:57:34.081 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:57:34.081 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:57:34.081 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:57:34.081 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:57:34.143 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:57:34.144 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:57:34.144 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:57:34.144 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:57:34.144 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:57:34.144 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:57:34.144 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:34.146 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-19 06:57:34.151 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:34.157 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:34.161 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:34.167 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-19 06:57:34.168 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-19 06:57:34.168 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-19 06:57:34.169 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-19 06:57:34.169 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-19 06:57:34.169 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+multichip prefill 0.9999434563393946
+multichip traced decode 0.9999454953390461
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_non_aligned_lengths[linear_non_aligned65] 2026-08-19 06:57:41.119 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:57:41.120 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:57:41.120 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:57:41.120 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:57:41.120 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:57:41.120 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:57:41.120 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:57:41.183 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:57:41.183 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:57:41.183 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:57:41.183 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:57:41.183 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:57:41.183 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:57:41.183 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:41.183 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 06:57:41.187 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:41.192 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:41.196 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:51.206 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:51.210 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:51.214 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:51.219 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:51.981 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-08-19 06:57:51.981 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 06:57:51.981 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 06:57:51.981 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:51.981 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:51.981 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:51.981 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:51.981 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:51.981 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:51.981 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:51.981 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:57:51.981 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 06:57:51.981 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 06:57:51.982 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:57:51.982 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:57:51.982 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:57:51.982 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:57:51.982 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:57:51.982 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:57:51.982 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:57:52.044 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:57:52.044 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:57:52.044 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:57:52.044 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:57:52.044 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:57:52.044 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:57:52.044 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:52.046 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-19 06:57:52.050 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:52.057 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:52.061 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:52.067 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-19 06:57:52.068 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-19 06:57:52.068 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-19 06:57:52.069 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-19 06:57:52.069 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-19 06:57:52.069 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+multichip non-aligned prefill 0.9999464359555065
+multichip non-aligned traced decode 0.9999427554606481
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_non_aligned_lengths[full_non_aligned33] 2026-08-19 06:57:59.418 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:57:59.418 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:57:59.418 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:57:59.419 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:57:59.419 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:57:59.419 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:57:59.419 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:57:59.482 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:57:59.482 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:57:59.482 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:57:59.482 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:57:59.482 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:57:59.482 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:57:59.482 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:59.482 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 06:57:59.486 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:59.490 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:57:59.494 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:09.504 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:09.508 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:09.513 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:09.517 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:09.915 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-08-19 06:58:09.915 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 06:58:09.915 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 06:58:09.915 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:09.915 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:09.915 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:09.915 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:09.915 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:09.915 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:09.915 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:09.915 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:09.916 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 06:58:09.916 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 06:58:09.916 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:58:09.916 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:58:09.916 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:58:09.916 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:58:09.916 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:58:09.916 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:58:09.916 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:58:09.978 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:58:09.978 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:58:09.978 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:58:09.978 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:58:09.978 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:58:09.978 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:58:09.978 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:09.981 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-19 06:58:09.985 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:09.991 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:09.995 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:10.001 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-19 06:58:10.002 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-19 06:58:10.002 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-19 06:58:10.003 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-19 06:58:10.003 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-19 06:58:10.003 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-08-19 06:58:10.723 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=3981678129571 cycles (realtime_profiler_manager.cpp:1127)
+multichip non-aligned prefill 0.9999434563393946
+multichip non-aligned traced decode 0.9999454953390461
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_batch2_against_optimized[linear_batch2] 2026-08-19 06:58:17.501 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:58:17.501 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:58:17.501 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:58:17.502 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:58:17.502 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:58:17.502 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:58:17.502 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:58:17.565 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:58:17.565 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:58:17.565 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:58:17.565 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:58:17.565 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:58:17.565 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:58:17.565 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:17.565 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 06:58:17.569 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:17.573 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:17.577 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:27.587 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:27.592 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:27.596 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:27.600 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:28.371 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-08-19 06:58:28.371 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 06:58:28.371 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 06:58:28.371 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:28.371 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:28.371 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:28.371 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:28.371 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:28.371 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:28.371 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:28.371 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:28.371 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 06:58:28.371 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 06:58:28.371 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:58:28.372 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:58:28.372 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:58:28.372 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:58:28.372 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:58:28.372 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:58:28.372 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:58:28.435 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:58:28.435 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:58:28.435 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:58:28.435 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:58:28.435 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:58:28.435 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:58:28.435 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:28.437 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-19 06:58:28.441 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:28.448 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:28.452 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:28.458 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-19 06:58:28.458 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-19 06:58:28.459 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-19 06:58:28.459 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-19 06:58:28.459 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-19 06:58:28.459 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-08-19 06:58:29.179 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349984 GHz, device_time_at_sync=3982358723725 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 06:58:29.180 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349982 GHz, device_time_at_sync=3984104130951 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 06:58:29.181 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349989 GHz, device_time_at_sync=3985853185811 cycles (realtime_profiler_manager.cpp:1127)
+multichip batch2 prefill 0.9999494999613228
+multichip batch2 decode 0.9999499535882233
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_batch2_against_optimized[full_batch2] 2026-08-19 06:58:36.201 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:58:36.201 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:58:36.202 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:58:36.202 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:58:36.202 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:58:36.202 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:58:36.202 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:58:36.266 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:58:36.266 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:58:36.266 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:58:36.266 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:58:36.266 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:58:36.266 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:58:36.266 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:36.266 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 06:58:36.270 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:36.274 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:36.278 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:46.288 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:46.292 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:46.297 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:46.301 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:46.947 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-08-19 06:58:46.947 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 06:58:46.947 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 06:58:46.947 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:46.947 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:46.947 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:46.947 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:46.947 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:46.947 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:46.947 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:46.947 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:58:46.948 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 06:58:46.948 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 06:58:46.948 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:58:46.948 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:58:46.948 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:58:46.948 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:58:46.948 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:58:46.948 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:58:46.948 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:58:47.010 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:58:47.010 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:58:47.010 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:58:47.010 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:58:47.010 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:58:47.011 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:58:47.011 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:47.013 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-19 06:58:47.018 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:47.024 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:47.028 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:47.034 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-19 06:58:47.034 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-19 06:58:47.035 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-19 06:58:47.035 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-19 06:58:47.035 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-19 06:58:47.035 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+multichip batch2 prefill 0.9999451873736693
+multichip batch2 decode 0.9999451794244919
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_real_weight_multichip_decoder_prefill_decode_against_optimized[real_linear_layer0] 2026-08-19 06:58:53.903 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:58:53.903 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:58:53.904 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:58:53.904 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:58:53.904 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:58:53.904 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:58:53.904 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:58:53.967 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:58:53.968 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:58:53.968 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:58:53.968 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:58:53.968 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:58:53.968 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:58:53.968 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:53.968 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 06:58:53.972 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:53.976 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:58:53.980 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:03.989 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:03.993 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:03.998 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:04.002 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:08.834 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-08-19 06:59:08.834 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 06:59:08.834 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 06:59:08.834 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:08.834 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:08.834 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:08.834 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:08.834 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:08.834 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:08.834 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:08.834 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:08.834 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 06:59:08.834 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 06:59:08.835 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:59:08.835 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:59:08.835 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:59:08.835 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:59:08.835 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:59:08.835 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:59:08.835 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:59:08.898 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:59:08.898 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:59:08.898 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:59:08.898 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:59:08.898 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:59:08.898 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:59:08.898 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:08.900 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-19 06:59:08.904 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:08.910 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:08.914 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:08.920 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-19 06:59:08.921 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-19 06:59:08.921 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-19 06:59:08.922 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-19 06:59:08.922 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-19 06:59:08.922 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+multichip real prefill 0.999973132328256
+multichip real traced decode 0.9999286756928917
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_real_weight_multichip_decoder_prefill_decode_against_optimized[real_full_layer3] 2026-08-19 06:59:17.725 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:59:17.725 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:59:17.725 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:59:17.725 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:59:17.725 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:59:17.726 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:59:17.726 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:59:17.788 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:59:17.788 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:59:17.788 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:59:17.788 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:59:17.788 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:59:17.788 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:59:17.788 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:17.788 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 06:59:17.792 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:17.797 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:17.801 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:18.419 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349984 GHz, device_time_at_sync=4073064200228 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 06:59:27.810 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:27.815 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:27.819 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:27.823 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:33.892 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:281)
+2026-08-19 06:59:33.892 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 06:59:33.892 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 06:59:33.893 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:33.893 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:33.893 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:33.893 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:33.893 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:33.893 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:33.893 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:33.893 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 06:59:33.893 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 06:59:33.893 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 06:59:33.893 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 06:59:33.893 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 06:59:33.893 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:59:33.893 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:59:33.893 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:59:33.893 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:59:33.893 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:59:33.955 | info     |       LLRuntime | Watcher log file: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_multichip_decoder/watcher/final/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-08-19 06:59:33.955 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-08-19 06:59:33.955 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-08-19 06:59:33.955 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-08-19 06:59:33.955 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-08-19 06:59:33.955 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-08-19 06:59:33.955 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:33.957 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-08-19 06:59:33.962 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:33.968 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:33.972 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:33.978 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-08-19 06:59:33.979 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-08-19 06:59:33.979 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-08-19 06:59:33.980 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-08-19 06:59:33.980 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-08-19 06:59:33.980 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-08-19 06:59:34.701 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349988 GHz, device_time_at_sync=4070810861842 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 06:59:34.702 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349989 GHz, device_time_at_sync=4074305615050 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 06:59:34.702 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=4072556294454 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 06:59:44.025 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:44.030 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+multichip real prefill 0.9999452009034249
+multichip real traced decode 0.9998278764371862
+PASSED2026-08-19 06:59:44.034 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-08-19 06:59:44.038 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+26.31s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_real_weight_multichip_decoder_prefill_decode_against_optimized[real_full_layer3]
+23.82s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_real_weight_multichip_decoder_prefill_decode_against_optimized[real_linear_layer0]
+19.87s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_prefill_decode_against_optimized[linear_seq5]
+18.72s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_batch2_against_optimized[linear_batch2]
+18.32s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_non_aligned_lengths[linear_non_aligned65]
+18.06s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_non_aligned_lengths[full_non_aligned33]
+17.87s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_batch2_against_optimized[full_batch2]
+17.63s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_prefill_decode_against_optimized[full_seq33]
+0.00s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_multichip_runtime_fallback_audit_source
+0.00s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_real_weight_multichip_decoder_prefill_decode_against_optimized[real_linear_layer0]
+0.00s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_batch2_against_optimized[full_batch2]
+0.00s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_prefill_decode_against_optimized[full_seq33]
+0.00s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_non_aligned_lengths[linear_non_aligned65]
+0.00s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_non_aligned_lengths[full_non_aligned33]
+0.00s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_real_weight_multichip_decoder_prefill_decode_against_optimized[real_full_layer3]
+0.00s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_batch2_against_optimized[linear_batch2]
+0.00s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_prefill_decode_against_optimized[linear_seq5]
+0.00s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_batch2_against_optimized[full_batch2]
+0.00s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_prefill_decode_against_optimized[linear_seq5]
+0.00s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_non_aligned_lengths[full_non_aligned33]
+0.00s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_batch2_against_optimized[linear_batch2]
+0.00s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_real_weight_multichip_decoder_prefill_decode_against_optimized[real_linear_layer0]
+0.00s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_non_aligned_lengths[linear_non_aligned65]
+0.00s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_prefill_decode_against_optimized[full_seq33]
+0.00s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_real_weight_multichip_decoder_prefill_decode_against_optimized[real_full_layer3]
+0.00s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_multichip_decoder_graph_summary
+0.00s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_multichip_decoder_graph_summary
+0.00s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_multichip_decoder_graph_summary
+0.00s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_multichip_runtime_fallback_audit_source
+0.00s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_multichip_runtime_fallback_audit_source
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_multichip_decoder_graph_summary
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_multichip_runtime_fallback_audit_source
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_prefill_decode_against_optimized[linear_seq5]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_prefill_decode_against_optimized[full_seq33]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_non_aligned_lengths[linear_non_aligned65]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_non_aligned_lengths[full_non_aligned33]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_batch2_against_optimized[linear_batch2]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_synthetic_multichip_decoder_batch2_against_optimized[full_batch2]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_real_weight_multichip_decoder_prefill_decode_against_optimized[real_linear_layer0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_multichip_decoder.py::test_real_weight_multichip_decoder_prefill_decode_against_optimized[real_full_layer3]
+=========== 10 passed, 4 deselected, 2 warnings in 161.95s (0:02:41) ===========
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x7f9f82ff9de8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7f9f83115a88 of type "ttnn._ttnn.device.DispatchCoreConfig"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 305 functions!
+ - leaked function "create_submesh"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "create_descriptor"
+ - leaked function "EnableMemoryReports"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "is_sharded"
+ - leaked function "__ne__"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-19 06:59:45.760 | info     |    BuildKernels | JIT cache stats: 1371/1371 hits (100.0%) [1371 cached, 7278 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-19 06:59:45.760 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-19 06:59:45.762 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-08-19 06:59:45.762 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-08-19 06:59:45.762 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-08-19 06:59:45.762 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-08-19 06:59:45.762 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-08-19 06:59:45.774 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-19 06:59:45.774 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-19 06:59:46.366 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-19 06:59:46.366 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-19 06:59:46.366 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

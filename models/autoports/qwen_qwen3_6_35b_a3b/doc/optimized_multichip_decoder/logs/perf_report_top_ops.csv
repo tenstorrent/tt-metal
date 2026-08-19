@@ -1,0 +1,129 @@
+run,segment,id,device,device_time_us,op_code,advice
+baseline,base_linear_prefill,1121,0,4107.173,SparseMatmulDeviceOperation active=256/256 x 32 x 2048 x 1024,"If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+baseline,base_linear_prefill,1127,0,1256.434,SparseMatmulDeviceOperation active=256/256 x 32 x 512 x 2048,"If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+baseline,base_linear_prefill,1129,0,189.576,BinaryNgDeviceOperation,
+baseline,base_linear_prefill,1126,0,177.828,UnaryDeviceOperation,
+baseline,base_linear_prefill,1122,0,97.519,PermuteDeviceOperation,
+baseline,base_linear_prefill,1130,0,91.394,FastReduceNCDeviceOperation,
+baseline,base_linear_prefill,1080,0,90.579,MatmulDeviceOperation b={32} x 64 x 128 x 128,"If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED) • in0_block_w=1 is small, try in0_block_w=2 or above • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+baseline,base_linear_prefill,1074,0,90.019,MatmulDeviceOperation b={32} x 64 x 128 x 128,"If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED) • in0_block_w=1 is small, try in0_block_w=2 or above • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+baseline,mc_linear_prefill,6277,0,177.94,UnaryDeviceOperation,
+baseline,mc_linear_prefill,6174,1,176.833,UnaryDeviceOperation,
+baseline,mc_linear_prefill,6381,0,176.388,UnaryDeviceOperation,
+baseline,mc_linear_prefill,6486,1,176.095,UnaryDeviceOperation,
+baseline,mc_linear_prefill,6589,0,174.773,UnaryDeviceOperation,
+baseline,mc_linear_prefill,6387,3,96.309,TransposeDeviceOperation,
+baseline,mc_linear_prefill,6492,2,96.053,TransposeDeviceOperation,
+baseline,mc_linear_prefill,6180,2,95.82,TransposeDeviceOperation,
+baseline,base_full_prefill,6864,0,4100.636,SparseMatmulDeviceOperation active=256/256 x 32 x 2048 x 1024,"If possible place input 0 in L1 (currently in DEV_4_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+baseline,base_full_prefill,6870,0,1251.28,SparseMatmulDeviceOperation active=256/256 x 32 x 512 x 2048,"If possible place input 0 in L1 (currently in DEV_4_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+baseline,base_full_prefill,6872,0,193.867,BinaryNgDeviceOperation,
+baseline,base_full_prefill,6869,0,174.761,UnaryDeviceOperation,
+baseline,base_full_prefill,6892,0,173.927,UnaryDeviceOperation,
+baseline,base_full_prefill,6886,0,132.861,SparseMatmulDeviceOperation active=8/256 x 32 x 2048 x 1024,"If possible place input 0 in L1 (currently in DEV_4_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+baseline,base_full_prefill,6865,0,98.958,PermuteDeviceOperation,
+baseline,base_full_prefill,6894,0,94.093,TransposeDeviceOperation,
+baseline,mc_full_prefill,13717,3,180.812,UnaryDeviceOperation,
+baseline,mc_full_prefill,11846,2,179.076,UnaryDeviceOperation,
+baseline,mc_full_prefill,12992,1,178.324,UnaryDeviceOperation,
+baseline,mc_full_prefill,11325,3,178.087,UnaryDeviceOperation,
+baseline,mc_full_prefill,12781,3,177.867,UnaryDeviceOperation,
+baseline,mc_full_prefill,12576,1,177.711,UnaryDeviceOperation,
+baseline,mc_full_prefill,13925,3,177.652,UnaryDeviceOperation,
+baseline,mc_full_prefill,12053,3,177.356,UnaryDeviceOperation,
+baseline,base_linear_decode,15729,0,176.806,UnaryDeviceOperation,
+baseline,base_linear_decode,15723,0,132.824,SparseMatmulDeviceOperation active=8/256 x 32 x 2048 x 1024,"If possible place input 0 in L1 (currently in DEV_7_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+baseline,base_linear_decode,15731,0,94.986,TransposeDeviceOperation,
+baseline,base_linear_decode,15722,0,86.489,UnaryDeviceOperation,
+baseline,base_linear_decode,15703,0,74.027,MatmulDeviceOperation 32 x 4096 x 2048,"If possible place input 0 in L1 (currently in DEV_7_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+baseline,base_linear_decode,15652,0,73.429,MatmulDeviceOperation 32 x 2048 x 12352,Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+baseline,base_linear_decode,15691,0,52.587,MatmulDeviceOperation b={32} x 32 x 128 x 128,"If possible place input 0 in L1 (currently in DEV_7_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+baseline,base_linear_decode,15697,0,52.362,MatmulDeviceOperation b={32} x 32 x 128 x 128,"If possible place input 0 in L1 (currently in DEV_7_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+baseline,mc_linear_decode,20372,0,176.857,UnaryDeviceOperation,
+baseline,mc_linear_decode,20479,1,96.167,TransposeDeviceOperation,
+baseline,mc_linear_decode,20366,0,66.114,SparseMatmulDeviceOperation active=4/256 x 32 x 2048 x 512,"If possible place input 0 in L1 (currently in DEV_2_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+baseline,mc_linear_decode,20289,0,49.419,MatmulDeviceOperation 32 x 2048 x 6176,If possible place input 0 in L1 (currently in DEV_8_DRAM_INTERLEAVED) • in0_block_w=2 and output subblock 1x2 look good 🤷 • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+baseline,mc_linear_decode,20455,1,44.921,TopKDeviceOperation,
+baseline,mc_linear_decode,20365,0,44.498,UnaryDeviceOperation,
+baseline,mc_linear_decode,20447,1,38.343,MatmulDeviceOperation 32 x 2048 x 2048,"If possible place input 0 in L1 (currently in DEV_8_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+baseline,mc_linear_decode,20382,0,29.414,MatmulDeviceOperation 32 x 2048 x 512,"If possible place input 0 in L1 (currently in DEV_5_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+baseline,base_full_decode,20885,0,172.268,UnaryDeviceOperation,
+baseline,base_full_decode,20879,0,132.731,SparseMatmulDeviceOperation active=8/256 x 32 x 2048 x 1024,"If possible place input 0 in L1 (currently in DEV_4_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+baseline,base_full_decode,20887,0,94.764,TransposeDeviceOperation,
+baseline,base_full_decode,20878,0,87.584,UnaryDeviceOperation,
+baseline,base_full_decode,20859,0,73.817,MatmulDeviceOperation 32 x 4096 x 2048,"If possible place input 0 in L1 (currently in DEV_7_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+baseline,base_full_decode,20828,0,55.807,MatmulDeviceOperation 32 x 2048 x 9216,Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+baseline,base_full_decode,20880,0,49.357,TransposeDeviceOperation,
+baseline,base_full_decode,20865,0,44.88,TopKDeviceOperation,
+baseline,mc_full_decode,26028,0,175.49,UnaryDeviceOperation,
+baseline,mc_full_decode,25949,2,95.755,TransposeDeviceOperation,
+baseline,mc_full_decode,26103,1,65.702,SparseMatmulDeviceOperation active=4/256 x 32 x 2048 x 512,"If possible place input 0 in L1 (currently in DEV_5_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+baseline,mc_full_decode,25859,3,45.341,UnaryDeviceOperation,
+baseline,mc_full_decode,26006,0,44.996,TopKDeviceOperation,
+baseline,mc_full_decode,26050,1,41.467,MatmulDeviceOperation 32 x 2048 x 4608,If possible place input 0 in L1 (currently in DEV_11_DRAM_INTERLEAVED) • in0_block_w=2 and output subblock 1x2 look good 🤷 • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+baseline,mc_full_decode,25998,0,37.469,MatmulDeviceOperation 32 x 2048 x 2048,"If possible place input 0 in L1 (currently in DEV_8_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+baseline,mc_full_decode,26119,1,29.167,MatmulDeviceOperation 32 x 2048 x 512,"If possible place input 0 in L1 (currently in DEV_5_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+final,base_linear_prefill,1121,0,4107.209,SparseMatmulDeviceOperation active=256/256 x 32 x 2048 x 1024,"If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+final,base_linear_prefill,1127,0,1255.599,SparseMatmulDeviceOperation active=256/256 x 32 x 512 x 2048,"If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+final,base_linear_prefill,1129,0,190.559,BinaryNgDeviceOperation,
+final,base_linear_prefill,1126,0,174.136,UnaryDeviceOperation,
+final,base_linear_prefill,1122,0,101.176,PermuteDeviceOperation,
+final,base_linear_prefill,1130,0,92.261,FastReduceNCDeviceOperation,
+final,base_linear_prefill,1074,0,90.48,MatmulDeviceOperation b={32} x 64 x 128 x 128,"If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED) • in0_block_w=1 is small, try in0_block_w=2 or above • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+final,base_linear_prefill,1080,0,90.192,MatmulDeviceOperation b={32} x 64 x 128 x 128,"If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED) • in0_block_w=1 is small, try in0_block_w=2 or above • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+final,mc_linear_prefill,6275,3,179.133,UnaryDeviceOperation,
+final,mc_linear_prefill,6483,3,176.08,UnaryDeviceOperation,
+final,mc_linear_prefill,6589,0,175.383,UnaryDeviceOperation,
+final,mc_linear_prefill,6379,3,174.849,UnaryDeviceOperation,
+final,mc_linear_prefill,6174,1,173.887,UnaryDeviceOperation,
+final,mc_linear_prefill,6597,0,97.307,TransposeDeviceOperation,
+final,mc_linear_prefill,6494,1,95.875,TransposeDeviceOperation,
+final,mc_linear_prefill,6180,2,95.485,TransposeDeviceOperation,
+final,base_full_prefill,6864,0,4102.37,SparseMatmulDeviceOperation active=256/256 x 32 x 2048 x 1024,"If possible place input 0 in L1 (currently in DEV_4_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+final,base_full_prefill,6870,0,1250.581,SparseMatmulDeviceOperation active=256/256 x 32 x 512 x 2048,"If possible place input 0 in L1 (currently in DEV_4_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+final,base_full_prefill,6872,0,187.775,BinaryNgDeviceOperation,
+final,base_full_prefill,6892,0,176.66,UnaryDeviceOperation,
+final,base_full_prefill,6869,0,172.842,UnaryDeviceOperation,
+final,base_full_prefill,6886,0,132.81,SparseMatmulDeviceOperation active=8/256 x 32 x 2048 x 1024,"If possible place input 0 in L1 (currently in DEV_4_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+final,base_full_prefill,6865,0,101.51,PermuteDeviceOperation,
+final,base_full_prefill,6894,0,95.794,TransposeDeviceOperation,
+final,mc_full_prefill,11848,1,178.182,UnaryDeviceOperation,
+final,mc_full_prefill,12989,3,177.859,UnaryDeviceOperation,
+final,mc_full_prefill,11535,0,177.684,UnaryDeviceOperation,
+final,mc_full_prefill,13303,0,177.652,UnaryDeviceOperation,
+final,mc_full_prefill,11327,0,176.928,UnaryDeviceOperation,
+final,mc_full_prefill,14238,2,176.881,UnaryDeviceOperation,
+final,mc_full_prefill,11120,1,176.662,UnaryDeviceOperation,
+final,mc_full_prefill,12576,1,176.621,UnaryDeviceOperation,
+final,base_linear_decode,15729,0,172.887,UnaryDeviceOperation,
+final,base_linear_decode,15723,0,132.926,SparseMatmulDeviceOperation active=8/256 x 32 x 2048 x 1024,"If possible place input 0 in L1 (currently in DEV_7_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+final,base_linear_decode,15731,0,94.073,TransposeDeviceOperation,
+final,base_linear_decode,15722,0,89.675,UnaryDeviceOperation,
+final,base_linear_decode,15703,0,73.738,MatmulDeviceOperation 32 x 4096 x 2048,"If possible place input 0 in L1 (currently in DEV_7_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+final,base_linear_decode,15652,0,72.938,MatmulDeviceOperation 32 x 2048 x 12352,Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+final,base_linear_decode,15691,0,53.296,MatmulDeviceOperation b={32} x 32 x 128 x 128,"If possible place input 0 in L1 (currently in DEV_7_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+final,base_linear_decode,15697,0,52.301,MatmulDeviceOperation b={32} x 32 x 128 x 128,"If possible place input 0 in L1 (currently in DEV_7_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+final,mc_linear_decode,20477,1,175.502,UnaryDeviceOperation,
+final,mc_linear_decode,20479,1,97.148,TransposeDeviceOperation,
+final,mc_linear_decode,20366,0,65.816,SparseMatmulDeviceOperation active=4/256 x 32 x 2048 x 512,"If possible place input 0 in L1 (currently in DEV_2_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+final,mc_linear_decode,20394,1,49.444,MatmulDeviceOperation 32 x 2048 x 6176,If possible place input 0 in L1 (currently in DEV_8_DRAM_INTERLEAVED) • in0_block_w=2 and output subblock 1x2 look good 🤷 • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+final,mc_linear_decode,20245,2,44.891,TopKDeviceOperation,
+final,mc_linear_decode,20260,2,44.492,UnaryDeviceOperation,
+final,mc_linear_decode,20447,1,38.337,MatmulDeviceOperation 32 x 2048 x 2048,"If possible place input 0 in L1 (currently in DEV_8_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+final,mc_linear_decode,20382,0,29.441,MatmulDeviceOperation 32 x 2048 x 512,"If possible place input 0 in L1 (currently in DEV_5_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+final,base_full_decode,20885,0,176.593,UnaryDeviceOperation,
+final,base_full_decode,20879,0,132.695,SparseMatmulDeviceOperation active=8/256 x 32 x 2048 x 1024,"If possible place input 0 in L1 (currently in DEV_4_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+final,base_full_decode,20887,0,95.033,TransposeDeviceOperation,
+final,base_full_decode,20878,0,87.367,UnaryDeviceOperation,
+final,base_full_decode,20859,0,74.065,MatmulDeviceOperation 32 x 4096 x 2048,"If possible place input 0 in L1 (currently in DEV_7_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+final,base_full_decode,20828,0,55.17,MatmulDeviceOperation 32 x 2048 x 9216,Try a DRAM-sharded program config (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) to improve throughput further • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+final,base_full_decode,20880,0,48.644,TransposeDeviceOperation,
+final,base_full_decode,20865,0,44.867,TopKDeviceOperation,
+final,mc_full_decode,26028,0,176.218,UnaryDeviceOperation,
+final,mc_full_decode,25949,2,97.55,TransposeDeviceOperation,
+final,mc_full_decode,26103,1,65.911,SparseMatmulDeviceOperation active=4/256 x 32 x 2048 x 512,"If possible place input 0 in L1 (currently in DEV_5_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+final,mc_full_decode,25925,2,44.916,TopKDeviceOperation,
+final,mc_full_decode,26021,0,44.521,UnaryDeviceOperation,
+final,mc_full_decode,25969,0,41.437,MatmulDeviceOperation 32 x 2048 x 4608,If possible place input 0 in L1 (currently in DEV_11_DRAM_INTERLEAVED) • in0_block_w=2 and output subblock 1x2 look good 🤷 • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+final,mc_full_decode,25998,0,37.556,MatmulDeviceOperation 32 x 2048 x 2048,"If possible place input 0 in L1 (currently in DEV_8_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+final,mc_full_decode,26038,0,29.345,MatmulDeviceOperation 32 x 2048 x 512,"If possible place input 0 in L1 (currently in DEV_5_DRAM_INTERLEAVED) • Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible • If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"

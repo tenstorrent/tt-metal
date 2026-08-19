@@ -20,12 +20,19 @@ per-device weight, state, and KV-cache shapes explicit.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 import torch
 
 import ttnn
+from models.common.modules.tt_ccl import (
+    CCL_CHUNKS_PER_SYNC,
+    CCL_NUM_BUFFERS_PER_CHANNEL,
+    CCL_NUM_WORKERS_PER_LINK,
+    get_tt_ccl,
+)
 
 from .functional_decoder import (
     DEFAULT_MOE_CHUNK_SIZE,
@@ -68,11 +75,32 @@ class MultichipMeshPlan:
     tensor_parallel_size: int = 2
     expert_parallel_size: int = 2
     topology: Any = ttnn.Topology.Ring
-    num_links: int = 1
+    num_links: int = 2
+    ccl_mode: Literal["all_reduce", "explicit_rs_ag"] = "all_reduce"
+    ccl_dtype: Literal["bf16", "bf8"] = "bf16"
     residual_layout: Literal["replicated"] = "replicated"
 
 
-TARGET_MESH_PLAN = MultichipMeshPlan()
+def _target_mesh_plan_from_env() -> MultichipMeshPlan:
+    plan = MultichipMeshPlan()
+    raw_links = os.environ.get("QWEN36_MULTICHIP_NUM_LINKS")
+    raw_mode = os.environ.get("QWEN36_MULTICHIP_CCL_MODE")
+    raw_dtype = os.environ.get("QWEN36_MULTICHIP_CCL_DTYPE")
+    if raw_links is None and raw_mode is None and raw_dtype is None:
+        return plan
+    num_links = plan.num_links if raw_links is None else int(raw_links)
+    if num_links <= 0:
+        raise ValueError(f"QWEN36_MULTICHIP_NUM_LINKS must be positive, got {raw_links!r}")
+    ccl_mode = plan.ccl_mode if raw_mode is None else raw_mode
+    if ccl_mode not in ("all_reduce", "explicit_rs_ag"):
+        raise ValueError(f"unsupported QWEN36_MULTICHIP_CCL_MODE={raw_mode!r}")
+    ccl_dtype = plan.ccl_dtype if raw_dtype is None else raw_dtype
+    if ccl_dtype not in ("bf16", "bf8"):
+        raise ValueError(f"unsupported QWEN36_MULTICHIP_CCL_DTYPE={raw_dtype!r}")
+    return replace(plan, num_links=num_links, ccl_mode=ccl_mode, ccl_dtype=ccl_dtype)
+
+
+TARGET_MESH_PLAN = _target_mesh_plan_from_env()
 
 
 @dataclass(frozen=True)
@@ -83,6 +111,9 @@ class MultichipDecoderGraphSummary:
     target_mesh_shape: tuple[int, int]
     tensor_parallel_size: int
     expert_parallel_size: int
+    ccl_num_links: int
+    ccl_mode: str
+    ccl_dtype: str
     replicated_residual_contract: bool
     full_attention_q_heads_per_device: int
     full_attention_kv_heads_per_device: int
@@ -97,6 +128,9 @@ GRAPH_SUMMARY = MultichipDecoderGraphSummary(
     target_mesh_shape=TARGET_MESH_PLAN.mesh_shape,
     tensor_parallel_size=TARGET_MESH_PLAN.tensor_parallel_size,
     expert_parallel_size=TARGET_MESH_PLAN.expert_parallel_size,
+    ccl_num_links=TARGET_MESH_PLAN.num_links,
+    ccl_mode=TARGET_MESH_PLAN.ccl_mode,
+    ccl_dtype=TARGET_MESH_PLAN.ccl_dtype,
     replicated_residual_contract=True,
     full_attention_q_heads_per_device=8,
     full_attention_kv_heads_per_device=1,
@@ -199,22 +233,62 @@ def _expert_row_weight(weight: torch.Tensor, *, device, dtype) -> ttnn.Tensor:
     )
 
 
+def _all_reduce(tensor: ttnn.Tensor, plan: MultichipMeshPlan, *, cluster_axis: int) -> ttnn.Tensor:
+    output_dtype = tensor.dtype
+    if plan.ccl_dtype == "bf8":
+        tensor = ttnn.typecast(tensor, dtype=ttnn.bfloat8_b)
+    output_memory_config = tensor.memory_config()
+    if plan.ccl_mode == "explicit_rs_ag":
+        tt_ccl = get_tt_ccl(tensor.device())
+        reduced = ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            persistent_output_buffers=None,
+            dim=3,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            num_links=plan.num_links,
+            memory_config=output_memory_config,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=plan.topology,
+            cluster_axis=cluster_axis,
+            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
+            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
+        )
+        gathered = ttnn.experimental.all_gather_async(
+            reduced,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+            num_links=plan.num_links,
+            memory_config=output_memory_config,
+            topology=plan.topology,
+            cluster_axis=cluster_axis,
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            chunks_per_sync=CCL_CHUNKS_PER_SYNC,
+            num_workers_per_link=CCL_NUM_WORKERS_PER_LINK,
+            num_buffers_per_channel=CCL_NUM_BUFFERS_PER_CHANNEL,
+        )
+        reduced.deallocate(True)
+        output = gathered
+    else:
+        output = ttnn.all_reduce(
+            tensor,
+            num_links=plan.num_links,
+            topology=plan.topology,
+            cluster_axis=cluster_axis,
+        )
+    if plan.ccl_dtype == "bf8" and output_dtype != ttnn.bfloat8_b:
+        output = ttnn.typecast(output, dtype=output_dtype)
+    return output
+
+
 def _all_reduce_tp(tensor: ttnn.Tensor, plan: MultichipMeshPlan) -> ttnn.Tensor:
-    return ttnn.all_reduce(
-        tensor,
-        num_links=plan.num_links,
-        topology=plan.topology,
-        cluster_axis=plan.tensor_parallel_axis,
-    )
+    return _all_reduce(tensor, plan, cluster_axis=plan.tensor_parallel_axis)
 
 
 def _all_reduce_ep(tensor: ttnn.Tensor, plan: MultichipMeshPlan) -> ttnn.Tensor:
-    return ttnn.all_reduce(
-        tensor,
-        num_links=plan.num_links,
-        topology=plan.topology,
-        cluster_axis=plan.expert_parallel_axis,
-    )
+    return _all_reduce(tensor, plan, cluster_axis=plan.expert_parallel_axis)
 
 
 def _head_chunk(weight: torch.Tensor, start: int, count: int, width: int) -> torch.Tensor:

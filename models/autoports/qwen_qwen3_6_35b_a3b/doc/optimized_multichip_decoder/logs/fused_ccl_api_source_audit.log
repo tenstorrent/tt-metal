@@ -1,0 +1,409 @@
+matmul_reduce_scatter_async binding signatures
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:25:    mm_shard_dim,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:26:    rs_scatter_dim,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:27:    num_links,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:37:    rs_topology,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:71:    ### Create persistent output buffers
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:72:    logger.info("Creating persistent buffers")
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:76:    persistent_intermediate_buffers = [
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:89:    persistent_output_buffers = [
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:101:    logger.info("Done creating persistent buffers")
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:112:        mesh_mapper=ShardTensorToMesh(mesh_device, dim=mm_shard_dim),
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:156:    logger.info(f"Reduce scatter dim: {rs_scatter_dim}")
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:187:        matmul_input = torch.cat(torch_input_tensor_list[i], dim=3)
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:192:        scatter_output = torch.chunk(matmul_output, num_devices, rs_scatter_dim)
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:212:                persistent_intermediate_buffer=persistent_intermediate_buffers[i],
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:213:                persistent_output_buffer=persistent_output_buffers[i],
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:214:                dim=rs_scatter_dim,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:216:                num_links=num_links,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:218:                topology=rs_topology,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:222:            tt_matmul_out_tensor, tt_reduce_scatter_output_tensor = ttnn.experimental.matmul_reduce_scatter_async(
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:225:                persistent_intermediate_buffer=persistent_intermediate_buffers[i],
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:226:                persistent_output_buffer=persistent_output_buffers[i],
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:227:                dim=rs_scatter_dim,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:231:                num_links=num_links,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:233:                topology=rs_topology,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:280:        tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:281:        tt_mm_out = torch.sum(torch.stack(torch.chunk(tt_mm_out, num_devices, 3)), dim=0)
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:291:        tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:304:    "num_devices, num_links, mm_weights_shape, rs_input_shape, mm_shard_dim, rs_scatter_dim, layout, max_in0_block_w, matmul_weights_dtype, rs_input_dtype, use_bias",
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:380:    "device_params, rs_topology",
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:390:    num_links,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:393:    mm_shard_dim,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:394:    rs_scatter_dim,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:405:    rs_topology,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:411:        mm_shard_dim,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:412:        rs_scatter_dim,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:413:        num_links,
+tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py:423:        rs_topology=rs_topology,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:5:#include "matmul_reduce_scatter_async_nanobind.hpp"
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:19:#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp"
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:29:std::vector<ttnn::Tensor> matmul_reduce_scatter_async_wrapper(
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:32:    ttnn::Tensor& persistent_intermediate_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:33:    ttnn::Tensor& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:34:    const uint32_t dim,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:39:    std::optional<uint32_t> num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:42:    const ttnn::ccl::Topology topology,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:52:    return ttnn::experimental::matmul_reduce_scatter_async(
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:55:        persistent_intermediate_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:56:        persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:57:        dim,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:62:        num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:65:        topology,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:79:void bind_matmul_reduce_scatter_async(nb::module_& mod) {
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:80:    ttnn::bind_function<"matmul_reduce_scatter_async", "ttnn.experimental.">(
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:88:            * :attr:`dim` (int)
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:93:            * :attr:`num_links` (int, optional): Number of links to use for the reduce-scatter operation. Defaults to the maximum available.
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:94:            * :attr:`topology` (ttnn.Topology): Communication topology for the reduce-scatter phase. Defaults to `ttnn.Topology.Ring`.
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:105:        matmul_reduce_scatter_async_wrapper,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:108:        nb::arg("persistent_intermediate_buffer"),
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:109:        nb::arg("persistent_output_buffer"),
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:110:        nb::arg("dim"),
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:116:        nb::arg("num_links") = nb::none(),
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp:119:        nb::arg("topology") = ttnn::ccl::Topology::Ring,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.hpp:11:void bind_matmul_reduce_scatter_async(nb::module_& mod);
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:5:#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp"
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:7:#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp"
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:12:std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:15:    ttnn::Tensor& persistent_intermediate_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:16:    ttnn::Tensor& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:17:    const uint32_t dim,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:22:    std::optional<uint32_t> num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:25:    const ttnn::ccl::Topology topology,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:36:    TT_FATAL(mesh_device != nullptr, "Mesh device is required for matmul_reduce_scatter_async operation");
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:37:    uint32_t resolved_num_links =
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:38:        num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, std::nullopt));
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:39:    tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, std::nullopt);
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:40:    auto output_tensors = ttnn::prim::matmul_reduce_scatter_async(
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:43:        persistent_intermediate_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:44:        persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:45:        dim,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:50:        resolved_num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:53:        usable_topology,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp:22:std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp:25:    ttnn::Tensor& persistent_intermediate_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp:26:    ttnn::Tensor& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp:27:    uint32_t dim,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp:32:    std::optional<uint32_t> num_links = std::nullopt,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp:35:    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:5:#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.hpp"
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:45:    ttnn::ccl::Topology topology = args.reduce_scatter_params.topology;
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:47:    const auto& dim = args.reduce_scatter_params.dim;
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:48:    const auto& num_links = args.reduce_scatter_params.num_links;
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:52:    const auto& using_persistent_buffers = args.reduce_scatter_params.using_persistent_buffers;
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:63:        tensor_args.input, mesh_coord, 1, args.reduce_scatter_params.topology, args.reduce_scatter_params.cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:69:        args.reduce_scatter_params.topology,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:70:        args.reduce_scatter_params.cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:73:        tensor_args.input, mesh_coord, args.reduce_scatter_params.cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:84:        tensor_args.persistent_intermediate,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:89:        dim,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:90:        num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:93:        topology,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:96:        using_persistent_buffers,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:158:            args.reduce_scatter_params.num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:163:            shared_vars.reduce_scatter_artifacts.normalized_dim,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp:167:            tensor_args.persistent_intermediate,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.hpp:8:#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation_types.hpp"
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp:26:#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation_types.hpp"
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp:27:#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.hpp"
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp:49:ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return_value_t matmul_reduce_scatter_async(
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp:52:    Tensor& persistent_intermediate_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp:53:    Tensor& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp:54:    uint32_t dim,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp:59:    uint32_t num_links = 1,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp:62:    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:5:#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp"
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:20:#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation_types.hpp"
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:34:        args.reduce_scatter_params.dim == 3,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:35:        "MatmulReduceScatterAsync requires dim=3 for the ReduceScatter operations.");
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:79:    return {.mm = matmul_output_tensor, .reduce_scatter = tensor_args.persistent_output};
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:89:    const ttnn::Tensor& persistent_intermediate_tensor = tensor_args.persistent_intermediate;
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:90:    const ttnn::Tensor& persistent_output_tensor = tensor_args.persistent_output;
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:92:        args.reduce_scatter_params.dim,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:93:        args.reduce_scatter_params.num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:97:        args.reduce_scatter_params.topology,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:103:        args.reduce_scatter_params.cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:105:        args.reduce_scatter_params.using_persistent_buffers,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:114:        persistent_intermediate_tensor,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:115:        persistent_output_tensor);
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:122:ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return_value_t matmul_reduce_scatter_async(
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:125:    Tensor& persistent_intermediate_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:126:    Tensor& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:127:    const uint32_t dim,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:132:    const uint32_t num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:135:    const ttnn::ccl::Topology topology,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:175:    // Not using persistent buffers not currently supported by the RSMM API
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:176:    bool using_persistent_buffers = true;
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:181:        .dim = dim,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:182:        .num_links = num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:186:        .topology = topology,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:189:        .using_persistent_buffers = using_persistent_buffers,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:191:        .cluster_axis = std::nullopt,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:203:        .persistent_intermediate = persistent_intermediate_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp:204:        .persistent_output = persistent_output_buffer};
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation_types.hpp:56:    Tensor persistent_intermediate;
+ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation_types.hpp:57:    Tensor persistent_output;
+
+all_reduce public API signatures
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.hpp:13:ttnn::Tensor all_reduce(
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.hpp:15:    std::optional<uint32_t> cluster_axis = std::nullopt,
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.hpp:17:    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.hpp:18:    std::optional<uint32_t> num_links = std::nullopt,
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.hpp:19:    std::optional<tt::tt_fabric::Topology> topology = std::nullopt);
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp:5:#include "all_reduce_nanobind.hpp"
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp:14:#include "all_reduce.hpp"
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp:20:void bind_all_reduce(nb::module_& mod) {
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp:29:            cluster_axis (int, optional): The axis on the mesh device to reduce across. Defaults to `None`.
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp:31:            memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp:32:            num_links (int, optional): Number of links to use for the all_reduce operation. Defaults to `None`.
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp:33:            topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp:48:            >>> output = ttnn.all_reduce(ttnn_tensor)
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp:53:    ttnn::bind_function<"all_reduce">(
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp:56:        &ttnn::all_reduce,
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp:59:        nb::arg("cluster_axis") = nb::none(),
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp:62:        nb::arg("num_links") = nb::none(),
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp:63:        nb::arg("topology") = nb::none());
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:5:#include "all_reduce.hpp"
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:9:#include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:16:ttnn::Tensor all_reduce(
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:18:    std::optional<uint32_t> cluster_axis,
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:20:    const std::optional<ttnn::MemoryConfig>& memory_config,
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:21:    std::optional<uint32_t> num_links,
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:22:    std::optional<tt::tt_fabric::Topology> topology) {
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:23:    // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call all-reduce on cluster_axis=1, then
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:24:    // all-reduce on cluster_axis=0
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:25:    if (cluster_axis == std::nullopt) {
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:29:        if (!mesh_shape.is_line_topology()) {
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:32:                tensor = ttnn::all_reduce(tensor, i, subdevice_id, memory_config, num_links, topology);
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:39:    TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_reduce operation");
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:41:    // Determine topology
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:42:    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:43:    topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:44:    // Call the experimental all_reduce_async with Sum operation
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:45:    return ::ttnn::experimental::all_reduce_async(
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:47:        cluster_axis,
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:54:        topology_,
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce.cpp:55:        num_links,
+ttnn/cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.hpp:11:void bind_all_reduce(nb::module_& mod);
+
+explicit async CCL APIs
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.cpp:16:    const std::optional<Tensor>& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.cpp:17:    std::optional<uint32_t> num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.cpp:21:    std::optional<uint32_t> cluster_axis) {
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.cpp:23:    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.cpp:25:    uint32_t num_links_ = num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis));
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.cpp:29:        persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.cpp:32:        num_links_,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.cpp:36:        cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp:37:            persistent_output_buffer (ttnn.Tensor, optional): Buffer where final output will be written.
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp:38:            num_links (int, optional): Number of fabric links to use for communication.
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp:42:            cluster_axis (int, optional): The axis along which to cluster the communication.
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp:52:            ...     persistent_output_buffer=output_buf,  # Optional buffer
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp:55:            ...     cluster_axis=1
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp:63:        nb::arg("persistent_output_buffer") = nb::none(),
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp:64:        nb::arg("num_links") = nb::none(),
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp:68:        nb::arg("cluster_axis") = nb::none());
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.hpp:18:    const std::optional<Tensor>& persistent_output_buffer = std::nullopt,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.hpp:19:    std::optional<uint32_t> num_links = std::nullopt,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic.hpp:23:    std::optional<uint32_t> cluster_axis = std::nullopt);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation_types.hpp:17:    const uint32_t num_links;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation_types.hpp:22:    const std::optional<uint32_t> cluster_axis;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation_types.hpp:27:    std::optional<Tensor> persistent_output_buffer;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp:117:        persistent_output_buffer : Optional[ttnn.Tensor], default: None
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp:122:        num_links : int
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp:125:        cluster_axis : Optional[int], default: None
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp:130:            tensor for the all gather output is ready to be written.  Either this or persistent_output_buffer needs to be
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp:221:            nb::arg("persistent_output_buffer") = nb::none(),
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp:222:            nb::arg("num_links") = 1,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp:223:            nb::arg("cluster_axis") = nb::none(),
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp:230:            nb::arg("fsdp_cluster_axis") = nb::none(),
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.hpp:42:    const std::optional<Tensor>& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.hpp:45:    uint32_t num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.hpp:49:    std::optional<uint32_t> cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async.cpp:29:    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async.cpp:30:    uint32_t num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async.cpp:31:    std::optional<uint32_t> cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async.cpp:38:    std::optional<uint32_t> fsdp_cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async.cpp:56:        persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async.cpp:57:        num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async.cpp:58:        cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async.cpp:65:        fsdp_cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async.hpp:32:    const std::optional<ttnn::Tensor>& persistent_output_buffer = std::nullopt,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async.hpp:33:    uint32_t num_links = 1,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async.hpp:34:    std::optional<uint32_t> cluster_axis = std::nullopt,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async.hpp:41:    std::optional<uint32_t> fsdp_cluster_axis = std::nullopt,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_program_factory.cpp:81:        tensor_args.input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_program_factory.cpp:84:        tensor_args.input_tensor, mesh_coordinate, 1, operation_attributes.topology, operation_attributes.cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_program_factory.cpp:90:        operation_attributes.cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_program_factory.cpp:106:        operation_attributes.num_links, num_senders_per_link, device, operation_attributes.sub_device_id);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_program_factory.cpp:161:    const uint32_t num_cores_per_blocks = operation_attributes.num_links;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_program_factory.cpp:192:        block_starts[i].resize(operation_attributes.num_links);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_program_factory.cpp:193:        block_ends[i].resize(operation_attributes.num_links);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_program_factory.cpp:214:    for (int l = 0; l < operation_attributes.num_links; ++l) {
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_program_factory.cpp:217:        if (l == operation_attributes.num_links - 1) {
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:74:    const auto& persistent_output_buffer = tensor_args.persistent_output_buffer;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:76:    if (persistent_output_buffer.has_value()) {
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:77:        const auto& output_tensor = persistent_output_buffer.value();
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:107:    if (tensor_args.persistent_output_buffer.has_value()) {
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:108:        return tensor_args.persistent_output_buffer->tensor_spec();
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:123:    if (tensor_args.persistent_output_buffer.has_value()) {
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:124:        return tensor_args.persistent_output_buffer.value();
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:141:        operation_attributes.num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:145:        operation_attributes.cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:152:    const std::optional<Tensor>& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:155:    uint32_t num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:159:    std::optional<uint32_t> cluster_axis) {
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:161:    uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:170:        .num_links = num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:175:        .cluster_axis = cluster_axis};
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:177:        .input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer};
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:188:    const std::optional<Tensor>& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:191:    uint32_t num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:195:    std::optional<uint32_t> cluster_axis) {
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:198:        persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:201:        num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.cpp:205:        cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:186:    const uint32_t num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:468:    // direction, so it must form exactly num_links groups (the last group may be short when the
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:473:            (in0_axis + num_workers_per_link - 1) / num_workers_per_link == num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:474:            "The in0 sender axis ({}) must form exactly num_links ({}) groups of num_workers_per_link ({})",
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:476:            num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:479:    uint32_t num_mux_cores = num_links * 2;  // 2 being the number of directions
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:485:    // one cyclically within the 2*num_links packed rows. The flip swaps which direction owns the
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:705:                // 0..2*num_links-1. Each row's chain-tail sender then reaches its mux with a short
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1530:    const size_t mm_outputs_start = 1 + (attributes.fsdp_cluster_axis.has_value() ? 1 : 0);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1554:    const bool fsdp_fused_override = attributes.fsdp_cluster_axis.has_value();
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1634:    const uint32_t num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1672:            num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1702:        tensor_args.input_tensor, mesh_coordinate, attributes.cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1705:        tensor_args.input_tensor, mesh_coordinate, 1, attributes.topology, attributes.cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1708:        tensor_args.input_tensor, mesh_coordinate, -1, attributes.topology, attributes.cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1710:    // FSDP neighbor lookup along fsdp_cluster_axis (only when FSDP fusion is active).
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1714:    if (attributes.fsdp_cluster_axis.has_value()) {
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1716:            tensor_args.input_tensor, mesh_coordinate, attributes.fsdp_cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1718:            tensor_args.input_tensor, mesh_coordinate, 1, attributes.fsdp_topology, attributes.fsdp_cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1720:            tensor_args.input_tensor, mesh_coordinate, -1, attributes.fsdp_topology, attributes.fsdp_cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1730:    size_t mm_outputs_start = 1 + (attributes.fsdp_cluster_axis.has_value() ? 1 : 0);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1732:    if (attributes.fsdp_cluster_axis.has_value()) {
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_program_factory.cpp:1748:        attributes.num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async.cpp:18:    ttnn::Tensor& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async.cpp:22:    const uint32_t num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async.cpp:30:        // but the composite implementation is unable to reuse it. So overwrite persistent_output_buffer
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async.cpp:32:        persistent_output_buffer = composite_common::composite_all_to_all(
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async.cpp:33:            input_tensor, in_dim, out_dim, num_links, memory_config, subdevice_id);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async.cpp:34:        return persistent_output_buffer;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async.cpp:45:            persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async.cpp:49:            num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async.cpp:54:    std::optional<ttnn::Tensor> optional_persistent_output_buffer = persistent_output_buffer;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async.cpp:59:        optional_persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async.cpp:60:        num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:103:    if (attributes.fsdp_cluster_axis.has_value()) {
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:106:            "fsdp_cluster_axis is set but fsdp_ring_size is {} (expected > 1)",
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:122:            !attributes.cluster_axis.has_value() ||
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:123:                attributes.cluster_axis.value() != attributes.fsdp_cluster_axis.value(),
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:124:            "fsdp_cluster_axis ({}) must not equal cluster_axis ({})",
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:125:            attributes.fsdp_cluster_axis.value(),
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:126:            attributes.cluster_axis.value_or(0));
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:129:            "fsdp_semaphore must have at least 2 entries (ping-pong) when fsdp_cluster_axis is set, got {}",
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:140:            "persistent_weight_buffer must be provided when fsdp_cluster_axis is set");
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:158:            "fsdp_ring_size must be 1 when fsdp_cluster_axis is not set, got {}",
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:327:    const bool fsdp_fused = attributes.fsdp_cluster_axis.has_value();
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:369:    const bool fsdp_fused = attributes.fsdp_cluster_axis.has_value();
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:371:    // Slot 0: activation gather buffer (persistent_output_buffer or new alloc)
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:372:    if (tensor_args.persistent_output_buffer.has_value()) {
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:373:        output_tensors.emplace_back(tensor_args.persistent_output_buffer.value());
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:404:        attributes.num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:408:        attributes.cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:417:        attributes.fsdp_cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:442:    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:443:    uint32_t num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:444:    std::optional<uint32_t> cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:451:    std::optional<uint32_t> fsdp_cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:465:    uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:467:        fsdp_cluster_axis.has_value() ? ttnn::ccl::get_topological_dimension(input_tensor, fsdp_cluster_axis) : 1;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:469:    bool using_persistent_buffers = persistent_output_buffer.has_value();
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:472:    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:474:        fsdp_cluster_axis.has_value() ? ::ttnn::ccl::get_usable_topology(input_tensor, fsdp_topology, fsdp_cluster_axis)
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:483:        num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:487:        cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:496:        fsdp_cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:505:        persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.cpp:514:    size_t strip_count = 1 + (fsdp_cluster_axis.has_value() ? 1 : 0);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async.hpp:17:    ttnn::Tensor& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async.hpp:21:    uint32_t num_links = 1,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:36:        operation_attributes.num_links > 0,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:38:        operation_attributes.num_links);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:40:        operation_attributes.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:41:        "Worker cores used by links are parallelized over rows, num_links ({}) exceeds available rows ({})",
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:42:        operation_attributes.num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:77:    const auto& output_buffer = tensor_args.persistent_output_buffer;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:130:        operation_attributes.num_links == 1,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:131:        "AllToAllAsync: num_links must be 1, but is {}",
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:132:        operation_attributes.num_links);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:139:    const auto& output_buffer = tensor_args.persistent_output_buffer;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:166:    // Return spec for the output buffer (persistent_output_buffer)
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:167:    return tensor_args.persistent_output_buffer.tensor_spec();
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:173:    return tensor_args.persistent_output_buffer;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:187:        operation_attributes.num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:198:    ttnn::Tensor& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:202:    uint32_t num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:233:        num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.cpp:242:        .persistent_output_buffer = persistent_output_buffer};
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.hpp:38:    ttnn::Tensor& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation.hpp:42:    uint32_t num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in1_sender_out.cpp:8:#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.hpp:61:    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.hpp:62:    uint32_t num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.hpp:63:    std::optional<uint32_t> cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.hpp:70:    std::optional<uint32_t> fsdp_cluster_axis = std::nullopt,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:20:    uint32_t num_links = 0;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:24:    std::optional<uint32_t> cluster_axis;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:38:    // `fsdp_cluster_axis` with size `fsdp_ring_size`, and the op all-gathers it
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:40:    std::optional<uint32_t> fsdp_cluster_axis;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:52:        uint32_t num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:56:        std::optional<uint32_t> cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:65:        std::optional<uint32_t> fsdp_cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:75:        num_links(num_links),
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:79:        cluster_axis(cluster_axis),
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:88:        fsdp_cluster_axis(fsdp_cluster_axis),
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:95:        "num_links",
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:100:        "cluster_axis",
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:107:        "fsdp_cluster_axis",
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:115:            this->num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:120:            this->cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:127:            this->fsdp_cluster_axis,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:139:    std::optional<Tensor> persistent_output_buffer;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation_types.hpp:146:    // When fsdp_cluster_axis is set on params, this should also be set; the op will
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation_types.hpp:19:    const uint32_t num_links;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation_types.hpp:29:        uint32_t num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation_types.hpp:37:        num_links(num_links),
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation_types.hpp:49:        attrs.emplace_back("num_links", num_links);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_device_operation_types.hpp:64:    Tensor persistent_output_buffer;
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_program_factory.cpp:220:        tensor_args.persistent_intermediate_buffer, tensor_args.persistent_output_buffer};
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_program_factory.cpp:244:        operation_attributes.num_links, num_senders_per_link, device, operation_attributes.sub_device_id);
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_program_factory.cpp:247:        operation_attributes.num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_program_factory.cpp:255:        receiver_worker_cores.size() == operation_attributes.num_links * num_receivers_per_link,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_program_factory.cpp:257:        operation_attributes.num_links * num_receivers_per_link,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_program_factory.cpp:346:    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_output_buffer.buffer())
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_program_factory.cpp:369:    tt::tt_metal::TensorAccessorArgs(tensor_args.persistent_output_buffer.buffer())
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_program_factory.cpp:406:    auto output_shape = tensor_args.persistent_output_buffer.padded_shape();
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_program_factory.cpp:447:    for (uint32_t link = 0; link < operation_attributes.num_links; link++) {
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_program_factory.cpp:477:            tensor_args.persistent_output_buffer.buffer()->address(),
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_program_factory.cpp:544:                tensor_args.persistent_output_buffer.buffer()->address(),
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_program_factory.cpp:604:            worker_writer_sender_runtime_args[1] = tensor_args.persistent_output_buffer.buffer()->address();
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_program_factory.cpp:611:            receiver_writer_runtime_args[0] = tensor_args.persistent_output_buffer.buffer()->address();
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_nanobind.cpp:35:            persistent_output_buffer (ttnn.Tensor): Buffer where final output will be written.
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_nanobind.cpp:42:            num_links (int, optional): Number of fabric links to use for communication. Defaults to 1.
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_nanobind.cpp:74:        nb::arg("persistent_output_buffer"),
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_nanobind.cpp:79:        nb::arg("num_links") = 1,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp:5:#include "all_gather_async_nanobind.hpp"
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp:17:#include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp:37:ttnn::Tensor all_gather_async_wrapper_sub_core_grids(
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp:41:    std::optional<uint32_t> num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp:51:        return ttnn::experimental::all_gather_async_reversed(
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp:55:            num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp:66:        return ttnn::experimental::all_gather_async(
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp:70:            num_links,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp:84:ttnn::Tensor all_gather_async_wrapper_persistent_buffer(
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp:86:    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp:89:    std::optional<uint32_t> num_links,
