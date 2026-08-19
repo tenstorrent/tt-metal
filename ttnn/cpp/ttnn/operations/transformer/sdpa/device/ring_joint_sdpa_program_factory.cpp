@@ -537,7 +537,10 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     // 2 extra buffer slots for gathered_joint_k/v when the sharded-joint path is active
     const uint32_t gathered_joint_buffer_args = joint_input_params.joint_is_sharded ? 2 : 0;
     const bool enable_kv_chains = !args.has_sliding_window();
-    const bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
+    // Latent-V (shared K buffer) never streams V through the head chain — V is read in place of /
+    // materialized from the mcast K^T — so skip building it there. This also frees its 3 program
+    // semaphores, which the ring-8 rotated-Q-split path needs to stay under NUM_SEMAPHORES.
+    const bool use_head_chain = enable_kv_chains && !gqa_grouped_kv && !v_shares_k_buffer;
     const uint32_t head_chain_args = use_head_chain ? kRingJointChainConfigArgCount : 0;
     const uint32_t batch_chain_args =
         enable_kv_chains && k_uses_batch_chain ? (kRingJointChainConfigArgCount + kReaderBatchChainExtraArgCount) : 0;
@@ -1025,7 +1028,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t vDH = tensor_args.v_head_dim(args.latent_v_head_dim);
     const bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     const bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
-    const bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
+    // Latent-V (shared K buffer) never streams V through the head chain — V is read in place of /
+    // materialized from the mcast K^T — so skip building it there. This also frees its 3 program
+    // semaphores, which the ring-8 rotated-Q-split path needs to stay under NUM_SEMAPHORES.
+    // Must match the layout-side definition in build_runtime_arg_layout above.
+    const bool use_head_chain = enable_kv_chains && !gqa_grouped_kv && !v_shares_k_buffer;
     // The store-and-forward chains are scheduled per head, not per (batch, head).
     // Until their batch-aware scheduling is restored, multi-batch requests read K/V
     // independently on each core. This preserves the established B>1 functional path.
@@ -2676,9 +2683,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 cfg.next_core_q_chunks = rot_base_chunks + 1;
             }
         }
-        // One handoff semaphore per ring iteration; receiver resets it to 0 after its wait so a
-        // cached program replays cleanly.
-        for (uint32_t t = 0; t < ring_size; ++t) {
+        // One handoff semaphore per ring iteration that can RECEIVE a migrated float (iterations
+        // 1..ring_size-1 — iteration 0 starts fresh, no handoffs). Receiver resets its semaphore
+        // to 0 after the wait so a cached program replays cleanly. Program semaphores are a scarce
+        // resource (NUM_SEMAPHORES=16 total, shared with the chain and fused all-gather sems), so
+        // allocate only ring_size-1: with the head chain skipped for latent-V, ring-8 uses
+        // 2 (fused) + 3 (batch chain) + 7 (handoff) + 3 (all-gather) = 15.
+        for (uint32_t t = 1; t < ring_size; ++t) {
             const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
             desc.semaphores.push_back(SemaphoreDescriptor{
                 .id = sem_id,
@@ -2907,10 +2918,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
-        // Rotated Q split: handoff semaphore ids, then per ring iteration
-        // [my_count, migrated_in_count, float_dest, chunk ids (fixed stride)].
+        // Rotated Q split: ring_size-1 handoff semaphore ids (for iterations 1..ring_size-1),
+        // then per ring iteration [my_count, migrated_in_count, float_dest, chunk ids (stride)].
         if (use_rotated_q_split) {
-            for (uint32_t t = 0; t < ring_size; ++t) {
+            for (uint32_t t = 0; t + 1 < ring_size; ++t) {
                 writer_args.push_back(rot_handoff_sem_ids[t]);
             }
             for (uint32_t t = 0; t < ring_size; ++t) {

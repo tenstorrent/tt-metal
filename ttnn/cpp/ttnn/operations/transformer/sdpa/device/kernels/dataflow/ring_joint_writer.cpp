@@ -502,8 +502,11 @@ void kernel_main() {
     constexpr uint32_t rot_max_slots = ROTATED_Q_SPLIT;
     constexpr uint32_t rot_iter_stride = 3 + rot_max_slots;
     constexpr uint32_t ROT_NO_DEST = 0xFFFFFFFF;
-    uint32_t rot_sem_ids[ring_size];
-    for (uint32_t r = 0; r < ring_size; ++r) {
+    // ring_size-1 handoff semaphores: only iterations 1..ring_size-1 can receive a migrated
+    // float (iteration 0 starts fresh). Indexed by [ring_iter - 1] at both use sites, which the
+    // factory schedule guarantees run at ring_iter >= 1.
+    uint32_t rot_sem_ids[ring_size - 1];
+    for (uint32_t r = 0; r + 1 < ring_size; ++r) {
         rot_sem_ids[r] = get_arg_val<uint32_t>(argidx++);
     }
     const uint32_t rot_args_base = argidx;
@@ -819,7 +822,8 @@ void kernel_main() {
                 // saved by another core; wait for that donor's handoff signal before issuing the
                 // restore reads, then reset the semaphore for the next (possibly cached) run.
                 if (rot_mig_in != 0 && next_q_index == last_q_index) {
-                    Semaphore<> handoff_sem(rot_sem_ids[ring_iter]);
+                    // rot_mig_in is 0 on the first active iteration, so ring_iter >= 1 here.
+                    Semaphore<> handoff_sem(rot_sem_ids[ring_iter - 1]);
                     handoff_sem.wait_min(rot_mig_in);
                     handoff_sem.set(0);
                 }
@@ -877,7 +881,10 @@ void kernel_main() {
                 // first: flushed-but-not-landed writes must not be visible as "ready".
                 if (deferred.mig_dest != ROT_NO_DEST) {
                     noc.async_write_barrier<NocOptions::TXN_ID>({.trid = deferred.trid});
-                    Semaphore<>(rot_sem_ids[ring_iter]).up(noc, deferred.mig_dest >> 8, deferred.mig_dest & 0xFFu, 1);
+                    // Migrating floats sit last in the donor's list, so this flush always runs at
+                    // the receiver's use iteration (ring_iter >= 1).
+                    Semaphore<>(rot_sem_ids[ring_iter - 1])
+                        .up(noc, deferred.mig_dest >> 8, deferred.mig_dest & 0xFFu, 1);
                     deferred.mig_dest = ROT_NO_DEST;
                 }
 #endif
