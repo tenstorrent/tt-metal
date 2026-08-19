@@ -33,6 +33,8 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/compute_kernel_api.h
     inc/api/compute/add_int_sfpu.h
     inc/api/compute/atan2.h
+    inc/api/compute/logaddexp.h
+    inc/api/compute/logaddexp2.h
     inc/api/compute/bcast.h
     inc/api/compute/binary_bitwise_sfpu.h
     inc/api/compute/binary_comp.h

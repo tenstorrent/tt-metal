@@ -399,20 +399,12 @@ std::map<std::string, std::string> get_defines_fp32(
             op_name = "lcm_tile";
             break;
         case BinaryOpType::LOGADDEXP:
-            // PRE_IN0_0 ===> Applies prescaling for first input
-            // PRE_IN1_0 ====> Applies prescaling for second input
-            new_defines.merge(get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN0_0"));
-            new_defines.merge(get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN1_0"));
-            new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
-            op_name = "add_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::LOG, std::nullopt, "0", idst1));
+            new_defines.insert({"BINOP_INIT", fmt::format("logaddexp_binary_tile_init();")});
+            op_name = "logaddexp_binary_tile";
             break;
         case BinaryOpType::LOGADDEXP2:
-            new_defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN0_0"));
-            new_defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
-            new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
-            op_name = "add_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::LOG2, std::nullopt, "0", idst1));
+            new_defines.insert({"BINOP_INIT", fmt::format("logaddexp2_binary_tile_init();")});
+            op_name = "logaddexp2_binary_tile";
             break;
         case BinaryOpType::LDEXP:
             new_defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
