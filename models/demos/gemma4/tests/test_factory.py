@@ -14,6 +14,7 @@ from functools import lru_cache
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -34,6 +35,40 @@ PREFILL_BUCKETS = [128, 1024, 4096]
 
 def _get_model_path():
     return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", _DEFAULT_MODEL_PATH)
+
+
+# HF reference loading -- one path shared by every test that scores TT against
+# the real checkpoint (test_demo_v2_hf_reference, test_teacher_forcing_e2e), so
+# dtype/device_map never drift between the demo-agreement and accuracy numbers.
+_HF_DEVICE_MAP_ENV = "GEMMA4_HF_DEVICE_MAP"
+
+
+def load_hf_reference_model(model_path=None):
+    """Load the full HF checkpoint used as the reference model.
+
+    bf16 weights + ``trust_remote_code``, sharded per ``GEMMA4_HF_DEVICE_MAP``
+    (default ``auto``); set that to ``cpu`` to force host. Caller owns the
+    returned model and should ``del`` it when done -- these checkpoints are large.
+    """
+    from transformers import AutoModelForCausalLM
+
+    model_path = model_path or _get_model_path()
+    device_map = os.environ.get(_HF_DEVICE_MAP_ENV, "auto")
+    load_kwargs = {"torch_dtype": torch.bfloat16, "trust_remote_code": True}
+    if device_map.lower() not in ("cpu", "none", ""):
+        load_kwargs["device_map"] = device_map
+        logger.info("Loading HF reference model with device_map={}", device_map)
+    else:
+        logger.warning("Loading HF reference model on CPU (set {}=auto for GPU)", _HF_DEVICE_MAP_ENV)
+
+    model = AutoModelForCausalLM.from_pretrained(model_path, **load_kwargs)
+    model.eval()
+    return model
+
+
+def hf_reference_model_device(model) -> torch.device:
+    """Device of the first parameter -- where inputs for ``model`` must live."""
+    return next(model.parameters()).device
 
 
 def build_hf_prefill_mask(seq_len, sliding_window=None):
