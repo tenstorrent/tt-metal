@@ -540,6 +540,58 @@ class ChunkedPrefillPageTableGuardMixin:
         logger.info("Done Capturing Prefill Trace")
         return trace_id, tt_out_trace, *device_inputs
 
+    def _capture_trace_prefill_sampling(self, model_id, sampling_batch):
+        """Gemma4 override: replicate the sampling trace input, do not column-shard it.
+
+        The shared tt_transformers implementation builds this buffer with
+        ``ShardTensorToMesh(dim=-1)``, i.e. ``[1, 1, sampling_batch, dim/TP]``,
+        because tt_transformers activations are column-sharded. Gemma4 residuals
+        are **full width on every device** (embed all-gather + per-layer
+        all-reduces) — the same convention
+        ``extract_last_tokens_batched_prefill`` relies on when it re-uploads the
+        gathered last-token rows with ``ReplicateTensorToMesh``. Feeding a
+        ``dim/TP``-wide tensor into Gemma4's ``_apply_lm_head`` therefore fails
+        the matmul contract:
+
+            The width of the first tensor must be equal to the height of the
+            second tensor. Mismatch: width=480 height=3840   (12B, TP=8)
+
+        Only the *traced* batched-prefill sampling path hit this; the eager
+        fallback right below it in ``_row_sharded_batched_prefill`` passes the
+        replicated ``user_hidden`` straight to ``_apply_norm_and_lm_head`` and
+        has always been correct. Mirroring the eager layout here makes the two
+        agree. This is mesh-shape driven, not arch driven — any TP>1 Gemma4 mesh
+        that captures this trace needs it.
+        """
+        mesh_device = self.model_args[model_id].mesh_device
+        full_dim = self.model_args[model_id].dim
+        model = self.model[model_id]
+        mesh_mapper = model._replicate_to_mesh_mapper()
+
+        def _make_input():
+            return ttnn.from_torch(
+                torch.zeros(1, 1, sampling_batch, full_dim, dtype=torch.bfloat16),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+            )
+
+        logits = model._apply_norm_and_lm_head(_make_input())
+        model.sampling.sample(logits, enable_trace=False)
+        ttnn.synchronize_device(mesh_device)
+        logger.info("Gemma4: done compiling prefill sampling (replicated input)")
+
+        trace_input = _make_input()
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        logits = model._apply_norm_and_lm_head(trace_input, deallocate_input=False)
+        tt_tokens, tt_log_probs = model.sampling.sample(logits, enable_trace=False)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        logger.info("Gemma4: done capturing prefill sampling trace")
+
+        return trace_id, (tt_tokens, tt_log_probs), trace_input
+
     def _easy_trace_prefill(self, *args, **kwargs):
         page_table = kwargs.get("page_table")
         if page_table is None and len(args) >= 2:

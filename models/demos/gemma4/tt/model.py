@@ -1115,7 +1115,7 @@ class Gemma4Model:
         if getattr(self, "bounded_sliding_kv_cache", False):
             flush_deferred_bounded_fills(self.layers)
 
-    def _apply_lm_head(self, hidden_states, is_decode=False, keep_sharded_for_sampling=False):
+    def _apply_lm_head(self, hidden_states, is_decode=False, keep_sharded_for_sampling=False, deallocate_input=True):
         """Project post-norm hidden states to vocab logits, softcap, all-gather.
 
         Factored out of ``__call__`` so traced prefill can defer it (the trace
@@ -1155,7 +1155,13 @@ class Gemma4Model:
                 n=self.lm_head_weight.shape[-1],
             )
             logits = ttnn.linear(hidden_states, self.lm_head_weight, program_config=lm_head_pc)
-            hidden_states.deallocate(True)
+            # ``deallocate_input=False`` is required when the caller owns a
+            # *persistent* buffer that outlives this call — notably the batched
+            # prefill-sampling trace, whose input is written by
+            # copy_host_to_device_tensor on every replay. Freeing it inside the
+            # capture leaves that copy writing into dead memory (segfault).
+            if deallocate_input:
+                hidden_states.deallocate(True)
         else:
             logits = hidden_states
 
@@ -1893,13 +1899,19 @@ class Gemma4Model:
             mesh_mapper=self._replicate_to_mesh_mapper(),
         )
 
-    def _apply_norm_and_lm_head(self, x):
+    def _apply_norm_and_lm_head(self, x, deallocate_input=True):
         """Batched-prefill sampling: final norm already applied; run lm_head.
 
         Called by ``Generator`` after :meth:`extract_last_tokens_batched_prefill`.
         Keep logits TP-sharded for on-device sampling.
+
+        ``deallocate_input=False`` when ``x`` is a persistent trace-input buffer
+        that must survive the capture (see
+        ``Gemma4Generator._capture_trace_prefill_sampling``).
         """
-        return self._apply_lm_head(x, is_decode=False, keep_sharded_for_sampling=True)
+        return self._apply_lm_head(
+            x, is_decode=False, keep_sharded_for_sampling=True, deallocate_input=deallocate_input
+        )
 
     def switch_mode(self, mode):
         """Generator compatibility — no prefetcher to reinitialize."""
