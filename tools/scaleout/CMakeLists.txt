@@ -112,6 +112,7 @@ target_link_libraries(
     run_cluster_validation
     PRIVATE
         TT::ScaleoutTools
+        TT::ScaleoutTopology # PSD/MGD/PGD symbols (hidden in libtt_metal)
         enchantum::enchantum
         protobuf::libprotobuf
         tt_metal
@@ -289,6 +290,7 @@ target_link_libraries(
     PRIVATE
         generate_mgd_lib
         scaleout_tools
+        TT::ScaleoutTopology # PSD/MGD/PGD symbols (hidden in libtt_metal; $<TARGET_OBJECTS:fabric> doesn't pull them)
         tt_metal
         protobuf::libprotobuf
         cxxopts::cxxopts

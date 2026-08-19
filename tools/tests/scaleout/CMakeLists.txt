@@ -64,6 +64,7 @@ target_link_libraries(
     test_link_retraining
     PRIVATE
         TT::ScaleoutTools
+        TT::ScaleoutTopology # PSD/MGD/PGD symbols (hidden in libtt_metal)
         test_common_libs
         tt_metal
         protobuf::libprotobuf
@@ -96,6 +97,7 @@ target_link_libraries(
     test_cabling_descriptor_mgd_generation
     PRIVATE
         TT::ScaleoutTools
+        TT::ScaleoutTopology # PSD/MGD/PGD symbols (hidden in libtt_metal)
         test_common_libs
         tt_metal
         generate_mgd_lib

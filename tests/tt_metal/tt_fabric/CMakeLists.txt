@@ -11,6 +11,7 @@ target_link_libraries(
     fabric_unit_tests
     PRIVATE
         tt_metal
+        TT::ScaleoutTopology # PSD/MGD/PGD/solver/mapper-utils symbols (hidden in libtt_metal)
         test_common_libs
         yaml-cpp::yaml-cpp
         protobuf::libprotobuf
@@ -39,6 +40,7 @@ target_link_libraries(
     test_physical_discovery
     PRIVATE
         tt_metal
+        TT::ScaleoutTopology # PSD/MGD/PGD symbols (hidden in libtt_metal)
         test_common_libs
         yaml-cpp::yaml-cpp
         spdlog::spdlog
