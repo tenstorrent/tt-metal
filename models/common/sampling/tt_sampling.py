@@ -776,16 +776,16 @@ class TTSampling(LightweightModule):
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
             # BH galaxy prefetcher (unfused-CCL) keeps a split senders/worker sub-device manager
-            # loaded during decode. The vocab-trim ttnn.slice and the tail-mask slices auto-grid a
-            # 32-core block from origin (0,0) (they don't honor sub_core_grids on the DRAM-interleaved
-            # path), which spills into the uncovered senders-column tail -> "kernel group cores do not
-            # match sub device cores" fatal. Skip the vocab trim on this path: the padded-vocab logits
-            # are exactly 0 (the lm_head weight is zero-padded), so argmax over the full padded width
-            # still selects the top valid token, and the following untilize/argmax are pinned to the
-            # worker sub-core grid via _force_argmax_sub_core_grids.
+            # loaded during decode. The vocab-trim ttnn.slice auto-grids a 32-core block from origin
+            # (0,0) on the DRAM-interleaved path (it does not honor sub_core_grids there) and spills
+            # into the uncovered senders-column tail -> "kernel group cores do not match sub device
+            # cores". Skip that slice here. Still apply the full-width additive invalid-vocab mask
+            # (already selected whenever sub_core_grids is set; one elementwise add, no slice/concat)
+            # so a 0-padded logit cannot win argmax when every valid logit is negative. untilize/
+            # argmax stay pinned to the worker sub-core grid via _force_argmax_sub_core_grids.
             force_argmax_skip_vocab_trim = self._force_argmax_sub_core_grids is not None
             slice_valid_vocab = self._can_slice_valid_vocab_for_argmax() and not force_argmax_skip_vocab_trim
-            if not slice_valid_vocab and not force_argmax_skip_vocab_trim:
+            if not slice_valid_vocab:
                 x = self._mask_invalid_vocab_logits(x)
             # Gather the output across all devices and untilize the tensor (for argmax)
             num_devices = self.mesh_device.get_num_devices()
@@ -808,15 +808,19 @@ class TTSampling(LightweightModule):
                     "get_sampling_barrier_semaphore_handle",
                     self.tt_ccl.get_and_cycle_barrier_semaphore_handle,
                 )
-                # Pin the gather's worker cores to the same sub-device as the downstream
-                # untilize/argmax. Without this, all_gather_async defaults to sub-device 0, which
-                # under the galaxy prefetcher decode manager is the prefetcher/senders sub-device.
-                # Dispatch only serializes programs within a sub-device, so a gather on sub-device 0
-                # runs concurrently with the untilize on the worker sub-device: under trace replay
-                # (back-to-back go signals) the untilize/argmax read the gather output buffer before
-                # this step's writes land and return the previous step's argmax (stale tokens).
-                # Eager mode masks this because per-op host dispatch latency exceeds the gather time.
-                ag_sub_device_id = getattr(self.tt_ccl, "worker_sub_device_id", None)
+                # Pin the gather to the worker sub-device only on the BH unfused path, where the
+                # downstream untilize/argmax are themselves confined via _force_argmax_sub_core_grids.
+                # Without this, all_gather_async defaults to sub-device 0 (prefetcher/senders under
+                # the galaxy decode manager). Dispatch only serializes within a sub-device, so a
+                # gather on 0 races the worker-grid untilize and under trace replay returns the
+                # previous step's tokens. Eager mode masks this via host dispatch latency.
+                # Left unpinned on Wormhole: untilize/argmax are not sub-core-grid confined there
+                # and still use the default sub-device 0, matching pre-existing WH behaviour.
+                ag_sub_device_id = (
+                    getattr(self.tt_ccl, "worker_sub_device_id", None)
+                    if self._force_argmax_sub_core_grids is not None
+                    else None
+                )
                 x = ttnn.experimental.all_gather_async(
                     x,
                     persistent_output_buffer=None,
