@@ -232,6 +232,7 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
     if (args.is_true_2d()) {
         // Limitation: Unicast algorithm currently does not support true 2D topologies
         use_unicast = false;
+        // NOLINTNEXTLINE(bugprone-branch-clone) - one branch per limitation, kept separate to document each
     } else if (tt::tt_fabric::is_2d_fabric_config(args.fabric_config) && !args.axis_is_straight[args.get_1d_axis()]) {
         // Limitation: Multicast cannot handle 2D topology reshapes/views that bend an axis
         use_unicast = true;

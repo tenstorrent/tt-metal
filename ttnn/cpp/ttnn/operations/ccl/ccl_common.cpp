@@ -125,7 +125,7 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
 
 bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
     const auto& mesh_view = mesh_device.get_view();
-    const auto mesh_shape = mesh_view.shape();
+    const auto& mesh_shape = mesh_view.shape();
     if (mesh_shape[axis] < 2) {
         return true;  // no hops to compare
     }
@@ -148,7 +148,7 @@ bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, 
 
 bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device, uint32_t axis) {
     const auto& mesh_view = mesh_device.get_view();
-    const auto mesh_shape = mesh_view.shape();
+    const auto& mesh_shape = mesh_view.shape();
     // A 2-device axis would close on the link it already uses, so it stays open and never rings.
     if (!tt::tt_fabric::is_genuine_torus_dim(mesh_shape[axis])) {
         return false;
