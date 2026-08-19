@@ -25,17 +25,18 @@ _DYADIC_FACTORS = (1.5, 0.75, 1.25, 0.625, 2.0, 0.5)
 def _exact_product_input(shape, cpu_dtype, seed=2023):
     """Random dyadic factors, renormalised so the full product lands in [2**-0.5, 2**0.5].
 
-    A product of thousands of factors drifts exponentially. The previous `randint(1, 5)` stimulus
-    overflowed the golden to +inf for every shape in this test, which left `allclose(inf, inf)` as
-    the only assertion that still did anything; drawing factors around 1.0 instead pushes it the
-    other way, to ~1e-35 for the 4096-element shapes. That is only three orders of magnitude above
-    the smallest normal float32 (~1.2e-38, and bfloat16 has the same exponent range), so a
-    different seed or a larger shape would underflow into denormals where relative error stops
-    being meaningful.
+    # A product of thousands of factors drifts exponentially. For example, taking randint(1, 5)
+    # as the stimulus easily overflows the golden to +inf, leaving allclose(inf, inf) as the only
+    # reasonable check at the end of the test.
 
-    Rounding log2 of the product to the nearest integer and dividing element 0 by that power of
-    two lands the product in [2**-0.5, 2**0.5]. Scaling by a power of two only changes an exponent
-    field, so no element becomes inexact.
+    # Conversely, drawing factors around 1.0 pushes the product the other way,
+    # to ~1e-35 for the 4096-element shapes. That is only three orders of magnitude above the smallest
+    # normal float32 (~1.2e-38, and bfloat16 has the same exponent range), so a different seed
+    # or a larger shape would underflow into denormals where relative error stops being meaningful.
+
+    # Dividing element 0 by 2**round(log2(product)) lands the product in [2**-0.5, 2**0.5].
+    # Scaling by a power of two only changes the exponent field, so no element becomes inexact,
+    # as long as the result stays in the normal range.
     """
     torch.manual_seed(seed)
     numel = 1
@@ -78,11 +79,10 @@ def test_prod(shapes, npu_dtype, device):
 
     (tt_input, tt_output, torch_input) = get_tensors(shapes, shapes, device, npu_dtype)
 
-    # Reduce in float64 and cast back. torch.prod on a bfloat16 tensor runs its own serial
-    # bfloat16 reduction, which accumulates a different error than the device's and in a
-    # different order, so comparing the two compares two approximations rather than measuring
-    # the device against the true product: on the 4096-element shapes they land ~30% apart
-    # while each is within 17% of the exact answer.
+    # Reduce in float64 and cast back.
+    # torch.prod on a bfloat16 tensor would run its own serial bfloat16 reduction,
+    # accumulating a different error from the device's, in a different order.
+    # Comparing the two would pit two approximations against each other rather than measuring the device against the true product.
     torch_output = torch.prod(torch_input.to(torch.float64)).to(torch_input.dtype)
 
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
