@@ -1131,6 +1131,13 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
     pushes exactly its prompt: depth = ceil(real_len/CHUNK_SIZE), clamped to the per-user cache."""
     default = os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)
     spec = os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", "").strip()
+    if spec and cfg.multi_turn_prob > 0:
+        raise ValueError(
+            "PREFILL_PRODUCER_SLOT_TRACES is incompatible with multi-turn "
+            "(PREFILL_PRODUCER_MULTI_TURN_PROB>0): each slot's per-trace pool is loaded only one turn deep "
+            "and its golden defines a single turn, so a resumed turn would read past its pool and mismatch "
+            "the golden. Use one shared trace (unset SLOT_TRACES) for multi-turn runs."
+        )
     max_chunks = MAX_SEQ_LEN // CHUNK_SIZE
 
     if not spec:

@@ -437,6 +437,11 @@ class TtDFlashDrafter:
             f"kv_actual_global ({kv_actual_global}) + chunk_global ({chunk_global}) exceeds the global cache "
             f"depth ({self.cache_seq}); construct with a larger max_seq_len (windowing happens at migration)"
         )
+        assert self.cache_seq % chunk_global == 0, (
+            f"cache_seq ({self.cache_seq}) must be a whole number of chunk_global ({chunk_global}) blocks; "
+            "update_padded_kv_cache tiles the per-user cache block-cyclically in chunk_global-sized blocks, "
+            "so a depth that is not a multiple would corrupt the layout"
+        )
 
         # Distributed hidden_norm on the [1,1,seq,H/tp] shard (stats all-gathered internally → correct
         # full-H norm), then all-gather back to replicated so the column-parallel k/v_proj sees full H.
