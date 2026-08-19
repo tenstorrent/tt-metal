@@ -18,7 +18,7 @@ def test_from_torch(device):
     torch_tensor = torch.randn((4, 5), dtype=torch.bfloat16)
     ttnn_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, device=device)
 
-    logger.info("TT-NN tensor shape", ttnn_tensor.shape)
+    logger.info(f"TT-NN tensor shape: {ttnn_tensor.shape}")
 
 
 def test_to_torch(device):
@@ -26,7 +26,7 @@ def test_to_torch(device):
     ttnn_tensor = ttnn.rand((2, 3), dtype=ttnn.bfloat16, device=device)
     torch_tensor = ttnn.to_torch(ttnn_tensor)
 
-    logger.info("Torch tensor shape", torch_tensor.shape)
+    logger.info(f"Torch tensor shape: {torch_tensor.shape}")
 
 
 def test_to_device(device):
@@ -38,7 +38,7 @@ def test_to_device(device):
     tensor_on_host = ttnn.from_torch(torch.randn((10, 64, 32)), dtype=ttnn.bfloat16)
     ttnn_tensor = ttnn.to_device(tensor_on_host, device=device)
 
-    logger.info("TT-NN tensor shape after moving to device", ttnn_tensor.shape)
+    logger.info(f"TT-NN tensor shape after moving to device: {ttnn_tensor.shape}")
 
 
 def test_from_device(device):
@@ -50,7 +50,7 @@ def test_from_device(device):
     ttnn_tensor_on_device = ttnn.rand((2, 3), dtype=ttnn.bfloat16, device=device)
     ttnn_tensor_on_host = ttnn.from_device(ttnn_tensor_on_device)
 
-    logger.info("TT-NN tensor shape after moving from device to host", ttnn_tensor_on_host.shape)
+    logger.info(f"TT-NN tensor shape after moving from device to host: {ttnn_tensor_on_host.shape}")
 
 
 def test_to_layout(device):
@@ -58,7 +58,7 @@ def test_to_layout(device):
     ttnn_tensor = ttnn.rand((2, 3, 4), dtype=ttnn.bfloat16, device=device)
     ttnn_tensor_layout_changed = ttnn.to_layout(ttnn_tensor, layout=ttnn.TILE_LAYOUT)
 
-    logger.info("TT-NN tensor shape after changing layout", ttnn_tensor_layout_changed.shape)
+    logger.info(f"TT-NN tensor shape after changing layout: {ttnn_tensor_layout_changed.shape}")
 
 
 def test_dump_tensor(device):
@@ -73,7 +73,7 @@ def test_load_tensor(device):
     ttnn.dump_tensor(file_name="ttnn_tensor.tensorbin", tensor=ttnn_tensor)
 
     loaded_tensor = ttnn.load_tensor(file_name="ttnn_tensor.tensorbin", device=device)
-    logger.info("Loaded TT-NN tensor shape", loaded_tensor.shape)
+    logger.info(f"Loaded TT-NN tensor shape: {loaded_tensor.shape}")
 
 
 def test_deallocate(device):
@@ -87,7 +87,7 @@ def test_reallocate(device):
     ttnn_tensor = ttnn.rand((2, 3), dtype=ttnn.bfloat16, device=device)
     ttnn_tensor_reallocated = ttnn.reallocate(ttnn_tensor)
 
-    logger.info("Reallocated TT-NN tensor shape", ttnn_tensor_reallocated.shape)
+    logger.info(f"Reallocated TT-NN tensor shape: {ttnn_tensor_reallocated.shape}")
 
 
 def test_to_memory_config(device):
@@ -95,7 +95,7 @@ def test_to_memory_config(device):
     ttnn_tensor = ttnn.rand((2, 3), dtype=ttnn.bfloat16, device=device)
     ttnn_tensor_memory_config_changed = ttnn.to_memory_config(ttnn_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    logger.info("TT-NN tensor shape after changing memory configuration", ttnn_tensor_memory_config_changed.shape)
+    logger.info(f"TT-NN tensor shape after changing memory configuration: {ttnn_tensor_memory_config_changed.shape}")
 
 
 def test_copy_device_to_host_tensor(device):
@@ -104,7 +104,7 @@ def test_copy_device_to_host_tensor(device):
     host_tensor = ttnn.allocate_tensor_on_host(ttnn_tensor.spec, device)
     ttnn.copy_device_to_host_tensor(ttnn_tensor, host_tensor)
 
-    logger.info("Host tensor shape after copying from device", host_tensor.shape)
+    logger.info(f"Host tensor shape after copying from device: {host_tensor.shape}")
 
 
 def test_copy_host_to_device_tensor(device):
@@ -117,7 +117,7 @@ def test_copy_host_to_device_tensor(device):
     device_tensor_copy = ttnn.allocate_tensor_on_device(host_tensor.spec, device)
     ttnn.copy_host_to_device_tensor(host_tensor, device_tensor_copy)
 
-    logger.info("TT-NN tensor shape after copying to device", device_tensor_copy.shape)
+    logger.info(f"TT-NN tensor shape after copying to device: {device_tensor_copy.shape}")
 
 
 def test_to_dtype(device):
@@ -128,7 +128,7 @@ def test_to_dtype(device):
     assert tensor.dtype == ttnn.uint8
     assert tensor.shape == (10, 64, 32)
 
-    logger.info("TT-NN tensor shape after converting to uint8", tensor.shape)
+    logger.info(f"TT-NN tensor shape after converting to uint8: {tensor.shape}")
 
 
 def test_typecast(device):
@@ -137,4 +137,4 @@ def test_typecast(device):
     assert tensor.dtype == ttnn.uint16
     assert tensor.shape == (10, 3, 32, 32)
 
-    logger.info("TT-NN tensor shape after typecasting to uint16", tensor.shape)
+    logger.info(f"TT-NN tensor shape after typecasting to uint16: {tensor.shape}")
