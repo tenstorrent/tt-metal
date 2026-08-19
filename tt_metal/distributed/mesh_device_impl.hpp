@@ -190,6 +190,7 @@ private:
     // Throws if the tracker is null (e.g., on remote-only MeshDevices).
     void validate_sub_device_manager_tracker() const;
     std::vector<AllocatorImpl*> trace_allocators() const;
+    std::vector<AllocatorImpl*> all_trace_allocators() const;
 
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;

@@ -263,3 +263,23 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
         ttnn.release_trace(device, trace_id)
 
     assert trace_output.is_allocated()
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+def test_release_trace_is_idempotent(device):
+    shape = (1, 1, 32, 32)
+    input_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    ttnn.neg(input_dev)
+
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    output = ttnn.neg(input_dev)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+
+    # The keyword form must work identically with and without allocation tracking.
+    ttnn.execute_trace(mesh_device=device, trace_id=tid, cq_id=0, blocking=True)
+
+    ttnn.release_trace(device, tid)
+    ttnn.release_trace(device, tid)
+
+    assert output.is_allocated()

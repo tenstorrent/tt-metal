@@ -145,6 +145,15 @@ SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() cons
     return default_sub_device_manager_;
 }
 
+std::vector<SubDeviceManager*> SubDeviceManagerTracker::get_all_sub_device_managers() const {
+    std::vector<SubDeviceManager*> result;
+    result.reserve(sub_device_managers_.size());
+    for (const auto& entry : sub_device_managers_) {
+        result.push_back(entry.second.get());
+    }
+    return result;
+}
+
 DeviceAddr SubDeviceManagerTracker::get_max_trace_high_water_mark() const {
     DeviceAddr max_high_water_mark = 0;
     for (const auto& entry : sub_device_managers_) {

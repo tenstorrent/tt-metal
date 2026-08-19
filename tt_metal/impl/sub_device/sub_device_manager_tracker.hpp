@@ -47,6 +47,10 @@ public:
 
     SubDeviceManager* get_default_sub_device_manager() const;
 
+    // Every manager created on this device, loaded or not. Trace bookkeeping spans manager
+    // switches, so its cleanup must reach allocators beyond the default and active managers.
+    std::vector<SubDeviceManager*> get_all_sub_device_managers() const;
+
     DeviceAddr get_max_trace_high_water_mark() const;
 
     // Used for caching program state by manager and buffers to check that the required manager is still active

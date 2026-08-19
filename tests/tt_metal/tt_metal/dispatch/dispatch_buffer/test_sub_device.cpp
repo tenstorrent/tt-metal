@@ -271,4 +271,38 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerTagsLazyProgramBuffers
 
     distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), trace_id);
 }
+
+// Runs in both tracking modes: the trace registration lifecycle must tolerate release of a
+// trace whose capture failed, double release, repeated registration, and a sub-device
+// manager switch between capture and release.
+TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerLifecycleToleratesImbalance) {
+    auto mesh_device = devices_[0];
+
+    constexpr distributed::MeshTraceId never_captured{0x2345};
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), never_captured);
+
+    constexpr distributed::MeshTraceId trace_id{0x2346};
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), trace_id);
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), trace_id);
+
+    constexpr uint32_t local_l1_size = 3200;
+    SubDevice sub_device(std::array{CoreRangeSet(CoreRange({0, 0}, {0, 0}))});
+    auto manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
+    mesh_device->load_sub_device_manager(manager);
+
+    // Release must clean up the allocators registered at capture time (default manager only)
+    // and tolerate the sub-device allocators that never saw the registration.
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), trace_id);
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), trace_id);
+
+    // Capture under the sub-device manager, release after switching back to the default.
+    constexpr distributed::MeshTraceId sub_device_trace{0x2347};
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), sub_device_trace);
+    mesh_device->clear_loaded_sub_device_manager();
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), sub_device_trace);
+    EXPECT_TRUE(
+        distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), sub_device_trace).empty());
+
+    mesh_device->remove_sub_device_manager(manager);
+}
 }  // namespace tt::tt_metal

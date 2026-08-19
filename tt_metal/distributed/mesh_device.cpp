@@ -288,6 +288,20 @@ std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators() const {
     return result;
 }
 
+std::vector<AllocatorImpl*> MeshDeviceImpl::all_trace_allocators() const {
+    this->validate_sub_device_manager_tracker();
+    std::vector<AllocatorImpl*> result;
+    std::unordered_set<AllocatorImpl*> seen;
+    for (const auto* manager : sub_device_manager_tracker_->get_all_sub_device_managers()) {
+        for (const auto& allocator : manager->allocators()) {
+            if (allocator != nullptr && seen.insert(allocator.get()).second) {
+                result.push_back(allocator.get());
+            }
+        }
+    }
+    return result;
+}
+
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::register_active_trace(const MeshTraceId& trace_id) {
     for (auto* allocator : this->trace_allocators()) {
@@ -295,23 +309,26 @@ void MeshDeviceImpl::register_active_trace(const MeshTraceId& trace_id) {
     }
 }
 
+// Registration touches the allocators that were loaded at capture time; the loaded set may
+// have changed by release time. Cleanup walks every manager's allocators and relies on
+// unregister being a no-op on allocators that never saw the trace.
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::unregister_active_trace(const MeshTraceId& trace_id) {
-    for (auto* allocator : this->trace_allocators()) {
+    for (auto* allocator : this->all_trace_allocators()) {
         allocator->unregister_active_trace(*trace_id);
     }
 }
 
 std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids(const MeshTraceId& trace_id) const {
     std::unordered_map<size_t, std::string> result;
-    for (auto* allocator : this->trace_allocators()) {
+    for (auto* allocator : this->all_trace_allocators()) {
         result.merge(allocator->get_unsafe_tracked_ids(*trace_id));
     }
     return result;
 }
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
-    for (auto* allocator : this->trace_allocators()) {
+    for (auto* allocator : this->all_trace_allocators()) {
         allocator->remove_unsafe_tracked_id(buffer_unique_id);
     }
 }

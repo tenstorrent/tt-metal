@@ -75,7 +75,9 @@ bool AllocatorImpl::in_corruptible_allocation_scope() const {
 
 void AllocatorImpl::register_active_trace(std::uint32_t trace_id) {
     std::lock_guard<std::mutex> lock(mutex_);
-    ++active_trace_count_;
+    if (!active_trace_ids_.insert(trace_id).second) {
+        return;
+    }
     if (tracking_enabled_) {
         unsafe_tracked_ids_by_trace_.try_emplace(trace_id);
     } else {
@@ -85,19 +87,23 @@ void AllocatorImpl::register_active_trace(std::uint32_t trace_id) {
 
 void AllocatorImpl::unregister_active_trace(std::uint32_t trace_id) {
     std::lock_guard<std::mutex> lock(mutex_);
-    TT_FATAL(active_trace_count_ > 0, "Cannot unregister trace {}: no active traces are registered", trace_id);
+    // No-op for a trace this allocator never saw: the capture failed before registration,
+    // the trace was already released, or the loaded sub-device managers changed between
+    // capture and release.
+    if (active_trace_ids_.erase(trace_id) == 0) {
+        return;
+    }
     if (!tracking_enabled_) {
-        --active_trace_count_;
-        allocations_unsafe_ = active_trace_count_ > 0;
+        allocations_unsafe_ = !active_trace_ids_.empty();
         return;
     }
 
+    // Registration inserts into both structures under mutex_, so the entry must exist here.
     auto trace_it = unsafe_tracked_ids_by_trace_.find(trace_id);
-    TT_FATAL(
-        trace_it != unsafe_tracked_ids_by_trace_.end(),
-        "Cannot unregister trace {}: the trace is not registered",
-        trace_id);
-    --active_trace_count_;
+    TT_ASSERT(trace_it != unsafe_tracked_ids_by_trace_.end());
+    if (trace_it == unsafe_tracked_ids_by_trace_.end()) {
+        return;
+    }
     auto removed_buffer_ids = std::move(trace_it->second);
     unsafe_tracked_ids_by_trace_.erase(trace_it);
     for (size_t buffer_unique_id : removed_buffer_ids) {

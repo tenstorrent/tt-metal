@@ -174,7 +174,7 @@ private:
     bool tracking_enabled_ = false;
     bool traceback_capture_enabled_ = false;
     bool skip_program_cache_ = false;
-    std::uint32_t active_trace_count_ = 0;
+    std::unordered_set<std::uint32_t> active_trace_ids_;
     std::unordered_map<std::uint32_t, std::unordered_set<size_t>> unsafe_tracked_ids_by_trace_;
     std::unordered_map<size_t, std::string> unsafe_allocation_contexts_;
 };
