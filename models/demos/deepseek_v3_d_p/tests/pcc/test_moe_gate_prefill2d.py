@@ -265,6 +265,21 @@ LOUDBOX_TP1_MESH_CONFIG = pytest.param(
     id="linear-8",
 )
 
+# Galaxy TP=4: the deployed mesh. Unlike the LoudBox entry above this needs no dim scaling at all --
+# adjust_shapes_for_testing leaves a 4-wide TP axis alone -- so the gate runs the model's real dim and
+# the TP all-reduce is live, which the TP=1 case skips entirely.
+GALAXY_TP4_MESH_CONFIG = pytest.param(
+    (8, 4),
+    {
+        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+    },
+    2,
+    ttnn.Topology.Linear,
+    marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+    id="mesh-8x4",
+)
+
 
 # (gate_model id, gate compute mode). Sigmoid models (V3/Kimi) exercise both the host and on-device
 # gates; V4 (sqrtsoftplus) runs the regular gate on device, where the kernel applies the activation.
@@ -679,19 +694,21 @@ DEVICE_GATE_CASES = [
 @pytest.mark.parametrize("gate_model, gate_fallback_mode", DEVICE_GATE_CASES)
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
-    [LOUDBOX_TP1_MESH_CONFIG],
+    [GALAXY_TP4_MESH_CONFIG, LOUDBOX_TP1_MESH_CONFIG],
     indirect=["mesh_device", "device_params"],
 )
-def test_forward_pass_tp1_interleaved(mesh_device, num_links, topology, gate_model, gate_fallback_mode):
-    """Every model's deployed gate matmul shape, on a TP=1 LoudBox with a DRAM-interleaved input.
+def test_forward_pass_interleaved(mesh_device, num_links, topology, gate_model, gate_fallback_mode):
+    """Every model's deployed gate matmul shape, with the DRAM-interleaved input TtMoe really passes.
 
-    At TP=1 adjust_shapes_for_testing divides the model dim by 4, so each model's per-device gate
-    width lands on EMB_SIZE / 4 -- the width its TP=4 deployment resolves. The mm_configs lookup is
-    therefore the same key production hits, but reached with the interleaved input TtMoe actually
-    passes rather than the height-sharded one every other case here builds. That distinction is the
-    point: a height-sharded input pins the matmul program config (per_core_M must equal the shard
-    height in tiles, and a 2D config additionally demands K == in0_block_w and a single-column shard
-    grid), so the sharded cases cannot cover the config the deployment runs.
+    Both meshes land on the per-device width EMB_SIZE / 4 that a TP=4 deployment resolves, by
+    opposite routes: mesh-8x4 IS that deployment (real dim, TP=4, all-reduce live), while the TP=1
+    LoudBox gets there by adjust_shapes_for_testing dividing the dim by 4 and does no all-reduce at
+    all. The mm_configs lookup is therefore the same key production hits, but reached with the
+    interleaved input TtMoe actually passes rather than the height-sharded one every other case here
+    builds. That distinction is the point: a height-sharded input pins the matmul program config
+    (per_core_M must equal the shard height in tiles, and a 2D config additionally demands
+    K == in0_block_w and a single-column shard grid), so the sharded cases cannot cover the config the
+    deployment runs.
 
     The width is also held un-rounded (tile_align_width=False), which only GPT-OSS notices: its
     2880 / 4 = 720 is 22.5 tiles, and the other cases here round it to 736 so an L1 shard width stays
