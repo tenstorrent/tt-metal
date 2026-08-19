@@ -4,11 +4,15 @@
 
 Builds ONE prefill runtime supporting two chunk sizes {1024, 10240} and times processing the SAME
 1024-token prompt two ways — as a native 1024 chunk vs padded into a 10240 chunk — to show the small
-chunk avoids the ~10x padding waste on a typical short request. One-shot (actual_start=0) both ways.
+chunk avoids the ~10x padding waste on a typical short request.
 
-GALAXY-GATED. Run on a fresh bh_sc36_2 node WITHOUT tt-smi -r (compile warms the small-size ring, which
-needs the torus). Env: HF_MODEL, GPT_OSS_WEIGHTS_FROM_CACHE=1, EXPERT_DTYPE=bf8,
-TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_torus_xy_graph_descriptor.textproto, PREFILL_NUM_LAYERS(opt).
+Both ways are ONE-SHOT (actual_start=0, gather-Q AllGather) — the primary use case for a short request
+and the exact path variable chunk optimizes. One-shot uses FABRIC_1D (linear); NO torus / ring needed,
+so this runs on any healthy galaxy node. We skip runtime.compile() (which would warm the multi-chunk
+ring path and require the torus); the timing loop's first iter JIT-warms, the median of 3 is warm.
+
+GALAXY-GATED. Env: HF_MODEL, GPT_OSS_WEIGHTS_FROM_CACHE=1, EXPERT_DTYPE=bf8,
+TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_mesh_graph_descriptor.textproto, PREFILL_NUM_LAYERS(opt).
 """
 import os
 import statistics
@@ -29,7 +33,7 @@ def main():
     from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
     from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)  # compile warms the small-size ring path
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)  # one-shot gather-Q; no torus/ring needed
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(ROWS, COLS))
     print(f"[varchunk] mesh {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
     try:
@@ -62,11 +66,10 @@ def main():
         rt = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
         del state_dict
         print(f"[varchunk] built; supported chunk_sizes={rt.chunk_sizes} num_layers={num_layers}", flush=True)
-        rt.compile()
-        print("[varchunk] compiled both sizes", flush=True)
 
         def time_prefill(chunk_size, real=SMALL, iters=3):
-            """Prefill `real` real tokens as a single chunk of width `chunk_size` (pad tail). Median ms."""
+            """Prefill `real` real tokens as a single one-shot chunk of width `chunk_size`. Median ms.
+            No compile() warmup here, so the first of `iters` JIT-warms and is discarded by the median."""
             toks = [0] * chunk_size
             ts = []
             for _ in range(iters):
