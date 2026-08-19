@@ -7,12 +7,14 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
 #include "sfpu_stub.h"
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_unpack_binary_broadcast_operands.h"
 #include "llk_unpack_common.h"
 #include "params.h"
@@ -23,49 +25,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT        = params.TILE_CNT;
-    const std::uint32_t num_faces       = params.num_faces;
-    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const Operand& buffer_A             = params.buffer_A;
-    const Operand& buffer_B             = params.buffer_B;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const std::uint32_t num_faces   = params.num_faces;
+    const Operand& buffer_A         = params.buffer_A;
+    const Operand& buffer_B         = params.buffer_B;
 #endif
-    tdma_descriptor_t td_val_A, td_val_B;
-    const std::uint32_t buf_desc_id_a        = 0;
-    const std::uint32_t buf_desc_id_b        = 1;
     const std::uint32_t num_tiles_per_unpack = TILE_CNT;
 
     {
         ZONE_SCOPED("INIT")
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-        buffer_descriptor_u bd_val_A = {0};
-        bd_val_A.f.l1_addr_16B       = buffer_A[0] / 16;
-        bd_val_A.f.format            = static_cast<std::uint8_t>(formats.unpack_A_src);
-        bd_val_A.f.x_dim             = TEST_FACE_C_DIM;
-        bd_val_A.f.y_dim             = TEST_FACE_R_DIM;
-        bd_val_A.f.z_dim             = num_faces;
-
-        td_val_A.buf_desc        = bd_val_A;
-        td_val_A.buf_desc_id     = buf_desc_id_a;
-        td_val_A.reg_data_format = static_cast<DataFormat>(formats.unpack_A_dst);
-
-        buffer_descriptor_u bd_val_B = {0};
-        bd_val_B.f.l1_addr_16B       = buffer_B[0] / 16;
-        bd_val_B.f.format            = static_cast<std::uint8_t>(formats.unpack_B_src);
-        bd_val_B.f.x_dim             = TEST_FACE_C_DIM;
-        bd_val_B.f.y_dim             = TEST_FACE_R_DIM;
-        bd_val_B.f.z_dim             = num_faces;
-
-        td_val_B.buf_desc        = bd_val_B;
-        td_val_B.buf_desc_id     = buf_desc_id_b;
-        td_val_B.reg_data_format = static_cast<DataFormat>(formats.unpack_B_dst);
-
-        _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
-        _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A.reg_data_format, td_val_B.reg_data_format);
-        _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(buf_desc_id_a, buf_desc_id_b, num_tiles_per_unpack);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
+            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
+        _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+            num_tiles_per_unpack);
         PROFILER_SYNC();
     }
     {
@@ -182,6 +163,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -192,14 +174,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT        = params.TILE_CNT;
-    const std::uint32_t num_faces       = params.num_faces;
-    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
-    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
-    const Operand& buffer_Res           = params.buffer_Res;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    std::uint32_t const buf_desc_id        = 8;
     const std::uint32_t num_tiles_per_pack = TILE_CNT;
 
     {
@@ -216,22 +194,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        buffer_descriptor_u bd_val = {0};
-        bd_val.f.l1_addr_16B       = buffer_Res[0] / 16;
-        bd_val.f.format            = static_cast<std::uint8_t>(formats.pack_dst);
-        bd_val.f.x_dim             = TEST_FACE_C_DIM;
-        bd_val.f.y_dim             = TEST_FACE_R_DIM;
-        bd_val.f.z_dim             = num_faces;
-
-        tdma_descriptor_t tdma_desc;
-
-        tdma_desc.buf_desc        = bd_val;
-        tdma_desc.buf_desc_id     = buf_desc_id;
-        tdma_desc.reg_data_format = static_cast<DataFormat>(formats.pack_src);
-
-        _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none());
-        _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
         PROFILER_SYNC();
     }
     {
