@@ -365,40 +365,49 @@ constexpr ckernel::ReduceDim metal_dim(ReduceAxis a) {
 #endif
 
 // The INPUT tile grid, row-major: tile (h, w) is at index h * wt + w.
-template <uint32_t Ht, uint32_t Wt>
+// Derived from the input shape, not declared: every member below is a pure function of
+// (rows, cols, axis), so the operand's shape IS the geometry. Nothing writes this type.
+template <typename S>
 struct ReduceGeometry {
-    static constexpr uint32_t ht = Ht;
-    static constexpr uint32_t wt = Wt;
-    static constexpr uint32_t num_tiles = Ht * Wt;
+    static_assert(
+        S::leading == 1,
+        "reducing a shape with a leading (batch) extent is not implemented -- the strategy walks one "
+        "2-D grid, so run the reduction per batch from the kernel's own loop");
+
+    static constexpr uint32_t ht = S::rows;
+    static constexpr uint32_t wt = S::cols;
+    static constexpr uint32_t num_tiles = ht * wt;
 
     // Tiles the result occupies, which is what the destination Storage must hold.
     static constexpr uint32_t out_tiles(ReduceAxis axis) {
-        return axis == ReduceAxis::Rows ? Wt : (axis == ReduceAxis::Cols ? Ht : 1);
+        return axis == ReduceAxis::Rows ? wt : (axis == ReduceAxis::Cols ? ht : 1);
     }
 
     // Elements folded into ONE output value -- what an average divides by. A tile
     // is 32x32, so collapsing rows folds ht*32 of them.
     static constexpr uint32_t elements(ReduceAxis axis) {
-        return axis == ReduceAxis::Rows ? Ht * 32 : (axis == ReduceAxis::Cols ? Wt * 32 : Ht * Wt * 32 * 32);
+        return axis == ReduceAxis::Rows ? ht * 32 : (axis == ReduceAxis::Cols ? wt * 32 : ht * wt * 32 * 32);
     }
 
     // Input tiles feeding one output tile.
     static constexpr uint32_t group(ReduceAxis axis) {
-        return axis == ReduceAxis::Rows ? Ht : (axis == ReduceAxis::Cols ? Wt : num_tiles);
+        return axis == ReduceAxis::Rows ? ht : (axis == ReduceAxis::Cols ? wt : num_tiles);
     }
 
     // Index of the g'th contributor to output tile `o`.
     static constexpr uint32_t contributor(ReduceAxis axis, uint32_t o, uint32_t g) {
-        return axis == ReduceAxis::Rows ? g * Wt + o : (axis == ReduceAxis::Cols ? o * Wt + g : g);
+        return axis == ReduceAxis::Rows ? g * wt + o : (axis == ReduceAxis::Cols ? o * wt + g : g);
     }
 };
 
 // `scaler_cb` holds the constant reduce_tile folds in: see fill_reduce_scaler.
-template <typename Geometry, ReduceAxis Axis, ReducePool Pool, typename Chain>
-struct ReduceNode : expr::Fluent<ReduceNode<Geometry, Axis, Pool, Chain>> {
+template <typename S, ReduceAxis Axis, ReducePool Pool, typename Chain>
+struct ReduceNode : expr::Fluent<ReduceNode<S, Axis, Pool, Chain>> {
     using fusion_kind = ReduceFusion;
-    using geometry = Geometry;
+    using in_shape = S;
+    using geometry = ReduceGeometry<S>;
     using chain = Chain;
+    using shape = reduce_shape<S, Axis>;
     static constexpr ReduceAxis axis = Axis;
     static constexpr ReducePool pool = Pool;
 
@@ -406,29 +415,29 @@ struct ReduceNode : expr::Fluent<ReduceNode<Geometry, Axis, Pool, Chain>> {
     uint32_t scaler_cb;
 };
 
-template <typename G, ReduceAxis A, ReducePool P, typename Chain>
-auto relu(const ReduceNode<G, A, P, Chain>& r) {
-    return ReduceNode<G, A, P, expr::chain_append_t<Chain, ReluOp>>{{}, r.in_cb, r.scaler_cb};
+template <typename S, ReduceAxis A, ReducePool P, typename Chain>
+auto relu(const ReduceNode<S, A, P, Chain>& r) {
+    return ReduceNode<S, A, P, expr::chain_append_t<Chain, ReluOp>>{{}, r.in_cb, r.scaler_cb};
 }
 
-template <typename G, ReduceAxis A, ReducePool P, typename Chain>
-auto exp_(const ReduceNode<G, A, P, Chain>& r) {
-    return ReduceNode<G, A, P, expr::chain_append_t<Chain, ExpOp>>{{}, r.in_cb, r.scaler_cb};
+template <typename S, ReduceAxis A, ReducePool P, typename Chain>
+auto exp_(const ReduceNode<S, A, P, Chain>& r) {
+    return ReduceNode<S, A, P, expr::chain_append_t<Chain, ExpOp>>{{}, r.in_cb, r.scaler_cb};
 }
 
-template <typename G, ReduceAxis A, ReducePool P, typename Chain>
-auto recip(const ReduceNode<G, A, P, Chain>& r) {
-    return ReduceNode<G, A, P, expr::chain_append_t<Chain, RecipOp>>{{}, r.in_cb, r.scaler_cb};
+template <typename S, ReduceAxis A, ReducePool P, typename Chain>
+auto recip(const ReduceNode<S, A, P, Chain>& r) {
+    return ReduceNode<S, A, P, expr::chain_append_t<Chain, RecipOp>>{{}, r.in_cb, r.scaler_cb};
 }
 
-template <typename G, ReduceAxis A, ReducePool P, typename Chain>
-auto sqrt_(const ReduceNode<G, A, P, Chain>& r) {
-    return ReduceNode<G, A, P, expr::chain_append_t<Chain, SqrtOp>>{{}, r.in_cb, r.scaler_cb};
+template <typename S, ReduceAxis A, ReducePool P, typename Chain>
+auto sqrt_(const ReduceNode<S, A, P, Chain>& r) {
+    return ReduceNode<S, A, P, expr::chain_append_t<Chain, SqrtOp>>{{}, r.in_cb, r.scaler_cb};
 }
 
-template <typename G, ReduceAxis A, ReducePool P, typename Chain>
-auto rsqrt(const ReduceNode<G, A, P, Chain>& r) {
-    return ReduceNode<G, A, P, expr::chain_append_t<Chain, RsqrtOp>>{{}, r.in_cb, r.scaler_cb};
+template <typename S, ReduceAxis A, ReducePool P, typename Chain>
+auto rsqrt(const ReduceNode<S, A, P, Chain>& r) {
+    return ReduceNode<S, A, P, expr::chain_append_t<Chain, RsqrtOp>>{{}, r.in_cb, r.scaler_cb};
 }
 
 // --- Node shapes ---
@@ -465,12 +474,6 @@ struct node_shape<expr::Bin<Op, L, R>> {
 };
 
 // An FPU fusion's shape is its output block: rows from A, columns from B.
-// A reduction collapses one axis of its input grid.
-template <typename Geometry, ReduceAxis Axis, ReducePool Pool, typename Chain>
-struct node_shape<ReduceNode<Geometry, Axis, Pool, Chain>> {
-    using type = reduce_shape<Shape<Geometry::ht, Geometry::wt>, Axis>;
-};
-
 // --- Operand plumbing ---
 //
 // `is_operand` and `as_node` are the extension points the core header hooks into:
