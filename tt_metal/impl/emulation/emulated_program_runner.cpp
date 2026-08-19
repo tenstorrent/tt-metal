@@ -2529,6 +2529,7 @@ static thread_local uint32_t t_peer_writes = 0;
 // the state lives in shared memory alongside the chip L1. See tt-emule docs/multi-rank-emulation.md.
 static bool emule_peer_may_still_deliver();
 static void emule_install_peer_probes();
+static bool emule_peer_liveness();
 
 // ---------------------------------------------------------------------------
 // In-process virtual ranks: co-scheduling the K rank threads.
@@ -2622,6 +2623,19 @@ static tt_emule::RankState& emule_rank_state() {
     return rs;
 }
 
+static std::atomic<bool> g_emule_peer_probes_installed{false};
+// A confirmed fixed point makes the next quiescence authoritative instead of reopening peer churn.
+static std::atomic<bool> g_peer_fixed_point_confirmed{false};
+
+static bool emule_peer_liveness() {
+    if (virtual_rank_peer_absent()) {
+        return true;
+    }
+    auto& r = emule_rank_state();
+    return r.valid() && !r.any_faulted() && !g_peer_fixed_point_confirmed.load(std::memory_order_acquire) &&
+           r.any_peer_unfinished() && !r.global_fixed_point();
+}
+
 // Installed ONLY from a multi-rank path — the shm one above and the in-process one in
 // virtual_rank_note_dispatch — so single-rank the scheduler's quiescence branch is byte-identical to
 // its pre-multi-rank form (an empty std::function it never calls). Idempotent: both paths can be
@@ -2630,23 +2644,10 @@ static void emule_install_peer_probes() {
     static std::once_flag once;
     std::call_once(once, [] {
         tt::tt_metal::emule_fiber::set_peer_progress_probe(&emule_peer_may_still_deliver);
-        tt::tt_metal::emule_fiber::set_peer_liveness_probe([] {
-            // Ahead of emule_rank_state(): this probe runs on the watchdog thread, and the in-process
-            // answer needs no rank identity, which that thread does not have.
-            if (virtual_rank_peer_absent()) {
-                return true;
-            }
-            auto& r = emule_rank_state();
-            return r.valid() && r.any_peer_unfinished();
-        });
+        tt::tt_metal::emule_fiber::set_peer_liveness_probe(&emule_peer_liveness);
+        g_emule_peer_probes_installed.store(true, std::memory_order_release);
     });
 }
-
-// Latched once the spin below has independently confirmed a global fixed point. Without it the loop
-// livelocks: each rank clears its flag to run, so the two never observe each other parked at the same
-// instant, the probe keeps answering "a peer might still deliver", and a genuine deadlock is never
-// reported. The latch makes the next quiescence authoritative.
-static std::atomic<bool> g_peer_fixed_point_confirmed{false};
 
 // Called from the scheduler at local quiescence. Publishing BEFORE testing is what makes the answer
 // meaningful: until this rank's own slot says parked, the fixed point can never hold.
@@ -2677,7 +2678,7 @@ static bool emule_peer_may_still_deliver() {
 // Returns true only when a DELIVERY arrived, which is the sole reason to un-publish our quiescence:
 // clearing it on the other exits would let two stuck ranks alternate between "parked" and "running"
 // and never observe each other parked at the same instant, so the fixed point could never be reached.
-static bool emule_peer_wait_for_change() {
+[[maybe_unused]] static bool emule_peer_wait_for_change() {
     auto& rs = emule_rank_state();
     if (!rs.valid()) {
         return false;
@@ -4176,8 +4177,45 @@ static const char* intern_kernel_name(const std::string& name) {
     return table.insert(name).first->c_str();
 }
 
-// [HOST-INTERLEAVED SOCKET] Parked on host socket I/O, fibers alive; pump_device() drives it, the last pump clears it.
+// Separate flags preserve the suspension cause; neither set means running. Quiescence is
+// published only inside the peer probe, never while the host owns control.
 static std::atomic<bool> g_emule_host_wait{false};
+static std::atomic<bool> g_emule_peer_wait{false};
+static std::atomic<bool> g_emule_pump_in_flight{false};
+static std::atomic<uint64_t> g_emule_run_sequence{0};
+static std::exception_ptr g_emule_driver_fault;
+
+class PeerWaitDriver;
+static std::atomic<PeerWaitDriver*> g_peer_wait_driver{nullptr};
+static void notify_peer_wait_driver();
+static void ensure_peer_wait_driver(
+    tt::tt_metal::emule_fiber::FiberScheduler&, tt_emule::RankState&);
+
+static bool emule_run_suspended() { return g_emule_host_wait || g_emule_peer_wait; }
+
+static bool emule_run_has_peer_fed_waiter() {
+    return emule_run_suspended() &&
+           tt::tt_metal::emule_fiber::FiberScheduler::instance().has_peer_fed_waiter();
+}
+
+static void resume_emule_run() {
+    emule_rank_state().publish_quiesced(false);
+    g_emule_host_wait = false;
+    g_emule_peer_wait = false;
+    notify_peer_wait_driver();
+}
+
+static void suspend_emule_run(tt::tt_metal::emule_fiber::RunOutcome outcome) {
+    const bool host = outcome == tt::tt_metal::emule_fiber::RunOutcome::HostWait;
+    // Only a rank parked on a PEER is a fixed-point participant. One that went back to its host is
+    // running as far as peers are concerned, and counting it as parked would fabricate a fixed point.
+    if (host) {
+        emule_rank_state().publish_quiesced(false);
+    }
+    g_emule_host_wait = host;
+    g_emule_peer_wait = outcome == tt::tt_metal::emule_fiber::RunOutcome::PeerWait;
+    notify_peer_wait_driver();
+}
 
 // Serializes worker-pool drivers: pump_device() + MeshDispatchLock; run_persistent() returns at quiescence.
 static std::mutex g_emule_run_mu;
@@ -4676,7 +4714,7 @@ static void virtual_rank_note_teardown() {
 // point: the peer cannot register its half of the socket without it. Unlocking here is well-formed
 // because the caller's MeshDispatchLock took it on this same thread — but run_mesh_dispatch is also
 // reachable from the deferred-flush path holding nothing, hence the ownership check.
-static void virtual_rank_yield_for_peer() {
+[[maybe_unused]] static void virtual_rank_yield_for_peer() {
     auto& v = virtual_rank_run();
     uint64_t seen = 0;
     {
@@ -4716,14 +4754,14 @@ void begin_mesh_dispatch() {
     // Ids from a register phase that threw before launch belong to no run; a parked one keeps its ids.
     // An in-process peer parked mid-run owns its ids too — clearing them would let its Finish walk
     // away from a run that is still in flight, and this dispatch is about to join that same run.
-    if (!g_emule_host_wait && !virtual_rank_run_live()) {
+    if (!emule_run_suspended() && !virtual_rank_run_live()) {
         run_device_ids_clear();
     }
 }
 
 // Drop a parked run's state; pre: the registry is gone. A stale flag lets a feeder kill the next dispatch.
-static void clear_host_interleaved_state() {
-    g_emule_host_wait = false;
+static void clear_suspended_run_state() {
+    resume_emule_run();
     g_emule_mesh_defer = false;
     // Generation-scoped rather than a blanket clear: identical here, since every caller has an empty
     // registry so no generation is live, but it states the actual rule. With in-process ranks sharing
@@ -4735,18 +4773,21 @@ static void clear_host_interleaved_state() {
 }
 
 void run_mesh_dispatch() {
+    std::unique_lock<std::mutex> dispatch_lock(g_emule_run_mu, std::defer_lock);
+    if (!t_holds_dispatch_lock) {
+        dispatch_lock.lock();
+    }
 #if defined(__x86_64__) && defined(__linux__)
     EmuleSigfpeGuard sigfpe_guard;  // the actual kernel run happens here, across all chips
 #endif
-    // Reset defer + free the kept per-device state even if the run throws. Disarmed on the
-    // host-wait path, which keeps the state alive across the return to the host.
+    // Reset defer + free the kept per-device state even if the run throws. Disarmed while
+    // either suspension keeps the state alive across the return to the host.
     struct Cleanup {
         bool armed = true;
         ~Cleanup() {
-            // `armed` is false exactly on the HostWait return, where the run is suspended rather than
-            // over — so that is the one exit that must NOT tell peers this rank is finished.
+            // A suspension disarms cleanup because the rank is not finished yet.
             if (armed) {
-                clear_host_interleaved_state();
+                clear_suspended_run_state();
                 // A rank that finished stops delivering forever, just as a faulted one does. Without
                 // this a peer sits in PeerWait on a rank that has already left, and the fixed point it
                 // is waiting for can never be reached.
@@ -4764,34 +4805,18 @@ void run_mesh_dispatch() {
     // throw the RAII Cleanup above frees the kept state during unwind.
     // Force the rank state up before the run: it is what installs the scheduler's peer probe, and
     // without it a quiescence could never be classified as a PeerWait in the first place.
-    emule_rank_state().begin_dispatch();
+    auto& scheduler = tt::tt_metal::emule_fiber::FiberScheduler::instance();
+    auto& rank_state = emule_rank_state();
+    rank_state.begin_dispatch();
     virtual_rank_note_dispatch();
+    ensure_peer_wait_driver(scheduler, rank_state);
+    g_emule_driver_fault = nullptr;
+    g_emule_run_sequence.fetch_add(1, std::memory_order_release);
     g_peer_fixed_point_confirmed.store(false, std::memory_order_release);
-    tt::tt_metal::emule_fiber::RunOutcome oc =
-        tt::tt_metal::emule_fiber::FiberScheduler::instance().run_persistent();
-    // A PeerWait is resolved by another RANK, not by our host, so it is absorbed here rather than
-    // returned: this rank has nothing to do but wait and re-poll. The loop ends when the peer acts
-    // (pump makes progress), when every rank agrees there is nothing left (the probe goes false and
-    // the engine reports the deadlock with its usual diagnostic), or on a fault.
-    while (oc == tt::tt_metal::emule_fiber::RunOutcome::PeerWait) {
-        if (virtual_rank_peer_absent()) {
-            // In-process: the peer needs the dispatch mutex to register its half of the socket, and
-            // waiting on shared rank state would be waiting for a process that does not exist.
-            virtual_rank_yield_for_peer();
-        } else if (emule_peer_wait_for_change()) {
-            g_peer_fixed_point_confirmed.store(false, std::memory_order_release);  // work arrived
-        }
-        // Cleared on EVERY path, not just after a delivery: pump() is about to release the parked
-        // fibers, and a rank that is running must never still advertise itself as parked.
-        emule_rank_state().publish_quiesced(false);
-        oc = tt::tt_metal::emule_fiber::FiberScheduler::instance().pump();
-    }
-    if (oc == tt::tt_metal::emule_fiber::RunOutcome::HostWait) {
-        // A kernel is parked on a host-fed socket wait. Keep the kept state + the scheduler's fibers
-        // ALIVE and return to the host; it streams socket tokens and pump_device() drives the run to
-        // completion (which runs the cleanup, see pump_device()).
+    tt::tt_metal::emule_fiber::RunOutcome oc = scheduler.run_persistent();
+    if (oc != tt::tt_metal::emule_fiber::RunOutcome::Completed) {
         cleanup.armed = false;
-        g_emule_host_wait = true;
+        suspend_emule_run(oc);
         return;
     }
     // Completed synchronously (no host-fed socket wait): the RAII Cleanup frees the kept state.
@@ -4799,24 +4824,209 @@ void run_mesh_dispatch() {
 
 // pre: g_emule_run_mu held. See pump_device().
 static void pump_device_locked() {
-    if (!g_emule_host_wait) {
+    if (!emule_run_suspended()) {
         return;
     }
+    struct PumpFlight {
+        PumpFlight() { g_emule_pump_in_flight.store(true, std::memory_order_release); }
+        ~PumpFlight() { g_emule_pump_in_flight.store(false, std::memory_order_release); }
+    } pump_flight;
 #if defined(__x86_64__) && defined(__linux__)
     // pump() re-enters kernel bodies; run_mesh_dispatch's guard was destroyed at its HostWait return,
     // so reinstall the SIGFPE->RISC-V divide/overflow handler for the resumed execution.
     EmuleSigfpeGuard sigfpe_guard;
 #endif
     try {
+        resume_emule_run();
         auto oc = tt::tt_metal::emule_fiber::FiberScheduler::instance().pump();
         if (oc == tt::tt_metal::emule_fiber::RunOutcome::Completed) {
-            clear_host_interleaved_state();
+            clear_suspended_run_state();
+            emule_rank_state().note_done();
+        } else {
+            suspend_emule_run(oc);
         }
     } catch (...) {
         // pump() threw (kernel exception / host-wait stall deadlock) — the scheduler registry is torn
         // down; drop the mesh keepalives + host-wait/defer flags so a later dispatch starts clean.
-        clear_host_interleaved_state();
+        clear_suspended_run_state();
         throw;
+    }
+}
+
+static std::chrono::seconds peer_driver_timeout() {
+    static const uint64_t seconds = [] {
+        const char* v = std::getenv("TT_EMULE_PEER_DRIVER_TIMEOUT_SEC");
+        if (v == nullptr || v[0] == '\0') {
+            return uint64_t{120};
+        }
+        errno = 0;
+        char* end = nullptr;
+        const unsigned long long n = std::strtoull(v, &end, 10);
+        if (end == v || *end != '\0' || errno == ERANGE || std::strchr(v, '-') != nullptr) {
+            log_warning(
+                tt::LogMetal,
+                "TT_EMULE_PEER_DRIVER_TIMEOUT_SEC='{}' is not a non-negative integer; using 120",
+                v);
+            return uint64_t{120};
+        }
+        return static_cast<uint64_t>(n);
+    }();
+    return std::chrono::seconds(seconds);
+}
+
+[[noreturn]] static void abort_peer_driver(const char* reason, const std::exception_ptr& fault) {
+    std::string detail = "unknown exception";
+    try {
+        if (fault) {
+            std::rethrow_exception(fault);
+        }
+    } catch (const std::exception& e) {
+        detail = e.what();
+    } catch (...) {
+        detail = "non-std exception";
+    }
+    std::fprintf(stderr, "[EMULE] peer-wait driver: %s\n%s\n", reason, detail.c_str());
+    emule_rank_state().dump(reason);
+    std::fflush(stderr);
+    try {
+        using tt::tt_metal::distributed::multihost::DistributedContext;
+        if (DistributedContext::is_initialized()) {
+            DistributedContext::get_world_context()->abort(EXIT_FAILURE);
+        }
+    } catch (...) {
+    }
+    std::abort();
+}
+
+class PeerWaitDriver {
+public:
+    PeerWaitDriver() : thread_(&PeerWaitDriver::run, this) {}
+    ~PeerWaitDriver() noexcept {
+        g_peer_wait_driver.store(nullptr, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> g(wait_mu_);
+            stop_ = true;
+        }
+        cv_.notify_one();
+        if (thread_.joinable()) {
+            try {
+                thread_.join();
+            } catch (...) {
+                std::terminate();
+            }
+        }
+    }
+
+    void notify() { cv_.notify_one(); }
+
+private:
+    bool stopping() {
+        std::lock_guard<std::mutex> g(wait_mu_);
+        return stop_;
+    }
+
+    void back_off() {
+        std::unique_lock<std::mutex> lk(wait_mu_);
+        cv_.wait_for(lk, std::chrono::milliseconds(1), [this] { return stop_; });
+    }
+
+    void fail_locked(const char* reason, std::exception_ptr fault) {
+        g_emule_driver_fault = std::move(fault);
+        emule_rank_state().note_faulted();
+        g_emule_run_sequence.fetch_add(1, std::memory_order_release);
+        abort_peer_driver(reason, g_emule_driver_fault);
+    }
+
+    void abandon_locked(const char* reason, const std::string& diagnostic) {
+        try {
+            tt::tt_metal::emule_fiber::FiberScheduler::instance().abandon_host_wait(diagnostic);
+        } catch (...) {
+            clear_suspended_run_state();
+            fail_locked(reason, std::current_exception());
+        }
+        // Returned instead of throwing: the registry was already torn down, so the run is simply over
+        // and there is nothing to report. Faulting the job here would abort on a benign state.
+        clear_suspended_run_state();
+    }
+
+    void run() {
+        uint64_t sequence = 0;
+        std::chrono::steady_clock::time_point deadline;
+        while (!stopping()) {
+            if (!emule_run_has_peer_fed_waiter()) {
+                std::unique_lock<std::mutex> lk(wait_mu_);
+                cv_.wait(lk, [this] { return stop_ || emule_run_has_peer_fed_waiter(); });
+                if (stop_) {
+                    return;
+                }
+            }
+            const uint64_t current_sequence = g_emule_run_sequence.load(std::memory_order_acquire);
+            if (sequence != current_sequence) {
+                sequence = current_sequence;
+                deadline = std::chrono::steady_clock::now() + peer_driver_timeout();
+            }
+
+            std::unique_lock<std::mutex> run_lock(g_emule_run_mu, std::try_to_lock);
+            if (!run_lock.owns_lock()) {
+                back_off();
+                continue;
+            }
+            if (!emule_run_has_peer_fed_waiter() ||
+                sequence != g_emule_run_sequence.load(std::memory_order_acquire)) {
+                continue;
+            }
+            if (emule_rank_state().any_faulted()) {
+                abandon_locked(
+                    "peer rank faulted",
+                    "EMULE fiber engine: peer-wait driver observed a faulted rank; the peer cannot deliver.");
+                continue;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                abandon_locked(
+                    "peer-wait deadline expired",
+                    fmt::format(
+                        "EMULE fiber engine: peer-wait driver exceeded its {}s wall-clock deadline "
+                        "(TT_EMULE_PEER_DRIVER_TIMEOUT_SEC).",
+                        peer_driver_timeout().count()));
+                continue;
+            }
+            if (!emule_peer_liveness()) {
+                run_lock.unlock();
+                std::unique_lock<std::mutex> lk(wait_mu_);
+                cv_.wait_until(lk, std::min(deadline, std::chrono::steady_clock::now() + std::chrono::milliseconds(250)),
+                               [this, sequence] {
+                    return stop_ || !emule_run_has_peer_fed_waiter() ||
+                           sequence != g_emule_run_sequence.load(std::memory_order_acquire);
+                });
+                continue;
+            }
+            try {
+                pump_device_locked();
+            } catch (...) {
+                fail_locked("background pump failed", std::current_exception());
+            }
+            run_lock.unlock();
+            back_off();
+        }
+    }
+
+    std::mutex wait_mu_;
+    std::condition_variable cv_;
+    bool stop_ = false;
+    std::thread thread_;
+};
+
+static void ensure_peer_wait_driver(tt::tt_metal::emule_fiber::FiberScheduler&, tt_emule::RankState&) {
+    if (!g_emule_peer_probes_installed.load(std::memory_order_acquire)) {
+        return;
+    }
+    static PeerWaitDriver driver;
+    g_peer_wait_driver.store(&driver, std::memory_order_release);
+}
+
+static void notify_peer_wait_driver() {
+    if (auto* driver = g_peer_wait_driver.load(std::memory_order_acquire); driver != nullptr) {
+        driver->notify();
     }
 }
 
@@ -4875,7 +5085,7 @@ static uint64_t drain_max_pumps() {
 }
 
 void drain_device(const std::vector<int>& device_ids) {
-    if (!g_emule_host_wait) {
+    if (!emule_run_suspended() && !g_emule_pump_in_flight.load(std::memory_order_acquire)) {
         return;
     }
     // Finish means idle on return, and a run past its termination signal has no credit loop driving it.
@@ -4883,7 +5093,7 @@ void drain_device(const std::vector<int>& device_ids) {
     for (uint64_t i = 0; i < max_pumps; ++i) {
         // Re-read every pass under the pumping lock: the run can complete and another mesh park a new one.
         std::lock_guard<std::mutex> g(g_emule_run_mu);
-        if (!g_emule_host_wait) {
+        if (!emule_run_suspended()) {
             break;
         }
         if (!device_ids.empty() && !run_device_ids_owns(device_ids)) {
@@ -4893,7 +5103,7 @@ void drain_device(const std::vector<int>& device_ids) {
     }
     // Bound hit, run still parked: hand it to the engine. Locked — this tears down the pump's registry.
     std::lock_guard<std::mutex> g(g_emule_run_mu);
-    if (!g_emule_host_wait) {
+    if (!emule_run_suspended()) {
         return;
     }
     try {
@@ -4909,11 +5119,11 @@ void drain_device(const std::vector<int>& device_ids) {
             max_pumps,
             tt::tt_metal::emule_fiber::FiberScheduler::host_wait_stall_limit()));
     } catch (...) {
-        clear_host_interleaved_state();
+        clear_suspended_run_state();
         throw;
     }
     // abandon_host_wait found no registry to tear down, so the flags outlived the run they described.
-    clear_host_interleaved_state();
+    clear_suspended_run_state();
 }
 
 }  // namespace tt::tt_metal::emule

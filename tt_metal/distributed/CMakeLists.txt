@@ -87,6 +87,7 @@ add_dependencies(distributed metalium_GeneratedHeaders)
 if(USE_MPI)
     target_link_libraries(distributed PRIVATE OpenMPI::MPI)
     target_compile_definitions(distributed PRIVATE OPEN_MPI="1")
+    target_compile_definitions(impl PRIVATE TT_METAL_USE_MPI=1)
 endif()
 
 if(TT_UMD_BUILD_SIMULATION)

@@ -186,7 +186,7 @@ struct FiberSchedulerImpl {
     // See tt-emule docs/socket-emulation.md.
     uint64_t host_wait_no_progress_pumps_ = 0;
 
-    // Tier-2 watchdog. A HostWait return leaves it RUNNING (the gap's only guard); launch/teardown reaps.
+    // Tier-2 watchdog. A suspended return leaves it RUNNING (the gap's only guard); launch/teardown reaps.
     std::thread wd_;
     // Parked between pumps: HOST latency, so the watchdog swaps bounds and re-clocks at the park.
     std::atomic<bool> host_wait_parked_{false};
@@ -453,7 +453,8 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
                 // Same trigger for a d2d socket poll fed by another RANK. Without it the spinner is
                 // resumed forever, quiescence is never reached, and the tier-2 watchdog aborts a run
                 // that is only waiting on another process.
-                if (persistent_ && any_fresh_peer_socket_poll_waiter() && peer_progress_probe()) {
+                if (persistent_ && !any_waiting_on_host() && any_fresh_peer_socket_poll_waiter() &&
+                    peer_progress_probe()) {
                     peer_wait_ = true;
                     abort_flag_ = true;
                     cv_.notify_all();
@@ -1163,7 +1164,7 @@ void FiberScheduler::launch_and_wait(bool initial) {
         p_->done_cv_.wait(lk, [&] { return p_->workers_done_ == W; });
     }
 
-    bool host_wait = false;
+    bool suspended = false;
     {  // A captured kernel fault outranks a host wait: HostWait would defer the rethrow indefinitely.
         std::lock_guard<std::mutex> g(p_->mu_);
         if (p_->first_eptr_ && p_->host_wait_) {
@@ -1172,11 +1173,11 @@ void FiberScheduler::launch_and_wait(bool initial) {
         if (p_->first_eptr_ && p_->peer_wait_) {
             p_->peer_wait_ = false;
         }
-        host_wait = p_->host_wait_;
+        suspended = p_->host_wait_ || p_->peer_wait_;
     }
-    // A HostWait return leaves the watchdog RUNNING (the gap's only guard); anything else ends the run.
-    p_->host_wait_parked_.store(host_wait, std::memory_order_release);
-    if (!host_wait) {
+    // Either suspension leaves the watchdog RUNNING; anything else ends the run.
+    p_->host_wait_parked_.store(suspended, std::memory_order_release);
+    if (!suspended) {
         p_->stop_watchdog();
     }
     if (std::getenv("TT_EMULE_FIBER_LOG_N")) {
@@ -1249,6 +1250,11 @@ static uint64_t host_wait_no_progress_limit() {
 }
 
 uint64_t FiberScheduler::host_wait_stall_limit() { return host_wait_no_progress_limit(); }
+
+bool FiberScheduler::has_peer_fed_waiter() const {
+    std::lock_guard<std::mutex> g(p_->mu_);
+    return p_->any_fresh_peer_socket_poll_waiter();
+}
 
 RunOutcome FiberScheduler::run_persistent() {
     p_->persistent_ = true;
