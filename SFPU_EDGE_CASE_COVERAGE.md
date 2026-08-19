@@ -2,8 +2,8 @@
 
 **Issue:** [tenstorrent/tt-metal#49739 — [LLK] SFPU testing edge cases](https://github.com/tenstorrent/tt-metal/issues/49739)
 **Plan for what is left:** [SFPU_EDGE_CASE_EXPANSION_PLAN.md](SFPU_EDGE_CASE_EXPANSION_PLAN.md)
-**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-17 (revision 17), against
-`ldjurovic/sfpu_edge_cases_phase_3` @ `1430f442ba3`
+**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-19 (revision 18), against
+`ldjurovic/sfpu_edge_cases_phase_3` @ `caf8701f973`
 **Wormhole measurement:** [WORMHOLE_MEASUREMENT_RESULTS.md](WORMHOLE_MEASUREMENT_RESULTS.md)
 **Scope:** every SFPU op reachable from the tt-llk Python test infra
 (`tt_metal/tt-llk/tests/python_tests/`), which is where the suites, the registries and all the gates
@@ -24,6 +24,50 @@ audit treats them together and notes arch-specific gaps inline. Quasar has its o
 > practice — §2.5's cat-F list has always been mostly `llk_sfpu` kernels — but the old one-line scope
 > statement sent anyone re-auditing it to the wrong directory.
 
+> ### Revision 18 — the binary suite is measured *with* `bcast`, both arches are green, and three review rounds landed
+>
+> Measured at `caf8701f973` on a **Wormhole n300**. Revision 17 was `1430f442ba3` on an n150, and the
+> three review rounds between them changed goldens, so every suite was re-run rather than carried.
+>
+> | Suite | Revision 17 | Revision 18 |
+> |---|---|---|
+> | `test_sfpu_unary.py` | 6044 p · 573 s · 23 xf · 6 XP · 0 F | **6044 p · 573 s · 23 xf · 6 XP · 0 F** — unchanged, cell for cell |
+> | `test_sfpu_binary.py` | 445 p · 552 s · 9 xf · 16 XP · 0 F (`-k "not bcast"`) | **1009 p · 844 s · 9 xf · 16 XP · 0 F — full suite, `bcast` included** |
+> | `test_sfpu_reduce.py` | 1074 p · 548 s · 0 F | **1074 p · 548 s · 0 F** — unchanged |
+> | `test_sfpu_binop_scalar.py` | 67 p · 73 s · 0 F | **67 p · 73 s · 0 F** — unchanged |
+> | `test_sfpu_ternary.py` | 39 p · 25 s · 0 F | **39 p · 25 s · 0 F** — unchanged |
+> | `test_sfpu_domains.py` (host) | 120 / 111 (§1 and §7 disagreed) | **126 passed** — both now say so |
+>
+> **Revision 17's `bcast` caveat is resolved, and its hazard is real.** That revision reported the
+> binary suite as `-k "not bcast"` because a full run produced 601 `TENSIX TIMED OUT` failures in
+> `test_sfpu_binary_bcast` at `Bfp8_b`, and warned against assuming the suite was green. The full suite
+> is now measured green — 1009 passed, `bcast` included, **0 timeouts**, twice.
+>
+> **The wedge reproduced once here, and a reset clears it.** One consumer run produced 396
+> `TENSIX TIMED OUT` failures with an identical frozen `Brisc Counter` across all of them — one hang
+> partway through, everything after it cascading, not 396 broken variants. `tt-smi -r` cleared it and
+> the next two runs were identical at 20-then-0 failures. So: **seen twice on two boards, transient,
+> and a reset is the remedy** — still not worth filing without a repro, but do not read a timeout
+> cascade as a coverage result. Two separate traps sit next to it: a consumer run against a *missing*
+> ELF also fails every variant (`/tmp/tt-llk-build/shared/` had been cleaned between phases, giving
+> 1009 identical failures with `0` timeouts), and a stale `ttexalens` fails the whole suite at
+> collection. All three look like broken code and none is.
+>
+> **Blackhole is green at this head**, which closes revision 17's "unverified at HEAD" caveat on the
+> Blackhole row. Per-suite counts were not captured into this revision, so the p300a table below is
+> still the last numeric Blackhole record rather than a current one.
+>
+> **The binary xfail count confirms revision 17's own correction on silicon.** It removed 24 binary
+> cells — the `both_zero`/`nan_golden` classes of `div`, `xlogy`, `fmod` and `remainder`, which were the
+> pack path rather than a divergence — predicting 33 → 9. Measured: **9**.
+>
+> **Three review rounds landed between the revisions**, and the findings are §5.14–§5.16. Two are
+> corrections to work this document already recorded as done, which is the pattern worth noticing: the
+> NaN-sign scope was wrong three times in a row (§5.14), and the total order was modelled with the two
+> zeros tied where the ISA puts `-0` strictly below `+0` (§5.15). Neither was catchable by the suite —
+> the first because host tests covered only the ops the author thought of, the second because
+> `passed_test` cannot see a zero's sign at all.
+>
 > ### Revision 17 — cat B reaches the binary and reduce families, and the total order turns out to be *lost* on six ops
 >
 > Implemented in `1430f442ba3` on `ldjurovic/sfpu_edge_cases_phase_3` and measured on a **Wormhole
@@ -350,7 +394,7 @@ All figures re-derived from the tree on 2026-08-12 (see §7 for the commands).
 | Cat B for the reduce family | **6 classes × 4 pools × 2 ops × 2 formats = 96 variants** (`test_float_reduce_specials`), where a special reaches the output *through the fold* (§4.8) |
 | `(format, dest_acc)` triples that can carry specials | 7 cells of 50, **re-confirmed on Wormhole** (250 variants, 85 failing); **3 of those 7 reachable and confirmed on Blackhole**. Carrying a `-0.0` is a strictly narrower gate — see §5.2 |
 | Ops diverging from their golden at a driven edge | **8 ops over 46 cells** — 7 unary over 24 (`Sign` 2, `Heaviside` 2, `RsqrtCompat` 8, `Erfinv` 2, `Reciprocal` 6, `Sqrt` 2, `Rsqrt` 2) and 1 binary over 22 (`SfpuElwpow`'s `0**0` 6, plus the 16 arch-gated signed-zero cells). **Revision 17 removed 24 binary cells** — the `both_zero`/`nan_golden` classes of `div`, `xlogy`, `fmod` and `remainder`, which were the pack path rather than a divergence (§5.3, §5.13). Revisions 12–16 recorded "12 ops over 70" |
-| Host-side guards over the gates and metadata | **120** tests (`test_sfpu_domains.py`) |
+| Host-side guards over the gates and metadata | **126** tests (`test_sfpu_domains.py`) |
 
 **Category status:** A ✅ closed for every op that has a boundary — unary, **binary** (`SfpuAtan2`'s
 branch point was the last unregistered one) **and ternary** · B 🟡 live for 67 of the 97 unary ops, all
@@ -1548,6 +1592,110 @@ pass 8/8 on both arches, so there is no failure to chase; the gap is that the *r
 been re-read against the guard question. Worth one pass over those two kernels before the next op is
 enrolled on the order.
 
+### 5.14 New: the NaN-sign scope was wrong three times, each time one level too narrow
+
+§5.10 established the fact — Wormhole's SFPMAD leaves an emitted NaN's sign unspecified, Blackhole makes
+it canonical. Closing it took three passes, and **the shape of the mistake is the finding**: each pass
+scoped the excusal by the wrong thing, and each was caught by a reviewer rather than by a test.
+
+1. **Per class.** Excusing every non-finite lane in an edge class was sound while the classes were
+   `both_zero` and `nan_golden`, which are classified by what the *golden* answers and so are invented by
+   construction. `specials_in` is classified by an *operand* being non-finite, so it is the first class
+   whose lanes are a mixture: `inf - inf` shares a class with `0 - (-inf)`, and one unspecified sign took
+   ten IEEE-specified ones with it — **122 Wormhole lanes** across `SfpuElwadd`, `SfpuElwmul`,
+   `SfpuElwrsub` and `SfpuElwsub` stopped having their sign checked.
+2. **Per operand.** The fix was a per-lane mask keyed on "was an operand already NaN?" — forwarded NaNs
+   keep their sign, invented ones lose it. But `SFPMAD.md` scopes its wording to *"if a NaN is
+   emitted"* and draws no line between one the instruction computed and one that arrived on an input. On
+   Wormhole *any* NaN out of SFPMAD has an unspecified sign; on Blackhole any NaN out of it is canonical.
+   So the operand was never the right key.
+3. **Per instruction.** The mask is now keyed on the op, by **exclusion**: `binary_max_min` is a bare
+   `SFPSWAP(VEC_MIN_MAX)` that *selects* an operand, so the NaN it returns is the datum it was handed and
+   its sign is real; everything else computes its result and loses it.
+
+**An allowlist was tried at step 3 and was wrong in a way host tests could not see.** Listing the four
+elementwise arithmetic ops silently zeroed the mask for the composition ops — `div`, `fmod`,
+`remainder`, `xlogy`, `pow`, `atan2` — whose NaN is as computed as `add`'s. Because revision 17 had
+*deleted* the `both_zero`/`nan_golden` xfails for exactly those ops on the premise that the gate would
+excuse them, removing the excusal turned **20 Wormhole variants red**. The host test passed throughout,
+because it asserted only the four ops the author had listed.
+
+**An exclusion list of the exceptions survives a new op joining; an allowlist of the cases you thought
+of does not.** That is the third time this document records the same lesson, and the first time it cost
+a red suite.
+
+The reduce family needed the same split in the other direction: `Sum` and `Average` accumulate, so their
+NaN comes out of SFPMAD, while `Max`/`Min` select a lane — `Max` over a column holding `+NaN` returns
+that operand and its sign is a real datum, so relaxing it there would accept a `-inf` and hide a broken
+selection.
+
+**And the reduce path re-ran §5.7's defect.** It returns before the element-wise canonicalisation, so it
+handed `torch.sum`'s NaN straight to the pack model — and `torch.sum([+inf, -inf, ...])` returns a
+**negatively** signed NaN, which the substitution turns into `-inf` where Blackhole emits `0x7fc00000`
+and packs `+inf`. A Blackhole-only failure, invisible on Wormhole behind the gate, and the third
+appearance of "the golden exported the host libm's arbitrary NaN sign". **Every path reaching
+`convert_nan_to_inf` without canonicalising first is a latent fourth.**
+
+### 5.15 New: the total order ranks `-0` below `+0`, and the model had them tied
+
+§5.13 establishes which ops the documented total order actually reaches. The *model* of that order was
+still wrong at one pair. `SignMagIsSmaller()` is
+
+```c
+C ^= (uint32_t)((int32_t)C >> 30) >> 1;   // mask = 0x7FFFFFFF if the sign bit is set, else 0
+return (int32_t)C < (int32_t)D;
+```
+
+so a negative of magnitude `m` ranks at `-1 - m`, putting `-0.0` at **-1**, strictly below `+0.0` at 0 —
+exactly as the documented chain `-NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN` shows.
+`sfpu_total_order_key` had written the remap as `-(bits & 0x7FFFFFFF)`, which sends `-0.0` to 0 and
+**ties the two zeros**; the docstring then asserted the tie as though the ISA said it.
+
+The two keys are order-isomorphic everywhere else (`-1 - m` and `-m` are both monotone in `m`), so the
+blast radius was exactly that pair: `sfpu_min`/`sfpu_max` were **operand-order-dependent** for signed
+zeros, returning whichever came first. **No device test could catch it** — `passed_test` cannot see a
+zero's sign, which is §5.2's limitation surfacing a third time. It is now pinned host-side against an
+independently written remap.
+
+The general point: this suite can model a documented order correctly and still get one pair wrong,
+because the pair it got wrong is the one its comparator is blind to. **Where the comparator cannot see a
+distinction, the model of that distinction has to be checked host-side or not claimed.**
+
+### 5.16 New: `Hardtanh` is not `Clamp`, and both goldens said it was
+
+`SfpuType::hardtanh` dispatches to `_calculate_hardtanh_` — `val += p0; v_if (val < 0) val = 0;
+val += p1; v_if (val >= 0) val = 0; val += p2`, bf16 constants `1.0 / -2.0 / 1.0` — where `Clamp`
+dispatches to `_calculate_clamp_`, `v_if (val < min) / v_elseif (val >= max)` with fp16 `min`/`max`.
+Different function, different constants, different formats, and different comparison operands: hardtanh
+compares against the constant `0.0f`, clamp against min/max vectors.
+
+`SPECIALS_READY_OPS[Hardtanh]` read *"Same clamp as Clamp, same dispatch constants"* — wrong twice over
+— and the golden's own comment agreed with it. The two do coincide on the finite range and at every
+special this op is enrolled for, so modelling hardtanh as a clamp is sound, but **by arithmetic rather
+than by construction**. The agreement is now pinned against a model of the real chain instead of
+asserted in prose.
+
+The live trap sat next to it: the `sfpu_clamp` docstring described two `v_if`s with `> max` where the
+kernel is `v_if` / `v_elseif` with `>=`. Equivalent at these bounds — and tightening it to a strict `>`
+to match the comment would have moved `Hardtanh` at `+NaN` from `1.0` to `NaN`, because `_hardtanh`'s
+golden calls `sfpu_clamp` even though its kernel is a different one.
+
+### 5.17 New: a relative-error tolerance is not per format, and treating it as one broke 15 variants
+
+`SfpuXlogy` carries a per-output-format tolerance because its error is **absolute** (`x · abs_err(ln y)`),
+so the atol it needs tracks output quantization: 0.6 at Float16_b, 0.14 at Float32, 0.12 at Float16.
+`SfpuElwpow`'s is **relative** — measured ~flat in the operands, 10–13% across `b · ln a` = 3.30 to
+11.09 — so it does *not* scale with output precision.
+
+Reading a flat `(None, 0.15)` on pow as a per-format bug and splitting it the way xlogy is split
+**failed all 15 of pow's `->Float16` variants**: 0.15 is the op's requirement on every float column, not
+a loosening of Float16's 0.05 default. The half that was a real bug is `->Bfp8_b`, whose default rtol is
+**0.2**, so a flat 0.15 *tightened* it — and at 0.2 a lane that misses the tolerance can still be caught
+by `passed_test`'s block-lattice fallback. Bfp8_b now falls through; the three float columns are listed.
+
+**Before per-formatting a tolerance, ask whether the error is absolute or relative.** Only the first kind
+is a property of the output format.
+
 ### 5.6 What to raise with kernel owners
 
 Written up in full, with measured tables and a reproduce command, in `KERNEL_OWNER_QUESTIONS.md`.
@@ -1688,7 +1836,7 @@ print('binary cat B ready', len(BINARY_SPECIALS_READY_OPS),
 # (Revisions before 12 said 19 / ... / 0 here; revisions 12-15 said 65, which was the
 #  revision-12 figure of 60 unary + 5 scalar left un-regenerated while §1's own table
 #  had moved to 67 + 5. Re-run this rather than trusting either number.)
-python3 -m pytest test_sfpu_domains.py -q --noconftest   # expect 111 passed
+python3 -m pytest test_sfpu_domains.py -q --noconftest   # expect 126 passed
 ```
 
 Per-op rows are keyed on `MathOperation` and read `_OP_DOMAIN_REGISTRY`, `_OP_SINGULARITIES`,
@@ -1697,6 +1845,9 @@ being in the registry**, not by being listed in a test, so a new op appears in �
 regenerate rather than editing rows by hand.
 
 The `pytest --noconftest` above is needed because `conftest.py` imports `helpers/device.py`, which
-imports `tt-exalens`; `tests/requirements.txt` pins `0.3.29` and later releases moved
+imports `tt-exalens`; `tests/requirements.txt` pins `0.3.31` and **earlier** releases lack
 `CallstackEntry` and `ElfFile`, so a drifted venv fails at collection with what looks like a broken
-checkout. Host-side tests do not need the device at all.
+checkout. Host-side tests do not need the device at all. This bites in practice rather than in theory: a
+system interpreter carrying an older `ttexalens` fails every suite, device and host alike, and the fix is
+a venv built from `tests/requirements.txt` — plus `PYTHONNOUSERSITE=1` if `~/.local/lib` holds a
+shadowing `numpy`.

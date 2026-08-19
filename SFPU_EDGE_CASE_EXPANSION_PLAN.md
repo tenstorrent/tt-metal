@@ -7,7 +7,32 @@ audit, and the record of every finding to date
 **Scope:** Wormhole B0 and Blackhole. Quasar keeps its own inline stimulus definitions under
 `quasar/` and is tracked separately.
 
-**Revision 17 — 2026-08-13.** This document contains **only work that is not done**. Completed items
+**Revision 18 — 2026-08-19.** Two items are deleted as finished, and the audit's own revision 18 asked
+for exactly this: *"`SFPU_EDGE_CASE_EXPANSION_PLAN.md` §4 (the NaN sign), §5 and §6 (the nocov timeouts)
+all need the corrections above applied."*
+
+- **§4, the generated-NaN sign on Wormhole** (was item 1, and the only item with a deadline). Closed. It
+  is **gated, not repaired**: `nan_survives_to_l1()` + `GENERATED_NAN_SIGN_OPS` +
+  `specials_after_nan_sign_gate()` turn cat B off where Wormhole's SFPMAD leaves the sign unspecified,
+  Blackhole keeps every variant, and the reach is pinned host-side. Getting the *scope* right took three
+  passes and one red suite — audit §5.14, which is worth reading before touching a NaN sign again. The
+  one piece that survives is the comparator repair (accept **either** infinity for a substituted NaN),
+  still not done and still §4 below.
+- **§6, the non-coverage CI groups' timeouts.** Withdrawn: the premise was false. No group in
+  `llk_e2e_tests.yaml` passes `--coverage`, so the broad profile was already running nightly on both
+  arches and the companion groups were a duplicate. They are gone and the file is byte-identical to
+  `main`.
+
+**Both arches are green at `caf8701f973`** — Wormhole n300 measured suite by suite including the `bcast`
+tests revision 17 had to exclude, Blackhole reported green at the same head. **Nothing on this list is a
+fire any more**, so the ordering below is by value rather than urgency.
+
+**Three small unblocked items now exist that did not at revision 17** — §10. `SfpuIsclose` is the last
+piece of unblocked cat-B work in any family; `ReduceScalar` has a golden and a registry entry that no
+test can reach; and whether to widen `GENERATED_NAN_SIGN_OPS` is an open judgement call.
+
+**Revision 17's text follows, with §4 and §6 retired in place.** This document contains **only work that
+is not done**. Completed items
 are deleted rather than ticked off, because their results live in two places that cannot drift from the
 code: the code itself, and the coverage audit. For what a finished item established, read the audit —
 §5 has the findings, §4 has the per-op state.
@@ -21,18 +46,12 @@ one verdict per cell; and the total order holds, so the seven enrolled goldens n
 Earlier revisions deleted cat E, the scalar tensor-operand edges, the CI gap and the cat-B tranches the
 same way. What survived from all of it is not history but advice, and it is in §8.
 
-**But the same run found something, and it is now the most urgent item here.** Driving the edge sweep on
-Wormhole for the first time fails **49 of 752 variants across 10 ops**, all one cause: the sign of a
-NaN the kernel generates. `SFPMAD.md` documents that sign as canonical-positive on Blackhole and
-**explicitly unspecified on Wormhole**, so it is golden work — see §4, which now holds that instead of
-the finished re-measurement. It matters on a schedule rather than eventually: `SPECIALS_READY_OPS` is
-empty on `main`, so no NaN is injected there today, and **this branch's enrolment is what turns the
-Wormhole e2e groups red.**
-
-**Of the rest, everything unblocked is done and what remains is genuinely other people's.** 67 of the 97
-unary ops are enrolled. Of the 30 still outside, **all 30 wait on the two questions in §3 or on a
-harness** — there is no cat-B op left that this document could simply fix. Beyond §4, what is actionable
-here is cat F (large, unblocked) and one CI number to tune after the next nightly.
+**Of the cat-B work, everything unblocked is done in the unary family and nearly done in the binary
+one.** 67 of the 97 unary ops are enrolled, and all 30 outside wait on §3's questions or on a harness.
+The binary family is newer: 12 of 21 enrolled, and of the 9 outside, 6 fold into §3's first question, 1
+into its third, and `SfpuLogsigmoid` is not a binary op in the sense the probe assumes — leaving
+`SfpuIsclose` as the single piece of unblocked cat-B work anywhere. Reduce is 2 of 3, with `ReduceScalar`
+blocked on a C++ source branch that does not exist.
 
 ---
 
@@ -40,12 +59,12 @@ here is cat F (large, unblocked) and one CI number to tune after the next nightl
 
 | # | Item | Blocked on | Size | Where |
 |---|---|---|---|---|
-| 1 | **The generated-NaN sign on Wormhole** — 49 red edge variants across 10 ops, one shared comparator/cast fix | nothing | one shared change + a both-arch sweep | §4 |
-| 2 | **Two questions for kernel owners** — approximation contract, `RsqrtCompat(0)` (+ `SFPSETCC`/`NaN`) | judgement, not code | drafted, need sending | §3 |
-| 3 | **Cat B, the rest** — 26 ops blocked on item 2's answers | see §2 | small, once answered | §2 |
+| 1 | **Two questions for kernel owners** — approximation contract, `RsqrtCompat(0)` (+ `SFPSETCC`/`NaN`) | judgement, not code | drafted, need sending | §3 |
+| 2 | **Three small unblocked items** — `SfpuIsclose` read-back, `ReduceScalar`'s missing source branch, widening `GENERATED_NAN_SIGN_OPS` | nothing | small each | §10 |
+| 3 | **Cat B, the rest** — 30 unary + 7 binary, all blocked on item 1's answers | see §2 | small, once answered | §2 |
 | 4 | **Re-derive the two Wormhole arch gates** — each XPASSes on Wormhole, so each asserts nothing on either arch | a second Wormhole board (9.1); one bitwise compare (9.2) | small each | §9 |
 | 5 | **Cat F** — harnesses for 11 kernels with no enum entry | new C++ source + golden each | large, per kernel | §5 |
-| 6 | **Tune the new non-coverage CI groups' timeouts** | one nightly run's data | one YAML edit | §6 |
+| 6 | **The comparator repair** — accept either infinity for a NaN the pack path substituted, keeping the sign assertion for `Neg`/`Abs`/`Identity` | nothing | one change to `convert_nan_to_inf`'s contract | §4 |
 
 **Start with item 1**, and not because it is the most interesting: it is the only item with a deadline.
 The 49 failures are invisible on `main` — `SPECIALS_READY_OPS` is empty there, so nothing injects a NaN —
@@ -232,54 +251,25 @@ where it diverges, so there is no kernel contract to question. Do not re-file it
 
 ---
 
-## 4. The generated-NaN sign on Wormhole — 49 red variants, one fix
+## 4. ~~The generated-NaN sign on Wormhole~~ — gated; the comparator repair survives
 
-Measured on a Wormhole n300; the full record, with bit patterns and ISA quotations, is
-[WORMHOLE_MEASUREMENT_RESULTS.md](WORMHOLE_MEASUREMENT_RESULTS.md) §4.
+Retired in place, keeping the number because §7, §8 and §9 refer to it and because what it settled is
+load-bearing for anything touching a NaN sign again.
 
-```
-test_eltwise_unary_sfpu_edges, Wormhole:  475 passed · 198 skipped · 49 failed · 30 xfailed · 0 xpassed
-```
+The 49 red Wormhole variants are gone. `SFPMAD.md` makes the emitted sign canonical on Blackhole and
+explicitly unspecified on Wormhole, so the kernels were in spec and the *golden* was asserting a sign
+the ISA declines to promise. A **skip** and not an xfail, because "might or might not be set" makes an
+xfail a coin-flip gate. Audit §5.10 has the measurement, §5.14 the three passes it took to scope, and
+§5.14 is the one to read first — the scope was wrong at the class level, then the operand level, and an
+allowlist at the third attempt turned 20 variants red because it silently dropped the composition ops.
 
-**Ten ops, one cause.** `Cos`, `Fmod`, `GeluAppx`, `Hardmish`, `Mish`, `Rsqrt`, `Silu`, `Sin`,
-`Softsign`, `Tan` — every one of them *generates* a NaN from the probe, and every failing cell is one
-where a NaN cannot survive as a NaN: the four format pairs at `dest_acc=No` (16-bit Dest) plus
-`Float32->Float16_b` at `dest_acc=Yes` (16-bit output pack). The divergence is always the same shape,
-`golden=+inf` against `hw=-inf`.
-
-**The ISA settles it, one sentence per arch.** `SFPMAD.md` — "if a NaN is emitted":
-
-| Blackhole | "it is always **the canonical NaN with bit pattern `0x7fc00000`**" |
-|---|---|
-| **Wormhole** | "the LSB of the mantissa is guaranteed to be set; other bits of the mantissa might or might not be set, and **the sign bit might or might not be set**" |
-
-`UnarySFPUGolden`'s canonicalisation rests on the sentence *"The SFPU emits a positive one"*, which is a
-documented Blackhole guarantee and explicitly unspecified on Wormhole. The conversion that makes the
-sign observable is documented too, and flagged: the packer's early conversion says "if the exponent is 8
-bits wide, NaN becomes infinity (**this is a potentially surprising behaviour**)", and `SFPSTORE`'s note
-adds "software is advised to avoid NaN inputs for this conversion" — with Blackhole alone carrying the
-clause "albeit canonical NaNs produced by arithmetic instructions do not suffer any truncation".
-
-**So the fix is in the comparator, not in ten goldens and not in an xfail.** Where a golden `NaN` is
-turned into `±inf` by a Dest write or a pack, accept **either** infinity; keep asserting the sign only
-for `_NAN_SIGN_TRANSPARENT_OPS` (`Neg`, `Abs`, `Identity`), where the kernel *moves* the sign bit — which
-the ISA backs directly: `SFPABS`'s summary is "-NaN is left as -NaN rather than becoming +NaN".
-
-**Do not arch-key the sign instead.** It is the tempting shape — measure Wormhole's sign per op and
-tabulate it — and the ISA contradicts it in advance: a bit that "might or might not be set" is not a
-fact, and `Cos(+inf)` already emits a positive NaN at a 32-bit Dest and a sign-set one at a 16-bit Dest.
-That table would be §8's permanent, plausible-looking lie, with an ISA sentence against it.
-
-**Acceptance.** The 49 go green on Wormhole with no new xfail; the Blackhole baseline is unchanged
-variant for variant (this touches shared machinery, so §8's diff-the-whole-op-set rule is not optional
-here); `0 xpassed` on both arches. Drive it as one sweep per §2.3, not op by op.
-
-**One residue it does not cover:** `Tan(NaN) -> 0.0` on the 16-bit-Dest path — a finite zero, not a
-substituted infinity, so neither the `SFPMAD` sentence nor the pack path explains it. `Tan` at
-`Float32->Float16_b`/`dest_acc=Yes` returns a NaN for the same probe, so the `0.0` belongs to the
-16-bit-Dest path specifically. Measure it before deciding whether it is golden work too.
-
----
+**What is left is the repair, and it is item 6.** The gate stops the golden asserting what it cannot
+know; it does not restore the assertion in the weaker form the ISA *does* support — "an infinity of
+either sign". That is a change to `convert_nan_to_inf`'s contract rather than to the gate, and it has to
+keep the sign assertion for the ops that genuinely **move** the sign bit (`Neg`, `Abs`, `Identity` —
+`SFPABS`'s summary says "-NaN is left as -NaN rather than becoming +NaN"). Until it lands, every gated
+cell is a coverage loss rather than a closed item, and `test_sfpu_domains` pins the reach at 50 unary +
+1 scalar so it cannot widen unnoticed.
 
 ## 5. Cat F — the 11 kernels with no `MathOperation` entry
 
@@ -313,26 +303,24 @@ kernel accordingly, and expect the first one to pay for the shape that the rest 
 
 ---
 
-## 6. Tune the new non-coverage CI groups' timeouts
+## 6. ~~Tune the non-coverage CI groups' timeouts~~ — withdrawn, the premise was false
 
-The broad unary profile used to run in no automated job at all: every LLK python job either
-excluded the `nightly` marker or ran with coverage, and coverage skips `BROAD_SWEEP_OPS`
-wholesale. `llk_e2e_tests.yaml` now carries non-coverage companion groups (`split_group` 6–10,
-`llk_e2e_*_nocov`) that run the same tests without `--coverage`, so it executes.
+This item existed because the broad unary profile was believed to run in no automated job: llk-e2e was
+read as running under coverage, and `_skip_coverage_unsupported` drops every `BROAD_SWEEP_OPS` variant
+when it does. **No group in `llk_e2e_tests.yaml` passes `--coverage`** — all four carry
+`coverage: false`, `WITH_COVERAGE` is set solely by that CLI option, and `llk-e2e-impl.yaml` runs
+`matrix.test-group.cmd` verbatim. The skip never fires there, so the broad profile was already running
+nightly on both arches and the companion groups were a duplicate rather than new coverage. They are
+withdrawn and `tests/pipeline_reorg/llk_e2e_tests.yaml` is byte-identical to `main`.
 
-**What is left is one number per group.** Their timeouts were copied from the instrumented
-groups — 38 min on `wh_n150_civ2`, 55 on `bh_p150b_civ2` — which is a starting point, not a
-measurement: a non-coverage run has more variants to execute but no instrumentation overhead.
-After the first nightly, read the actual durations and set them. Budget is not the constraint
-(`verify_time_budget.py` allows 1800 min per SKU for team `llk`; this took `wh_n150_civ2` to
-380 and `bh_p150b_civ2` to 550), so err high until there is data.
+**What is left is a number to watch, not work to do.** The variants land inside the existing groups'
+`timeout: 38`, whose wall-clock is unmeasured. For scale, measured serially on a Wormhole n300:
+`test_sfpu_unary.py` runs its 6646 variants in **13m22s** of consumer time after a 2m38s producer, and
+the nightly groups run `-n auto --dist=worksteal`.
 
-**Do not re-cite tt-llk#1435 for the coverage skip.** That issue is about test *ordering*, and
-its one mention of coverage is an observation of the skip's effect rather than a reason for it —
-the citation was circular and has been removed. The actual rationale for excluding the broad
-profile from the instrumented run is recorded nowhere; if you find out, write it down.
-
----
+**Do not re-cite tt-llk#1435 for the coverage skip.** That issue is about test *ordering*, and its one
+mention of coverage is an observation of the skip's effect rather than a reason for it. The citation was
+circular and has been removed. The real rationale is recorded nowhere; if you find out, write it down.
 
 ## 7. How to verify your work
 
@@ -341,18 +329,20 @@ hardware:
 
 ```bash
 cd tt_metal/tt-llk/tests/python_tests
-python3 -m pytest test_sfpu_domains.py -q --noconftest      # 107 passed
+python3 -m pytest test_sfpu_domains.py -q --noconftest      # 126 passed
 python3 -c "
 import sys; sys.path.insert(0,'.')
 from helpers.sfpu_domains import (_OP_SINGULARITIES, _OP_EDGE_POINTS, sfpu_unary_ops,
                                   edge_spec, SPECIALS_READY_OPS)
-from helpers.llk_params import DataFormat as F
+from helpers.format_config import DataFormat as F
 u = sorted(sfpu_unary_ops(), key=lambda o: o.name)
 e = [o for o in u if edge_spec(o, F.Float32, F.Float32) is not None]
 print(len(_OP_SINGULARITIES), len(_OP_EDGE_POINTS), len(u), len(e), len(SPECIALS_READY_OPS))
 "
-# 21 43 97 50 72 — the last number counts the 5 scalar binops too, so it runs
-#                  ahead of the 67 *unary* ops enrolled; bump it as ops join
+# 22 43 97 50 72 — the 72 counts the 5 scalar binops too, so it runs ahead of the 67
+#                  *unary* ops enrolled; bump it as ops join. The 22 is 19 + 2 ternary
+#                  operand-C poles + SfpuAtan2's operand-B branch point.
+#                  DataFormat comes from helpers.format_config, not helpers.llk_params.
 ```
 
 **On hardware.** Never call `pytest` directly — use the repo's runner, which serialises silicon access
@@ -364,24 +354,32 @@ cd tt_metal/tt-llk
     --test test_sfpu_unary.py --k test_eltwise_unary_sfpu_edges
 ```
 
-Baselines for all four suites through the two-phase flow. Blackhole is green; Wormhole is green apart
-from §4's 49, which are the same cause in every suite that injects a NaN:
+**Wormhole n300 baseline, measured at `caf8701f973` (2026-08-19)** through the two-phase flow, every
+suite, `bcast` included. Both arches green; Blackhole is green at the same head and its per-suite counts
+were not captured, so the 2026-08-13 p300a figures below it are the last numeric Blackhole record rather
+than a current one.
 
-| Suite | Blackhole p300a | Wormhole n300 |
-|---|---|---|
-| `test_sfpu_unary.py` | 5027 passed · 1601 skipped · 18 xfailed · **0 xpassed** | 6034 passed · 533 skipped · **49 failed** · 30 xfailed · **6 xpassed** |
-| `test_sfpu_binary.py` | 739 passed · 531 skipped · 36 xfailed · **0 xpassed** | 865 passed · 392 skipped · 33 xfailed · **16 xpassed** |
-| `test_sfpu_ternary.py` | 39 passed · 25 skipped | 39 passed · 25 skipped |
-| `test_sfpu_binop_scalar.py` | 68 passed · 72 skipped | 67 passed · 72 skipped · **1 failed** |
+| Suite | Wormhole n300 |
+|---|---|
+| `test_sfpu_unary.py` | 6044 passed · 573 skipped · 23 xfailed · **6 xpassed** · 0 failed |
+| `test_sfpu_binary.py` | 1009 passed · 844 skipped · 9 xfailed · **16 xpassed** · 0 failed |
+| `test_sfpu_reduce.py` | 1074 passed · 548 skipped · 0 failed |
+| `test_sfpu_binop_scalar.py` | 67 passed · 73 skipped · 0 failed |
+| `test_sfpu_ternary.py` | 39 passed · 25 skipped · 0 failed |
 
-The 49 and the 1 are both §4 — the scalar failure is `ScalarRsub` at `Float16_b->Float16_b`/`dest_acc=No`,
-diverging `+inf` against `-inf` on the `NaN` probe, which is the same cause reaching a second suite. The
-6 and 16 xpassed are §9. The edge sweep alone, which is the part §4 is about:
-`475 passed · 198 skipped · 49 failed · 30 xfailed`.
+**The 6 and 16 xpassed are §9** and are the only non-green signal left. §4's 49 and the scalar 1 are gone.
 
-Note the skip counts, because they explain why this run found things: Wormhole collects the same 6652
-unary variants but skips 533 where Blackhole skips 1601, since `_skip_bh_unless_fp32` collapses the whole
-`dest_acc=No` row there. **Run both arches from now on** — every arch-keyed claim in this tree was written
+**Three ways to get a fake red, all of which look like broken code.** Learn these before trusting a
+failure: (1) a hung card gives `TENSIX TIMED OUT` on every remaining variant with a frozen `Brisc
+Counter` — one hang, not N failures; `tt-smi -r` clears it. (2) A consumer run against a missing ELF
+fails *every* variant identically with **0** timeouts — `/tmp/tt-llk-build/shared/` can be cleaned
+between the phases, so chain producer and consumer in one invocation. (3) A stale `ttexalens` fails the
+whole suite at collection.
+
+For the arch comparison, 2026-08-13 Blackhole p300a: `test_sfpu_unary.py` 5027 passed · 1601 skipped ·
+18 xfailed, `test_sfpu_binary.py` 739 passed · 531 skipped · 36 xfailed. Note the skip counts against
+Wormhole's — both collect the same unary variants, but `_skip_bh_unless_fp32` collapses the whole
+`dest_acc=No` row on Blackhole. **Run both arches from now on** — every arch-keyed claim in this tree was written
 when only one of them had ever been exercised, and the first Wormhole run turned up a 10-op family and two
 dead arch gates in an afternoon.
 
@@ -405,7 +403,7 @@ signal that the fix was aimed one level too low. Both defects in this section's 
 found exactly this way — a four-op enrolment regressed `Acosh`, `Cos`, `Sin` and `Exp`, none of which
 the change was about — and neither would have appeared in a run of the ops being enrolled.
 
-**Environment.** `tests/requirements.txt` pins `tt-exalens==0.3.29` and `run_test.sh` expects a venv at
+**Environment.** `tests/requirements.txt` pins `tt-exalens==0.3.31` and `run_test.sh` expects a venv at
 `tests/.venv`, which `setup_testing_env.sh` does **not** create — that script installs SFPI and
 pre-commit only. From a bare checkout the whole setup is three commands:
 
@@ -599,3 +597,77 @@ flushing and the gate's premise is wrong on its own terms. Until then, do not tr
 
 **Do not fold either of these into §4.** They share an arch and nothing else: §4 is a documented ISA
 difference with a known fix; these are undocumented disagreements with recorded measurements.
+
+---
+
+## 10. Three small unblocked items
+
+None existed at revision 17. All three are small and none is blocked on anyone; the first two close a
+coverage gap rather than tidying one.
+
+### 10.1 `SfpuIsclose` — one per-cell read-back
+
+**The last piece of unblocked cat-B work in any family.** 12 of the 21 float binary ops are enrolled; of
+the 9 outside, 6 answer together with §3 Q1, 1 with §3 Q3, and `SfpuLogsigmoid` is not a binary op in the
+sense the probe assumes — its operand B is read only on the `x > 4` branch and the golden ignores it, so a
+cat-B probe in B asserts nothing. That leaves this one.
+
+The situation is narrow and unusual: **both sides claim the same semantics and disagree anyway.**
+`ckernel_sfpu_isclose` documents `torch.isclose` including `EQUAL_NAN=false` — "any NaN input => result =
+0" — and bit-inspects for `±Inf` against `NaN`. The golden claims the same. They diverge at a non-finite
+operand.
+
+**How.** Drive the pairs by hand on one cell and read both answers back — a throwaway probe in the
+`test_sfpu_wh_*` style, not a suite addition. Enumerate `(±inf, ±inf)`, `(NaN, finite)`, `(finite, NaN)`,
+`(NaN, NaN)`, `(±inf, NaN)`; print kernel and golden side by side. The answer either fixes the golden and
+enrols the op, or it is a kernel finding for §3's list.
+
+**Do not adjust the golden first.** Fixing a golden until it matches is how a kernel divergence gets
+laundered into agreement — audit §5.8 is the case where that would have written seven permanent,
+plausible-looking lies about documented hardware.
+
+### 10.2 `ReduceScalar` cat B — add the missing source branch
+
+`ReduceColumn` and `ReduceRow` are enrolled and green (audit §4.8). `ReduceScalar` is not, and the reason
+is not semantics: **`sources/sfpu_reduce_test.cpp` branches on `ReduceDim::REDUCE_COL` and
+`ReduceDim::REDUCE_ROW` only**, so there is no scalar path to point a test at. Its golden and its registry
+entry both exist.
+
+This is cat E's shape before `SFPU_SHIFT_AMOUNT`: a C++ edit gates a Python gain, so do them in that
+order.
+
+1. Add the `REDUCE_SCALAR` branch alongside the two that are there. A scalar reduce folds the tile to one
+   element at output `(0, 0)` with the packer zeroing the rest; `test_reduce.py` already drives the op
+   through a different source, so the LLK call is not new work.
+2. Extend `test_float_reduce_specials`. Its parametrize is over `mathop`, so the op is one more entry —
+   but `_build_reduce_specials_tile` is **axis-aware** now and a scalar reduce has no axis. Give it its own
+   branch: every special can share one cell, because there is one output lane and nothing to isolate it
+   from. Simpler than either existing direction, not harder.
+3. `_run_float_reduce_specials` slices `[0]` or `[:, 0]` by direction; scalar wants `[0, 0]`.
+
+**What it buys.** `both_inf` most of all: a scalar `Sum` over a tile holding both infinities must be NaN,
+and it is the one fold where *every* element reaches the single output, so a special cannot be diluted.
+
+### 10.3 Widen `GENERATED_NAN_SIGN_OPS` to `GeluTanh` and `Xielu` — or record the decision not to
+
+**A judgement call with a cost, which is why it is last.** Raised twice by review, declined once, and the
+ISA reading strengthens it each time.
+
+Membership is by **measured disagreement**: ten unary ops plus `ScalarRsub` emit a NaN whose sign
+disagreed with the golden on one Wormhole board. `GeluTanh` and `Xielu` build a NaN through SFPMAD in the
+same `inf + (-inf)` shape as the gated `GeluAppx`, but read back raw they come out `0x7FC00001` — sign
+clear — where `Cos`, `Mish` and `Silu` give `0xFFC00001`. So they agree with the golden and are out.
+
+**For:** `SFPMAD.md` says the Wormhole sign "might or might not be set", so their passing is evidence
+rather than a guarantee, and a nightly gate resting on an explicitly unspecified bit can flake.
+**Against:** they pass today, and gating them trades real sign assertions on five cells each for a risk
+that has not materialised.
+
+**What makes it awkward is the cost, not the argument.** It widens a *measured* gate from 50 to 60 unary
+cells, which restates `test_nan_sign_gate_matches_the_measured_wormhole_failures`' pinned reach **and**
+every skip count in the PR description — so it wants a Wormhole re-run in the same pass, making it the
+natural companion to item 4 rather than a standalone edit.
+
+**If you do it:** add both, update the pinned 50 → 60 and the scalar 1, re-run `test_sfpu_unary.py` on
+Wormhole, restate the skip figures. **If you decide not to:** write the decision into the set's comment so
+it is not raised a third time.
