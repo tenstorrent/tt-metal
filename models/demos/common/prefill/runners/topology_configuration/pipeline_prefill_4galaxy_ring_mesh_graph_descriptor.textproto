@@ -1,0 +1,49 @@
+# RING 4-galaxy mesh graph descriptor for the D2D-socket pipeline prefill.
+#
+# Identical to the "connected" (chain) MGD but closes the loop with a 4th connection mesh 3 <-> 0, so
+# the logical inter-mesh degree histogram is {2:4} (a 4-cycle) matching the physically discovered ring
+# on c04/c05 ({2:4}). The chain MGD ({1:2,2:2}) fails TopologyMapper on a physical ring because its two
+# degree-1 endpoints have no degree-1 physical mesh to map onto. The runner's pipeline is still linear
+# (rank r -> r+1); the extra 3->0 fabric edge is unused capacity.
+#
+# Host order (mesh 0->1->2->3) must follow the physical ring: c04u08 -> c04u02 -> c05u02 -> c05u08.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    channels { count: 8 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
