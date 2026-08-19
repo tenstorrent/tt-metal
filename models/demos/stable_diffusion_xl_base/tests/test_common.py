@@ -54,7 +54,12 @@ def prepare_device(mesh_device, use_cfg_parallel):
         mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
 
 
-def create_tt_clip_text_encoders(pipeline, ttnn_device):
+def create_tt_clip_text_encoders(pipeline, ttnn_device, lora_enabled=False):
+    """Build the device CLIP encoders.
+
+    ``lora_enabled`` selects tt_dit's LoRA-capable linears so a text-encoder LoRA can be
+    fused in place on device. Off by default; the SDXL pipeline turns it on.
+    """
     ccl_manager = None
     if pipeline.text_encoder is not None:
         text_encoder_1 = pipeline.text_encoder
@@ -76,7 +81,12 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
         )
 
         tt_text_encoder = CLIPEncoder(
-            config_1, ttnn_device, ccl_manager, parallel_config_1, text_encoder_1.config.eos_token_id
+            config_1,
+            ttnn_device,
+            ccl_manager,
+            parallel_config_1,
+            text_encoder_1.config.eos_token_id,
+            lora_enabled=lora_enabled,
         )
         tt_text_encoder.load_torch_state_dict(text_encoder_1.state_dict())
     else:
@@ -102,7 +112,12 @@ def create_tt_clip_text_encoders(pipeline, ttnn_device):
     )
 
     tt_text_encoder_2 = CLIPEncoder(
-        config_2, ttnn_device, ccl_manager, parallel_config_2, text_encoder_2.config.eos_token_id
+        config_2,
+        ttnn_device,
+        ccl_manager,
+        parallel_config_2,
+        text_encoder_2.config.eos_token_id,
+        lora_enabled=lora_enabled,
     )
     tt_text_encoder_2.load_torch_state_dict(text_encoder_2.state_dict())
 

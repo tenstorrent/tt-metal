@@ -203,29 +203,26 @@ class TtSDXLPipeline(LightweightModule):
             or self._lora_weights_manager.is_fused
             or self._te_lora_weights_manager.is_fused
         ):
-            # Genuinely nothing loaded. Stay quiet when something is already fused: a
-            # text-encoder fuse strips the torch adapters, so has_lora_adapter() is
-            # False afterwards even though the LoRA is applied.
             logger.warning("No LoRA weights loaded. Please load LoRA weights with load_lora_weights() before fusing.")
 
         # The UNet manager's from_torch calls pass no mesh_mapper, so the replicate
-        # context must be established here. The text-encoder step runs inside it too:
-        # every from_torch on the encoder reload path passes mesh_mapper explicitly, so
-        # the ambient context cannot reach it (see models/tt_dit/utils/tensor.py).
+        # context must be established here. The text-encoder bind uploads its factors the
+        # same way, so it belongs inside the context too.
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
-            # Order matters: the text-encoder fuse strips the torch adapters once it has
-            # merged them, so the UNet deltas have to be read off first.
             self._lora_weights_manager.fuse_lora(lora_scale)
             self._te_lora_weights_manager.fuse(clip_scale)
 
     def load_lora_weights(self, lora_path):
-        # The snapshot has to be taken before anything can attach an adapter to the
-        # torch text encoders, so that it captures clean weights.
-        self._te_lora_weights_manager.ensure_base_snapshot()
         self._lora_weights_manager.load_lora_weights(lora_path)
-        # Read after the load so a rejected adapter (DoRA, unsupported ops) — which the
-        # UNet manager unloads again — correctly leaves no text-encoder components.
+        # Read after the load so a rejected adapter (DoRA, unsupported ops), which the
+        # UNet manager unloads again, correctly leaves no text-encoder components.
         self._te_lora_weights_manager.refresh_components()
+        if self._te_lora_weights_manager.affects_unsupported_ops():
+            logger.warning("LoRA weights affect unsupported text-encoder operations; TE LoRA not applied.")
+            self._te_lora_weights_manager.unload()
+            return
+        with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
+            self._te_lora_weights_manager.register_adapter()
 
     def unload_lora_weights(self):
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
@@ -240,17 +237,6 @@ class TtSDXLPipeline(LightweightModule):
             "text_encoder": bool(self._te_lora_weights_manager.is_fused),
             "skipped_reason": adapter_state["skipped_reason"],
         }
-
-    def _reload_tt_text_encoders(self):
-        # Registered with the LoRA weights manager as its text-encoder reload hook; it
-        # owns when this runs. Pushes the current torch text-encoder weights onto the
-        # device encoders. Encoders run eagerly (not in a captured trace), so re-loading
-        # weights is safe; program cache keys on shapes, which are unchanged.
-        if self.tt_text_encoder is not None:
-            self.tt_text_encoder.deallocate_weights()
-            self.tt_text_encoder.load_torch_state_dict(self.torch_pipeline.text_encoder.state_dict())
-        self.tt_text_encoder_2.deallocate_weights()
-        self.tt_text_encoder_2.load_torch_state_dict(self.torch_pipeline.text_encoder_2.state_dict())
 
     def set_num_inference_steps(self, num_inference_steps: int):
         # When changing num_inference_steps, the timesteps and latents need to be recreated.
@@ -886,22 +872,19 @@ class TtSDXLPipeline(LightweightModule):
 
         # 4. Load encoders
         if pipeline_config.encoders_on_device:
+            # lora_enabled swaps in tt_dit's LoRA-capable linears so a text-encoder LoRA
+            # can be fused in place on device, the way the UNet already is.
             self.tt_text_encoder, self.tt_text_encoder_2 = create_tt_clip_text_encoders(
-                self.torch_pipeline, self.ttnn_device
+                self.torch_pipeline, self.ttnn_device, lora_enabled=True
             )
             # The manager cannot be handed these at construction: the encoders only
-            # exist here. Not registering (the host-encoder branch below) disables the
-            # TE LoRA path.
-            self._te_lora_weights_manager.register_reload(
-                self._reload_tt_text_encoders,
-                components=[
-                    name
-                    for name, tt_encoder in (
-                        ("text_encoder", self.tt_text_encoder),
-                        ("text_encoder_2", self.tt_text_encoder_2),
-                    )
-                    if tt_encoder is not None
-                ],
+            # exist here. Registering nothing (the host-encoder branch below) disables
+            # the TE LoRA path.
+            self._te_lora_weights_manager.register_encoders(
+                {
+                    "text_encoder": self.tt_text_encoder,
+                    "text_encoder_2": self.tt_text_encoder_2,
+                }
             )
         else:
             self.tt_text_encoder, self.tt_text_encoder_2 = None, None
