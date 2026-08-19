@@ -1,0 +1,275 @@
+2026-08-19 02:13:00.839 | INFO     | __main__:main:189 - Setting profiler artifacts folder to models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_decoder/tracy/candidate_decode_l1_sparse_inputs_exact_nnz_raw
+2026-08-19 02:13:00.840 | WARNING  | __main__:main:334 - Skipping runtime analysis (C++ post-processing) due to conflicting options (--no-runtime-analysis). Falling back to legacy Python processing.
+2026-08-19 02:13:00.840 | INFO     | __main__:main:395 - Using port 8086
+2026-08-19 02:13:00.840 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-19 02:13:00.841 | INFO     | tracy:run_report_setup:112 - Capture command: ('/localdev/vkovacevic/tt-metal/build/tools/profiler/bin/tracy-capture -o models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_decoder/tracy/candidate_decode_l1_sparse_inputs_exact_nnz_raw/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-19 02:13:00.846 | INFO     | __main__:main:413 - Test process started
+2026-08-19 02:13:01.539 | INFO     | __main__:main:189 - Setting profiler artifacts folder to models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_decoder/tracy/candidate_decode_l1_sparse_inputs_exact_nnz_raw
+2026-08-19 02:13:01.540 | WARNING  | __main__:main:334 - Skipping runtime analysis (C++ post-processing) due to conflicting options (--no-runtime-analysis). Falling back to legacy Python processing.
+2026-08-19 02:13:02.753 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /localdev/vkovacevic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/vkovacevic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, cov-7.0.0, benchmark-5.2.3, anyio-4.14.2, split-0.11.0, dash-2.15.0, github-actions-annotate-failures-0.3.0
+timeout: 600.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 46 items / 42 deselected / 4 selected
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_linear_prefill[device_params0] 2026-08-19 02:13:04.762 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-19 02:13:04.762 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-19 02:13:04.762 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-19 02:13:04.762 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-19 02:13:04.764 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-19 02:13:04.764 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-19 02:13:04.767 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-19 02:13:04.990 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-19 02:13:04.990 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-19 02:13:04.990 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-19 02:13:04.990 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-19 02:13:04.992 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-19 02:13:05.150 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-19 02:13:05.268 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 02:13:05.268 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 02:13:05.268 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 02:13:05.268 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 02:13:05.268 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 02:13:05.268 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 02:13:05.268 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 02:13:05.268 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 02:13:05.268 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 02:13:05.268 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 02:13:05.268 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 02:13:05.268 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 02:13:05.268 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 02:13:05.268 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 02:13:05.308 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 02:13:05.340 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-08-19 02:13:05.383 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931937_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 02:13:05.962 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349989 GHz, device_time_at_sync=34178339032934 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 02:13:19.389 | INFO     | tracy:signpost:49 - OPT_LINEAR_PREFILL
+2026-08-19 02:13:19.414 | INFO     | tracy:signpost:49 - OPT_LINEAR_PREFILL_END
+OPT_LINEAR_PREFILL wall_ms=24.808 output_shape=(1, 1, 5, 2048)
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_full_prefill[device_params0] 2026-08-19 02:13:21.108 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 02:13:21.109 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 02:13:21.161 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 02:13:21.189 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+Building brisc, compile step:
+cd /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_bmm_tile_layout_in0_sender_padding/15555221556293265471/brisc/ && /localdev/vkovacevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/vkovacevic/tt-metal/ -I/localdev/vkovacevic/tt-metal/ttnn -I/localdev/vkovacevic/tt-metal/ttnn/cpp -I/localdev/vkovacevic/tt-metal/tt_metal -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/common -I/localdev/vkovacevic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/vkovacevic/tt-metal/tt_metal/api/ -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_bmm_tile_layout_in0_sender_padding/15555221556293265471/brisc/brisck.1727204472281249822.o /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_bmm_tile_layout_in0_sender_padding/15555221556293265471/brisc/brisck.1727204472281249822.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in0_sender_padding/15555221556293265471/\"" -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,64,2,64,2,1,2,0,0,0,0,0,32,1,1,0,1,31,31,64,1,1,0,256,512,1,0,0,0,2048,2,512,8 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",6}, {\"cb_in0_sharded\",2}, {\"cb_in0\",0}, "
+In file included from /localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+cd /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_bmm_tile_layout_in0_sender_padding/8319641851727283642/brisc/ && /localdev/vkovacevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/vkovacevic/tt-metal/ -I/localdev/vkovacevic/tt-metal/ttnn -I/localdev/vkovacevic/tt-metal/ttnn/cpp -I/localdev/vkovacevic/tt-metal/tt_metal -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/common -I/localdev/vkovacevic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/vkovacevic/tt-metal/tt_metal/api/ -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_bmm_tile_layout_in0_sender_padding/8319641851727283642/brisc/brisck.1727204472281249822.o /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_bmm_tile_layout_in0_sender_padding/8319641851727283642/brisc/brisck.1727204472281249822.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in0_sender_padding/8319641851727283642/\"" -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,16,2,16,2,1,2,0,0,0,0,0,8,1,1,0,1,63,63,16,1,1,0,256,512,0,0,0,0,2048,2,512,8 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",6}, {\"cb_in0_sharded\",2}, {\"cb_in0\",0}, "
+In file included from /localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-08-19 02:13:35.518 | INFO     | tracy:signpost:49 - OPT_FULL_PREFILL
+2026-08-19 02:13:35.532 | INFO     | tracy:signpost:49 - OPT_FULL_PREFILL_END
+OPT_FULL_PREFILL wall_ms=13.454 output_shape=(1, 1, 33, 2048)
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_linear_decode[device_params0] 2026-08-19 02:13:36.082 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 02:13:36.082 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 02:13:36.125 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 02:13:36.154 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+Building brisc, compile step:
+cd /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_bmm_tile_layout_in0_sender_padding/7127470248607199295/brisc/ && /localdev/vkovacevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/vkovacevic/tt-metal/ -I/localdev/vkovacevic/tt-metal/ttnn -I/localdev/vkovacevic/tt-metal/ttnn/cpp -I/localdev/vkovacevic/tt-metal/tt_metal -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/common -I/localdev/vkovacevic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/vkovacevic/tt-metal/tt_metal/api/ -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_bmm_tile_layout_in0_sender_padding/7127470248607199295/brisc/brisck.1727204472281249822.o /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_bmm_tile_layout_in0_sender_padding/7127470248607199295/brisc/brisck.1727204472281249822.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in0_sender_padding/7127470248607199295/\"" -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,64,2,64,2,1,2,0,0,0,0,0,32,1,1,0,1,31,31,64,1,1,0,256,512,1,0,0,0,2048,2,512,8 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",6}, {\"cb_in0_sharded\",2}, {\"cb_in0\",0}, "
+In file included from /localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+cd /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_bmm_tile_layout_in0_sender_padding/9732343769067178450/brisc/ && /localdev/vkovacevic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/vkovacevic/tt-metal/ -I/localdev/vkovacevic/tt-metal/ttnn -I/localdev/vkovacevic/tt-metal/ttnn/cpp -I/localdev/vkovacevic/tt-metal/tt_metal -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/common -I/localdev/vkovacevic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/vkovacevic/tt-metal/tt_metal/api/ -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/vkovacevic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/vkovacevic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/vkovacevic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_bmm_tile_layout_in0_sender_padding/9732343769067178450/brisc/brisck.1727204472281249822.o /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /localdev/vkovacevic/tt-metal-cache/tt-metal-cache8846000813376827529/kernels/reader_bmm_tile_layout_in0_sender_padding/9732343769067178450/brisc/brisck.1727204472281249822.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=240000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in0_sender_padding/9732343769067178450/\"" -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,16,2,16,2,1,2,0,0,0,0,0,8,1,1,0,1,63,63,16,1,1,0,256,512,0,0,0,0,2048,2,512,8 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",6}, {\"cb_in0_sharded\",2}, {\"cb_in0\",0}, "
+In file included from /localdev/vkovacevic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/vkovacevic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-08-19 02:13:50.156 | INFO     | tracy:signpost:49 - OPT_LINEAR_DECODE
+2026-08-19 02:13:50.158 | INFO     | tracy:signpost:49 - OPT_LINEAR_DECODE_END
+OPT_LINEAR_DECODE traced_wall_ms=1.693 output_shape=(1, 1, 1, 2048)
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_full_decode[device_params0] 2026-08-19 02:13:51.479 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 02:13:51.481 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 02:13:51.533 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 02:13:51.564 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-08-19 02:14:05.445 | INFO     | tracy:signpost:49 - OPT_FULL_DECODE
+2026-08-19 02:14:05.447 | INFO     | tracy:signpost:49 - OPT_FULL_DECODE_END
+OPT_FULL_DECODE traced_wall_ms=1.373 output_shape=(1, 1, 1, 2048)
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+14.30s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_full_prefill[device_params0]
+13.97s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_linear_decode[device_params0]
+13.84s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_full_decode[device_params0]
+13.44s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_linear_prefill[device_params0]
+1.68s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_linear_prefill[device_params0]
+1.31s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_linear_decode[device_params0]
+1.21s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_linear_prefill[device_params0]
+0.55s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_full_decode[device_params0]
+0.54s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_full_prefill[device_params0]
+0.13s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_full_decode[device_params0]
+0.12s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_full_prefill[device_params0]
+0.11s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_linear_decode[device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_linear_prefill[device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_full_prefill[device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_linear_decode[device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_perf_qwen36_optimized_full_decode[device_params0]
+=========== 4 passed, 42 deselected, 2 warnings in 62.58s (0:01:02) ============
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x7c7e04029908 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x7c7e0410dc98 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 34 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 303 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "UnregisterProgramRealtimeProfilerCallback"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "memory_config"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "create_submesh"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-19 02:14:07.751 | info     |    BuildKernels | JIT cache stats: 532/536 hits (99.3%) [532 cached, 1131 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-19 02:14:07.751 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-19 02:14:07.764 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-19 02:14:07.764 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-19 02:14:08.399 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-19 02:14:08.399 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-19 02:14:08.399 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 7:03:47
+Zones: 3,112,295
+Elapsed time: 1:06.3
+Saving trace... done!
+Trace size 26.73 MB (17.65% ratio)
+2026-08-19 02:14:08.777 | INFO     | __main__:main:452 - Copying /localdev/vkovacevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/vkovacevic/tt-metal/build/profiler/build_wasm/traces/python_2026_08_19_02_14_08.tracy
+2026-08-19 02:14:08.784 | INFO     | __main__:main:455 - Copied /localdev/vkovacevic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/vkovacevic/tt-metal/build/profiler/build_wasm/traces/python_2026_08_19_02_14_08.tracy
+2026-08-19 02:14:08.785 | INFO     | __main__:main:464 - embed.tracy -> traces/python_2026_08_19_02_14_08.tracy
+2026-08-19 02:14:08.785 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-19 02:14:08.785 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-19 02:14:08.785 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-19 02:14:09.897 | INFO     | tracy:generate_report:162 - Host side ops time report generated at models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_decoder/tracy/candidate_decode_l1_sparse_inputs_exact_nnz_raw/.logs/tracy_ops_times.csv
+2026-08-19 02:14:09.948 | INFO     | tracy:generate_report:173 - Host side ops data report generated at models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_decoder/tracy/candidate_decode_l1_sparse_inputs_exact_nnz_raw/.logs/tracy_ops_data.csv
+2026-08-19 02:14:09.948 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:345 - Importing ops logs
+/localdev/vkovacevic/tt-metal/tools/tracy/process_ops_logs.py:450: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-19 02:14:12.936 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-19 02:14:12.937 | INFO     | tracy.process_ops_logs:append_device_data:1009 - Appending device data
+2026-08-19 02:14:12.937 | WARNING  | tracy.process_ops_logs:append_device_data:1027 - Device perf report cpp_device_perf_report.csv not found in models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_decoder/tracy/candidate_decode_l1_sparse_inputs_exact_nnz_raw/.logs. Falling back to legacy device-log parsing via import_log_run_stats(); this will take longer.
+2026-08-19 02:14:22.475 | INFO     | tracy.process_device_log:core_to_device_timeseries:416 - Importing Data For Device Number : 0
+2026-08-19 02:15:17.214 | INFO     | tracy.process_ops_logs:generate_reports:1342 - OPs' perf analysis is finished! Generating reports ...
+2026-08-19 02:15:17.214 | INFO     | tracy.process_ops_logs:generate_reports:1360 - Copying runtime artifacts
+2026-08-19 02:15:17.288 | INFO     | tracy.process_ops_logs:generate_reports:1369 - Generating OPs CSV
+2026-08-19 02:15:18.023 | INFO     | tracy.process_ops_logs:generate_reports:1765 - OPs csv generated at: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_decoder/tracy/candidate_decode_l1_sparse_inputs_exact_nnz_raw/reports/2026_08_19_02_15_17/ops_perf_results_2026_08_19_02_15_17.csv

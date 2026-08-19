@@ -1,0 +1,139 @@
+2026-08-19 00:56:10.394 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /localdev/vkovacevic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/vkovacevic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, cov-7.0.0, benchmark-5.2.3, anyio-4.14.2, split-0.11.0, dash-2.15.0, github-actions-annotate-failures-0.3.0
+timeout: 900.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 25 items / 23 deselected / 2 selected
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_decode_dense_projection_dram_sharded[linear_qkvzba-device_params0] 2026-08-19 00:56:12.381 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-19 00:56:12.381 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-19 00:56:12.381 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-19 00:56:12.381 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-19 00:56:12.383 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-19 00:56:12.383 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-19 00:56:12.387 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-19 00:56:12.608 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-19 00:56:12.608 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-19 00:56:12.608 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-19 00:56:12.608 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-19 00:56:12.610 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-19 00:56:12.817 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-19 00:56:12.935 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 00:56:12.935 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 00:56:12.935 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 00:56:12.935 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 00:56:12.935 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:56:12.935 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:56:12.935 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:56:12.935 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:56:12.935 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:56:12.935 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:56:12.935 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:56:12.935 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:56:12.935 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 00:56:12.935 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 00:56:12.940 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:56:12.940 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:56:12.940 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:56:12.940 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:56:12.969 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 00:56:13.008 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931937_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 00:56:13.587 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349984 GHz, device_time_at_sync=29717391465078 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-19 00:56:14.029 | INFO     | tracy:signpost:49 - OPT_CAND_LINEAR_QKVZBA_BASE
+2026-08-19 00:56:14.030 | INFO     | tracy:signpost:49 - OPT_CAND_LINEAR_QKVZBA_BASE_END
+SKIPPED\nCalled with:\n
+interleaved_to_sharded(ttnn.Tensor, ttnn._ttnn.types.CoreGrid, list,
+ttnn.TensorMemoryLayout, ttnn.ShardOrientation)\n\nAvailable
+signatures:\n  interleaved_to_sharded(input_tensor: ttnn.Tensor, grid:
+ttnn.CoreCoord | ttnn.CoreRangeSet, shard_shape:
+collections.abc.Sequence[int], shard_scheme: ttnn.TensorMemoryLayout,
+shard_orientation: ttnn.ShardOrientation, output_dtype: ttnn.DataType |
+None = None, *, keep_l1_aligned: bool | None = False)\n
+interleaved_to_sharded(input_tensor: ttnn.Tensor, sharded_memory_config:
+ttnn.MemoryConfig, output_dtype: ttnn.DataType | None = None, *,
+keep_l1_aligned: bool | None = False, preallocated_output: ttnn.Tensor |
+None = None)'))
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_decode_dense_projection_dram_sharded[full_qkgv-device_params0] 2026-08-19 00:56:14.154 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 00:56:14.154 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 00:56:14.166 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:56:14.167 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:56:14.167 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:56:14.168 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:56:14.196 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 00:56:14.555 | INFO     | tracy:signpost:49 - OPT_CAND_FULL_QKGV_BASE
+2026-08-19 00:56:14.555 | INFO     | tracy:signpost:49 - OPT_CAND_FULL_QKGV_BASE_END
+SKIPPEDlled with:\n  interleaved_to_sharded(ttnn.Tensor,
+ttnn._ttnn.types.CoreGrid, list, ttnn.TensorMemoryLayout,
+ttnn.ShardOrientation)\n\nAvailable signatures:\n
+interleaved_to_sharded(input_tensor: ttnn.Tensor, grid: ttnn.CoreCoord |
+ttnn.CoreRangeSet, shard_shape: collections.abc.Sequence[int],
+shard_scheme: ttnn.TensorMemoryLayout, shard_orientation:
+ttnn.ShardOrientation, output_dtype: ttnn.DataType | None = None, *,
+keep_l1_aligned: bool | None = False)\n
+interleaved_to_sharded(input_tensor: ttnn.Tensor, sharded_memory_config:
+ttnn.MemoryConfig, output_dtype: ttnn.DataType | None = None, *,
+keep_l1_aligned: bool | None = False, preallocated_output: ttnn.Tensor |
+None = None)'))
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+1.22s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_decode_dense_projection_dram_sharded[linear_qkvzba-device_params0]
+0.43s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_decode_dense_projection_dram_sharded[linear_qkvzba-device_params0]
+0.32s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_decode_dense_projection_dram_sharded[full_qkgv-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_decode_dense_projection_dram_sharded[full_qkgv-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_decode_dense_projection_dram_sharded[linear_qkvzba-device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_decode_dense_projection_dram_sharded[full_qkgv-device_params0]
+=========================== short test summary info ============================
+SKIPPED [1] models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py:586: linear_qkvzba adapted DRAM-sharded projection rejected by TTNN: TypeError('\nttnn.interleaved_to_sharded(): incompatible function arguments.\n\nCalled with:\n  interleaved_to_sharded(ttnn.Tensor, ttnn._ttnn.types.CoreGrid, list, ttnn.TensorMemoryLayout, ttnn.ShardOrientation)\n\nAvailable signatures:\n  interleaved_to_sharded(input_tensor: ttnn.Tensor, grid: ttnn.CoreCoord | ttnn.CoreRangeSet, shard_shape: collections.abc.Sequence[int], shard_scheme: ttnn.TensorMemoryLayout, shard_orientation: ttnn.ShardOrientation, output_dtype: ttnn.DataType | None = None, *, keep_l1_aligned: bool | None = False)\n  interleaved_to_sharded(input_tensor: ttnn.Tensor, sharded_memory_config: ttnn.MemoryConfig, output_dtype: ttnn.DataType | None = None, *, keep_l1_aligned: bool | None = False, preallocated_output: ttnn.Tensor | None = None)')
+SKIPPED [1] models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py:586: full_qkgv adapted DRAM-sharded projection rejected by TTNN: TypeError('\nttnn.interleaved_to_sharded(): incompatible function arguments.\n\nCalled with:\n  interleaved_to_sharded(ttnn.Tensor, ttnn._ttnn.types.CoreGrid, list, ttnn.TensorMemoryLayout, ttnn.ShardOrientation)\n\nAvailable signatures:\n  interleaved_to_sharded(input_tensor: ttnn.Tensor, grid: ttnn.CoreCoord | ttnn.CoreRangeSet, shard_shape: collections.abc.Sequence[int], shard_scheme: ttnn.TensorMemoryLayout, shard_orientation: ttnn.ShardOrientation, output_dtype: ttnn.DataType | None = None, *, keep_l1_aligned: bool | None = False)\n  interleaved_to_sharded(input_tensor: ttnn.Tensor, sharded_memory_config: ttnn.MemoryConfig, output_dtype: ttnn.DataType | None = None, *, keep_l1_aligned: bool | None = False, preallocated_output: ttnn.Tensor | None = None)')
+================ 2 skipped, 23 deselected, 2 warnings in 3.61s =================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 1 instances!
+ - leaked instance 0x76f55e5d5b18 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 14 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - ... skipped remainder
+nanobind: leaked 233 functions!
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "sfpu_eps"
+ - leaked function "tensor_topology"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "to_list"
+ - leaked function "buffer_page_size"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-19 00:56:16.403 | info     |    BuildKernels | JIT cache stats: 19/19 hits (100.0%) [19 cached, 7 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-19 00:56:16.403 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-19 00:56:16.415 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-19 00:56:16.415 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-19 00:56:16.971 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-19 00:56:16.971 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-19 00:56:16.971 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

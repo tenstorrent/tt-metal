@@ -1,0 +1,228 @@
+2026-08-19 00:54:38.149 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /localdev/vkovacevic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/vkovacevic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, cov-7.0.0, benchmark-5.2.3, anyio-4.14.2, split-0.11.0, dash-2.15.0, github-actions-annotate-failures-0.3.0
+timeout: 1200.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 25 items / 20 deselected / 5 selected
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[routed_bfp4_linear-device_params0] 2026-08-19 00:54:40.135 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-19 00:54:40.135 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-19 00:54:40.135 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-19 00:54:40.135 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-19 00:54:40.136 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-19 00:54:40.136 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-19 00:54:40.140 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-19 00:54:40.360 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-19 00:54:40.360 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-19 00:54:40.360 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-19 00:54:40.360 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-19 00:54:40.362 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-19 00:54:40.506 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-19 00:54:40.624 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 00:54:40.624 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 00:54:40.624 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-19 00:54:40.624 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-19 00:54:40.624 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:54:40.624 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:54:40.624 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:54:40.624 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:54:40.624 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:54:40.624 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:54:40.624 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:54:40.624 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-19 00:54:40.624 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-19 00:54:40.624 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-19 00:54:40.629 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:54:40.629 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:54:40.629 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:54:40.629 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:54:40.659 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 00:54:40.698 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681931937_memory' (shm_resource_tracker.cpp:282)
+2026-08-19 00:54:41.277 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=29600498797781 cycles (realtime_profiler_manager.cpp:1127)
+[transformers] The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+candidate policy=routed_bfp4 prefill 0.9996658297853894
+candidate policy=routed_bfp4 traced decode 0.9984949282340163
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[routed_bfp4_full-device_params0] 2026-08-19 00:54:57.591 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 00:54:57.591 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 00:54:57.604 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:54:57.606 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:54:57.606 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:54:57.606 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:54:57.634 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+candidate policy=routed_bfp4 prefill 0.999624418357692
+candidate policy=routed_bfp4 traced decode 0.9994981617821127
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[moe_all_bfp4_linear-device_params0] 2026-08-19 00:55:11.972 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 00:55:11.973 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 00:55:11.984 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:55:11.985 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:55:11.985 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:55:11.986 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:55:12.015 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+FAILED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[decode_l1_sparse_linear-device_params0] 2026-08-19 00:55:28.259 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 00:55:28.259 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 00:55:28.270 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:55:28.272 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:55:28.272 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:55:28.273 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:55:28.301 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+candidate policy=decode_l1_sparse_inputs prefill 0.999696609002408
+candidate policy=decode_l1_sparse_inputs traced decode 0.9986906621449116
+PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[decode_l1_sparse_full-device_params0] 2026-08-19 00:55:42.923 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-19 00:55:42.923 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-19 00:55:42.935 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:55:42.936 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:55:42.936 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:55:42.937 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/vkovacevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-19 00:55:42.966 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-08-19 00:55:43.582 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=29684609199069 cycles (realtime_profiler_manager.cpp:1127)
+candidate policy=decode_l1_sparse_inputs prefill 0.9996678306108964
+candidate policy=decode_l1_sparse_inputs traced decode 0.9995550576373459
+PASSED
+
+=================================== FAILURES ===================================
+_ test_candidate_qwen36_optimized_policy_real_weight_pcc[moe_all_bfp4_linear-device_params0] _
+
+device = MeshDevice(1x1 grid, 1 devices), policy_name = 'moe_all_bfp4'
+layer_idx = 0, seq_len = 5
+
+    @pytest.mark.skipif(
+        os.environ.get("RUN_QWEN36_OPTIMIZED_CANDIDATES") != "1",
+        reason="set RUN_QWEN36_OPTIMIZED_CANDIDATES=1 to run optimization candidate evidence",
+    )
+    @pytest.mark.parametrize("device_params", [{"trace_region_size": 16_000_000}], indirect=True)
+    @pytest.mark.parametrize(
+        ("policy_name", "layer_idx", "seq_len"),
+        [
+            ("routed_bfp4", 0, 5),
+            ("routed_bfp4", 3, 5),
+            ("moe_all_bfp4", 0, 5),
+            ("decode_l1_sparse_inputs", 0, 5),
+            ("decode_l1_sparse_inputs", 3, 5),
+        ],
+        ids=[
+            "routed_bfp4_linear",
+            "routed_bfp4_full",
+            "moe_all_bfp4_linear",
+            "decode_l1_sparse_linear",
+            "decode_l1_sparse_full",
+        ],
+    )
+    def test_candidate_qwen36_optimized_policy_real_weight_pcc(device, policy_name, layer_idx, seq_len):
+        cfg = _target_text_config()
+        state = _load_real_layer_state(layer_idx)
+        policy = _optimized_policy_from_name(policy_name)
+>       prefill_msg, decode_msg = _run_optimized_prefill_decode_parity(
+            device,
+            cfg=cfg,
+            layer_idx=layer_idx,
+            state=state,
+            seq_len=seq_len,
+            trace_decode=True,
+            policy=policy,
+        )
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py:389:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py:224: in _run_optimized_prefill_decode_parity
+    prefill_msg = _assert_pcc(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+label = 'optimized linear_attention prefill'
+expected = tensor([[[ 0.0444, -0.0435, -0.3164,  ...,  0.1582,  0.7148,  0.0289],
+         [-0.0425,  0.0154, -0.0145,  ..., -0.0...0.0278, -0.0396],
+         [-0.0356,  0.0410,  0.0972,  ..., -0.0023,  0.0183, -0.0210]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[-0.0107,  0.0203, -0.2695,  ...,  0.0649,  0.6250,  0.1279],
+         [-0.0320,  0.0128, -0.0082,  ..., -0.0...69,  0.0250,  ...,  0.0466, -0.0337, -0.0417],
+         [-0.0361,  0.0417,  0.0938,  ..., -0.0026,  0.0154, -0.0216]]])
+pcc = 0.995
+
+    def _assert_pcc(label: str, expected: torch.Tensor, actual: torch.Tensor, pcc: float = PCC_BAR):
+        passed, message = comp_pcc(expected.float(), actual.float(), pcc)
+>       assert passed, f"{label}: {message}"
+E       AssertionError: optimized linear_attention prefill: 0.9890764118945616
+E       assert False
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_functional_decoder.py:186: AssertionError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+16.17s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[routed_bfp4_linear-device_params0]
+16.07s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[moe_all_bfp4_linear-device_params0]
+14.45s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[decode_l1_sparse_linear-device_params0]
+14.17s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[routed_bfp4_full-device_params0]
+13.14s call     models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[decode_l1_sparse_full-device_params0]
+1.16s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[routed_bfp4_linear-device_params0]
+0.67s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[decode_l1_sparse_full-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[moe_all_bfp4_linear-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[decode_l1_sparse_full-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[routed_bfp4_full-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[routed_bfp4_linear-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[decode_l1_sparse_linear-device_params0]
+0.09s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[decode_l1_sparse_linear-device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[routed_bfp4_full-device_params0]
+0.08s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[moe_all_bfp4_linear-device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[routed_bfp4_linear-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[routed_bfp4_full-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[decode_l1_sparse_linear-device_params0]
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[decode_l1_sparse_full-device_params0]
+FAILED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_optimized_decoder.py::test_candidate_qwen36_optimized_policy_real_weight_pcc[moe_all_bfp4_linear-device_params0] - AssertionError: optimized linear_attention prefill: 0.9890764118945616
+assert False
+====== 1 failed, 4 passed, 20 deselected, 2 warnings in 78.06s (0:01:18) =======
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x7a08ee9cdbd8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7a08ee8e5818 of type "ttnn._ttnn.device.DispatchCoreConfig"
+nanobind: leaked 34 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 303 functions!
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function "__init__"
+ - leaked function "to_json"
+ - leaked function "set_sub_device_stall_group"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "to_torch"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "matmul_select_program_factory"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-19 00:55:58.712 | info     |    BuildKernels | JIT cache stats: 450/492 hits (91.5%) [450 cached, 1707 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-19 00:55:58.712 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-19 00:55:58.725 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-19 00:55:58.725 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-19 00:55:59.370 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-19 00:55:59.370 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-19 00:55:59.370 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

@@ -1,0 +1,13 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Warning: Ignoring user-specified architecture: blackhole, CSV detected blackhole architecture
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'OPT_FULL_DECODE'.
+Using operations until 'OPT_FULL_DECODE_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_decoder/tracy/routed_bfp4/full_attention/decode_perf_report.csv
+Overall DRAM roofline (modeled ops): 4.8% (24 GB/s)
+Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ScatterDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_decoder/tracy/routed_bfp4/full_attention/decode_summary.csv.csv
+Plotting PNG stacked report to models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_decoder/tracy/routed_bfp4/full_attention/decode_summary.csv.png
