@@ -1704,9 +1704,8 @@ bool ControlPlane::mesh_has_protected_ring_in_axis_of(MeshId mesh_id, RoutingDir
         axis_direction != RoutingDirection::C && axis_direction != RoutingDirection::NONE,
         "mesh_has_protected_ring_in_axis_of: {} is not a port direction",
         enchantum::to_string(axis_direction));
-    // The axis-level question reduces to ring existence for the axis: ring state is derived per
-    // mesh and a mesh's express rings, where present, span every line, so the per-mesh answer is
-    // the pointer itself -- never elided on leaf rows the way the per-node answer is.
+    // Ring state is per mesh, and a mesh's express rings span every line where they exist, so the
+    // answer is just whether the axis has a ring at all.
     return this->ring_for_direction(mesh_id, axis_direction) != nullptr;
 }
 
@@ -1971,18 +1970,15 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
         mesh_shape[0],
         mesh_shape[1]);
 
-    // Express meshes embed the indexed destination-major vectors; all other meshes keep the
-    // legacy compressed 2D table. Both packers share the same call shape and query this
-    // ControlPlane's first-hop relation per destination. The gate is express_routing_enabled --
-    // the same answer route generation keyed on -- so a chip's L1 layout always matches its
-    // decode.
+    // Express meshes embed the indexed destination-major vectors; all others keep the legacy
+    // compressed 2D table. Gated on express_routing_enabled, the same answer route generation used, so
+    // a chip's L1 layout always matches its decode.
     if (this->express_routing_enabled(mesh_id)) {
         indexed_route_vectors_t indexed_vectors;
         indexed_vectors.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
 
-        // Hybrid layout (codec contract 6.2): the unicast vectors above are mesh-identical, so they
-        // are regenerated identically for every chip; the reverse trees are not, so this chip gets
-        // T(its own row) and T(its own column) only, written into the tail of the same slot.
+        // The unicast vectors above are mesh-identical, but the reverse trees are not: this chip gets
+        // only T(its own row) and T(its own column), written into the tail of the same slot.
         const auto* y_rings = this->ring_for_direction(mesh_id, RoutingDirection::N);
         const auto* x_rings = this->ring_for_direction(mesh_id, RoutingDirection::E);
         if (y_rings != nullptr && x_rings != nullptr) {
@@ -1997,10 +1993,8 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
                     static_cast<int>(coord[1]),
                     indexed_vectors.data,
                     &failure)) {
-                // Rejects reverse-tree multicast for this mesh rather than the mesh itself (contract
-                // 6.1: a root failure has no alternate mcast artifact in V1). Unicast is unaffected,
-                // and the region stays zeroed. The multicast producer must refuse to encode against a
-                // mesh that lands here.
+                // Only multicast is rejected; unicast is unaffected and the tree region stays zeroed.
+                // The multicast producer must refuse to encode against a mesh that lands here.
                 log_warning(
                     tt::LogFabric,
                     "mesh {}: no multicast reverse trees, express multicast unavailable: {}",
@@ -2041,10 +2035,9 @@ void ControlPlane::write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id)
     routing_info.state_manager.state = RouterState::INITIALIZING;
     routing_info.my_mesh_id = *mesh_id;
     routing_info.my_device_id = chip_id;
-    // Same accessor the indexed packer, the router named args, and the worker shape defines use.
-    // The coordinates only mean anything against the shape the tables were built with, and a
-    // Galaxy presents as either 8x4 or 4x8, so taking the shape from a second source risks
-    // transposed coordinates that index valid-looking but wrong table slots.
+    // Same accessor and scope the indexed packer, the router named args, and the worker shape defines
+    // use. A Galaxy presents as either 8x4 or 4x8, so a shape from a second source risks transposed
+    // coordinates that index valid-looking but wrong table slots.
     const auto mesh_shape = this->get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
     routing_info.my_mesh_coord_y = chip_id / mesh_shape[1];
     routing_info.my_mesh_coord_x = chip_id % mesh_shape[1];

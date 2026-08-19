@@ -1145,6 +1145,14 @@ HighLevelPatternConfig YamlConfigParser::parse_high_level_pattern_config(const Y
         config.mesh_scope = detail::mesh_scope_mapper.to_enum.at(mesh_scope_str);
     }
 
+    if (pattern_yaml["vc_id"]) {
+        config.vc_id = parse_scalar<uint8_t>(pattern_yaml["vc_id"]);
+        TT_FATAL(
+            config.vc_id.value() == 0 || config.vc_id.value() == 2,
+            "vc_id must be 0 or 2, got {}",
+            config.vc_id.value());
+    }
+
     return config;
 }
 
@@ -1858,11 +1866,18 @@ void TestConfigBuilder::validate_test(const TestConfig& test) const {
 
 void TestConfigBuilder::expand_patterns_into_test(
     ParsedTestConfig& test, const std::vector<HighLevelPatternConfig>& patterns, uint32_t iteration_idx) {
-    const auto& defaults = test.defaults.value_or(ParsedTrafficPatternConfig{});
+    const auto& test_defaults = test.defaults.value_or(ParsedTrafficPatternConfig{});
 
     for (const auto& pattern : patterns) {
         if (pattern.iterations.has_value() && iteration_idx >= pattern.iterations.value()) {
             continue;
+        }
+
+        // Per-pattern overrides layer on top of the test-wide defaults; the expanders only
+        // receive a traffic config, so anything set on the pattern must be folded in here.
+        ParsedTrafficPatternConfig defaults = test_defaults;
+        if (pattern.vc_id.has_value()) {
+            defaults.vc_id = pattern.vc_id;
         }
 
         if (pattern.type == "all_to_all") {
