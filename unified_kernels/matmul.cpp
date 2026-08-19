@@ -100,9 +100,9 @@ void kernel_main() {
 #if defined(MM_ACC_L1)
     // L1: the packer sums into acc_storage, so DST only ever holds one block's
     // product and a per-step chain sees that contribution alone.
-    u::Accumulator<u::AccumulatorMode::L1, Out> acc(acc_storage, out_storage);
+    u::Accumulator<Out, u::AccumulatorMode::L1> acc(acc_storage, out_storage);
 #else
-    u::Accumulator<u::AccumulatorMode::Dst, Out> acc(acc_storage, out_storage);
+    u::Accumulator<Out, u::AccumulatorMode::Dst> acc(acc_storage, out_storage);
 #endif
     acc.clear();
 

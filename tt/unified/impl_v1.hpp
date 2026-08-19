@@ -308,13 +308,13 @@ void Block<S>::consume() {
 
 // --- Accumulator ---
 
-template <AccumulatorMode Mode, typename S>
-Accumulator<Mode, S>::Accumulator(const Storage<S>& acc_storage, const Storage<S>& out_storage) :
+template <typename S, AccumulatorMode Mode>
+Accumulator<S, Mode>::Accumulator(const Storage<S>& acc_storage, const Storage<S>& out_storage) :
     acc_storage(acc_storage), out_storage(out_storage) {}
 
-template <AccumulatorMode Mode, typename S>
+template <typename S, AccumulatorMode Mode>
 template <typename Node, typename Epilogue>
-Block<S> Accumulator<Mode, S>::accumulate(const Node& node, bool finish, Epilogue epilogue) {
+Block<S> Accumulator<S, Mode>::accumulate(const Node& node, bool finish, Epilogue epilogue) {
     static_assert(is_fpu_fusion<Node>::value, "Accumulator drives FPU fusions");
 
     if constexpr (std::is_same_v<Epilogue, std::nullptr_t>) {
@@ -340,8 +340,8 @@ Block<S> Accumulator<Mode, S>::accumulate(const Node& node, bool finish, Epilogu
     return finish ? Block<S>(out_storage) : Block<S>(acc_storage, typename Block<S>::Retained{});
 }
 
-template <AccumulatorMode Mode, typename S>
-void Accumulator<Mode, S>::clear() {
+template <typename S, AccumulatorMode Mode>
+void Accumulator<S, Mode>::clear() {
     reload = false;
 }
 
