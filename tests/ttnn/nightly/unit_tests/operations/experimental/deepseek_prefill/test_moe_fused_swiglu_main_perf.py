@@ -4,7 +4,9 @@
 """Kimi K2.6 / GLM 5.1 / Kimi K3 SiTU 5K profiler sweep for the fused routed-expert block.
 
 Run with ``scripts/run_safe_pytest.sh --profile``.  The profiler CSV preserves
-one row per dispatch, ordered by the ``COUNTS``/``REPS`` loops below.
+one row per dispatch, ordered by the ``COUNTS``/``REPS`` loops below. Set
+``MOE_FUSED_SWIGLU_STAGE_PROFILE=1`` only when fine-grained kernel zones are needed;
+ordinary latency sweeps leave them disabled to avoid profiler-record overhead.
 """
 
 import os
