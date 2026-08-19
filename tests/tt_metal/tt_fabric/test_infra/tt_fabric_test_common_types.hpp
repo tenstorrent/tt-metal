@@ -175,6 +175,7 @@ struct HighLevelPatternConfig {
     std::optional<uint32_t> iterations;
     bool is_sequential = false;
     MeshTrafficScope mesh_scope = MeshTrafficScope::ALL;
+    std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2. Overrides the test defaults.
 };
 
 struct ParsedTestConfig {

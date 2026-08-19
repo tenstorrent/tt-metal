@@ -1198,25 +1198,15 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
 #if defined(FABRIC_EXPRESS_ENABLED)
 // clang-format off
 /**
- * Source multi-inject multicast (§7.3.1). Splits ONE multicast operation across several connections,
- * which is what distinguishes it from the route variant above: that one builds a different header per
- * slot, this one builds a single canonical map and launches every canonical root output with an
- * identical copy of it.
+ * Splits ONE multicast operation across several connections: builds a single route map and sends an
+ * identical copy of it out every root output. Unlike the route variant above, which builds a
+ * different header per slot.
  *
- * Express routing makes multi-output roots ordinary rather than exceptional -- a single northward
- * range can leave the source on both N and Z -- and a worker injects into one router, bypassing the
- * source RX that lets transit routers clone atomically. So the worker issues one copy per output.
- * The copies need no atomicity between them: a worker waiting on its second slot holds no fabric
- * receiver and cannot join a dependency cycle, and multicast has no cross-branch ordering guarantee.
+ * Requires one direction-tagged slot and one header per root output, and fail-stops if a slot is
+ * missing rather than delivering to part of the range.
  *
- * Requires one direction-tagged slot per canonical root output and one header per output in the
- * route. If a slot is missing the operation is not realizable and this fail-stops rather than
- * delivering to part of the range; §7.3.1 rejects every transport-level substitute, including
- * returning a copy over the injected link.
- *
- * Delivers locally when the canonical root action carries LOCAL_DELIVER, which happens when the
- * requested range covers the source chip itself. Returns the root action byte for inspection; the
- * caller must not repeat the local delivery, which §5.12.2 requires to happen exactly once.
+ * Delivers locally when the root action carries LOCAL_DELIVER, i.e. when the range covers the source
+ * chip. Returns the root action byte; the caller must not repeat that local delivery.
  *
  * | Argument                   | Description                             | Type                                       | Required |
  * |----------------------------|-----------------------------------------|--------------------------------------------|----------|
@@ -1241,8 +1231,8 @@ FORCE_INLINE uint8_t fabric_multicast_source_inject_noc_unicast_write(
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
     auto [headers, num_headers] = PacketHeaderPool::header_table[route_id];
 
-    // Encoded per header rather than encoded once and copied between them: the inputs are identical,
-    // so the bytes are identical, and this avoids copying through volatile L1 pointers.
+    // Re-encoded per header rather than copied between them, to avoid copying through volatile L1
+    // pointers.
     const uint8_t root_action = fabric_set_indexed_mcast_route(
         headers,
         dst_dev_id,
@@ -1278,8 +1268,8 @@ FORCE_INLINE uint8_t fabric_multicast_source_inject_noc_unicast_write(
 
         bool injected = false;
         connection_manager.for_each_with_tag(dir, [&](auto& sender, uint32_t, uint32_t) {
-            // One copy per canonical output even where several slots share a direction; a second
-            // send would deliver the subtree twice.
+            // One send per output even where several slots share a direction; a second send would
+            // deliver the subtree twice.
             if (injected) {
                 return;
             }
@@ -1293,13 +1283,8 @@ FORCE_INLINE uint8_t fabric_multicast_source_inject_noc_unicast_write(
         copy_index++;
     }
 
-    // §7.3.1 step 4. No router ever decodes the source's own action byte: injection goes straight into
-    // a sender channel and bypasses the source RX that would otherwise consume it. So when the range
-    // covers this chip, this write is the only thing that delivers here. Once rather than once per
-    // copy -- every copy above carries the same NOC command, and §5.12.2 makes the count normative.
-    //
-    // The header's noc_address names a core and an offset, not a chip, so reusing it unchanged lands
-    // on the same core here that the multicast targets everywhere else.
+    // Injection bypasses the source RX, so no router decodes this chip's own action byte and this
+    // write is the only thing that delivers here. Exactly once, not once per copy.
     if (root_action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER) {
         noc_async_write(src_addr, noc_unicast_command_header.noc_address, size);
     }

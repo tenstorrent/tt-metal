@@ -297,16 +297,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     }
 
     {
-        // Reserved unconditionally rather than only for multi-TXQ. Credits can now travel through
-        // these counters for a second reason -- an express router needs stream registers this form
-        // does not consume -- and that reason is not known here: this constructor takes only a
-        // topology, and deliberately so, since it aims for one L1 layout across every config. Always
-        // reserving keeps the layout stable and makes the counter form selectable by compile-time
-        // argument alone, with no way for the address map and that choice to disagree.
-        //
-        // The cost is roughly 192 bytes taken from channel buffering, well under a percent of it, and
-        // the slot options are coarse enough (4/2/1) that crossing a threshold is unlikely. If it ever
-        // does, the protected-receiver slot check reports it rather than letting it pass silently.
+        // Reserved unconditionally rather than only for multi-TXQ: this constructor sees only a
+        // topology, so it cannot tell whether the counter form was selected, and always reserving keeps
+        // the L1 layout stable across configurations. The cost is roughly 192 bytes of channel
+        // buffering.
         //
         // counters are packed contiguously in memory, This can lead to resends of values but
         // this is safe for free running counters, which are enabled in this mode.
@@ -609,10 +603,9 @@ void append_worker_to_fabric_edm_sender_rt_args(
     connection_info.edm_worker_location_info_addr = connection.edm_worker_location_info_addr;
     connection_info.buffer_size_bytes = connection.buffer_size_bytes;
     connection_info.buffer_index_semaphore_id = connection.buffer_index_semaphore_id;
-    // This non-device-init path is the local worker-style VC0 contract, so preserve
-    // the sender-channel-0 free-slots stream id when rewriting the entry. The constant in
-    // connection_interface is the single authority every side reads: the router's stream
-    // assignment pins the VC0 free-slots base to it, so the contracts agree by construction.
+    // This non-device-init path is the local worker-style VC0 contract, so preserve the
+    // sender-channel-0 free-slots stream id when rewriting the entry. The router's stream assignment
+    // pins the VC0 free-slots base to the same constant.
     connection_info.worker_free_slots_stream_id = connection_interface::sender_channel_0_free_slots_stream_id;
     // NOTE: valid_connections_mask is not copied to L1 from performance reason
     //       because this callstack will be deprecated and not used in WorkerToFabricEdmSenderImpl yet
@@ -794,10 +787,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     }
 
     // Apply channel trimming overrides (from imported profile) after normal initialization.
-    // Kernel contract §6 holds channel remapping and trim bypass off for an express fabric: an
-    // imported capture describes the queue graph of the configuration it was captured against, and
-    // express gives a router a different sender/downstream shape, so replaying it here can disable
-    // a channel this router genuinely uses.
+    // Skipped for an express fabric: an imported capture describes the queue graph it was captured
+    // against, and express gives a router a different sender/downstream shape, so replaying it can
+    // disable a channel this router genuinely uses.
     const bool express_routing_enabled =
         tt::tt_metal::MetalContext::instance().get_control_plane().express_routing_enabled(
             local_fabric_node_id.mesh_id);
@@ -1075,12 +1067,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     const auto& global_overrides = builder_context.get_channel_trimming_global_overrides();
     const bool router_has_real_capture_entry = has_real_channel_trimming_capture_entry(
         builder_context.get_channel_trimming_overrides(), local_physical_chip_id, my_eth_channel);
-    // Kernel contract §6: speedy, super-speedy, trim bypass, and channel remapping stay off for an
-    // express fabric until each is shown to preserve the same local admission, concrete sender,
-    // remote BFC, and queue graph. Express changes the per-router shape those paths were derived
-    // against -- a cardinal router carries five VC0 and four VC1 senders, and an X-facing router is
-    // DOR-unwired down to a single downstream -- so a topology inferred from the trim capture no
-    // longer describes the queue graph the router actually runs.
+    // Speedy, super-speedy, trim bypass, and channel remapping all stay off for an express fabric.
+    // Express changes the per-router shape those paths were derived against -- five VC0 senders on a
+    // cardinal router, a single downstream on a DOR-unwired X-facing one -- so a topology inferred from
+    // the trim capture no longer describes the queue graph the router runs.
     const bool express_routing_enabled = control_plane.express_routing_enabled(this->local_fabric_node_id.mesh_id);
 
     // Global overrides replace the sender/receiver enablement decision for a VC,
@@ -1095,8 +1085,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // `ComputeMeshRouterBuilder` precomputes the local VC0 trim
     // shape, including whether a terminal-only router has an exact upstream
     // peer that makes the speedy receiver path safe on this link.
-    // Gated with the rest of the trim bypass above. Suppressing these keeps deadlock avoidance and
-    // first-level ack at their untrimmed setting rather than letting a trim shape relax them.
+    // Gated with the rest of the trim bypass above, so deadlock avoidance and first-level ack stay at
+    // their untrimmed setting rather than being relaxed by a trim shape.
     const bool vc0_trim_fast_path_usable = !express_routing_enabled && vc0_trim_fast_path_info_.has_value();
     const bool vc0_is_terminal_or_source_only_after_trim =
         vc0_trim_fast_path_usable && vc0_trim_fast_path_info_->terminal_or_source_only;
@@ -1106,17 +1096,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
     const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;
 
-    // Bubble flow control requires the immediate downstream receiver to hold at least two slots: an
-    // injection channel only sends when it sees that many free, so with a single-slot receiver the
-    // condition can never hold and that sender stalls forever.
-    //
-    // Nothing tied slot selection to this. The allocator walks an ordered table and takes the first
-    // option that fits the available channel buffering, and its smallest option gives one receiver
-    // slot -- so the requirement has been satisfied only incidentally, by the larger options fitting.
-    // A tight L1 budget could select that last option under bubble flow control and hang instead.
-    //
-    // Checked per VC and only where bubble flow control is actually enabled, so a configuration that
-    // gives VC1 a single slot still passes as long as the VCs that need the guard have two.
+    // Bubble flow control requires the downstream receiver to hold at least two slots: an injection
+    // channel only sends when it sees that many free, so a single-slot receiver stalls it forever.
+    // Nothing in the allocator guarantees this -- its smallest buffer-slot option gives one slot -- so
+    // check it per VC, and only where bubble flow control is actually enabled.
     if (final_enable_deadlock_avoidance) {
         constexpr uint32_t k_bfc_protected_receiver_min_slots =
             builder_config::bubble_flow_control_protected_receiver_min_slots;
@@ -1154,32 +1137,23 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 
     // --- Stream IDs (increment-on-write registers) ---
     //
-    // The assignment is computed once upstream (in the router build, from the family's shape) and
-    // shared with every builder that must agree on a register across a link; the credit plan it
-    // carries is the same derivation the two flags below read, from the same edm_config. The plan
-    // itself is unchanged: Multi-TXQ puts every VC on counters; express puts VC1 on counters
-    // because widening VC0 to five senders needs one more ack register than an ethernet core has,
-    // and VC1's completion registers are what covers it -- VC0 deliberately untouched.
-    // The stream-register assignment is fabric-scoped (shared per mesh) and lives in
-    // FabricBuilderContext; every router in the mesh reads the same one, so the flat-channel ->
-    // register-id map agrees by construction -- the kernel resolves a downstream router's register
-    // through its own table, and that lookup is only correct if the maps agree.
+    // The assignment is fabric-scoped and lives in FabricBuilderContext, so every router in the mesh
+    // reads the same flat-channel -> register-id map. That agreement is required, since the kernel
+    // resolves a downstream router's register through its own table.
     const StreamAssignment& stream_assignment =
         control_plane.get_fabric_context().get_builder_context().get_stream_assignment(local_fabric_node_id.mesh_id);
     const CreditTransportPlan& credit_plan = stream_assignment.plan();
 
     named_args["VC0_USES_COUNTER_CREDITS"] = credit_plan.vc0_uses_counters ? 1 : 0;
     named_args["VC1_USES_COUNTER_CREDITS"] = credit_plan.vc1_uses_counters ? 1 : 0;
+    named_args["VC2_USES_COUNTER_CREDITS"] = credit_plan.vc2_uses_counters ? 1 : 0;
 
-    // The fabric-scoped flat bases: the shared free-slots table's positions follow the fabric's
-    // family maxima, so a VC's boundary is the same on every router in the mesh.
+    // Flat bases for the shared free-slots table, so a VC's boundary is the same on every router.
     named_args["VC1_FABRIC_POSITION_START"] = stream_assignment.sender_flat_base(1);
     named_args["VC2_FABRIC_POSITION_START"] = stream_assignment.sender_flat_base(2);
 
-    // The full declared stream-register name set, filled from the assignment or the sentinel (the
-    // sentinel marks an inactive consumer, which the device skips initialising). Each entry is
-    // emplaced with a duplicate check rather than blind-inserted, so a collision fails here
-    // instead of being absorbed.
+    // Every declared stream-register name, filled from the assignment or the inactive-consumer
+    // sentinel. Emplaced with a duplicate check so a collision fails here rather than being absorbed.
     for (const auto& [name, value] : stream_assignment.named_args()) {
         TT_FATAL(named_args.emplace(name, value).second, "Duplicate compile-time arg {}", name);
     }
@@ -1209,14 +1183,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;
     named_args["ENABLE_FIRST_LEVEL_ACK_VC0"] = final_enable_first_level_ack_vc0 ? 1 : 0;
-    // VC1 does not use bubble flow control, and it cannot afford first-level ack independently of
-    // that: turning this on compiles the ack paths into all four VC1 sender channel steps and the
-    // VC1 receiver step, which pushes the router past the ACTIVE_ETH kernel config window
-    // (measured: 25648 against a 25600 limit on an intermesh-bearing rank). The window is fixed by
-    // MEM_AERISC_KERNEL_CONFIG_SIZE in the Blackhole memory map, so this is a space constraint and
-    // not a policy knob. Note also that first-level ack must agree across every VC1 link, since the
-    // acking receiver and the upstream sender are on different routers -- it cannot be enabled for
-    // just the routers that carry landed intermesh traffic.
+    // VC1 does not use bubble flow control, and enabling first-level ack anyway compiles the ack paths
+    // into all four VC1 sender steps and the VC1 receiver step, pushing the router past the ACTIVE_ETH
+    // kernel config window (25648 against a 25600 limit on an intermesh-bearing rank). This must also
+    // agree across every VC1 link, since the acking receiver and upstream sender are on different
+    // routers, so it cannot be enabled per-router.
     named_args["ENABLE_FIRST_LEVEL_ACK_VC1"] = 0;
     named_args["ENABLE_RISC_CPU_DATA_CACHE"] = enable_risc_cpu_data_cache;
     named_args["VC0_DOWNSTREAM_EDM_SIZE"] = vc0_downstream_edm_size;
@@ -1285,26 +1256,18 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["IS_INTRAMESH_ROUTER_ON_EDGE"] = is_intramesh_router_on_edge;
 
     // --- Express ABI args (only when this router's mesh selected the indexed 2D ABI) ---
-    // Agreement with the FABRIC_EXPRESS_ENABLED define emission in
-    // ComputeMeshRouterBuilder::create_kernel is by construction: both key on
-    // express_routing_enabled. The kernel reads these named args only under that define, and a
-    // missing arg fails the compile.
+    // Keyed on express_routing_enabled, the same condition ComputeMeshRouterBuilder::create_kernel uses
+    // to emit FABRIC_EXPRESS_ENABLED. The kernel reads these args only under that define.
     if (express_routing_enabled) {
-        // Same accessor and scope the packer and the worker defines use. The router decodes with
-        // these as its coordinate bounds, so any disagreement with the shape the L1 vectors were
-        // packed against reads the wrong row.
+        // Same accessor and scope the packer and the worker defines use. These are the router's
+        // coordinate bounds, so a disagreement with the packed L1 vectors reads the wrong row.
         const auto mesh_shape =
             control_plane.get_physical_mesh_shape(this->local_fabric_node_id.mesh_id, MeshScope::GLOBAL);
         named_args["MESH_Y_SIZE"] = mesh_shape[0];
         named_args["MESH_X_SIZE"] = mesh_shape[1];
-        // A router receives inter-mesh landings iff its eth peer is in another mesh, and on such a
-        // router every carrier-VC receiver takes them: a neighbour mesh's locally generated traffic
-        // is injected by its workers on VC0 and therefore arrives here on VC0, which is what the
-        // VC0->VC1 crossover downstream of this receiver exists to handle. Arming only VC1 would
-        // leave that traffic to ordinary decode, which reads the source mesh's stale maps against
-        // this mesh's coordinates and forwards the packet instead of landing it.
-        //
-        // VC2 is excluded because it stays outside the express derivation entirely.
+        // A router receives inter-mesh landings iff its eth peer is in another mesh, and both carrier
+        // VCs take them: a neighbour mesh's workers inject on VC0, so that traffic arrives here on VC0
+        // rather than VC1. VC2 is excluded, staying outside the express derivation entirely.
         for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
             named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", i)] = (is_inter_mesh && i < 2) ? 1 : 0;
         }
