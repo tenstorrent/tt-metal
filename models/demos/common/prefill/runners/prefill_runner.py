@@ -380,31 +380,6 @@ def _d2d_recv(inbound, *, decode_meta: bool) -> tuple:
     return act, meta, metadata_msg
 
 
-_dbg_send_meta_calls = 0
-
-
-def _dbg_dump_send_meta(md_tensor, rank: int) -> None:
-    """DEBUG (PREFILL_DEBUG_META_SHARDS=1): read the metadata tensor back per shard immediately before
-    the outbound socket send. Pairs with the runtime's receive-side dump: send-side clean here but
-    receive-side garbage downstream localizes the fault to the cross-rack transport; send-side already
-    garbage localizes it to this rank's held buffer being stomped (e.g. by trace replay)."""
-    global _dbg_send_meta_calls
-    if os.environ.get("PREFILL_DEBUG_META_SHARDS", "0") != "1" or _dbg_send_meta_calls >= 3:
-        return
-    _dbg_send_meta_calls += 1
-    import torch
-
-    dev = md_tensor.device()
-    rows = ttnn.to_torch(md_tensor, mesh_composer=ttnn.ConcatMeshToTensor(dev, dim=0)).reshape(-1, 3).to(torch.int64)
-    uniq = torch.unique(rows, dim=0)
-    allsame = uniq.shape[0] == 1
-    logger.info(
-        f"[dbg-meta-send rank {rank}] call={_dbg_send_meta_calls - 1} shards={rows.shape[0]} all_same={allsame} "
-        f"shard0={rows[0].tolist()} n_distinct={uniq.shape[0]} "
-        f"first_diff_shard={None if allsame else int((rows != rows[0]).any(dim=1).nonzero()[0].item())}"
-    )
-
-
 def _d2d_send(
     outbound, activation: ttnn.Tensor, rank: int, meta: Optional[dict], *, deallocate: bool = True, metadata_msg=None
 ) -> None:
@@ -440,7 +415,6 @@ def _d2d_send(
                 ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
             ),
         )
-    _dbg_dump_send_meta(md_tensor, rank)
     ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
     if deallocate:
         ttnn.deallocate(activation)

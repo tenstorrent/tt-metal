@@ -374,36 +374,10 @@ class TtPrefillRuntime:
         The per-element slices read from the persistent copy rather than metadata_msg so both forms are
         guaranteed to carry the same chunk's words."""
         ttnn.copy(metadata_msg, self._trace_metadata_msg)
-        self._dbg_dump_meta_shards(metadata_msg)
         for i, dst in enumerate(self._trace_metadata):
             word = ttnn.slice(self._trace_metadata_msg, [0, 0, 0, i], [1, 1, 1, i + 1])
             ttnn.copy(word, dst)
             ttnn.deallocate(word)
-
-    def _dbg_dump_meta_shards(self, metadata_msg: ttnn.Tensor) -> None:
-        """DEBUG (PREFILL_DEBUG_META_SHARDS=1): read the raw socket metadata and the post-copy persistent
-        record back to host per shard and report whether all mesh shards are byte-identical. Isolates the
-        32-socket D2H metadata-mismatch: raw-inconsistent -> the socket/D2D deliver differs per shard;
-        raw-consistent but copy-inconsistent -> ttnn.copy into the ReplicateTensorToMesh buffer is the fault."""
-        import os
-
-        if os.environ.get("PREFILL_DEBUG_META_SHARDS", "0") != "1":
-            return
-        n = getattr(self, "_dbg_meta_calls", 0)
-        if n >= 3:
-            return
-        self._dbg_meta_calls = n + 1
-        rank = os.environ.get("OMPI_COMM_WORLD_RANK", "?")
-        composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-        for tag, t in (("raw_msg", metadata_msg), ("trace_msg", self._trace_metadata_msg)):
-            rows = ttnn.to_torch(t, mesh_composer=composer).reshape(-1, 3).to(torch.int64)
-            uniq = torch.unique(rows, dim=0)
-            allsame = uniq.shape[0] == 1
-            logger.info(
-                f"[dbg-meta rank {rank}] call={n} {tag} shards={rows.shape[0]} all_same={allsame} "
-                f"shard0={rows[0].tolist()} n_distinct={uniq.shape[0]} "
-                f"first_diff_shard={None if allsame else int((rows != rows[0]).any(dim=1).nonzero()[0].item())}"
-            )
 
     @property
     def trace_metadata_msg(self) -> Optional[ttnn.Tensor]:
