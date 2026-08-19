@@ -496,6 +496,71 @@ def test_kimi_mla(
     )
 
 
+# Mistral Small 4 119B: dense MLA at dims no current resident uses -- qk_head_dim 128 (family: 192 or
+# 256), kv_lora_rank 256 (family: 512), 32 heads (family: 64 or 128), and a LIVE YaRN factor of 128
+# (DeepSeek 40, GLM 1.0 = disabled) so the attention softmax scale is 0.194969 rather than the bare
+# qk_head_dim**-0.5 = 0.088388 (mla.py:381-385). Random weights only: this row exercises the MLA
+# shapes, and the pretrained path is covered by the block and transformer tests.
+# (32,1) is included because it is a CI-listed BLACKHOLE_GALAXY mesh (conftest CI_ALLOWED_FABRICS) and
+# is the closest available probe of the TP=1 half of the PP=4 x (8,1) serving proposal.
+# (8,1) is the PP=4 serving-stage geometry under discussion. It is NOT in the BLACKHOLE_GALAXY
+# CI_ALLOWED_FABRICS table (every entry there uses all 32 chips), so on a galaxy it requires an
+# 8-chip carve via TT_VISIBLE_DEVICES. Left in the list so the probe is one -k away; it auto-skips
+# on a full 32-chip session with "Requested more devices" inverted -- see the mesh guard.
+@pytest.mark.parametrize("mesh_device", [(8, 4), (32, 1), (8, 1)], ids=["8x4", "32x1", "8x1"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+        },
+    ],
+    ids=["line", "fabric2d"],
+    indirect=True,
+)
+@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
+@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
+@pytest.mark.parametrize("seq_len", [5 * 1024, 25 * 1024], ids=["seq5k", "seq25k"])
+@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
+@pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
+@pytest.mark.parametrize("variant", ["mistral_small4"], indirect=True, ids=["mistral4"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 bring-up targets Blackhole")
+@pytest.mark.timeout(0)
+def test_mistral4_mla(
+    use_pretrained,
+    request,
+    mesh_device,
+    seq_len,
+    skip_host_comparison,
+    scale_down_sl,
+    is_balanced,
+    is_ci_env,
+    is_ci_v2_env,
+    device_params,
+    variant,
+):
+    run_model(
+        variant,
+        use_pretrained,
+        request,
+        mesh_device,
+        seq_len,
+        skip_host_comparison,
+        scale_down_sl,
+        is_balanced,
+        is_ci_env,
+        is_ci_v2_env,
+        device_params,
+    )
+
+
 # ---------------------------------------------------------------------------------------------------
 # Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+ring_mla -> compare)
 # parametrized by where the prefix/reference come from. See test_mla_chunked_prefill below.
@@ -954,11 +1019,12 @@ _CHUNKED_SCENARIOS = (
 @pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
 @pytest.mark.parametrize(
     "variant",
-    ["deepseek_v3_d_p", "kimi_k2_6", "kimi_k3"],
+    ["deepseek_v3_d_p", "kimi_k2_6", "kimi_k3", "mistral_small4"],
     indirect=True,
     # "k3", not "kimi_k3": pytest -k is substring-based, so a "kimi_k3" id would silently widen every
     # existing `-k kimi` selector (CI yaml, tests/perf/test_mla_perf.py) to include K3.
-    ids=["dsv3", "kimi", "k3"],
+    # "mistral4" for the same reason -- keeps `-k mistral` selectors unambiguous.
+    ids=["dsv3", "kimi", "k3", "mistral4"],
 )
 @pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
