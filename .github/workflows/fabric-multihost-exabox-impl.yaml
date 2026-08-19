@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   load-test-matrix:
-    name: Load Test Matrix for ${{ inputs.sp-config }}
+    name: Load Test Matrix for ${{ inputs.sp-config || 'sc4' }}
     runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.filter-tests.outputs.matrix }}
@@ -63,7 +63,7 @@ jobs:
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "bh_${{ inputs.sp-config }}" \
+            "bh_${{ inputs.sp-config || 'sc4' }}" \
             ./.github/sku_config.yaml
 
       - name: Filter tests by sp_config
@@ -71,15 +71,15 @@ jobs:
         env:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
         run: |
-          FILTERED=$(echo "$MATRIX" | jq -c --arg sp "${{ inputs.sp-config }}" '[.[] | select(.sp_config == $sp)]')
+          FILTERED=$(echo "$MATRIX" | jq -c --arg sp "${{ inputs.sp-config || 'sc4' }}" '[.[] | select(.sp_config == $sp)]')
           if [ "$FILTERED" = "[]" ]; then
-            echo "::error::No tests found for sp_config '${{ inputs.sp-config }}' in ${TESTS_YAML_PATH}"
+            echo "::error::No tests found for sp_config '${{ inputs.sp-config || 'sc4'}}' in ${TESTS_YAML_PATH}"
             exit 1
           fi
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$FILTERED" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-          echo "Filtered tests for ${{ inputs.sp-config }}:"
+          echo "Filtered tests for ${{ inputs.sp-config || 'sc4' }}:"
           echo "$FILTERED" | jq .
 
   multihost-tests:
@@ -143,7 +143,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: fabric-${{ inputs.sp-config }}-${{ strategy.job-index }}-${{ github.run_id }}
+          name: fabric-${{ inputs.sp-config || 'sc4' }}-${{ strategy.job-index }}-${{ github.run_id }}
           if-no-files-found: warn
           retention-days: 14
           path: ${{ env.PIPELINE_DIR }}/
