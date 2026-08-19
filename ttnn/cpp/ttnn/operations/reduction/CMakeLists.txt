@@ -13,9 +13,6 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-# Every kernels dir ships both sources and headers: the JIT compiles these on the
-# installed layout, so a missing .cpp (accumulation) or .hpp (generic's
-# reduce_rm_dataflow_common.hpp) makes the packaged op unusable.
 file(
     GLOB_RECURSE kernels
     accumulation/device/kernels/*.cpp
