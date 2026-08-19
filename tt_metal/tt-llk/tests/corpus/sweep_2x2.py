@@ -147,7 +147,8 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-drain-schedule "
     "-mno-tt-tensix-macro-planner-residency "
     "-mno-tt-tensix-optimize-const-remat "
-    "-mno-tt-tensix-optimize-const-residency"
+    "-mno-tt-tensix-optimize-const-residency "
+    "-mno-tt-tensix-optimize-counted-row-formation"
 )
 ON_FLAGS = (
     "-mtt-tensix-optimize-latency-schedule "
@@ -207,7 +208,19 @@ ON_FLAGS = (
     # fire (where x7, sdpa-exp x2, binop-scalar x3; CRAQ 142/142, laneBS
     # evidence).  The spill-diag tier is unconditional (no flag).
     "-mtt-tensix-optimize-const-remat "
-    "-mtt-tensix-optimize-const-residency"
+    "-mtt-tensix-optimize-const-residency "
+    # Lane BM (next pin): counted-row parameterized formation (fire
+    # witness = the welford perf body dump: one 5-member parameterized
+    # record, 7 clones, body issue census 234 -> 218; dg fire twins in
+    # sfpi-gcc counted-row-formation-*).  MERGE-ORDER: this line lands
+    # only with the pin cycle whose toolchain accepts the flag.
+    "-mtt-tensix-optimize-counted-row-formation"
+    # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
+    # its only engagement channel was the trusted TTREGION source markers in
+    # the LLK headers, and trusted source annotation of the consumed library
+    # is rejected at the design level (LLK-pristine rule, conf R7).  The flag
+    # returns when the compiler PROVES region effects algorithmically
+    # (mop_cfg template-programming dataflow derivation — Lane BC).
 )
 REMOVED_FLAGS = ("-mtt-tensix-emit-loadmacro", "-mtt-tensix-analyze-loadmacro")
 # Weekly per-knob attribution: OFF set plus exactly one positive knob.
@@ -233,6 +246,7 @@ KNOBS = {
     "planner-residency": "-mtt-tensix-macro-planner-residency",
     "const-remat": "-mtt-tensix-optimize-const-remat",
     "const-residency": "-mtt-tensix-optimize-const-residency",
+    "counted-row-formation": "-mtt-tensix-optimize-counted-row-formation",
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
