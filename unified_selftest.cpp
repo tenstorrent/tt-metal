@@ -421,7 +421,7 @@ void example_matmul_acc() {
     Storage<Sq2> acc_storage(24);  // running total -- a different CB from out
     Storage<Sq2> out_storage(3);
 
-    Accumulator<AccumulatorMode::Dst, Sq2> acc(acc_storage, out_storage);
+    Accumulator<Sq2, AccumulatorMode::Dst> acc(acc_storage, out_storage);
     acc.clear();
 
     for (uint32_t k = 0; k < Geom::num_blocks; ++k) {
