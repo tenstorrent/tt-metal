@@ -7,22 +7,11 @@ Kimi-K3 LatentMoE device-perf gate on the 8x4 galaxy, measured with the real-tim
 profiler -- same mechanism as ``test_ttnn_hca_perf.py``, which already gates HCA perf on this
 SKU.
 
-Why not the tracy harness the deepseek MoE gates in ``test_moe_perf.py`` use: blaze builds
-with the profiler disabled (``blaze-models-prefill-tests.yaml`` passes no ``tracy:`` input ->
-``build-artifact.yaml`` adds ``--disable-profiler`` -> ``ENABLE_TRACY=OFF``, which early-returns
-before tracy's capture/csvexport targets), so ``build/tools/profiler/bin`` is empty there and the
-``python -m tracy`` subprocess that ``run_model_device_perf_test_with_merge`` shells out to has
-nothing to run. The real-time profiler is an in-process device API
-(``tt_metal/distributed/realtime_profiler_manager.cpp``), not gated on ``TRACY_ENABLE``, so it
-measures on the pipeline's ordinary build. It also drops the nested pytest re-run, which is what
-keeps this inside the leg's 22-minute slot.
-
 What the number is: over the programs the MoE forward dispatched, the sum of each program's
 critical path (max duration across the 32 chips). Close to but NOT the same as the tracy
 baseline it replaces -- ``merge_device_rows`` averages CCL ops across devices where this takes
 their max -- so this baseline was measured with the real-time profiler and must not be
-back-ported to the tracy path. For reference the tracy number was 12_924_852 ns, split Matmul
-2_196 us / CCL 1_042 us / Other 9_687 us (dispatch/combine/top-k dominates).
+back-ported to the tracy path.
 
 What the number excludes, verified on an 8x4 galaxy (warm caches, 58 programs x 32 chips =
 1856 records, 0 dropped, no program dispatched more than once per chip):
@@ -37,22 +26,13 @@ What the number excludes, verified on an 8x4 galaxy (warm caches, 58 programs x 
     get pulled *inside* the records: the same forward measured cold (JIT compiling ~1080 kernels)
     reported 19.01 ms, i.e. the E2E span rather than the sum. Hence the warm-up pass in the test.
 
-Still inside each record: the dispatcher prologue (loop-top -> go-signal mcast -> worker launch) and
-the completion-semaphore tail. Measured at <=1.5% against tracy's kernel-only sum -- roughly the
-observed run-to-run noise (12.944 / 13.080 ms on two warm runs). Isolating kernel spans exactly
-needs the kernel-zone instrumentation (``PROFILE_KERNEL``), which only a Tracy build compiles in --
-use tracy on a dev box for op-level tuning.
-
-Report-only until calibrated: ``_EXPECTED_NS`` starts as ``None``, so the first galaxy runs
-measure and log without gating. See the constant for what to do with the logged number.
+Recalibrating: set ``_EXPECTED_NS = None`` and the test measures and logs without gating, printing
+the value to set it back to. Do that on any box whose baseline you need to re-cut.
 
 Two limits carried over from the tracy version:
 
   * Measures the SiLU path, not the checkpoint's SiTU-GLU (#51335), so this baseline moves when
     that kernel lands.
-  * Forward only. At 896 experts the constructor's one-time weight tilize/typecast is a large
-    share of wall time but is not per-token cost; the profiler window is the forward call, so it
-    is excluded by construction (no signposts needed).
 """
 
 import os
@@ -75,15 +55,12 @@ _SEQ_LEN_PER_CHIP = 640
 # Capacity factor 5 carries over from K2.6, as in the pcc parametrize.
 _DISPATCH_BUFFER_CAPACITY_FACTOR = 5
 
-# None = report only, no perf gate. The tracy baseline this replaces (12_924_852 ns) is not a
-# comparable number (see the module docstring), so there is nothing honest to assert against until
-# the real-time profiler has reported once on the galaxy. Calibration is one step: take the
-# "realtime perf" ns this test logs on its first green run and set it here (TODO #53269) -- that
-# alone turns the gate on. The measurement itself still fails loudly if it produced no records.
-_EXPECTED_NS = None
-# 10 warm measurements on one 8x4 galaxy spanned 12.915-13.159 ms (median 12.991, stdev 0.64%),
-# i.e. +/-1.3% around the median holds every sample. 3% covers that, and sub-nominal DDR doubles it
-# to 6% via adjust_margin_for_ddr_speed.
+# Measured 2026-08-19 on an 8x4 BH galaxy (DDR 16000, 130W), warm forward, 58 programs.
+_EXPECTED_NS = 13_088_659
+# Repeated warm measurements on that box spanned 12.915-13.159 ms (stdev 0.63%, 1.89% peak to
+# peak), so 3% holds the observed run-to-run noise; sub-nominal DDR doubles it to 6% via
+# adjust_margin_for_ddr_speed. The baseline above is one run, so the band sits nearer the top of
+# that spread than the middle -- recentre it if a regression this shallow ever needs catching.
 _MARGIN = 0.03
 
 # The profiler's default 1s collection deadline is sized for a single block's programs. The MoE

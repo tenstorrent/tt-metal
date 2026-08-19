@@ -97,8 +97,3 @@ def test_deepseek_v3_moe_perf_galaxy_pad50():
         margin=margin,
         comments="seq3200_glx_8x4_ground_truth_padded_50_percent_w_awareness",
     )
-
-
-# Kimi-K3's LatentMoE perf gate is NOT here: it needs a profiler build that blaze does not
-# produce, so it measures with the real-time profiler instead -- see
-# `test_kimi_k3_moe_perf.py`.
