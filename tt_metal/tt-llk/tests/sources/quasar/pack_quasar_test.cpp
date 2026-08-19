@@ -16,6 +16,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -32,7 +33,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A         = params.buffer_A;
 #endif
     constexpr std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
-    const std::uint32_t buf_desc_id           = 0;
     const std::uint32_t num_tiles_per_unpack  = TILE_CNT;
 
     {
@@ -74,7 +74,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
-        program_buf_desc(buf_desc_id, tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
@@ -85,7 +85,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_configure_unary_<SELECTED_UNPACKER>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
-        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, tensor_shape_A, num_tiles_per_unpack);
+        _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape_A, num_tiles_per_unpack);
         PROFILER_SYNC();
     }
     {
@@ -228,12 +229,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -243,7 +246,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int RELU_CONFIG           = params.RELU_CONFIG;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    std::uint32_t const buf_desc_id        = 8;
     const std::uint32_t num_tiles_per_pack = TILE_CNT;
 
     {
@@ -269,10 +271,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
-        program_buf_desc(buf_desc_id, tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        ckernel::trisc::bfd_alloc_and_program<pack_res>(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         const ckernel::ReluConfig relu_config = ckernel::ReluConfig::from_packed(RELU_CONFIG);
-        _llk_pack_init_(buf_desc_id, tensor_shape_A, num_tiles_per_pack);
+        _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), tensor_shape_A, num_tiles_per_pack);
         _llk_pack_relu_config_<p_pacr::PACK0, is_fp32_dest_acc_en>(relu_config);
         PROFILER_SYNC();
     }

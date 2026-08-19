@@ -18,13 +18,9 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-// Buffer descriptor IDs for TDMA engines - these are indices into the hardware buffer descriptor table
-constexpr std::uint32_t buf_desc_id_src_a = 29; // Source A matrix input buffer
-constexpr std::uint32_t buf_desc_id_src_b = 30; // Source B matrix input buffer
-constexpr std::uint32_t buf_desc_id_dst   = 31; // Destination matrix output buffer
-
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_unpack_matmul.h"
 #include "params.h"
 
@@ -47,6 +43,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
+        ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Unp0>(); // allocate srcA (order matters: A before B)
+        ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Unp1>(); // allocate srcB
         // src A input configuration
         buffer_descriptor_u bd_src_a = {0};
         bd_src_a.f.l1_addr_16B       = L1_ADDRESS(buffer_A[0]);
@@ -65,13 +63,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         bd_src_b.f.y_dim             = FACE_R_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
         bd_src_b.f.z_dim             = num_faces_B; // Number of faces = 4, tiny tiles not supported for quasar
 
-        _configure_buf_desc_table_(buf_desc_id_src_a, bd_src_a);
-        _configure_buf_desc_table_(buf_desc_id_src_b, bd_src_b);
+        _configure_buf_desc_table_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), bd_src_a);
+        _configure_buf_desc_table_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(), bd_src_b);
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(static_cast<DataFormat>(formats.unpack_A_dst));
         _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(static_cast<DataFormat>(formats.unpack_B_dst));
 
-        _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(buf_desc_id_src_a, buf_desc_id_src_b, CT_DIM, RT_DIM, KT_DIM); // transpose in src_A not supported for
-                                                                                                                        // quasar
+        _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+            CT_DIM,
+            RT_DIM,
+            KT_DIM); // transpose in src_A not supported for quasar
         PROFILER_SYNC();
     }
     {
@@ -188,6 +190,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_matmul.h"
 #include "params.h"
@@ -204,6 +207,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
+    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
+    ckernel::trisc::bfd_alloc<pack_res>();
     {
         ZONE_SCOPED("INIT")
         // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
@@ -226,9 +231,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         bd_dst.f.y_dim             = FACE_R_DIM;
         bd_dst.f.z_dim             = num_faces;
 
-        _configure_buf_desc_table_(buf_desc_id_dst, bd_dst);
+        _configure_buf_desc_table_(ckernel::trisc::bfd_current<pack_res>(), bd_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_matmul_init_(buf_desc_id_dst, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/); // Use destination buffer descriptor for packing output
+        _llk_pack_matmul_init_(
+            ckernel::trisc::bfd_current<pack_res>(), RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/); // Use destination buffer descriptor for packing output
         PROFILER_SYNC();
     }
     {

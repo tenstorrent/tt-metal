@@ -26,6 +26,7 @@
 #ifdef LLK_TRISC_UNPACK
 
 #include "cfg_defines.h"
+#include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -44,7 +45,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces       = params.num_faces;
     const Operand& buffer_A             = params.buffer_A;
 #endif
-    const std::uint32_t buf_desc_id = 0;
+    ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Unp0>(); // allocate srcA
 
     {
         ZONE_SCOPED("INIT")
@@ -80,7 +81,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         bd_val.f.y_dim             = TEST_FACE_R_DIM;
         bd_val.f.z_dim             = num_faces;
 
-        _configure_buf_desc_table_(buf_desc_id, bd_val);
+        _configure_buf_desc_table_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), bd_val);
 
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
@@ -92,7 +93,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
 
-        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
         PROFILER_SYNC();
     }
     {
@@ -269,6 +271,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cfg_defines.h"
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -286,7 +289,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t DST_TILE_IDX    = params.DST_TILE_IDX;
     const Operand& buffer_Res           = params.buffer_Res;
 #endif
-    std::uint32_t const buf_desc_id        = 8;
+    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
+    ckernel::trisc::bfd_alloc<pack_res>();
     const std::uint32_t num_tiles_per_pack = 1; // only the SFPU result tile is packed
 
     {
@@ -316,10 +320,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         bd_val.f.y_dim             = TEST_FACE_R_DIM;
         bd_val.f.z_dim             = num_faces;
 
-        _configure_buf_desc_table_(buf_desc_id, bd_val);
+        _configure_buf_desc_table_(ckernel::trisc::bfd_current<pack_res>(), bd_val);
 
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
+        _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
         PROFILER_SYNC();
     }
     {

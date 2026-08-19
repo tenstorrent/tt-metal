@@ -9,20 +9,6 @@
 #include "ckernel_trisc_common.h"
 #include "tensor_shape.h"
 
-/**
- * @brief Build a buffer descriptor from the tensor shape / L1 base / format and program it into the
- * BD table entry `buf_desc_id`. Test-side analog of the migrated op inits: it does what the product
- * `bfd_alloc_and_program` does, but with a caller-chosen id (tests pick fixed ids) and without
- * allocating. The register data format is passed separately to the `_llk_*_configure_` call.
- *
- * @tparam MODE: L1 access mode; Strided (PACR/UNPACR_STRIDE tiny-tiles) forces y_dim = z_dim = 1.
- */
-template <ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
-inline void program_buf_desc(std::uint32_t buf_desc_id, const ckernel::TensorShape& shape, unsigned base_l1_16B, unsigned data_format)
-{
-    ckernel::trisc::_configure_buf_desc_table_(buf_desc_id, ckernel::trisc::construct_buf_desc<MODE>(shape, base_l1_16B, data_format));
-}
-
 inline void clear_dest_dvalid_wait_mask(std::uint32_t wait_mask_addr)
 {
     volatile std::uint32_t* cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE);

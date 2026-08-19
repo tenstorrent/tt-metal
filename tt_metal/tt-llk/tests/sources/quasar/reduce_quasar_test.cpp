@@ -17,6 +17,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_reduce.h"
 #include "params.h"
@@ -33,18 +34,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
 #endif
-    const std::uint32_t buf_desc_id_a         = 0;
-    const std::uint32_t buf_desc_id_b         = 1;
     const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
 
     {
         ZONE_SCOPED("INIT")
-        program_buf_desc(buf_desc_id_a, tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        program_buf_desc(buf_desc_id_b, tensor_shape_A, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape_A, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
 
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
-        _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(buf_desc_id_a, buf_desc_id_b, tensor_shape_A, 1 /*num_tiles_per_unpack*/);
+        _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+            tensor_shape_A,
+            1 /*num_tiles_per_unpack*/);
         PROFILER_SYNC();
     }
     {
@@ -194,12 +197,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -208,7 +213,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    const std::uint32_t buf_desc_id           = 8;
     const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
 
     {
@@ -225,9 +229,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        program_buf_desc(buf_desc_id, tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        ckernel::trisc::bfd_alloc_and_program<pack_res>(tensor_shape_A, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(buf_desc_id, tensor_shape_A, 1 /*num_tiles_per_pack*/);
+        _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), tensor_shape_A, 1 /*num_tiles_per_pack*/);
         _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape_A);
         PROFILER_SYNC();
     }

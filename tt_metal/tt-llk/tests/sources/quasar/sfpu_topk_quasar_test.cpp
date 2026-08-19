@@ -40,6 +40,7 @@ constexpr std::uint8_t TOPK_L1_WB_SEM = 2;
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -59,7 +60,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Dvalid setup: FPU -> SFPU -> PACK
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
 
-    const std::uint32_t buf_desc_id = 0;
+    ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Unp0>();
 
     // The L1 base is stable; tile offsets are passed to execute.
     // Keep unpack configuration per stage because values use
@@ -112,18 +113,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                     bd_val.f.format = static_cast<std::uint8_t>(unpack_src_format);
 
-                    _configure_buf_desc_table_(buf_desc_id, bd_val);
+                    _configure_buf_desc_table_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), bd_val);
                     _llk_unpack_configure_unary_<p_unpacr::UNP_A>(static_cast<DataFormat>(unpack_dst_format));
 
                     if (first_iteration)
                     {
                         _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true /*transpose*/, is_fp32_dest_acc_en>(
-                            buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1);
+                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1);
                     }
                     else
                     {
                         _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false /*transpose*/, is_fp32_dest_acc_en>(
-                            buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1);
+                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1);
                     }
 
                     const int first_tile_index  = tile_row_offset + stage_offset + tile_pair_offset;
@@ -307,6 +308,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cfg_defines.h"
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -320,7 +322,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int NUM_VALUE_TILES_PER_ROW            = params.FULL_CT_DIM / NUM_STAGES;
     const int NUM_TILES_IN_RESULT_BUFFER_PER_ROW = (TOPK_K / ckernel::trisc::TILE_C_DIM) * NUM_STAGES;
 
-    const std::uint32_t buf_desc_id = 8;
+    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
+    ckernel::trisc::bfd_alloc<pack_res>();
 
     // Dest dvalid sync chain: FPU (datacopy) -> SFPU (topk) -> PACK.
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
@@ -349,7 +352,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             for (int current_tile_pair_idx = 0; current_tile_pair_idx < num_pairs; ++current_tile_pair_idx)
             {
-                _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1);
+                _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, 1);
 
                 // PACR stalls on the SFPU dvalid; no explicit math-done wait needed.
                 for (Stage stage : {Stage::Values, Stage::Indices})
@@ -378,7 +381,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         bd_val.f.l1_addr_16B       = params.buffer_A[tile_L1_offset] / 16;
                     }
 
-                    _configure_buf_desc_table_(buf_desc_id, bd_val);
+                    _configure_buf_desc_table_(ckernel::trisc::bfd_current<pack_res>(), bd_val);
 
                     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(pack_src_format), ckernel::ReluConfig::none());
                     _llk_pack_(tile_dest_offset, 0, ckernel::DEFAULT_TENSOR_SHAPE);

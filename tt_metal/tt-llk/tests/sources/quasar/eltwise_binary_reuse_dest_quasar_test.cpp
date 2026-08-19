@@ -21,6 +21,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
 #include "params.h"
@@ -39,12 +40,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A             = params.buffer_A;
     const Operand& buffer_B             = params.buffer_B;
 #endif
-    const std::uint32_t buf_desc_id_a          = 0;
-    const std::uint32_t buf_desc_id_b          = 1;
-    constexpr bool TRANSPOSE_EN                = false;
-    constexpr bool IS_32B_DEST_EN              = false;
-    constexpr std::uint32_t buf_desc_id_phase2 = (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ? buf_desc_id_a : buf_desc_id_b;
-    constexpr std::uint32_t unp_sel_phase2     = (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
+    ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Unp0>(); // allocate srcA (order matters: A before B)
+    ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Unp1>(); // allocate srcB
+    constexpr bool TRANSPOSE_EN            = false;
+    constexpr bool IS_32B_DEST_EN          = false;
+    constexpr std::uint32_t unp_sel_phase2 = (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
 
     {
         ZONE_SCOPED("INIT")
@@ -65,8 +65,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         bd_val_B.f.y_dim       = TEST_FACE_R_DIM;
         bd_val_B.f.z_dim       = num_faces;
 
-        _configure_buf_desc_table_(buf_desc_id_a, bd_val_A);
-        _configure_buf_desc_table_(buf_desc_id_b, bd_val_B);
+        _configure_buf_desc_table_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), bd_val_A);
+        _configure_buf_desc_table_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(), bd_val_B);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
 
@@ -94,7 +94,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // Phase 1 and phase 2 share unpack's bank0 instruction
                 // buffer, so select the phase 1 MOP before executing it.
                 _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32B_DEST_EN>(
-                    buf_desc_id_a, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/);
+                    ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/);
                 for (std::uint32_t i = 0; i < INPUT_TILE_CNT; ++i)
                 {
                     _llk_unpack_unary_operand_<p_unpacr::UNP_A>(i, ckernel::DEFAULT_TENSOR_SHAPE);
@@ -102,7 +102,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 // Select the reuse-dest phase 2 MOP after phase 1 completes.
                 _llk_unpack_unary_operand_init_<unp_sel_phase2, TRANSPOSE_EN, IS_32B_DEST_EN, REUSE_DEST_TYPE>(
-                    buf_desc_id_phase2, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/);
+                    (REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCB) ? ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>()
+                                                                                  : ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+                    ckernel::DEFAULT_TENSOR_SHAPE,
+                    1 /*num_tiles_per_unpack*/);
                 for (std::uint32_t i = 0; i < INPUT_TILE_CNT; ++i)
                 {
                     _llk_unpack_unary_operand_<unp_sel_phase2, REUSE_DEST_TYPE>(i, ckernel::DEFAULT_TENSOR_SHAPE);
@@ -209,6 +212,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -227,7 +231,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
     const Operand& buffer_Res                     = params.buffer_Res;
 #endif
-    std::uint32_t const buf_desc_id = 8;
+    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
+    ckernel::trisc::bfd_alloc<pack_res>();
 
     {
         ZONE_SCOPED("INIT")
@@ -250,9 +255,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         bd_val.f.y_dim       = TEST_FACE_R_DIM;
         bd_val.f.z_dim       = num_faces;
 
-        _configure_buf_desc_table_(buf_desc_id, bd_val);
+        _configure_buf_desc_table_(ckernel::trisc::bfd_current<pack_res>(), bd_val);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
+        _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
         PROFILER_SYNC();
     }
     {

@@ -25,6 +25,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifdef LLK_TRISC_UNPACK
 
 #include "experimental/llk_unpack_AB_sub_bcast_col_custom.h"
+#include "llk_bfd_alloc.h"
 #include "llk_unpack_common.h"
 #include "params.h"
 
@@ -33,15 +34,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t buf_desc_id_a = 0;
-    const std::uint32_t buf_desc_id_b = 1;
-
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     const auto tensor_shape = tensor_shape_from_params(params);
 
-    program_buf_desc(buf_desc_id_a, tensor_shape, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
-    program_buf_desc(buf_desc_id_b, tensor_shape, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
 
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
         static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
@@ -54,7 +52,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
         // SrcB is the same single tile for every block, so its L1 tile index stays 0.
-        _llk_unpack_AB_sub_bcast_col_custom_(buf_desc_id_a, buf_desc_id_b, block * ct_dim, 0 /*start_l1_tile_idx_1*/, ct_dim, tensor_shape);
+        _llk_unpack_AB_sub_bcast_col_custom_(
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+            block * ct_dim,
+            0 /*start_l1_tile_idx_1*/,
+            ct_dim,
+            tensor_shape);
     }
 }
 
@@ -97,24 +101,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t buf_desc_id = 8;
-
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     const auto tensor_shape = tensor_shape_from_params(params);
 
-    program_buf_desc(buf_desc_id, tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
+    ckernel::trisc::bfd_alloc_and_program<pack_res>(tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_init_(buf_desc_id, tensor_shape, 1 /*num_tiles_per_pack*/);
+    _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), tensor_shape, 1 /*num_tiles_per_pack*/);
 
     const std::uint32_t ct_dim     = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks = static_cast<std::uint32_t>(params.OUTPUT_NUM_BLOCKS);

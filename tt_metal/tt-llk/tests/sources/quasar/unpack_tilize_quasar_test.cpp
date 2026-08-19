@@ -16,6 +16,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_tilize.h"
@@ -31,7 +32,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
 #endif
-    const std::uint32_t buf_desc_id = 0;
 
     {
         ZONE_SCOPED("INIT")
@@ -81,11 +81,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if (tensor_shape.face_r_dim <= ckernel::unpack::UNPACR_STRIDE_MAX_ROWS)
         {
-            program_buf_desc<L1AccessMode::Strided>(buf_desc_id, tensor_shape, l1_addr_16B, formats.unpack_A_src);
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(
+                tensor_shape, l1_addr_16B, formats.unpack_A_src);
         }
         else
         {
-            program_buf_desc(buf_desc_id, tensor_shape, l1_addr_16B, formats.unpack_A_src);
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Continuous>(
+                tensor_shape, l1_addr_16B, formats.unpack_A_src);
         }
 
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
@@ -100,15 +102,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (unpack_to_dest)
         {
-            _llk_unpack_tilize_block_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
+            _llk_unpack_tilize_block_init_<FULL_CT_DIM, BLOCK_CT_DIM>(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape);
         }
         else if (tensor_shape.face_r_dim < FACE_R_DIM)
         {
-            _llk_unpack_tilize_strided_init_small_faces_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(buf_desc_id, tensor_shape, FULL_CT_DIM, BLOCK_CT_DIM);
+            _llk_unpack_tilize_strided_init_small_faces_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(
+                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, FULL_CT_DIM, BLOCK_CT_DIM);
         }
         else
         {
-            _llk_unpack_tilize_init_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(buf_desc_id, FULL_CT_DIM, BLOCK_CT_DIM, tensor_shape);
+            _llk_unpack_tilize_init_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en>(
+                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), FULL_CT_DIM, BLOCK_CT_DIM, tensor_shape);
         }
         PROFILER_SYNC();
     }
@@ -272,12 +276,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -286,7 +292,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    std::uint32_t const buf_desc_id        = 8;
     const std::uint32_t num_tiles_per_pack = TILE_CNT;
 
     {
@@ -306,9 +311,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
-        program_buf_desc(buf_desc_id, tensor_shape, L1_ADDRESS(buffer_Res[0]) /*l1_addr_16B*/, formats.pack_dst);
+        ckernel::trisc::bfd_alloc_and_program<pack_res>(tensor_shape, L1_ADDRESS(buffer_Res[0]) /*l1_addr_16B*/, formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none() /*relu_config*/);
-        _llk_pack_init_(buf_desc_id, tensor_shape, num_tiles_per_pack);
+        _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), tensor_shape, num_tiles_per_pack);
         PROFILER_SYNC();
     }
     {

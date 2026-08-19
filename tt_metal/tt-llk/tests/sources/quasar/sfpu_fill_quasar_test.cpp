@@ -36,6 +36,7 @@ inline bool is_int_fill_format(DataFormat fmt)
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -46,8 +47,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t buf_desc_id = 0; // T0 source descriptor slot for buffer_A
-    const std::uint32_t num_tiles   = params.TILE_CNT;
+    ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Unp0>(); // T0 source descriptor slot for buffer_A
+    const std::uint32_t num_tiles = params.TILE_CNT;
 
     // DEST DVALID handshake: T0 is the producer, T1 (SFPU) and T2 (PACK) are the consumers.
     // fill always uses unpack_to_dest (SFPU test — no FPU datacopy path).
@@ -76,11 +77,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // TDMA descriptor: bind the buffer descriptor to slot 0; reg_data_format =
     // unpack_A_dst is the DEST-side (post-conversion) format.
-    _configure_buf_desc_table_(buf_desc_id, bd_val);
+    _configure_buf_desc_table_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), bd_val);
 
     // Configure unpacker → init unary operand path → unpack tile 0 from L1 into DEST.
     _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles);
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, num_tiles);
     _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, ckernel::DEFAULT_TENSOR_SHAPE);
 
     // Release DEST section to the SFPU consumer.
@@ -168,6 +170,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cfg_defines.h"
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -177,7 +180,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    std::uint32_t const buf_desc_id        = 8; // T2 destination descriptor slot for buffer_Res
+    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
+    ckernel::trisc::bfd_alloc<pack_res>(); // T2 destination descriptor slot for buffer_Res
     const std::uint32_t num_tiles_per_pack = params.TILE_CNT;
 
     // PACK is the final consumer of the DEST DVALID chain.
@@ -194,11 +198,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // TDMA descriptor: bind buffer_Res to slot 8; reg_data_format = pack_src is
     // the DEST-side format the packer reads.
-    _configure_buf_desc_table_(buf_desc_id, bd_val);
+    _configure_buf_desc_table_(ckernel::trisc::bfd_current<pack_res>(), bd_val);
 
     // Configure pack engine 0 → init → pack tile from DST_INDEX into buffer_Res → release section.
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
+    _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
     _llk_pack_(params.DST_INDEX, 0, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }

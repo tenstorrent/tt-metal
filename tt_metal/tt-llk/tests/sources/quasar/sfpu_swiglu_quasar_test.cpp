@@ -12,6 +12,7 @@
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_bfd_alloc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -30,7 +31,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t buf_desc_id     = 0;
+    ckernel::trisc::bfd_alloc<ckernel::trisc::BfdResource::Unp0>();
     const std::uint32_t num_input_tiles = 2; // gate + up
 
     if (unpack_to_dest)
@@ -51,7 +52,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
     bd_val.f.z_dim       = params.num_faces;
 
-    _configure_buf_desc_table_(buf_desc_id, bd_val);
+    _configure_buf_desc_table_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), bd_val);
 
     if (is_fp32_dest_acc_en && !unpack_to_dest)
     {
@@ -65,7 +66,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
     }
 
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_input_tiles);
+    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, num_input_tiles);
     _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, ckernel::DEFAULT_TENSOR_SHAPE);
 
     if (unpack_to_dest)
@@ -176,6 +178,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cfg_defines.h"
+#include "llk_bfd_alloc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -185,7 +188,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    std::uint32_t const buf_desc_id          = 8;
+    constexpr auto pack_res = (ckernel::TRISC_ID == 2) ? ckernel::trisc::BfdResource::Pack0 : ckernel::trisc::BfdResource::Pack1;
+    ckernel::trisc::bfd_alloc<pack_res>();
     constexpr std::uint32_t num_output_tiles = 1;
 
     // Declare the same dvalid client chain that UNPACK/MATH used, seen from
@@ -206,10 +210,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_val.f.y_dim             = params.TEST_FACE_R_DIM;
     bd_val.f.z_dim             = params.num_faces;
 
-    _configure_buf_desc_table_(buf_desc_id, bd_val);
+    _configure_buf_desc_table_(ckernel::trisc::bfd_current<pack_res>(), bd_val);
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_output_tiles);
+    _llk_pack_init_(ckernel::trisc::bfd_current<pack_res>(), ckernel::DEFAULT_TENSOR_SHAPE, num_output_tiles);
 
     // Output lives at Dest tile index 2 — this is the layout *this driver*
     // uses (see "Layout used by this test" at the top of the file): gate=0,
