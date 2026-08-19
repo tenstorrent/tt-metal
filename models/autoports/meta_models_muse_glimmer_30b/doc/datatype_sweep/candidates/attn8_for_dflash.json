@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "config_id": "attn8-for-dflash",
+  "description": "c14 with attention projections at BFP8 instead of BFP4. Not a throughput candidate: the sweep measured this geometry (c00-baseline-attn8-mlp4-kv8-lofi) at 38.036 t/s/u against c14's 38.226 -- 0.5% slower at the same top-1 0.99. The hypothesis is that DFlash acceptance depends on the target's argmax fidelity, which top-1 at 0.99 resolution cannot resolve and which the sweep's ranking metric (non-speculative t/s/u) does not reward.",
+  "weights": {
+    "attn_projections": {
+      "dtype": "bfloat8_b",
+      "roles": [
+        "wqkv",
+        "attn_gate",
+        "o_proj"
+      ]
+    },
+    "mlp_gate_up": {
+      "dtype": "bfloat4_b",
+      "roles": [
+        "mlp_gate",
+        "mlp_up"
+      ]
+    },
+    "mlp_down": {
+      "dtype": "bfloat4_b",
+      "roles": [
+        "mlp_down"
+      ]
+    },
+    "lm_head": {
+      "dtype": "bfloat4_b",
+      "output_dtype": "bfloat16",
+      "matmul": "dram_sharded",
+      "cores": 52,
+      "in0_block_w": 2
+    },
+    "embedding": {
+      "dtype": "bfloat16",
+      "note": "structural: ttnn.embedding needs a ROW_MAJOR BF16 table"
+    },
+    "norms": {
+      "dtype": "bfloat16",
+      "note": "structural: every RMSNorm weight is packed BF16"
+    }
+  },
+  "layer_exceptions": [],
+  "compute_fidelity": {
+    "decode": {
+      "default": "LoFi",
+      "by_role": {}
+    },
+    "prefill": {
+      "default": "LoFi",
+      "by_role": {}
+    },
+    "lm_head": {
+      "fidelity": "LoFi",
+      "fp32_dest_acc_en": false
+    }
+  },
+  "activations": {
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16"
+  },
+  "ccl": {
+    "prefill_dtype": "bfloat8_b",
+    "decode_dtype": "bfloat8_b",
+    "decode_dtype_note": "null means the collective carries the activation dtype"
+  },
+  "kv_cache": {
+    "dtype": "bfloat8_b"
+  },
+  "decoder_overrides": {},
+  "logits": {
+    "lm_head_output_dtype": "bfloat16",
+    "sampling_input_dtype": "bfloat16",
+    "sampling_implementation": "models.common.sampling.SamplingGenerator"
+  },
+  "selected": false,
+  "provenance": {
+    "stage": "dflash",
+    "selected_by": "manual: DFlash acceptance experiment",
+    "selection_reason": "Acceptance is the multiplier on every per-iteration DFlash term. Three datapoints on this checkpoint: CPU target + CPU drafter 5.33 accepted/forward (F1), device target + HF drafter 2.57, device target + device drafter 2.50 (F15) -- i.e. the device target's argmax is what rejects drafts, not the drafter. This moves precision back up exactly where argmax is decided and nowhere else."
+  }
+}

@@ -135,6 +135,16 @@ def main() -> None:
         action="store_true",
         help="diagnostic: run the offset-free graph with no trace, isolating graph from replay",
     )
+    parser.add_argument(
+        "--precision-config",
+        default=None,
+        help=(
+            "path to a precision artifact to build with, instead of the selected one. Exists "
+            "because DFlash cares about a property the datatype sweep does not rank: the "
+            "target's argmax fidelity sets acceptance, and acceptance multiplies every "
+            "per-iteration cost. See doc/datatype_sweep/candidates/."
+        ),
+    )
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
@@ -156,6 +166,8 @@ def main() -> None:
             # block size has to divide it. 32 is also the floor the chunked SDPA offset can
             # shrink to, so start_pos stays legal for every anchor.
             build_kwargs["page_block_size"] = 32
+        if args.precision_config:
+            build_kwargs["precision_config"] = args.precision_config
         gen = build_generator(".", mesh, **build_kwargs)
         tok = gen.tokenizer
 
@@ -275,6 +287,7 @@ def main() -> None:
             "page_block": args.page_block,
             "verify": args.verify,
             "trace_verify": args.trace_verify,
+            "precision_config": args.precision_config or "selected",
             "dflash": stats.as_dict(),
             "dflash_token_ids": dflash_tokens,
             "baseline_token_ids": baseline_tokens,

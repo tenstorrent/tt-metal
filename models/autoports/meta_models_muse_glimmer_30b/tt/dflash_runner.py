@@ -398,7 +398,11 @@ class DFlashRunner:
         pieces = []
         for layer_idx in self._tap_layers():
             tensor = taps[layer_idx]
-            host = ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(self.model.mesh_device, dim=0))[0:1]
+            # Device 0's copy only.  Tapped hidden states are *replicated* -- each device
+            # holds the full 6656 width, which is why five of them feed a 33280-wide
+            # ``encoder.fc`` -- so composing the mesh moved four identical copies to keep
+            # one: 8.5 MB per iteration to use 2.1 MB.
+            host = ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
             ttnn.deallocate(tensor)
             host = host.reshape(1, -1, self.config.hidden_size)[:, offset : offset + num_rows, :]
             # Kept in bf16 rather than widened to float32: it is uploaded as bf16, and at
@@ -466,9 +470,8 @@ class DFlashRunner:
         """
         pieces = []
         for layer_idx in self._tap_layers():
-            host = ttnn.to_torch(taps[layer_idx], mesh_composer=ttnn.ConcatMeshToTensor(self.model.mesh_device, dim=0))[
-                0:1
-            ]
+            # Device 0's copy only; see ``_taps_to_host``.
+            host = ttnn.to_torch(ttnn.get_device_tensors(taps[layer_idx])[0])
             host = host.reshape(1, -1, self.config.hidden_size)[:, offset : offset + num_rows, :]
             pieces.append(host.to(torch.bfloat16))
         return torch.cat(pieces, dim=-1)

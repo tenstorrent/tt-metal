@@ -480,6 +480,14 @@ class _DFlashLayer(LightweightModule):
     # head dimension, still pass.  It would be valid at ``block >= 32``.
 
     def _attend(self, query: ttnn.Tensor, key: ttnn.Tensor, value: ttnn.Tensor, mask: ttnn.Tensor, block: int):
+        """Attention over a caller-owned K/V, consuming ``query``.
+
+        **Ownership, and it is load-bearing.**  This frees ``query`` and does *not* free
+        ``key``/``value``: both are rebound over ``repeat_interleave`` below, so the
+        deallocations here release the GQA-expanded copies rather than what the caller
+        passed.  That is exactly the contract a persistent K/V cache needs -- a callee that
+        freed its K/V would destroy the cache -- so the caller frees them if it owns them.
+        """
         config = self.config
         key = ttnn.repeat_interleave(key, config.num_kv_groups, dim=1)
         value = ttnn.repeat_interleave(value, config.num_kv_groups, dim=1)
@@ -491,6 +499,8 @@ class _DFlashLayer(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
+        # Consumed by the matmul; the inlined copy in ``forward`` frees it here too.
+        ttnn.deallocate(query)
         ttnn.deallocate(key_t)
         scores = ttnn.mul(scores, config.sdpa_scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         scores = ttnn.add(scores, mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -550,6 +560,11 @@ class _DFlashLayer(LightweightModule):
             cached_k, cached_v = cache.append(layer_idx, key_ctx, value_ctx)
         else:
             cached_k, cached_v = cache.k[layer_idx], cache.v[layer_idx]
+            if cached_k is None or cached_v is None:
+                raise ValueError(
+                    f"layer {layer_idx} has no cached K/V and no context was passed: the first "
+                    "cached call must carry the prompt's context rows"
+                )
 
         query = ttnn.linear(
             normed,
@@ -573,6 +588,9 @@ class _DFlashLayer(LightweightModule):
         ttnn.deallocate(value_win)
 
         attn_out = self._attend(query, key, value, mask, block)
+        # ``_attend`` owns only ``query``; these concat buffers belong to this call.
+        ttnn.deallocate(key)
+        ttnn.deallocate(value)
         return self._feed_forward(hidden_states, attn_out)
 
     def forward(
@@ -879,7 +897,12 @@ class DFlashDrafter(LightweightModule):
             ttnn.deallocate(context)
         for tensor in (*(rope_ctx or ()), *rope_win, mask):
             ttnn.deallocate(tensor)
-        return self.final_norm(hidden)
+        # ``final_norm`` allocates its own output, so the last layer's hidden state is dead
+        # the moment it returns -- the fault F19 recorded, already fixed in
+        # ``_forward_with_positions`` and not here.
+        out = self.final_norm(hidden)
+        ttnn.deallocate(hidden)
+        return out
 
     def forward_padded(
         self,
