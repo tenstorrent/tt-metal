@@ -111,7 +111,8 @@ public:
         this->cq_id = cq_id;
         this->expected_num_workers_completed = expected_num_workers_completed;
         if (src_pinned) {
-            const uint64_t relay_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+            const uint64_t relay_alignment =
+                MetalContext::instance(extract_context_id(buffer.device())).hal().get_alignment(HalMemType::HOST);
             const uint64_t alignment_offset = src_addr % relay_alignment;
             if (alignment_offset != 0) {
                 this->alignment_prefix_bytes = relay_alignment - alignment_offset;
@@ -437,8 +438,10 @@ int32_t calculate_num_pages_available_in_cq(
 }
 
 bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer, uint32_t num_subdevices) {
-    const CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    const uint32_t max_data_size = calculate_max_prefetch_data_size_bytes(dispatch_core_type, num_subdevices);
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(buffer.device()));
+    const CoreType dispatch_core_type = metal_ctx.get_dispatch_core_manager().get_dispatch_core_type();
+    const uint32_t max_data_size =
+        calculate_max_prefetch_data_size_bytes(metal_ctx.get_context_id(), dispatch_core_type, num_subdevices);
     return buffer.aligned_page_size() > max_data_size;
 }
 
@@ -446,7 +449,9 @@ uint32_t calculate_partial_page_size(const Buffer& buffer) {
     const HalMemType buffer_mem_type = buffer.memory_type();
     const uint32_t partial_page_size = tt::align(
         DispatchSettings::BASE_PARTIAL_PAGE_SIZE_DISPATCH,
-        MetalContext::instance().hal().get_common_alignment_with_pcie(buffer_mem_type));
+        MetalContext::instance(extract_context_id(buffer.device()))
+            .hal()
+            .get_common_alignment_with_pcie(buffer_mem_type));
     return partial_page_size;
 }
 
@@ -465,15 +470,16 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
 
     buf_dispatch_constants.issue_queue_cmd_limit = sysmem_manager.get_issue_queue_limit(cq_id);
     buf_dispatch_constants.max_prefetch_cmd_size =
-        MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+        MetalContext::instance(sysmem_manager.get_context_id()).dispatch_mem_map().max_prefetch_command_size();
 
     return buf_dispatch_constants;
 }
 
-void update_offset_on_issue_wait_cmd(uint32_t& byte_offset, bool issue_wait, uint32_t num_sub_devices) {
+void update_offset_on_issue_wait_cmd(
+    ContextId context_id, uint32_t& byte_offset, bool issue_wait, uint32_t num_sub_devices) {
     if (issue_wait) {
         // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        byte_offset += (MetalContext::instance().hal().get_alignment(HalMemType::HOST) * num_sub_devices);
+        byte_offset += (MetalContext::instance(context_id).hal().get_alignment(HalMemType::HOST) * num_sub_devices);
     }
 }
 
@@ -734,7 +740,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
-                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
+                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
                 dispatch_params.expected_num_workers_completed[offset_index],
                 dispatch_params.cq_id);
         }
@@ -983,7 +989,7 @@ void issue_buffer_dispatch_command_sequence(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
-                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
+                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
                 dispatch_params.expected_num_workers_completed[offset_index],
                 dispatch_params.cq_id);
         }
@@ -1013,8 +1019,7 @@ void issue_buffer_dispatch_command_sequence(
         uint64_t relay_data_size = (uint64_t)dispatch_params.total_pages_to_write * dispatch_params.page_size_to_write;
         if constexpr (std::is_same_v<T, InterleavedBufferWriteDispatchParams>) {
             TT_ASSERT(
-                dispatch_params.alignment_prefix_bytes % MetalContext::instance().hal().get_alignment(HalMemType::L1) ==
-                    0,
+                dispatch_params.alignment_prefix_bytes % metal_ctx.hal().get_alignment(HalMemType::L1) == 0,
                 "Alignment prefix is not aligned to L1");
             relay_src_addr += dispatch_params.alignment_prefix_bytes;
             relay_data_size -= dispatch_params.alignment_prefix_bytes;
@@ -1055,10 +1060,15 @@ void write_interleaved_buffer_to_device(
     bool use_pinned_memory = dispatch_params.use_pinned_transfer;
 
     // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
-    uint32_t byte_offset_in_cq = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    uint32_t byte_offset_in_cq =
+        MetalContext::instance(extract_context_id(dispatch_params.device)).hal().get_alignment(HalMemType::HOST);
 
     dispatch_params.calculate_issue_wait();
-    update_offset_on_issue_wait_cmd(byte_offset_in_cq, dispatch_params.issue_wait, sub_device_ids.size());
+    update_offset_on_issue_wait_cmd(
+        extract_context_id(dispatch_params.device),
+        byte_offset_in_cq,
+        dispatch_params.issue_wait,
+        sub_device_ids.size());
 
     if (use_pinned_memory) {
         if (dispatch_params.is_page_offset_out_of_bounds()) {
@@ -1124,7 +1134,8 @@ void write_sharded_buffer_to_core(
         DeviceCommandCalculator calculator(metal_ctx);
         calculator.add_dispatch_write_linear<true, false>(0);
         uint32_t data_offset_bytes = calculator.write_offset_bytes();
-        update_offset_on_issue_wait_cmd(data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
+        update_offset_on_issue_wait_cmd(
+            extract_context_id(buffer.device()), data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
 
         while (dispatch_params.core_num_pages_remaining_to_write != 0) {
             const int32_t num_pages_available_in_cq =

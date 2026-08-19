@@ -1024,7 +1024,7 @@ BatchedTransfers assemble_runtime_args_commands(
                     transfer_info.num_dests,
                     crta_offset,
                     size);
-                RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, size);
+                RecordDispatchData(program.get_context_id(), program.get_id(), DISPATCH_DATA_RTARGS, size);
                 transfers[std::make_pair(noc_xy_addr, transfer_info.num_dests)][crta_offset] =
                     std::vector<Transfer>{Transfer{
                         .start = crta_offset,
@@ -1123,7 +1123,11 @@ BatchedTransfers assemble_runtime_args_commands(
                 }
                 for (auto& data_per_kernel : unique_rt_data_and_sizes) {
                     for (auto& data_and_sizes : data_per_kernel) {
-                        RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
+                        RecordDispatchData(
+                            program.get_context_id(),
+                            program.get_id(),
+                            DISPATCH_DATA_RTARGS,
+                            std::get<1>(data_and_sizes));
                     }
                 }
                 unique_sub_cmds.clear();
@@ -1220,7 +1224,11 @@ BatchedTransfers assemble_runtime_args_commands(
 
                 for (auto& data_per_kernel : common_rt_data_and_sizes) {
                     for (auto& data_and_sizes : data_per_kernel) {
-                        RecordDispatchData(program.get_id(), DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
+                        RecordDispatchData(
+                            program.get_context_id(),
+                            program.get_id(),
+                            DISPATCH_DATA_RTARGS,
+                            std::get<1>(data_and_sizes));
                     }
                 }
             }
@@ -1291,7 +1299,8 @@ public:
                         dst_noc_info.num_dests,
                         start_addr,
                         semaphore_data.back());
-                    RecordDispatchData(program.get_id(), DISPATCH_DATA_SEMAPHORE, sizeof(uint32_t));
+                    RecordDispatchData(
+                        program.get_context_id(), program.get_id(), DISPATCH_DATA_SEMAPHORE, sizeof(uint32_t));
                     batched_transfers[std::make_pair(noc_xy_addr, dst_noc_info.num_dests)][start_addr] =
                         std::vector<Transfer>{
                             {{.start = start_addr,
@@ -1351,7 +1360,8 @@ public:
                     DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
                 for (const auto& data_and_size : cmds.data) {
-                    RecordDispatchData(program.get_id(), DISPATCH_DATA_SEMAPHORE, data_and_size.second);
+                    RecordDispatchData(
+                        program.get_context_id(), program.get_id(), DISPATCH_DATA_SEMAPHORE, data_and_size.second);
                 }
             }
         }
@@ -1463,7 +1473,8 @@ public:
                     core_range.size(),
                     start_addr,
                     max_index * sizeof(uint32_t));
-                RecordDispatchData(program.get_id(), DISPATCH_DATA_CB_CONFIG, max_index * sizeof(uint32_t));
+                RecordDispatchData(
+                    program.get_context_id(), program.get_id(), DISPATCH_DATA_CB_CONFIG, max_index * sizeof(uint32_t));
 
                 batched_transfers[std::make_pair(noc_xy_addr, core_range.size())][start_addr] = std::vector<Transfer>{
                     {.start = start_addr,
@@ -1744,6 +1755,7 @@ public:
                         nullptr,
                         write_offset);
                     RecordDispatchData(
+                        program.get_context_id(),
                         program.get_id(),
                         DISPATCH_DATA_BINARY,
                         kg_transfer_info.lengths[kernel_idx],
@@ -1858,6 +1870,7 @@ public:
                             .num_mcast_dests = (uint8_t)num_mcast_dests,
                             .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK});
                         RecordDispatchData(
+                            program.get_context_id(),
                             program.get_id(),
                             DISPATCH_DATA_BINARY,
                             write_length,
@@ -2808,7 +2821,7 @@ void update_program_dispatch_commands(
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         program_host_id_offset, &runtime_id, sizeof(runtime_id));
 
-    RecordProgramMetadata(program);
+    RecordProgramMetadata(program.get_context_id(), program);
 
     if (hal.get_programmable_core_type_count() >= 2) {
         cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
@@ -3392,7 +3405,7 @@ TraceNode create_trace_node(
         cross_node_config_pages.push_back(page);
     }
 
-    RecordProgramMetadata(program);
+    RecordProgramMetadata(program.get_context_id(), program);
 
     return TraceNode{
         program.shared_from_this(),

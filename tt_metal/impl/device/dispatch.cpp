@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "allocator/allocator.hpp"
 #include "context/context_types.hpp"
+#include "impl/context/metal_context.hpp"
 #include "device/device_manager.hpp"
 #include "dispatch/device_command.hpp"
 #include "dispatch/device_command_calculator.hpp"
@@ -15,14 +16,16 @@
 
 namespace tt::tt_metal {
 
-uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& /*dispatch_core_type*/, uint32_t num_subdevices) {
+uint32_t calculate_max_prefetch_data_size_bytes(
+    ContextId context_id, const CoreType& /*dispatch_core_type*/, uint32_t num_subdevices) {
     // CQ capacity would be reduced by the commands and alignment padding.
     // prefetch_relay_inline, dispatch_wait (x #workers), and dispatch_write_linear would add alignment padding
-    const auto host_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    MetalContext& metal_ctx = MetalContext::instance(context_id);
+    const auto host_alignment = metal_ctx.hal().get_alignment(HalMemType::HOST);
     auto padded_commands_size = tt::align(sizeof(CQPrefetchCmd), host_alignment) +
                                 (num_subdevices * tt::align(sizeof(CQDispatchCmd), host_alignment)) +
                                 tt::align(sizeof(CQDispatchCmdLarge), host_alignment);
-    return tt::tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() - padded_commands_size;
+    return metal_ctx.dispatch_mem_map().max_prefetch_command_size() - padded_commands_size;
 }
 
 namespace device_dispatch {
@@ -33,9 +36,10 @@ struct CoreWriteDispatchParams : public CoreDispatchParams {
 
 void validate_core_read_write_bounds(
     IDevice* device, const CoreCoord& virtual_core, DeviceAddr address, uint32_t size_bytes) {
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
     const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::L1) {
-        const auto& hal = tt::tt_metal::MetalContext::instance(extract_context_id(device)).hal();
+        const auto& hal = metal_ctx.hal();
         HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
         const DeviceAddr l1_base_address = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::BASE);
         const DeviceAddr l1_size = hal.get_dev_size(programmable_core_type, HalL1MemAddrType::BASE);
@@ -45,7 +49,7 @@ void validate_core_read_write_bounds(
     } else {
         TT_ASSERT(mem_type == HalMemType::DRAM);
 
-        const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const auto& soc_desc = metal_ctx.get_cluster().get_soc_desc(device->id());
         const uint32_t dram_channel = device->dram_channel_from_virtual_core(virtual_core);
         const DeviceAddr dram_base_address = soc_desc.get_address_offset(dram_channel);
 
@@ -59,7 +63,8 @@ void validate_core_read_write_bounds(
 DeviceAddr add_bank_offset_to_address(IDevice* device, const CoreCoord& virtual_core, DeviceAddr address) {
     const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::DRAM) {
-        const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        const auto& soc_desc =
+            MetalContext::instance(extract_context_id(device)).get_cluster().get_soc_desc(device->id());
         const uint32_t dram_channel = device->dram_channel_from_virtual_core(virtual_core);
         address += soc_desc.get_address_offset(dram_channel);
     }
@@ -87,7 +92,7 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
-            tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
+            metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
             dispatch_params.expected_num_workers_completed[offset_index],
             dispatch_params.cq_id);
     }
@@ -119,9 +124,11 @@ void write_to_core_impl(
     ttsl::Span<const SubDeviceId> sub_device_ids) {
     while (size_bytes > 0) {
         const CoreType dispatch_core_type =
-            MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-        const uint32_t size_bytes_to_write =
-            std::min(size_bytes, calculate_max_prefetch_data_size_bytes(dispatch_core_type, sub_device_ids.size()));
+            MetalContext::instance(extract_context_id(device)).get_dispatch_core_manager().get_dispatch_core_type();
+        const uint32_t size_bytes_to_write = std::min(
+            size_bytes,
+            calculate_max_prefetch_data_size_bytes(
+                extract_context_id(device), dispatch_core_type, sub_device_ids.size()));
 
         CoreWriteDispatchParams dispatch_params{
             {virtual_core,
@@ -194,7 +201,7 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
-            tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
+            metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
             dispatch_params.expected_num_workers_completed[offset_index],
             dispatch_params.cq_id);
     }
@@ -202,7 +209,7 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,
-        tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
+        metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
         dispatch_params.expected_num_workers_completed[offset_index],
         dispatch_params.cq_id);
 
@@ -225,16 +232,14 @@ void read_completion_queue(
     uint16_t channel,
     uint32_t addr,
     const SystemMemoryManager& sysmem_manager) {
+    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
     if (sysmem_manager.is_dram_backed()) {
-        const uint32_t dram_channel = tt::tt_metal::MetalContext::instance()
-                                          .device_manager()
-                                          ->get_active_device(device_id)
-                                          ->allocator_impl()
-                                          ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
-        tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-            dst, size_bytes, device_id, dram_channel, addr);
+        const uint32_t dram_channel =
+            metal_ctx.device_manager()->get_active_device(device_id)->allocator_impl()->get_dram_channel_from_bank_id(
+                sysmem_manager.get_dram_region_bank_id());
+        metal_ctx.get_cluster().read_dram_vec(dst, size_bytes, device_id, dram_channel, addr);
     } else {
-        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(dst, size_bytes, addr, device_id, channel);
+        metal_ctx.get_cluster().read_sysmem(dst, size_bytes, addr, device_id, channel);
     }
 }
 

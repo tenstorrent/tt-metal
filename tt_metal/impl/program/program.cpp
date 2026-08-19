@@ -1186,7 +1186,8 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
             index++;
         }
         for (const auto& kg : kernel_groups_[programmable_core_type_index]) {
-            RecordKernelGroup(*this, hal.get_programmable_core_type(programmable_core_type_index), *kg);
+            RecordKernelGroup(
+                this->get_context_id(), *this, hal.get_programmable_core_type(programmable_core_type_index), *kg);
         }
     }
 }
