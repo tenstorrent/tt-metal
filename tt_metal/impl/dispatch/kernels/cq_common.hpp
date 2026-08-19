@@ -15,7 +15,6 @@
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
 #include <array>
-#include <type_traits>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region
@@ -478,8 +477,9 @@ public:
         // TL1 cell and the split is intentional -- the NoC atomic is serviced by the TL1 SRAM bank at
         // the plain offset. Adding MEM_L1_UNCACHED_BASE here would target a different offset.
         noc_semaphore_inc(
-            get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)), n, noc_idx);
-        // #endif
+            get_noc_addr_helper(downstream_noc_xy, get_semaphore<programmable_core_type>(downstream_sem_id)),
+            n,
+            noc_idx);
     }
 
     uint32_t additional_count{0};

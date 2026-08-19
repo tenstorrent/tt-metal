@@ -1616,7 +1616,6 @@ void kernel_main() {
 #else
     DPRINT("dispatch_{}{}: start\n", is_h_variant, is_d_variant);
 #endif
-
     // Get runtime args
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
