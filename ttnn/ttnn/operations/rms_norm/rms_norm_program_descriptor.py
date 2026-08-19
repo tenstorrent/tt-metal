@@ -56,6 +56,11 @@ LEVER_DEFAULTS = {
     "dest_block": 0,  # compute_block_size - 0: solver; N: force DEST_BLOCK
     "coarse_chunk": 1,  # block-size fidelity - 0: force the W-chunk to 1 tile
     "coalesce": 1,  # B5/B6 - 0: split each tile transfer into two half-tile ones
+    # F-group (precision cost): 1 = the accumulator CBs carry the CHEAPEST format
+    # that loses nothing (fp32 only when DEST actually accumulates in fp32);
+    # 0 = the Phase-0 arm, fp32 accumulator CBs unconditionally.  Byte-identical
+    # at fp32_dest_acc_en=True, where both arms pick fp32.
+    "acc_narrow": 1,
     # --- /perf-measure ablation arms (payload stubbed, sync scaffolding kept) ---
     "stub_dm": 0,  # 1: reader/writer keep every CB op + barrier, issue no NoC transfer
     "stub_compute": 0,  # 1: eltwise chains keep their CB lifecycle, do no math
@@ -97,6 +102,53 @@ def _largest_divisor_at_most(value: int, cap: int) -> int:
         if value % cand == 0:
             return cand
     return 1
+
+
+# --- Numerical format policy (ONE place; see /numeric-formats-metal) ---------
+# Block-float (bfp*) is a DRAM/L1 TRANSPORT format, never a compute intermediate:
+# 16 datums share one exponent, so parking x^2 or the normalized activations there
+# would re-quantise a value the very next phase reads back.  A compute-only
+# intermediate therefore promotes to bfloat16, which is also exactly what the
+# FPU's srcA/srcB carry.
+BLOCK_FLOAT_DTYPES = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+
+
+def _interm_dtype(input_dtype):
+    """Format for a compute-only intermediate CB (cb_squared / cb_normed).
+
+    Identical to the input dtype for every non-block format, so this is
+    byte-identical on the float32 / bfloat16 paths.
+    """
+    return ttnn.bfloat16 if input_dtype in BLOCK_FLOAT_DTYPES else input_dtype
+
+
+def _acc_dtype(compute_kernel_config, interm_dtype, narrow: bool):
+    """Format for a CB that parks a running reduction across phases.
+
+    The rule (/numeric-formats-metal S4): an accumulator CB must be Float32 when
+    the accumulation crosses the CB *in fp32* - i.e. when DEST itself accumulates
+    in fp32.  With fp32_dest_acc_en=False the value packed out of DEST has already
+    been rounded to the narrow DEST datum, so a Float32 CB buys no precision while
+    costing 2x the L1 pages; narrowing hands that L1 back to BLOCK_HT /
+    IN_BUF_DEPTH.  `narrow=False` is the measurable Phase-0 counterfactual arm.
+    """
+    if bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True)) or not narrow:
+        return ttnn.float32
+    return interm_dtype
+
+
+def _elem_size(dtype) -> int:
+    """Bytes per datum, or 0 for a block format (which has no per-datum size).
+
+    Only the ROW_MAJOR path consumes this (stick byte offsets), and a block-float
+    tensor cannot BE row-major - ttnn refuses to construct one ("Layout must be
+    Layout::TILE for bfloat8_b or bfloat4_b"); `blocking_plan` asserts it.
+    Derived from the tile size rather than Tensor.element_size(), which raises
+    outright for bfp2/bfp4/bfp8.
+    """
+    if dtype in BLOCK_FLOAT_DTYPES:
+        return 0
+    return ttnn.tile_size(dtype) // (TILE_DIM * TILE_DIM)
 
 
 def _f32_bits(x: float) -> int:
@@ -162,8 +214,12 @@ class BlockingPlan:
     gamma_elem_size: int
     in_tile_bytes: int
     gamma_tile_bytes: int
-    f32_tile_bytes: int
     bf16_tile_bytes: int
+    # --- numerical formats (see _interm_dtype / _acc_dtype) -----------------
+    interm_dtype: object
+    acc_dtype: object
+    interm_tile_bytes: int
+    acc_tile_bytes: int
     row_bytes: int
     gamma_row_bytes: int
     # --- knobs (every one of these is a tunable, never an inlined literal) ---
@@ -196,8 +252,14 @@ class BlockingPlan:
 # descriptors it produced (a drift that would silently mis-size the budget and
 # either OOM or under-use L1 the moment a block knob is turned).
 #
-# `kind` names the data format: "in" (input dtype), "out" (output dtype),
-# "gamma" (gamma dtype), "f32", "bf16".
+# `kind` names the data format, and each one resolves in exactly ONE place
+# (`fmt_of_kind` in create_program_descriptor, off fields of the plan):
+#   "in"     the input tensor's dtype      (carries the tensor itself)
+#   "out"    the output tensor's dtype     (carries the tensor itself)
+#   "gamma"  the gamma tensor's dtype      (carries the tensor itself)
+#   "interm" plan.interm_dtype  - compute-only intermediate, never block-float
+#   "acc"    plan.acc_dtype     - parks a running reduction across phases
+#   "bf16"   mandatory bfloat16 (the reduce scaler tile)
 
 
 def _cb_layout(
@@ -218,7 +280,8 @@ def _cb_layout(
     gamma_ingest_block: int,
     T_in: int,
     T_g: int,
-    T_f32: int,
+    T_interm: int,
+    T_acc: int,
     T_bf16: int,
 ):
     """Return [(cb_index, num_pages, page_bytes, kind)] for this knob assignment."""
@@ -232,8 +295,8 @@ def _cb_layout(
         (CB_INPUT_TILES, in_depth * block_ht * wmax, T_in, "in"),
         # Regime B accumulates across W-chunks through this CB, so it needs the
         # extra generation live; Regime A writes it once per row-block.
-        (CB_SUMSQ, (2 if regime == "B" else 1) * block_ht, T_f32, "f32"),
-        (CB_RMS_RECIP, block_ht, T_f32, "f32"),
+        (CB_SUMSQ, (2 if regime == "B" else 1) * block_ht, T_acc, "acc"),
+        (CB_RMS_RECIP, block_ht, T_acc, "acc"),
         # bfloat16 is mandatory for the reduce scaler.  Both regimes need the
         # within-tile REDUCE_ROW finalize; only Regime B also needs the PARTIAL
         # tile that zeroes the pad columns of the last W-tile.
@@ -242,15 +305,15 @@ def _cb_layout(
     if regime == "A":
         # sum_of_squares' element-wise tile accumulator, collapsed along W by the
         # finalize reduce.
-        layout.append((CB_SUMSQ_ACC, block_ht, T_f32, "f32"))
+        layout.append((CB_SUMSQ_ACC, block_ht, T_acc, "acc"))
     else:
         # Sequential-helper intermediate: must hold the FULL block per call.
-        layout.append((CB_SQUARED, block_ht * wr, T_in, "in"))
+        layout.append((CB_SQUARED, block_ht * wr, T_interm, "interm"))
     if has_gamma:
         layout.append((CB_GAMMA_TILES, ws, T_g, "gamma"))
         if gamma_is_row_major:
             layout.append((CB_GAMMA_RM, gamma_ingest_block, T_g, "gamma"))
-        layout.append((CB_NORMED, block_ht * ws, T_in, "in"))
+        layout.append((CB_NORMED, block_ht * ws, T_interm, "interm"))
     # Streamed to the writer on the TILE path, but feeds the sequential untilize
     # helper on the RM path (must then hold the full block).
     layout.append((CB_OUTPUT_TILES, (out_depth if tile_out else 1) * block_ht * ws, T_in, "out"))
@@ -280,11 +343,21 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
     has_gamma = gamma is not None
     gamma_is_row_major = bool(has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT)
 
-    elem_size = input_tensor.element_size()
-    gamma_elem_size = gamma.element_size() if has_gamma else elem_size
+    elem_size = _elem_size(input_tensor.dtype)
+    gamma_elem_size = _elem_size(gamma.dtype) if has_gamma else elem_size
+    # A block-float tensor cannot be row-major (ttnn refuses to build one), so the
+    # stick-addressing path never sees a zero elem_size.
+    assert not (is_row_major and elem_size == 0), "block-float dtype on the ROW_MAJOR path"
+
+    # The two derived formats, decided HERE and nowhere else; _cb_layout consumes
+    # the tile sizes and create_program_descriptor the dtypes.
+    interm_dtype = _interm_dtype(input_tensor.dtype)
+    acc_dtype = _acc_dtype(compute_kernel_config, interm_dtype, bool(_lever(levers, "acc_narrow")))
+
     T_in = ttnn.tile_size(input_tensor.dtype)
     T_g = ttnn.tile_size(gamma.dtype) if has_gamma else T_in
-    T_f32 = ttnn.tile_size(ttnn.float32)
+    T_interm = ttnn.tile_size(interm_dtype)
+    T_acc = ttnn.tile_size(acc_dtype)
     T_bf16 = ttnn.tile_size(ttnn.bfloat16)
 
     tile_out = not is_row_major
@@ -304,7 +377,8 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         W_partial=W_partial,
         T_in=T_in,
         T_g=T_g,
-        T_f32=T_f32,
+        T_interm=T_interm,
+        T_acc=T_acc,
         T_bf16=T_bf16,
     )
 
@@ -425,7 +499,10 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         gamma_elem_size=gamma_elem_size,
         in_tile_bytes=T_in,
         gamma_tile_bytes=T_g,
-        f32_tile_bytes=T_f32,
+        interm_dtype=interm_dtype,
+        acc_dtype=acc_dtype,
+        interm_tile_bytes=T_interm,
+        acc_tile_bytes=T_acc,
         bf16_tile_bytes=T_bf16,
         row_bytes=W_true * elem_size,
         gamma_row_bytes=W_true * gamma_elem_size,
@@ -503,7 +580,9 @@ def create_program_descriptor(
         "in": input_tensor.dtype,
         "out": output_tensor.dtype,
         "gamma": gamma.dtype if plan.has_gamma else input_tensor.dtype,
-        "f32": ttnn.float32,
+        # Derived numerical formats — decided once, in blocking_plan.
+        "interm": plan.interm_dtype,
+        "acc": plan.acc_dtype,
         "bf16": ttnn.bfloat16,
     }
     cbs = [

@@ -77,14 +77,19 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32, ttnn.bfloat16],
-    "fp32_dest_acc_en": [True],
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+    # Precision is a two-axis model (dtype x fp32_dest_acc_en).  BOTH DEST
+    # accumulator widths are native: fp32_dest_acc_en=False halves the DEST datum
+    # width and therefore DOUBLES the tile capacity (4 -> 8 at half-sync), which
+    # `_dest_limit()` already reports and the block solver re-sweeps against.
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
     "gamma_mode": ["gamma", "no_gamma"],
-    # "none" is the no-weight sentinel and is ALWAYS legal.
-    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, "none"],
+    # "none" is the no-weight sentinel and is ALWAYS legal.  gamma may be at a
+    # different dtype than the activations (mixed-precision LLMs).
+    "gamma_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
     "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
 }

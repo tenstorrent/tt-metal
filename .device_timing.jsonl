@@ -58,3 +58,22 @@
 {"source":"run_safe_pytest","pid":1764571,"started_at_ms":1787164320487,"wait_ms":5,"run_ms":95749,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0,"precompile_mode":"local","precompile_reason":"ok","precompile_s":72}
 {"source":"run_safe_pytest","pid":1772848,"started_at_ms":1787164416249,"wait_ms":4,"run_ms":44387,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0,"precompile_mode":"local","precompile_reason":"ok","precompile_s":18}
 {"source":"run_safe_pytest","pid":1775124,"started_at_ms":1787164521997,"wait_ms":4,"run_ms":13728,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0,"precompile_mode":"local","precompile_reason":"ok","precompile_s":6}
+{"event": "phase", "phase": "implementer", "state": "end", "at_ms": 1787164700798}
+{"event": "phase", "phase": "verifier", "state": "start", "at_ms": 1787164700798}
+{"source":"run_safe_pytest","pid":1779498,"started_at_ms":1787164904197,"wait_ms":5,"run_ms":13641,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0,"precompile_mode":"local","precompile_reason":"ok","precompile_s":7}
+{"source":"eval_test_runner","pid":1779917,"started_at_ms":1787164924710,"wait_ms":3447,"run_ms":596524,"test_path":"eval/golden_tests/rms_norm/","exit_code":1,"precompile_mode":"local","precompile_reason":"no_server"}
+{"source":"eval_test_runner","pid":1844806,"started_at_ms":1787165558833,"wait_ms":3464,"run_ms":582353,"test_path":"eval/golden_tests/rms_norm/","exit_code":0,"precompile_mode":"local","precompile_reason":"no_server"}
+{"source":"run_safe_pytest","pid":1863199,"started_at_ms":1787166923776,"wait_ms":4,"run_ms":43729,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":1,"precompile_mode":"local","precompile_reason":"ok","precompile_s":37}
+{"source":"run_safe_pytest","pid":1866969,"started_at_ms":1787166970604,"wait_ms":4,"run_ms":13811,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":1,"precompile_mode":"local","precompile_reason":"ok","precompile_s":7}
+{"source":"run_safe_pytest","pid":1867411,"started_at_ms":1787167001056,"wait_ms":4,"run_ms":43447,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0,"precompile_mode":"local","precompile_reason":"ok","precompile_s":36}
+{"source":"run_safe_pytest","pid":1871248,"started_at_ms":1787167051573,"wait_ms":5,"run_ms":18732,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_precision_baseline.py","exit_code":0,"precompile_mode":"local","precompile_reason":"ok","precompile_s":10}
+{"source":"eval_test_runner","pid":1872157,"started_at_ms":1787167089504,"wait_ms":3504,"run_ms":810888,"test_path":"eval/golden_tests/rms_norm/","exit_code":0,"precompile_mode":"local","precompile_reason":"no_server"}
+{"source":"run_safe_pytest","pid":1919349,"started_at_ms":1787167984373,"wait_ms":5,"run_ms":35249,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/","exit_code":0,"precompile_mode":"local","precompile_reason":"ok","precompile_s":22}
+{"source":"run_safe_pytest","pid":1923538,"started_at_ms":1787168345871,"wait_ms":4,"run_ms":21285,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/","exit_code":0,"precompile_mode":"local","precompile_reason":"ok","precompile_s":9}
+{"event": "phase", "phase": "verifier", "state": "end", "at_ms": 1787168483754}
+{"event": "phase", "phase": "phase0_golden", "state": "start", "at_ms": 1787168491779}
+{"source":"eval_test_runner","pid":1926216,"started_at_ms":1787168491783,"wait_ms":3430,"run_ms":497492,"test_path":"eval/golden_tests/rms_norm/","exit_code":0,"precompile_mode":"local","precompile_reason":"no_server"}
+{"event": "phase", "phase": "phase0_golden", "state": "end", "at_ms": 1787168992710}
+{"event": "phase", "phase": "refinement_1", "state": "start", "at_ms": 1787169002382}
+{"source":"tt-probe","pid":1942879,"started_at_ms":1787169388157,"wait_ms":174,"run_ms":42431,"test_path":"rms_norm","exit_code":1}
+{"source":"tt-probe","pid":1943228,"started_at_ms":1787169447917,"wait_ms":189,"run_ms":64224,"test_path":"rms_norm","exit_code":0}
