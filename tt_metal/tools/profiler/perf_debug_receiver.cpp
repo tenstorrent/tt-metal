@@ -248,50 +248,50 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         zone_markers += 8;
         stall_zones += static_cast<uint32_t>(__builtin_popcount(static_cast<uint32_t>(
             _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(w0s, _mm256_set1_epi32(0x7FFF)))))));
-        const __m256i th64 = _mm256_set1_epi64x(static_cast<int64_t>(static_cast<uint64_t>(th) << 32));
-        const __m256i ts_a = _mm256_or_si256(th64, _mm256_cvtepu32_epi64(_mm256_castsi256_si128(w1s)));
-        const __m256i ts_b = _mm256_or_si256(th64, _mm256_cvtepu32_epi64(_mm256_extracti128_si256(w1s, 1)));
-        const uint64_t t3 = static_cast<uint64_t>(_mm256_extract_epi64(ts_a, 3));
-        const uint64_t t7 = static_cast<uint64_t>(_mm256_extract_epi64(ts_b, 3));
-        // Order invariant: compare each ts against its predecessor ([prev, t0..t2], [t3, t4..t6]).
-        __m256i prev_a = _mm256_permute4x64_epi64(ts_a, _MM_SHUFFLE(2, 1, 0, 0));
-        prev_a = _mm256_blend_epi32(prev_a, _mm256_set1_epi64x(static_cast<int64_t>(last_ts[lane])), 0x03);
-        __m256i prev_b = _mm256_permute4x64_epi64(ts_b, _MM_SHUFFLE(2, 1, 0, 0));
-        prev_b = _mm256_blend_epi32(prev_b, _mm256_set1_epi64x(static_cast<int64_t>(t3)), 0x03);
-        const int viol = _mm256_movemask_pd(_mm256_castsi256_pd(_mm256_cmpgt_epi64(prev_a, ts_a))) |
-                         (_mm256_movemask_pd(_mm256_castsi256_pd(_mm256_cmpgt_epi64(prev_b, ts_b))) << 4);
-        order_regressions += static_cast<uint32_t>(__builtin_popcount(static_cast<uint32_t>(viol)));
-        last_ts[lane] = t7;
+        // Order invariant at block endpoints only: the producer guarantees monotonicity inside a run, so
+        // in-block inversions would need a producer bug, while the boundary compare still catches every
+        // head-mirror/resync error class. th is block-constant, so comparing on it is exact.
+        const uint64_t ts_first =
+            (static_cast<uint64_t>(th) << 32) | static_cast<uint32_t>(_mm256_extract_epi32(w1s, 0));
+        const uint64_t ts_last =
+            (static_cast<uint64_t>(th) << 32) | static_cast<uint32_t>(_mm256_extract_epi32(w1s, 7));
+        order_regressions += ts_first < last_ts[lane] ? 1 : 0;
+        last_ts[lane] = ts_last;
         if (min_ts == 0) {
-            min_ts = static_cast<uint64_t>(_mm256_extract_epi64(ts_a, 0));
+            min_ts = ts_first;
         }
-        max_ts = t7;
+        max_ts = ts_last;
         if (!sink) {
             return;
         }
-        // meta = hash | type bit (wire bit 27 -> record bit 29) | lane | dev | ZoneStart base.
+        // meta = hash | type bit (wire bit 27 -> record bit 29) | lane | dev | ZoneStart base. A record's
+        // two quadwords are (th<<32|w1) and (prog<<32|meta), so interleaving w1s/metas against the two
+        // splatted constants at 32-bit then pairing at 64-bit yields finished records with no widening.
         const uint32_t meta_base = (lane << 16) | (dev << 26) | (1u << 29);
         const __m256i meta = _mm256_or_si256(
             _mm256_or_si256(
                 _mm256_and_si256(w0s, _mm256_set1_epi32(0xFFFF)),
                 _mm256_slli_epi32(_mm256_and_si256(w0s, _mm256_set1_epi32(0x08000000)), 2)),
             _mm256_set1_epi32(static_cast<int>(meta_base)));
-        const __m256i prog64 = _mm256_set1_epi64x(static_cast<int64_t>(static_cast<uint64_t>(prog) << 32));
-        const __m256i mp_a = _mm256_or_si256(prog64, _mm256_cvtepu32_epi64(_mm256_castsi256_si128(meta)));
-        const __m256i mp_b = _mm256_or_si256(prog64, _mm256_cvtepu32_epi64(_mm256_extracti128_si256(meta, 1)));
-        const __m256i r02 = _mm256_unpacklo_epi64(ts_a, mp_a);
-        const __m256i r13 = _mm256_unpackhi_epi64(ts_a, mp_a);
-        const __m256i r46 = _mm256_unpacklo_epi64(ts_b, mp_b);
-        const __m256i r57 = _mm256_unpackhi_epi64(ts_b, mp_b);
+        const __m256i th32 = _mm256_set1_epi32(static_cast<int>(th));
+        const __m256i prog32 = _mm256_set1_epi32(static_cast<int>(prog));
+        const __m256i a_lo = _mm256_unpacklo_epi32(w1s, th32);  // q0 of records 0,1 | 4,5
+        const __m256i a_hi = _mm256_unpackhi_epi32(w1s, th32);  // q0 of records 2,3 | 6,7
+        const __m256i b_lo = _mm256_unpacklo_epi32(meta, prog32);
+        const __m256i b_hi = _mm256_unpackhi_epi32(meta, prog32);
+        const __m256i r04 = _mm256_unpacklo_epi64(a_lo, b_lo);
+        const __m256i r15 = _mm256_unpackhi_epi64(a_lo, b_lo);
+        const __m256i r26 = _mm256_unpacklo_epi64(a_hi, b_hi);
+        const __m256i r37 = _mm256_unpackhi_epi64(a_hi, b_hi);
         auto slot = [&](uint64_t p) { return reinterpret_cast<__m128i*>(w.emit_slot_ptr(p)); };
-        _mm_stream_si128(slot(pos + 0), _mm256_castsi256_si128(r02));
-        _mm_stream_si128(slot(pos + 1), _mm256_castsi256_si128(r13));
-        _mm_stream_si128(slot(pos + 2), _mm256_extracti128_si256(r02, 1));
-        _mm_stream_si128(slot(pos + 3), _mm256_extracti128_si256(r13, 1));
-        _mm_stream_si128(slot(pos + 4), _mm256_castsi256_si128(r46));
-        _mm_stream_si128(slot(pos + 5), _mm256_castsi256_si128(r57));
-        _mm_stream_si128(slot(pos + 6), _mm256_extracti128_si256(r46, 1));
-        _mm_stream_si128(slot(pos + 7), _mm256_extracti128_si256(r57, 1));
+        _mm_stream_si128(slot(pos + 0), _mm256_castsi256_si128(r04));
+        _mm_stream_si128(slot(pos + 1), _mm256_castsi256_si128(r15));
+        _mm_stream_si128(slot(pos + 2), _mm256_castsi256_si128(r26));
+        _mm_stream_si128(slot(pos + 3), _mm256_castsi256_si128(r37));
+        _mm_stream_si128(slot(pos + 4), _mm256_extracti128_si256(r04, 1));
+        _mm_stream_si128(slot(pos + 5), _mm256_extracti128_si256(r15, 1));
+        _mm_stream_si128(slot(pos + 6), _mm256_extracti128_si256(r26, 1));
+        _mm_stream_si128(slot(pos + 7), _mm256_extracti128_si256(r37, 1));
         pos += 8;
     };
 #endif

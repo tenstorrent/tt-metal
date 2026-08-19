@@ -13,6 +13,7 @@
 // ends mid-packet.
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -188,9 +189,9 @@ inline void spsc_decode_frame(
                     const __m256i odd = _mm256_castps_si256(
                         _mm256_shuffle_ps(_mm256_castsi256_ps(v0), _mm256_castsi256_ps(v1), _MM_SHUFFLE(3, 1, 3, 1)));
                     const __m256i w0s = _mm256_permute4x64_epi64(even, _MM_SHUFFLE(3, 1, 2, 0));
-                    const __m256i w1s = _mm256_permute4x64_epi64(odd, _MM_SHUFFLE(3, 1, 2, 0));
                     const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
                     if (_mm256_movemask_epi8(_mm256_cmpgt_epi32(types, _mm256_set1_epi32(1))) == 0) {
+                        const __m256i w1s = _mm256_permute4x64_epi64(odd, _MM_SHUFFLE(3, 1, 2, 0));
                         emit_zones8(lane, th, pg, w0s, w1s);
                         i += 16;
                         continue;
