@@ -558,9 +558,11 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      # Measured 4.0 min at two_iters; ten_iters adds ~8x10.6s -> ~5.5 min. Trace replay is faster per
-      # chunk than eager dispatch, so this needs no more than its untraced twin.
-      timeout: 18
+      # Raised 18 -> 40 alongside its untraced twin. This leg PASSES on main but timed out at
+      # 18.2/18 min on the #52775 revert, so it is the one leg that isolates the revert's pure
+      # host-side cost (trace replay pre-records dispatch, so it is immune to launch skew).
+      # Killed mid-run it reports nothing. Investigation branch only -- see Kimi_no_trace_fail_ci.MD.
+      timeout: 40
   owner_id: U08RL15T4N8
   team: models
   sp_config: sc1
