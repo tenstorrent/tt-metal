@@ -63,15 +63,12 @@ jobs:
             --event "${{ github.event_name }}"
       - name: Restrict matrix to requested test names
         id: filter-matrix
-        env:
-          MATRIX_JSON: ${{ steps.build-matrix.outputs.matrix }}
-          TEST_NAMES: ${{ inputs.test-names }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, os, sys
+          import json, sys
 
-          matrix = json.loads(os.environ["MATRIX_JSON"])
-          names = [n.strip() for n in os.environ["TEST_NAMES"].split(",") if n.strip()]
+          matrix = json.loads(r"""${{ steps.build-matrix.outputs.matrix }}""")
+          names = [n.strip() for n in r"""${{ inputs.test-names }}""".split(",") if n.strip()]
           if names:
               base = lambda entry: entry["name"].split(" [")[0]
               unknown = sorted(set(names) - {base(t) for t in matrix})
