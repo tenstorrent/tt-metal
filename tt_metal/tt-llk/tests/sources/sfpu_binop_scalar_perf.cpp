@@ -97,22 +97,6 @@ static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
 #define FRESH_CPP_IMPL 0
 #endif
 
-// Storm-lane S1 selector: dispatch one tile's scalar binop through the fresh
-// ScalarAdd semantic body (impl 1) or the production kernel (impl 0).
-template <DstSync DST_SYNC_MODE_T, bool DST_ACCUM>
-inline void run_selected_binop_scalar(const std::uint32_t block_tile)
-{
-    if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINOP_MODE == static_cast<int>(ckernel::sfpu::ADD))
-    {
-        SFPU_UNARY_CALL(DST_SYNC_MODE_T, DST_ACCUM, calculate_binop_scalar_add_fresh_cpp, (8), block_tile, VectorMode::RC, SFPU_UNARY_SCALAR);
-    }
-    else
-    {
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE_T, DST_ACCUM, calculate_binop_with_scalar, (APPROX_MODE, SFPU_BINOP_MODE, 8), block_tile, VectorMode::RC, SFPU_UNARY_SCALAR);
-    }
-}
-
 void run_kernel(RUNTIME_PARAMETERS params)
 {
     const DataCopyType data_copy_type = DataCopyType::A2D;
@@ -200,7 +184,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // Scalar binop reads one Dest tile and writes the result back to
                         // the same tile. The SFPU cost is data-independent, so this
                         // measures the representative math cost.
-                        run_selected_binop_scalar<DST_SYNC_MODE, is_fp32_dest_acc_en>(block_tile);
+                        // Storm-lane S1 selector (fresh_cpp/binopscalar.h semantic
+                        // body): the fresh ScalarAdd arm at impl 1, production
+                        // otherwise.
+                        if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINOP_MODE == static_cast<int>(ckernel::sfpu::ADD))
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_binop_scalar_add_fresh_cpp, (8), block_tile, VectorMode::RC, SFPU_UNARY_SCALAR);
+                        }
+                        else
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_binop_with_scalar,
+                                (APPROX_MODE, SFPU_BINOP_MODE, 8),
+                                block_tile,
+                                VectorMode::RC,
+                                SFPU_UNARY_SCALAR);
+                        }
                     }
                 }
             }
@@ -222,7 +224,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                             block_tile, formats.math, formats.math);
 
-                        run_selected_binop_scalar<DST_SYNC_MODE, is_fp32_dest_acc_en>(block_tile);
+                        // Storm-lane S1 selector (fresh_cpp/binopscalar.h semantic
+                        // body): the fresh ScalarAdd arm at impl 1, production
+                        // otherwise.
+                        if constexpr (FRESH_CPP_IMPL == 1 && SFPU_BINOP_MODE == static_cast<int>(ckernel::sfpu::ADD))
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_binop_scalar_add_fresh_cpp, (8), block_tile, VectorMode::RC, SFPU_UNARY_SCALAR);
+                        }
+                        else
+                        {
+                            SFPU_UNARY_CALL(
+                                DST_SYNC_MODE,
+                                is_fp32_dest_acc_en,
+                                calculate_binop_with_scalar,
+                                (APPROX_MODE, SFPU_BINOP_MODE, 8),
+                                block_tile,
+                                VectorMode::RC,
+                                SFPU_UNARY_SCALAR);
+                        }
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
