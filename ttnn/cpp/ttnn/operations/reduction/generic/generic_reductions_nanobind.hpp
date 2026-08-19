@@ -91,11 +91,14 @@ inline std::string get_generic_reduction_doc(
         output_layout_kwarg);
 }
 
-// sum and mean expose both 'fast_and_approximate_mode' and 'output_layout', so they cannot share
-// max/min's wrapper. Same deprecated-correction handling, plus the trailing accurate flag and
-// output_layout forwarded to Func.
+// Wrapper that detects explicit use of the deprecated 'correction' parameter and
+// emits a Python DeprecationWarning before forwarding to the real implementation.
+// The binding-layer type is std::optional<bool> (default nb::none()) so we can
+// distinguish "user passed correction=True" from "used the default".
+// This whole function can be removed when the deprecated 'correction' parameter is removed.
+// Used by sum and mean, which take a trailing output_layout.
 template <auto Func>
-inline Tensor reduction_with_fast_mode_and_layout(
+inline Tensor reduction_with_deprecated_correction_and_layout(
     const Tensor& input_tensor,
     const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim,
     bool keepdim,
@@ -126,10 +129,9 @@ inline Tensor reduction_with_fast_mode_and_layout(
         output_layout);
 }
 
-// max and min expose 'fast_and_approximate_mode' but not 'output_layout', so they cannot share
-// mean's wrapper.
+// As above, used by max and min, which do not take output_layout.
 template <auto Func>
-inline Tensor reduction_with_fast_mode(
+inline Tensor reduction_with_deprecated_correction(
     const Tensor& input_tensor,
     const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim,
     bool keepdim,
@@ -164,7 +166,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
     ttnn::bind_function<"sum">(
         mod,
         sum_doc.c_str(),
-        &reduction_with_fast_mode_and_layout<&ttnn::sum>,
+        &reduction_with_deprecated_correction_and_layout<&ttnn::sum>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -186,7 +188,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
     ttnn::bind_function<"mean">(
         mod,
         mean_doc.c_str(),
-        &reduction_with_fast_mode_and_layout<&ttnn::mean>,
+        &reduction_with_deprecated_correction_and_layout<&ttnn::mean>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -201,12 +203,12 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("fast_and_approximate_mode") = false,
         nb::arg("output_layout") = nb::none());
 
-    const auto max_doc =
-        get_generic_reduction_doc("max", "ttnn.max", /*int32_supported=*/true, /*has_fast_approximate_mode=*/true);
+    const auto max_doc = get_generic_reduction_doc(
+        "max", "ttnn.max", /*int32_supported=*/true, /*has_output_layout=*/false, /*has_fast_approximate_mode=*/true);
     ttnn::bind_function<"max">(
         mod,
         max_doc.c_str(),
-        &reduction_with_fast_mode<&ttnn::max>,
+        &reduction_with_deprecated_correction<&ttnn::max>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
@@ -223,7 +225,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
     ttnn::bind_function<"min">(
         mod,
         min_doc.c_str(),
-        &reduction_with_fast_mode<&ttnn::min>,
+        &reduction_with_deprecated_correction<&ttnn::min>,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,

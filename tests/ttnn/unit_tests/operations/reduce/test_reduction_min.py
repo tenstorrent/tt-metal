@@ -134,7 +134,7 @@ def test_min_multi_dim(device, input_shape):
     )
 
 
-@pytest.mark.parametrize("input_shape", [(16, 2, 32, 3), (16, 2, 32, 24), (1, 1, 64, 64)])
+@pytest.mark.parametrize("input_shape", [(32, 32), (16, 2, 32, 3), (16, 2, 32, 24), (1, 1, 64, 64)])
 @pytest.mark.parametrize("dim", [None, -1, -2])
 @pytest.mark.parametrize("scalar", [1.0, 2.5, -2.5])
 @pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["accurate", "fast"])
@@ -142,9 +142,6 @@ def test_min_fp32_fast_and_approximate_mode(device, input_shape, dim, scalar, fa
     """FLOAT32 min with both values of fast_and_approximate_mode.
     - False (default): accurate SFPU path (LLK MIN reduce) - result matches torch exactly.
     - True: faster FPU/TF32 path via -MAX(-x) - result is approximate.
-
-    The scalar is applied after the reduction, so it costs the accurate path no precision. A negative
-    scalar flips the op, since min(scalar * x) == scalar * max(x).
     """
     torch.manual_seed(1)
 
@@ -157,7 +154,6 @@ def test_min_fp32_fast_and_approximate_mode(device, input_shape, dim, scalar, fa
     output_tensor = ttnn.min(input_tensor, fast_and_approximate_mode=fast_and_approximate_mode, dim=dim, scalar=scalar)
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor)).reshape(torch_output_tensor.shape)
 
-    # A negative scalar dispatches to max, which is accurate for fp32, so only fast mode is loose.
     if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
         assert_allclose(torch_output_tensor, output_tensor, rtol=1e-3, atol=1e-2)
     else:

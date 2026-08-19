@@ -168,13 +168,12 @@ def test_mean_shard(device, mem_config, keepdim, dtype):
         assert output_mem_config.is_sharded()
 
 
-@pytest.mark.parametrize("input_shape", [(16, 2, 32, 3), (16, 2, 32, 24), (1, 1, 64, 64)])
+@pytest.mark.parametrize("input_shape", [(32, 32), (16, 2, 32, 3), (16, 2, 32, 24), (1, 1, 64, 64)])
 @pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["accurate", "fast"])
 def test_mean_fp32_fast_and_approximate_mode_no_dim(device, input_shape, fast_and_approximate_mode):
-    """FLOAT32 global mean (dim=None) with both values of fast_and_approximate_mode.
-
-    dim=None covers every axis, so the reduce is decomposed into per-axis Sum sub-steps rather than
-    taking a single W/H/HW dispatch; this pins that decomposition to the accurate path.
+    """FLOAT32 mean (dim=None) with both values of fast_and_approximate_mode.
+    - False (default): accurate SFPU path.
+    - True: faster FPU/TF32 path.
     """
     torch.manual_seed(1)
 
@@ -190,4 +189,4 @@ def test_mean_fp32_fast_and_approximate_mode_no_dim(device, input_shape, fast_an
     if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
         assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
     else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=8)
+        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)

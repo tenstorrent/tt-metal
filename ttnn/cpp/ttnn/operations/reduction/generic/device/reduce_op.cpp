@@ -156,12 +156,12 @@ Tensor reduce(
     const bool use_rm_dense = use_rm_dense_w || use_rm_dense_h;
 
     // Accurate fp32 SFPU path (the FPU truncates fp32 to tf32 on the way into SrcA/SrcB). Falls back
-    // to the FPU without fp32_dest_acc_en, on Quasar (no SFPU reduce LLKs), or on the dense RM path
-    // (its own kernels, no SFPU variant). negate=true marks the FPU's -MAX(-x) min lowering, which
-    // has no SFPU fold, so MAX/MIN exclude it.
+    // to the FPU without fp32_dest_acc_en or on Quasar (no SFPU reduce LLKs). The dense RM kernels
+    // share the same SFPU fold via CT arg 6. negate=true marks the FPU's -MAX(-x) min lowering,
+    // which has no SFPU fold, so MAX/MIN exclude it.
     const bool fp32_sfpu_eligible = !fast_and_approximate_mode &&
                                     input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 &&
-                                    arch != tt::ARCH::QUASAR && config.fp32_dest_acc_en && !use_rm_dense;
+                                    arch != tt::ARCH::QUASAR && config.fp32_dest_acc_en;
 
     const bool use_sfpu_fp32_sum = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::SUM;
     const bool use_sfpu_fp32_mean = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::AVG;
@@ -354,7 +354,7 @@ Tensor reduce(
                 /*post_mul_scaler=*/1.0f,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
-                /*use_sfpu_reduce=*/use_sfpu_fp32_mean,
+                /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
                 /*num_h_slices=*/num_h_slices,
                 /*output_layout=*/tt::tt_metal::Layout::ROW_MAJOR);
 
@@ -371,7 +371,7 @@ Tensor reduce(
                 /*post_mul_scaler=*/post_mul,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
-                /*use_sfpu_reduce=*/use_sfpu_fp32_mean,
+                /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
                 /*num_h_slices=*/1,
                 /*output_layout=*/rm_dense_out_layout);
         }
