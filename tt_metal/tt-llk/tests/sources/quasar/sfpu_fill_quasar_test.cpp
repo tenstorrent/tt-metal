@@ -79,11 +79,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_descriptor_t td_val;
     td_val.buf_desc        = bd_val;
     td_val.buf_desc_id     = buf_desc_id;
-    td_val.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
+    td_val.reg_data_format = static_cast<DataFormat>(formats.unpack_A_dst);
     _configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
 
     // Configure unpacker → init unary operand path → unpack tile 0 from L1 into DEST.
-    _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
+    _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val.reg_data_format);
     _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles);
     _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0, ckernel::DEFAULT_TENSOR_SHAPE);
 
@@ -201,11 +201,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_descriptor_t tdma_desc;
     tdma_desc.buf_desc        = bd_val;
     tdma_desc.buf_desc_id     = buf_desc_id;
-    tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
+    tdma_desc.reg_data_format = static_cast<DataFormat>(formats.pack_src);
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
     // Configure pack engine 0 → init → pack tile from DST_INDEX into buffer_Res → release section.
-    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc, ckernel::ReluConfig::none());
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(tdma_desc.reg_data_format, ckernel::ReluConfig::none());
     _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
     _llk_pack_(params.DST_INDEX, 0, ckernel::DEFAULT_TENSOR_SHAPE);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
