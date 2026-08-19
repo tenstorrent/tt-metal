@@ -300,7 +300,7 @@ def test_matmul(
     ]
     runtimes = [
         CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
-        TILE_COUNT(matmul_dims.output_tile_cnt),
+        TILE_COUNT(matmul_dims.output_tile_cnt * matmul_dims.kt_dim),
         NUM_FACES(num_faces, num_faces, num_faces),
         LOOP_FACTOR(loop_factor),
     ]
