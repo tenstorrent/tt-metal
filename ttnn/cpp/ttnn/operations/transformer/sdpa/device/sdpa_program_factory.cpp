@@ -19,6 +19,8 @@
 #include <optional>
 #include <string>
 #include <cmath>
+#include <numeric>
+#include "gna_geometry.hpp"  // GNA fused kernel host geometry (P4/P5 build-out)
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -831,6 +833,29 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const std::array<uint32_t, 3> block = operation_attributes.neighborhood_block.value_or(std::array<uint32_t, 3>{});
     // GNA region-reuse path (P4/P5 build-out): branch point. Off => existing per-block fused path (baseline).
     [[maybe_unused]] const bool gna_region = operation_attributes.neighborhood_gna;
+    if (gna_region && operation_attributes.neighborhood_3d.has_value() &&
+        operation_attributes.neighborhood_block.has_value()) {
+        // Iteration 1: derive + validate the GNA host geometry (still dispatch baseline below so the gate stays
+        // green). neighborhood_3d = {T,H,W,kt,kh,kw}; block = {bt,bh,bw} (op order).
+        const auto& n = operation_attributes.neighborhood_3d.value();
+        const auto& bk = block;
+        const auto geo = ttnn::operations::transformer::gna::compute_gna_geometry(
+            n[0], n[1], n[2], bk[0], bk[1], bk[2], n[3], n[4], n[5]);
+        uint64_t idx_sum = std::accumulate(geo.box_idx.begin(), geo.box_idx.end(), uint64_t{0});
+        uint64_t mask_sum = std::accumulate(geo.mask_table.begin(), geo.mask_table.end(), uint64_t{0});
+        log_info(
+            tt::LogOp,
+            "[GNA-geom] nb={} vol={} box_vol={} n_distinct={} ext=({},{},{}) box_idx_sum={} mask_live_sum={}",
+            geo.nb,
+            geo.vol,
+            geo.box_vol,
+            geo.n_distinct,
+            geo.ext_t,
+            geo.ext_h,
+            geo.ext_w,
+            idx_sum,
+            mask_sum);
+    }
     if (is_windowed) {
         // The reader->compute k-range ctrl CB carries each Q chunk's {k_lo, k_hi} and is needed in both
         // windowed sub-modes (block-diagonal and 3D-neighborhood); double-buffered so the reader can run a
