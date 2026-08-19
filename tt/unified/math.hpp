@@ -245,6 +245,27 @@ struct FPUFusion {};
 
 struct ReduceFusion {};
 
+// How B's tiles are read. This is the ONE matmul property that is not derivable from
+// the operand shapes, so it is the only thing left to state.
+//
+// It is a PER-TILE transpose and nothing more: each 32x32 tile of B is transposed as it
+// is unpacked, and the tile GRID is untouched. Metal's own wording is "transpose
+// operation on tiles in B", and ttnn's SDPA relies on exactly this -- its indexing is
+// byte-identical with the flag on or off.
+//
+// So this alone does NOT give you B-transpose. A true Bt needs both halves:
+//
+//   per-tile   this flag
+//   tile grid  the READER, placing page (r, c) of B at slot (c, r)
+//
+// For Q@Kt that means K arrives grid-transposed -- so its shape here is genuinely
+// kt x ct and the geometry below infers correctly -- and this flag supplies the rest.
+// Verified on silicon: the pair matches torch's q @ k.T to 0.006-0.007 across four
+// shapes, while the flag alone matches neither q@k nor q@k.T once B is wider than one
+// tile. An A-transpose is NOT symmetric with this and has no flag: ttnn does it with a
+// separate materialised pass into another circular buffer.
+enum class TransposeB { No, Yes };
+
 // The geometry a matmul runs at, DERIVED from its operands rather than declared.
 // Names follow matmul_block's own parameters: A is rt_dim x kt_dim tiles, B is
 // kt_dim x ct_dim, C is rt_dim x ct_dim.
@@ -261,7 +282,7 @@ struct ReduceFusion {};
 // output's columns. Subblocking B -- several output subblocks side by side in one
 // buffer -- would make them differ, and would then be expressed by giving B a wider
 // shape than the output takes.
-template <typename SA, typename SB>
+template <typename SA, typename SB, TransposeB Tr = TransposeB::No>
 struct MatmulGeometry {
     static_assert(
         SA::cols == SB::rows, "matmul inner dimension disagrees: operand A's columns must equal operand B's rows");
@@ -273,6 +294,9 @@ struct MatmulGeometry {
     static constexpr uint32_t in1_row_stride = SB::cols;
     static constexpr uint32_t out_subblock_num_tiles = rt_dim * ct_dim;
 
+    // What metal's matmul_block wants: any non-zero value means transpose.
+    static constexpr uint32_t transpose = (Tr == TransposeB::Yes) ? 1u : 0u;
+
     // The output block, with any leading extent carried through from A.
     using out_shape = with_hw<SA, rt_dim, ct_dim>;
 };
@@ -280,12 +304,13 @@ struct MatmulGeometry {
 // No bias. A real cb id could be 0, so the sentinel has to be out of range.
 inline constexpr uint32_t kNoBias = ~uint32_t(0);
 
-template <typename SA, typename SB, typename Chain>
-struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Chain>> {
+template <typename SA, typename SB, TransposeB Tr, typename Chain>
+struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Tr, Chain>> {
     using fusion_kind = FPUFusion;
     using lhs_shape = SA;
     using rhs_shape = SB;
-    using geometry = MatmulGeometry<SA, SB>;
+    static constexpr TransposeB transpose_b = Tr;
+    using geometry = MatmulGeometry<SA, SB, Tr>;
     using chain = Chain;
     using shape = typename geometry::out_shape;
 
@@ -310,7 +335,7 @@ struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Chain>> {
         // nothing to notice; more and the kernel and the geometry disagree about
         // the shape. Checked here rather than in the strategy because this is where
         // the operand's page count is still in hand.
-        MatmulNode<SA, SB, Chain> out{{}, in0_cb, in1_cb, operand.get_cb_id()};
+        MatmulNode<SA, SB, Tr, Chain> out{{}, in0_cb, in1_cb, operand.get_cb_id()};
         return out;
     }
 
@@ -548,29 +573,29 @@ auto rsqrt(const N& n) {
     return expr::Un<RsqrtOp, N>{{}, n};
 }
 
-template <typename SA, typename SB, typename Chain>
-auto relu(const MatmulNode<SA, SB, Chain>& m) {
-    return MatmulNode<SA, SB, expr::chain_append_t<Chain, ReluOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+template <typename SA, typename SB, TransposeB Tr, typename Chain>
+auto relu(const MatmulNode<SA, SB, Tr, Chain>& m) {
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, ReluOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
 }
 
-template <typename SA, typename SB, typename Chain>
-auto exp_(const MatmulNode<SA, SB, Chain>& m) {
-    return MatmulNode<SA, SB, expr::chain_append_t<Chain, ExpOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+template <typename SA, typename SB, TransposeB Tr, typename Chain>
+auto exp_(const MatmulNode<SA, SB, Tr, Chain>& m) {
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, ExpOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
 }
 
-template <typename SA, typename SB, typename Chain>
-auto recip(const MatmulNode<SA, SB, Chain>& m) {
-    return MatmulNode<SA, SB, expr::chain_append_t<Chain, RecipOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+template <typename SA, typename SB, TransposeB Tr, typename Chain>
+auto recip(const MatmulNode<SA, SB, Tr, Chain>& m) {
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, RecipOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
 }
 
-template <typename SA, typename SB, typename Chain>
-auto sqrt_(const MatmulNode<SA, SB, Chain>& m) {
-    return MatmulNode<SA, SB, expr::chain_append_t<Chain, SqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+template <typename SA, typename SB, TransposeB Tr, typename Chain>
+auto sqrt_(const MatmulNode<SA, SB, Tr, Chain>& m) {
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, SqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
 }
 
-template <typename SA, typename SB, typename Chain>
-auto rsqrt(const MatmulNode<SA, SB, Chain>& m) {
-    return MatmulNode<SA, SB, expr::chain_append_t<Chain, RsqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
+template <typename SA, typename SB, TransposeB Tr, typename Chain>
+auto rsqrt(const MatmulNode<SA, SB, Tr, Chain>& m) {
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, RsqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
 }
 
 // The hooks expr.hpp's Fluent calls. Unqualified inside, so ordinary lookup finds
@@ -602,9 +627,9 @@ auto fluent_rsqrt(const N& n) {
 // The operands ARE the geometry now, so there is nothing left to state twice -- and
 // the inner-dimension agreement that nothing checked before is a static_assert inside
 // MatmulGeometry, reached by simply naming it.
-template <typename SA, typename SB>
+template <TransposeB Tr = TransposeB::No, typename SA, typename SB>
 auto matmul(TileSource<SA> a, TileSource<SB> b) {
-    return MatmulNode<SA, SB, expr::UnaryChain<>>{{}, a.cb_id, b.cb_id, kNoBias};
+    return MatmulNode<SA, SB, Tr, expr::UnaryChain<>>{{}, a.cb_id, b.cb_id, kNoBias};
 }
 
 // An FPU fusion cannot be an operand of a binary op: it already owns every DST
@@ -669,17 +694,22 @@ inline void compute_init(uint32_t in_cb, uint32_t out_cb) {
 // and in1 in SrcA -- plus the block dimensions programmed up front. Calling
 // compute_init() instead leaves the ALU configured for SFPU work, and matmul then
 // runs against a state it cannot use.
-template <typename SA, typename SB>
-inline void matmul_init(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t transpose = 0) {
+// The transpose here MUST match the one every matmul() in the kernel uses. This call
+// programs the MOP once at startup; matmul_block then passes its own flag per call, and
+// a disagreement leaves the unpacker configured for the other arrangement. Nothing can
+// check it across two separate calls -- the fix is to name it once in the kernel and
+// pass that constant to both. ttnn has the same coupling and resolves it the same way.
+template <typename SA, typename SB, TransposeB Tr = TransposeB::No>
+inline void matmul_init(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-    using Geometry = MatmulGeometry<SA, SB>;
+    using Geometry = MatmulGeometry<SA, SB, Tr>;
     ckernel::compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(in0_cb, in1_cb, out_cb);
-    ckernel::matmul_block_init(in0_cb, in1_cb, transpose, Geometry::ct_dim, Geometry::rt_dim, Geometry::kt_dim);
+    ckernel::matmul_block_init(
+        in0_cb, in1_cb, Geometry::transpose, Geometry::ct_dim, Geometry::rt_dim, Geometry::kt_dim);
 #else
     (void)in0_cb;
     (void)in1_cb;
     (void)out_cb;
-    (void)transpose;
 #endif
 }
 
@@ -760,7 +790,7 @@ struct Strategy<FPUFusion> {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         using G = typename Node::geometry;
         constexpr uint32_t kAccTiles = G::out_subblock_num_tiles;
-        constexpr uint32_t kTranspose = 0;
+        constexpr uint32_t kTranspose = G::transpose;
 
         ckernel::tile_regs_acquire();
         ckernel::reconfig_data_format(acc_cb, node.bias_cb);
@@ -827,7 +857,7 @@ struct Strategy<FPUFusion> {
             "4x2 / 2x4 / 8x1 / 1x8 are the largest that are.");
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         using Chain = typename Node::chain;
-        constexpr uint32_t kTranspose = 0;
+        constexpr uint32_t kTranspose = G::transpose;
 
         ckernel::tile_regs_acquire();
 

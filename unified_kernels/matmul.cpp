@@ -39,12 +39,22 @@ constexpr uint32_t kCbAcc = 24;  // running total; a separate CB from kCbOut
 // budget static_assert keys on the output block they imply. MM_K_BLOCKS stays a plain
 // loop bound, which is all it ever was.
 //
+// The one thing shapes cannot derive is how B's tiles are read, and it is named ONCE
+// here because matmul_init and every matmul() must agree and nothing can check that
+// they do. With MM_TRANSPOSE the host supplies in1 grid-transposed, so this computes
+// A @ B-transpose; see TransposeB in tt/unified/math.hpp for why both halves are needed.
+#if defined(MM_TRANSPOSE)
+constexpr auto kTransposeB = u::TransposeB::Yes;
+#else
+constexpr auto kTransposeB = u::TransposeB::No;
+#endif
+//
 // One spelling of the fusion, biased or not, so the relu variants below do not
 // each need two forms.
 #if defined(MM_BIAS)
-#define MM_FUSION(x, y) u::matmul(x, y).bias(bias)
+#define MM_FUSION(x, y) u::matmul<kTransposeB>(x, y).bias(bias)
 #else
-#define MM_FUSION(x, y) u::matmul(x, y)
+#define MM_FUSION(x, y) u::matmul<kTransposeB>(x, y)
 #endif
 
 constexpr uint32_t kIn0Tiles = MM_RT_DIM * MM_KT_DIM;
@@ -79,7 +89,7 @@ void kernel_main() {
     // The FPU path needs its own hardware startup: SrcOrder::Reverse plus the
     // block dims. compute_init() (init_sfpu) would leave the ALU configured for
     // SFPU work and matmul could not run against it.
-    u::matmul_init<In0, In1>(kCbIn0, kCbIn1, kCbOut);
+    u::matmul_init<In0, In1, kTransposeB>(kCbIn0, kCbIn1, kCbOut);
 
     const auto in0 = TensorAccessor(in0_args, in0_addr);
     const auto in1 = TensorAccessor(in1_args, in1_addr);
@@ -122,7 +132,8 @@ void kernel_main() {
         // both chains at once: relu per k-block, then exp once on the total.
         // exp rather than relu for the epilogue so the two stages stay
         // distinguishable -- relu of a sum of relus would be a no-op.
-        u::Block result = acc.accumulate(u::relu(u::matmul(a, b)), finish, [](auto mm) { return u::exp_(mm); });
+        u::Block result =
+            acc.accumulate(u::relu(u::matmul<kTransposeB>(a, b)), finish, [](auto mm) { return u::exp_(mm); });
 #else
         u::Block result = acc.accumulate(MM_FUSION(a, b), finish);
 #endif

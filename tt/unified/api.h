@@ -381,7 +381,11 @@ auto rsqrt(const ComputeBlock<S>& b);
 // The geometry is DERIVED from the operands -- see MatmulGeometry in
 // tt/unified/math.hpp. A must be rt x kt tiles and B kt x ct, and their agreement on
 // kt is a compile error rather than silent garbage.
-template <typename SA, typename SB>
+//
+// `Tr` selects whether B's TILES are read transposed. It is not a B-transpose on its
+// own -- the tile grid is the reader's job -- and it must match the argument given to
+// matmul_init. See TransposeB in tt/unified/math.hpp, which spells out both halves.
+template <TransposeB Tr = TransposeB::No, typename SA, typename SB>
 auto matmul(const ComputeBlock<SA>& a, const ComputeBlock<SB>& b);
 
 // Reduce `b`'s tile grid down one axis, within and across tiles. `Axis` says which
