@@ -254,6 +254,12 @@ class Qwen36ModelArgs(ModelArgs):
         # Prefill matmul factory (M = seq_len)
         self._prefill_grid = tpc.prefill_grid_default()
         self.prefill_tuning = tpc.prefill_tuning(tp)
+        if self.moe_num_experts > 0:
+            # The dense TP=4 tuning picks in0_block_w = min(cap, k_tiles // grid), which the
+            # 35B-A3B's attention/GDN prefill K dims don't divide (Kt % in0_block_w != 0). Force
+            # the divisor path (largest divisor of k_tiles ≤ cap) so the block always divides;
+            # dense 9B/27B keep their tuned block.
+            self.prefill_tuning = {**self.prefill_tuning, "in0_block_w_divisor": True}
         self.prefill_progcfg = lambda seq_len, k, n: tpc.create_prefill_matmul_program_config(
             seq_len, k, n, grid_size=self._prefill_grid, tuning=self.prefill_tuning
         )
