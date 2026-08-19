@@ -119,18 +119,41 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
-# KNOWN ERROR — [WH-T3K] Gemma4-31B: device hang (fast-dispatch timeout) during
-# decode on WH-T3K only; the same serving config passes on BH. Kept enabled to
-# track. https://github.com/tenstorrent/tt-metal/issues/49494
 # Serve 16k with chunked prefill=2048 (12 GB/ASIC); do not mirror BH 256k.
+#
+# --async-scheduling was REMOVED here (it is still set on the Blackhole legs
+# below). Async decode is measurably broken on Wormhole: on T3K 12B at
+# max_num_seqs 32, async ON returns 32/32 correct on only 4 of 6 repeats
+# (30/32 on the other two, degenerate repetition) while async OFF gives 32/32
+# on four consecutive repeats at the same throughput (363-383 vs 377-389 tok/s
+# aggregate) — no throughput upside, strictly worse correctness. This is also
+# the most likely driver of the WH-T3K-only decode hang tracked in
+# https://github.com/tenstorrent/tt-metal/issues/49494, which never reproduced
+# on BH with the same serving config. Restore it with the tt-inference-server
+# WH specs once the async path is fixed on Wormhole.
+#
+# Benchmark scope reduced to 16 prompts (the shared default is 32) instead of
+# raising any timeout. 31B/T3K sustains ~8.9 tok/s and the benchmark is
+# serialized at max_num_seqs 1, so 32 x 100 output tokens needs ~360 s and was
+# overrunning the 5 min benchmark budget (measured 359.9 s). 16 prompts is
+# ~180 s, comfortably inside it. additional-benchmark-args is appended after the
+# shared args so --num-prompts wins, and the "all requests completed" gate reads
+# num_prompts back out of the result JSON, so it stays consistent at 16.
+#
+# coherence-test added: this was the only gemma4 leg without it, and the
+# benchmark gate gates on request *completion* only — the WH corruption class
+# returns well-formed garbage with completed == num_prompts and sails straight
+# through. Verified passing on T3K.
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
+  coherence-test: true
   server-timeout: 45
   benchmark-timeout: 5
   mesh-device: T3K
   arch: arch-wormhole_b0
   tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 80000000}'
-  additional-server-args: "--max_model_len 16384 --max_num_seqs 1 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
+  additional-server-args: "--max_model_len 16384 --max_num_seqs 1 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048"
+  additional-benchmark-args: "--num-prompts 16"
   multimodal: false
   skus:
     wh_llmbox:
