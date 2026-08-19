@@ -36,6 +36,9 @@
  * @param red_dim_units_this_core Number of reduction dimension units assigned to this core
  * @param in_vals Pointer to L1 memory containing input values with data type determined by data_format template
  * parameter
+ * @param j_start First inner-dimension index owned by this data movement processor
+ * @param j_end One past the last inner-dimension index owned by this processor
+ * @param src_cb_offset Byte offset of this processor's half of the input circular buffer
  */
 template <bool reduce_all, DataFormat data_format, typename AddrGen, typename SrcCb>
 inline void find_argmax_for_core(
@@ -53,14 +56,19 @@ inline void find_argmax_for_core(
     uint32_t& max_idx,
     decltype(get_default_value<data_format>())& max_val,
     volatile tt_l1_ptr uint32_t* red_idxs,
-    volatile tt_l1_ptr decltype(get_default_value<data_format>())* red_vals) {
-    for (uint32_t j = 0; j < inner_dim_units; ++j) {
+    volatile tt_l1_ptr decltype(get_default_value<data_format>())* red_vals,
+    const uint32_t j_start,
+    const uint32_t j_end,
+    const uint32_t src_cb_offset) {
+    // inner_dim_units stays the FULL count: it is the page stride and part of the
+    // reduce_all index. Only the iteration range narrows to [j_start, j_end).
+    for (uint32_t j = j_start; j < j_end; ++j) {
         noc.async_read(
             s_src,
             src_cb,
             src_read_size,
             {.page_id = outer_idx * inner_dim_units + j, .offset_bytes = src_offset},
-            {.offset_bytes = 0});
+            {.offset_bytes = src_cb_offset});
         noc.async_read_barrier();
 
         // Reset max_val for each new output
@@ -296,7 +304,28 @@ void kernel_main() {
     // Semaphore to fire when intermediate outputs for one page are ready
     constexpr uint32_t done_sem_idx = get_compile_time_arg_val(27);
 
-    constexpr auto s_src_args = TensorAccessorArgs<28>();
+    // Secondary -> primary handoff, local to this core.
+    constexpr uint32_t partial_ready_sem_idx = get_compile_time_arg_val(28);
+
+    // This processor's half of the inner loop: [j_start, j_end).
+    constexpr uint32_t j_start = get_compile_time_arg_val(29);
+    constexpr uint32_t j_end = get_compile_time_arg_val(30);
+
+    // This processor's private half of src_cb: primary 0, secondary one page in.
+    constexpr uint32_t src_cb_offset = get_compile_time_arg_val(31);
+
+    // True on the processor that runs the cross-core protocol and writes the output.
+    constexpr bool owns_reduction = (bool)get_compile_time_arg_val(32);
+
+    // True when a second data movement processor is active on this core.
+    constexpr bool has_secondary_dm = (bool)get_compile_time_arg_val(33);
+
+    static_assert(j_start < j_end, "Empty inner range: this processor would do no work.");
+    static_assert(
+        !(reduce_all && has_secondary_dm), "reduce_all cannot be split: its accumulator spans the whole inner range.");
+    static_assert(owns_reduction || has_secondary_dm, "Secondary launched without a primary.");
+
+    constexpr auto s_src_args = TensorAccessorArgs<34>();
     constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
 
     //-------------------------------------------------------------------------
@@ -313,9 +342,9 @@ void kernel_main() {
     CircularBuffer red_idx_cb(red_idxs_cb_idx);
     CircularBuffer red_val_cb(red_vals_cb_idx);
 
-    // CB in L1 memory for storing input
+    // CB in L1 for input: one page per data movement processor when the loop is split.
     constexpr DataFormat src_cb_addr_data_format = get_dataformat(src_cb_idx);
-    const uint32_t src_cb_addr = src_cb.get_write_ptr();
+    const uint32_t src_cb_addr = src_cb.get_write_ptr() + src_cb_offset;
     volatile tt_l1_ptr auto* in_vals = get_tt_l1_ptr_based_on_data_format<src_cb_addr_data_format>(src_cb_addr);
 
     // CB in L1 memory of reducer core for storing output
@@ -346,6 +375,10 @@ void kernel_main() {
     // Semaphores
     Semaphore<> start_sem(start_sem_idx);
     Semaphore<> done_sem(done_sem_idx);
+    // Monotonic: secondary ups once per k, primary waits for k+1, so no reset is needed.
+    // wait_min also invalidates the L1 cache while polling, which is what makes the
+    // secondary's red_idxs / red_vals stores visible to the primary.
+    Semaphore<> partial_ready_sem(partial_ready_sem_idx);
 
     uint32_t max_idx = 0;
     auto max_val = get_default_value<src_cb_addr_data_format>();
@@ -353,7 +386,11 @@ void kernel_main() {
     // -------------------------------------------------------------------------
     // Main loop - run by all cores
     for (uint32_t k = 0; k < outer_dim_units; ++k) {
-        if (is_reduce_core) {
+        // Only the primary drives start_sem: semaphores are per-core, so two processors
+        // setting them would race. It also keeps the multicast on NOC1, matching the
+        // end-before-start corner order the host passes. From NOC0 that rectangle inverts
+        // and only one core is signalled -- the hang reported against the original PR.
+        if (is_reduce_core && owns_reduction) {
             // done_sem is zero-initialized by the dispatcher before the kernel
             // launches, so the k == 0 iteration needs no reset. Resetting it here
             // at k == 0 would race the worker cores' done_sem.up() increments:
@@ -406,9 +443,27 @@ void kernel_main() {
             max_idx,
             max_val,
             red_idxs,
-            red_vals);
+            red_vals,
+            j_start,
+            j_end,
+            src_cb_offset);
 
         if constexpr (not reduce_all) {
+            // The secondary fills only its [j_start, j_end) entries and hands off, taking no
+            // part in the cross-core protocol: done_sem still expects num_cores and the
+            // output write stays single-sourced. No free-slot semaphore is needed to stop it
+            // overwriting a partial still being shipped -- its next iteration blocks on the
+            // start_sem wait above, which advances only after the reduce core merged k.
+            if constexpr (not owns_reduction) {
+                partial_ready_sem.up(1);
+                continue;
+            }
+
+            // Wait for this core's secondary to fill its half before shipping the slot.
+            if constexpr (has_secondary_dm) {
+                partial_ready_sem.wait_min(k + 1);
+            }
+
             // We now write these local values to the equivalent position in the reduction core
             if (core_id != reduce_core_id) {
                 noc.async_write(
