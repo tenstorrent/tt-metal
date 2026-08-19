@@ -679,7 +679,7 @@ int main(int argc, char** argv) {
         // Factory System Descriptor (FSD) path comes from RTOptions, populated from the
         // TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH environment variable (set by tt-run and propagated to this
         // MPI worker). NOTE: FSD-driven mapping is not yet implemented; today we always fall back to live PSD
-        // discovery below. See Plan.md for the follow-up that consumes this.
+        // discovery below. See issue #52859 for the follow-up that consumes this.
         const auto& fsd_path = tt::tt_metal::MetalContext::instance().rtoptions().get_factory_system_descriptor_path();
         if (!fsd_path.empty()) {
             log_info(

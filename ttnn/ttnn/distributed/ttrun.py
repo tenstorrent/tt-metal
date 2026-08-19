@@ -918,7 +918,8 @@ def build_generate_rank_bindings_mpi_cmd(
         mpi_args: Optional list of additional MPI arguments (e.g., ["--allow-run-as-root"])
         factory_system_descriptor: Optional FSD path. When set, generate_rank_bindings receives it via
             the ``TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH`` env var (per-rank ``-x``) and reads it through
-            RTOptions, so Phase 1 mapping can use the FSD-derived topology instead of live PSD discovery.
+            RTOptions. NOTE: the path is only propagated here; it is not yet consumed for mapping — Phase 1
+            still performs live PSD discovery.
 
     Returns:
         List of command-line arguments for mpirun
@@ -1724,8 +1725,8 @@ def get_rank_environment(
     if config.mock_cluster_rank_binding:
         env["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = str(config.mock_cluster_rank_binding[binding.rank])
 
-    # Factory System Descriptor: applied to all ranks so the workload (and generate_rank_bindings) can map
-    # against the FSD-derived topology. Consumed via RTOptions in the worker process.
+    # Factory System Descriptor: applied to all ranks and read via RTOptions in the worker process. NOTE: the
+    # path is only propagated for now; it is not yet consumed for mapping (Phase 1 still does live PSD discovery).
     if config.factory_system_descriptor_path is not None:
         env[FACTORY_SYSTEM_DESCRIPTOR_ENV_VAR] = str(config.factory_system_descriptor_path)
 
@@ -2443,8 +2444,15 @@ def legacy_flow(
         else:
             config = parse_binding_config(rank_binding, mock_cluster_rank_binding, skip_mgd_check)
         # Apply the FSD path (if any) to all ranks so the workload receives TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH.
+        # Resolve against the launch directory here so remote MPI workers get an absolute, valid path (matches how
+        # new_mode_flow resolves it). Resolving an already-absolute path (e.g. passed from new_mode_flow) is a no-op.
         if factory_system_descriptor is not None:
-            config.factory_system_descriptor_path = factory_system_descriptor
+            config.factory_system_descriptor_path = resolve_path(
+                factory_system_descriptor,
+                description="Factory System Descriptor",
+                must_be_file=True,
+                must_exist=True,
+            )
     except (ValueError, ValidationError) as e:
         msg = f"Configuration error: {e}"
         # Stale Phase 1 cache guidance applies after a cache hit when MPI/apps fail — not typical for YAML parse.
@@ -2710,8 +2718,9 @@ def new_mode_flow(
     if verbose:
         logger.info(f"{TT_RUN_PREFIX} New mode: Mesh graph input = {resolved_mgd} (mapping YAML={mgd_is_mapping_yaml})")
 
-    # Resolve the optional Factory System Descriptor. When supplied it drives Phase 1 mapping (via
-    # generate_rank_bindings reading TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH) and reaches the Phase 2 workload.
+    # Resolve the optional Factory System Descriptor. When supplied it is propagated to Phase 1
+    # (generate_rank_bindings, via TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH) and the Phase 2 workload, and folded into
+    # the Phase 1 cache fingerprint. NOTE: it is not yet consumed for mapping — Phase 1 still does live PSD discovery.
     resolved_fsd: Optional[Path] = None
     if factory_system_descriptor is not None:
         resolved_fsd = resolve_path(

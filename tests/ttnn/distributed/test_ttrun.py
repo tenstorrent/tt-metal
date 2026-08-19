@@ -579,6 +579,55 @@ class TestLegacyFlow:
             # Single-process runs should work fine even with multihost args
             # MPI handles single-process runs correctly regardless
 
+    def test_legacy_mode_resolves_and_propagates_fsd(self, runner, sample_rank_binding_yaml, temp_dir):
+        """Legacy mode resolves --factory-system-descriptor to an absolute path and exports it to the workload.
+
+        Regression: legacy_flow previously stored the raw Click path, so a relative FSD could resolve to a
+        different location on a remote MPI worker.
+        """
+        import subprocess
+
+        fsd = temp_dir / "fsd.textproto"
+        fsd.write_text("")  # must exist: legacy_flow now validates with must_exist=True
+
+        with patch.object(subprocess, "run") as mock_run:
+            mock_run.return_value.returncode = 0
+            result = runner.invoke(
+                main,
+                [
+                    "--rank-binding",
+                    str(sample_rank_binding_yaml),
+                    "--factory-system-descriptor",
+                    str(fsd),
+                    "echo",
+                    "test",
+                ],
+            )
+
+        assert result.exit_code == 0
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        fsd_env = [c for c in cmd if c.startswith(f"{FACTORY_SYSTEM_DESCRIPTOR_ENV_VAR}=")]
+        assert fsd_env, f"FSD env var not exported in legacy-mode command: {cmd}"
+        val = fsd_env[0].split("=", 1)[1]
+        assert Path(val).is_absolute(), f"FSD path not resolved to absolute: {val}"
+        assert Path(val).name == "fsd.textproto"
+
+    def test_legacy_mode_missing_fsd_errors(self, runner, sample_rank_binding_yaml, temp_dir):
+        """Legacy mode validates the FSD path exists (regression: raw path was stored unvalidated)."""
+        result = runner.invoke(
+            main,
+            [
+                "--rank-binding",
+                str(sample_rank_binding_yaml),
+                "--factory-system-descriptor",
+                str(temp_dir / "does_not_exist.textproto"),
+                "echo",
+                "test",
+            ],
+        )
+        assert result.exit_code != 0
+
 
 class TestRankfileInjection:
     """Test rankfile injection functions."""
