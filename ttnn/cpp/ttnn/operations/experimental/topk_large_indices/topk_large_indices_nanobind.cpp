@@ -49,13 +49,14 @@ void bind_topk_large_indices(nb::module_& mod) {
               sentinel index 0xFFFFFFFF;
             * applied at runtime (no recompile), so a loop growing valid_length reuses one program.
 
-        sub_core_grids (optional):
-            * fences the op into a core rectangle so a concurrent workload
-              (e.g. a CCL) can own the remaining cores;
-            * must be a CoreRangeSet containing exactly ONE rectangular
-              CoreRange that fits inside the device compute grid; it may sit
-              anywhere in the grid (a non-origin fence is fully supported);
-            * defaults to None = the full compute grid.
+        Core selection:
+            * ``subdevice_id`` selects a TENSIX subdevice from the active manager;
+            * ``sub_core_grids`` optionally restricts work to a fully contained CoreRangeSet;
+            * the resolved grid is structural and participates in the program-cache key;
+            * kernels and circular buffers are created only on the resolved grid;
+            * when the resolved grid is a single dense rectangle (any origin), the op
+              may run its column-parallel tree and hybrid engines inside it; any other
+              set runs the row-parallel engine over the enumerated cores.
         stable (optional, default False):
             * sequential tie-breaking: equal values return their indices in
               ascending global-index order (the stable=True contract of
@@ -65,7 +66,8 @@ void bind_topk_large_indices(nb::module_& mod) {
             input_tensor: device tensor with ROW_MAJOR layout and BFLOAT16 dtype.
             k: required number of indices to return.
             valid_length: optional number of leading columns to search (default: full width).
-            sub_core_grids: optional single-rectangle CoreRangeSet to run on (default: full grid).
+            subdevice_id: optional active subdevice containing the top-k workers.
+            sub_core_grids: optional core restriction within ``subdevice_id``.
             stable: optional sequential (lowest-index-first) tie-breaking (default: False).
         )doc",
         &ttnn::experimental::topk_large_indices,
@@ -73,6 +75,7 @@ void bind_topk_large_indices(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("k"),
         nb::arg("valid_length") = std::nullopt,
+        nb::arg("subdevice_id") = nb::none(),
         nb::arg("sub_core_grids") = nb::none(),
         nb::arg("stable") = false);
 }

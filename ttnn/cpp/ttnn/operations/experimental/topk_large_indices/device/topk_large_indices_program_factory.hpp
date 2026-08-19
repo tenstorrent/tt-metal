@@ -11,23 +11,29 @@
 
 namespace ttnn::operations::experimental::topk_large_indices::program {
 
-// The worker grid this op uses — the single point every grid decision
-// (factory selection, program hash, work split, kernel placement) goes
-// through. With a sub_core_grids fence set (v1: exactly one rectangular
-// CoreRange) it returns the fence's DIMENSIONS; unset returns the device's
-// full compute grid (stock behavior). Placement additionally translates by
-// topk_li_worker_origin so the fence may sit anywhere in the device grid.
-CoreCoord topk_li_worker_grid(
-    tt::tt_metal::IDevice* device, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+// The resolved worker core set as one dense rectangle, when it is one. The
+// multi-engine paths (column-parallel trees, hybrid row split) require a
+// rectangle: the cost model sees its dimensions and every placement is
+// translated by its origin, so it may sit anywhere in the device grid. A
+// non-rectangular resolved set returns nullopt and the op runs the
+// row-parallel engine over the enumerated cores.
+std::optional<CoreRange> topk_li_worker_rect(const CoreRangeSet& resolved_worker_core_grid);
 
-// The fence's origin core ((0,0) when unset): every logical core coordinate
-// the factories construct from split indices is translated by this offset.
-CoreCoord topk_li_worker_origin(const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+struct CoreRowAssignment {
+    CoreCoord core{};
+    uint32_t start_row{};
+    uint32_t num_rows{};
+};
+
+// This is the canonical mapping used to populate reader/writer runtime arguments. Keeping it visible
+// allows a host-only unit test to pin ordering across discontiguous CoreRangeSets.
+std::vector<CoreRowAssignment> derive_core_row_assignments(const CoreRangeSet& core_grid, uint32_t num_rows);
 
 struct TopkLargeIndicesSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle compute_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
+    CoreRangeSet core_grid{};
     std::vector<CoreCoord> cores{};
 };
 
@@ -104,6 +110,7 @@ struct TopkLargeIndicesMultiCoreSharedVariables {
     tt::tt_metal::KernelHandle compute_node_kernel_id{};
     tt::tt_metal::KernelHandle compute_root_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
+    CoreRangeSet core_grid{};
     // Per-rectangle slice-major (row-major within the rectangle) core lists;
     // rect_cores[r][0] is rectangle r's tree root. Single-rect programs have
     // exactly one entry.

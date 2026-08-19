@@ -102,8 +102,11 @@ def test_topk_large_indices_fence_matches_unfenced_values(device):
     assert_equal(fenced_vals.sort(dim=-1).values, unfenced_vals.sort(dim=-1).values)
 
 
-def test_topk_large_indices_fence_rejects_multiple_ranges(device, expect_error):
-    torch_input = torch.randn(1, 1, 2, 4096, dtype=torch.bfloat16)
+def test_topk_large_indices_non_rectangular_grid_falls_back_row_parallel(device):
+    """A non-rectangular core set is legal: the op runs the row-parallel
+    engine over the enumerated cores (trees need a dense rectangle)."""
+    torch.manual_seed(13)
+    torch_input = torch.randn(1, 1, 37, 65536, dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     two_ranges = ttnn.CoreRangeSet(
         [
@@ -111,13 +114,13 @@ def test_topk_large_indices_fence_rejects_multiple_ranges(device, expect_error):
             ttnn.CoreRange(ttnn.CoreCoord(3, 3), ttnn.CoreCoord(4, 4)),
         ]
     )
-    with expect_error(RuntimeError, "exactly one rectangular CoreRange"):
-        ttnn.experimental.topk_large_indices(tt_input, k=256, sub_core_grids=two_ranges)
+    tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=256, sub_core_grids=two_ranges)
+    _assert_topk_values_match(torch_input, tt_indices, 256)
 
 
 def test_topk_large_indices_fence_rejects_out_of_grid(device, expect_error):
     torch_input = torch.randn(1, 1, 2, 4096, dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     grid = device.compute_with_storage_grid_size()
-    with expect_error(RuntimeError, "must fit within the device compute grid"):
+    with expect_error(RuntimeError, "must be fully contained"):
         ttnn.experimental.topk_large_indices(tt_input, k=256, sub_core_grids=_fence(0, 0, grid.x, grid.y))

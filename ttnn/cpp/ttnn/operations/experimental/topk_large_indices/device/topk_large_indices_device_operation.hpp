@@ -39,12 +39,13 @@ struct TopkLargeIndicesDeviceOperation {
 
     // num_slices, row_start, and row_count are composite-internal (the hybrid row split and the
     // remainder window's tree launch); the public API passes only (input, k, valid_length,
-    // sub_core_grids).
+    // subdevice_id, sub_core_grid, stable).
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
         uint32_t k,
         std::optional<uint32_t> valid_length,
-        std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt,
+        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
         std::optional<uint32_t> num_slices = std::nullopt,
         std::optional<uint32_t> row_start = std::nullopt,
         std::optional<uint32_t> row_count = std::nullopt,
@@ -59,7 +60,8 @@ Tensor topk_large_indices(
     const Tensor& input_tensor,
     uint32_t k,
     std::optional<uint32_t> valid_length = std::nullopt,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
     bool stable = false);
 
 }  // namespace ttnn::experimental

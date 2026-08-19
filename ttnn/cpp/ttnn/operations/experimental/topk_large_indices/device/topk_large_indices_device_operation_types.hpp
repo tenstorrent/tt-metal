@@ -8,6 +8,7 @@
 #include <optional>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -29,6 +30,16 @@ inline uint32_t flattened_rows_excluding_last_dim(const ttnn::Shape& shape) {
 
 struct operation_attributes_t {
     uint32_t k{};
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id{};
+    std::optional<CoreRangeSet> sub_core_grid{};
+    tt::tt_metal::SubDeviceManagerId subdevice_manager_id{};
+    // The caller-selected structural core set (sub_core_grid, else the whole
+    // TENSIX subdevice), resolved at invoke time. Kernel/CB placement is
+    // program structure, so it is part of the program hash. When the set is a
+    // single dense rectangle the multi-engine paths run inside it (placements
+    // translated by the rectangle origin); otherwise the op falls back to the
+    // row-parallel engine over the enumerated cores.
+    CoreRangeSet resolved_worker_core_grid{};
     // Restrict the search to the first `valid_length` columns of each row instead of the full last
     // dimension. Lets top-k run over the real prefix of an over-allocated row (whose tail may be stale)
     // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
@@ -53,13 +64,6 @@ struct operation_attributes_t {
     // already capture any structural difference.
     std::optional<uint32_t> row_start{};
     std::optional<uint32_t> row_count{};
-    // Optional core fence: run the op entirely inside this rectangle so a
-    // concurrent workload (e.g. a CCL) can own the remaining cores. v1 accepts
-    // exactly ONE rectangular CoreRange; it may sit anywhere in the device
-    // grid (the factories translate every placement by the fence origin).
-    // nullopt = the full compute grid (bit-identical to pre-fence behavior).
-    // Placement is program structure, so the fence is part of the program hash.
-    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids{};
     // Sequential tie-breaking: equal values return their indices in ascending
     // global-index order (the stable=True contract of ttnn.topk). Selects the
     // TOPK_XL_STABLE_TIES kernel compile, so it is part of the program hash.

@@ -18,36 +18,15 @@
 
 namespace ttnn::operations::experimental::topk_large_indices::program {
 
-namespace {
-
-// v1 fence contract: exactly one rectangular CoreRange. Enforced here (not
-// only in validate) because the hash/factory-selection path dereferences the
-// fence before validation runs.
-const CoreRange& single_fence_range(const tt::tt_metal::CoreRangeSet& sub_core_grids) {
-    TT_FATAL(
-        sub_core_grids.ranges().size() == 1,
-        "topk_large_indices sub_core_grids must be exactly one rectangular CoreRange, got {} ranges ({})",
-        sub_core_grids.ranges().size(),
-        sub_core_grids);
-    return sub_core_grids.ranges().front();
-}
-
-}  // namespace
-
-CoreCoord topk_li_worker_grid(
-    tt::tt_metal::IDevice* device, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    if (sub_core_grids.has_value()) {
-        const auto& range = single_fence_range(*sub_core_grids);
-        return CoreCoord(range.end_coord.x - range.start_coord.x + 1, range.end_coord.y - range.start_coord.y + 1);
+std::optional<CoreRange> topk_li_worker_rect(const CoreRangeSet& resolved_worker_core_grid) {
+    if (resolved_worker_core_grid.empty()) {
+        return std::nullopt;
     }
-    return device->compute_with_storage_grid_size();
-}
-
-CoreCoord topk_li_worker_origin(const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
-    if (sub_core_grids.has_value()) {
-        return single_fence_range(*sub_core_grids).start_coord;
+    const CoreRange bounding_box = resolved_worker_core_grid.bounding_box();
+    if (resolved_worker_core_grid.num_cores() != bounding_box.size()) {
+        return std::nullopt;
     }
-    return CoreCoord(0, 0);
+    return bounding_box;
 }
 
 namespace {
@@ -193,37 +172,26 @@ void set_runtime_args(
     // writers stay output-relative (the window's output has its own row 0).
     const uint32_t row_base = attrs.row_start.value_or(0);
     const uint32_t effective_rows = attrs.row_count.value_or(runtime_args.num_rows);
-    // The work split runs in the FENCE-LOCAL frame (origin (0,0), fence dims);
-    // shared.cores carries device-frame coordinates, so group membership is
-    // looked up on the un-translated coordinate below.
-    const CoreCoord origin = topk_li_worker_origin(attrs.sub_core_grids);
-    const auto work_split = tt::tt_metal::split_work_to_cores(
-        topk_li_worker_grid(input.device(), attrs.sub_core_grids), effective_rows, true);
-    const auto num_active_cores = std::get<0>(work_split);
-    const auto& core_group_1 = std::get<2>(work_split);
-    const auto& core_group_2 = std::get<3>(work_split);
-    const auto num_rows_per_core_group_1 = std::get<4>(work_split);
-    const auto num_rows_per_core_group_2 = std::get<5>(work_split);
-    TT_FATAL(num_active_cores > 0, "topk_large_indices requires at least one row of work");
-
-    uint32_t start_row = 0;
-    for (const auto& core : shared.cores) {
-        const CoreCoord local_core(core.x - origin.x, core.y - origin.y);
-        const uint32_t rows =
-            rows_for_core(local_core, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
+    const auto assignments = derive_core_row_assignments(shared.core_grid, effective_rows);
+    TT_FATAL(
+        assignments.size() == shared.cores.size(),
+        "topk_large_indices runtime assignment core count {} differs from compiled core count {}",
+        assignments.size(),
+        shared.cores.size());
+    for (uint32_t i = 0; i < assignments.size(); ++i) {
+        const auto& [core, start_row, rows] = assignments[i];
         TT_FATAL(
-            rows <= num_rows_per_core_group_1,
-            "topk_large_indices assigned {} rows to a core, expected at most {}",
-            rows,
-            num_rows_per_core_group_1);
-
-        const uint32_t input_row = row_base + start_row;
+            core == shared.cores[i],
+            "topk_large_indices runtime assignment core {} differs from compiled core {} at position {}",
+            core,
+            shared.cores[i],
+            i);
         tt::tt_metal::SetRuntimeArgs(
             program,
             shared.reader_kernel_id,
             core,
             {input.buffer()->address(),
-             input_row,
+             row_base + start_row,
              rows,
              runtime_args.num_chunks,
              runtime_args.input_tail_chunk_bytes,
@@ -232,14 +200,38 @@ void set_runtime_args(
             program, shared.compute_kernel_id, core, {rows, runtime_args.num_chunks, runtime_args.tail_elements});
         tt::tt_metal::SetRuntimeArgs(
             program, shared.writer_kernel_id, core, {indices.buffer()->address(), start_row, rows});
-
-        start_row += rows;
     }
-    TT_FATAL(
-        start_row == effective_rows, "topk_large_indices assigned {} rows, expected {}", start_row, effective_rows);
 }
 
 }  // namespace
+
+std::vector<CoreRowAssignment> derive_core_row_assignments(const CoreRangeSet& core_grid, uint32_t num_rows) {
+    const auto work_split = tt::tt_metal::split_work_to_cores(core_grid, num_rows, true);
+    const auto num_active_cores = std::get<0>(work_split);
+    const auto& core_group_1 = std::get<2>(work_split);
+    const auto& core_group_2 = std::get<3>(work_split);
+    const auto num_rows_per_core_group_1 = std::get<4>(work_split);
+    const auto num_rows_per_core_group_2 = std::get<5>(work_split);
+    TT_FATAL(num_active_cores > 0, "topk_large_indices requires at least one row of work");
+
+    const auto cores = corerange_to_cores(core_grid, std::nullopt, true);
+    std::vector<CoreRowAssignment> assignments;
+    assignments.reserve(cores.size());
+    uint32_t start_row = 0;
+    for (const auto& core : cores) {
+        const uint32_t rows =
+            rows_for_core(core, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
+        TT_FATAL(
+            rows <= num_rows_per_core_group_1,
+            "topk_large_indices assigned {} rows to a core, expected at most {}",
+            rows,
+            num_rows_per_core_group_1);
+        assignments.push_back(CoreRowAssignment{.core = core, .start_row = start_row, .num_rows = rows});
+        start_row += rows;
+    }
+    TT_FATAL(start_row == num_rows, "topk_large_indices assigned {} rows, expected {}", start_row, num_rows);
+    return assignments;
+}
 
 TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -255,12 +247,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t llk_k = to_uint32(llk_target_k);
     const uint32_t tiles_per_sequence = (llk_k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
 
-    const auto grid = topk_li_worker_grid(input.device(), operation_attributes.sub_core_grids);
-    const CoreCoord origin = topk_li_worker_origin(operation_attributes.sub_core_grids);
-    const CoreRangeSet all_cores(CoreRange({origin.x, origin.y}, {origin.x + grid.x - 1, origin.y + grid.y - 1}));
+    const auto& all_cores = operation_attributes.resolved_worker_core_grid;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, true);
-    // Runtime row counts are intentionally patched through runtime args instead of the program hash.
-    // Create kernels/CBs across the full worker grid so cache hits can use a different active core subset.
+    // Runtime row counts are intentionally patched through runtime args instead of the program hash. The
+    // caller-selected structural core grid is fixed in the hash, so cache hits can change shape without ever
+    // creating kernels or CBs on cores owned by another subdevice.
 
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_indices = tt::CBIndex::c_1;
@@ -345,6 +336,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         .reader_kernel_id = reader_kernel,
         .compute_kernel_id = compute_kernel,
         .writer_kernel_id = writer_kernel,
+        .core_grid = all_cores,
         .cores = cores};
     set_runtime_args(program, shared, input, tensor_return_value, operation_attributes);
 
@@ -356,6 +348,11 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    TT_FATAL(
+        operation_attributes.resolved_worker_core_grid == cached_program.shared_variables.core_grid,
+        "topk_large_indices cache hit resolved grid {} differs from compiled grid {}",
+        operation_attributes.resolved_worker_core_grid,
+        cached_program.shared_variables.core_grid);
     set_runtime_args(
         cached_program.program,
         cached_program.shared_variables,
@@ -798,8 +795,13 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
     const auto& shape = input.logical_shape();
     const uint32_t n = shape[shape.rank() - 1];
     const uint32_t num_rows = operation_attributes.row_count.value_or(flattened_rows_excluding_last_dim(shape));
-    const auto grid = topk_li_worker_grid(input.device(), operation_attributes.sub_core_grids);
-    const CoreCoord origin = topk_li_worker_origin(operation_attributes.sub_core_grids);
+    const auto rect = topk_li_worker_rect(operation_attributes.resolved_worker_core_grid);
+    TT_FATAL(
+        rect.has_value(),
+        "topk_large_indices multi-core factory requires a rectangular worker core set, got {}",
+        operation_attributes.resolved_worker_core_grid);
+    const CoreCoord origin = rect->start_coord;
+    const CoreCoord grid(rect->end_coord.x - rect->start_coord.x + 1, rect->end_coord.y - rect->start_coord.y + 1);
     const auto config =
         compute_column_split_config(k, n, num_rows, grid, operation_attributes.num_slices, /*allow_multi_row=*/true);
     TT_FATAL(config.enabled, "topk_large_indices multi-core factory selected for a shape it does not support");
@@ -820,7 +822,7 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
     std::vector<CoreRange> node_ranges;
     std::vector<std::vector<CoreCoord>> rect_cores(num_rects);
     for (uint32_t r = 0; r < num_rects; ++r) {
-        // Rectangle origins are fence-local; translate into the device frame.
+        // Rectangle origins are local to the resolved worker rect; translate into the device frame.
         const uint32_t ox = static_cast<uint32_t>(origin.x) + (r % rects_x) * config.local_grid_x;
         const uint32_t oy = static_cast<uint32_t>(origin.y) + (r / rects_x) * config.local_grid_y;
         const CoreRange rect(CoreCoord(ox, oy), CoreCoord(ox + config.local_grid_x - 1, oy + config.local_grid_y - 1));
@@ -982,6 +984,7 @@ TopkLargeIndicesMultiCoreProgramFactory::cached_program_t TopkLargeIndicesMultiC
         .compute_node_kernel_id = compute_node_kernel,
         .compute_root_kernel_id = compute_root_kernel,
         .writer_kernel_id = writer_kernel,
+        .core_grid = operation_attributes.resolved_worker_core_grid,
         .rect_cores = std::move(rect_cores)};
     set_runtime_args_multi_core(program, shared, input, tensor_return_value, operation_attributes);
 
@@ -993,6 +996,11 @@ void TopkLargeIndicesMultiCoreProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    TT_FATAL(
+        operation_attributes.resolved_worker_core_grid == cached_program.shared_variables.core_grid,
+        "topk_large_indices cache hit resolved grid {} differs from compiled grid {}",
+        operation_attributes.resolved_worker_core_grid,
+        cached_program.shared_variables.core_grid);
     set_runtime_args_multi_core(
         cached_program.program,
         cached_program.shared_variables,
