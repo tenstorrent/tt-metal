@@ -63,6 +63,13 @@ LEVER_DEFAULTS = {
     # with the reduced width (+0.8% at Wt=32 -> +10.4% at Wt=224); see the
     # rationale block in kernels/rms_norm_compute.cpp.
     "reduce_via_add": 1,
+    # --- F-group precision levers, measured through the same `_levers` hook ----
+    # These two are the ONLY knobs that reach the ComputeConfigDescriptor, and
+    # they exist so F24 / F25 have a re-runnable counterfactual arm instead of an
+    # ad-hoc toggle.  At their defaults `_apply_precision_levers` returns the
+    # caller's descriptor untouched, which is what F23 requires.
+    "dest_acc": 1,  # F25 - 0: force fp32_dest_acc_en=False (the cheap DEST width)
+    "pack_precise": 0,  # F24 - 1: force the PRECISE bfloat8_b packer (applied = fast)
     "coalesce": 1,  # B5/B6 - 0: split each tile transfer into two half-tile ones
     # F-group (precision cost): 1 = the accumulator CBs carry the CHEAPEST format
     # that loses nothing (fp32 only when DEST actually accumulates in fp32);
@@ -143,6 +150,29 @@ def _acc_dtype(compute_kernel_config, interm_dtype, narrow: bool):
     if bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True)) or not narrow:
         return ttnn.float32
     return interm_dtype
+
+
+def _apply_precision_levers(compute_kernel_config, levers):
+    """Bench-only overrides of the two precision fields levers F24 / F25 measure.
+
+    F23 boundary: with `levers` at its defaults - i.e. EVERY real call, since
+    `_levers` is an internal bench hook that no public argument reaches - this
+    returns the caller's descriptor object untouched, so the op still cannot
+    downgrade a caller-supplied precision knob.  Only an explicit bench arm
+    rebuilds it, and then only to measure the counterfactual.
+    """
+    force_dest_off = not _lever(levers, "dest_acc")
+    force_precise = bool(_lever(levers, "pack_precise"))
+    if not (force_dest_off or force_precise):
+        return compute_kernel_config
+
+    out = ttnn.ComputeConfigDescriptor()
+    out.math_fidelity = compute_kernel_config.math_fidelity
+    out.math_approx_mode = bool(getattr(compute_kernel_config, "math_approx_mode", False))
+    out.dst_full_sync_en = bool(getattr(compute_kernel_config, "dst_full_sync_en", False))
+    out.fp32_dest_acc_en = bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True)) and not force_dest_off
+    out.bfp8_pack_precise = bool(getattr(compute_kernel_config, "bfp8_pack_precise", False)) or force_precise
+    return out
 
 
 def _reduce_via_add(regime, compute_kernel_config, interm_dtype, W_partial: int, lever_on: bool) -> int:
@@ -597,6 +627,10 @@ def create_program_descriptor(
     levers=None,
 ) -> "ttnn.ProgramDescriptor":
     device = input_tensor.device()
+    # Applied FIRST: the plan reads fp32_dest_acc_en for the DEST limit, the
+    # accumulator-CB format and the reduce datapath, so the arm must be in effect
+    # before blocking_plan sees the config.  A no-op at the lever defaults.
+    compute_kernel_config = _apply_precision_levers(compute_kernel_config, levers)
     plan = blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_config, levers)
 
     # ---------------- work distribution over the INDEPENDENT axis ------------

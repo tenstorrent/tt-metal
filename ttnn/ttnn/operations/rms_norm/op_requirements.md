@@ -67,7 +67,7 @@ layouts, the full-grid and the single-core core counts.
 
 ---
 
-### [ ] Refinement 1 — Numerical configurability expansion
+### [x] Refinement 1 — Numerical configurability expansion
 
 **Goal**: add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` and to `SUPPORTED["gamma_dtype"]`, and add
 `False` to `SUPPORTED["fp32_dest_acc_en"]` for `bfloat16` activations. Expose the full
@@ -101,6 +101,21 @@ the very path it creates.
 category, and the `(1,1,32,7168)` interleaved perf loose case reaches the op (i.e. it is a
 `supported_pass`/measurable cell, not an xfail) at its exact config: bf16 / TILE / INTERLEAVED /
 HiFi2 / `fp32_dest_acc_en=False`.
+
+**Outcome**: landed all three axis values with **no new `EXCLUSIONS`** — golden interleaved cartesian
+went 700 → **1500 passing, 0 failed**, and the `(1,1,32,7168)` gate cell now reaches the op and passes
+at its exact config. The bulk of the work was a **16-bit-DEST sum-of-squares bias** in Regime B's
+`reduce_tile` datapath that grows with the reduced width (+0.84 % at `Wt=32` → +28 % at 344) and reads
+PCC 0.99995 while scaling every row 4.8 % low; fixed with `ReduceAlgorithm::AccumulateViaAdd`, gated
+on *needed AND correct* so every Phase-0 cell keeps Phase 0's datapath byte-for-byte. **Refinement 3's
+real baseline is now 47 995 ns**, not the 76 161 ns fp32-on stand-in — 1.59× better, and 3.2× (not
+5.1×) off the 14 894 ns goal. Of that 1.59×, F25 alone is 1.06× and HiFi2 (F27) is 1.50×;
+`reduce_via_add` adds 1.07×. Remaining headroom on that cell is still **compute** parallelism, i.e.
+Lamp L1 as already scheduled — `grid_starved` is the only bench shape where any compute lever moves,
+and every data-path lever is flat on it. `acc_narrow` is kept flat-but-correct (zero measured
+precision cost; it pays once Refinement 4 makes L1 the binding constraint). Not pursued here: lowering
+F27's exported default, because F23 forbids downgrading a caller-supplied knob and the gate cell
+supplies HiFi2 itself.
 
 ---
 

@@ -18,7 +18,7 @@ then
 
 Env:
     RMS_BENCH_SHAPES   comma list of bench-shape names (default: all)
-    RMS_BENCH_MODE     "baseline" | "levers" | "ablation" | "both" (default: both)
+    RMS_BENCH_MODE     "baseline" | "levers" | "ablation" | "precision" | "both" (default: both)
     RMS_BENCH_LEVER_SHAPES  comma list of shapes to run the lever arms on
 """
 
@@ -57,6 +57,14 @@ def test_rms_norm_bench(device):
     if mode in ("fidelity", "both"):
         for name in _shapes("RMS_BENCH_FID_SHAPES", ["grid_filling", "grid_starved"]):
             manifest += bench.run_fidelity(device, name)
+
+    if mode in ("precision", "both"):
+        for name in _shapes("RMS_BENCH_PREC_SHAPES", ["grid_filling", "grid_starved", "wide_prefill"]):
+            manifest += bench.run_precision(device, name)
+
+    if mode in ("recheck", "both"):
+        for name in _shapes("RMS_BENCH_RECHECK_SHAPES", ["grid_filling"]):
+            manifest += bench.run_unlocked_recheck(device, name)
 
     if mode in ("levers", "both"):
         for name in _shapes("RMS_BENCH_LEVER_SHAPES", ["grid_filling", "smallest"]):

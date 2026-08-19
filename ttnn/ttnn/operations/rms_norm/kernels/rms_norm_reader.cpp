@@ -93,6 +93,14 @@ constexpr uint32_t COALESCE = get_compile_time_arg_val(21);
 // emit the matching tile - see the scaler block in kernel_main().
 constexpr uint32_t REDUCE_VIA_ADD = get_compile_time_arg_val(22);
 
+// Lever B5/B6 off-arm: the tile page split into TWO transfers.  The split point
+// must stay NoC-alignment-legal on every dtype - Blackhole's DRAM alignment is
+// 64 B, and a bfloat8_b tile is 1088 B, whose midpoint (544) is NOT 64 B-aligned.
+// Rounding the first half DOWN to a 64 B multiple keeps both offsets legal and
+// still covers the whole page (1088 -> 512 + 576).
+constexpr uint32_t SPLIT_FIRST = (IN_TILE_BYTES / 2) & ~static_cast<uint32_t>(63);
+constexpr uint32_t SPLIT_SECOND = IN_TILE_BYTES - SPLIT_FIRST;
+
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t NUM_REDUCE_CHUNKS = Wt_core / WT_REDUCE_BLOCK;
 constexpr uint32_t NUM_SCALE_CHUNKS = Wt_core / WT_SCALE_BLOCK;
@@ -204,10 +212,10 @@ void kernel_main() {
                 if constexpr (!SKIP_DM_PAYLOAD) {
                     if constexpr (COALESCE) {
                         noc_async_read_tile(row_base + w, in_acc, addr);
-                    } else {  // lever B5/B6 off-arm: two half-page transactions
-                        constexpr uint32_t half = IN_TILE_BYTES / 2;
-                        noc_async_read(in_acc.get_noc_addr(row_base + w), addr, half);
-                        noc_async_read(in_acc.get_noc_addr(row_base + w, half), addr + half, half);
+                    } else {  // lever B5/B6 off-arm: two aligned partial-page transactions
+                        noc_async_read(in_acc.get_noc_addr(row_base + w), addr, SPLIT_FIRST);
+                        noc_async_read(
+                            in_acc.get_noc_addr(row_base + w, SPLIT_FIRST), addr + SPLIT_FIRST, SPLIT_SECOND);
                     }
                 }
                 if constexpr (!BARRIER_PER_BLOCK) {

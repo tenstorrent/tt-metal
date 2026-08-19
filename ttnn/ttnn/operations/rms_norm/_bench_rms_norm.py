@@ -48,6 +48,29 @@ N_ITERS = 10
 
 MANIFEST_PATH = Path("generated/rms_norm_bench_manifest.json")
 
+
+# --- precision corners --------------------------------------------------------
+# The cumulative bench set is measured at the op's OWN default precision corner
+# ("default").  Refinement 1 added a second corner that matters: every
+# feature_spec perf loose case runs at bf16 / HiFi2 / fp32_dest_acc_en=False, a
+# different DEST width (8 tiles instead of 4) AND a different reduce datapath, so
+# it has to be measured in its own right rather than inferred from the default.
+def _cfg_default():
+    return default_compute_kernel_config()
+
+
+def _cfg_loose():
+    """The exact precision corner of feature_spec.LOOSE_CASES' perf cases."""
+    cfg = ttnn.ComputeConfigDescriptor()
+    cfg.math_fidelity = ttnn.MathFidelity.HiFi2
+    cfg.fp32_dest_acc_en = False
+    cfg.math_approx_mode = False
+    return cfg
+
+
+BENCH_CONFIGS = {"default": _cfg_default, "loose": _cfg_loose}
+
+
 # name -> (shape, dtype, layout)
 BENCH_SHAPES = {
     "grid_filling": ((1, 1, 8192, 1024), ttnn.bfloat16, ttnn.TILE_LAYOUT),
@@ -75,7 +98,29 @@ LEVER_ARMS = {
     "C16": _arm(levers=dict(double_buffer=0)),
     "compute_block_size": _arm(levers=dict(block_ht=1, dest_block=1)),
     "coarse_chunk": _arm(levers=dict(coarse_chunk=0)),
+    # --- Refinement 1 -------------------------------------------------------
+    # F-group: accumulator CBs forced back to unconditional fp32 (the Phase-0 arm).
+    # Byte-identical at fp32_dest_acc_en=True, so measure it on the "loose" corner.
+    "acc_narrow": _arm(levers=dict(acc_narrow=0)),
+    # Regime B reduce datapath forced back to Phase 0's ReduceTile.  Only live on
+    # the loose corner (see _reduce_via_add), so measure it there.
+    "reduce_via_add": _arm(levers=dict(reduce_via_add=0)),
+    # The W-chunk cap, now a first-class knob (block-size fidelity, finer than
+    # coarse_chunk's all-or-nothing arm).
+    "wt_block": _arm(levers=dict(wt_block=8)),
+    # F25: the cheap DEST width is the ON arm, so the OFF arm is the caller's
+    # fp32_dest_acc_en left alone (default corner) — see run_precision.
+    "F25": _arm(levers=dict(dest_acc=0)),
+    # F24: applied = the FAST bfloat8_b packer, so the OFF arm forces PRECISE.
+    "F24": _arm(levers=dict(pack_precise=1)),
 }
+
+# Levers whose ON arm only exists at fp32_dest_acc_en=False, so measuring them on
+# the default corner would compare two identical programs.
+LOOSE_CORNER_LEVERS = ("acc_narrow", "reduce_via_add")
+# Every lever run_levers must skip on the default corner: the loose-corner ones
+# plus the two precision levers, which run_precision measures explicitly.
+LOOSE_ONLY_LEVERS = LOOSE_CORNER_LEVERS + ("F24", "F25")
 
 # /perf-measure ablation arms: the payload is stubbed, the CB/barrier sync
 # scaffolding is intact, so the diff against the ON arm is that stage's cost.
@@ -104,22 +149,40 @@ def _make(device, shape, dtype, layout):
 
     torch.manual_seed(0)
     x = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), dtype=dtype, layout=layout, device=device)
+    # A block-float tensor must be TILE (ttnn refuses to build a ROW_MAJOR one),
+    # so the gamma layout follows the dtype rather than being pinned.
     g = ttnn.from_torch(
         torch.randn((1, 1, 1, shape[-1]), dtype=torch.float32),
         dtype=dtype,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT if dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
     return x, g
 
 
-def run_arm(device, manifest, label, name, levers=None, iters=N_ITERS):
-    """Dispatch one (shape, lever-setting) arm and append it to the manifest."""
-    shape, dtype, layout = BENCH_SHAPES[name]
+def run_arm(device, manifest, label, name, levers=None, iters=N_ITERS, config="default", dtype=None):
+    """Dispatch one (shape, precision-corner, lever-setting) arm; append to the manifest.
+
+    `config` names a BENCH_CONFIGS corner and `dtype` overrides the shape's dtype
+    (Refinement 1: bfloat8_b), so a new precision point is a bench row rather than
+    an edit to the shape table - the cumulative shape set stays the documented five.
+    """
+    shape, shape_dtype, layout = BENCH_SHAPES[name]
+    dtype = dtype or shape_dtype
     x, g = _make(device, shape, dtype, layout)
-    cfg = default_compute_kernel_config()
+    cfg = BENCH_CONFIGS[config]()
     n = _dispatch(device, lambda: rms_norm(x, gamma=g, compute_kernel_config=cfg, _levers=levers), iters)
-    manifest.append({"label": label, "shape": name, "levers": levers or {}, "calls": n, "profiled": iters})
+    manifest.append(
+        {
+            "label": label,
+            "shape": name,
+            "config": config,
+            "dtype": str(dtype),
+            "levers": levers or {},
+            "calls": n,
+            "profiled": iters,
+        }
+    )
 
 
 def run_baseline(device, names=None):
@@ -134,8 +197,47 @@ def run_levers(device, shape_name, levers=None):
     """ON/OFF pairs for every lever, on one bench shape."""
     manifest = []
     run_arm(device, manifest, f"{shape_name}/ON", shape_name)
-    for lev in levers or list(LEVER_ARMS):
+    for lev in levers or [k for k in LEVER_ARMS if k not in LOOSE_ONLY_LEVERS]:
         run_arm(device, manifest, f"{shape_name}/OFF:{lev}", shape_name, LEVER_ARMS[lev])
+    return manifest
+
+
+def run_precision(device, shape_name):
+    """Refinement 1: the two precision corners, the bf8b dtype, and the new levers.
+
+    Every row is an ON/OFF pair on the corner where the lever is actually live, so
+    `eval.verify_levers` sees a re-runnable counterfactual rather than an argument.
+    """
+    manifest = []
+    run_arm(device, manifest, f"{shape_name}/prec:default", shape_name, config="default")
+    run_arm(device, manifest, f"{shape_name}/prec:loose", shape_name, config="loose")
+    run_arm(device, manifest, f"{shape_name}/prec:bf8b", shape_name, dtype=ttnn.bfloat8_b)
+    run_arm(device, manifest, f"{shape_name}/prec:bf8b_loose", shape_name, config="loose", dtype=ttnn.bfloat8_b)
+    for lev in LOOSE_CORNER_LEVERS:
+        run_arm(device, manifest, f"{shape_name}/loose/OFF:{lev}", shape_name, LEVER_ARMS[lev], config="loose")
+    # F25 attributed on its own: the DEST width only, fidelity held at the
+    # default corner (the `loose` corner moves math_fidelity too and would
+    # conflate F25 with F27).
+    run_arm(device, manifest, f"{shape_name}/F25:dest_off", shape_name, LEVER_ARMS["F25"])
+    # F24: fast (applied) vs precise bfloat8_b packer, on a bfloat8_b output.
+    run_arm(device, manifest, f"{shape_name}/F24:bf8b_precise", shape_name, LEVER_ARMS["F24"], dtype=ttnn.bfloat8_b)
+    return manifest
+
+
+# Levers closed measured-no-payoff whose PREMISE moved in refinement-1 (new dtype,
+# new reduce datapath, new derived CB formats).  verify_levers flags them
+# "possibly unlocked"; this re-runs their arms on the regimes that actually
+# changed, so the verdict is re-measured rather than re-argued.
+RECHECK_LEVERS = ("A1", "B6", "C16")
+
+
+def run_unlocked_recheck(device, shape_name):
+    """ON/OFF for every 'possibly unlocked' lever, on each NEW regime."""
+    manifest = []
+    for tag, kw in (("loose", dict(config="loose")), ("bf8b", dict(dtype=ttnn.bfloat8_b))):
+        run_arm(device, manifest, f"{shape_name}/{tag}/ON", shape_name, **kw)
+        for lev in RECHECK_LEVERS:
+            run_arm(device, manifest, f"{shape_name}/{tag}/OFF:{lev}", shape_name, LEVER_ARMS[lev], **kw)
     return manifest
 
 

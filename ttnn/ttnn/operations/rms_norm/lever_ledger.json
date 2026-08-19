@@ -1,7 +1,7 @@
 {
   "op": "rms_norm",
   "topology": {
-    "phase": "phase-0",
+    "phase": "refinement-1",
     "blocks_per_core": {
       "grid_filling": 1,
       "wide_prefill": 2,
@@ -12,12 +12,15 @@
     "plan_paths": [
       "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
       "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+      "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST, added in refinement-1)",
       "layout-TILE: reader/writer move whole tile pages",
-      "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle"
+      "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
+      "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32), added in refinement-1"
     ],
     "dtypes": [
       "bfloat16",
-      "float32"
+      "float32",
+      "bfloat8_b"
     ]
   },
   "levers": {
@@ -69,7 +72,7 @@
     "A1": {
       "status": "measured-no-payoff",
       "knob": "row_wise",
-      "reason": "split_work_to_cores(row_wise=True) is applied, but on a 130-core grid the op uses 128 cores, so row-wise and column-wise select almost the same set and the DRAM-facing spread is identical. Delta is inside noise on every bench shape (grid_filling -0.6%, row_major -0.9%, smallest -1.4%). Kept on: it costs nothing and it is the right default the moment the op runs on a partial grid.",
+      "reason": "split_work_to_cores(row_wise=True) is applied, but on a 130-core grid the op uses 128 cores, so row-wise and column-wise select almost the same set and the DRAM-facing spread is identical. Delta is inside noise on every bench shape (grid_filling -0.6%, row_major -0.9%, smallest -1.4%). Kept on: it costs nothing and it is the right default the moment the op runs on a partial grid. RE-MEASURED under the refinement-1 topology: still inside noise at the bfloat16 loose corner (91201 ON vs 89684 OFF, i.e. column-wise is 1.7% FASTER there), but on bfloat8_b the applied row-wise arm is 1.045x better (71273 vs 74486) - the first regime where the DRAM-facing spread is visible at all, consistent with bfloat8_b halving the bytes per core and making placement relatively more important. Kept ON; the verdict stays measured-no-payoff because the two corners disagree at the few-percent level, and it is worth re-checking once Lamp L3 puts the op on a partial grid.",
       "measured": {
         "on_ns": 93535,
         "off_ns": 92968,
@@ -80,7 +83,7 @@
           1024
         ],
         "topology": {
-          "phase": "phase-0",
+          "phase": "refinement-1",
           "blocks_per_core": {
             "grid_filling": 1,
             "wide_prefill": 2,
@@ -91,18 +94,25 @@
           "plan_paths": [
             "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
             "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST, added in refinement-1)",
             "layout-TILE: reader/writer move whole tile pages",
-            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle"
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
+            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32), added in refinement-1"
           ],
           "dtypes": [
             "bfloat16",
-            "float32"
+            "float32",
+            "bfloat8_b"
           ]
         },
         "smallest_on_ns": 3257,
-        "smallest_off_ns": 3211
+        "smallest_off_ns": 3211,
+        "bf8b_on_ns": 71273,
+        "bf8b_off_ns": 74486,
+        "loose_on_ns": 91201,
+        "loose_off_ns": 89684
       },
-      "phase": "phase-0"
+      "phase": "refinement-1"
     },
     "A2": {
       "status": "deferred",
@@ -198,18 +208,23 @@
       "phase": "phase-0"
     },
     "B6": {
-      "status": "measured-no-payoff",
+      "status": "applied",
       "knob": "coalesce",
-      "reason": "The one-packet fast path needs transfers <= 512 B; a bf16 tile page is 2048 B (fp32 4096 B). Reaching it means giving up B5's coalescing, and the same `coalesce` knob measures exactly that direction: halving to 1024 B - still above 512 B - already costs +9.1%. Shrinking further to 512 B goes further the wrong way, so the fast path is not reachable at a profit for this op's page size.",
+      "reason": "UNLOCKED by refinement-1 and re-measured. Phase 0 closed B6 measured-no-payoff because, at a 2048 B bfloat16 tile, splitting the page bought nothing beyond what B5 already measured. Adding bfloat8_b moved that premise: a bfloat8_b tile is 1088 B, so the same whole-page transaction now saves relatively more, and the OFF arm costs 1.129x on grid_filling at bfloat8_b (71273 -> 80440 ns) versus 1.087x at the bfloat16 loose corner (91201 -> 99102). The knob was already applied, so this is a stronger justification for the existing default rather than new work. Refinement 1 also had to FIX the counterfactual to measure this honestly: the off-arm split the page at IN_TILE_BYTES/2, which is 544 B for bfloat8_b - not a multiple of Blackhole's 64 B DRAM alignment, so the second transfer was illegal. Rounding the first half down to a 64 B multiple (1088 -> 512 + 576) makes both offsets legal, and the corrected arm reports 1.129x where the illegal one reported 1.249x - i.e. the unaligned access was inflating the win by 11 points.",
       "measured": {
-        "on_ns": 3257,
-        "off_ns": 3201,
+        "on_ns": 71273,
+        "off_ns": 80440,
         "shape": [
-          32,
-          17
+          1,
+          1,
+          8192,
+          1024
         ],
+        "dtype": "bfloat8_b",
+        "bf16_loose_on_ns": 91201,
+        "bf16_loose_off_ns": 99102,
         "topology": {
-          "phase": "phase-0",
+          "phase": "refinement-1",
           "blocks_per_core": {
             "grid_filling": 1,
             "wide_prefill": 2,
@@ -220,20 +235,19 @@
           "plan_paths": [
             "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
             "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST, added in refinement-1)",
             "layout-TILE: reader/writer move whole tile pages",
-            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle"
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
+            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32), added in refinement-1"
           ],
           "dtypes": [
             "bfloat16",
-            "float32"
+            "float32",
+            "bfloat8_b"
           ]
-        },
-        "grid_filling_on_ns": 93535,
-        "grid_filling_off_ns": 102044,
-        "grid_starved_on_ns": 76127,
-        "grid_starved_off_ns": 83807
+        }
       },
-      "phase": "phase-0"
+      "phase": "refinement-1"
     },
     "B7": {
       "status": "applied",
@@ -330,8 +344,33 @@
     "B11": {
       "status": "structurally-impossible",
       "assert_test": "tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py",
-      "reason": "Every DRAM address this op forms is alignment-legal by construction: tile transfers go through TensorAccessor's aligned page stride, and the two byte-offset paths (RM stick W-chunk, RM gamma slice) use offsets that are multiples of 32*element_size (>= 64 B). There is no misaligned variant to measure - one is a hardware fault, not a slower arm. The acceptance suite run under --dev (NoC sanitizer on) is the mechanical pin: it caught exactly this class of bug when an earlier gamma path issued a read at stick offset +32 B on a 64 B-aligned device.",
-      "phase": "phase-0"
+      "reason": "Every DRAM address this op forms is alignment-legal by construction: tile transfers go through TensorAccessor's aligned page stride, and the two byte-offset paths (RM stick W-chunk, RM gamma slice) use offsets that are multiples of 32*element_size (>= 64 B). There is no misaligned variant to measure - one is a hardware fault, not a slower arm. The acceptance suite run under --dev (NoC sanitizer on) is the mechanical pin: it caught exactly this class of bug when an earlier gamma path issued a read at stick offset +32 B on a 64 B-aligned device. RE-CONFIRMED under the refinement-1 topology: adding bfloat8_b changes the tile page size to 1088 B but every tile transfer still goes through TensorAccessor's aligned page stride, and the two byte-offset paths remain ROW_MAJOR-only - which a block format cannot be (ttnn refuses to build a ROW_MAJOR bfloat8_b tensor), asserted in blocking_plan(). So no new address arithmetic was introduced and there is still no misaligned variant to measure.",
+      "phase": "refinement-1",
+      "measured": {
+        "topology": {
+          "phase": "refinement-1",
+          "blocks_per_core": {
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST, added in refinement-1)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
+            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32), added in refinement-1"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b"
+          ]
+        }
+      }
     },
     "B12": {
       "status": "missed",
@@ -363,7 +402,7 @@
     "C16": {
       "status": "measured-no-payoff",
       "knob": "double_buffer",
-      "reason": "Applied and live: the budget solver reaches IN_BUF_DEPTH=4, OUT/RM depth 2 on the grid-filling shape (forcing 1/1/1 is a genuinely different plan, verified). It measures flat anyway (+0.1% on grid_filling, -0.7% on the RM path, 0.0% on grid_starved) because those shapes are already DRAM-saturated at ~358 GB/s of useful traffic - deepening the CB cannot create bandwidth. KEPT at its working default: it costs nothing here and it is the lever that pays once the op stops being DM-bound (Lamp L1/L3 move the wall).",
+      "reason": "Applied and live: the budget solver reaches IN_BUF_DEPTH=4, OUT/RM depth 2 on the grid-filling shape (forcing 1/1/1 is a genuinely different plan, verified). It measures flat anyway (+0.1% on grid_filling, -0.7% on the RM path, 0.0% on grid_starved) because those shapes are already DRAM-saturated at ~358 GB/s of useful traffic - deepening the CB cannot create bandwidth. KEPT at its working default: it costs nothing here and it is the lever that pays once the op stops being DM-bound (Lamp L1/L3 move the wall). RE-MEASURED under the refinement-1 topology, on both new regimes: still flat - bfloat16 loose corner 91201 ON vs 90594 OFF (-0.7%), bfloat8_b 71273 vs 71188 (-0.1%). The reason is unchanged and now double-confirmed: grid_filling is DRAM-saturated, and a deeper CB cannot create bandwidth. Note bfloat8_b does NOT unlock it even though it halves the bytes and frees L1 - the shape is still bound by DRAM, just at a smaller total. It remains the lever that pays once Lamp L1/L3/L4 move the wall; Refinement 4's regime flip is the next place to re-check.",
       "measured": {
         "on_ns": 93535,
         "off_ns": 93646,
@@ -374,7 +413,7 @@
           1024
         ],
         "topology": {
-          "phase": "phase-0",
+          "phase": "refinement-1",
           "blocks_per_core": {
             "grid_filling": 1,
             "wide_prefill": 2,
@@ -385,20 +424,27 @@
           "plan_paths": [
             "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
             "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST, added in refinement-1)",
             "layout-TILE: reader/writer move whole tile pages",
-            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle"
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
+            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32), added in refinement-1"
           ],
           "dtypes": [
             "bfloat16",
-            "float32"
+            "float32",
+            "bfloat8_b"
           ]
         },
         "row_major_on_ns": 95339,
         "row_major_off_ns": 94642,
         "smallest_on_ns": 3257,
-        "smallest_off_ns": 3217
+        "smallest_off_ns": 3217,
+        "bf8b_on_ns": 71273,
+        "bf8b_off_ns": 71188,
+        "loose_on_ns": 91201,
+        "loose_off_ns": 90594
       },
-      "phase": "phase-0"
+      "phase": "refinement-1"
     },
     "C17": {
       "status": "deferred",
@@ -445,33 +491,188 @@
     "F23": {
       "status": "structurally-impossible",
       "assert_test": "tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py::test_rms_norm_maxed_out_compute_config",
-      "reason": "The op cannot downgrade a caller-supplied precision knob: after validate(), the caller's ComputeConfigDescriptor is handed to the compute KernelDescriptor verbatim (config=cfg) and is never rebuilt or mutated. The only value the op chooses is its own default, and that lives in the single exported default_compute_kernel_config() factory. The named test passes an explicit descriptor and asserts the result; test_rms_norm_default_compute_kernel_config_is_a_factory pins the factory itself.",
-      "phase": "phase-0"
+      "reason": "RE-CLOSED under the refinement-1 topology, with the wording tightened because this phase added the op's only config-touching code. For every REAL call the caller's ComputeConfigDescriptor is still handed to the compute KernelDescriptor verbatim and never rebuilt: the sole rebuild site, _apply_precision_levers(), is reached only from the internal `_levers` bench hook (levers F24 / F25' counterfactual arms), returns the caller's own object identically at the lever defaults, and no public argument can set a lever. The only value the op CHOOSES is its own default, in the single exported default_compute_kernel_config() factory - and refinement 1 did not move it, even though F25/F27 measure the cheaper corner as a win, precisely because F23 forbids it. The named test passes an explicit descriptor and asserts the result; test_rms_norm_default_compute_kernel_config_is_a_factory pins the factory.",
+      "phase": "refinement-1",
+      "measured": {
+        "topology": {
+          "phase": "refinement-1",
+          "blocks_per_core": {
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST, added in refinement-1)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
+            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32), added in refinement-1"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b"
+          ]
+        }
+      }
     },
     "F24": {
-      "status": "structurally-impossible",
-      "assert_test": "eval/golden_tests/rms_norm/test_golden.py",
-      "reason": "bfp8_pack_precise selects how the packer writes a bfloat8_b tile. This op never emits one: SUPPORTED[dtype] is {float32, bfloat16} and the output dtype is always the input dtype, so there is no bfloat8_b pack for the knob to govern. The golden suite is the mechanical pin - every bfloat8_b cell is xfail-strict there and the suite passes.",
-      "phase": "phase-0"
+      "status": "applied",
+      "knob": "pack_precise",
+      "reason": "RE-CLOSED under the refinement-1 topology. The Phase-0 closure was structurally-impossible on the premise that SUPPORTED[dtype] held no block format, so no bfloat8_b pack existed for the knob to govern; refinement 1 added bfloat8_b, so that premise is void. The applied setting is the CHEAP one, the FAST packer (bfp8_pack_precise stays False): /numeric-formats-metal S1.7 gates the precise packer on a float32 INPUT, and this op's output dtype always equals its input dtype, so a bfloat8_b output implies a bfloat8_b input - never the wide-input case that needs rounding. The accuracy margin confirms it: every bfloat8_b cell of test_rms_norm_precision_matrix passes on the fast packer with min PCC 0.999944 and max rel_rms 0.0132 against a 0.99 gate. Measured both arms anyway: the precise packer is FLAT here (grid_filling fast 71639 vs precise 71267 ns; grid_starved 65997 vs 65977 ns, both inside noise), so the choice carries no perf risk in either direction and rests on the accuracy margin, not on a throughput argument.",
+      "measured": {
+        "on_ns": 71113,
+        "off_ns": 71135,
+        "shape": [
+          1,
+          1,
+          8192,
+          1024
+        ],
+        "grid_starved_on_ns": 65987,
+        "grid_starved_off_ns": 65990,
+        "topology": {
+          "phase": "refinement-1",
+          "blocks_per_core": {
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST, added in refinement-1)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
+            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32), added in refinement-1"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b"
+          ]
+        }
+      },
+      "phase": "refinement-1"
     },
     "F25": {
-      "status": "deferred",
-      "reason": "fp32_dest_acc_en is a GATED axis pinned to True for Phase 0 by the prompt and by references/precision_convention.md, and every measured cell supplies it explicitly - so F23's boundary applies and the op must not downgrade it. The cost is real and already visible indirectly: DEST_AUTO_LIMIT is 4 instead of 8, which halves the DEST_BLOCK the compute_block_size lever runs at (that lever is worth 1.035x-1.06x today at DEST_BLOCK=4).",
-      "followup": "The refinement that adds {bfloat16, fp32_dest_acc_en=False} to SUPPORTED: DEST doubles 4->8, so DEST_BLOCK doubles and B5/B7/C16/compute_block_size must all be re-swept at the new block factor. Measure with the existing `dest_block` bench knob once the axis is supported.",
-      "predicted_delta_pct": 6,
-      "phase": "phase-0"
+      "status": "applied",
+      "knob": "dest_acc",
+      "reason": "Refinement 1 added False to SUPPORTED[fp32_dest_acc_en], which is what Phase 0 deferred F25 on. Attributed ALONE (fidelity held at the default HiFi4, config `dest_off`), the cheap DEST width is 1.06x on the compute-bound decode shape (grid_starved 76079 -> 71823 ns) and flat on the DRAM-bound one (grid_filling 93581 -> 93910 ns, noise) - exactly the split the Phase-0 ablation predicts, since a narrower DEST buys math throughput and cannot create DRAM bandwidth. The `loose` corner's larger 1.58x on grid_starved (76079 -> 47987) is mostly F27: HiFi2 on top of the cheap DEST accounts for 71823 -> 47987. Making the cheap corner CORRECT was the real work, not flipping the flag: at 16-bit DEST, ReduceTile's long per-tile DEST accumulation carries a systematic sum-of-squares overestimate that grows with the reduced width (+0.84% at Wt=32, +1.9% at 64, +5.6% at 128, +10.4% at 224), which surfaced as a uniform ~4.8% low output scale at W=7168 while PCC still read 0.99995. Fixed by routing Regime B to ReduceAlgorithm::AccumulateViaAdd on that path (knob `reduce_via_add`). The op's EXPORTED default stays fp32_dest_acc_en=True per references/precision_convention.md; F23 forbids downgrading a caller-supplied value, so the op offers the cheap corner, it does not impose it.",
+      "measured": {
+        "on_ns": 71796,
+        "off_ns": 76080,
+        "shape": [
+          1,
+          1,
+          32,
+          7168
+        ],
+        "grid_filling_on_ns": 93824,
+        "grid_filling_off_ns": 93536,
+        "loose_corner_ns": 47995,
+        "topology": {
+          "phase": "refinement-1",
+          "blocks_per_core": {
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST, added in refinement-1)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
+            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32), added in refinement-1"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b"
+          ]
+        }
+      },
+      "phase": "refinement-1"
     },
     "F26": {
       "status": "structurally-impossible",
       "assert_test": "tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py::test_rms_norm_maxed_out_compute_config",
-      "reason": "master.md's own structural closure: a lossless unpack path buys nothing downstream of any FPU phase. Every path in this op hits at least one - sum_of_squares and the scale multiplies are FPU binaries, reduce<SUM, REDUCE_ROW> is FPU/GMPOOL, and the RM path's tilize uses the fast (fp32->tf32) route by design. So the fp32->TF32 drop happens regardless and Fp32Mode::Lossless / UnpackToDestFp32 would only buy the slower unpack. The named float32 test passes at PCC 0.999 on the default (fast) path, so the precision the lever would protect is not needed.",
-      "phase": "phase-0"
+      "reason": "RE-CLOSED under the refinement-1 topology (which added bfloat8_b, a second reduce datapath and two derived CB formats - none of which creates a lossless-unpack opportunity). A lossless unpack buys nothing downstream of any FPU phase, and every path here hits one: sum_of_squares and both scale multiplies are FPU binaries, reduce<SUM, REDUCE_ROW> is FPU/GMPOOL on either datapath, and the RM tilize uses the fast route by design. Refinement 1 adds a SECOND, independent disqualifier found while auditing the UnpackToDestFp32 candidates: the only CB that is exclusively copy_tile-reloaded would be cb_sumsq, but reduce()'s accumulator reload reads it through SrcA/SrcB (AccumulateReloadMode::FoldViaAdd and the ReduceTile accumulate), which reduce_helpers_compute.hpp documents as valid ONLY when that CB is UnpackToDestMode::Default - tagging it would be incorrect, not merely slower. cb_rms_recip feeds an FPU broadcast multiply and cb_sumsq_acc feeds the reduce, so neither is eligible either. The float32 test passes at PCC 0.999 on the fast path, so the precision the lever protects is not needed.",
+      "phase": "refinement-1",
+      "measured": {
+        "topology": {
+          "phase": "refinement-1",
+          "blocks_per_core": {
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST, added in refinement-1)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
+            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32), added in refinement-1"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b"
+          ]
+        }
+      }
     },
     "F27": {
       "status": "missed",
       "regime": "Compute-bound shapes where the CALLER leaves math_fidelity unset, so the op's own default applies. Measured ladder on (1,1,32,7168) (the ablation says that shape is compute-dominated: stubbing compute drops it to 41% of full): HiFi4 76114 ns, HiFi2 52430 ns (1.45x), LoFi 50293 ns (1.51x). On the DM-bound prefill shape (1,1,8192,1024) the same ladder is worth only 1.027x (93236 -> 90799), exactly as the bound classification predicts.",
-      "reason": "NOT changed in Phase 0. references/precision_convention.md and the op prompt pin the exported default_compute_kernel_config() to HiFi4, and F23 forbids downgrading a caller-supplied value - every golden cell and every perf loose case supplies math_fidelity explicitly (the perf cases already pin HiFi2). Recorded with the measured number so the refinement that revisits the op's own default starts from evidence rather than from a guess.",
-      "phase": "phase-0"
+      "reason": "NOT changed in Phase 0 or Refinement 1, and still MISSED rather than closed. references/precision_convention.md and the op prompt pin the exported default_compute_kernel_config() to HiFi4, and F23 forbids downgrading a caller-supplied value. Re-measured at the refinement-1 DEST width on the compute-bound decode shape: with fp32_dest_acc_en=False held fixed, HiFi4 71823 ns -> HiFi2 47987 ns = 1.50x (Phase 0 measured 1.45x at the fp32 DEST width), and flat on grid_filling (93581 -> 91003, DRAM-bound). It is the single largest unexploited compute lever on the perf-gated (1,1,32,7168) cell - and note the loose case that carries the 7x gate SUPPLIES HiFi2 itself, so that cell already gets it; the miss is only for callers who leave math_fidelity unset.",
+      "phase": "refinement-1",
+      "measured": {
+        "on_ns": 47995,
+        "off_ns": 71796,
+        "shape": [
+          1,
+          1,
+          32,
+          7168
+        ],
+        "grid_filling_on_ns": 91011,
+        "grid_filling_off_ns": 93536,
+        "topology": {
+          "phase": "refinement-1",
+          "blocks_per_core": {
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
+            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST, added in refinement-1)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
+            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32), added in refinement-1"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b"
+          ]
+        }
+      }
     }
   }
 }
