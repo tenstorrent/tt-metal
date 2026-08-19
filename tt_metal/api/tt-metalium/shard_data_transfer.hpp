@@ -21,6 +21,7 @@ namespace tt::tt_metal::distributed {
 class ShardDataTransfer {
 private:
     MeshCoordinate shard_coord_;
+    // TODO: consider making host data const when it's only read from.
     void* host_data_ = nullptr;
     std::optional<BufferRegion> region_;
     std::shared_ptr<experimental::PinnedMemory> pinned_memory_ = nullptr;
