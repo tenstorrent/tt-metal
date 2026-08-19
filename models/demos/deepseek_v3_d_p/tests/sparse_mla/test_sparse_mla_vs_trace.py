@@ -48,8 +48,8 @@ HF shard download. All are correctness gates → marked `gate`; @timeout(0).
 ────────────────────────────────────────────────────────────────────────────────
 GLM-5.1 (model id `glm_5_1`)
 ────────────────────────────────────────────────────────────────────────────────
-GLM-5.1 (`zai-org/GLM-5.1`, HF `glm_moe_dsa`) is a DeepSeek-V3.2-family model (MLA +
-DSA indexer + sparse attn). Hidden 6144; 64 q-heads → sparse_sdpa needs per-chip
+GLM-5.1 (`zai-org/GLM-5.1`, HF `glm_moe_dsa`) is an MLA + DSA-indexer + sparse-attention
+model. Hidden 6144; 64 q-heads → sparse_sdpa needs per-chip
 H = 64/tp ≥ 32, so **tp ≤ 2** (tp>2 meshes are skipped); indexer RoPE is
 INTERLEAVED; NO YaRN (scale = qk_head_dim**-0.5). The config is
 hand-built (transformers can't load glm_moe_dsa) and weights load from
@@ -82,7 +82,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, 
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 
 # Bespoke suite: validated against recorded vLLM trace bundles (indexer logits/topk, sparse output,
-# k_pe frame), so it stays here rather than on the v3.1 TestVariant infra. `trace` marks it as a
+# k_pe frame), so it stays here rather than on the dense-MLA TestVariant infra. `trace` marks it as a
 # trace-bundle parity test (run separately from the CI correctness matrix).
 pytestmark = pytest.mark.trace
 

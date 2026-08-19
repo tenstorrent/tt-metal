@@ -79,8 +79,8 @@ variant axis — glm_5_1 / glm_5_2 (64 / 32). All run the
   All model dims come from the single-source reference configs.
 
 attn_mode axis — a baseline to compare the sparse impl against:
-  * sparse — v3.2 DSA: indexer builds top-k index keys, sparse_sdpa attends only the top-k=2048 keys.
-  * dense  — v3.1 baseline: has_indexer=False -> NullIndexer + full-prefix ring MLA (ring_joint_sdpa
+  * sparse — DSA: indexer builds top-k index keys, sparse_sdpa attends only the top-k=2048 keys.
+  * dense  — baseline: has_indexer=False -> NullIndexer + full-prefix ring MLA (ring_joint_sdpa
     over the whole prefix, no indexer/top-k). Needs no cache fill (ring reads the prefix by logical_n).
   Each case writes its own profiler subdir, including the sparse KV format in the directory name, so
   reports never clobber and the CSVs stay directly comparable.
@@ -143,7 +143,7 @@ CHUNK_TOKENS = int(os.environ.get("DS_PERF_CHUNK", 5120))  # 5 * 1024 processed 
 # chunk (the rope table requires total = cache + chunk to be a multiple of chunk). Override with
 # DS_PERF_LONG_CACHE (must stay a chunk multiple), e.g. 522240 (=102 chunks ≈ 512*1024).
 LONG_CACHE_TOKENS = int(os.environ.get("DS_PERF_LONG_CACHE", 512000))
-# attn_mode axis: sparse (v3.2 DSA indexer + sparse_sdpa) vs dense (v3.1 full-prefix ring MLA — no
+# attn_mode axis: sparse (DSA indexer + sparse_sdpa) vs dense (full-prefix ring MLA — no
 # indexer, no top-k), a baseline to compare the sparse impl against. Each mode writes its own profiler
 # subdir + per-scenario CSVs so the two runs never clobber and stay directly comparable.
 ATTN_MODE = os.environ.get("DS_PERF_ATTN_MODE", "sparse")  # module-level default (mesh-shape detection)
@@ -476,7 +476,6 @@ def _op_label(kernel_sources) -> str:
 # the indexer rope (rotary_embedding_indexed) before its shared llama rope kernel, and every real op
 # before the trailing eltwise/unary epilogue. Codes chosen to match the tracy device-op names so the
 # existing per-call graph attribution (parse_percall + its alias sets) consumes this dump unchanged.
-# Verified against the tracy op-code counts/durations for deepseek_v32 warm/sparse.
 _OP_CODE_RULES = (
     # The fused ring indexer includes ring-attention all-gather helper kernels. Match its defining
     # indexer kernels first so the whole program remains attributable to IndexerScore.
