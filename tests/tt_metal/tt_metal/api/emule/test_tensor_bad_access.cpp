@@ -100,7 +100,7 @@ TEST_F(UnitMeshFixture, Host_UAF_WriteToBuffer_SharedPtrOverload_SanityCheck) {
         distributed::ReplicatedBufferConfig{.size = 1024},
         {.page_size = 1024, .buffer_type = BufferType::L1},
         &this->device());
-    Dea;
+    DeallocateBuffer(*buffer->get_reference_buffer());
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
     EXPECT_DEATH(slow_dispatch::WriteToBuffer(*buffer, data), ".*Use-After-Free.*WriteToBuffer.*");
