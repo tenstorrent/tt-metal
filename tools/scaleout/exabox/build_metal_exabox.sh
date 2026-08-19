@@ -2,71 +2,35 @@
 #
 # build_metal_exabox.sh — build tt-metal for Exabox without paying NFS latency.
 #
-# WHY THIS EXISTS
-# ---------------
-# On Exabox, multi-node Slurm jobs can only see /data (cluster-wide NFS), so the
-# documented convention is to clone into /data/<user>/tt-metal and build there.
-# But /data is very non-performant for many-small-file I/O: the CPM dependency
-# fetch/extract phase alone (tidy, usearch, pugixml, boost -> <clone>/.cpmcache)
-# has been measured at 18+ minutes wall clock for ~2 minutes of CPU — i.e. almost
-# pure I/O wait, versus 7-12 minutes for a *complete* build on faster storage.
+# Multi-node Slurm jobs on Exabox can only see /data (cluster-wide NFS), so the
+# documented convention is to clone and build at /data/<user>/tt-metal. But
+# /data is very slow for many-small-file I/O: the CPM dependency fetch/extract
+# phase alone has been measured at 18+ minutes of almost pure I/O wait, versus
+# 7-12 minutes for a *complete* build on fast storage.
 #
-# The obvious workaround — build on fast local disk, then copy to /data — does
-# NOT work, because tt-metal bakes absolute build paths into its artifacts:
-#   * tt_metal/CMakeLists.txt sets INSTALL_RPATH from the literal
-#     ${PROJECT_BINARY_DIR} (tt-metal's own comment there says:
-#     "FIXME: Install RPATH should not have a build path!"), so .so/executables
-#     hard-code wherever they were built.
-#   * create_venv.sh writes shebangs in python_env/bin/* pointing at the venv's
-#     own absolute path.
+# Building on fast disk and copying to /data afterwards does NOT work, because
+# tt-metal bakes absolute build paths into its artifacts:
+#   * tt_metal/CMakeLists.txt sets INSTALL_RPATH from ${PROJECT_BINARY_DIR}
+#   * create_venv.sh writes absolute-path shebangs into python_env/bin/*
 # Move the tree afterwards and you break dynamic linking and the venv.
 #
-# Upstream states the same constraint explicitly. From the base stage of
-# tt-metal's own Dockerfile, verbatim:
-#   "For system installs of uv, UV_PYTHON_INSTALL_DIR ensures Python is in an
-#    accessible shared path. When the venv is copied to NFS for multi-host use,
-#    the Python interpreter must be reachable from all nodes."
-# i.e. path-correctness-at-build-time is a known, acknowledged property of this
-# toolchain, not an inference on our part.
+# THE TRICK: build inside a container where a fast *local* directory is
+# bind-mounted at the exact absolute path the build must eventually live at.
+# CMake, the RPATHs, and the venv shebangs all see (and bake) that path while
+# every byte is actually read/written on local disk. The result is NOT yet
+# visible to other Slurm nodes; the opt-in --sync-to flag rsyncs it to the real
+# NFS path afterwards — the one unavoidably slow step, so you choose when to
+# pay for it.
 #
-# THE TRICK
-# ---------
-# Build inside a container where a *fast local* directory is bind-mounted so it
-# appears at the exact absolute path the build must eventually live at. cmake,
-# the RPATH it bakes, and the venv shebangs all see /data/<user>/tt-metal and
-# record that path — while every byte is actually read/written on local disk.
-#
-# USAGE (the intended flow)
+# USAGE
 #   mkdir -p /tmp/$USER && cd /tmp/$USER
 #   git clone --recursive https://github.com/tenstorrent/tt-metal
 #   cd tt-metal
 #   ./tools/scaleout/exabox/build_metal_exabox.sh
 #
-# SCOPE / KNOWN LIMITATION (read this)
-# ------------------------------------
-# By default this script finishes with a complete build whose baked-in paths say
-# /data/<user>/tt-metal, but whose bytes still live on local scratch. That build
-# is NOT yet visible to other Slurm nodes, so it is NOT yet usable for multi-node
-# jobs. Because the baked paths are already correct for the real destination, an
-# rsync to that exact same path is safe and is the intended last mile — that is
-# what the opt-in --sync-to flag does. It is opt-in (and refuses any destination
-# other than --target-path) precisely because that copy is the one unavoidably
-# slow NFS operation, and you should choose when to pay for it.
-#
-# ccache is deliberately NOT wired up in this first draft (no CCACHE_DIR /
-# CCACHE_BASEDIR). Deferred, not forgotten. Note that the tool itself is already
-# present in the default image — it has a dedicated ccache-layer and ships
-# ENV CCACHE_TEMPDIR=/tmp/ccache — so enabling this later is purely a question of
-# which env vars/flags to set (and how CCACHE_BASEDIR should interact with the
-# path remapping above), not "does the container even have ccache".
-#
-# FUTURE DIRECTION (not implemented, do not action from this comment)
-# tt-metal's release/release-models image targets build their venv with
-# `uv venv --relocatable` plus a patch_activate_posix.sh — a genuinely
-# relocatable venv mechanism that would sidestep the shebang problem entirely,
-# but which is not exposed through the dev-facing create_venv.sh (whose only
-# relevant option is --bundle-python). Worth asking upstream whether it can be;
-# unverified outside the release-image context.
+# ccache is deliberately NOT wired up yet: the image ships ccache (and
+# ENV CCACHE_TEMPDIR=/tmp/ccache) but nothing here sets CCACHE_DIR /
+# CCACHE_BASEDIR. Deferred, not forgotten.
 #
 # See also: TROUBLESHOOTING.md in this directory.
 
@@ -87,19 +51,14 @@ SYNC_TO=""              # opt-in rsync destination (must equal TARGET_PATH)
 DRY_RUN=0
 EXTRA_BUILD_ARGS=()     # everything after `--`, forwarded to build_metal.sh
 
-# .cpmcache is CMake Package Manager's cache of downloaded/extracted third-party
-# sources (tidy, usearch, pugixml, boost, ...), consulted only during the build
-# itself to avoid re-fetching from the network. Nothing at runtime references it
-# -- RPATHs point at build*/lib, not .cpmcache -- so it's dead weight on a sync
-# meant to make the build usable elsewhere, not to let someone keep incrementally
-# rebuilding from the synced copy. Excluded by default; add more with
-# --sync-exclude (repeatable) if you find other build-only bulk worth dropping.
+# .cpmcache is CMake's cache of downloaded third-party sources, read only at
+# build time; nothing at runtime references it, so it's dead weight on a sync.
 SYNC_EXCLUDES=(".cpmcache")
 
-# Concurrent rsync jobs for the --sync-to copy. rsync is single-threaded per
-# invocation and this destination is latency-bound, so running a few at once is
-# what speeds it up. Deliberately small and NOT derived from nproc: the resource
-# being shared is one NFS server, not this machine's CPUs.
+# Parallel rsyncs for --sync-to. rsync is single-threaded per invocation and the
+# destination is latency-bound, so a few concurrent jobs is what helps.
+# Deliberately NOT derived from nproc: the shared resource is the NFS server,
+# not this machine's CPUs.
 SYNC_JOBS=4
 
 # Soft warning threshold for free space on the local scratch filesystem (GiB).
@@ -123,10 +82,8 @@ Options:
   --home-dir <path>     Host directory to back \$HOME inside the container
                         (default: <parent of this clone>/.exabox-home)
   --entrypoint <path>   Override the image entrypoint. Not needed for the default
-                        ci-build image, which declares no ENTRYPOINT (ENTRYPOINT
-                        first appears at the dev-light stage, which ci-build does
-                        not inherit from). Provided for pointing --image/--tag at
-                        a variant that does set one, e.g. dev or release.
+                        ci-build image (which declares none); for variants that
+                        do set one, e.g. dev or release.
   --sync-to <path>      After a successful build, rsync the tree to <path> on
                         the real filesystem (i.e. the actual NFS mount). Must be
                         identical to --target-path or the script refuses, because
@@ -191,14 +148,14 @@ SRC="$(pwd -P)"
 [[ "${TARGET_PATH}" != "/" ]] || die "--target-path must not be /"
 TARGET_PATH="${TARGET_PATH%/}"
 
-# $HOME inside the container. The doc convention on Exabox is HOME=/data/<user>,
-# i.e. the *parent* of the clone. We honour that, but back it with its own writable
-# bind mount: if we left it as a bare mountpoint parent, Docker would create it
-# root-owned and pip/CPM/git writes into $HOME would fail for a non-root user.
+# $HOME inside the container. Exabox convention is HOME=/data/<user>, i.e. the
+# parent of the clone. Back it with its own writable bind mount: left as a bare
+# mountpoint parent, Docker would create it root-owned and pip/CPM/git writes
+# into $HOME would fail for a non-root user.
 CONTAINER_HOME="$(dirname "${TARGET_PATH}")"
 if [[ "${CONTAINER_HOME}" == "/" || -z "${CONTAINER_HOME}" ]]; then
-  # Degenerate target like /tt-metal: nowhere sane to put a separate HOME, so
-  # fall back to HOME == the build tree itself (works, just leaves dotfiles there).
+  # Degenerate target like /tt-metal: fall back to HOME == the build tree
+  # (works, just leaves dotfiles there).
   CONTAINER_HOME="${TARGET_PATH}"
 fi
 
@@ -223,9 +180,8 @@ if [[ "${SRC}" == "${TARGET_PATH}" ]]; then
 and you will be building directly on that filesystem."
 fi
 
-# Are we actually on fast local storage? If the source is already NFS, the whole
-# point of this script is defeated — warn loudly but don't block (someone may be
-# deliberately testing).
+# Building from network storage defeats the point — warn loudly but don't block
+# (someone may be deliberately testing).
 if command -v stat >/dev/null 2>&1; then
   fstype="$(stat -f -c %T "${SRC}" 2>/dev/null || echo unknown)"
   case "${fstype}" in
@@ -263,7 +219,7 @@ will fail at runtime). Either sync to '${TARGET_PATH}', or re-run the build with
 --target-path '${SYNC_TO}'."
   fi
   command -v rsync >/dev/null 2>&1 || die "--sync-to requires rsync, which was not found."
-  # Checked here rather than at use, so a typo fails now instead of after the build.
+  # Checked now so a typo fails before the build, not after it.
   [[ "${SYNC_JOBS}" =~ ^[1-9][0-9]*$ ]] || die "--sync-jobs must be a positive integer (got '${SYNC_JOBS}')."
 fi
 
@@ -281,35 +237,24 @@ fi
 # ----------------------------------------------------------------------------
 # Non-root user support: synthesize /etc/passwd and /etc/group for the container
 # ----------------------------------------------------------------------------
-# This image runs as root: its ci-build target inherits base -> ci-build-light ->
-# ci-build and none of those stages declares a USER, so Docker's root default
-# applies. Building as root would leave root-owned artifacts on the host, so we
-# run the container as the invoking host UID:GID instead.
+# The ci-build image declares no USER, so it runs as root; building as root
+# would leave root-owned artifacts on the host. We run as the invoking UID:GID
+# instead — which breaks anything calling getpwuid() ("I have no name!", git,
+# $HOME lookups) unless that UID has a passwd entry in the container.
 #
-# The classic failure mode of `--user <uid>:<gid>` is that the UID has no passwd
-# entry inside the container, so anything calling getpwuid() ("I have no name!",
-# git's "unable to look up current user", tools resolving $HOME from the passwd
-# DB) breaks.
-#
-# The usual fix is to bind-mount the host's /etc/passwd and /etc/group read-only.
-# We do something slightly stronger, for two reasons:
-#   (1) On cluster login nodes, users are frequently served by LDAP/SSSD and are
-#       NOT present in the literal /etc/passwd file — bind-mounting it would
-#       therefore not fix the problem at all. We resolve via getent (which does
-#       consult NSS) and synthesize an entry.
-#   (2) We want the passwd entry's home field to be the *container* home
-#       (${CONTAINER_HOME}), not the host home, so getpwuid-based lookups agree
-#       with the HOME env var instead of pointing at a path that does not exist
-#       in the container.
-# We base the file on the *image's* own /etc/passwd where possible so that the
-# image's system accounts survive, then append our user.
+# Bind-mounting the host's /etc/passwd (the usual fix) is not enough here:
+# cluster login nodes typically serve users via LDAP/SSSD, so the invoking user
+# may not appear in the literal file at all. So we resolve identity via NSS
+# (id/getent) and synthesize an entry, with its home field set to the
+# *container* home so getpwuid() agrees with the HOME env var. We base the file
+# on the image's own /etc/passwd where possible so its system accounts survive.
 TMP_ETC="$(mktemp -d)"
 cleanup() { rm -rf "${TMP_ETC}"; }
 trap cleanup EXIT
 
 fetch_from_image() { # $1 = file path inside image
-  # --entrypoint cat is belt-and-braces: the default ci-build image declares no
-  # ENTRYPOINT, but --image/--tag may point somewhere that does.
+  # --entrypoint cat in case --image/--tag points at an image that sets an
+  # ENTRYPOINT (the default ci-build image does not).
   docker run --rm --entrypoint cat "${IMAGE_REF}" "$1" 2>/dev/null
 }
 
@@ -319,13 +264,12 @@ if (( ! DRY_RUN )); then
   base_passwd="$(fetch_from_image /etc/passwd || true)"
   base_group="$(fetch_from_image /etc/group || true)"
 fi
-# Fall back to the host's files (the documented approach) if we could not read
-# the image's, and finally to a minimal skeleton.
+# Fall back to the host's files, then to a minimal skeleton.
 [[ -n "${base_passwd}" ]] || base_passwd="$(cat /etc/passwd 2>/dev/null || echo 'root:x:0:0:root:/root:/bin/bash')"
 [[ -n "${base_group}"  ]] || base_group="$(cat /etc/group  2>/dev/null || echo 'root:x:0:')"
 
-# Drop any line that collides with our user/uid (glibc uses the FIRST match, so a
-# stale colliding entry would win over ours), then append the entry we want.
+# Drop any line colliding with our user/uid (glibc uses the FIRST match, so a
+# stale entry would win over ours), then append the entry we want.
 printf '%s\n' "${base_passwd}" \
   | awk -F: -v u="${UNAME}" -v uid="${UID_N}" '$1 != u && $3 != uid' > "${TMP_ETC}/passwd"
 printf '%s:x:%s:%s:%s:%s:/bin/bash\n' \
@@ -348,9 +292,8 @@ fi
 # ----------------------------------------------------------------------------
 # The build script that runs *inside* the container
 # ----------------------------------------------------------------------------
-# Fully single-quoted heredoc: nothing is expanded here on the host. Everything
-# it needs arrives as an environment variable, which avoids a layer of quoting
-# bugs.
+# Fully single-quoted heredoc: nothing expands on the host; everything the
+# script needs arrives as an environment variable.
 CONTAINER_SCRIPT="$(cat <<'INNER_EOF'
 set -euo pipefail
 
@@ -368,21 +311,20 @@ if [ ! -w "${HOME}" ]; then
   exit 1
 fi
 
-# The bind-mounted tree is owned by this same UID, so git ownership checks should
-# pass; set safe.directory anyway so nested submodule paths can never trip it.
-# This writes to ${HOME}/.gitconfig, which is a throwaway per-build home, not the
-# user's real dotfiles and not inside the source tree.
+# Belt-and-braces: the tree is owned by this UID, but set safe.directory so
+# nested submodule paths can never trip git's ownership check. Writes to the
+# throwaway per-build $HOME, not the user's real dotfiles.
 git config --global --add safe.directory '*' >/dev/null 2>&1 || true
 
-# tt-metal's own scripts derive this, but set it explicitly: by construction the
-# repo root IS the target path, which is the whole point of the bind mount.
+# tt-metal's scripts derive this, but set it explicitly: by construction the
+# repo root IS the target path.
 export TT_METAL_HOME="$(pwd)"
 
 # Forwarded `-- ...` arguments for build_metal.sh, printf %q-quoted on the host.
 eval "set -- ${EXABOX_BUILD_ARGS:-}"
 
-# Defensive submodule init. `git clone --recursive` on the host should already
-# have done this; mirror tt-blaze's install.sh and re-check rather than assume.
+# Defensive: `git clone --recursive` on the host should already have done this;
+# re-check rather than assume.
 if git rev-parse --git-dir >/dev/null 2>&1; then
   if git submodule status --recursive 2>/dev/null | grep -qE '^-'; then
     echo "==> Uninitialized submodules found; running git submodule update --init --recursive"
@@ -397,27 +339,21 @@ fi
 echo "==> Running build_metal.sh $*"
 bash ./build_metal.sh "$@"
 
-# NOTE: this image already ships a pre-built venv at /opt/venv (built by a
-# separate Dockerfile.python / ci-build-venv-layer, world-writable via umask 000,
-# and already on PATH/VIRTUAL_ENV). It is intentionally unused here: it is a
-# different venv from the <clone>/python_env one create_venv.sh builds inside the
-# mount, and the two do not conflict. Reusing it could be a future speedup, but
-# only if the image's pinned tt-metal commit matches the user's clone — which
-# this script has no way to verify — so v1 always builds its own.
+# The image ships a pre-built venv at /opt/venv; we deliberately build our own
+# in the checkout instead, since the image's venv is pinned to whatever
+# tt-metal commit the image was built from, which we cannot verify against
+# this clone.
 #
-# --bundle-python deep-copies the interpreter into the venv instead of symlinking
-# it. Same default (and same order) as tt-blaze's install.sh, for the same reason:
-# a symlinked venv resolves to an interpreter that may not exist on other nodes and
-# dies with "python3: not found" once the tree is shared.
+# --bundle-python deep-copies the interpreter into the venv instead of
+# symlinking it: a symlinked venv resolves to an interpreter that may not exist
+# on other nodes once the tree is on shared NFS ("python3: not found").
 # See https://github.com/tenstorrent/tt-blaze/issues/1516
 #
-# IMPORTANT: the ci-build image bakes ENV PYTHON_ENV_DIR=/opt/venv (pointing at
-# its own pre-built venv from a separate Dockerfile.python layer). create_venv.sh
-# defaults to that env var when --env-dir is not passed, so without this it tries
-# to rebuild/overwrite the image's venv at /opt/venv instead of inside our
-# checkout — and fails, since /opt/venv isn't writable for the mapped host UID.
-# Explicit --env-dir always overrides the env var (per create_venv.sh --help), so
-# pass it, and unset the leaking env vars so nothing else picks up /opt/venv either.
+# IMPORTANT: the ci-build image bakes ENV PYTHON_ENV_DIR=/opt/venv, and
+# create_venv.sh defaults to that env var — without an explicit --env-dir it
+# tries to overwrite /opt/venv and fails (not writable for the mapped host
+# UID). Keep both the --env-dir flag and the unset below; removing either
+# reintroduces that bug.
 unset PYTHON_ENV_DIR VIRTUAL_ENV
 echo "==> Running create_venv.sh --bundle-python --env-dir $(pwd)/python_env"
 bash ./create_venv.sh --bundle-python --env-dir "$(pwd)/python_env"
@@ -436,8 +372,7 @@ fi
 # ----------------------------------------------------------------------------
 DOCKER_ARGS=(run --rm)
 if [[ -t 1 ]]; then DOCKER_ARGS+=(-t); fi
-# The default ci-build image declares no ENTRYPOINT, so `bash -c ...` below is
-# executed directly and nothing needs overriding. Only set when the user asked.
+# Only override the entrypoint when asked; the default image declares none.
 if [[ -n "${ENTRYPOINT}" ]]; then DOCKER_ARGS+=(--entrypoint "${ENTRYPOINT}"); fi
 
 DOCKER_ARGS+=(
@@ -446,9 +381,9 @@ DOCKER_ARGS+=(
   -v "${TMP_ETC}/group:/etc/group:ro"
 )
 
-# Order note: Docker mounts destinations parent-first, so mounting the home dir at
-# ${CONTAINER_HOME} and the source at ${CONTAINER_HOME}/<name> nests correctly and
-# the source mount is NOT shadowed.
+# Docker mounts destinations parent-first, so mounting the home dir at
+# ${CONTAINER_HOME} and the source at ${CONTAINER_HOME}/<name> nests correctly
+# (the source mount is NOT shadowed).
 if [[ "${CONTAINER_HOME}" != "${TARGET_PATH}" ]]; then
   DOCKER_ARGS+=(-v "${HOME_DIR}:${CONTAINER_HOME}")
 fi
@@ -456,15 +391,13 @@ fi
 DOCKER_ARGS+=(
   -v "${SRC}:${TARGET_PATH}"
   --workdir "${TARGET_PATH}"
-  # HOME is set explicitly rather than relying on the passwd lookup alone: some
-  # tools read the env var, some call getpwuid(), and we want both to agree.
+  # HOME set explicitly so tools reading the env var and tools calling
+  # getpwuid() agree.
   -e "HOME=${CONTAINER_HOME}"
   -e "USER=${UNAME}"
   -e "LOGNAME=${UNAME}"
   -e "EXABOX_BUILD_ARGS=${BUILD_ARGS_Q}"
-  # NOTE: ccache intentionally not configured in v1 (no CCACHE_DIR/CCACHE_BASEDIR).
-  # The binary IS present in the image (dedicated ccache-layer, ENV
-  # CCACHE_TEMPDIR=/tmp/ccache), so this is an env-var/flag decision for v2.
+  # NOTE: ccache intentionally not configured yet (see header).
   # NOTE: if your tt-metal revision still requires ARCH_NAME, add it here.
   "${IMAGE_REF}"
   bash -c "${CONTAINER_SCRIPT}"
@@ -507,10 +440,11 @@ if [[ -n "${SYNC_TO}" ]]; then
   fi
   mkdir -p "${SYNC_TO}"
   sync_start=${SECONDS}
-  # One rsync per top-level entry, ${SYNC_JOBS} of them at a time. Sources have no
-  # trailing slash, so a directory is copied recursively and a plain file is copied
-  # as itself -- one pass covers both, and --exclude patterns mean exactly what they
-  # would in a single rsync of the whole tree.
+  # One rsync per top-level entry, ${SYNC_JOBS} at a time. Sources have no
+  # trailing slash, so directories copy recursively and plain files copy as
+  # themselves, and --exclude patterns mean the same as in a single rsync of
+  # the whole tree. Syncs in place: a concurrent reader on another node could
+  # see a partially-written tree mid-sync.
   find "${SRC}" -mindepth 1 -maxdepth 1 -printf '%f\n' \
     | xargs -P "${SYNC_JOBS}" -I{} rsync -a --human-readable "${RSYNC_EXCLUDE_ARGS[@]}" "${SRC}/{}" "${SYNC_TO}/" \
     || die "sync to ${SYNC_TO} failed; re-run to continue (rsync skips what already matches)."
