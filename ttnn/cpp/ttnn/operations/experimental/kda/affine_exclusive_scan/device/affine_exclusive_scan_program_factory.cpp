@@ -56,16 +56,12 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
 
     const m2::DFBSpecName INITIAL_A{"initial_a"};
     const m2::DFBSpecName INITIAL_B{"initial_b"};
-    const m2::DFBSpecName STAGE_A_PING{"stage_a_ping"};
-    const m2::DFBSpecName STAGE_B_PING{"stage_b_ping"};
-    const m2::DFBSpecName STAGE_A_PONG{"stage_a_pong"};
-    const m2::DFBSpecName STAGE_B_PONG{"stage_b_pong"};
-    const m2::DFBSpecName SEND_A_PING{"send_a_ping"};
-    const m2::DFBSpecName SEND_B_PING{"send_b_ping"};
-    const m2::DFBSpecName SEND_A_PONG{"send_a_pong"};
-    const m2::DFBSpecName SEND_B_PONG{"send_b_pong"};
-    const m2::DFBSpecName REMOTE_A{"remote_a"};
-    const m2::DFBSpecName REMOTE_B{"remote_b"};
+    const m2::DFBSpecName LOCAL_A{"local_a"};
+    const m2::DFBSpecName LOCAL_B{"local_b"};
+    const m2::DFBSpecName TO_REMOTE_A{"to_remote_a"};
+    const m2::DFBSpecName TO_REMOTE_B{"to_remote_b"};
+    const m2::DFBSpecName FROM_REMOTE_A{"from_remote_a"};
+    const m2::DFBSpecName FROM_REMOTE_B{"from_remote_b"};
     const m2::DFBSpecName INITIAL_STATE{"initial_state"};
     const m2::DFBSpecName FINAL{"final"};
     const m2::DFBSpecName SCRATCH{"scratch"};
@@ -80,33 +76,24 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
     const m2::TensorParamName INITIAL_STATE_TENSOR{"initial_state"};
     const m2::TensorParamName OUTPUT{"output"};
 
-    auto make_dfb = [](const m2::DFBSpecName& name,
-                       uint32_t tiles,
-                       tt::DataFormat format,
-                       m2::Group<m2::DFBSpecName> aliases = {}) {
-        auto dfb = m2::DataflowBufferSpec{
+    auto make_dfb = [](const m2::DFBSpecName& name, uint32_t tiles, tt::DataFormat format) {
+        return m2::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = tt::tile_size(format),
             .num_entries = tiles,
             .data_format_metadata = format,
         };
-        dfb.advanced_options.alias_with = std::move(aliases);
-        return dfb;
     };
     const auto summary_format = datatype_to_dataformat_converter(in.a.dtype());
     m2::Group<m2::DataflowBufferSpec> dfbs = {
         make_dfb(INITIAL_A, kk, summary_format),
         make_dfb(INITIAL_B, kv, summary_format),
-        make_dfb(STAGE_A_PING, kk, tt::DataFormat::Float32, {SEND_A_PING}),
-        make_dfb(STAGE_B_PING, kv, tt::DataFormat::Float32, {SEND_B_PING}),
-        make_dfb(STAGE_A_PONG, kk, tt::DataFormat::Float32, {SEND_A_PONG}),
-        make_dfb(STAGE_B_PONG, kv, tt::DataFormat::Float32, {SEND_B_PONG}),
-        make_dfb(SEND_A_PING, kk, tt::DataFormat::Float32, {STAGE_A_PING}),
-        make_dfb(SEND_B_PING, kv, tt::DataFormat::Float32, {STAGE_B_PING}),
-        make_dfb(SEND_A_PONG, kk, tt::DataFormat::Float32, {STAGE_A_PONG}),
-        make_dfb(SEND_B_PONG, kv, tt::DataFormat::Float32, {STAGE_B_PONG}),
-        make_dfb(REMOTE_A, kk, tt::DataFormat::Float32),
-        make_dfb(REMOTE_B, kv, tt::DataFormat::Float32),
+        make_dfb(LOCAL_A, 2 * kk, tt::DataFormat::Float32),
+        make_dfb(LOCAL_B, 2 * kv, tt::DataFormat::Float32),
+        make_dfb(TO_REMOTE_A, kk, tt::DataFormat::Float32),
+        make_dfb(TO_REMOTE_B, kv, tt::DataFormat::Float32),
+        make_dfb(FROM_REMOTE_A, kk, tt::DataFormat::Float32),
+        make_dfb(FROM_REMOTE_B, kv, tt::DataFormat::Float32),
         make_dfb(INITIAL_STATE, kv, tt::DataFormat::Float32),
         make_dfb(FINAL, kv, tt::DataFormat::Float32),
         make_dfb(SCRATCH, kv, tt::DataFormat::Float32),
@@ -122,12 +109,12 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
             {
                 m2::DFBBinding{INITIAL_A, "initial_a", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{INITIAL_B, "initial_b", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{SEND_A_PING, "send_a_ping", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{SEND_B_PING, "send_b_ping", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{SEND_A_PONG, "send_a_pong", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{SEND_B_PONG, "send_b_pong", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{REMOTE_A, "remote_a", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{REMOTE_B, "remote_b", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{LOCAL_A, "local_a", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{LOCAL_B, "local_b", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{TO_REMOTE_A, "to_remote_a", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{TO_REMOTE_B, "to_remote_b", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{FROM_REMOTE_A, "from_remote_a", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{FROM_REMOTE_B, "from_remote_b", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{INITIAL_STATE, "initial_state", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{FINAL, "final", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{STAGE_TOKEN, "stage_token", m2::DFBEndpointType::PRODUCER},
@@ -155,16 +142,7 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
 
     auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
     auto& unpack_modes = m2::unpack_modes(compute_hw);
-    for (const auto& name :
-         {STAGE_A_PING,
-          STAGE_B_PING,
-          STAGE_A_PONG,
-          STAGE_B_PONG,
-          REMOTE_A,
-          REMOTE_B,
-          INITIAL_STATE,
-          SCRATCH,
-          STAGE_TOKEN}) {
+    for (const auto& name : {LOCAL_A, LOCAL_B, FROM_REMOTE_A, FROM_REMOTE_B, INITIAL_STATE, SCRATCH, STAGE_TOKEN}) {
         unpack_modes[name] = UnpackMode::UnpackToSrc;
     }
     if (summary_format == tt::DataFormat::Float32) {
@@ -182,20 +160,12 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
             {
                 m2::DFBBinding{INITIAL_A, "initial_a", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{INITIAL_B, "initial_b", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STAGE_A_PING, "stage_a_ping", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STAGE_A_PING, "stage_a_ping", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STAGE_B_PING, "stage_b_ping", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STAGE_B_PING, "stage_b_ping", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STAGE_A_PONG, "stage_a_pong", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STAGE_A_PONG, "stage_a_pong", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STAGE_B_PONG, "stage_b_pong", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STAGE_B_PONG, "stage_b_pong", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{SEND_A_PING, "send_a_ping", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{SEND_B_PING, "send_b_ping", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{SEND_A_PONG, "send_a_pong", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{SEND_B_PONG, "send_b_pong", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{REMOTE_A, "remote_a", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{REMOTE_B, "remote_b", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{LOCAL_A, "local_a", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{LOCAL_B, "local_b", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{TO_REMOTE_A, "to_remote_a", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{TO_REMOTE_B, "to_remote_b", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{FROM_REMOTE_A, "from_remote_a", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{FROM_REMOTE_B, "from_remote_b", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{INITIAL_STATE, "initial_state", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{FINAL, "final", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{SCRATCH, "scratch", m2::DFBEndpointType::PRODUCER},
