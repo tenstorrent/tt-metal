@@ -21,6 +21,27 @@
  *   - compile-time invariant checks (illegal lifecycle/index combos, duplicate upfront CBs,
  *     pack-output collisions, hoist-safety).
  *
+ * Design constraints (why the code looks the way it does)
+ * -------------------------------------------------------
+ * This library is a compile-time EDSL for freestanding RISC-V Trisc kernels, JIT-built with
+ * `-std=c++17`. Several conventional C++ choices are unavailable or deliberately avoided:
+ *   - No virtual dispatch. Everything must fully inline (`ALWI`); an out-of-line MATH body is a
+ *     correctness hazard, and vtables/RTTI have no place in the kernel image. Element
+ *     classification therefore uses empty marker tags + CRTP, not abstract interfaces.
+ *   - Packed integer template keys. The public aliases accept `input(...)` / `output(...)`
+ *     spec structs as NTTPs (a tt-gcc `-ftt-nttp` extension; plain C++17 forbids class-type
+ *     NTTPs). The Impl layer then converts each spec to one integer `ConfigBits` NTTP via
+ *     `ConfigField` encode/decode: equal specs canonicalize to the same instantiation, mangled
+ *     symbol names stay short (kernel debug info is a real budget), and the explicit bit layout
+ *     is deterministic and width-checked — which implementation-defined C++ bitfields are not.
+ *   - One core-walk instantiation. Typed wrappers (e.g. `TypedIterationShape<Kind>`) exist only
+ *     in the thin public validation layer and decay to the untyped runtime payload before
+ *     `eltwise_chain_impl`, so compile-time tags never multiply the heavy template's
+ *     instantiations (kernel code size and JIT time are part of the budget).
+ *   - Cross-element scheduling (reconfig folding, init hoisting, DEST slot allocation) depends
+ *     on facts no single element can know, so it lives in the chain pipeline; per-element logic
+ *     (`init()` / `exec()`) stays on the element types.
+ *
  * Caller-init contract
  * --------------------
  * The chain never issues engine-wide ("BIG") init. The caller owns `compute_kernel_hw_startup`
