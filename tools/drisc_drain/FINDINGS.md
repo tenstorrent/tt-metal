@@ -5831,3 +5831,27 @@ L1 stall counters exactly), 0 order regressions, 0 consumer drops. Producer stal
 converging toward the ~290k device floor (§N+51). Per-thread decode is now 6.2 GB/s against the 13.6 GB/s
 raw-read ceiling (§N+53), so roughly another 2x of headroom remains in the scalar residue (screen misses,
 sub-16-word tails, per-block overheads) before reads become the wall.
+
+## §N+55 — Decode is memory-LATENCY bound: ALU trims are wall-time-neutral, two-pass scanning is a regression (bh-18, 2026-08-19)
+
+Three structural variants of the AVX2 zone-block path, measured on the judged run:
+
+| variant | decode ms (2 threads) | busy GB/s |
+|---|---|---|
+| v2: per-block screen + cvtepu assembly + full order chain | 89.6 / 90.5 | 12.19 |
+| v3: scan-then-emit stretches (screen pass + emit pass) | 92.9 / **120.9** | 9.11 |
+| v4: per-block screen + endpoint order check + unpack assembly | 88.2-91.8 / 92.7-99.0 | 11.2-11.9 |
+
+v3's second touch of every block (reload + re-shuffle, even from L1) cost more than its branchless emit
+stretch saved -- REVERTED. v4 deletes ~14 uops/block versus v2 (endpoint-only order compare; records built
+by 32-bit interleaves against splatted th/prog then 64-bit pairing, no widening) and measures WITHIN NOISE
+of v2 -- kept for the smaller loop, but the lesson is that per-thread decode (~6 GB/s vs the 13.6 GB/s
+raw-read ceiling) is bound by dependent access latency on cold lines, not by instruction count. §N+54's
+"~2x headroom in the scalar residue" is refuted: the residue is latency.
+
+Remaining rungs, in order of expected value: cross-frame latency overlap (prefetch frame N+1's live
+windows while decoding frame N), AVX-512 (Zen 4 present; halves uop count but double-pumped and the path
+is latency-bound, so expect modest), decode fan-out via frame sharding (unattractive on this 6-core part:
+2 decode + consumer + workload + Tracy client already fill it), and producer-side wire changes (the big
+lever, out of receiver scope). Context: at delay 15 the host already drains within 1.3x of the device's
+offered rate; host-attributable stalls are ~60k of ~352k.
