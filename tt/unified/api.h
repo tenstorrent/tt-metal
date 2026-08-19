@@ -365,7 +365,7 @@ template <typename S>
 struct is_operand<ComputeBlock<S>> : std::true_type {};
 
 template <typename S>
-TileSource as_node(const ComputeBlock<S>& b);
+TileSource<S> as_node(const ComputeBlock<S>& b);
 
 template <typename S>
 auto relu(const ComputeBlock<S>& b);
@@ -624,6 +624,21 @@ struct NocAsyncWriteTx {
 // landed -- it landed here.
 template <int thread, typename D, typename S>
 struct NocAsyncReadCoreTx {
+    // A core-to-core copy is not required to fill its destination: a GATHER has n
+    // writers each depositing its own source at its own byte_offset, so the
+    // destination is n times the source. What must hold is that the source fits and
+    // tiles the destination evenly -- one whole slot per writer. Equality would be
+    // wrong; nothing checked either fact before, since the two page counts were
+    // independent runtime fields.
+    static_assert(
+        S::num_pages <= D::num_pages,
+        "a core-to-core copy's source does not fit its destination -- the source Block has more pages "
+        "than the destination Storage");
+    static_assert(
+        D::num_pages % S::num_pages == 0,
+        "a core-to-core copy's destination is not a whole multiple of its source -- a gather deposits "
+        "one source-sized slot per writer, so a ragged destination cannot be addressed by byte_offset");
+
     NocAsyncReadCoreTx(const Storage<D>& dst, const Block<S>& src);
 
     NocAsyncReadCoreTx(const NocAsyncReadCoreTx&) = delete;
@@ -661,6 +676,21 @@ struct NocAsyncReadCoreTx {
 // unicast form, where construction costs only an L1 address.
 template <int thread, typename D, typename S>
 struct NocAsyncWriteCoreTx {
+    // A core-to-core copy is not required to fill its destination: a GATHER has n
+    // writers each depositing its own source at its own byte_offset, so the
+    // destination is n times the source. What must hold is that the source fits and
+    // tiles the destination evenly -- one whole slot per writer. Equality would be
+    // wrong; nothing checked either fact before, since the two page counts were
+    // independent runtime fields.
+    static_assert(
+        S::num_pages <= D::num_pages,
+        "a core-to-core copy's source does not fit its destination -- the source Block has more pages "
+        "than the destination Storage");
+    static_assert(
+        D::num_pages % S::num_pages == 0,
+        "a core-to-core copy's destination is not a whole multiple of its source -- a gather deposits "
+        "one source-sized slot per writer, so a ragged destination cannot be addressed by byte_offset");
+
     NocAsyncWriteCoreTx(const Storage<D>& dst, const Block<S>& src, PhysicalMcast dst_range, uint32_t semaphore_id);
     NocAsyncWriteCoreTx(const Storage<D>& dst, const Block<S>& src, bool reader, uint32_t semaphore_id);
 
