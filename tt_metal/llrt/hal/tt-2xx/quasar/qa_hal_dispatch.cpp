@@ -59,9 +59,10 @@ HalCoreInfoType create_dispatch_mem_map() {
             .fw_base_addr = dispatch_dm_kernel_base,
             .local_init_addr = UINT32_MAX,
             .fw_launch_addr = 0x0,
-            // DM firmware is linked/loaded at MEM_DM_FIRMWARE_BASE (main.ld); per-DM fw_base_addr is the
-            // cq-kernel link/load slot only. Reset still boots via JAL from L1[0] into firmware.
-            .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+            // DM firmware is linked and loaded at MEM_DISPATCH_DM_FIRMWARE_BASE (qa_hal.cpp passes it as
+            // --defsym=__fw_text); per-DM fw_base_addr is the cq-kernel link/load slot only. Reset still
+            // boots via JAL from L1[0] into firmware, so this must match where the firmware was linked.
+            .fw_launch_addr_value = generate_risc_startup_addr(MEM_DISPATCH_DM_FIRMWARE_BASE),
             .memory_load = ll_api::memory::Loading::CONTIGUOUS,
         });
     }
@@ -88,7 +89,7 @@ HalCoreInfoType create_dispatch_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = GET_MAILBOX_ADDRESS_HOST(watcher);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = GET_MAILBOX_ADDRESS_HOST(dprint_buf);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_MAILBOX_ADDRESS_HOST(profiler);
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_MAP_END;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_DISPATCH_MAP_END;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_MAILBOX_ADDRESS_HOST(go_messages);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG_INDEX)] =
@@ -96,11 +97,12 @@ HalCoreInfoType create_dispatch_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] =
         GET_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LOCAL)] = MEM_LOCAL_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_BANK_TO_NOC_SCRATCH;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_TENSIX_ROUTING_TABLE_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_DISPATCH_BANK_TO_NOC_SCRATCH;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_DISPATCH_TENSIX_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
-        MEM_TENSIX_FABRIC_CONNECTIONS_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_CONNECTION_LOCK)] = MEM_FABRIC_CONNECTION_LOCK_BASE;
+        MEM_DISPATCH_TENSIX_FABRIC_CONNECTIONS_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_CONNECTION_LOCK)] =
+        MEM_DISPATCH_FABRIC_CONNECTION_LOCK_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         tt::align(DISPATCH_MEM_MAP_END, max_alignment);
 
@@ -108,7 +110,7 @@ HalCoreInfoType create_dispatch_mem_map() {
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_L1_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = sizeof(uint32_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_MAILBOX_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_DISPATCH_MAILBOX_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = sizeof(launch_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = sizeof(watcher_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(DevicePrintMemoryLayout);

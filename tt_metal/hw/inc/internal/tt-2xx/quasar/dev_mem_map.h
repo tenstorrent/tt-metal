@@ -215,13 +215,13 @@
 #define MEM_LOGICAL_TO_VIRTUAL_SIZE ((20 + 12) * sizeof(uint8_t))
 
 // Dispatch-engine tile: DM-only reserved prefix. Dispatch engines have no TRISCs, so this chain omits the Tensix LLK
-// debug, TRISC firmware/global, and TRISC init-local regions. The matching MEM_LLK_DEBUG_* and MEM_TRISC_* names are
-// not redirected below and still expand on a dispatch build, where they land on addresses this chain assigns to other
-// regions -- MEM_TRISC0_FIRMWARE_BASE on MEM_DM_GLOBAL_BASE, for one. They describe the Tensix layout only.
+// debug, TRISC firmware/global, and TRISC init-local regions. The MEM_LLK_DEBUG_* and MEM_TRISC_* names describe the
+// Tensix layout only and carry no meaning on a dispatch engine.
 //
-// Both layouts are always defined independently because the host builds the Tensix and dispatch HAL maps in one
-// process. Device dispatch builds select this layout through the generic-name aliases below, allowing shared device
-// code to keep using MEM_* without changing the Tensix region sizes.
+// Both layouts are always defined, and neither one overrides the other: the host builds the Tensix and the dispatch
+// HAL map in a single process, so every name here has exactly one value. Code that runs on, or describes, a dispatch
+// engine names the MEM_DISPATCH_* address it wants. Shared device code that has to work on both core types chooses
+// between the two names at the point of use, keyed on COMPILE_FOR_DISPATCH_ENGINE.
 #define MEM_DISPATCH_INTERRUPT_TABLE_BASE ((MEM_DISPATCH_MAILBOX_END + 255) & ~255)
 #define MEM_DISPATCH_DM_FIRMWARE_BASE (MEM_DISPATCH_INTERRUPT_TABLE_BASE + MEM_INTERRUPT_TABLE_SIZE)
 #define MEM_DISPATCH_DM_GLOBAL_BASE (MEM_DISPATCH_DM_FIRMWARE_BASE + MEM_DM_FIRMWARE_SIZE)
@@ -256,57 +256,6 @@
 #define MEM_DISPATCH_DM6_KERNEL_BASE (MEM_DISPATCH_DM5_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
 #define MEM_DISPATCH_DM7_KERNEL_BASE (MEM_DISPATCH_DM6_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
 #define DISPATCH_MEM_MAP_END (MEM_DISPATCH_DM7_KERNEL_BASE + MEM_DM_KERNEL_SIZE)
-
-// Shared device code uses the generic names.
-#if defined(COMPILE_FOR_DISPATCH_ENGINE)
-#undef MEM_MAILBOX_SIZE
-#define MEM_MAILBOX_SIZE MEM_DISPATCH_MAILBOX_SIZE
-#undef MEM_MAILBOX_END
-#define MEM_MAILBOX_END MEM_DISPATCH_MAILBOX_END
-#undef MEM_INTERRUPT_TABLE_BASE
-#define MEM_INTERRUPT_TABLE_BASE MEM_DISPATCH_INTERRUPT_TABLE_BASE
-#undef MEM_DM_FIRMWARE_BASE
-#define MEM_DM_FIRMWARE_BASE MEM_DISPATCH_DM_FIRMWARE_BASE
-#undef MEM_DM_GLOBAL_BASE
-#define MEM_DM_GLOBAL_BASE MEM_DISPATCH_DM_GLOBAL_BASE
-#undef MEM_DM_LOCAL_BASE
-#define MEM_DM_LOCAL_BASE MEM_DISPATCH_DM_LOCAL_BASE
-#undef MEM_NOC_COUNTER_BASE
-#define MEM_NOC_COUNTER_BASE MEM_DISPATCH_NOC_COUNTER_BASE
-#undef MEM_FABRIC_COUNTER_BASE
-#define MEM_FABRIC_COUNTER_BASE MEM_DISPATCH_FABRIC_COUNTER_BASE
-#undef MEM_FABRIC_CONNECTION_LOCK_BASE
-#define MEM_FABRIC_CONNECTION_LOCK_BASE MEM_DISPATCH_FABRIC_CONNECTION_LOCK_BASE
-#undef MEM_TENSIX_ROUTING_TABLE_BASE
-#define MEM_TENSIX_ROUTING_TABLE_BASE MEM_DISPATCH_TENSIX_ROUTING_TABLE_BASE
-#undef MEM_TENSIX_ROUTING_PATH_BASE
-#define MEM_TENSIX_ROUTING_PATH_BASE MEM_DISPATCH_TENSIX_ROUTING_PATH_BASE
-#undef MEM_TENSIX_ROUTING_PATH_BASE_1D
-#define MEM_TENSIX_ROUTING_PATH_BASE_1D MEM_DISPATCH_TENSIX_ROUTING_PATH_BASE
-#undef MEM_TENSIX_ROUTING_PATH_BASE_2D
-#define MEM_TENSIX_ROUTING_PATH_BASE_2D MEM_DISPATCH_TENSIX_ROUTING_PATH_BASE
-#undef MEM_TENSIX_EXIT_NODE_TABLE_BASE
-#define MEM_TENSIX_EXIT_NODE_TABLE_BASE MEM_DISPATCH_TENSIX_EXIT_NODE_TABLE_BASE
-#undef MEM_TENSIX_FABRIC_CONNECTIONS_BASE
-#define MEM_TENSIX_FABRIC_CONNECTIONS_BASE MEM_DISPATCH_TENSIX_FABRIC_CONNECTIONS_BASE
-#undef MEM_PACKET_HEADER_POOL_BASE
-#define MEM_PACKET_HEADER_POOL_BASE MEM_DISPATCH_PACKET_HEADER_POOL_BASE
-#undef MEM_MAP_END
-#define MEM_MAP_END MEM_DISPATCH_MAP_END
-#undef MEM_KERNEL_CONFIG_SIZE
-#define MEM_KERNEL_CONFIG_SIZE MEM_DISPATCH_KERNEL_CONFIG_SIZE
-#undef MEM_DM0_INIT_LOCAL_L1_BASE_SCRATCH
-#define MEM_DM0_INIT_LOCAL_L1_BASE_SCRATCH MEM_DISPATCH_DM0_INIT_LOCAL_L1_BASE_SCRATCH
-#undef MEM_BANK_TO_NOC_SCRATCH
-#define MEM_BANK_TO_NOC_SCRATCH MEM_DISPATCH_BANK_TO_NOC_SCRATCH
-#undef MEM_LOGICAL_TO_VIRTUAL_SCRATCH
-#define MEM_LOGICAL_TO_VIRTUAL_SCRATCH MEM_DISPATCH_LOGICAL_TO_VIRTUAL_SCRATCH
-// Unlike the redirects above, this widens the boundary rather than retargeting it: MEM_TENSIX_FABRIC_CONNECTIONS_BASE
-// is already redirected, so the generic definition would yield the dispatch read-only end on its own. The wider bound
-// makes watcher NOC sanitize protect the dispatch firmware and kernel text as well, so it is not redundant.
-#undef MEM_MAP_READ_ONLY_END
-#define MEM_MAP_READ_ONLY_END DISPATCH_MEM_MAP_END
-#endif
 
 /////////////
 // Stack info
