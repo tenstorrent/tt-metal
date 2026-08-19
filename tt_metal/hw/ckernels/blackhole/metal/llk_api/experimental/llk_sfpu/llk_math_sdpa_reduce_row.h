@@ -38,4 +38,13 @@ inline void llk_math_sfpu_sdpa_reduce_sum_row(std::uint32_t src_index, std::uint
     sfpu::calculate_sdpa_reduce_sum_row<format, block_width, skip_signalling>(src_index, dst_index, prev_sum);
 }
 
+// Signal that SFPU work for the chunk is complete. Waits for the FPU's post
+// (p_stall::NONE — never blocks SFPU logic; only ensures the semaphore is
+// non-zero before decrementing), then decrements so the QK matmul can reuse
+// the space in the next iteration.
+inline void llk_math_sdpa_sfpu_signal_chunk_done() {
+    t6_semaphore_wait_on_zero<p_stall::NONE>(semaphore::FPU_SFPU);
+    t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU);
+}
+
 }  // namespace ckernel
