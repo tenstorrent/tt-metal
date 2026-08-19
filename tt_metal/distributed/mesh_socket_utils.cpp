@@ -4,8 +4,6 @@
 
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
-
-#include <mutex>
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
@@ -192,16 +190,9 @@ Tag generate_descriptor_exchange_tag(tt_fabric::MeshId peer_mesh_id, std::option
     // descriptors between the sender and receiver.
     // This is used to ensure that the sender and receiver are
     // exchanging the correct descriptors.
-    // Per CALLING rank, for the same reason as generate_rank_scoped_exchange_tag below.
-    static std::mutex tag_mu;
-    static std::unordered_map<
-        DistributedContextId,
-        std::unordered_map<tt_fabric::MeshId, std::unordered_map<int, uint32_t>>>
-        exchange_tags;
+    static std::unordered_map<DistributedContextId, std::unordered_map<tt_fabric::MeshId, uint32_t>> exchange_tags;
     DistributedContextId unique_context_id = context_id.value_or(DistributedContext::get_current_world()->id());
-    const int caller = *DistributedContext::get_current_world()->rank();
-    std::lock_guard<std::mutex> lock(tag_mu);
-    return Tag{static_cast<int>(exchange_tags[unique_context_id][peer_mesh_id][caller]++)};
+    return Tag{static_cast<int>(exchange_tags[unique_context_id][peer_mesh_id]++)};
 }
 
 Tag generate_rank_scoped_exchange_tag(
@@ -210,16 +201,10 @@ Tag generate_rank_scoped_exchange_tag(
     // ranks, even when the endpoints live on different meshes. Key the counter
     // on the ordered rank pair so both sides deterministically produce the same
     // tag independent of mesh participation.
-    // Per CALLING rank. One rank per process already made this static per-rank; emule's in-process
-    // ranks share it, and a shared counter hands the two sides of one socket different tags.
-    static std::mutex tag_mu;
-    static std::unordered_map<DistributedContextId, std::unordered_map<uint64_t, std::unordered_map<int, uint32_t>>>
-        exchange_tags;
+    static std::unordered_map<DistributedContextId, std::unordered_map<uint64_t, uint32_t>> exchange_tags;
     DistributedContextId unique_context_id = context_id.value_or(DistributedContext::get_current_world()->id());
     uint64_t pair_key = (static_cast<uint64_t>(*sender_rank) << 32) | static_cast<uint64_t>(*receiver_rank);
-    const int caller = *DistributedContext::get_current_world()->rank();
-    std::lock_guard<std::mutex> lock(tag_mu);
-    return Tag{static_cast<int>(exchange_tags[unique_context_id][pair_key][caller]++)};
+    return Tag{static_cast<int>(exchange_tags[unique_context_id][pair_key]++)};
 }
 }  // namespace
 
@@ -373,13 +358,6 @@ void write_socket_configs(
         if (peer_device) {
             return peer_device->get_fabric_node_id(device_coord);
         }
-#if defined(TT_METAL_USE_EMULE)
-        // In-process ranks share a host, so the host-rank offset below is the same for all of them
-        // and would fold every rank's submesh onto one rank's chips. The peer's mesh is right here.
-        if (auto peer = emule::virtual_rank_mesh(static_cast<uint32_t>(*peer_rank))) {
-            return peer->get_fabric_node_id(device_coord);
-        }
-#endif
         // peer_device is null for rank-scoped cross-process sockets, so we can't ask the peer's
         // MeshDevice directly. Resolve the peer's submesh-local coordinate to its GLOBAL chip via
         // the peer rank's host binding — without host_rank, coordinate_to_chip assumes host-rank 0
@@ -750,13 +728,6 @@ std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> g
         if (device) {
             return device->get_fabric_node_id(device_coord);
         }
-#if defined(TT_METAL_USE_EMULE)
-        // See write_socket_configs: in-process ranks share a host rank, so the offset below cannot
-        // tell their submeshes apart.
-        if (auto peer = emule::virtual_rank_mesh(static_cast<uint32_t>(*rank))) {
-            return peer->get_fabric_node_id(device_coord);
-        }
-#endif
         // No local device handle: resolve the submesh-local coord to its global chip via the
         // owning rank's host binding (host_rank). Without it, coordinate_to_chip assumes
         // host-rank 0 and the kernel's fabric routes point at the wrong chip.

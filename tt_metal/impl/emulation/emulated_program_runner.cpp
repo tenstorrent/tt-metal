@@ -82,7 +82,6 @@
 #include "tt_emule/dfb_sync_state.hpp"
 #include "tt_emule/l1_pool.hpp"
 #include "tt_emule/rank_state.hpp"
-#include "emule_virtual_ranks.hpp"
 #include "tt_emule/kernel_patcher.hpp"  // tt::emule::patch_kernel_source (the extracted JIT patch pass)
 #include "tt_emule/tile_counter.hpp"
 #include "jit_hw/internal/emule_thread_ctx.h"
@@ -2538,76 +2537,13 @@ static bool emule_peer_may_still_deliver();
 static void emule_install_peer_probes();
 static bool emule_peer_liveness();
 
-// ---------------------------------------------------------------------------
-// In-process virtual ranks: co-scheduling the K rank threads.
-// ---------------------------------------------------------------------------
-// With no MPI the K ranks share ONE FiberScheduler and ONE dispatch mutex, so a rank whose kernel
-// spin-polls a d2d socket has to hand the mutex back — holding it blocks the very peer whose data it
-// is waiting for. Yielding lets the peer register its own workload into the still-live registry, and
-// the scheduler's resume path then runs both ranks' fibers in one generation, which is what the
-// socket needs. See tt-emule docs/multi-rank-emulation.md.
 namespace {
 
-constexpr uint32_t kMaxVirtualRanks = 64;
-
-// `k` and `joined` are ATOMIC and nothing here consults the scheduler: the progress probe is called
-// from inner_loop with the scheduler's own mu_ held, so a probe that took a lock — its own or the
-// scheduler's, via any query — would deadlock the engine outright. mu_/cv_ below serve only the
-// parked rank's wait, which runs on a dispatch thread outside the scheduler.
-struct VirtualRankRun {
-    std::atomic<uint32_t> k{0};       // 0/1 = in-process ranks are not installed
-    std::atomic<uint64_t> joined{0};  // bitmask of ranks whose workload is in the live registry
-    std::mutex mu;
-    std::condition_variable cv;
-    uint64_t epoch = 0;  // bumped whenever `joined` changes
-};
-
-VirtualRankRun& virtual_rank_run() {
-    static VirtualRankRun v;
-    return v;
-}
-
-// How long a rank waits for an absent peer before falling through to the engine's own diagnostic. A
-// bound, not a synchronization mechanism: only a dispatch already stalled on a d2d socket whose peer
-// never arrives can reach it.
-std::chrono::duration<float> virtual_rank_peer_wait_timeout() {
-    static const float s = [] {
-        const char* v = std::getenv("TT_EMULE_VRANK_PEER_WAIT_S");
-        return (v != nullptr && v[0] != '\0') ? std::strtof(v, nullptr) : 120.0f;
-    }();
-    return std::chrono::duration<float>(s);
-}
-
 // Set while THIS thread holds the dispatch mutex through a MeshDispatchLock. run_mesh_dispatch is
-// also reachable from the deferred-flush path with no lock held, and a parked rank must only give
-// back a mutex it actually owns.
+// also reachable from the deferred-flush path with no lock held.
 thread_local bool t_holds_dispatch_lock = false;
 
 }  // namespace
-
-// Latched once a rank has waited out its peer without the peer ever arriving. Without it a rank
-// whose peer has finished its own work and left would park, time out, re-poll and park again for
-// the rest of the process; the latch hands the stall back to the engine so it is reported.
-static std::atomic<bool> g_virtual_rank_peer_gave_up{false};
-
-// True while some in-process rank has not yet joined this run, so a d2d socket with no sender is
-// merely early. Once every rank has joined, the engine's own detection is authoritative again —
-// which is what keeps this from masking a genuine deadlock.
-static bool virtual_rank_peer_absent() {
-    auto& v = virtual_rank_run();
-    const uint32_t k = v.k.load(std::memory_order_acquire);
-    if (k <= 1 || g_virtual_rank_peer_gave_up.load(std::memory_order_acquire)) {
-        return false;
-    }
-    const uint64_t all = (k >= 64) ? ~0ULL : ((1ULL << k) - 1);
-    return (v.joined.load(std::memory_order_acquire) & all) != all;
-}
-
-// True while any in-process rank's workload is still in the registry.
-static bool virtual_rank_run_live() {
-    auto& v = virtual_rank_run();
-    return v.k.load(std::memory_order_acquire) > 1 && v.joined.load(std::memory_order_acquire) != 0;
-}
 
 static tt_emule::RankState& emule_rank_state() {
     static tt_emule::RankState rs = [] {
@@ -2635,18 +2571,12 @@ static std::atomic<bool> g_emule_peer_probes_installed{false};
 static std::atomic<bool> g_peer_fixed_point_confirmed{false};
 
 static bool emule_peer_liveness() {
-    if (virtual_rank_peer_absent()) {
-        return true;
-    }
     auto& r = emule_rank_state();
     return r.valid() && !r.any_faulted() && !g_peer_fixed_point_confirmed.load(std::memory_order_acquire) &&
            r.any_peer_unfinished() && !r.global_fixed_point();
 }
 
-// Installed ONLY from a multi-rank path — the shm one above and the in-process one in
-// virtual_rank_note_dispatch — so single-rank the scheduler's quiescence branch is byte-identical to
-// its pre-multi-rank form (an empty std::function it never calls). Idempotent: both paths can be
-// live in the same process in principle, and neither knows about the other.
+// Installed only when shared rank state is active, so single-rank scheduling keeps empty probes.
 static void emule_install_peer_probes() {
     static std::once_flag once;
     std::call_once(once, [] {
@@ -2659,12 +2589,6 @@ static void emule_install_peer_probes() {
 // Called from the scheduler at local quiescence. Publishing BEFORE testing is what makes the answer
 // meaningful: until this rank's own slot says parked, the fixed point can never hold.
 static bool emule_peer_may_still_deliver() {
-    // In-process ranks share this scheduler, so "a peer may still deliver" reduces to "a peer has
-    // not registered its half yet" — once every rank's fibers are in the registry a stall is a
-    // genuine one and the engine's own detection must have it back.
-    if (virtual_rank_peer_absent()) {
-        return true;
-    }
     auto& rs = emule_rank_state();
     if (!rs.valid()) {
         return false;
@@ -2677,53 +2601,6 @@ static bool emule_peer_may_still_deliver() {
     }
     rs.publish_quiesced(true);
     return !rs.global_fixed_point();
-}
-
-// Block until something changes the answer: a peer delivered (our parked snapshot is now stale), or
-// every rank agreed there is nothing left, or someone faulted. Deliveries are shared-memory stores,
-// so this is a spin with a yield rather than a wait primitive — there is nothing to be signalled by.
-// Returns true only when a DELIVERY arrived, which is the sole reason to un-publish our quiescence:
-// clearing it on the other exits would let two stuck ranks alternate between "parked" and "running"
-// and never observe each other parked at the same instant, so the fixed point could never be reached.
-[[maybe_unused]] static bool emule_peer_wait_for_change() {
-    auto& rs = emule_rank_state();
-    if (!rs.valid()) {
-        return false;
-    }
-    // Bounded so a lost delivery surfaces as the engine's deadlock diagnostic instead of a silent
-    // hang; the pump that follows re-tests and lets the real report fire.
-    static const uint64_t spins = [] {
-        const char* v = std::getenv("TT_EMULE_PEER_WAIT_SPINS");
-        return (v != nullptr && *v != '\0') ? std::strtoull(v, nullptr, 10) : 200'000'000ull;
-    }();
-    for (uint64_t i = 0; i < spins; ++i) {
-        if (!rs.quiesced_snapshot_is_current()) {
-            return true;  // a peer wrote into us; re-poll with fresh eyes
-        }
-        if (rs.any_faulted()) {
-            return false;
-        }
-        if (rs.global_fixed_point()) {
-            // Observed while THIS rank is parked, so it is a real reading rather than a gap between
-            // two ranks' cycles. Latch it: the next quiescence must report a deadlock, not re-park.
-            g_peer_fixed_point_confirmed.store(true, std::memory_order_release);
-            return false;
-        }
-        if ((i & 0xFF) == 0) {
-            std::this_thread::yield();
-        }
-    }
-    // Spin exhausted with no answer. Do NOT leave this rank advertising itself as parked while it
-    // goes on to run: a peer reading that stale flag would see a fixed point that does not exist and
-    // report a deadlock against a rank that is still working.
-    // Report the whole array once: a stuck pair is otherwise invisible, and this names the rank that
-    // is holding the fixed point open.
-    static bool dumped = false;
-    if (!dumped) {
-        dumped = true;
-        rs.dump("PeerWait spin exhausted");
-    }
-    return false;
 }
 
 static uint8_t* __emule_fabric_resolve_peer(uint32_t dst_chip, uint64_t noc_addr) {
@@ -4718,103 +4595,13 @@ MeshDispatchLock::~MeshDispatchLock() {
     g_emule_run_mu.unlock();
 }
 
-// Bump the event epoch and release every rank parked on it. pre: the caller has already published
-// whatever the waiters are meant to observe.
-static void virtual_rank_publish() {
-    auto& v = virtual_rank_run();
-    {
-        std::lock_guard<std::mutex> g(v.mu);
-        ++v.epoch;
-    }
-    v.cv.notify_all();
-}
-
-// Mark this rank's workload as present in the registry and wake any peer parked waiting for it.
-// No-op unless in-process ranks are installed, which is what keeps the single-rank scheduler free of
-// a peer probe entirely. Called from run_mesh_dispatch, so `me` is read on the rank's own thread —
-// the only one carrying the thread_local rank.
-static void virtual_rank_note_dispatch() {
-    auto& v = virtual_rank_run();
-    const uint32_t k = tt::tt_metal::emule::virtual_rank_count();
-    if (k <= 1) {
-        // The world can also be torn DOWN between dispatches (a test uninstalling its ranks). Forget
-        // it here, or every later single-rank run keeps answering "a peer has not joined yet".
-        if (v.k.exchange(0, std::memory_order_acq_rel) != 0) {
-            v.joined.store(0, std::memory_order_release);
-            virtual_rank_publish();
-        }
-        return;
-    }
-    const uint32_t me = tt::tt_metal::emule::current_virtual_rank();
-    TT_FATAL(k <= kMaxVirtualRanks && me < k, "in-process rank {} outside a world of {}", me, k);
-    emule_install_peer_probes();
-    if (v.k.exchange(k, std::memory_order_acq_rel) != k) {
-        v.joined.store(0, std::memory_order_release);  // a fresh world; the old mask names nothing
-    }
-    v.joined.fetch_or(1ULL << me, std::memory_order_acq_rel);
-    // A rank arriving is exactly the evidence the give-up latch was missing, so clear it here rather
-    // than leaving the mechanism off for the rest of the process after one slow peer.
-    g_virtual_rank_peer_gave_up.store(false, std::memory_order_release);
-    virtual_rank_publish();
-}
-
-// The registry is gone, so no rank's workload is in it any more. Clearing the whole mask (rather
-// than the caller's own bit) is what keeps it honest: teardown destroys EVERY rank's fibers, and the
-// rank that drove the run to completion is not necessarily the one that registered them.
-static void virtual_rank_note_teardown() {
-    auto& v = virtual_rank_run();
-    if (v.k.load(std::memory_order_acquire) <= 1) {
-        return;
-    }
-    v.joined.store(0, std::memory_order_release);
-    virtual_rank_publish();
-}
-
-// Park until a peer registers, giving the dispatch mutex back for the duration. This is the whole
-// point: the peer cannot register its half of the socket without it. Unlocking here is well-formed
-// because the caller's MeshDispatchLock took it on this same thread — but run_mesh_dispatch is also
-// reachable from the deferred-flush path holding nothing, hence the ownership check.
-[[maybe_unused]] static void virtual_rank_yield_for_peer() {
-    auto& v = virtual_rank_run();
-    uint64_t seen = 0;
-    {
-        std::lock_guard<std::mutex> g(v.mu);
-        seen = v.epoch;
-    }
-    const bool owned = t_holds_dispatch_lock;
-    if (owned) {
-        t_holds_dispatch_lock = false;
-        g_emule_run_mu.unlock();
-    }
-    bool arrived = false;
-    {
-        std::unique_lock<std::mutex> lk(v.mu);
-        arrived = v.cv.wait_for(lk, virtual_rank_peer_wait_timeout(), [&] { return v.epoch != seen; });
-    }
-    if (!arrived) {
-        std::fprintf(
-            stderr,
-            "[EMULE] in-process rank %u waited %.0fs for a peer to register the other end of a d2d "
-            "socket and none did; reporting the stall.\n",
-            tt::tt_metal::emule::current_virtual_rank(),
-            virtual_rank_peer_wait_timeout().count());
-        g_virtual_rank_peer_gave_up.store(true, std::memory_order_release);
-    }
-    if (owned) {
-        g_emule_run_mu.lock();
-        t_holds_dispatch_lock = true;
-    }
-}
-
 void begin_mesh_dispatch() {
     g_emule_mesh_defer = true;
     // Tag FROM the scheduler (a parallel counter drifts): a blanket clear frees arrays under live fibers.
     g_mesh_keep_gen = tt::tt_metal::emule_fiber::FiberScheduler::instance().begin_spawn_generation();
     reclaim_dead_mesh_keepalives();
-    // Ids from a register phase that threw before launch belong to no run; a parked one keeps its ids.
-    // An in-process peer parked mid-run owns its ids too — clearing them would let its Finish walk
-    // away from a run that is still in flight, and this dispatch is about to join that same run.
-    if (!emule_run_suspended() && !virtual_rank_run_live()) {
+    // Ids from a register phase that threw before launch belong to no run; a parked run keeps its ids.
+    if (!emule_run_suspended()) {
         run_device_ids_clear();
     }
 }
@@ -4823,13 +4610,9 @@ void begin_mesh_dispatch() {
 static void clear_suspended_run_state() {
     resume_emule_run();
     g_emule_mesh_defer = false;
-    // Generation-scoped rather than a blanket clear: identical here, since every caller has an empty
-    // registry so no generation is live, but it states the actual rule. With in-process ranks sharing
-    // one registry, "free everything" and "free what nothing is running against" stop being the same
-    // sentence, and only the second one is ever right.
+    // Generation-scoped reclamation states the rule even though no generation is live here.
     reclaim_dead_mesh_keepalives();
     run_device_ids_clear();
-    virtual_rank_note_teardown();
 }
 
 void run_mesh_dispatch() {
@@ -4868,7 +4651,6 @@ void run_mesh_dispatch() {
     auto& scheduler = tt::tt_metal::emule_fiber::FiberScheduler::instance();
     auto& rank_state = emule_rank_state();
     rank_state.begin_dispatch();
-    virtual_rank_note_dispatch();
     ensure_peer_wait_driver(scheduler, rank_state);
     g_emule_driver_fault = nullptr;
     g_emule_run_sequence.fetch_add(1, std::memory_order_release);
