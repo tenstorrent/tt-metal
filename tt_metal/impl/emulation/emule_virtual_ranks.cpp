@@ -22,7 +22,9 @@
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
+#if !defined(TT_METAL_USE_MPI)
 #include "tt_metal/distributed/multihost/single_host_context.hpp"
+#endif
 #include "tt_metal/impl/context/metal_context.hpp"
 
 namespace tt::tt_metal::emule {
@@ -136,7 +138,7 @@ bool vrank_trace() {
     return on;
 }
 
-World& world() {
+[[maybe_unused]] World& world() {
     static World w;
     return w;
 }
@@ -147,6 +149,7 @@ World& world() {
 // DistributedContext::set_current_world accepts (it dynamic_casts). Only the pieces blaze actually
 // exercises are implemented; the rest inherit SingleHostContext's throwing stubs, so an unsupported
 // collective fails loudly instead of silently returning single-rank answers.
+#if !defined(TT_METAL_USE_MPI)
 class VirtualRankContext : public SingleHostContext {
 public:
     // `members` are WORLD rank ids, in this context's rank order.
@@ -325,6 +328,7 @@ private:
     std::vector<int> members_;
     std::shared_ptr<Gate> gate_;
 };
+#endif
 
 // The ranks share one cluster and one control plane, so a rank-addressed MeshSocket has to be able
 // to resolve each of them to a mesh; the control plane skips building any binding when the world it
@@ -340,6 +344,9 @@ void install_virtual_ranks(uint32_t k) {
     if (vrank_trace()) {
         std::fprintf(stderr, "[VRANK] install k=%u\n", k);
     }
+#if defined(TT_METAL_USE_MPI)
+    TT_FATAL(k <= 1, "in-process virtual ranks are unavailable in MPI builds");
+#else
     world().reset();
     bind_ranks_in_control_plane(k);
     if (k <= 1) {
@@ -351,13 +358,30 @@ void install_virtual_ranks(uint32_t k) {
         members[r] = static_cast<int>(r);
     }
     DistributedContext::set_current_world(std::make_shared<VirtualRankContext>(std::move(members)));
+#endif
 }
 
-void set_current_virtual_rank(uint32_t rank) { t_virtual_rank = rank; }
+void set_current_virtual_rank(uint32_t rank) {
+#if defined(TT_METAL_USE_MPI)
+    static_cast<void>(rank);
+#else
+    t_virtual_rank = rank;
+#endif
+}
 
-uint32_t current_virtual_rank() { return t_virtual_rank; }
+uint32_t current_virtual_rank() {
+#if defined(TT_METAL_USE_MPI)
+    return 0;
+#else
+    return t_virtual_rank;
+#endif
+}
 
-void fault_virtual_ranks() { world().fault(); }
+void fault_virtual_ranks() {
+#if !defined(TT_METAL_USE_MPI)
+    world().fault();
+#endif
+}
 
 // Weak, so a rank's submesh is not pinned past the fixture that owns it.
 static std::mutex& rank_mesh_mu() {
@@ -391,6 +415,9 @@ std::shared_ptr<distributed::MeshDevice> virtual_rank_mesh(uint32_t rank) {
 }
 
 uint32_t virtual_rank_count() {
+#if defined(TT_METAL_USE_MPI)
+    return 1;
+#else
     if (!DistributedContext::is_initialized()) {
         return 1;
     }
@@ -399,6 +426,7 @@ uint32_t virtual_rank_count() {
     // MPI already partitions by process.
     auto world_ctx = std::dynamic_pointer_cast<const VirtualRankContext>(DistributedContext::get_current_world());
     return world_ctx ? static_cast<uint32_t>(*world_ctx->size()) : 1;
+#endif
 }
 
 }  // namespace tt::tt_metal::emule
