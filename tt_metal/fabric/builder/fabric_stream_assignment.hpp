@@ -26,8 +26,13 @@ namespace tt::tt_fabric {
 struct CreditTransportPlan {
     bool vc0_uses_counters = false;
     bool vc1_uses_counters = false;
+    // VC2 is a carrier VC in its own right (one sender at flat position 9, one receiver), so it
+    // needs its own transport decision rather than inheriting a neighbour's. Its sender sits past
+    // the completed table's declared extent (positions 0..8), so counters are the only transport
+    // that can carry its credits today; stream_requirements enforces that.
+    bool vc2_uses_counters = false;
 
-    bool any_vc_uses_counters() const { return vc0_uses_counters || vc1_uses_counters; }
+    bool any_vc_uses_counters() const { return vc0_uses_counters || vc1_uses_counters || vc2_uses_counters; }
 };
 
 struct StreamRegAssignments {
@@ -69,7 +74,7 @@ struct StreamRegAssignments {
 // host-side -- they must move with the kernel header, and num_stream_register_names is only as
 // good as this mirror. Keep the two sides in step; the kernel header names this file as its
 // counterpart.
-constexpr uint32_t num_receiver_pkts_sent_names = 2;            // TO_RECEIVER_{0,1}_PKTS_SENT_ID
+constexpr uint32_t num_receiver_pkts_sent_names = 3;            // TO_RECEIVER_{0,1,2}_PKTS_SENT_ID
 constexpr uint32_t num_pkts_acked_names = 5;                    // TO_SENDER_{0..4}_PKTS_ACKED_ID
 constexpr uint32_t num_pkts_completed_names = 9;                // TO_SENDER_{0..8}_PKTS_COMPLETED_ID
 constexpr uint32_t num_downstream_free_slots_names_per_vc = 4;  // VC{0,1}_..._EDGE_{1..4}
@@ -90,7 +95,7 @@ constexpr uint32_t num_stream_register_names = num_receiver_pkts_sent_names + nu
 // compact index for DOWNSTREAM_FREE_SLOTS, nothing for the per-VC receiver role. Deliberately not
 // one index space.
 enum class StreamRole : uint8_t {
-    RECEIVER_PKTS_SENT,       // per carrier VC (VC0, VC1), need-driven
+    RECEIVER_PKTS_SENT,       // per receiver CHANNEL (not VC -- VC2's receiver densifies), need-driven
     SENDER_PKTS_ACKED,        // per sender channel; VC0 only, and only while VC0 is on registers
     SENDER_PKTS_COMPLETED,    // per sender channel, per VC still on registers
     DOWNSTREAM_FREE_SLOTS,    // per downstream compact index (span 4, direction-keyed), per VC

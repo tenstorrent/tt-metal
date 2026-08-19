@@ -49,7 +49,11 @@ StreamAssignment FabricBuilderContext::compute_stream_assignment(MeshId mesh_id)
     const auto& base_config = get_fabric_router_config();
     const bool multi_txq_enabled = base_config.sender_txq_id != base_config.receiver_txq_id;
     const CreditTransportPlan plan{
-        .vc0_uses_counters = multi_txq_enabled, .vc1_uses_counters = multi_txq_enabled || express_enabled};
+        .vc0_uses_counters = multi_txq_enabled,
+        .vc1_uses_counters = multi_txq_enabled || express_enabled,
+        // VC2 has no completion register to fall back on -- the completed table stops at flat
+        // position 8 and VC2's sender is position 9 -- so it rides counters wherever it exists.
+        .vc2_uses_counters = intermesh_vc_config_.requires_vc2};
 
     std::array<uint32_t, builder_config::MAX_NUM_VCS> max_senders{};
     std::array<uint32_t, builder_config::MAX_NUM_VCS> max_receivers{};

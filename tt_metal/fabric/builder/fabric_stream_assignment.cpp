@@ -40,10 +40,16 @@ StreamRequirements stream_requirements(const StreamPlacementInputs& placement, c
     // The downstream span is four per VC with a receiver, direction-keyed (not densified).
     constexpr uint32_t downstream_span_per_vc = 4;
 
-    // Need-driven receivers: an absent VC takes no slot and emits the out-of-range sentinel, which
-    // is strictly more correct than today's always-assign (ids are not ABI).
+    // Need-driven receivers, keyed by receiver CHANNEL rather than by VC, because that is how the
+    // kernel indexes to_receiver_packets_sent_streams. VC2's receiver densifies onto channel 1 when
+    // VC1 has no receiver and channel 2 when it does, so keying by VC left channel 1 unassigned in
+    // exactly the VC2-without-VC1 case: arrivals incremented the out-of-range sentinel and the
+    // receiver polled it forever, stalling the link with the packets already delivered.
+    const bool vc1_has_receiver = placement.max_receiver_counts[1] > 0;
+    const bool vc2_has_receiver = placement.max_receiver_counts[2] > 0;
     need.add(StreamRole::RECEIVER_PKTS_SENT, 0, placement.max_receiver_counts[0] > 0 ? 1 : 0);
-    need.add(StreamRole::RECEIVER_PKTS_SENT, 1, placement.max_receiver_counts[1] > 0 ? 1 : 0);
+    need.add(StreamRole::RECEIVER_PKTS_SENT, 1, (vc1_has_receiver || vc2_has_receiver) ? 1 : 0);
+    need.add(StreamRole::RECEIVER_PKTS_SENT, 2, (vc1_has_receiver && vc2_has_receiver) ? 1 : 0);
 
     // A VC still on registers needs one ack (VC0 only) and one completion register per sender.
     if (!plan.vc0_uses_counters) {
@@ -52,11 +58,22 @@ StreamRequirements stream_requirements(const StreamPlacementInputs& placement, c
     }
     if (!plan.vc1_uses_counters) {
         // The family's full VC1 width is the need. The completed table's declared extent covers
-        // every position the families can produce (the one exempt slot, position 9, is VC2's
-        // worker-type sender, exempt by type kernel-side), and the register budget is
+        // every position VC0 and VC1 can produce (0..8), and the register budget is
         // make_stream_assignment's check -- no extent arithmetic belongs here.
         need.add(StreamRole::SENDER_PKTS_COMPLETED, 1, placement.max_sender_counts[1]);
     }
+
+    // VC2 takes no completed group: its sender is flat position 9, one past the table's declared
+    // extent, so no register can name it. That makes counters its only workable transport -- and a
+    // plan that says otherwise leaves its sender polling a sentinel while the receiver acks into
+    // the other mechanism, which wedges the link with no error. Widening the table to ten names
+    // (kernel header included) is what it would take to put VC2 back on registers.
+    TT_FATAL(
+        !placement.vc2_present || plan.vc2_uses_counters,
+        "VC2 is present but its credit plan says stream registers. Its sender is flat position {}, past "
+        "the completed table's declared extent of {} positions, so it has no completion register.",
+        need.sender_flat_base[2],
+        num_pkts_completed_names);
 
     need.add(StreamRole::DOWNSTREAM_FREE_SLOTS, 0, placement.max_receiver_counts[0] > 0 ? downstream_span_per_vc : 0);
     need.add(StreamRole::DOWNSTREAM_FREE_SLOTS, 1, placement.max_receiver_counts[1] > 0 ? downstream_span_per_vc : 0);
@@ -179,12 +196,12 @@ std::vector<std::pair<std::string, uint32_t>> StreamAssignment::named_args() con
     std::vector<std::pair<std::string, uint32_t>> out;
     out.reserve(num_stream_register_names);
 
-    // Receiver pkts-sent counters, named per VC (not sender-flat).
-    for (uint32_t vc = 0; vc < num_receiver_pkts_sent_names; ++vc) {
+    // Receiver pkts-sent counters, named per receiver channel (not per VC, and not sender-flat).
+    for (uint32_t channel = 0; channel < num_receiver_pkts_sent_names; ++channel) {
         out.emplace_back(
-            fmt::format("TO_RECEIVER_{}_PKTS_SENT_ID", vc),
-            has(StreamRole::RECEIVER_PKTS_SENT, vc, 0) ? id(StreamRole::RECEIVER_PKTS_SENT, vc, 0)
-                                                       : k_unused_stream_id);
+            fmt::format("TO_RECEIVER_{}_PKTS_SENT_ID", channel),
+            has(StreamRole::RECEIVER_PKTS_SENT, channel, 0) ? id(StreamRole::RECEIVER_PKTS_SENT, channel, 0)
+                                                            : k_unused_stream_id);
     }
 
     emit_flat_table(StreamRole::SENDER_PKTS_ACKED, "TO_SENDER_{}_PKTS_ACKED_ID", num_pkts_acked_names, out);

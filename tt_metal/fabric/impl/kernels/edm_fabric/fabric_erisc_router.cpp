@@ -318,9 +318,8 @@ static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_fr
     sender_channel_7_free_slots_stream_id,
     sender_channel_8_free_slots_stream_id,
     sender_channel_9_free_slots_stream_id};
-// The host's allocator places each VC's sender free-slots registers as one contiguous group, and
-// that is all that is asserted here -- from the VC-start args, never from fixed id values. This
-// survives any future repack: boundaries are read from the CT args rather than pinned literals.
+// Each VC's sender free-slots registers form one contiguous group. Boundaries come from the VC-start
+// CT args rather than pinned literals, so a future repack still holds.
 constexpr bool is_contiguous_stream_span(const uint32_t* ids, size_t count) {
     for (size_t i = 1; i < count; ++i) {
         if (ids[i] != ids[i - 1] + 1) {
@@ -339,10 +338,8 @@ static_assert(
     (ACTUAL_VC2_SENDER_CHANNELS > 0 ? tt::tt_fabric::connection_interface::vc2_sender_free_slots_stream_id
                                     : tt::tt_fabric::k_unused_stream_id));
 
-// An entry reading the sentinel marks an inactive consumer for this configuration -- a VC whose
-// credits travel through L1 counters reads no ack or completion register at all. The sentinel is
-// out of register range (k_unused_stream_id, shared with the host), so no real register can ever
-// be clobbered by an inactive entry, and every id in the file is ordinary.
+// The sentinel marks an inactive consumer, e.g. a VC whose credits travel through L1 counters and
+// reads no register at all. It is out of register range, so an inactive entry can clobber nothing.
 template <uint32_t STREAM_ID>
 FORCE_INLINE void init_stream_reg_if_used(uint32_t value) {
     if constexpr (STREAM_ID != tt::tt_fabric::k_unused_stream_id) {
@@ -417,10 +414,8 @@ constexpr uint32_t get_vc0_downstream_sender_channel_free_slots_stream_id(uint32
 }
 
 // VC1 downstream sender channel mapping (for inter-mesh routing)
-// Compact indices 0, 1, 2 map to this fabric's VC1 channels, on VC1's fabric base: the direction
-// rules are identical to VC0, but offset to skip VC0's channels. The base follows the fabric's VC0
-// width (VC1_FABRIC_POSITION_START) rather than a constant -- legacy fabrics have VC0 = 4, a fabric
-// with a boundary router has VC0 = 5.
+// Same direction rules as VC0, offset by VC1's fabric base to skip VC0's channels. The base is a CT
+// arg because VC0's width varies: 4 on legacy fabrics, 5 on one with a boundary router.
 constexpr uint32_t get_vc1_downstream_sender_channel_free_slots_stream_id(uint32_t compact_index) {
     auto ds_edm_direction = edm_index_to_edm_direction[my_direction][compact_index];
     if (my_direction > ds_edm_direction) {
@@ -455,11 +450,9 @@ constexpr size_t TURN_STATUS_ARRAY_SIZE = (MAX_NUM_SENDER_CHANNELS_VC0 > MAX_NUM
 constexpr auto get_sender_channel_turn_statuses() -> std::array<bool, TURN_STATUS_ARRAY_SIZE> {
     std::array<bool, TURN_STATUS_ARRAY_SIZE> turn_statuses = {};
 
-    // Turn channels only exist on E/W routers, where N/S sender channels represent a packet turning
-    // off the E/W spine. A Z router *is* the (intra-mesh skip) link itself and has no turn semantics:
-    // every eth send it makes is a linear hop that must advance hop_index by +1, not jump to a branch
-    // offset. Its downstream directions map to {E,W,N,S}, so the N/S entries would otherwise be
-    // mis-flagged as turns and corrupt hop_index on the skip-link send.
+    // Turn channels only exist on E/W routers, where an N/S sender channel means a packet turning off
+    // the E/W spine. A Z router has no turn semantics -- every send it makes is a linear hop -- so its
+    // N/S entries stay clear rather than being mis-flagged as turns.
     if constexpr (
         !is_spine_direction(static_cast<eth_chan_directions>(my_direction)) &&
         static_cast<eth_chan_directions>(my_direction) != eth_chan_directions::Z) {
@@ -543,8 +536,8 @@ enum PacketLocalForwardType : uint8_t {
 // the link is down
 bool did_something;
 
-// Cached pinned logical coordinates for express decode: cached once at setup so transit does no
-// divide/mod. Populated in kernel_main when express_enabled.
+// This router's logical coordinates, cached at setup so express decode does no divide/mod on the hot
+// path. Populated in kernel_main when express_enabled.
 uint8_t express_local_y = 0;
 uint8_t express_local_x = 0;
 
@@ -676,14 +669,9 @@ FORCE_INLINE constexpr size_t get_downstream_edm_interface_index(eth_chan_direct
     return map_downstream_direction_to_compact_index(downstream_direction);
 }
 
-// Whether this router actually instantiates the downstream slot a direction maps to. The compact
-// index is a property of the direction pair alone, so it is fixed regardless of how many slots the
-// router was built with, and a narrow router leaves the higher ones absent.
-//
-// Express makes this a live question on every arm rather than just the last one. X_RING_ONLY leaves
-// an E/W-facing router a single downstream (its opposite), so slots 1 and 2 do not exist there
-// either; before express the only narrow shape was the 3-wide cardinal router, whose sole missing
-// slot was the Z arm at index 3.
+// Whether this router actually instantiates the downstream slot a direction maps to. A compact index
+// is fixed by the direction pair alone, so a narrow router simply leaves the higher slots absent --
+// X_RING_ONLY gives an E/W-facing router only its opposite, so slots 1 and 2 do not exist there.
 template <size_t DOWNSTREAM_EDM_SIZE, eth_chan_directions DIRECTION>
 constexpr bool express_arm_is_realizable() {
     return get_downstream_edm_interface_index<DIRECTION>() < DOWNSTREAM_EDM_SIZE;
@@ -988,19 +976,15 @@ FORCE_INLINE void forward_to_local_destination(
 // ============================================================================
 // Skip-link routing — admit/forward dispatch
 // ============================================================================
-// Realizes packet action-byte decode with the dense packed-key dispatch: the four
-// non-self eth outputs (IndexedMeshRoutingFields::fwd_dirs<MY_DIR>) pack into a 4-bit
-// key, LOCAL_DELIVER stays outside the key, admission for every selected local destination must
-// succeed before any copy is committed, and every selected eth output receives the identical
-// complete packet image with local delivery last. Skip-link transit never calls the legacy
-// hop-program header updates, never increments hop_index, and never rewrites per branch.
+// Decodes a packet action byte through a dense packed key: the four non-self eth outputs
+// (IndexedMeshRoutingFields::fwd_dirs<MY_DIR>) pack into 4 bits, with LOCAL_DELIVER kept outside the
+// key. Admission must succeed for every selected output before any copy is committed, and each
+// selected output then receives an identical packet image, local delivery last.
 //
-// Reachable only when express_enabled; otherwise the RX hot path calls none of this and the
-// templates are never instantiated.
+// Reachable only when express_enabled; the legacy hop-program header updates never run here.
 
-// admit_combo<KEY>: local relay capacity when ld, plus the local downstream queue for every
-// eth output selected by KEY. The relay check mirrors check_downstream_has_space's self-direction
-// branch: only UDM mode queues local delivery through a relay interface.
+// Checks local relay capacity when ld, plus the downstream queue for every eth output KEY selects.
+// Only UDM mode queues local delivery through a relay interface.
 template <uint8_t KEY, typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE bool admit_express_combo(
     bool ld,
@@ -1043,10 +1027,8 @@ FORCE_INLINE bool admit_express_combo(
             ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[3]>(
                            downstream_edm_interfaces, local_relay_interface);
         } else {
-            // The arm names a downstream this router does not have: a 3-wide cardinal router has no
-            // Z slot, and an X_RING_ONLY router has only its opposite. A key selecting one means the
-            // host packed an action the router cannot realize, so refuse admission per the invalid
-            // action policy rather than indexing past the array.
+            // The arm names a downstream this router does not have, so the host packed an action the
+            // router cannot realize. Refuse admission rather than indexing past the array.
             ASSERT(false);
             ok = false;
         }
@@ -1054,10 +1036,8 @@ FORCE_INLINE bool admit_express_combo(
     return ok;
 }
 
-// forward_combo<KEY>: one immutable full-packet copy per selected eth output, nothing else.
-// Remote receiver credit is deliberately absent here; the sender step applies bubble flow control
-// before send. Local delivery is done by the caller after the dispatch so every arm is
-// straight-line code and the key switch lowers to a clean jump table.
+// One unmodified full-packet copy per eth output KEY selects, and nothing else: remote receiver
+// credit is left to the sender step's bubble flow control, and local delivery to the caller.
 template <uint8_t KEY, typename DownstreamSenderT, size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE void forward_express_combo(
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
@@ -1115,16 +1095,15 @@ FORCE_INLINE void forward_express_combo(
                 downstream_edm_interfaces[edm_index],
                 transaction_id);
         } else {
-            // The arm names a downstream this router does not have: a 3-wide cardinal router has no
-            // Z slot, and an X_RING_ONLY router has only its opposite. Admission already refused the
-            // key, so reaching here means the two dispatches disagree.
+            // The arm names a downstream this router does not have. Admission already refused the key,
+            // so reaching here means the two dispatches disagree.
             ASSERT(false);
         }
     }
 }
 
-// Hand-written 16-arm admit dispatch over the dense key. Compile-time KEY selection keeps
-// each admitted output compile-time visible and removes unselected queue checks.
+// Hand-written 16-arm admit dispatch over the dense key: a compile-time KEY drops the queue checks
+// for unselected outputs.
 template <typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) bool admit_express_dispatch(
     uint8_t key,
@@ -1152,8 +1131,8 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool admit_express_dispatc
     }
 }
 
-// Hand-written 16-arm forward dispatch over the same dense key. Every arm is straight-line code
-// (local delivery lives at the call site), so the switch lowers to a clean jump table.
+// Hand-written 16-arm forward dispatch over the same dense key. Every arm is straight-line code, so
+// the switch lowers to a jump table.
 template <typename DownstreamSenderT, size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) void forward_express_dispatch(
     uint8_t key,
@@ -1971,8 +1950,8 @@ FORCE_INLINE
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
-        // Skip-link 2D transit consumes no hop program, so the sender step must not run the
-        // legacy 2D header update (hop_index advance / branch-offset jump).
+        // Express transit consumes no hop program, so the legacy 2D header update (hop_index advance,
+        // branch-offset jump) must not run.
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH && !express_enabled) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
@@ -2159,8 +2138,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         uint32_t hop_cmd;
         uint8_t express_fwd_key = 0;
         bool express_local_deliver = false;
-        // Intermesh egress handoff state: set only when this chip is the mesh's exit for the packet;
-        // carries the resolved INTERMESH downstream slot from admission to the forward phase.
+        // Set only when this chip is the mesh's exit for the packet; carries the resolved INTERMESH
+        // downstream slot from admission to the forward phase.
         bool express_egress = false;
         uint8_t express_egress_index = 0;
         bool can_send_to_all_local_chip_receivers;
@@ -2168,15 +2147,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 #if defined(FABRIC_2D)
             // need the FABRIC_2D ifdef since the packet header for 1D does not have route_buffer field in it.
             if constexpr (express_enabled) {
-                // Skip-link RX hot path: landing intercept (boundary receivers only)
-                // -> decode -> validate -> intermesh-exit intercept -> admit. No hop program, no map
-                // rebuild beyond the landing encode, no header mutation.
+                // Express RX path: landing intercept (boundary receivers only) -> decode -> validate
+                // -> intermesh-exit intercept -> admit. No hop program and no header mutation.
                 if constexpr (receiver_channel_is_intermesh_ingress[receiver_channel]) {
-                    // INTERMESH ingress intercepts the landing BEFORE ordinary decode
-                    // can consume stale source-mesh maps. The codec landing encode
-                    // re-installs maps from this mesh's own vector table — intermediate: next-exit;
-                    // destination: final target — preserving the retained final destination; ordinary
-                    // decode then resumes below on the fresh maps.
+                    // Runs before decode, which would otherwise consume stale source-mesh maps. The
+                    // landing encode replaces them from this mesh's own vector table.
                     fabric_set_indexed_intermesh_landing_route(
                         packet_header, routing_table, EXPRESS_MESH_Y_SIZE, EXPRESS_MESH_X_SIZE);
                 }
@@ -2185,36 +2160,27 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                         packet_header->route_buffer, express_local_y, express_local_x, EXPRESS_MESH_Y_SIZE);
                 if (!IndexedMeshRoutingFields::action_is_valid<static_cast<eth_chan_directions>(my_direction)>(
                         action)) {
-                    // Fail-stop on invalid actions: commit no copy and stall the parent RX packet.
-                    // There is no retransmission or recovery contract.
+                    // Fail-stop: commit no copy and stall the parent RX packet. There is no
+                    // retransmission or recovery path.
                     ASSERT(false);
                     can_send_to_all_local_chip_receivers = false;
                 } else {
-                    // Intermesh exit check (CT-gated so interior routers skip the mesh-id compare):
-                    // the installed maps say deliver here but the final mesh is elsewhere -> this
-                    // chip is the exit.
+                    // This chip is the exit when the maps say deliver here but the final mesh is
+                    // elsewhere. CT-gated so interior routers skip the mesh-id compare.
                     bool intermesh_exit = false;
                     if constexpr (is_intramesh_router_on_edge) {
                         intermesh_exit = IndexedMeshRoutingFields::action_is_intermesh_exit(
                             action, packet_header->dst_start_mesh_id, routing_table.my_mesh_id);
                     }
                     if (intermesh_exit) {
-                        // Intermesh egress: forward the packet AS-IS on the INTERMESH egress in
-                        // boundary_dir — no local delivery, no map rebuild. boundary_dir comes from
-                        // the retained inter_mesh_direction_table, never a packet compass field. An
-                        // invalid entry — or one naming this router's own direction, which the
-                        // compact downstream array cannot address — fail-stops.
+                        // Forward the packet as-is on the INTERMESH egress in boundary_dir, with no
+                        // local delivery and no map rebuild.
                         const auto boundary_dir = static_cast<eth_chan_directions>(
                             routing_table.inter_mesh_direction_table.get_original_direction(
                                 packet_header->dst_start_mesh_id));
-                        // The boundary direction is chosen per destination mesh, so unlike a decoded
-                        // action it is not constrained to the arms this router was built with: any
-                        // receiver can be the one an exit-bound packet arrives on. A router whose
-                        // downstream set does not reach the boundary cannot forward it, and indexing
-                        // the compact array anyway would read past its end and admit on whatever
-                        // followed. Builder wiring is what guarantees the slot exists (contract 4.4
-                        // keeps an INTERMESH egress wired even where dimension order unwires the
-                        // intramesh ones); this is the invariant check, not the mechanism.
+                        // boundary_dir is chosen per destination mesh, so unlike a decoded action it is
+                        // not constrained to the arms this router was built with. Indexing the compact
+                        // array unchecked would read past its end, so fail-stop instead.
                         const bool boundary_dir_is_addressable =
                             boundary_dir < eth_chan_directions::COUNT &&
                             boundary_dir != static_cast<eth_chan_directions>(my_direction) &&
@@ -2285,8 +2251,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 #if defined(FABRIC_2D)
                     if constexpr (express_enabled) {
                         if (express_egress) {
-                            // The exit chip's only output is the INTERMESH egress, sent
-                            // as-is — no local delivery, no header mutation.
+                            // The exit chip's only output is the INTERMESH egress, sent as-is.
                             forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                                 packet_header,
                                 packet_header->payload_size_bytes,
@@ -2294,9 +2259,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                                 downstream_edm_interfaces[express_egress_index],
                                 trid);
                         } else {
-                            // Same dense key as admission; immutable full-packet copies to the
-                            // selected eth outputs. Local delivery stays outside the dispatch so
-                            // every arm is straight-line and the key switch lowers to a jump table.
+                            // Same dense key as admission. Local delivery stays outside the dispatch
+                            // so every arm is straight-line code.
                             forward_express_dispatch(
                                 express_fwd_key, packet_header, cached_routing_fields, downstream_edm_interfaces, trid);
                             if (express_local_deliver) {
@@ -2584,8 +2548,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     tt::tt_fabric::routing_l1_info_t routing_table = *routing_table_l1;
 
     if constexpr (express_enabled) {
-        // Cache the pinned logical coordinates once at setup; transit reads no table fields and
-        // does no divide/mod on the hot path.
+        // Cached once here so the hot path reads no table fields and does no divide/mod.
         express_local_y = routing_table.my_mesh_coord_y;
         express_local_x = routing_table.my_mesh_coord_x;
     }
@@ -3232,9 +3195,8 @@ void
 void populate_local_sender_channel_free_slots_stream_id_ordered_map(
     uint32_t has_downstream_edm_vc0_buffer_connection,
     std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
-    // The table is fabric-flat, so the local copy is the whole fabric table: positions mean the
-    // fabric's (vc, channel), and this router's accessors read its own fabric positions. Copying
-    // only this router's compact count would truncate the tail under a wider family in the fabric.
+    // The whole fabric table is copied, not just this router's compact count, since positions are
+    // fabric-flat and a narrower router would otherwise truncate the tail.
     local_sender_channel_free_slots_stream_ids = sender_channel_free_slots_stream_ids;
 }
 
@@ -3463,16 +3425,18 @@ void kernel_main() {
     }
 
     if constexpr (is_2d_fabric) {
-        init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
+        // Receiver channels 1 and 2 are only populated when a VC densifies onto them, so guard the
+        // init rather than writing through an unassigned entry.
+        init_stream_reg_if_used<to_receiver_packets_sent_streams[1]>(0);
+        init_stream_reg_if_used<to_receiver_packets_sent_streams[2]>(0);
         init_stream_reg_if_used<to_sender_packets_acked_streams[2]>(0);
         init_stream_reg_if_used<to_sender_packets_acked_streams[3]>(0);
         init_stream_reg_if_used<to_sender_packets_acked_streams[4]>(0);
 
         // Initialize completion streams and sender channel free slots for channels 2..MAX-1 using compile-time loop.
         // Index sequence covers Is=0..7 → channels 2..9 (MAX_NUM_SENDER_CHANNELS=10).
-        // The free-slots table is fabric-flat: this router's compact channels sit at their fabric
-        // positions, and positions it does not service (phantoms under another family's wider
-        // layout) are skipped. The buffer count comes from the compact array.
+        // Positions this router does not service are skipped; the buffer count comes from the compact
+        // array.
         [&]<size_t... Is>(std::index_sequence<Is...>) {
             (([&]() {
                  init_stream_reg_if_used<to_sender_packets_completed_streams[Is + 2]>(0);

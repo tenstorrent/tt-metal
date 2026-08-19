@@ -47,8 +47,7 @@ std::optional<McastReverseTree> build_mcast_reverse_tree(
     tree.axis_len = len;
 
     // Walk the canonical route to every destination and record each hop as a child->parent edge. The
-    // arborescence condition is exactly that no row is ever entered two different ways, so it is
-    // checked here, hop by hop, rather than reconstructed from the finished edge set.
+    // arborescence condition is that no row is ever entered two different ways, checked here hop by hop.
     for (int dst = 0; dst < len; dst++) {
         if (dst == root) {
             continue;
@@ -114,8 +113,8 @@ std::optional<McastReverseTree> build_mcast_reverse_tree(
             len - 1));
     }
 
-    // Depth doubles as the acyclicity check: a row that cannot reach the root by following parents is
-    // in a cycle, and the guard catches it. Depth then orders the edge list.
+    // Depth also serves as the acyclicity check: a row that cannot reach the root by following parents
+    // is in a cycle, which the guard catches. Depth then orders the edge list.
     std::vector<int> depth(len, kUnset);
     depth[root] = 0;
     for (int row = 0; row < len; row++) {
@@ -135,15 +134,12 @@ std::optional<McastReverseTree> build_mcast_reverse_tree(
         }
     }
 
-    // Descendants before ancestors. The worker propagates `needed` from a child to its parent in one
-    // pass, so every edge below a row must be visited before the edge above it, which ordering by
-    // decreasing child depth gives. Ties are independent subtrees, so their relative order is free.
+    // Descendants before ancestors: the worker's single pass propagates `needed` upward, so every edge
+    // below a row must come before the edge above it. Ties are independent subtrees, so order is free.
     std::stable_sort(tree.edges.begin(), tree.edges.end(), [&depth](const McastTreeEdge& a, const McastTreeEdge& b) {
         return depth[a.child] > depth[b.child];
     });
 
-    // Each row has one parent, so the tree path from root to any dst is the walk that built it:
-    // "tree path == canonical route" holds by construction, with no second traversal to check it.
     return tree;
 }
 
@@ -173,8 +169,8 @@ std::optional<std::vector<std::uint16_t>> pack_mcast_reverse_tree(const McastRev
             MCAST_TREE_MAX_AXIS_LEN));
     }
 
-    // An edge hanging off row r must be serialized before the edge entering r, or the device pass
-    // reads r's edge before r was marked needed and drops that whole branch.
+    // An edge hanging off row r must come before the edge entering r, or the device pass reads r's edge
+    // before r was marked needed and drops that whole branch.
     std::vector<int> position_of_edge_into(tree.axis_len, -1);
     for (std::size_t i = 0; i < tree.edges.size(); i++) {
         position_of_edge_into[tree.edges[i].child] = static_cast<int>(i);
@@ -238,8 +234,8 @@ std::vector<std::uint8_t> encode_mcast_axis_actions(const McastReverseTree& tree
         return actions;
     }
 
-    // `needed` starts as the requested targets and grows toward the root: marking a parent needed is
-    // what carries a target's requirement up its own branch without walking the branch.
+    // `needed` starts as the requested targets and grows toward the root: marking a parent needed
+    // carries a target's requirement up its branch without walking the branch.
     std::vector<bool> needed = targets;
     for (const auto& edge : tree.edges) {
         if (needed[edge.child]) {
@@ -287,7 +283,7 @@ std::vector<RoutingDirection> mcast_root_output_directions(
     const auto y_size = static_cast<std::uint32_t>(y_topo.axis_len);
     const auto x_size = static_cast<std::uint32_t>(x_topo.axis_len);
 
-    // Runs the worker's encoder over the worker's bytes, so the answer is the worker's answer.
+    // Runs the worker's encoder over a table laid out exactly as the device sees it.
     std::vector<std::uint8_t> table(IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES, 0);
     if (!embed_mcast_reverse_trees(mesh_graph, mesh_id, y_topo, x_topo, root_y, root_x, table.data(), failure)) {
         return {};
@@ -308,8 +304,7 @@ std::vector<RoutingDirection> mcast_root_output_directions(
 
     const std::uint8_t root_action = maps[root_y] & IndexedMeshRoutingFields::ACTION_ETH_MASK;
 
-    // Inverted through mcast_action_bit rather than a second bit-to-direction table, so a direction
-    // and its action bit are related in one place.
+    // Inverted through mcast_action_bit rather than a second bit-to-direction table.
     std::vector<RoutingDirection> directions;
     for (const auto direction :
          {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S, RoutingDirection::Z}) {

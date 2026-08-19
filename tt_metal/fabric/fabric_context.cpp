@@ -78,11 +78,9 @@ uint32_t FabricContext::get_max_2d_hops_from_topology(const ControlPlane& contro
     return compute_max_2d_hops(mesh_shapes);
 }
 
-// Express meshes carry destination-indexed action maps rather than a hop program, so their route
-// buffer is not sized by hop count. widen_indexed_route_to_chip lays out the Y map in
-// route_buffer[0..rows) and the X map in route_buffer[rows..rows+cols), needing rows + cols bytes --
-// two more than the (rows-1) + (cols-1) Manhattan hop count. Meshes without express links return 0
-// and are sized by hops alone.
+// Express meshes carry destination-indexed action maps rather than a hop program, so their route buffer
+// holds rows + cols bytes -- two more than the (rows-1) + (cols-1) Manhattan hop count. Meshes without
+// express links return 0 and are sized by hops alone.
 uint32_t FabricContext::get_max_2d_indexed_route_bytes_from_topology(const ControlPlane& control_plane) const {
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
@@ -91,8 +89,8 @@ uint32_t FabricContext::get_max_2d_indexed_route_bytes_from_topology(const Contr
         if (!control_plane.express_routing_enabled(mesh_id)) {
             continue;
         }
-        // Must be the same shape get_express_kernel_defines emits as FABRIC_EXPRESS_MESH_*_SIZE, GLOBAL
-        // scope included, since those defines are the Y and X the kernel widens against.
+        // Must match the shape get_express_kernel_defines emits as FABRIC_EXPRESS_MESH_*_SIZE, GLOBAL
+        // scope included, since that is what the kernel widens against.
         const auto shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
         max_bytes = std::max(max_bytes, static_cast<uint32_t>(shape[0]) + static_cast<uint32_t>(shape[1]));
     }
@@ -109,9 +107,8 @@ uint32_t FabricContext::compute_1d_pkt_hdr_extension_words(uint32_t max_hops) co
     return (max_hops - 1) / ROUTING_1D_HOPS_PER_WORD;
 }
 
-// Takes the number of route buffer bytes the encoding needs, which is the hop count for the legacy
-// hop program but rows + cols for express indexed maps. Tiers hold one byte per hop, so the two are
-// compared directly. Precondition: bounds validated by compute_packet_specifications().
+// required_route_bytes is the hop count for the legacy hop program, or rows + cols for express indexed
+// maps. Precondition: bounds validated by compute_packet_specifications().
 uint32_t FabricContext::compute_2d_pkt_hdr_route_buffer_size(uint32_t required_route_bytes) const {
     // Route buffer tiers aligned to packet header size boundaries
     for (const auto& tier : ROUTING_2D_BUFFER_TIERS) {
@@ -149,8 +146,7 @@ void FabricContext::compute_packet_specifications(
             Limits::MAX_2D_HOPS,
             Limits::MAX_2D_ROUTE_BUFFER_SIZE);
 
-        // Express meshes need rows + cols bytes for their indexed maps, which exceeds the hop count.
-        // Size for whichever encoding demands more so neither can overrun the buffer.
+        // Size for whichever encoding demands more, so neither can overrun the buffer.
         const uint32_t required_2d_route_bytes =
             std::max(max_2d_hops_, get_max_2d_indexed_route_bytes_from_topology(control_plane));
 
@@ -342,15 +338,10 @@ const FabricBuilderContext& FabricContext::get_builder_context() const {
 
 bool FabricContext::need_deadlock_avoidance_support(
     const ControlPlane& control_plane, const FabricNodeId& fabric_node_id, eth_chan_directions direction) const {
-    // With express routing the topology token no longer answers this. Express chords can close a
-    // protected ring on an axis the descriptor advertises as a line: the two- and three-Galaxy
-    // carve-outs have no cardinal end wrap on Y, yet their retained wraps still form one spanning
-    // ring. Deciding from Topology::Torus would return false there and drop the bubble on a ring that
-    // genuinely needs it, so ask whether the axis actually carries protected rings.
-    //
-    // The question is per axis, not per chip. A per-node answer would elide the guard on leaf chips,
-    // and this flag also selects first-level ACK and the upstream credit path, so that would change
-    // more than flow control. Leaf elision waits on the corresponding VC safety proof.
+    // The topology token cannot answer this under express routing: express chords can close a protected
+    // ring on an axis the descriptor advertises as a line, so Topology::Torus would drop the bubble on a
+    // ring that needs it. Asked per axis rather than per chip, since a per-node answer would elide the
+    // guard on leaf chips and this flag also selects first-level ACK and the upstream credit path.
     if (control_plane.express_routing_enabled(fabric_node_id.mesh_id)) {
         return control_plane.mesh_has_protected_ring_in_axis_of(
             fabric_node_id.mesh_id, control_plane.eth_direction_to_routing_direction(direction));
@@ -377,14 +368,13 @@ bool FabricContext::need_deadlock_avoidance_support(
 
 std::map<std::string, std::string> FabricContext::get_express_kernel_defines(
     const ControlPlane& control_plane, MeshId mesh_id) const {
-    // express_routing_enabled, not raw Z-edge presence: it additionally requires that the ring
-    // decomposition validated, and it is the answer route generation keyed on when it packed the
-    // tables these defines make the kernel encode against.
+    // Keyed on express_routing_enabled rather than raw Z-edge presence, since that is the answer route
+    // generation used when it packed the tables these defines make the kernel encode against.
     if (!is_2D_routing_enabled_ || !control_plane.express_routing_enabled(mesh_id)) {
         return {};
     }
-    // GLOBAL scope is required, not incidental: the L1 vectors are packed against the global shape
-    // and indexed by global chip ids, so a local-scope shape would desync encode from the table.
+    // GLOBAL scope is required: the L1 vectors are packed against the global shape and indexed by
+    // global chip ids, so a local-scope shape would desync the encode from the table.
     const auto mesh_shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
     return {
         {"FABRIC_EXPRESS_ENABLED", "1"},

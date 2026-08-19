@@ -14,9 +14,15 @@ namespace tt::tt_fabric {
 
 // Determine maximum number of routing-plane connections if not provided by the build.
 #ifndef TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS
-#if defined(FABRIC_2D)
-#define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 4
-#else  // 1D
+// Anything beyond the four port directions is a Z peer, and both conditions for having one are
+// required: only Blackhole has Z ports at all (num_z_ports is 0 on every other arch), and intramesh
+// Z edges are written solely by the express_links expansion, which FABRIC_EXPRESS_ENABLED echoes.
+// A 2D build without express links therefore still tops out at NESW.
+#if defined(FABRIC_EXPRESS_ENABLED) && defined(ARCH_BLACKHOLE)
+// NESW + up to 2 Z-link peers. Both Z connections carry tag == eth_chan_directions::Z, so a tag
+// lookup alone cannot tell them apart; callers needing a specific peer must go by slot.
+#define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 6
+#else
 #define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 4
 // TODO: 3D, dragonfly and custom etc.
 #endif
@@ -53,6 +59,19 @@ public:
 
     RoutingPlaneConnectionManager() : num_active_(0) {}
 
+    // Parses one sender at the cursor and appends it as the next slot, returning that slot's index.
+    // The tag is passed in rather than read here so that callers whose arg stream interleaves these
+    // connections with other kinds can keep their own layout. Under FABRIC_2D the slot's dst ids are
+    // left at their value-initialized zero; callers needing them must set them separately.
+    inline uint32_t append_from_args(std::size_t& arg_idx, uint8_t tag) {
+        ASSERT(num_active_ < MaxConnections);
+        const uint32_t slot = num_active_++;
+        auto& conn = slots_[slot];
+        conn.tag = tag;
+        conn.sender = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+        return slot;
+    }
+
     template <
         BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY,
         uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc()>
@@ -65,16 +84,12 @@ public:
         ASSERT(num_connections_to_build <= MaxConnections);
 
         for (uint32_t i = 0; i < num_connections_to_build; ++i) {
-            auto& conn = mgr.slots_[i];
-            conn.tag = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
-            conn.sender =
-                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+            const uint8_t tag = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
+            mgr.append_from_args(arg_idx, tag);
             if constexpr (connect) {
-                conn.sender.open_start<false, false, WORKER_HANDSHAKE_NOC>();
+                mgr.slots_[i].sender.open_start<false, false, WORKER_HANDSHAKE_NOC>();
             }
         }
-
-        mgr.num_active_ = num_connections_to_build;
 
         if constexpr (connect && wait_for_connection_open_finish) {
             for (uint32_t i = 0; i < mgr.num_active_; ++i) {
