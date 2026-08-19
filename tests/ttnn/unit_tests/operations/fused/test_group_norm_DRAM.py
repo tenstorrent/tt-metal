@@ -40,7 +40,7 @@ GROUP_NORM_DRAM_SHAPES = [
         4,
         4,
     ),  # test all groups on core fit in less than one tile, so need to reduce col core count
-    # All SDXL/sd35 tests with 512x512 or larger sizes and cases taking more than 4 minutes in sim moved to nightly.
+    # SDXL/sd35 test cases. Additional slower test cases in nightly test.
     # SDXL Base
     (1, 1920, 16, 16, 32, 1, 4, 4),
     # SDXL Refiner
