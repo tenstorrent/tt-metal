@@ -6,6 +6,9 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/accumulate_helpers_compute.hpp"
+#include "ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp"
+
+namespace sched = ttnn::ccl::schedule;
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
@@ -29,42 +32,18 @@ void kernel_main() {
     // Arm once: hoists add_init out of the chunk loop and asserts tile_granularity fits DEST.
     auto acc = compute_kernel_lib::BlockAccumulate::arm(input_cb_id, intermediate_cb, output_cb, tile_granularity);
 
+    // The same interleaved own/other chunk walk the reader and writer drive, from the shared
+    // header — previously this kernel carried its own copy of the interleave. A zero-tile own
+    // chunk still runs the full CB protocol (acc.run(0) waits/pops/pushes one granule), which is
+    // what keeps it in lockstep with the reader's empty-granule pushes.
+    sched::DimZeroChunkWalk walk(slice_B, tile_granularity, start_tiles_read, start_tiles_to_read, direction);
+
     // Don't reduce on the first slice
     for (uint32_t i = 0; i < ring_size - 1; i++) {
-        for (uint32_t b = 0; b < slice_B; b++) {
-            uint32_t tiles_read = start_tiles_read;
-            uint32_t tiles_to_read = start_tiles_to_read;
-
-            if (!direction) {
-                uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
-                tiles_read += backwards_offset;
-            }
-
-            // Interleave the two directions over one slice: this worker takes every other chunk, and
-            // steps over the chunks belonging to the opposite direction without touching the CBs.
-            while (tiles_read < tiles_to_read) {
-                uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
-                uint32_t num_pages_to_read = 0;
-                if (direction) {
-                    num_pages_to_read = std::min(tiles_remaining_to_read / 2, tile_granularity);
-                } else {
-                    num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
-                }
-
-                acc.run(num_pages_to_read);
-                tiles_read += num_pages_to_read;
-
-                // Skip the tiles going the other direction
-                tiles_remaining_to_read = tiles_to_read - tiles_read;
-                if (tiles_remaining_to_read > 0) {
-                    num_pages_to_read = 0;
-                    if (!direction) {
-                        num_pages_to_read = std::min(tiles_remaining_to_read / 2, tile_granularity);
-                    } else {
-                        num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
-                    }
-                    tiles_read += num_pages_to_read;
-                }
+        walk.reset();
+        while (walk.next_batch()) {
+            while (walk.next_chunk()) {
+                acc.run(walk.tiles_this_chunk());
             }
         }
     }
