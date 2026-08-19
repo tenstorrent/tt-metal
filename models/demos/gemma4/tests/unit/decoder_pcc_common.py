@@ -51,6 +51,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
+from models.demos.gemma4.tt.attention.kv_cache_hybrid import build_hybrid_page_tables
 from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.model import create_rope_caches
@@ -107,7 +108,7 @@ class DecoderPccContext(NamedTuple):
     hf_layer: object
     tt_layer: Gemma4DecoderLayer
     kv_cache: list
-    page_table: torch.Tensor  # [1, max_num_blocks] int32, host copy
+    page_table: torch.Tensor  # [1, blocks] int32, host copy
     page_table_tt: ttnn.Tensor
     rope_4d: tuple  # (cos, sin) [1, 1, max_seq_len, head_dim] — prefill
     rope_2d: tuple  # (cos, sin) [max_seq_len, head_dim]       — decode gather
@@ -119,13 +120,33 @@ class DecoderPccContext(NamedTuple):
     block_size: int
     tp: int
     is_mesh: bool
+    # sliding_window when the bounded ring cache is on, else None. Mirrors
+    # ``config.cache_position_modulo``: the value the paged ops wrap positions by.
+    cache_position_modulo: int | None
 
 
-def build_decoder_pcc_context(mesh_device, layer_type: str, *, max_seq_len: int) -> DecoderPccContext:
+def build_decoder_pcc_context(
+    mesh_device, layer_type: str, *, max_seq_len: int, bounded: bool = False
+) -> DecoderPccContext:
     """One decoder layer, HF + TT, real weights, shipped dtypes, paged KV cache.
 
     ``max_seq_len`` sizes both the RoPE caches and the page pool, so it must cover
     the longest position the caller will touch.
+
+    ``bounded=True`` builds the **bounded sliding KV cache** instead of the
+    unbounded one — the layout the demo auto-enables above its per-(model, system)
+    ISL cutover (``GEMMA4_LONG_CONTEXT_POLICY``). A sliding layer can only ever
+    attend to the last ``sliding_window`` tokens, so rather than one cache slot per
+    position it gets a ring of ``sliding_window / block_size`` blocks, and the three
+    paged ops wrap the absolute position into that ring before the page-table
+    lookup (``config.cache_position_modulo``). The page table stays full width with
+    a zero-padded tail past the valid prefix, exactly as vLLM emits for a
+    SlidingWindowSpec layer — so this also checks the wrap never walks onto the
+    padding and clobbers block 0.
+
+    Only meaningful on a sliding layer: ``Gemma4Attention`` leaves the modulo unset
+    on full-attention layers, so ``bounded=True`` there would silently test the
+    unbounded path. Skipped rather than silently downgraded.
     """
     skip_unless_real_weights()
 
@@ -159,8 +180,23 @@ def build_decoder_pcc_context(mesh_device, layer_type: str, *, max_seq_len: int)
     # quietly more precise than the demo's.
     precision = Gemma4Precision.load(_get_model_path(), mesh_shape, hf_config=model_args)
 
-    max_num_blocks = num_blocks_in_seq(max_seq_len, KV_BLOCK_SIZE)
-    paged_config = PagedAttentionConfig(block_size=KV_BLOCK_SIZE, max_num_blocks=max_num_blocks)
+    sliding_window = attn_cfg.sliding_window if attn_cfg.is_sliding else None
+    if bounded:
+        if sliding_window is None:
+            pytest.skip(f"bounded sliding KV is only defined for a sliding layer, not {layer_type}")
+        if sliding_window % KV_BLOCK_SIZE != 0:
+            pytest.skip(f"sliding_window ({sliding_window}) is not a multiple of block_size ({KV_BLOCK_SIZE})")
+
+    # Bounded: a ring of sliding_window/block_size blocks per user, and a full-width
+    # page table whose tail past that prefix is zero-padded (what vLLM emits, and
+    # what the wrap has to stay clear of). Unbounded: one block per block_size
+    # positions and a plain ascending table.
+    full_width_blocks = num_blocks_in_seq(max_seq_len, KV_BLOCK_SIZE)
+    if bounded:
+        pool_blocks = (sliding_window // KV_BLOCK_SIZE) * PCC_BATCH_SIZE
+    else:
+        pool_blocks = full_width_blocks
+    paged_config = PagedAttentionConfig(block_size=KV_BLOCK_SIZE, max_num_blocks=pool_blocks)
     kv_cache = init_kv_cache(
         mesh_device=mesh_device,
         config=attn_cfg,
@@ -185,10 +221,31 @@ def build_decoder_pcc_context(mesh_device, layer_type: str, *, max_seq_len: int)
         attention_dtype=precision.get("attention", ttnn.bfloat16),
         experts_dtype=precision.get("experts", ttnn.bfloat16),
         router_dtype=precision.get("router", ttnn.bfloat16),
+        bounded_sliding_kv_cache=bounded,
     )
     tt_layer.self_attn.kv_cache = kv_cache
 
-    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(1, max_num_blocks)
+    # Wiring check, not a formality: if the flag failed to reach the config the
+    # ops would run unbounded and every assertion below would still pass — the
+    # test would be green for the wrong layout.
+    modulo = tt_layer.self_attn.config.cache_position_modulo
+    expected_modulo = sliding_window if bounded else None
+    assert modulo == expected_modulo, (
+        f"bounded={bounded} on a {layer_type} layer should give "
+        f"cache_position_modulo={expected_modulo}, got {modulo}"
+    )
+
+    if bounded:
+        page_table = build_hybrid_page_tables(
+            num_layers=1,
+            sliding_layers_mask=[True],
+            num_users=PCC_BATCH_SIZE,
+            block_size=KV_BLOCK_SIZE,
+            max_seq_len=max_seq_len,
+            sliding_window=sliding_window,
+        )[0]
+    else:
+        page_table = torch.arange(full_width_blocks, dtype=torch.int32).reshape(1, full_width_blocks)
     page_table_tt = ttnn.from_torch(
         page_table,
         device=mesh_device,
@@ -200,14 +257,15 @@ def build_decoder_pcc_context(mesh_device, layer_type: str, *, max_seq_len: int)
     rope_4d, rope_2d = create_rope_caches(mesh_device, hf_text_cfg, max_seq_len)
 
     logger.info(
-        "Decoder PCC context: layer_idx={} ({}), sliding_window={}, hidden={}, "
+        "Decoder PCC context: layer_idx={} ({}), sliding_window={}, kv={}, hidden={}, "
         "max_seq_len={}, blocks={}x{}, tp={}, attn_dtype={}, mlp_dtype={}",
         layer_idx,
         layer_type,
-        attn_cfg.sliding_window if attn_cfg.is_sliding else None,
+        sliding_window,
+        f"bounded(ring={sliding_window})" if bounded else "unbounded",
         model_args.hidden_size,
         max_seq_len,
-        max_num_blocks,
+        pool_blocks,
         KV_BLOCK_SIZE,
         tp,
         precision.get("attention", ttnn.bfloat16),
@@ -227,12 +285,13 @@ def build_decoder_pcc_context(mesh_device, layer_type: str, *, max_seq_len: int)
         rope_2d=rope_2d[layer_type],
         layer_idx=layer_idx,
         layer_type=layer_type,
-        sliding_window=attn_cfg.sliding_window if attn_cfg.is_sliding else None,
+        sliding_window=sliding_window,
         hidden_size=model_args.hidden_size,
         max_seq_len=max_seq_len,
         block_size=KV_BLOCK_SIZE,
         tp=tp,
         is_mesh=is_mesh,
+        cache_position_modulo=sliding_window if bounded else None,
     )
 
 
@@ -464,7 +523,40 @@ def _hf_cache_kv(cache, layer_idx: int):
     return cache.key_cache[layer_idx], cache.value_cache[layer_idx]
 
 
-def compare_kv_cache(ctx: DecoderPccContext, cache, positions: list[int]):
+def cache_slot(ctx: DecoderPccContext, position: int) -> tuple[int, int]:
+    """``(block, row)`` the device op writes ``position`` to.
+
+    Resolved by hand rather than by reusing the production indexing, so the readback
+    is an independent check. On the bounded ring the absolute position is first
+    wrapped into ``[0, cache_position_modulo)`` — the same wrap
+    ``paged_update_cache`` / ``paged_fill_cache`` apply — which is what keeps the
+    lookup inside the valid page-table prefix instead of on the zero-padded tail.
+    """
+    slot = position % ctx.cache_position_modulo if ctx.cache_position_modulo else position
+    return int(ctx.page_table[0, slot // ctx.block_size]), slot % ctx.block_size
+
+
+def assert_positions_resident(ctx: DecoderPccContext, positions: list[int], written_through: int) -> None:
+    """Fail loudly if a requested position has already been overwritten by the ring.
+
+    On the bounded cache slot ``p % window`` holds the *newest* position congruent to
+    ``p``, so once ``written_through`` tokens exist only the last ``window`` of them
+    are still readable. Comparing an evicted position against HF (which keeps
+    everything) would report a phantom KV mismatch, so ask for the impossible and
+    get an error naming the cause instead.
+    """
+    window = ctx.cache_position_modulo
+    if window is None:
+        return
+    evicted = [p for p in positions if p + window < written_through]
+    assert not evicted, (
+        f"positions {evicted} were evicted from the bounded ring (window={window}, "
+        f"{written_through} positions written — only [{max(0, written_through - window)}, "
+        f"{written_through}) are still resident); ask for a resident position instead"
+    )
+
+
+def compare_kv_cache(ctx: DecoderPccContext, cache, positions: list[int], *, written_through: int | None = None):
     """TT-vs-HF K/V at ``positions``, over *every* device, as flat aligned tensors.
 
     Returns ``((tt_k, hf_k), (tt_v, hf_v))``, each pair the same shape, built by
@@ -472,19 +564,18 @@ def compare_kv_cache(ctx: DecoderPccContext, cache, positions: list[int]):
     heads that device is supposed to hold. Checking the whole mesh rather than
     device 0 alone is what catches a head landing on the wrong column.
 
-    The paged layout is resolved by hand — block ``page_table[0, p // block]``, row
-    ``p % block`` — so the check reads where the device op actually wrote instead of
-    reusing the indexing under test. Absolute positions are correct here because the
-    fixture leaves ``cache_position_modulo`` unset (no bounded sliding cache); a
-    bounded-cache variant would wrap them.
+    ``written_through`` (total positions written so far) enables the bounded-ring
+    residency check; pass it whenever the context may be bounded.
     """
+    if written_through is not None:
+        assert_positions_resident(ctx, positions, written_through)
     k_cache, v_cache = ctx.kv_cache
     tt_k_dev = ttnn.get_device_tensors(k_cache) if ctx.is_mesh else [k_cache]
     tt_v_dev = ttnn.get_device_tensors(v_cache) if ctx.is_mesh else [v_cache]
     hf_k, hf_v = _hf_cache_kv(cache, ctx.layer_idx)
     assignment = kv_head_assignment(ctx)
 
-    rows = [(pos, int(ctx.page_table[0, pos // ctx.block_size]), pos % ctx.block_size) for pos in positions]
+    rows = [(pos, *cache_slot(ctx, pos)) for pos in positions]
     tt_k_out, tt_v_out, hf_k_out, hf_v_out = [], [], [], []
 
     for dev_idx, (dev_k, dev_v) in enumerate(zip(tt_k_dev, tt_v_dev)):
