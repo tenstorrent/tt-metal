@@ -40,6 +40,9 @@ __attribute__((noinline)) void calculate_gelu_fresh_cpp()
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat x = sfpi::dst_reg[0];
+        // x^2 feeds two of the three computed regions; state it once at the
+        // top (all lanes) so neither predicate arm recomputes it.
+        const sfpi::vFloat x2 = x * x;
         // Identity region (x >= 2.78125) as the all-lane default.
         sfpi::vFloat r = x;
         v_if (x <= GELU_SAT)
@@ -49,7 +52,7 @@ __attribute__((noinline)) void calculate_gelu_fresh_cpp()
         v_elseif (x < -3.125f)
         {
             // H = exp(-x^2/2) * corr_H(x), snapped to the 2^-25 grid.
-            const sfpi::vFloat xlog2   = (x * x) * NEG_HALF_ONE_LN2 + 127.0f;
+            const sfpi::vFloat xlog2   = x2 * NEG_HALF_ONE_LN2 + 127.0f;
             const sfpi::vInt zi        = sfpi::shft(sfpi::exman(xlog2, sfpi::MantissaMode::ImplicitOne), sfpi::exexp(xlog2), sfpi::ShiftMode::Logical);
             const sfpi::vFloat z       = sfpi::as<sfpi::vFloat>(zi);
             sfpi::vFloat frac          = sfpi::convert<sfpi::vFloat>(sfpi::exman(z), sfpi::RoundMode::Nearest);
@@ -62,8 +65,7 @@ __attribute__((noinline)) void calculate_gelu_fresh_cpp()
         }
         v_elseif (x < 2.78125f)
         {
-            const sfpi::vFloat x2 = x * x;
-            sfpi::vFloat odd      = P13;
+            sfpi::vFloat odd = P13;
             odd                   = odd * x2 + P11;
             odd                   = odd * x2 + P9;
             odd                   = odd * x2 + P7;

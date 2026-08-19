@@ -25,15 +25,15 @@ namespace ckernel::sfpu
 // but parks the sign-clear mask in vConstIntPrgm0 at init and folds its
 // special-case predicates for predicate-stack economy; here every constant is
 // a plain local and each rule is its own plain predicate region.  Class tests
-// use the encoding order directly: clearing the sign bit orders every lane by
-// magnitude class, with |bits| == inf-bits <=> +-inf and |bits| > inf-bits
-// <=> NaN.
+// use the encoding order directly: the magnitude encoding is |x|'s bit
+// pattern (float abs IS the sign-bit clear on the sign-magnitude register
+// file, NaN payload preserved), which orders every lane by magnitude class:
+// |bits| == inf-bits <=> +-inf and |bits| > inf-bits <=> NaN.
 template <bool EQUAL_NAN, int ITERATIONS>
 __attribute__((noinline)) void calculate_isclose_fresh_cpp(const std::uint32_t rtol_bits, const std::uint32_t atol_bits)
 {
     constexpr std::uint32_t tile_rows = 32;
     constexpr int INF_BITS            = 0x7F800000;
-    constexpr int SIGN_CLEAR          = 0x7FFFFFFF;
 
     const sfpi::vFloat rtol = Converter::as_float(rtol_bits);
     const sfpi::vFloat atol = Converter::as_float(atol_bits);
@@ -52,8 +52,10 @@ __attribute__((noinline)) void calculate_isclose_fresh_cpp(const std::uint32_t r
             // Finite lanes: the tolerance inequality itself.  NaN operands
             // compare false here, so they already sit at 0 before the class
             // fix-up below.
-            sfpi::vFloat result = 0.0f;
-            v_if (sfpi::abs(a - b) <= atol + rtol * sfpi::abs(b))
+            const sfpi::vFloat abs_a = sfpi::abs(a);
+            const sfpi::vFloat abs_b = sfpi::abs(b);
+            sfpi::vFloat result      = 0.0f;
+            v_if (sfpi::abs(a - b) <= atol + rtol * abs_b)
             {
                 result = 1.0f;
             }
@@ -64,8 +66,8 @@ __attribute__((noinline)) void calculate_isclose_fresh_cpp(const std::uint32_t r
             // holds even for mismatched signs).
             const sfpi::vInt a_bits = sfpi::as<sfpi::vInt>(a);
             const sfpi::vInt b_bits = sfpi::as<sfpi::vInt>(b);
-            const sfpi::vInt a_mag  = a_bits & SIGN_CLEAR;
-            const sfpi::vInt b_mag  = b_bits & SIGN_CLEAR;
+            const sfpi::vInt a_mag  = sfpi::as<sfpi::vInt>(abs_a);
+            const sfpi::vInt b_mag  = sfpi::as<sfpi::vInt>(abs_b);
             v_if (a_mag >= INF_BITS || b_mag >= INF_BITS)
             {
                 result = 0.0f;

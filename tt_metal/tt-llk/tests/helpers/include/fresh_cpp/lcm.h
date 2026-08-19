@@ -12,12 +12,15 @@
 namespace ckernel::sfpu
 {
 
-// ctz(v) = 31 - clz(isolated lowest set bit); every lane that consumes the
+// Right-shift amount that drops v's trailing zeros: -ctz(v) = clz(isolated
+// lowest set bit) - 31 (negative = logical right shift for sfpi::shft).
+// Stated as the shift amount directly so the consumer needs no re-negation
+// and the 31 stays an sfpiadd immediate.  Every lane that consumes the
 // result holds v != 0 (the callers predicate on it).
-inline sfpi::vInt lcm_fresh_cpp_ctz(const sfpi::vInt v)
+inline sfpi::vInt lcm_fresh_cpp_ctz_shift(const sfpi::vInt v)
 {
     const sfpi::vInt iso = v & (sfpi::vInt(0) - v);
-    return sfpi::vInt(31) - sfpi::as<sfpi::vInt>(sfpi::lz(iso));
+    return sfpi::as<sfpi::vInt>(sfpi::lz(iso)) - 31;
 }
 
 // Fresh typed-C++ lcm stating the torch.lcm golden contract independently,
@@ -40,10 +43,10 @@ inline sfpi::vInt lcm_fresh_cpp_ctz(const sfpi::vInt v)
 //      (32/17)*m seed on m in [0.5, 1) (rel. err <= 1/17; three refinements
 //      leave |q_float - q| far below the 0.5 the nearest-integer recovery
 //      needs), recovered exactly with the 2^23 round-and-extract identity;
-//   3. q * |b| split as q*(b >> 8) and q*(b & 0xFF): with q, |b| < 2^15 both
-//      partial products stay below 2^23, so fp32 arithmetic and the same
-//      2^23 extraction are exact, and the 30-bit product is recombined in
-//      integer space.
+//   3. q * |b| through the typed 24x24 integer-multiply primitive
+//      (sfpi::fractional_mul, the fresh mul-int precedent): q, |b| < 2^15,
+//      so the 30-bit product is exactly low-23-bits + (high << 23) with no
+//      >=2^23 correction terms.
 //
 // Every constant is a plain local; no fixed LREGs, raw instructions, replay
 // slots, or SFPLOADMACRO templates.
@@ -73,27 +76,25 @@ __attribute__((noinline)) void calculate_lcm_fresh_cpp()
             // Invariant: gcd(x, y) * 2^common is the answer; x is kept odd,
             // each round makes y odd, orders x <= y, and subtracts, so y
             // turns even (or 0) and loses at least one bit per round.
-            sfpi::vInt x            = ax;
-            sfpi::vInt y            = bx;
-            const sfpi::vInt common = lcm_fresh_cpp_ctz(x | y);
-            x                       = sfpi::shft(x, sfpi::vInt(0) - lcm_fresh_cpp_ctz(x), sfpi::ShiftMode::Logical);
+            // The ordering step is the typed min/max sort (one architectural
+            // SFPSWAP): x, y are non-negative < 2^15, where sign-magnitude
+            // and integer order coincide.
+            sfpi::vInt x                  = ax;
+            sfpi::vInt y                  = bx;
+            const sfpi::vInt common_shift = lcm_fresh_cpp_ctz_shift(x | y); // -common
+            x                             = sfpi::shft(x, lcm_fresh_cpp_ctz_shift(x), sfpi::ShiftMode::Logical);
             for (int round = 0; round < 15; ++round)
             {
                 v_if (y != 0)
                 {
-                    y = sfpi::shft(y, sfpi::vInt(0) - lcm_fresh_cpp_ctz(y), sfpi::ShiftMode::Logical);
-                    v_if (x > y)
-                    {
-                        const sfpi::vInt t = x;
-                        x                  = y;
-                        y                  = t;
-                    }
-                    v_endif;
-                    y = y - x;
+                    y                  = sfpi::shft(y, lcm_fresh_cpp_ctz_shift(y), sfpi::ShiftMode::Logical);
+                    const auto ordered = sfpi::min_max(sfpi::as<sfpi::vSMag>(x), sfpi::as<sfpi::vSMag>(y));
+                    x                  = sfpi::as<sfpi::vInt>(ordered.first);
+                    y                  = sfpi::as<sfpi::vInt>(ordered.second) - x;
                 }
                 v_endif;
             }
-            const sfpi::vInt g = sfpi::shft(x, common, sfpi::ShiftMode::Logical);
+            const sfpi::vInt g = sfpi::shft(x, sfpi::vInt(0) - common_shift, sfpi::ShiftMode::Logical);
 
             // --- 2. q = ax / g (exact: g divides ax).
             // Reciprocal of g: normalize to m in [0.5, 1), Newton-refine the
@@ -113,14 +114,14 @@ __attribute__((noinline)) void calculate_lcm_fresh_cpp()
             // integer q in the mantissa field (q < 2^15, error << 0.5).
             const sfpi::vFloat af = sfpi::convert<sfpi::vFloat>(ax, sfpi::RoundMode::Nearest);
             const sfpi::vInt q    = sfpi::as<sfpi::vInt>(sfpi::exman(af * rg + BIAS));
-            const sfpi::vFloat qf = sfpi::convert<sfpi::vFloat>(q, sfpi::RoundMode::Nearest);
 
-            // --- 3. result = q * bx, exact through an 8-bit split.
-            const sfpi::vFloat bhi = sfpi::convert<sfpi::vFloat>(sfpi::shft(bx, -8, sfpi::ShiftMode::Logical), sfpi::RoundMode::Nearest);
-            const sfpi::vFloat blo = sfpi::convert<sfpi::vFloat>(bx & 0xFF, sfpi::RoundMode::Nearest);
-            const sfpi::vInt p_hi  = sfpi::as<sfpi::vInt>(sfpi::exman(qf * bhi + BIAS));
-            const sfpi::vInt p_lo  = sfpi::as<sfpi::vInt>(sfpi::exman(qf * blo + BIAS));
-            const sfpi::vInt lcm   = sfpi::shft(p_hi, 8, sfpi::ShiftMode::Logical) + p_lo;
+            // --- 3. result = q * bx through the typed 24x24 primitive (the
+            // fresh mul-int precedent): q, bx < 2^15, so the product < 2^30
+            // splits exactly as low-23-bits + (high << 23) with no >=2^23
+            // correction terms.
+            const sfpi::vInt p_lo = sfpi::fractional_mul(q, bx, sfpi::FractionalHalf::Low);
+            const sfpi::vInt p_hi = sfpi::fractional_mul(q, bx, sfpi::FractionalHalf::High);
+            const sfpi::vInt lcm  = sfpi::shft(p_hi, 23, sfpi::ShiftMode::Logical) + p_lo;
 
             sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>() = lcm;
             sfpi::dst_reg++;
