@@ -118,6 +118,12 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         uint32_t getSrcAddr() const { return (src_addr_4b << 2) | (src_addr_offset & 0x3); }
     };
 
+    struct LocalNocEventSizeTrailer {
+        uint32_t num_bytes;
+        uint32_t reserved;
+    };
+    static_assert(sizeof(LocalNocEventSizeTrailer) == sizeof(uint64_t));
+
     // represents a fabric NOC event
     enum class FabricPacketType : unsigned char { REGULAR, LOW_LATENCY, LOW_LATENCY_MESH, DYNAMIC_MESH };
     struct FabricNoCEvent {
@@ -164,6 +170,7 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         RawEvent raw_event;
         LocalNocEvent local_event;
         LocalNocEventDstTrailer local_event_dst_trailer;
+        LocalNocEventSizeTrailer local_event_size_trailer;
         FabricNoCEvent fabric_event;
         FabricNoCScatterEvent fabric_scatter_event;
         FabricRoutingFields1D fabric_routing_fields_1d;
@@ -229,6 +236,8 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
     // Getter to return a LocalNocEventDstTrailer from the metadata. Called knows from TS_DATA_16B context that this is
     // a dst trailer.
     LocalNocEventDstTrailer getLocalNocEventDstTrailer() const { return data.local_event_dst_trailer; }
+
+    LocalNocEventSizeTrailer getLocalNocEventSizeTrailer() const { return data.local_event_size_trailer; }
 
     uint64_t asU64() const {
         uint64_t ret;

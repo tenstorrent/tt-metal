@@ -97,14 +97,17 @@ FORCE_INLINE void recordNocEvent(
     if constexpr (kernel_profiler::NON_DROPPING) {
         KernelProfilerNocEventMetadata dst_data =
             createNocEventDstTrailer<noc_event_type, posted>(local_addr, dst_local_addr);
+        KernelProfilerNocEventMetadata size_data;
+        size_data.data.local_event_size_trailer.num_bytes = num_bytes;
+        size_data.data.local_event_size_trailer.reserved = 0;
 
         kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3);
+            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 4);
 
         kernel_profiler::timeStampedData<
             STATIC_ID,
             kernel_profiler::DoingDispatch::DISPATCH,
-            kernel_profiler::PacketTypes::TS_DATA_16B>(ev_md.asU64(), dst_data.asU64());
+            kernel_profiler::PacketTypes::TS_DATA_24B>(ev_md.asU64(), dst_data.asU64(), size_data.asU64());
     } else {
         kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
         kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
@@ -141,14 +144,17 @@ FORCE_INLINE void recordMulticastNocEvent(
         uint32_t dst_local_addr = decode_noc_addr_to_local_addr(dst_noc_addr);
         KernelProfilerNocEventMetadata dst_data =
             createNocEventDstTrailer<noc_event_type, /*posted=*/false>(local_addr, dst_local_addr);
+        KernelProfilerNocEventMetadata size_data;
+        size_data.data.local_event_size_trailer.num_bytes = num_bytes;
+        size_data.data.local_event_size_trailer.reserved = 0;
 
         kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3);
+            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 4);
 
         kernel_profiler::timeStampedData<
             STATIC_ID,
             kernel_profiler::DoingDispatch::DISPATCH,
-            kernel_profiler::PacketTypes::TS_DATA_16B>(ev_md.asU64(), dst_data.asU64());
+            kernel_profiler::PacketTypes::TS_DATA_24B>(ev_md.asU64(), dst_data.asU64(), size_data.asU64());
     } else {
         kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
         kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());

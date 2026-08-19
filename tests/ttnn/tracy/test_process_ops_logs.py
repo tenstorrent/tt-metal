@@ -200,3 +200,31 @@ def test_generate_reports_writes_multicast_noc_util_column(tmp_path):
         row = next(reader)
         assert "MULTICAST NOC UTIL (%)" in reader.fieldnames
         assert row["MULTICAST NOC UTIL (%)"] == "25.0"
+
+
+def test_generate_reports_copies_lossless_noc_artifacts_without_modification(tmp_path):
+    log_folder = tmp_path / "logs"
+    report_folder = tmp_path / "reports"
+    log_folder.mkdir(parents=True)
+
+    manifest_contents = b'{"schema_version":1,"complete":true}\n'
+    events_contents = (
+        b'{"operation":{"runtime_id":7},"num_bytes":4275878552}\n'
+        b'{"operation":{"runtime_id":8},"num_bytes":131072}\n'
+    )
+    (log_folder / "lossless_noc_manifest.json").write_bytes(manifest_contents)
+    (log_folder / "lossless_noc_events.jsonl").write_bytes(events_contents)
+
+    process_ops_logs.generate_reports(
+        ops={},
+        deviceOps={},
+        traceOps={},
+        signposts={},
+        logFolder=log_folder,
+        outputFolder=report_folder,
+        date=False,
+        nameAppend=None,
+    )
+
+    assert (report_folder / "lossless_noc_manifest.json").read_bytes() == manifest_contents
+    assert (report_folder / "lossless_noc_events.jsonl").read_bytes() == events_contents

@@ -595,6 +595,15 @@ class TracedTorchTensor(torch.Tensor):
         return postprocess_return_value(function_return_value, output_tensors)
 
 
+def unwrap_traced_tensor(tensor: Any) -> Any:
+    if not isinstance(tensor, TracedTorchTensor):
+        return tensor
+
+    # Prevent as_subclass from being traced and wrapped again.
+    with torch._C.DisableTorchFunctionSubclass():
+        return tensor.as_subclass(torch.Tensor)
+
+
 def wrap_create_function(function: Callable[..., Any]) -> Callable[..., Any]:
     def wrapper(*function_args: Any, **function_kwargs: Any) -> TracedTensor:
         arg_name_value_pairs = get_arg_name_value_pairs(

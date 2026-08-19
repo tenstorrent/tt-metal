@@ -10,6 +10,7 @@
 import ast
 import os
 import csv
+import shutil
 from pathlib import Path
 import json
 import yaml
@@ -1442,6 +1443,10 @@ def generate_reports(
         os.system(f"cp {logFolder / TRACY_FILE_NAME} {outFolder}")
     if os.path.isfile(f"{logFolder / PROFILER_DEVICE_SIDE_LOG}"):
         os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
+    for lossless_artifact in ("lossless_noc_events.jsonl", "lossless_noc_manifest.json"):
+        source = Path(logFolder) / lossless_artifact
+        if source.is_file():
+            shutil.copy2(source, outFolder)
     if os.path.isdir(f"{logFolder.parent / 'npe_viz'}"):
         os.system(f"cp -r {logFolder.parent / 'npe_viz'} {outFolder}")
 

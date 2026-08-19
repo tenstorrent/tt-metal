@@ -21,6 +21,7 @@
 #include "common/TracyTTDeviceData.hpp"
 #include "context/context_types.hpp"
 #include "core_coord.hpp"
+#include "hostdevcommon/profiler_common.h"
 #include "mesh_device.hpp"
 #include "profiler_optional_metadata.hpp"
 #include "profiler_types.hpp"
@@ -34,6 +35,32 @@ class ThreadPool;
 using RuntimeID = uint32_t;
 
 namespace tt::tt_metal {
+
+constexpr bool is_supported_debug_dump_risc_type(tracy::RiscType risc_type, bool is_ethernet_core) {
+    if (is_ethernet_core) {
+        return risc_type == tracy::RiscType::ERISC;
+    }
+
+    switch (risc_type) {
+        case tracy::RiscType::BRISC:
+        case tracy::RiscType::NCRISC:
+        case tracy::RiscType::TRISC_0:
+        case tracy::RiscType::TRISC_1:
+        case tracy::RiscType::TRISC_2: return true;
+        default: return false;
+    }
+}
+
+constexpr uint32_t timestamped_data_packet_marker_count(kernel_profiler::PacketTypes packet_type) {
+    switch (packet_type) {
+        case kernel_profiler::TS_DATA: return 1 + kernel_profiler::TimestampedDataSize<kernel_profiler::TS_DATA>::size;
+        case kernel_profiler::TS_DATA_16B:
+            return 1 + kernel_profiler::TimestampedDataSize<kernel_profiler::TS_DATA_16B>::size;
+        case kernel_profiler::TS_DATA_24B:
+            return 1 + kernel_profiler::TimestampedDataSize<kernel_profiler::TS_DATA_24B>::size;
+        default: return 1;
+    }
+}
 
 template <typename T1, typename T2>
 struct pair_hash {
@@ -218,7 +245,7 @@ private:
         uint32_t timer_id,
         uint64_t timestamp);
 
-    void readTsData16BMarkerData(
+    void readExtendedTsDataMarkerData(
         std::set<tracy::TTDeviceMarker>& device_markers,
         uint32_t run_host_id,
         uint32_t device_trace_counter,
@@ -239,7 +266,7 @@ private:
         const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) const;
 
     // Dump device results to files
-    void writeDeviceResultsToFiles() const;
+    void writeDeviceResultsToFiles(bool is_final_dump) const;
 
     // Push device results to tracy
     void pushTracyDeviceResults(std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec);
