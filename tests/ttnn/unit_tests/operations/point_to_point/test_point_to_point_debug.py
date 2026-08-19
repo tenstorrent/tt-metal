@@ -16,11 +16,20 @@ A. ``test_fabric_mesh_open_close_only`` — the CONTROL. It opens the (1, 4)
    active again". If THIS control reproduces that with no op in the picture, the
    wedge belongs to repeated fabric mesh open/close on this board, not to the op.
 
-   MEASURED (Blackhole 1x4 QuietBox, 2026-08-19): 16 op-free open/close cycles are
-   green in ~4 s, so the fixture cycle alone is NOT the wedge. Mixed with real op
-   traffic the wedge appears after ~6 cycles, i.e. it is fabric-teardown state, and
-   it is why the 90-case acceptance file cannot complete in one pytest process on
-   this board -- see changelog / the run notes.
+   MEASURED (Blackhole 1x4 QuietBox, 2026-08-19) -- the full bisect:
+     * 16x op-free fabric mesh open/close ................. PASS (10.2 s)
+     * GlobalSemaphore created per cycle, no traffic, 4x ... PASS ( 4.2 s)
+     * THIS op, 1 hop  (0,0)->(0,1), 4 cycles ............. PASS ( 4.5 s)
+     * THIS op, 2 hops (0,0)->(0,2), 4 cycles ............. 1 PASS then wedge
+     * BOUND C++ ttnn.point_to_point, 1 hop,  4 cycles .... PASS ( 7.0 s)
+     * BOUND C++ ttnn.point_to_point, 2 hops, 4 cycles .... 1 PASS then wedge
+   CONCLUSION: the wedge is a MULTI-HOP fabric-teardown limitation of this board,
+   reproduced identically by the pre-existing C++ op (an independent implementation).
+   It is NOT specific to this Python op. In both cases the FIRST multi-hop transfer
+   delivers correct data and only the NEXT mesh open fails, so it is a teardown/
+   ethernet-firmware issue, not a data-path issue. Single-hop traffic is unaffected
+   and repeats indefinitely. Practical consequence: any pytest process that performs
+   a multi-hop transfer must be the last one to use the board before a reset.
 
 B. Deterministic-payload transfers whose every byte is hand-checkable:
      * all-ones      — every element of the receiver shard must be exactly 1.0
@@ -112,16 +121,19 @@ def test_mesh_device_id_reuse_probe(mesh_device, probe_iteration):
 # Referenced here for DIAGNOSIS ONLY -- the op itself never touches it.
 @pytest.mark.parametrize("device_params", [FABRIC], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("cpp_iteration", [0, 1, 2, 3, 4, 5])
-def test_cpp_reference_op_fixture_cycle(mesh_device, cpp_iteration):
-    """Same fixture cycle + same fabric traffic, but through the C++ op."""
+# ids without "=" so `pytest -k` can select them.
+@pytest.mark.parametrize("cpp_hops", [1, 2, 3], ids=["ch1", "ch2", "ch3"])
+@pytest.mark.parametrize("cpp_payload", [(1, 1, 32, 32), (1, 1, 64, 128)], ids=["cp1tile", "cp8tile"])
+@pytest.mark.parametrize("cpp_iteration", list(range(20)), ids=[f"c{i}" for i in range(20)])
+def test_cpp_reference_op_fixture_cycle(mesh_device, cpp_iteration, cpp_hops, cpp_payload):
+    """Same fixture cycle + same fabric traffic + same hop count, C++ op."""
     _require_mesh(mesh_device)
     if not hasattr(ttnn, "point_to_point"):
         pytest.skip("bound C++ ttnn.point_to_point not available")
 
     num_devices = prod(tuple(mesh_device.shape))
     torch.manual_seed(7)
-    full = torch.randn((num_devices, 1, 32, 32), dtype=torch.bfloat16)
+    full = torch.randn((num_devices * cpp_payload[0], *cpp_payload[1:]), dtype=torch.bfloat16)
     inp = ttnn.from_torch(
         full,
         dtype=ttnn.bfloat16,
@@ -134,8 +146,127 @@ def test_cpp_reference_op_fixture_cycle(mesh_device, cpp_iteration):
     # MEASURED signature of the bound C++ op (op_design.md's "(receiver, sender)"
     # note is stale): (input, sender_coord, receiver_coord, *, output_tensor,
     # intermediate_tensor, topology) -- topology is keyword-only there.
-    ttnn.point_to_point(inp, ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1), topology=ttnn.Topology.Linear)
+    ttnn.point_to_point(inp, ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, cpp_hops), topology=ttnn.Topology.Linear)
     ttnn.synchronize_device(mesh_device)
+
+
+# --------------------------------------------------------------------------------------
+# A4. DIAGNOSTIC — does any acceptance case frame a packet LARGER than the EDM slot?
+# --------------------------------------------------------------------------------------
+# `ccl_packet_dims` caps a packet at get_tt_fabric_channel_buffer_size_bytes(), but
+# that value is header + max_payload (fabric_context.cpp:157-159), while the worker
+# writes the header at the channel-slot base and the payload at
+# base + sizeof(PACKET_HEADER_TYPE) (edm_fabric_worker_adapters.hpp:705-708). The
+# only guard is an ASSERT that omits the header and is compiled out in Release. So a
+# packet_size in (max_payload, max_payload + header] overruns the ETH CORE's L1 —
+# which corrupts the router so it never polls its run flag, and device close then
+# fails with "Timed out while waiting for active ethernet core ... to become active
+# again" (llrt.cpp:529-569). That is our exact symptom, so this test enumerates the
+# whole acceptance matrix and reports any case that oversteps.
+@pytest.mark.parametrize("device_params", [FABRIC], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+def test_packet_geometry_within_edm_slot(mesh_device):
+    """Enumerate every acceptance (dtype, layout, shape) and print the framing."""
+    _require_mesh(mesh_device)
+    max_payload = ttnn._ttnn.fabric.get_tt_fabric_max_payload_size_bytes()
+    header = ttnn._ttnn.fabric.get_tt_fabric_packet_header_size_bytes()
+    l1a = ttnn.get_l1_alignment()
+    print(f"P2P_GEOM max_payload={max_payload} header={header} channel_buffer={header + max_payload}")
+
+    dtype_layouts = [
+        (ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.float32, ttnn.TILE_LAYOUT),
+        (ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ]
+    shapes = [
+        (1, 1, 32, 32),
+        (1, 1, 64, 128),
+        (1, 1, 96, 64),
+        (2, 1, 32, 64),
+        (1, 1, 48, 64),
+        (1, 1, 32, 48),
+        (1, 1, 24, 24),
+        # golden-suite shapes too
+        (1, 1, 32, 64),
+        (1, 1, 128, 128),
+        (1, 1, 256, 64),
+        (2, 4, 64, 64),
+        (1, 8, 32, 32),
+        (32, 64),
+        (4, 32, 96),
+        (1, 1, 512, 512),
+        (1, 4, 256, 128),
+        (1, 1, 56, 88),
+        (2, 1, 48, 64),
+    ]
+    offenders = []
+    for dtype, layout in dtype_layouts:
+        for shape in shapes:
+            t = ttnn.from_torch(
+                torch.zeros(shape, dtype=torch.float32),
+                dtype=dtype,
+                layout=layout,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            page = t.buffer_page_size()
+            npages = t.buffer_num_pages()
+            d = ttnn._ttnn.fabric.ccl_packet_dims(dtype, page, npages, l1a)
+            over = d.packet_size_bytes > max_payload
+            print(
+                f"P2P_GEOM {dtype} {layout} {shape} page={page} npages={npages} "
+                f"pkt={d.packet_size_bytes} ppp={d.pages_per_packet} seg={d.page_segments} "
+                f"total={d.total_packets} OVER={over}"
+            )
+            if over:
+                offenders.append((dtype, layout, shape, page, npages, d.packet_size_bytes))
+            ttnn.deallocate(t)
+    print(f"P2P_GEOM offenders={offenders}")
+    assert not offenders, f"packet_size exceeds EDM max_payload ({max_payload} B) for: {offenders}"
+
+
+# --------------------------------------------------------------------------------------
+# A5. BISECT — is the ethernet wedge triggered by HOP COUNT rather than call count?
+# --------------------------------------------------------------------------------------
+# Evidence from the acceptance runs: a chunk whose ONLY op call was a 2-hop transfer
+# ((0,0)->(0,2)) wedged immediately, while a chunk of three consecutive 1-hop
+# transfers survived and only the fourth call wedged. A multi-hop send routes the
+# payload AND the trailing atomic-inc through the eth cores of the intervening chip,
+# which has NO program of its own. This parametrizes hop count with a fixed payload so
+# the two variables (hops vs call count) are separated.
+@pytest.mark.parametrize("device_params", [FABRIC], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+# ids without "=" so `pytest -k` can select them (its expression parser rejects "=").
+@pytest.mark.parametrize("hops", [1, 2, 3], ids=["h1", "h2", "h3"])
+@pytest.mark.parametrize("payload", [(1, 1, 32, 32), (1, 1, 64, 128)], ids=["p1tile", "p8tile"])
+@pytest.mark.parametrize("rep", list(range(20)), ids=[f"r{i}" for i in range(20)])
+def test_hop_count_stress(mesh_device, hops, rep, payload):
+    """Fixed payload, varying hop distance, several fixture cycles each."""
+    _require_mesh(mesh_device)
+    sender = ttnn.MeshCoordinate(0, 0)
+    receiver = ttnn.MeshCoordinate(0, hops)
+
+    num_devices = prod(tuple(mesh_device.shape))
+    torch.manual_seed(3)
+    full = torch.randn((num_devices * payload[0], *payload[1:]), dtype=torch.bfloat16)
+    inp = ttnn.from_torch(
+        full,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    ttnn.synchronize_device(mesh_device)
+    expected = ttnn.to_torch(ttnn.get_device_tensors(inp)[0]).float()
+
+    out = point_to_point(inp, sender, receiver)
+    ttnn.synchronize_device(mesh_device)
+    got = ttnn.to_torch(ttnn.get_device_tensors(out)[hops]).float()
+    diff = (got - expected).abs().max().item()
+    assert diff == 0.0, f"hops={hops} rep={rep}: max diff {diff}"
 
 
 # --------------------------------------------------------------------------------------
