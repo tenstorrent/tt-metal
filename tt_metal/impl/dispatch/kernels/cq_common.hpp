@@ -158,9 +158,9 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
 
 // More generic version of cq_noc_async_write_with_state: Allows writing an arbitrary amount of data, when the NOC
 // config (dst_noc, VC..) have been specified.
-// flush_last_transfer tags the final transfer so that a credit atomic issued after this call -- typically
-// from CBWriter::release_pages -- cannot commit to L1 ahead of the payload (see noc_set_packet_flush).
-// No-op on tt-1xx, which has no flush bit.
+// flush_last_transfer sets the flush packet tag on the final transfer so that a credit atomic issued after
+// this call -- typically from CBWriter::release_pages -- cannot commit to L1 ahead of the payload.
+// No-op on tt-1xx, which has no packet tags.
 template <
     bool write_last_packet = true,
     bool update_counters = false,
@@ -186,14 +186,14 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
     if constexpr (write_last_packet) {
 #if defined(ARCH_QUASAR)
         if constexpr (flush_last_transfer) {
-            noc_set_packet_flush<cmd_buf>(true);
+            noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/true);
         }
 #endif
         cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf, update_counters>(
             src_addr, dst_addr, size, ndests, noc);
 #if defined(ARCH_QUASAR)
         if constexpr (flush_last_transfer) {
-            noc_set_packet_flush<cmd_buf>(false);
+            noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/false);
         }
 #endif
         return 0;

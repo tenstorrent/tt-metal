@@ -28,6 +28,8 @@
 
 // FABRIC_RELAY is defined exactly when !is_hd(), so this catches an _h/_d build.
 // Quasar FD assumes prefetcher and dispatcher share a Tensix; remote-chip support needs cross-Tensix verification.
+// That includes payload-before-credit ordering: these builds relay over fabric, where the NoC packet flush tag
+// this file relies on does not apply.
 #if defined(ARCH_QUASAR) && defined(FABRIC_RELAY)
 #error "Quasar FD supports the _hd prefetcher only; the split _h/_d variants are not supported yet."
 #endif
@@ -913,6 +915,9 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
     if (dispatch_data_ptr == downstream_cb_end) {
         dispatch_data_ptr = downstream_cb_base;
     }
+    // On Quasar these writes carry no flush tag: this routine does not release the page, so the header
+    // and the payload that follows are published by one release_pages, and the flush on the payload's
+    // last transfer covers all packets before it.
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
         // wrap cmddat
