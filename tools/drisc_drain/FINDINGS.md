@@ -5762,3 +5762,31 @@ Decode optimization rounds: NT slot stores + live-window prefetch were real (5.3
 the per-record stats out of the aliased Stream fields (perf attributed ~20% to a per-marker load-add-store
 forced by the NT stores' pointer casts) measured within run-to-run noise — the remaining decode time is
 cold-line latency on the DMA-fresh wire.
+
+## §N+52 — --delay calibration: 1 unit = 10.00 cycles = 7.41 ns; 2 GiB rings retain a whole capture; ring hugepages are a wash (bh-18, 2026-08-19)
+
+**Delay conversion, measured.** 2x2 x 2000-iter runs (0 stalls, unthrottled) at delay 15/500/2000 give device
+zone windows of 4.0/75.8/298.0 ms. The slope is 7.407 ns per delay unit = **exactly 10.00 cycles at 1.35 GHz**,
+intercept **86.7 ns fixed cost per zone**. So `zone body ~= 87 ns + 7.41 ns x delay`:
+
+| --delay | ns/zone | unthrottled Mmarkers/s/lane |
+|---|---|---|
+| 0 | ~87 | 23.1 |
+| 15 | 198 | 10.1 |
+| 50 | 457 | 4.4 |
+| 500 | 3,790 | 0.53 |
+| 2000 | 14,900 | 0.13 |
+
+At delay 15 the unthrottled offer is ~10M markers/s/lane x 600 lanes ~= 48 GB/s of wire — 6x any drain path —
+so the 290-365k stalls there are the lossless throttle working, not a removable inefficiency. The harness now
+prints the conversion.
+
+**Ring sizing.** The per-stream record-ring default is now 2 GiB (128 Mi x 16 B records): a full judged
+capture (120.7M records) fits, so the Tracy consumer delivered **120,720,976 records with 0 drops** (was
+53.6M dropped at 512 MiB). SUSTAINED busy 6.36 GB/s with plain pages.
+
+**Hugepages (mmap + MADV_HUGEPAGE for slot arrays >= 64 MiB; THP is madvise-only on this box): no measurable
+effect** — decode threads 171.5/195.2 ms vs plain 172.5/172.7 ms, inside the ±10% per-thread spread observed
+across ten runs (165-207 ms). Coherent: the ring is written once, sequentially, with NT stores, while the
+decode wall is cold reads from the socket's pinned FIFO, which ring pages cannot touch. Kept for the page-table
+footprint (2 GiB of 4 KiB PTEs is ~4 MB per ring).
