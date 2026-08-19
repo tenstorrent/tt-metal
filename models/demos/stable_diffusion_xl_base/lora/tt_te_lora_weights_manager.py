@@ -61,6 +61,10 @@ class TtTextEncoderLoRAWeightsManager:
 
         # component -> {tt module path: LoRA bank index}, populated on load.
         self._registered = {}
+        # component -> {tt module path: the adapter's own scaling (alpha/rank)}. Held
+        # separately because bind_active's scale argument *replaces* the registered scale
+        # rather than multiplying it, so the two have to be combined by the caller.
+        self._scalings = {}
         # component -> {tt module path: host copy of the pristine weight}. bind/unbind is
         # arithmetic on a bf16 weight, so (W + d) - d does not round-trip; restoring from
         # these makes rollback bit-exact, the same way the UNet manager keeps a host copy
@@ -139,6 +143,7 @@ class TtTextEncoderLoRAWeightsManager:
         bind or unbind is then just arithmetic on weights already in place.
         """
         self._registered = {}
+        self._scalings = {}
         self._base_weights_host = {}
         if not (self._components and self._active()):
             return
@@ -147,7 +152,7 @@ class TtTextEncoderLoRAWeightsManager:
             if encoder is None:
                 continue
             targets = _lora_capable_modules(encoder)
-            banked, snapshots, missing = {}, {}, []
+            banked, scalings, snapshots, missing = {}, {}, {}, []
             for path, lora_a, lora_b, scaling in self._iter_torch_lora(name):
                 tt_path = _torch_path_to_tt(path)
                 module = targets.get(tt_path)
@@ -155,15 +160,16 @@ class TtTextEncoderLoRAWeightsManager:
                     missing.append(tt_path)
                     continue
                 # tt_dit validates A as [rank, in] and B as [out, rank], which is exactly
-                # how PEFT stores them, so they go across untransposed. The adapter's own
-                # scaling is baked in here; the caller's clip scale is applied at bind time.
+                # how PEFT stores them, so they go across untransposed.
                 banked[tt_path] = module.register_lora(lora_a, lora_b, scale=scaling)
+                scalings[tt_path] = scaling
                 # Straight off the device, so the copy needs no knowledge of layout or
                 # sharding and restores into the same allocation later.
                 snapshots[tt_path] = ttnn.from_device(module.weight.data)
             if missing:
                 logger.debug(f"{name}: {len(missing)} LoRA targets had no device module, e.g. {missing[:3]}")
             self._registered[name] = banked
+            self._scalings[name] = scalings
             self._base_weights_host[name] = snapshots
             logger.info(f"{name}: banked {len(banked)} LoRA targets on device")
 
@@ -190,16 +196,19 @@ class TtTextEncoderLoRAWeightsManager:
         logger.info(f"Fusing text-encoder LoRA into {self._components} on device (scale={lora_scale})...")
         for name, banked in self._registered.items():
             targets = _lora_capable_modules(self._encoders[name])
+            scalings = self._scalings.get(name, {})
             for tt_path, idx in banked.items():
-                # The adapter's own scaling went in at register time; multiply the
-                # caller's clip scale on top so a re-bind at a new scale is exact.
-                targets[tt_path].bind_active(idx, scale=lora_scale)
+                # bind_active's scale replaces the registered one rather than multiplying,
+                # so the adapter's own scaling has to be folded in here. Dropping it would
+                # silently mis-scale every delta by alpha/rank.
+                targets[tt_path].bind_active(idx, scale=scalings.get(tt_path, 1.0) * lora_scale)
         self._fused = True
 
     def unload(self):
         components, self._components = self._components, []
         if not self._fused:
             self._registered = {}
+            self._scalings = {}
             self._base_weights_host = {}
             return
         logger.info("Restoring base text-encoder weights on device...")
@@ -216,6 +225,7 @@ class TtTextEncoderLoRAWeightsManager:
                 if host is not None:
                     ttnn.copy_host_to_device_tensor(host, module.weight.data)
         self._registered = {}
+        self._scalings = {}
         self._base_weights_host = {}
         self._fused = False
         logger.debug(f"Rolled back text-encoder LoRA for {components}")
