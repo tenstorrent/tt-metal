@@ -300,7 +300,7 @@ def test_prepare_chunk_recurrence_default_compute_config_matches_explicit_defaul
     explicit_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
+        math_approx_mode=True,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
         dst_full_sync_en=False,
@@ -314,24 +314,24 @@ def test_prepare_chunk_recurrence_default_compute_config_matches_explicit_defaul
         )
 
 
-def test_prepare_chunk_recurrence_approximate_math_uses_distinct_accurate_program(device: ttnn.Device) -> None:
+def test_prepare_chunk_recurrence_precise_math_uses_distinct_accurate_program(device: ttnn.Device) -> None:
     case = _PRODUCTION_CASE
     host_inputs = _production_host_inputs(seed=818)
     inputs = _device_inputs(host_inputs, device)
-    exact = _run(inputs, case.num_heads)
+    approximate = _run(inputs, case.num_heads)
     entries = device.num_program_cache_entries()
-    approximate_config = ttnn.init_device_compute_kernel_config(
+    precise_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=True,
+        math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
-    approximate = _run(inputs, case.num_heads, compute_kernel_config=approximate_config)
+    precise = _run(inputs, case.num_heads, compute_kernel_config=precise_config)
     assert device.num_program_cache_entries() == entries + 1
     expected = _oracle(host_inputs, case.num_heads, 0)
-    _assert_outputs_accurate(expected, exact, context="exact math")
-    _assert_outputs_accurate(expected, approximate, context="approximate math")
+    _assert_outputs_accurate(expected, approximate, context="default approximate math")
+    _assert_outputs_accurate(expected, precise, context="explicit precise math")
 
 
 def test_prepare_chunk_recurrence_rejects_unsupported_compute_config(

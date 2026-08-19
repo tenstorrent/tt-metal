@@ -52,7 +52,7 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
         q.device()->arch(),
         compute_kernel_config,
         MathFidelity::HiFi4,
-        /*default_approx_mode=*/false,
+        /*default_approx_mode=*/true,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
     return ttnn::experimental::prim::prepare_chunk_recurrence(
