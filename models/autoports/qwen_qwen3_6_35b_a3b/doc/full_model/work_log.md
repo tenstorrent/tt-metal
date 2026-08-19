@@ -250,3 +250,49 @@ Stage review:
 
 - Final verdict: `clean-pass`.
 - Review artifact: stage-review subagent `01a019fe-bb4f-77e2-9669-be816d42d0c0`.
+
+## 2026-08-19 - runner context-contract gate remediation
+
+Runner-side verification failed after the prior completion claim:
+
+```bash
+env MODEL_DIR=models/autoports/qwen_qwen3_6_35b_a3b \
+  HF_MODEL=Qwen/Qwen3.6-35B-A3B \
+  .agents/prompts/model_bringup_multigoal/06-full-model.check.sh
+```
+
+Local reproduction matched the runner failure. The degeneration check passed,
+then `.agents/scripts/check_context_contract.py` exited `2` with:
+`doc/context_contract.json does not record the current supported context`.
+
+Root cause: the full-model context capability was recorded under nested
+full-model fields, but the runner guard only accepts top-level canonical keys
+such as `hf_advertised_context` and `current_supported_context`.
+
+Fix: added top-level context keys to `doc/context_contract.json` without
+changing the capability: `hf_advertised_context=262144`,
+`target_context=262144`, `current_supported_context=262144`,
+`supported_context=262144`, and `max_supported_context=262144`.
+
+Verification:
+
+```bash
+python -m json.tool models/autoports/qwen_qwen3_6_35b_a3b/doc/context_contract.json >/dev/null
+
+python .agents/scripts/check_context_contract.py \
+  --model-dir models/autoports/qwen_qwen3_6_35b_a3b \
+  --hf-model Qwen/Qwen3.6-35B-A3B \
+  --stage full-model --require-contract
+
+env MODEL_DIR=models/autoports/qwen_qwen3_6_35b_a3b \
+  HF_MODEL=Qwen/Qwen3.6-35B-A3B \
+  .agents/prompts/model_bringup_multigoal/06-full-model.check.sh
+```
+
+Results: JSON syntax passed; context checker reported
+`target=262144, supported=262144 (full HF context)`; the full runner check
+exited `0`. Saved output:
+`models/autoports/qwen_qwen3_6_35b_a3b/doc/full_model/logs/runner_context_contract_fix_check.log`.
+
+No TT hardware command was needed for this remediation; the failing gate was a
+host-side artifact/metadata check over existing full-model evidence.

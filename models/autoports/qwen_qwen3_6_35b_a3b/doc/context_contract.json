@@ -2,6 +2,11 @@
   "model_id": "Qwen/Qwen3.6-35B-A3B",
   "autoport_dir": "models/autoports/qwen_qwen3_6_35b_a3b",
   "stage": "full_model",
+  "hf_advertised_context": 262144,
+  "target_context": 262144,
+  "current_supported_context": 262144,
+  "supported_context": 262144,
+  "max_supported_context": 262144,
   "hf_text_config": {
     "advertised_context_length_tokens": 262144,
     "hidden_size": 2048,
