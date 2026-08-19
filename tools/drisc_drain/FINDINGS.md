@@ -5790,3 +5790,28 @@ effect** — decode threads 171.5/195.2 ms vs plain 172.5/172.7 ms, inside the �
 across ten runs (165-207 ms). Coherent: the ring is written once, sequentially, with NT stores, while the
 decode wall is cold reads from the socket's pinned FIFO, which ring pages cannot touch. Kept for the page-table
 footprint (2 GiB of 4 KiB PTEs is ~4 MB per ring).
+
+## §N+53 — The D2H ladder: PCIe writes ~37 GB/s, pinned-FIFO reads 27 GB/s, DECODE 5.6-6.4 GB/s -- the wall is interpretation, not the pipe (bh-18, 2026-08-19)
+
+Three probes on the judged config (gx12 gy10 iters10k delay15), one layer each:
+
+| layer | probe | measured |
+|---|---|---|
+| device -> host PCIe write | SHIP_REPEAT=8 + NO_DECODE (17.4 GB shipped) | **36.8 GB/s** per mover during the write chunk (74 KB / 2.01 us); 29.1 GB/s per push incl. push_pages + notify |
+| host read of the pinned FIFO | READ_ONLY=1 (peek + line-stride sum + pop) | **27.0 GB/s** aggregate over 2 threads (568 MB / 41.9 ms each) |
+| decode (interpret + emit records) | normal run | **5.6-6.4 GB/s** aggregate (~2.9-3.2 GB/s/thread) |
+
+So "D2H throughput" as the receiver reports it is a decode-compute number: the link and the memory both do
+tens of GB/s today. Per thread, the same bytes read raw at 13.6 GB/s and decode at ~2.9 -- the walk spends
+~4.7x the raw-read time on interpretation and record emission, ~12-14 cycles per 8 B record (2 masked loads,
+type dispatch, ts assembly, meta pack, NT store, order check).
+
+Comparison point: the tensor prefetcher's 21-23 GB/s single-RISC DRAM reads come from deep batching --
+enormous bytes moved per instruction issued. The wire here is 8 B markers decoded scalar, one at a time.
+The equivalent lever is a vectorized fast path for the dominant case (a full span's run is almost entirely
+contiguous 2-word zone markers): AVX2-check 8 packets' types at once, build 8 records with shuffles, store
+128 B NT -- an expected 3-6x per-record, putting decode in the 15-30 GB/s range where the FIFO read (27)
+and PCIe write (29-37) layers sit.
+
+READ_ONLY's stall count (307,897) slots between the max-ack floor (~290k) and decode-paced (~361k),
+consistent with the layer costs above.
