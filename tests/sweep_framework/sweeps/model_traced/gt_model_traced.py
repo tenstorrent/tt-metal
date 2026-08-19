@@ -129,6 +129,9 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # Initialised unconditionally: the traced-output block below is conditional, and the gather
+    # references this, so leaving it unbound raises UnboundLocalError on every vector that skips it.
+    ot_placement = None
     if is_binary:
         if shape_b is None:
             shape_b = shape_a
