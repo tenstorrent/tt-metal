@@ -419,12 +419,12 @@ ColumnSplitConfig compute_model_column_split_config(
     if (best_cost >= cost_row) {
         return config;
     }
-    // Multi-row acceptance needs a margin over row-parallel: the only consumer
-    // is the hybrid wrapper's remainder window (the device op itself never
-    // auto-selects multi-row), and its split adds a concat + a second dispatch,
-    // so demand a >= 12.5% modeled win to keep marginal splits from netting
-    // negative. (Was 2x when bare multi-row calls could auto-route; that
-    // routing is gone — see column_split_config_for.)
+    // Multi-row acceptance needs a margin over row-parallel: the hybrid
+    // wrapper's remainder window adds a concat + a second dispatch, and bare
+    // multi-row calls (the device op auto-routes them here too — see
+    // column_split_config_for) shouldn't flip engines on a marginal modeled
+    // win the merge-unit model can't guarantee on silicon. Demand a >= 12.5%
+    // modeled win to keep marginal picks from netting negative.
     if (num_rows > 1 && best_cost + std::max(2u, cost_row / 8) > cost_row) {
         return config;
     }
@@ -478,8 +478,9 @@ ColumnSplitConfig compute_column_split_config(
     // classic column-parallel tree. Multiple rows: the multi-rectangle
     // variant — one P-core tree per rectangle, rows split contiguously across
     // as many rectangles as tile the grid, all running concurrently. (The
-    // built-in cost model still never auto-selects the multi-row form; the
-    // override is the opt-in.)
+    // built-in cost model can also auto-select the multi-row form when it
+    // models a win; the override bypasses the model and pins an exact P —
+    // the hybrid wrapper uses it to carry a P modeled on the searched width.)
     TT_FATAL(
         static_cast<uint32_t>(grid.x * grid.y) >= 2,
         "topk_large_indices num_slices={} needs a worker grid of at least 2 cores",
