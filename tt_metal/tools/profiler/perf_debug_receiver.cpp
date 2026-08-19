@@ -344,9 +344,6 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     if (const uint32_t left = nframes % kAckBatchFrames; left != 0) {
         s.sock->pop(left * profiler::kSpscFramePages, true);
     }
-    if (pos != pos0) {
-        w.wake_readers();
-    }
     s.last_commit_tsc = tsc_now();
     s.frames += nframes;
     s.passes++;
