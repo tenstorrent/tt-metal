@@ -96,6 +96,26 @@ EXTRA_BUILD_ARGS=()     # everything after `--`, forwarded to build_metal.sh
 # --sync-exclude (repeatable) if you find other build-only bulk worth dropping.
 SYNC_EXCLUDES=(".cpmcache")
 
+# How many concurrent rsync workers the --sync-to copy fans out over. The
+# destination is latency-bound (many synchronous metadata round trips per file),
+# not bandwidth-bound, and rsync is single-threaded per invocation, so overlapping
+# several is the only lever that addresses the actual bottleneck. 4 is a
+# deliberately modest default: /data is shared by the whole Exabox pool and the
+# server has finite nfsd threads and RPC slots, so hammering it degrades the mount
+# for everyone else. Returns flatten well before the warn threshold anyway.
+SYNC_JOBS=4
+SYNC_JOBS_WARN=8
+
+# 0 = build a fresh copy at ${SYNC_TO}.new and atomically rename it into place
+#     (default; see the big comment on the sync step for why).
+# 1 = legacy behavior: rsync straight over ${SYNC_TO}. Slower on a populated
+#     destination and briefly visible to readers in a half-written state.
+SYNC_IN_PLACE=0
+
+# Host-local scratch for sync bookkeeping (worker failure list). Removed by the
+# EXIT trap; declared here so cleanup() can reference it unconditionally.
+SYNC_STATE_DIR=""
+
 # Soft warning threshold for free space on the local scratch filesystem (GiB).
 MIN_FREE_GIB=50
 
@@ -125,9 +145,23 @@ Options:
                         the real filesystem (i.e. the actual NFS mount). Must be
                         identical to --target-path or the script refuses, because
                         any other destination invalidates the baked-in RPATHs.
+                        Builds a fresh copy at <path>.new and renames it into
+                        place, so readers never see a partial tree. NOTE: this
+                        needs room for two copies of the tree on the destination
+                        until the swap completes.
   --sync-exclude <pat>  Additional rsync --exclude pattern for the --sync-to copy
                         (repeatable). .cpmcache is excluded by default (build-only
-                        source cache, not needed to use the built tree).
+                        source cache, not needed to use the built tree). Patterns
+                        behave exactly as they would in a single whole-tree rsync,
+                        anchored ("/foo") ones included.
+  --sync-jobs <N>       Concurrent rsync workers for the --sync-to copy
+                        (default: ${SYNC_JOBS}). Warns above ${SYNC_JOBS_WARN}: /data is shared,
+                        and saturating it is antisocial for little extra speed.
+                        N=1 does a single whole-tree rsync.
+  --sync-in-place       Skip the temp-dir-and-rename dance and rsync directly over
+                        <path>. Only for when you cannot spare the transient 2x
+                        space. Slower on a populated destination, and concurrent
+                        readers on other nodes may see a half-written tree.
   --dry-run             Print the docker command that would run, then exit.
   -h, --help            Show this help.
 
@@ -159,6 +193,8 @@ while [[ $# -gt 0 ]]; do
     --entrypoint)  [[ $# -ge 2 ]] || die "--entrypoint needs a value";  ENTRYPOINT="$2"; shift 2 ;;
     --sync-to)     [[ $# -ge 2 ]] || die "--sync-to needs a value";     SYNC_TO="$2"; shift 2 ;;
     --sync-exclude) [[ $# -ge 2 ]] || die "--sync-exclude needs a value"; SYNC_EXCLUDES+=("$2"); shift 2 ;;
+    --sync-jobs)   [[ $# -ge 2 ]] || die "--sync-jobs needs a value";   SYNC_JOBS="$2"; shift 2 ;;
+    --sync-in-place) SYNC_IN_PLACE=1; shift ;;
     --dry-run)     DRY_RUN=1; shift ;;
     -h|--help)     usage; exit 0 ;;
     --)            shift; EXTRA_BUILD_ARGS=("$@"); break ;;
@@ -255,6 +291,20 @@ will fail at runtime). Either sync to '${TARGET_PATH}', or re-run the build with
 --target-path '${SYNC_TO}'."
   fi
   command -v rsync >/dev/null 2>&1 || die "--sync-to requires rsync, which was not found."
+
+  [[ "${SYNC_JOBS}" =~ ^[0-9]+$ ]] || die "--sync-jobs must be a positive integer (got '${SYNC_JOBS}')."
+  (( SYNC_JOBS >= 1 )) || die "--sync-jobs must be >= 1."
+  if (( SYNC_JOBS > SYNC_JOBS_WARN )); then
+    warn "--sync-jobs ${SYNC_JOBS} exceeds the recommended ${SYNC_JOBS_WARN}. /data is shared by the \
+whole Exabox pool and the server has finite nfsd threads and RPC slots; this can degrade \
+the mount for other users for little additional speed. Proceeding anyway."
+  fi
+  # The concurrency gate below uses `wait -n`, which needs bash >= 4.3.
+  if (( SYNC_JOBS > 1 )) \
+     && (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3) )); then
+    warn "bash ${BASH_VERSION} lacks 'wait -n' (need >= 4.3); falling back to --sync-jobs 1."
+    SYNC_JOBS=1
+  fi
 fi
 
 # ----------------------------------------------------------------------------
@@ -294,7 +344,12 @@ fi
 # We base the file on the *image's* own /etc/passwd where possible so that the
 # image's system accounts survive, then append our user.
 TMP_ETC="$(mktemp -d)"
-cleanup() { rm -rf "${TMP_ETC}"; }
+cleanup() {
+  rm -rf "${TMP_ETC}"
+  # Sync bookkeeping scratch, if the sync step got as far as creating it.
+  [[ -n "${SYNC_STATE_DIR:-}" ]] && rm -rf "${SYNC_STATE_DIR}"
+  return 0
+}
 trap cleanup EXIT
 
 fetch_from_image() { # $1 = file path inside image
@@ -468,8 +523,15 @@ cat <<EOF
   image:                      ${IMAGE_REF}
   build_metal.sh args:        ${BUILD_ARGS_Q:-<none>}
   sync-to after build:        ${SYNC_TO:-<disabled>}
-
 EOF
+if [[ -n "${SYNC_TO}" ]]; then
+  cat <<EOF
+  sync mode:                  $( (( SYNC_IN_PLACE )) && echo "in-place (non-atomic)" || echo "fresh copy + atomic rename" )
+  sync concurrency:           ${SYNC_JOBS} rsync worker(s)
+  sync excludes:              ${SYNC_EXCLUDES[*]:-<none>}
+EOF
+fi
+printf '\n'
 
 if (( DRY_RUN )); then
   info "[dry-run] would run:"
@@ -485,20 +547,223 @@ info "Container build finished in $(( (SECONDS - start_ts) / 60 ))m $(( (SECONDS
 # ----------------------------------------------------------------------------
 # Optional last mile: put the tree on the real (slow) shared filesystem
 # ----------------------------------------------------------------------------
+# Two things make this materially faster and safer than a plain in-place rsync.
+#
+# (1) ATOMIC SWAP (default; --sync-in-place opts out)
+#     We never rsync over the live tree. We build a complete copy at
+#     "${SYNC_TO}.new" and then rename it into place. Two independent reasons:
+#
+#     * Performance. rsync into an existing tree where essentially every file
+#       differs -- which is exactly what a fresh rebuild produces, since content
+#       and mtimes all change -- costs a per-file quick-check stat plus a
+#       write-to-temp-then-rename dance to replace the file safely. That is
+#       strictly more round trips per file than a straight CREATE into an empty
+#       directory, and on a latency-bound mount that overhead compounds across
+#       thousands of files. Measured live: 42m59s into an empty destination, then
+#       95m45s into a populated one. Writing into a guaranteed-fresh .new
+#       directory restores the empty-destination case on *every* run.
+#
+#     * Correctness. Another node reading ${SYNC_TO} while a plain rsync is
+#       mid-flight sees a half-written, unusable tree. rename(2) is atomic, so a
+#       concurrent reader sees either the whole old tree or the whole new one.
+#
+#     COST, stated plainly: until the swap completes and .old is removed, the
+#     destination filesystem holds up to TWO copies of the build. On a tight
+#     /data quota that can fail; --sync-in-place is the escape hatch.
+#
+#     BEHAVIOR CHANGE vs in-place, worth knowing: the swapped-in tree contains
+#     exactly what was copied this run, so anything left at ${SYNC_TO} by an
+#     earlier sync but excluded now (e.g. a .cpmcache from a run predating the
+#     default exclude) is gone afterwards. That is rsync --delete-like semantics
+#     for free, and usually what you want -- but it is a change from the additive
+#     in-place behavior, so it is called out rather than discovered.
+#
+# (2) PARALLEL FAN-OUT (--sync-jobs, default 4)
+#     This destination is latency-bound: cost tracks file *count*, because each
+#     file needs several synchronous metadata round trips (LOOKUP, CREATE, WRITE,
+#     SETATTR, COMMIT). Note what this rules out -- rsync already defaults to
+#     --whole-file for local-to-local transfers, so disabling the delta algorithm
+#     is a no-op here, and -a does not checksum. There is no flag that fixes this.
+#     The only lever is more requests in flight, and rsync is single-threaded per
+#     invocation, so we run several concurrently over disjoint top-level entries.
 if [[ -n "${SYNC_TO}" ]]; then
   RSYNC_EXCLUDE_ARGS=()
   for pat in "${SYNC_EXCLUDES[@]}"; do
     RSYNC_EXCLUDE_ARGS+=(--exclude="${pat}")
   done
-  if (( ${#SYNC_EXCLUDES[@]} > 0 )); then
-    info "Syncing to ${SYNC_TO} (excluding: ${SYNC_EXCLUDES[*]}) — this is the slow NFS part; expect it to take a while"
+  RSYNC_BASE=(rsync -a --human-readable "${RSYNC_EXCLUDE_ARGS[@]}")
+
+  SYNC_OLD=""
+  if (( SYNC_IN_PLACE )); then
+    SYNC_DEST="${SYNC_TO}"
+    warn "--sync-in-place: writing directly over '${SYNC_TO}'. Concurrent readers on other \
+nodes may observe a partially written tree, and overwriting a populated destination measured \
+~2.2x slower than writing a fresh one on this filesystem."
   else
-    info "Syncing to ${SYNC_TO} (this is the slow NFS part; expect it to take a while)"
+    SYNC_DEST="${SYNC_TO}.new"
+    SYNC_OLD="${SYNC_TO}.old"
+
+    # Clean up leftovers from an interrupted earlier run -- loudly, because a
+    # stale .new means a previous sync did not finish and someone may care.
+    for stale in "${SYNC_DEST}" "${SYNC_OLD}"; do
+      if [[ -e "${stale}" ]]; then
+        warn "removing leftover '${stale}' from an earlier interrupted run (this can itself \
+take a while on NFS)"
+        rm -rf "${stale}" || die "could not remove '${stale}'; clear it manually and re-run."
+      fi
+    done
   fi
-  mkdir -p "${SYNC_TO}"
+
+  # Rough space advisory. du's --exclude globbing is not identical to rsync's, so
+  # treat the number as approximate; it is only used to warn, never to refuse.
+  if command -v du >/dev/null 2>&1 && command -v df >/dev/null 2>&1; then
+    du_excl=()
+    for pat in "${SYNC_EXCLUDES[@]}"; do du_excl+=(--exclude="${pat}"); done
+    src_kb="$(du -sk "${du_excl[@]}" "${SRC}" 2>/dev/null | awk '{print $1}')" || src_kb=""
+    dest_avail_kb="$(df -P "$(dirname "${SYNC_TO}")" 2>/dev/null | awk 'NR==2 {print $4}')" || dest_avail_kb=""
+    if [[ -n "${src_kb}" && -n "${dest_avail_kb}" ]]; then
+      info "About to copy ~$(( src_kb / 1024 / 1024 )) GiB; $(( dest_avail_kb / 1024 / 1024 )) GiB free at $(dirname "${SYNC_TO}")"
+      if (( ! SYNC_IN_PLACE )) && (( dest_avail_kb < src_kb )); then
+        warn "the atomic-swap path needs room for the new copy alongside whatever is already \
+at '${SYNC_TO}' (briefly ~2x), and the destination looks tighter than that. Consider \
+--sync-in-place, or free space first."
+      fi
+    fi
+  fi
+
+  if (( ${#SYNC_EXCLUDES[@]} > 0 )); then
+    info "Syncing to ${SYNC_TO} via ${SYNC_DEST} (excluding: ${SYNC_EXCLUDES[*]}) — this is the slow NFS part"
+  else
+    info "Syncing to ${SYNC_TO} via ${SYNC_DEST} — this is the slow NFS part"
+  fi
+
   sync_start=${SECONDS}
-  rsync -a --human-readable "${RSYNC_EXCLUDE_ARGS[@]}" "${SRC}/" "${SYNC_TO}/"
-  info "Sync finished in $(( (SECONDS - sync_start) / 60 ))m $(( (SECONDS - sync_start) % 60 ))s"
+  mkdir -p "${SYNC_DEST}" || die "could not create '${SYNC_DEST}'."
+
+  SYNC_STATE_DIR="$(mktemp -d)"
+  FAIL_FILE="${SYNC_STATE_DIR}/failures"
+  : > "${FAIL_FILE}"
+
+  # One worker. Failures are recorded in FAIL_FILE rather than propagated as an
+  # exit status: a background job's status cannot be reliably collected once the
+  # concurrency gate below has reaped it with `wait -n`, and O_APPEND writes of
+  # short lines from separate processes do not interleave.
+  sync_worker() { # $1 = top-level directory name
+    local d="$1"
+    if "${RSYNC_BASE[@]}" "${SRC}/${d}" "${SYNC_DEST}/"; then
+      printf '  [ok]   %s\n' "${d}"
+    else
+      printf '  [FAIL] %s\n' "${d}" >&2
+      printf '%s\n' "${d}" >> "${FAIL_FILE}"
+    fi
+  }
+
+  if (( SYNC_JOBS <= 1 )); then
+    info "Copying whole tree with a single rsync"
+    "${RSYNC_BASE[@]}" "${SRC}/" "${SYNC_DEST}/" || die "rsync failed; '${SYNC_DEST}' left for inspection."
+  else
+    # Partition: one worker per real top-level directory, plus a single
+    # non-recursive pass for everything else at the top level (loose files,
+    # symlinks). '--exclude=/*/' matches only real directories directly under the
+    # transfer root, and `find -type d` (no -L) matches only real directories, so
+    # the two halves are exhaustive and non-overlapping -- a symlink-to-directory
+    # is carried by the root pass and never by a worker.
+    #
+    # Note the source form in sync_worker: "${SRC}/${d}" with NO trailing slash.
+    # That puts ${d} itself at the top of the worker's transfer, so every path
+    # relative to the transfer root is byte-identical to what it would be in a
+    # single whole-tree rsync ("python_env/lib/..." either way). That is what
+    # makes --sync-exclude patterns behave identically in every worker, anchored
+    # ("/foo") patterns included, with no per-worker pattern rewriting. Using the
+    # "${SRC}/${d}/" -> "${SYNC_DEST}/${d}/" form instead WOULD shift the anchor
+    # root per worker and silently change what anchored patterns mean.
+    info "Copying top-level files and symlinks"
+    "${RSYNC_BASE[@]}" --exclude='/*/' "${SRC}/" "${SYNC_DEST}/" \
+      || die "rsync of top-level entries failed; '${SYNC_DEST}' left for inspection."
+
+    top_dirs=()
+    while IFS= read -r -d '' d; do top_dirs+=("${d}"); done \
+      < <(find "${SRC}" -mindepth 1 -maxdepth 1 -type d -printf '%f\0' | sort -z)
+
+    # Do not spawn a worker for a top-level directory an exclude kills outright.
+    # rsync would correctly copy nothing, but the process and its local scan are
+    # pure waste. Exact-name matching only; globs stay rsync's job.
+    worker_dirs=()
+    for d in "${top_dirs[@]}"; do
+      skip=0
+      for pat in "${SYNC_EXCLUDES[@]}"; do
+        p="${pat#/}"; p="${p%/}"
+        if [[ "${d}" == "${p}" ]]; then skip=1; break; fi
+      done
+      if (( skip )); then
+        info "skipping excluded top-level directory: ${d}"
+      else
+        worker_dirs+=("${d}")
+      fi
+    done
+
+    info "Copying ${#worker_dirs[@]} top-level directories, ${SYNC_JOBS} at a time"
+    running=0
+    for d in "${worker_dirs[@]}"; do
+      if (( running >= SYNC_JOBS )); then
+        wait -n || true
+        running=$(( running - 1 ))
+      fi
+      sync_worker "${d}" &
+      running=$(( running + 1 ))
+    done
+    wait
+  fi
+
+  if [[ -s "${FAIL_FILE}" ]]; then
+    warn "these top-level entries failed to copy:"
+    sed 's/^/  /' "${FAIL_FILE}" >&2
+    die "sync incomplete. '${SYNC_DEST}' is being left in place for inspection and was NOT \
+swapped in, so '${SYNC_TO}' still holds whatever it held before."
+  fi
+
+  copy_elapsed=$(( SECONDS - sync_start ))
+  info "Copy finished in $(( copy_elapsed / 60 ))m $(( copy_elapsed % 60 ))s"
+
+  if (( ! SYNC_IN_PLACE )); then
+    # .new and .old are siblings of ${SYNC_TO}, so they are guaranteed to be on
+    # the same filesystem and each mv is a plain rename(2): atomic, and with no
+    # requirement that the target be empty. (That requirement only applies when
+    # replacing a directory *in place*, which is precisely why the existing tree
+    # is moved aside first rather than being overwritten.)
+    info "Swapping '${SYNC_DEST}' into place at '${SYNC_TO}'"
+    if [[ -e "${SYNC_TO}" ]]; then
+      mv "${SYNC_TO}" "${SYNC_OLD}" \
+        || die "could not move existing '${SYNC_TO}' aside. '${SYNC_DEST}' is complete and \
+can be swapped in by hand."
+    fi
+    if ! mv "${SYNC_DEST}" "${SYNC_TO}"; then
+      # Never leave nothing at ${SYNC_TO}: put the old tree back.
+      if [[ -e "${SYNC_OLD}" ]]; then
+        mv "${SYNC_OLD}" "${SYNC_TO}" || warn "rollback of '${SYNC_OLD}' -> '${SYNC_TO}' also failed."
+      fi
+      die "could not move '${SYNC_DEST}' to '${SYNC_TO}'."
+    fi
+    # Between those two renames there is a brief window where ${SYNC_TO} does not
+    # exist, so a concurrent reader gets ENOENT rather than a corrupt tree.
+    # Closing it completely needs renameat2(RENAME_EXCHANGE), which coreutils mv
+    # does not expose and NFS may not support.
+
+    if [[ -e "${SYNC_OLD}" ]]; then
+      # Unlinking the old tree is itself thousands of NFS round trips. It happens
+      # AFTER the swap, so the new build is already live and usable -- interrupting
+      # here is safe, it just leaves ${SYNC_OLD} to remove later. Best effort:
+      # failing to reclaim space must not fail an otherwise successful sync.
+      info "Removing previous tree at '${SYNC_OLD}' (new build is already live; safe to interrupt)"
+      old_start=${SECONDS}
+      rm -rf "${SYNC_OLD}" \
+        || warn "could not fully remove '${SYNC_OLD}'; remove it manually to reclaim space."
+      info "Removed in $(( (SECONDS - old_start) / 60 ))m $(( (SECONDS - old_start) % 60 ))s"
+    fi
+  fi
+
+  sync_total=$(( SECONDS - sync_start ))
+  info "Sync finished in $(( sync_total / 60 ))m $(( sync_total % 60 ))s"
   cat <<EOF
 
 Build is now at ${SYNC_TO}, which matches the path baked into its RPATHs and venv
