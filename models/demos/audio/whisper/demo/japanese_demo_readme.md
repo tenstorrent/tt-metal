@@ -22,3 +22,5 @@ python models/demos/audio/whisper/demo/run_jp_stt.py \
   --wav models/demos/audio/whisper/demo/sample_ja.wav \
   --warmup
 ```
+
+Faster JP path: Whisper **large-v3-turbo** — see `japanese_turbo_demo_readme.md`.
