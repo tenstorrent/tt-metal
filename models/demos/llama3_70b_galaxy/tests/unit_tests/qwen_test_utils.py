@@ -10,6 +10,7 @@ Keeping the detection here avoids the test files drifting apart.
 """
 
 import os
+import pytest
 import ttnn
 
 
@@ -45,3 +46,27 @@ DECODE_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if IS_BLACKHOLE else
 
 # Prefill collectives need the same 2D-torus fabric on Blackhole; Wormhole keeps main's FABRIC_1D_RING.
 PREFILL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if IS_BLACKHOLE else ttnn.FabricConfig.FABRIC_1D_RING
+
+# Every Qwen3-32B galaxy suite hard-parametrizes mesh_device=(8, 4), i.e. a 32-device Galaxy mesh.
+# On a machine that exposes fewer devices (e.g. a degraded Blackhole Galaxy that discovers only a
+# [2, 2] mesh) open_mesh_device raises `TT_FATAL: requested_size <= system_size` and the whole leg
+# fails instead of being skipped as "not applicable for this machine". Guard the suites so they skip
+# cleanly when the required device count is not available.
+REQUIRED_NUM_DEVICES = 32
+
+
+def _available_num_devices():
+    try:
+        return ttnn.get_num_devices()
+    except Exception:
+        return 0
+
+
+# Module-level marker; apply as `pytestmark = requires_galaxy_mesh` in each Qwen galaxy suite.
+requires_galaxy_mesh = pytest.mark.skipif(
+    _available_num_devices() < REQUIRED_NUM_DEVICES,
+    reason=(
+        f"Qwen3-32B galaxy tests require a {REQUIRED_NUM_DEVICES}-device Galaxy mesh (8x4); "
+        f"only {_available_num_devices()} devices available. Not applicable for this machine."
+    ),
+)

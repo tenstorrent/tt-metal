@@ -22,7 +22,10 @@ from models.demos.llama3_70b_galaxy.reference.qwen import FeedForward
 from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import (
     IS_BLACKHOLE as _IS_BLACKHOLE,
     DECODE_FABRIC_CONFIG as _FABRIC_CONFIG,
+    requires_galaxy_mesh,
 )
+
+pytestmark = requires_galaxy_mesh
 
 
 @torch.no_grad()

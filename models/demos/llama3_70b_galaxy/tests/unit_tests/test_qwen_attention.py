@@ -26,7 +26,10 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import (
     IS_BLACKHOLE as _IS_BLACKHOLE,
     DECODE_FABRIC_CONFIG as _FABRIC_CONFIG,
+    requires_galaxy_mesh,
 )
+
+pytestmark = requires_galaxy_mesh
 
 
 def _decode_pos_tensor(pos, batch_size, mesh_device, cluster_shape):
