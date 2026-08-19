@@ -877,6 +877,26 @@ class LTXPipeline:
         self._prepare_vae()
         self.decode_latents(dummy, latent_frames, latent_h, latent_w)
 
+    def _resolve_fps(self, fps: float | None) -> float:
+        """Resolve a per-call ``fps`` against the pipeline's own rate.
+
+        ``None`` means "use the pipeline's rate". A differing value is rejected rather
+        than substituted: FPS sets the audio latent length and scales the A/V cross-PE
+        temporal axis, both of which are baked into the captured traces, so honouring a
+        per-call rate would replay a trace built for another shape while the container
+        claims the requested one -- the desync this plumbing exists to prevent.
+        """
+        if fps is None:
+            return self.fps
+        if float(fps) != self.fps:
+            msg = (
+                f"fps={fps} does not match the pipeline's fps={self.fps}. FPS is fixed at "
+                "pipeline construction (it sets the audio latent length and the A/V cross-PE, "
+                "both baked into the captured traces). Build a pipeline with the desired fps."
+            )
+            raise ValueError(msg)
+        return self.fps
+
     def _warmup_audio_decode(self, audio_latent: torch.Tensor, num_frames: int, fps: float | None = None) -> None:
         """Eager (untraced) audio decode at the real shape: compiles kernels, warms lazy device
         state, and frees back to a deterministic allocator free-list so a later traced decode

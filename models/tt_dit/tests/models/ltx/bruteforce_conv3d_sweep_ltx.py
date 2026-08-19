@@ -68,27 +68,54 @@ from ..wan2_2.bruteforce_conv3d_sweep import TRACE_REGION_SIZE, run_sweep
 # Names are descriptive of (T, channels) rather than guessing the module attribute names.
 # ---------------------------------------------------------------------------
 _SWEEP_LAYERS_LTX_1080P_153F = [
-    # (name,                 C_in, C_out, kernel,    stride,    padding,    T,   H,  W, h, w)
+    # H and W here are the PADDED CONV3D INPUT dims, not the _BLOCKINGS key dims.
+    # run_sweep derives the key as H_out_key = H - (kH - 1) (see wan2_2/
+    # bruteforce_conv3d_sweep.py, "Seed best_us from the production blocking table"), so a
+    # production key of (155, 68, 60) with a (3,3,3) kernel must be swept with input
+    # (155, 70, 62). Passing the key dims directly benchmarks a smaller tensor AND looks up a
+    # key that does not exist, silently falling back to the channel-level table.
+    #
+    # (name,                C_in, C_out, kernel,    stride,    padding,    T,   H,  W, h, w)
     # --- 94% of total volume: the T=155 / T=79 decoder convs ---
-    ("t155_c128x128", 128, 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 68, 60, 4, 8),
-    ("t155_c128x48", 128, 48, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 68, 60, 4, 8),
-    ("t79_c512x512", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 79, 34, 30, 4, 8),
-    ("t155_c256x512", 256, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 34, 30, 4, 8),
-    ("t155_c256x256", 256, 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 34, 30, 4, 8),
+    ("t155_c128x128", 128, 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 70, 62, 4, 8),  # key 68x60
+    ("t155_c128x48", 128, 48, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 70, 62, 4, 8),  # key 68x60
+    ("t79_c512x512", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 79, 36, 32, 4, 8),  # key 34x30
+    ("t155_c256x512", 256, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 36, 32, 4, 8),  # key 34x30
+    ("t155_c256x256", 256, 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 155, 36, 32, 4, 8),  # key 34x30
     # --- mid volume ---
-    ("t41_c512x4096", 512, 4096, (3, 3, 3), (1, 1, 1), (0, 0, 0), 41, 17, 15, 4, 8),
-    ("t41_c512x512", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 41, 17, 15, 4, 8),
+    ("t41_c512x4096", 512, 4096, (3, 3, 3), (1, 1, 1), (0, 0, 0), 41, 19, 17, 4, 8),  # key 17x15
+    ("t41_c512x512", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 41, 19, 17, 4, 8),  # key 17x15
     # --- the latent upsampler (separate 0.20s -> 0.62s regression) ---
-    ("t20_ups_c1024x4096", 1024, 4096, (1, 3, 3), (1, 1, 1), (0, 0, 0), 20, 5, 4, 4, 8),
+    ("t20_ups_c1024x4096", 1024, 4096, (1, 3, 3), (1, 1, 1), (0, 0, 0), 20, 7, 6, 4, 8),  # key 5x4
     # --- small: T=22 sites ---
-    ("t22_c1024x1024_h10", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 10, 8, 4, 8),
-    ("t22_c1024x128_h10", 1024, 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 10, 8, 4, 8),
-    ("t22_c1024x4096_h9", 1024, 4096, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 9, 8, 4, 8),
-    ("t22_c1024x1024_h9", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 9, 8, 4, 8),
-    ("t22_c1024x1024_h5", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 5, 4, 4, 8),
-    ("t22_c128x1024_h9", 128, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 9, 8, 4, 8),
-    ("t22_c128x1024_h5", 128, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 5, 4, 4, 8),
+    ("t22_c1024x1024_h10", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 12, 10, 4, 8),  # key 10x8
+    ("t22_c1024x128_h10", 1024, 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 12, 10, 4, 8),  # key 10x8
+    ("t22_c1024x4096_h9", 1024, 4096, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 11, 10, 4, 8),  # key 9x8
+    ("t22_c1024x1024_h9", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 11, 10, 4, 8),  # key 9x8
+    ("t22_c1024x1024_h5", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 7, 6, 4, 8),  # key 5x4
+    ("t22_c128x1024_h9", 128, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 11, 10, 4, 8),  # key 9x8
+    ("t22_c128x1024_h5", 128, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 22, 7, 6, 4, 8),  # key 5x4
 ]
+
+
+def _hw_product(kernel, h_in: int, w_in: int) -> int:
+    """Largest supported (H_out_block * W_out_block) product that is actually achievable.
+
+    ``run_sweep`` filters candidates with ``h * w != hw_product`` -- an exact match -- so a
+    value no divisor pair can satisfy yields zero valid combos and the layer sweeps to
+    nothing. Blocks are bounded by the OUTPUT dims, so reachability is tested against
+    ``h_in - (kH - 1)``.
+
+    32 mirrors the wan2_2 h4w8 sweeps (non-32 products hung BH on their shapes). Where 32 is
+    unreachable -- the T=20 upsampler and the T=22 H=5/W=4 sites, whose 5x4 outputs cap the
+    product at 20 -- fall back to 16, satisfiable as 4x4.
+    """
+    h_out, w_out = h_in - (kernel[1] - 1), w_in - (kernel[2] - 1)
+    for product in (32, 16):
+        if any(product % h == 0 and h <= h_out and product // h <= w_out for h in range(1, product + 1)):
+            return product
+    msg = f"no achievable hw_product for output {h_out}x{w_out}"
+    raise ValueError(msg)
 
 
 @pytest.mark.parametrize(
@@ -123,13 +150,8 @@ def test_bruteforce_sweep_ltx_1080p_153f(
         w_factor=w_factor,
         max_combos=500,
         max_t_block=8,
-        # hw_product=32 mirrors the wan2_2 h4w8 sweeps (non-32 hw products hung BH there), but
-        # the filter is `h * w != hw_product` -- an EXACT match. Layers whose per-device spatial
-        # dims cannot reach 32 (e.g. the T=20 upsampler and the T=22 H=5/W=4 sites: 5*4 = 20)
-        # yield zero valid combos and sweep to nothing. Only constrain where it is satisfiable.
-        # Exact-match filter on (H_out_block * W_out_block): 32 where reachable; where it is not
-        # (H=5,W=4 -> max 20) use 16, satisfiable as 4x4. Do NOT pass None: unconstrained, the
-        # search balloons past 500 candidates and some blockings take MINUTES to compile
-        # (measured: t22_c1024x1024_h5 advanced <10 combos in 27 min at 90% host CPU).
-        hw_product=32 if H * W >= 32 else 16,
+        # Never pass None here: unconstrained, the search balloons past 500 candidates and
+        # some blockings take minutes each to compile (measured: t22_c1024x1024_h5 advanced
+        # fewer than 10 combos in 27 min at 90% host CPU before being abandoned).
+        hw_product=_hw_product(kernel, H, W),
     )
