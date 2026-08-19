@@ -88,6 +88,56 @@ inline void add_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
     T("    add_bcast_rows(cb" + n(icb0) + ",tile=" + n(itile0) + " + cb" + n(icb1) + ",tile=" + n(itile1) + " -> dst" +
       n(idst) + ")");
 }
+// The nine (op, axis) broadcast pairs. The init_short names are metal's own and are
+// NOT uniform -- add's scalar form omits `tiles_` where sub's and mul's include it.
+inline void add_bcast_cols_init_short(uint32_t b, uint32_t v) {
+    T("    add_bcast_cols_init(cb" + n(b) + ",cb" + n(v) + ")");
+}
+inline void add_tiles_bcast_cols(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
+    T("      add_bcast_cols(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+}
+inline void add_bcast_scalar_init_short(uint32_t b, uint32_t v) {
+    T("    add_bcast_scalar_init(cb" + n(b) + ",cb" + n(v) + ")");
+}
+inline void add_tiles_bcast_scalar(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
+    T("      add_bcast_scalar(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+}
+inline void sub_bcast_rows_init_short(uint32_t b, uint32_t v) {
+    T("    sub_bcast_rows_init(cb" + n(b) + ",cb" + n(v) + ")");
+}
+inline void sub_tiles_bcast_rows(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
+    T("      sub_bcast_rows(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+}
+inline void sub_bcast_cols_init_short(uint32_t b, uint32_t v) {
+    T("    sub_bcast_cols_init(cb" + n(b) + ",cb" + n(v) + ")");
+}
+inline void sub_tiles_bcast_cols(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
+    T("      sub_bcast_cols(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+}
+inline void sub_tiles_bcast_scalar_init_short(uint32_t b, uint32_t v) {
+    T("    sub_bcast_scalar_init(cb" + n(b) + ",cb" + n(v) + ")");
+}
+inline void sub_tiles_bcast_scalar(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
+    T("      sub_bcast_scalar(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+}
+inline void mul_bcast_rows_init_short(uint32_t b, uint32_t v) {
+    T("    mul_bcast_rows_init(cb" + n(b) + ",cb" + n(v) + ")");
+}
+inline void mul_tiles_bcast_rows(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
+    T("      mul_bcast_rows(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+}
+inline void mul_bcast_cols_init_short(uint32_t b, uint32_t v) {
+    T("    mul_bcast_cols_init(cb" + n(b) + ",cb" + n(v) + ")");
+}
+inline void mul_tiles_bcast_cols(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
+    T("      mul_bcast_cols(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+}
+inline void mul_tiles_bcast_scalar_init_short(uint32_t b, uint32_t v) {
+    T("    mul_bcast_scalar_init(cb" + n(b) + ",cb" + n(v) + ")");
+}
+inline void mul_tiles_bcast_scalar(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {
+    T("      mul_bcast_scalar(cb" + n(b) + "[" + n(bt) + "],cb" + n(v) + "[" + n(vt) + "] -> dst" + n(d) + ")");
+}
 inline void pack_tile(uint32_t dst, uint32_t cb) { T("  pack_tile(dst" + n(dst) + " -> cb" + n(cb) + ")"); }
 inline void add_binary_tile_init() {}
 inline void add_binary_tile(uint32_t a, uint32_t b, uint32_t o) {
@@ -347,6 +397,39 @@ void example_reduce() {
     noc_store<0>(out_storage.store(reduce_sum<ReduceAxis::Rows>(a, scaler)), t2, 0);
 }
 
+// Broadcast, one example per axis, and the softmax shape of the thing: a reduction
+// feeding the broadcast that undoes it. The axis appears in both and means the same in
+// both, so the shapes agree by construction -- writing Rows in one place would make the
+// vector Shape<1, wt> and the reduction's result no longer fit its buffer.
+void example_bcast() {
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
+    using In = Shape<2, 3>;                    // non-square on purpose
+    using Col = reduce_shape<In, Axis::Cols>;  // Shape<2, 1>
+    using Row = reduce_shape<In, Axis::Rows>;  // Shape<1, 3>
+
+    Storage<In> x_storage(0), e_storage(2), out_storage(4);
+    Storage<Col> m_storage(5);
+    Storage<Row> r_storage(6);
+    Storage<Shape<1, 1>> one_storage(3);
+
+    ComputeBlock one = fill_reduce_scaler<1>(one_storage);
+    ComputeBlock x = noc_load<1>(x_storage, t0, 0).wait();
+
+    {  // Cols: a reduction and the broadcast that expands it again, with a fused exp
+        ComputeBlock m = m_storage.store(reduce_max<Axis::Cols>(x, one));
+        noc_store<0>(e_storage.store((x - bcast<Axis::Cols>(m)).exp()), t2, 0);
+    }
+    {  // Rows
+        ComputeBlock r = noc_load<1>(r_storage, t0, 0).wait();
+        noc_store<0>(out_storage.store(x * bcast<Axis::Rows>(r)), t2, 0);
+    }
+    {  // Both -- a scalar
+        ComputeBlock sc = noc_load<1>(one_storage, t0, 0).wait();
+        noc_store<0>(out_storage.store(x + bcast<Axis::Both>(sc)), t2, 0);
+    }
+}
+
 // Core-to-core hop, exercising NocAsyncCopyTx. The peer handshake is still not
 // right (see the TODO in unified.hpp) -- this only checks that the local half of
 // the protocol balances and that the handle's two halves fire.
@@ -594,6 +677,8 @@ int main() {
     ok &= report("matmul_acc");
     tt::unified::example_reduce();
     ok &= report("reduce");
+    tt::unified::example_bcast();
+    ok &= report("bcast");
     tt::unified::example_peer_hop();
     ok &= report("peer_hop");
     ok &= report_same("syntax: free vs method", tt::unified::example_syntax_free, tt::unified::example_syntax_method);

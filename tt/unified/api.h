@@ -388,6 +388,28 @@ auto rsqrt(const ComputeBlock<S>& b);
 template <TransposeB Tr = TransposeB::No, typename SA, typename SB>
 auto matmul(const ComputeBlock<SA>& a, const ComputeBlock<SB>& b);
 
+// Mark a ComputeBlock as a BROADCAST operand along `A`, for use as the right-hand side
+// of +, - or *:
+//
+//     u::ComputeBlock m = m_storage.store(u::reduce_max<u::Axis::Cols>(x, one));
+//     e_storage.store((x - u::bcast<u::Axis::Cols>(m)).exp());          // exp(x - rowmax)
+//
+// The axis is DECLARED because a Shape counts tiles and cannot express it: one tile
+// holding a row, a column, or a lone value at [0, 0] is Shape<1, 1> in every case. The
+// vector's shape is then CHECKED against the axis, so the two carry different halves of
+// the requirement and neither is guessed. See bcast_vec_shape in tt/unified/math.hpp.
+//
+// The same axis names a reduction's collapse, so a reduction and the broadcast undoing it
+// agree by construction: reduce over Cols yields Shape<rows, 1>, which is exactly what
+// bcast<Axis::Cols> demands.
+//
+// A ComputeBlock and not a Storage, for the reason reduce_* takes one: its constructor
+// holds the cb_wait_front that makes reading the buffer legal, and its destructor holds
+// the matching pop. Hold it at the scope the vector must survive -- for a resident vector
+// re-read by every block, that is kernel scope.
+template <Axis A, typename S>
+Broadcast<A, S> bcast(const ComputeBlock<S>& v);
+
 // Reduce `b`'s tile grid down one axis, within and across tiles. `Axis` says which
 // dimension collapses; the input grid comes from `b`'s own shape -- see ReduceAxis in
 // tt/unified/math.hpp for what each axis leaves behind.
