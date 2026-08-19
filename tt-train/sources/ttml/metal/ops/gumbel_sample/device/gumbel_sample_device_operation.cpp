@@ -4,9 +4,13 @@
 
 #include "gumbel_sample_device_operation.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <enchantum/enchantum.hpp>
 #include <optional>
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "gumbel_sample_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -16,9 +20,9 @@ namespace ttml::metal::ops::gumbel_sample::device {
 namespace {
 
 // The shape this op WILL write, derived from the logits alone. Single-sourced because the writer
-// derives its output page indices from the logits geometry (its logical_tokens / Ht compile-time
-// args), never from the output tensor -- so validation and the output spec drifting apart would not
-// be caught anywhere downstream.
+// derives its output page indices from the logits geometry (its logical_tokens runtime arg and Ht
+// compile-time arg), never from the output tensor -- so validation and the output spec drifting
+// apart would not be caught anywhere downstream.
 tt::tt_metal::Shape expected_output_shape(bool position_aware, const ttnn::Tensor& logits) {
     // Matches ttnn::argmax(dim=3, keepdim=true): [B, 1, tokens, 1] -- or [B, 1, 1, 1] when a
     // position per batch entry was given, since then only one row per entry is sampled.
@@ -46,6 +50,26 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
             "GumbelSample: tensor '{}' must be TILE layout, got '{}'",
             name,
             enchantum::to_string(tensor.layout()));
+
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "GumbelSample: tensor '{}' must use the default {}x{} tile, got {}x{}",
+            name,
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            tile.get_height(),
+            tile.get_width());
+        auto expected_padded = tensor.logical_shape();
+        expected_padded[-2] = tt::round_up(expected_padded[-2], tt::constants::TILE_HEIGHT);
+        expected_padded[-1] = tt::round_up(expected_padded[-1], tt::constants::TILE_WIDTH);
+        TT_FATAL(
+            tensor.padded_shape() == expected_padded,
+            "GumbelSample: tensor '{}' padded shape {} must be its logical shape {} rounded up to the 32x32 tile; "
+            "custom alignments are not supported",
+            name,
+            tensor.padded_shape(),
+            tensor.logical_shape());
         TT_FATAL(
             tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "GumbelSample: tensor '{}' must be INTERLEAVED, got '{}'",
@@ -64,6 +88,38 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
     auto* device = logits.device();
     TT_FATAL(device != nullptr, "GumbelSample: logits are not associated with a device");
 
+    // seed_axes name the mesh axes whose devices hold DISTINCT data and must therefore draw
+    // DISTINCT noise. An axis outside the mesh is unconditionally a caller bug (a typo, or a
+    // config reused across topologies): seeded_linear_index() in the program factory skips axes it
+    // cannot find, so every device would fall through to stream id 0 and draw byte-identical
+    // noise -- for GRPO that is duplicate completions with zero-variance advantages, and nothing
+    // downstream flags it. Extent-1 axes are deliberately NOT rejected: a trivial axis is how a
+    // topology-generic caller says "seed this axis if it happens to be sharded here".
+    const auto mesh_shape = device->shape();
+    for (const uint32_t axis : args.seed_axes) {
+        TT_FATAL(
+            axis < mesh_shape.dims(),
+            "GumbelSample: seed_axes entry {} does not exist on this {}-dimensional mesh {}",
+            axis,
+            mesh_shape.dims(),
+            mesh_shape);
+    }
+    // A multi-device mesh where no seeded axis has extent > 1 is LEGAL -- a fully replicated
+    // (TP-only) mesh deliberately draws identical noise so replicas agree on the sampled token --
+    // but it is also exactly what a forgotten seed_axes looks like from a data-parallel caller.
+    // Say so at debug level (as the composite sample() this op replaced used to) rather than
+    // guessing which of the two the caller meant.
+    if (mesh_shape.mesh_size() > 1 && std::none_of(args.seed_axes.begin(), args.seed_axes.end(), [&](uint32_t axis) {
+            return mesh_shape[axis] > 1;
+        })) {
+        log_debug(
+            tt::LogOp,
+            "GumbelSample: all {} devices share one RNG stream (seed_axes selects no axis with extent > 1) and will "
+            "draw identical noise. If these devices hold distinct batch rows, pass the data-parallel mesh axes in "
+            "seed_axes.",
+            mesh_shape.mesh_size());
+    }
+
     TT_FATAL(
         logits.dtype() == tt::tt_metal::DataType::BFLOAT16 || logits.dtype() == tt::tt_metal::DataType::FLOAT32,
         "GumbelSample: logits must be BFLOAT16 or FLOAT32, got '{}'",
@@ -73,8 +129,8 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(
         args.temperature >= 0.0F && std::isfinite(args.temperature),
-        "GumbelSample: temperature must be finite and >= 0, got {}. Zero selects greedy argmax; anything positive "
-        "selects Gumbel-max sampling.",
+        "GumbelSample: temperature must be finite and >= 0, got {}. Zero -- or a positive value below ~2.9e-39, whose "
+        "reciprocal overflows float32 -- selects greedy argmax; other positive values select Gumbel-max sampling.",
         args.temperature);
 
     // NOTE: seed == 0 is deliberately NOT rejected. This op drives the SFPU generator directly via
@@ -211,11 +267,13 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
     // args that override_runtime_arguments re-applies, so every step of a training loop (new seed
     // each step) reuses one cached program instead of thrashing the cache.
     //
-    // Whether the temperature is zero IS part of the key, though: it selects the DO_GUMBEL_NOISE
-    // define, so greedy and sampled runs compile to different kernels. Omitting it would let a
-    // cached noisy program be reused for a greedy call -- silently sampling when the caller asked
-    // for argmax. `seed_axes` is in the key because it changes which mesh coordinates get distinct
-    // programs.
+    // WHICH KERNEL the temperature selects IS part of the key, though: uses_gumbel_noise picks the
+    // DO_GUMBEL_NOISE define, so greedy and sampled runs compile to different kernels. Omitting it
+    // would let a cached noisy program be reused for a greedy call -- silently sampling when the
+    // caller asked for argmax. It must be the SAME predicate the factory uses (not a bare
+    // `temperature > 0`): a sub-reciprocal-overflow temperature builds the greedy kernel, and
+    // hashing it as "noisy" would collide it with real noisy programs. `seed_axes` is in the key
+    // because it changes which mesh coordinates get distinct programs.
     // Buffer PLACEMENT is part of the key, not just presence. TensorAccessorArgs bakes
     // ArgConfig::IsDram and the buffer's aligned_page_size into the reader/writer COMPILE-TIME args
     // (tensor_accessor_args.cpp), and both differ between DRAM and L1. Two calls that differ only in
@@ -230,22 +288,25 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
     const bool position_aware = tensor_args.positions.has_value();
 
     // In position mode the program does not depend on the token dimension AT ALL: the work split is
-    // NC * Wt (see the program factory), the reader's Ht is a runtime arg, and the writer's
-    // token-dim compile-time args are pinned. Normalizing dim -2 out of the key is therefore what
-    // lets one program serve every prompt length. Without it, a rollout whose prompts round to a new
-    // Np missed the cache on every prefill and paid a fresh JIT build of all three kernels -- ~6 s
-    // against ~3 ms for the dispatch itself, measured across 17 generates.
+    // NC * Wt (see the program factory), the reader's Ht and both kernels' logical_tokens (the
+    // position-clamp bound) are runtime args, and the writer's compile-time Ht is pinned.
+    // Normalizing dim -2 out of the key is therefore what lets one program serve every
+    // prompt length. Without it, a rollout whose prompts round to a new Np missed the cache on
+    // every prefill and paid a fresh JIT build of all three kernels -- ~6 s against ~3 ms for the
+    // dispatch itself, measured across 17 generates.
     //
-    // The dim is NORMALIZED rather than omitted because hash_operation forwards a variadic pack with
-    // no arity tag, and both shapes must be treated: the host tile-rounds Np, so padded == logical
-    // and normalizing one alone would leave the other as a live source of misses.
+    // The dim is NORMALIZED rather than omitted because hash_operation forwards a variadic pack
+    // with no arity tag: conditionally dropping an argument would change the key's structure and
+    // let unrelated argument combinations alias.
     //
-    // Two invariants keep the relaxation sound, and both are load-bearing: the reader's Ht MUST be
-    // re-applied in override_runtime_arguments (a cached program is otherwise replayed with the Ht
-    // it was built at, reading a real but WRONG token row -- in bounds, no fault, silently wrong),
-    // and total_tiles MUST stay NC * Wt in position mode. It also means a captured trace would
-    // freeze Ht into its recorded runtime args; nothing in tt-train captures traces today, but a
-    // trace taken at one Np and replayed at another would read the wrong pages.
+    // Two invariants keep the relaxation sound, and both are load-bearing: every token-derived
+    // runtime arg (the reader's Ht, both kernels' logical_tokens) MUST be re-applied in
+    // override_runtime_arguments (a cached program is otherwise replayed with the values it was
+    // built at, reading a real but WRONG token row or clamping positions against a stale bound --
+    // in bounds, no fault, silently wrong), and total_tiles MUST stay NC * Wt in position mode. It
+    // also means a captured trace would freeze those args as recorded; nothing in tt-train
+    // captures traces today, but a trace taken at one Np and replayed at another would read the
+    // wrong pages.
     auto token_normalized = [position_aware](tt::tt_metal::Shape shape) {
         if (position_aware) {
             shape[-2] = 1U;
@@ -255,17 +316,22 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
 
     return tt::tt_metal::operation::hash_operation<GumbelSampleDeviceOperation>(
         position_aware,
-        args.temperature > 0.0F,
+        uses_gumbel_noise(args.temperature),
         args.seed_axes,
         logits.dtype(),
+        // The padded shape is deliberately NOT hashed alongside the logical one: check_tensor pins
+        // it to the logical shape's default-tile round-up, so it is fully derived and would only
+        // duplicate key material. Everything the program factory takes from padded dims (Wt, Ht,
+        // NC) is therefore a function of what IS in the key.
         token_normalized(logits.logical_shape()),
-        token_normalized(logits.padded_shape()),
         static_cast<int>(logits.memory_config().buffer_type()),
         tensor_args.logits_padding_mask.has_value(),
         placement_of(tensor_args.logits_padding_mask),
-        // The positions SHAPE is not hashed separately: its entry count is NC = padded_shape[0] *
-        // padded_shape[1], already in the key via dims 0 and 1, which token_normalized leaves alone.
-        // Only its placement matters, for the accessor reason above.
+        // The positions SHAPE is not hashed separately: its entry count is NC, which the factory
+        // computes from PADDED dims 0 and 1 of the logits. Tile rounding only touches the last two
+        // dims (check_tensor enforces exactly that), so padded dims 0 and 1 equal the logical ones
+        // already in the key -- and token_normalized leaves them alone. Only the placement of
+        // positions matters, for the accessor reason above.
         placement_of(tensor_args.positions),
         placement_of(tensor_args.preallocated_output));
 }

@@ -25,6 +25,11 @@ void kernel_main() {
     // Base address of the positions tensor, 0 when absent. Emitted in BOTH modes for the same reason
     // Ht is: the host patches this slot unconditionally on every dispatch.
     const uint32_t positions_address = get_arg_val<uint32_t>(rt_idx++);
+    // Logical token count, for range-clamping positions below. A RUNTIME arg for the same reason Ht
+    // is: it derives from the token dimension, which the program hash normalizes away in position
+    // mode -- baking it in would make every prompt length a fresh JIT build. Read unconditionally
+    // so the runtime-arg layout is identical in both modes.
+    const uint32_t logical_tokens = get_arg_val<uint32_t>(rt_idx++);
 
     constexpr uint32_t cb_logits_idx = tt::CBIndex::c_0;
     constexpr uint32_t cb_mask_idx = tt::CBIndex::c_1;
@@ -82,19 +87,30 @@ void kernel_main() {
             // volatile so the load cannot be hoisted above the barrier above.
             const uint32_t position =
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t *>(positions_l1_base + entry * positions_slot_bytes);
-            // Clamp the TILE ROW, not the position. This kernel consumes position >> 5 and the writer
-            // consumes position & 31 -- disjoint bit fields -- so bounding the row here cannot
-            // desynchronize the pair, and the writer needs no matching change. Clamping before the
-            // multiply also contains the uint32 overflow case.
+            // Clamp the POSITION against the logical token count, BEFORE it is split into its two
+            // consumed bit fields (this kernel takes position >> 5, the writer takes position & 31).
+            // The writer applies the IDENTICAL clamp: both halves must come from the same clamped
+            // value, or the pair desynchronizes -- clamping only the tile row here would fetch one
+            // tile while the writer scans a different position's row inside it.
             //
-            // The host can no longer range-check positions (they live in device memory), so without
-            // this clamp, a bad value reads outside the logits buffer entirely: interleaved accessors do no
-            // bounds checking, and watcher validates the whole DRAM window rather than the buffer, so
-            // it would not be caught there either. It is the caller's responsibility to ensure the passed-in positions
-            // are valid.
-            const uint32_t tile_row = position >> 5U;
-            const uint32_t clamped_row = (tile_row < Ht) ? tile_row : (Ht - 1U);
-            return (entry * Ht + clamped_row) * Wt + column;
+            // The clamp exists because positions live in device memory, so the host cannot
+            // range-check them on the dispatch path (reading them back is a blocking sync). Without
+            // it, a position in the tile-padding band [logical_tokens, Ht*32) selects a real tile
+            // but a ZERO-FILLED padding row -- greedy then returns token 0 and sampling returns a
+            // near-uniform token, silently -- and a position past Ht*32 reads outside the logits
+            // buffer entirely (interleaved accessors do no bounds checking, and watcher validates
+            // the whole DRAM window rather than the buffer). Clamping to the last real token also
+            // yields the row the caller almost certainly meant for the classic off-by-one
+            // (position == prompt length), and doing it before the shift and multiply contains the
+            // uint32 overflow case. The ASSERT makes a bad position loud under watcher; in normal
+            // runs the clamp keeps it in bounds.
+            //
+            // No separate Ht clamp is needed: validation pins the padded token dim to
+            // round_up(logical_tokens, 32), so clamped >> 5 <= Ht - 1 by construction.
+            ASSERT(position < logical_tokens);
+            const uint32_t clamped_position = (position < logical_tokens) ? position : (logical_tokens - 1U);
+            const uint32_t tile_row = clamped_position >> 5U;
+            return (entry * Ht + tile_row) * Wt + column;
         } else {
             return virtual_tile;
         }

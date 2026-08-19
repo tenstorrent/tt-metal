@@ -15,6 +15,7 @@
 
 #include "gumbel_sample_device_operation_types.hpp"
 #include "metal/common/program_utils.hpp"
+#include "ttnn/operations/uniform/uniform_range.hpp"
 
 namespace {
 
@@ -61,6 +62,15 @@ constexpr uint32_t kReaderHtIdx = 4U;
 constexpr uint32_t kReaderPositionsBufferIdx = 5U;
 constexpr uint32_t kWriterPositionsBufferIdx = 3U;
 static_assert(kReaderPositionsBufferIdx == kReaderHtIdx + 1U);
+// Logical token count, appended LAST in both kernels so every earlier slot keeps its index. It
+// bounds the position clamp in both kernels (they consume disjoint bit fields of the SAME clamped
+// value, so both need it). A RUNTIME arg for the same reason Ht is: it derives from the token
+// dimension, which the program hash normalizes away in position mode -- as a compile-time arg it
+// would put every prompt length back on the JIT-miss path.
+constexpr uint32_t kReaderLogicalTokensIdx = 6U;
+constexpr uint32_t kWriterLogicalTokensIdx = 5U;
+static_assert(kReaderLogicalTokensIdx == kReaderPositionsBufferIdx + 1U);
+static_assert(kWriterLogicalTokensIdx == kWriterPositionsBufferIdx + 1U);
 
 // Per-entry token positions live in a small device TENSOR, not in runtime args. Each core stages the
 // whole local list into L1 once at kernel start (slots are indexed by absolute entry id, so the full
@@ -82,11 +92,13 @@ constexpr auto kWriterPositionsCbIndex = tt::CBIndex::c_6;
 // gumbel_sfpu.h's approximate log drops its zero guard on the strength of exactly these bounds --
 // change them only together with that header.
 constexpr float kGumbelUniformLowerBound = 0x1p-32F;
-constexpr float kGumbelUniformUpperBound = 0x1.fffffep-1F;  // nextafterf(1.0F, 0.0F)
+const float kGumbelUniformUpperBound = ttnn::operations::uniform::largest_supported_float32_below(1.0F);
 
 // `rand_tile` is documented as inclusive of `from + scale`. Shrink the scale by one ULP if rounding
-// would push the top of the range past the intended upper bound -- same guard compute_uniform.cpp
-// applies on the device side.
+// would push the top of the range past the intended upper bound. This mirrors the guard in the
+// uniform op's DEVICE kernel (compute_uniform.cpp) -- there is no host-side header that ships it,
+// and this op cannot reuse the kernel's copy because its compute kernel takes `from` and `scale`
+// as runtime args (the scale must be computed here, on the host) rather than the two endpoints.
 uint32_t compute_rand_scale_bits(float lower, float upper) {
     float scale = upper - lower;
     uint32_t scale_bits = std::bit_cast<uint32_t>(scale);
@@ -338,9 +350,11 @@ tt::tt_metal::Program build_program(
     auto* mask_buffer = has_mask ? tensor_args.logits_padding_mask->buffer() : nullptr;
     auto* output_buffer = output.buffer();
 
-    // temperature == 0 selects the greedy variant of the compute kernel: no RNG, no scaling, the
-    // logits go straight through to the writer's running argmax.
-    const bool do_gumbel_noise = args.temperature > 0.0F;
+    // Greedy vs noisy is decided by uses_gumbel_noise, NOT a bare `temperature > 0`: a positive
+    // temperature whose reciprocal overflows float32 (below ~2.9e-39) must build the greedy kernel,
+    // or the +inf scale factor collapses every positive logit to one bit pattern and the argmax
+    // degenerates to "first positive column". The hash uses the same predicate.
+    const bool do_gumbel_noise = uses_gumbel_noise(args.temperature);
 
     std::map<std::string, std::string> defines;
     if (has_mask) {
@@ -388,14 +402,19 @@ tt::tt_metal::Program build_program(
     std::vector<uint32_t> writer_ct_args{
         layout.Wt,
         layout.logical_vocab,
-        // Both of these are dead under DO_POSITIONS -- their only uses sit past unconditional
-        // returns -- but a compile-time arg is hashed into the kernel binary whether it is read or
-        // not, so they are pinned to keep the build independent of the token dimension. ONE, never
-        // zero: the dead fallback divides by Ht in code that is still compiled, and the JIT builds
-        // with -Wall -Werror, so a zero here is a -Werror=div-by-zero build failure. At 1 the dead
-        // path degenerates to exactly what the position path does, which keeps it harmless if the
-        // guard is ever refactored away.
-        layout.position_aware ? 1U : layout.logical_tokens,
+        // logical_tokens is NOT here: it rides as a runtime arg in both modes (see
+        // kWriterLogicalTokensIdx) -- in position mode it must stay out of the program-cache key,
+        // and in non-position mode its uses are multiplies and compares that gain nothing from
+        // being constexpr. Ht cannot follow it: the writer divides by Ht, which folds to
+        // shift/multiply only for a compile-time constant.
+        //
+        // Ht is dead under DO_POSITIONS -- its only uses sit past unconditional returns -- but a
+        // compile-time arg is hashed into the kernel binary whether it is read or not, so it is
+        // pinned to keep the build independent of the token dimension. ONE, never zero: the dead
+        // fallback divides by Ht in code that is still compiled, and the JIT builds with
+        // -Wall -Werror, so a zero here is a -Werror=div-by-zero build failure. At 1 the dead path
+        // degenerates to exactly what the position path does, which keeps it harmless if the guard
+        // is ever refactored away.
         layout.position_aware ? 1U : layout.Ht,
         reduction_sem_id,
         max_foreign_shards,
@@ -424,8 +443,9 @@ tt::tt_metal::Program build_program(
     // -------------------------------------------------------------------------
     const uint32_t rand_from_bits = std::bit_cast<uint32_t>(kGumbelUniformLowerBound);
     const uint32_t rand_scale_bits = compute_rand_scale_bits(kGumbelUniformLowerBound, kGumbelUniformUpperBound);
-    // Guard the reciprocal: temperature == 0 would make this inf. The greedy kernel never reads it,
-    // but an inf sitting in a runtime arg is a trap for anyone who later makes it read it.
+    // Guard the reciprocal: only computed when the noisy kernel will read it. uses_gumbel_noise
+    // guarantees the reciprocal is FINITE here (that is the predicate's whole point); greedy gets a
+    // zero because an inf sitting in a runtime arg is a trap for anyone who later makes it read it.
     const uint32_t inv_temperature_bits = do_gumbel_noise ? std::bit_cast<uint32_t>(1.0F / args.temperature) : 0U;
 
     // Zero when absent: the slot exists in BOTH modes so override_runtime_arguments can patch it
@@ -443,7 +463,8 @@ tt::tt_metal::Program build_program(
              num_tiles,
              start_tile,
              layout.Ht,
-             positions_address});
+             positions_address,
+             layout.logical_tokens});
 
         SetRuntimeArgs(
             program,
@@ -456,7 +477,8 @@ tt::tt_metal::Program build_program(
              send_routing[core_index][0],
              send_routing[core_index][1],
              send_routing[core_index][2],
-             expected_shards[core_index]});
+             expected_shards[core_index],
+             layout.logical_tokens});
 
         const auto compute_kernel = layout.core_group_1.contains(core) ? shared_vars.compute_kernel_group_1_id
                                                                        : shared_vars.compute_kernel_group_2_id;
@@ -533,11 +555,15 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
 
     // seed and temperature are runtime-only (deliberately excluded from the program hash so that
     // changing either reuses the cached program), so they must be re-applied on every cache hit
-    // alongside the buffer addresses.
+    // alongside the buffer addresses. The guard is uses_gumbel_noise, matching build_program and
+    // the hash: it keeps the reciprocal finite, and a temperature whose kernel selection CHANGED
+    // (crossing zero or the reciprocal-overflow floor) hashes to a different program anyway, so a
+    // cached program is never patched with the wrong variant's args.
     const uint32_t rand_from_bits = std::bit_cast<uint32_t>(kGumbelUniformLowerBound);
     const uint32_t rand_scale_bits = compute_rand_scale_bits(kGumbelUniformLowerBound, kGumbelUniformUpperBound);
-    const uint32_t inv_temperature_bits =
-        operation_attributes.temperature > 0.0F ? std::bit_cast<uint32_t>(1.0F / operation_attributes.temperature) : 0U;
+    const uint32_t inv_temperature_bits = uses_gumbel_noise(operation_attributes.temperature)
+                                              ? std::bit_cast<uint32_t>(1.0F / operation_attributes.temperature)
+                                              : 0U;
 
     for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
         auto& vars = cached_workload.shared_variables.at(coord_range);
@@ -568,11 +594,16 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
                 // a cached program replayed against a stale address reads whatever DRAM now occupies
                 // that region -- in bounds, no fault, a plausible-looking token. This patch prevents that.
                 core_args[kReaderPositionsBufferIdx] = positions_address;
+                // Like Ht: runtime-only and token-derived, so a cached program replayed without
+                // this patch would clamp positions against a STALE token count -- either rejecting
+                // valid rows or readmitting the padding band the clamp exists to keep out.
+                core_args[kReaderLogicalTokensIdx] = layout.logical_tokens;
             }
             {
                 auto& core_args = writer_args[core.x][core.y];
                 core_args[kWriterOutputBufferIdx] = output_address;
                 core_args[kWriterPositionsBufferIdx] = positions_address;
+                core_args[kWriterLogicalTokensIdx] = layout.logical_tokens;
             }
             {
                 auto& core_args = vars.core_group_1.contains(core) ? compute_g1_args[core.x][core.y]

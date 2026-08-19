@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -12,11 +13,29 @@
 
 namespace ttml::metal::ops::gumbel_sample::device {
 
+// Whether this temperature selects the Gumbel-noise kernel (DO_GUMBEL_NOISE) or greedy argmax.
+// Deliberately STRICTER than `temperature > 0`: the device receives 1/temperature as a runtime
+// arg, and for positive temperatures below ~1/FLT_MAX (~2.9e-39, subnormal range) that reciprocal
+// overflows to +inf. logit * inf then collapses every positive logit to the same +inf bit pattern
+// and every zero logit to NaN (which float32_greater never picks), so the "sampled" argmax would
+// silently return the FIRST positive column rather than the max one. A temperature that small
+// means greedy anyway -- the noise term is dwarfed by the scaled logits long before the
+// reciprocal overflows -- so it routes to the greedy kernel, which is the exact limit a
+// temperature anneal is approaching.
+//
+// Single-sourced here because three sites must agree on which kernel a temperature selects: the
+// program HASH, the kernel-define selection in the factory, and the runtime-arg override. A
+// disagreement would replay a cached greedy program with noise args, or vice versa.
+inline bool uses_gumbel_noise(float temperature) {
+    return temperature > 0.0F && std::isfinite(1.0F / temperature);
+}
+
 struct GumbelSampleParams {
-    // Softmax temperature, >= 0. Zero selects greedy argmax: the compute kernel compiles out the
-    // RNG and the scaling (DO_GUMBEL_NOISE) and passes the logits straight to the writer's running
-    // argmax. Note this makes `temperature > 0` part of the program hash, since it changes the
-    // kernel binary -- see compute_program_hash.
+    // Softmax temperature, >= 0. Zero -- or a positive value so small that 1/temperature
+    // overflows float32 (see uses_gumbel_noise above) -- selects greedy argmax: the compute kernel
+    // compiles out the RNG and the scaling (DO_GUMBEL_NOISE) and passes the logits straight to the
+    // writer's running argmax. Note this makes uses_gumbel_noise(temperature) part of the program
+    // hash, since it changes the kernel binary -- see compute_program_hash.
     float temperature = 1.0F;
 
     // RNG seed. Any value is valid, INCLUDING 0 -- it is an ordinary seed here, not a sentinel.

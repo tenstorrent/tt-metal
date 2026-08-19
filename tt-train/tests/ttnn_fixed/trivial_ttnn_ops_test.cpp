@@ -11,6 +11,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <umd/device/cluster.hpp>
 #include <vector>
@@ -259,6 +260,35 @@ TEST_F(TrivialTnnFixedTest, TestSamplingZeroTemperatureNoMask) {
     auto tensor_b = ttml::ttnn_fixed::sample(tensor_a, 0.0F, 42);
     auto vector_b = ttml::core::to_vector<uint32_t>(tensor_b);
     EXPECT_EQ(vector_b, expected_b);
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingSubnormalTemperatureIsExactGreedy) {
+    // 1e-39F is positive and finite, so it passes validation and used to select the noise kernel --
+    // but 1/1e-39 overflows FLT_MAX, and the resulting +inf scale factor collapsed every positive
+    // logit to the same +inf bit pattern (and every zero logit to NaN, which float32_greater never
+    // picks). The "sampled" argmax then returned the FIRST positive column instead of the max one.
+    // Sub-reciprocal-overflow temperatures now route to the greedy kernel, the exact limit a
+    // temperature anneal approaches.
+    //
+    // Each row is built so the two behaviors disagree: an early positive DECOY column with a small
+    // logit and a later WINNER column with the true max. The old path returns the decoy (first
+    // positive), greedy returns the winner -- so exact equality here is the regression check.
+    constexpr uint32_t kRows = 32U;
+    constexpr uint32_t kVocab = 64U;
+    xt::xarray<float>::shape_type shape = {1, 1, kRows, kVocab};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+    a.fill(-1.0F);
+    std::vector<uint32_t> expected(kRows);
+    for (uint32_t i = 0; i < kRows; ++i) {
+        const uint32_t decoy = i % 8U;
+        const uint32_t winner = 8U + ((i * 3U) % (kVocab - 8U));
+        a(0, 0, i, decoy) = 0.5F;
+        a(0, 0, i, winner) = 2.0F;
+        expected[i] = winner;
+    }
+    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+    auto got = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 1e-39F, 42));
+    EXPECT_EQ(got, expected);
 }
 
 TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureNoMask) {
@@ -769,33 +799,74 @@ TEST_F(TrivialTnnFixedTest, TestSamplingRepatchesPositionsBufferOnCacheHit) {
 }
 
 TEST_F(TrivialTnnFixedTest, TestSamplingClampsOutOfRangePosition) {
-    // The host cannot range-check positions any more -- they live in device memory. An unclamped
-    // out-of-range value would resolve to a page outside the logits buffer entirely: interleaved
-    // accessors bounds-check nothing, and watcher validates the whole DRAM window rather than the
-    // buffer, so it would not be caught there either. The reader clamps the tile row, which bounds
-    // the read to this entry's own data. Assert the op returns an in-range id and does not hang.
-    constexpr uint32_t kBatch = 3U;
-    constexpr uint32_t kTokens = 64U;
+    // Positions live in device memory, so the host cannot range-check them on the dispatch path.
+    // The kernels clamp each position to the LAST REAL TOKEN -- reader and writer apply the same
+    // clamp to the value before splitting it into their disjoint bit fields (>> 5 and & 31), so
+    // the expectations here are EXACT row identities, not just "stayed inside the vocabulary".
+    // Two failure modes hide behind that weaker check:
+    //
+    //  * A position in the tile-padding band [tokens, Ht*32) -- e.g. the classic off-by-one of
+    //    position == prompt length on a mid-tile prompt -- passes any tile-row-only bound and
+    //    lands on a ZERO-FILLED padding row. Greedy argmax over zeros returns token 0: in range,
+    //    silently wrong. kTokens is deliberately mid-tile so the band exists at all; a
+    //    tile-aligned token count has none (which is why this test previously could not catch it).
+    //  * A position past Ht*32 resolves to a page outside the logits buffer entirely: interleaved
+    //    accessors bounds-check nothing, and watcher validates the whole DRAM window rather than
+    //    the buffer.
+    //
+    // Every winner below is nonzero, so a scan of a zeroed padding row (which returns 0) can never
+    // masquerade as a pass.
+    if (std::getenv("TT_METAL_WATCHER") != nullptr) {
+        GTEST_SKIP() << "out-of-range positions deliberately trip the kernels' watcher ASSERT; "
+                        "under watcher the loud path replaces the clamp being tested here";
+    }
+
+    constexpr uint32_t kBatch = 4U;
+    constexpr uint32_t kTokens = 70U;  // Ht = 3, mid-tile: the padding band is [70, 96)
     constexpr uint32_t kVocab = 40U;
 
     xt::xarray<float>::shape_type shape = {kBatch, 1U, kTokens, kVocab};
     xt::xarray<float> a = xt::zeros<float>(shape);
     a.fill(-1.0F);
+    std::vector<uint32_t> winner_at(kBatch * kTokens);
     for (uint32_t b = 0; b < kBatch; ++b) {
         for (uint32_t t = 0; t < kTokens; ++t) {
-            a(b, 0, t, ((b * kTokens + t) * 5U) % kVocab) = -0.5F;
+            const uint32_t winner = ((b * kTokens + t) * 5U) % kVocab;
+            a(b, 0, t, winner) = -0.5F;
+            winner_at[b * kTokens + t] = winner;
         }
     }
     auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
 
-    // Entry 2 is far out of range; entry 0 cannot exercise the clamp, since entry * Ht is zero.
-    const std::vector<uint32_t> positions = {0U, 33U, 10U * kTokens};
+    // Entry 0: in-range control (the last real token itself -- the clamp must not disturb it).
+    // Entry 1: the off-by-one, first value of the padding band; SAME tile row as real data, so a
+    //          tile-row-only clamp passes it straight through to the padding row.
+    // Entry 2: deep in the padding band, still inside the last real tile.
+    // Entry 3: far past the padded extent, in a tile row that does not exist.
+    const std::vector<uint32_t> positions = {kTokens - 1U, kTokens, 90U, 10U * kTokens};
     auto got = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(
         tensor_a, 0.0F, 7, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, make_positions(positions)));
     ASSERT_EQ(got.size(), kBatch);
-    for (uint32_t b = 0; b < kBatch; ++b) {
-        EXPECT_LT(got[b], kVocab) << "entry " << b << " left the logical vocabulary";
+
+    EXPECT_EQ(got[0], winner_at[0 * kTokens + (kTokens - 1U)]) << "in-range entry disturbed by the clamp";
+    for (uint32_t b = 1; b < kBatch; ++b) {
+        EXPECT_EQ(got[b], winner_at[b * kTokens + (kTokens - 1U)])
+            << "entry " << b << " (position " << positions[b] << ") must clamp to the last real token's row";
     }
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingRejectsOutOfRangeSeedAxis) {
+    // seeded_linear_index() skips mesh axes it cannot find, so before this was validated an
+    // out-of-range seed axis (a typo, or a config reused across mesh topologies) silently degraded
+    // to "no axis seeded": every data-parallel device drew byte-identical noise and a GRPO rollout
+    // emitted duplicate completions with zero-variance advantages. The op must reject it loudly
+    // instead. Axis 7 is out of range on any mesh this suite runs on.
+    xt::xarray<float>::shape_type shape = {1, 1, 32, 64};
+    xt::xarray<float> a = ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, 42U);
+    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+
+    EXPECT_ANY_THROW(ttml::ttnn_fixed::sample(
+        tensor_a, 1.0F, 42, /* mask */ std::nullopt, /* seed_axes */ std::vector<uint32_t>{7U}));
 }
 
 TEST_F(TrivialTnnFixedTest, TestSamplingWithoutPositionsUnchangedByAccessorChain) {

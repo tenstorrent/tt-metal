@@ -21,7 +21,9 @@ from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
 from ttml.trainers.grpo_trainer import GRPOCompleter
-from .completer_common import deallocate_tensors, async_read_to_host, positions_to_tensor
+from ttml.common.sampling import positions_to_tensor
+
+from .completer_common import deallocate_tensors, async_read_to_host
 from .llama_overrides import LlamaCompositeKV
 
 TILE_SIZE = 32
@@ -355,10 +357,12 @@ class LlamaGRPOCompleter(GRPOCompleter):
 
         return ttml.autograd.Tensor.from_numpy(mask_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self._dp_mapper)
 
-    def _build_logits_mask(self, vocab_size: int, padded_vocab_size: int) -> ttml.autograd.Tensor:
+    def _build_logits_mask(self, vocab_size: int, padded_vocab_size: int, dtype: ttnn.DataType) -> ttml.autograd.Tensor:
+        """``dtype`` must match the logits dtype -- the sampler rejects a mismatched mask rather
+        than converting it, so the caller passes the dtype of the actual logits tensor."""
         logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
         logits_mask[:, :, :, vocab_size:] = 1e4
-        return ttml.autograd.Tensor.from_numpy(logits_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+        return ttml.autograd.Tensor.from_numpy(logits_mask, ttnn.Layout.TILE, dtype)
 
     def _get_stop_ids(self) -> set[int]:
         tokenizer = self._ctx._tokenizer
@@ -407,7 +411,9 @@ class LlamaGRPOCompleter(GRPOCompleter):
         padded_V = round_up_to_tile(V)
 
         kv_cache = self._get_kv_cache(B_local)
-        logits_mask_tensor = self._build_logits_mask(V, padded_V) if padded_V != V else None
+        # Built lazily on the first step: the mask must match the LOGITS dtype (the sampler
+        # rejects a mismatch), and that dtype is only knowable from an actual forward pass.
+        logits_mask_tensor = None
 
         tokens_to_complete = min(
             ctx.max_tokens_to_complete,
@@ -452,6 +458,9 @@ class LlamaGRPOCompleter(GRPOCompleter):
 
             mask = self._create_causal_mask(processed, new_tokens, pad_lengths, B)
             logits = self._model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
+
+            if logits_mask_tensor is None and padded_V != V:
+                logits_mask_tensor = self._build_logits_mask(V, padded_V, logits.get_value().dtype)
 
             next_token_tensor = ttml.ops.sample.sample_op(
                 logits,
