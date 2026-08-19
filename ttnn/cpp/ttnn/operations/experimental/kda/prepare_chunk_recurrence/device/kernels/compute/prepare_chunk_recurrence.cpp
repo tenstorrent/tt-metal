@@ -368,7 +368,6 @@ TT_KERNEL void compute(uint32_t work_count) {
     DataflowBuffer t_inv(dfb::t_inv);
     DataflowBuffer v_beta(dfb::v_beta);
     DataflowBuffer k_beta(dfb::k_beta);
-    DataflowBuffer output(dfb::output);
     DataflowBuffer u(dfb::u);
     DataflowBuffer w(dfb::w);
     DataflowBuffer q_decay(dfb::q_decay);
