@@ -37,14 +37,11 @@ constexpr uint32_t kSeqRepeatInterleave = 9;
 // Shared by several data_movement ops, hence common/ rather than this op's own kernels dir.
 constexpr const char* kTileReaderSrc =
     "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/reader_tile_interleaved_unified.cpp";
-constexpr const char* kTileWriterSrc =
+constexpr const char* kWriterSrc =
     "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/writer_interleaved.cpp";
 constexpr const char* kRmReaderSrc =
     "ttnn/cpp/ttnn/operations/data_movement/repeat_interleave/codegen/kernels/"
     "reader_repeat_interleave_rm.cpp";
-constexpr const char* kRmWriterSrc =
-    "ttnn/cpp/ttnn/operations/data_movement/repeat_interleave/codegen/kernels/"
-    "writer_repeat_interleave_rm.cpp";
 
 uint32_t align_up(uint32_t value, uint32_t alignment) { return ((value + alignment - 1) / alignment) * alignment; }
 
@@ -134,7 +131,7 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
 
         const uint32_t out_page_size = align_up(cb_page_size, page_alignment(output.memory_config()));
         KernelDescriptor writer_desc;
-        writer_desc.kernel_source = kTileWriterSrc;
+        writer_desc.kernel_source = kWriterSrc;
         writer_desc.core_ranges = all_cores;
         writer_desc.compile_time_args = {cb_id, out_page_size};
         TensorAccessorArgs(*out_buffer).append_to(writer_desc.compile_time_args);
@@ -209,11 +206,14 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
     reader_desc.compile_time_args.push_back(batch);
     reader_desc.config = ReaderConfigDescriptor{};
 
-    const uint32_t out_page_size = static_cast<uint32_t>(out_buffer->aligned_page_size());
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kRmWriterSrc;
+    writer_desc.kernel_source = kWriterSrc;
     writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = {cb_id, operation_attributes.stick_size, out_page_size, slot_stride};
+    // CT[1] is the requested transfer size; the writer takes the destination pitch from the accessor
+    // and the L1 slot stride from the CB descriptor, then clamps the transfer to the smallest of the
+    // three. Requesting the stick keeps each output page's alignment padding untouched, which is what
+    // the host expects to trim on read-back.
+    writer_desc.compile_time_args = {cb_id, operation_attributes.stick_size};
     TensorAccessorArgs(*out_buffer).append_to(writer_desc.compile_time_args);
     writer_desc.compile_time_args.push_back(batch);
     writer_desc.config = WriterConfigDescriptor{};

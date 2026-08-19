@@ -4,21 +4,13 @@
 
 // Reader for repeat_interleave on RM interleaved tensors.
 //
-// Same RM stick addressing as repeat's higher-dim reader, but the within-block source page uses
-// the per-element (AABB) interleave formula instead of the modular (ABAB) repeat formula:
+// Source-page addressing is the shared SEQ_REPEAT_INTERLEAVE sequencer, the same one the unified
+// tile reader selects. This kernel exists for the transport loop, not the mapping: an RM slot is a
+// whole stick, so the read is stick_size bytes out of a page whose pitch is the buffer's aligned
+// page size, whereas the unified reader transfers the whole page.
 //
-//   SRC_LOWER = REP_DIM_PAGES * LOWER_PAGES
-//   DST_LOWER = NUM_REPEATS * SRC_LOWER
-//   block     = out_page / DST_LOWER          (everything above rep_dim)
-//   within    = out_page % DST_LOWER
-//   lo        = within % LOWER_PAGES           (offset below rep_dim)
-//   out_rep   = within / LOWER_PAGES           (replicated rep_dim index)
-//   in_rep    = out_rep / NUM_REPEATS          (AABB collapse, per-element)
-//   src       = block*SRC_LOWER + in_rep*LOWER_PAGES + lo
-//
-// This is valid only when the interleaved dim is a whole-stick (outer or H)
-// dim — i.e. NOT the last (W, within-stick) dim, which needs a different
-// addressing scheme this reader does not implement.
+// Valid only when the interleaved dim is a whole-stick (outer or H) dim. The last (W, within-stick)
+// dim needs a different addressing scheme that no sequencer implements.
 //
 // CT args: stick_size, input_page_size, l1_slot_stride, TensorAccessorArgs(in_t),
 //          cb_id, NUM_REPEATS, LOWER_PAGES, REP_DIM_PAGES, BATCH
@@ -26,6 +18,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+
+#include "ttnn/operations/data_movement/common/kernels/codegen/sequencers.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -47,18 +41,7 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_in(cb_id);
 
-    constexpr uint32_t SRC_LOWER = REP_DIM_PAGES * LOWER_PAGES;
-    constexpr uint32_t DST_LOWER = NUM_REPEATS * SRC_LOWER;
-
-    // out_page advances by one per read, so the formula above is evaluated once here and
-    // then stepped with counters, matching the TILE path's sequencer.
-    uint32_t block = out_start_page / DST_LOWER;
-    uint32_t within = out_start_page % DST_LOWER;
-    uint32_t lo = within % LOWER_PAGES;
-    uint32_t out_rep = within / LOWER_PAGES;
-    uint32_t in_rep = out_rep / NUM_REPEATS;
-    uint32_t src_page = block * SRC_LOWER + in_rep * LOWER_PAGES + lo;
-    uint32_t rep_phase = out_rep - in_rep * NUM_REPEATS;
+    auto seq = seq_repeat_interleave_init(out_start_page, NUM_REPEATS, LOWER_PAGES, REP_DIM_PAGES);
 
     uint32_t pages_left = num_out_pages;
 
@@ -68,23 +51,9 @@ void kernel_main() {
         uint32_t l1_offset = 0;
 
         for (uint32_t t = 0; t < batch; t++) {
+            const uint32_t src_page = seq_repeat_interleave_next(seq);
             noc.async_read(s, cb_in, stick_size, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = l1_offset});
             l1_offset += l1_slot_stride;
-
-            if (++lo == LOWER_PAGES) {
-                lo = 0;
-                if (++rep_phase == NUM_REPEATS) {
-                    // in_rep advances, carrying into block when it wraps. SRC_LOWER is
-                    // REP_DIM_PAGES * LOWER_PAGES, so either carry moves the source base up
-                    // by exactly LOWER_PAGES, which cancels against rewinding lo to 0.
-                    rep_phase = 0;
-                    src_page++;
-                } else {
-                    src_page -= LOWER_PAGES - 1;
-                }
-            } else {
-                src_page++;
-            }
         }
         noc.async_read_barrier();
         cb_in.push_back(batch);

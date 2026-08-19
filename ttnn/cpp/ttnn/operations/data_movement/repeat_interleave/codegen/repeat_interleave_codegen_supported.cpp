@@ -6,11 +6,11 @@
 
 #include <algorithm>
 
-#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
+
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement::repeat_interleave_codegen {
 
@@ -38,9 +38,10 @@ RmCbBudget rm_cb_budget(const Tensor& input, const std::optional<MemoryConfig>& 
         tt::round_up(stick_size, page_alignment(input.memory_config())),
         tt::round_up(stick_size, page_alignment(out_config)));
 
-    auto* device = input.device();
-    const uint32_t l1_capacity =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    // get_max_l1_space() measures down from the lowest occupied compute L1 address when there is
+    // one, so the budget excludes L1 already held by resident buffers instead of assuming everything
+    // above the allocator base is free.
+    const uint32_t l1_capacity = get_max_l1_space(input);
     return {slot_stride, slot_stride == 0 ? 0 : l1_capacity / slot_stride};
 }
 
