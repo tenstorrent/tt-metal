@@ -133,6 +133,48 @@ protos this lib provides — not also compile its own copies — or protobuf abo
 
 ---
 
+## 5b. Why this keeps Fabric Manager lightweight (no `libtt_metal`)
+
+The whole point of a *runtime-free* `TT::ScaleoutTopology` is that FM links **only that one static library** (plus a
+few small support libs) and **never links the Metalium runtime**. FM does **not** import the whole `libtt_metal`.
+
+**What FM's link closure actually is:**
+```
+tt-fabric-manager-controller
+└─ TT::ScaleoutTopology              (libscaleout_topology.a — PSD/MGD/PGD, solver, mapper-utils, FSD→PSD)
+   ├─ TT::ScaleoutTools              (FSD proto + board lib)
+   ├─ cadical                        (SAT solver)
+   ├─ protobuf · umd · fmt · tt-logger · TT::STL · TT::Metalium::HostDevCommon   (small headers/defs libs)
+   └─ ✗ libtt_metal                  NOT linked
+```
+
+**What FM therefore does NOT pull in** (the entire Metalium runtime, i.e. `libtt_metal`):
+device management · HAL · command-queue / dispatch · JIT kernel build · LLRT · kernel infrastructure ·
+the UMD device *driver* runtime. None of it is in `TT::ScaleoutTopology`'s link closure, because the topology code
+is pure data-structure / graph work that touches no hardware.
+
+**How the lib achieves this:**
+- It links only the lean set above. It reads tt-metalium **headers** through include-dirs
+  (`$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>`) — a **compile-time include path only**, *not* a link
+  dependency on `libtt_metal`.
+- The runtime-free path uses the **MGD-based** logical builder + PSD/PGD, none of which touch `MeshGraph`. Because
+  `mesh_graph` stays in `fabric`/`libtt_metal`, staying off that one type is exactly what keeps the runtime out of
+  the closure. (Reaching `MeshGraph` would drag `libtt_metal` back in.)
+
+**FM CMake — the lib, not the runtime:**
+```cmake
+# No `tt_metal` / `TT::Metalium` on this line — only the lean topology lib + protobuf.
+target_link_libraries(tt-fabric-manager-controller PRIVATE TT::ScaleoutTopology protobuf::libprotobuf)
+```
+
+**Proof it works:** the unit test `test_fsd_to_psd` links `TT::ScaleoutTopology` and — per `ldd` — **does not link
+`libtt_metal`**; it runs the FSD→PSD path with zero runtime. FM's controller gets the same lightweight closure.
+
+**Only compile-time requirement:** the tt-metalium API *headers* must be available (installed with the package, or
+via FM's vendored submodule) and FM must use the same protobuf. Those are headers/ABI — not the runtime library.
+
+---
+
 ## 6. API surface
 
 ```cpp
