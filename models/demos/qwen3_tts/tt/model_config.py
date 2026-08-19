@@ -10,6 +10,14 @@ from typing import Tuple
 
 import ttnn
 
+HF_ID_1_7B = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+HF_ID_0_6B = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+
+
+def is_0_6b(hf_id: str) -> bool:
+    h = (hf_id or "").lower()
+    return "0.6b" in h or "0b6" in h
+
 
 @dataclass
 class Qwen3TTSTalkerConfig:
@@ -62,6 +70,17 @@ class Qwen3TTSCodePredictorConfig:
     def qkv_size(self) -> int:
         """Combined size of Q, K, V projections."""
         return (self.num_attention_heads + 2 * self.num_key_value_heads) * self.head_dim
+
+
+def talker_config_for_hf_id(hf_id: str) -> Qwen3TTSTalkerConfig:
+    """1.7B talker is hidden=2048 / MLP=6144. 0.6B is hidden=1024 / MLP=3072. Same layers/heads."""
+    if is_0_6b(hf_id):
+        return Qwen3TTSTalkerConfig(hidden_size=1024, intermediate_size=3072)
+    return Qwen3TTSTalkerConfig()
+
+
+def speaker_output_dim_for_hf_id(hf_id: str) -> int:
+    return 1024 if is_0_6b(hf_id) else 2048
 
 
 def get_compute_kernel_config():

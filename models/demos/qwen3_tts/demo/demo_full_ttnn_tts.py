@@ -24,6 +24,7 @@ Usage:
 """
 
 import argparse
+import os
 import time
 from typing import Optional
 
@@ -76,6 +77,7 @@ def run_full_ttnn_tts(
     trim_frames: int = 4,
     load_cpu_inputs: str = None,
     pre_measurement_warmup: bool = False,
+    hf_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
 ):
     """Run full TTNN TTS pipeline (CLI orchestrator)."""
     demo_start = time.time()
@@ -91,42 +93,59 @@ def run_full_ttnn_tts(
         print(f"RNG seed: {seed} (torch.manual_seed before codec generation)")
     else:
         print("RNG seed: default — sampling is non-deterministic; use --seed for repeatable benchmarks")
+    print(f"HF id: {hf_id}")
     print()
 
     timings = {}
 
     # Load weights
     load_start = time.time()
-    main_weights, decoder_weights = load_weights()
+    main_weights, decoder_weights = load_weights(hf_id)
     timings["load_weights"] = time.time() - load_start
 
     # Load tokenizer
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-TTS-12Hz-1.7B-Base", trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(hf_id, trust_remote_code=True)
 
-    # Open device with explicit trace region.
-    print(f"\nOpening TT device {device_id}...")
+    # MESH_DEVICE: N150=(1,1), N300=(1,2) TP=2, T3K=(1,8). Unset → single-chip open_device.
     _ncq = 2
-    device = ttnn.open_device(
-        device_id=device_id,
-        l1_small_size=32768,
-        trace_region_size=200000000,
-        num_command_queues=_ncq,
-    )
+    _mesh_shape = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"))
+    if _mesh_shape is not None:
+        print(f"\nOpening TT mesh device {_mesh_shape} (MESH_DEVICE={os.environ['MESH_DEVICE']})...")
+        if _mesh_shape != (1, 1):
+            ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+        device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*_mesh_shape),
+            l1_small_size=32768,
+            trace_region_size=200000000,
+            num_command_queues=_ncq,
+        )
+    else:
+        print(f"\nOpening TT device {device_id}...")
+        device = ttnn.open_device(
+            device_id=device_id,
+            l1_small_size=32768,
+            trace_region_size=200000000,
+            num_command_queues=_ncq,
+        )
     device.enable_program_cache()
 
     try:
         print("\nInitializing TTNN model...")
         init_start = time.time()
 
+        from models.demos.qwen3_tts.tt.model_config import talker_config_for_hf_id
         from models.demos.qwen3_tts.tt.qwen3_tts import Qwen3TTS
 
-        model = Qwen3TTS(device=device, state_dict=main_weights)
+        talker_config = talker_config_for_hf_id(hf_id)
+        model = Qwen3TTS(device=device, state_dict=main_weights, talker_config=talker_config)
         timings["model_init"] = time.time() - init_start
         print(f"  Model initialized in {timings['model_init']:.2f}s")
+        print(f"  Talker hidden={talker_config.hidden_size}  MLP={talker_config.intermediate_size}")
 
         config = TTSConfig()
+        config.hidden_size = talker_config.hidden_size
         config.max_new_tokens = max_new_tokens
         config.greedy = greedy
         config.repetition_penalty = repetition_penalty
@@ -286,6 +305,8 @@ def run_full_ttnn_tts(
             print(
                 f"{'Steady throughput':<30} {timings['steady_frames_per_sec']:>10.2f}   frames/sec (matches line above)"
             )
+            _rtf = timings["steady_avg_decode_ms"] / 80.0
+            print(f"{'RTF vs 80 ms/frame':<30} {_rtf:>10.2f}   (12 Hz codec; <1 is faster than real-time)")
         print(
             "  Note: Total generation ms scales with EOS frame count when sampling; compare steady ms/sec across runs."
         )
@@ -297,15 +318,22 @@ def run_full_ttnn_tts(
         print(f"Total wall time: {total_time:.2f}s")
         print("=" * 80)
 
+        _steady = float(compile_timings.get("steady_avg_decode_ms", 0.0))
         result = {
             "prefill_ms": float(compile_timings.get("prefill_ms", 0.0)),
-            "steady_ms_per_frame": float(compile_timings.get("steady_avg_decode_ms", 0.0)),
+            "steady_ms_per_frame": _steady,
             "steady_frames_per_sec": float(compile_timings.get("steady_frames_per_sec", 0.0)),
+            "rtf": (_steady / 80.0) if _steady else 0.0,
             "num_frames": int(num_frames),
             "output_wav": output_path,
         }
     finally:
-        ttnn.close_device(device)
+        if _mesh_shape is not None:
+            ttnn.close_mesh_device(device)
+            if _mesh_shape != (1, 1):
+                ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        else:
+            ttnn.close_device(device)
         print("\nDevice closed")
 
     return result
@@ -355,6 +383,12 @@ def main():
             "Reference audio transcript. If unset and --ref-audio is the bundled "
             "jim_reference.wav, falls back to jim_reference.txt next to it."
         ),
+    )
+    parser.add_argument(
+        "--hf-id",
+        type=str,
+        default="Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+        help="HuggingFace repo (1.7B default, or Qwen/Qwen3-TTS-12Hz-0.6B-Base)",
     )
     parser.add_argument("--output", type=str, default="/tmp/ttnn_tts_output.wav", help="Output path")
     parser.add_argument("--max-tokens", type=int, default=256, help="Max tokens to generate")
@@ -412,6 +446,7 @@ def main():
         ref_cache=args.ref_cache,
         trim_frames=args.trim_frames,
         load_cpu_inputs=args.load_cpu_inputs,
+        hf_id=args.hf_id,
     )
 
 
