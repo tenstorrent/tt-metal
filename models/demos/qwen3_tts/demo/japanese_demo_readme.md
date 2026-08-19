@@ -1,29 +1,35 @@
-# Japanese TTS (Qwen3-TTS, N150)
+# Japanese TTS (Qwen3-TTS)
 
 From the tt-metal repo root, after `source python_env/bin/activate`.
 
-Do not use English-only defaults. Pass `--language japanese`.
+Pass `--language japanese`. Weights: full HF snapshot (including `speech_tokenizer/config.json`), not safetensors-only.
 
-Weights (once):
+Sample text: `sample_ja.txt`. Speaker ref: `jim_reference.wav`.
 
-```bash
-hf download Qwen/Qwen3-TTS-12Hz-1.7B-Base
-```
-
-Need the full download (including `speech_tokenizer/config.json`), not a `*.safetensors`-only copy.
-
-Sample text: `sample_ja.txt` (`こんにちは。今日はいい天気ですね。`). Speaker ref: `jim_reference.wav`.
-
-Assuming WH-Galaxy, one N150, device 0. `TT_VISIBLE_DEVICES` remaps that chip to logical 0, so `--device-id` stays `0`.
+## N150 (1.7B)
 
 ```bash
-MESH_DEVICE=N150 TT_VISIBLE_DEVICES=0 \
-TT_MESH_GRAPH_DESC_PATH=$PWD/tt_metal/fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.textproto \
-PYTHONPATH=$PWD \
+MESH_DEVICE=N150 \
 python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py \
   --text "$(cat models/demos/qwen3_tts/demo/sample_ja.txt)" \
   --language japanese \
   --ref-audio models/demos/qwen3_tts/demo/jim_reference.wav \
-  --output /tmp/jp_tts.wav \
-  --device-id 0
+  --output /tmp/qwen3-tts-1.7B.wav
 ```
+
+0.6B: add `--hf-id Qwen/Qwen3-TTS-12Hz-0.6B-Base --output /tmp/qwen3-tts-0.6B.wav`.
+
+## N300 TP=2 (1.7B and 0.6B)
+
+Needs a 2-chip N300 (or equivalent mesh). Prints RTF and writes both wavs.
+
+```bash
+MESH_DEVICE=N300 \
+python models/demos/qwen3_tts/demo/demo_jp_tts_tp2.py \
+  --output-dir /tmp
+```
+
+Outputs:
+
+- `/tmp/qwen3-tts-1.7B-tp2.wav`
+- `/tmp/qwen3-tts-0.6B-tp2.wav`
