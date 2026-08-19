@@ -87,3 +87,16 @@ PIPELINES=(
   "galaxy-integration-tests.yaml|Galaxy Integration|In-scope = resnet50 performant on Galaxy/TG (Galaxy resnet50 integration tests, via run_tg_frequent_tests.sh --model resnet50). Other galaxy integration jobs are out of scope.|Galaxy resnet50 integration tests"
   "ttnn-run-sweeps.yaml|Sweeps|In-scope = conv and pool op sweeps (conv2d, conv_transpose2d, pool2d modules under tests/sweep_framework/sweeps). Scheduled/on-demand batch, not per-commit; sweep job names are dynamic so this is a coarse workflow-level watch. Non-conv/pool sweeps are out of scope.|(conv2d|conv_transpose2d|pool2d)"
 )
+
+# Per-workflow trigger-event filter (optional). When a workflow is listed
+# here, watch.sh only considers runs with this trigger event when picking
+# the run to analyze (the API's `event=` filter). Use for nightlies where
+# manual workflow_dispatch re-runs interleave with the schedule: a green
+# manual run (often a job subset, or a fix-attempt on the same sha) would
+# otherwise flip the digest ✅ while the scheduled nightly still fails —
+# seen on the sdpa watcher's L2 entry 2026-08-15: dispatch #9053 success on
+# the SAME sha as scheduled #9056 failure. Unlisted workflows consider
+# every event.
+declare -A PIPELINE_EVENT=(
+  ["tt-metal-l2-nightly.yaml"]="schedule"
+)
