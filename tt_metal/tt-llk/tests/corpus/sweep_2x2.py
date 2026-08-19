@@ -191,7 +191,8 @@ OFF_FLAGS = (
     "-mno-tt-tensix-optimize-const-remat "
     "-mno-tt-tensix-optimize-const-residency "
     "-mno-tt-tensix-optimize-counted-row-formation "
-    "-mno-tt-tensix-optimize-crosscall-hoist"
+    "-mno-tt-tensix-optimize-crosscall-hoist "
+    "-mno-tt-tensix-optimize-crossloop-hoist"
 )
 ON_FLAGS = (
     "-mtt-tensix-optimize-latency-schedule "
@@ -267,7 +268,21 @@ ON_FLAGS = (
     # preheader; with replay-exec-record the per-tile dead prefix is
     # 17 -> 4 pushes.  Pre-registered prediction (laneBQ evidence
     # PREDICTION.md): sigmoid-tree sem_on 27.7-27.8 = parity vs hand.
-    "-mtt-tensix-optimize-crosscall-hoist"
+    "-mtt-tensix-optimize-crosscall-hoist "
+    # Lane CD (next pin): cross-loop hoist -- loop-invariant SFPU
+    # immediate materializations (and the programmable-constant
+    # programming points) lift across ENCLOSING loops whose bodies
+    # deliver only audited-inert words (raw .ttinsn constants,
+    # instruction-FIFO stores incl. PHI-joined compositions, MOPs with
+    # a proven TU template census); every unaudited class refuses by
+    # name (crossloop-*).  Fire witness: the exp perf node's
+    # MATH_ISOLATE math.elf -- "crossloop-hoist: hoisted across loop"
+    # x12 (4 loads x 3 loop levels) + "placement lifted from entry bb"
+    # (prgm-const L14 programming once per kernel); per-tile Tensix
+    # word count 68 -> 58 = hand parity; exp corr CRAQ 5630 -> 5589
+    # sim-cycles bit-exact PASS on the pinned BH sim.  MERGE-ORDER:
+    # lands only with the pin cycle whose toolchain accepts the flag.
+    "-mtt-tensix-optimize-crossloop-hoist"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
@@ -301,6 +316,7 @@ KNOBS = {
     "const-residency": "-mtt-tensix-optimize-const-residency",
     "counted-row-formation": "-mtt-tensix-optimize-counted-row-formation",
     "crosscall-hoist": "-mtt-tensix-optimize-crosscall-hoist",
+    "crossloop-hoist": "-mtt-tensix-optimize-crossloop-hoist",
 }
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
