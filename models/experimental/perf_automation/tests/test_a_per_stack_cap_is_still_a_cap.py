@@ -1,0 +1,99 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Every reader of depth looked at ONE variable, and a multi-stack model is capped by others.
+
+read_depth() reads TT_PERF_LAYERS. A model with two towers is capped per stack --
+TT_PERF_STACK0_LAYERS, TT_PERF_STACK1_LAYERS, and the per-stage TT_PERF_<STAGE>_LAYERS the
+generated test binds -- while TT_PERF_LAYERS stays unset. So every reader concluded "all layers" for
+a build that had two of thirty.
+
+RUN 11, 2026-08-19, is the measurement. The run's own log shows the caps in force:
+
+    coverage-sized profiling window (multi-stack): TT_PERF_STACK0_LAYERS=2, TT_PERF_STACK1_LAYERS=2
+
+and the census, added the same day to refuse exactly this, reported depth=all and pinned 1.247 B
+parameters of a 4.676 B model. Its sections say what it actually saw: `rest`, which holds layers
+3..30, came back at 114 MB -- about two layers.
+
+The refusal was correct and blind. It asked the one variable that was not set.
+
+Matched on the SHAPE of the name rather than a list: the tool derives these per stage and per stack,
+so a list would need extending for every stage a model declares that nobody anticipated.
+"""
+
+import sys
+from pathlib import Path
+
+_PA = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_PA))
+
+
+def _clear(monkeypatch):
+    import os
+
+    for k in list(os.environ):
+        if k.startswith("TT_PERF_") and k.endswith("LAYERS"):
+            monkeypatch.delenv(k, raising=False)
+
+
+def test_a_per_stack_cap_is_seen(monkeypatch):
+    from agent.layer_depth import active_depth_caps
+
+    _clear(monkeypatch)
+    monkeypatch.setenv("TT_PERF_STACK0_LAYERS", "2")
+    monkeypatch.setenv("TT_PERF_STACK1_LAYERS", "2")
+
+    assert active_depth_caps() == {"TT_PERF_STACK0_LAYERS": 2, "TT_PERF_STACK1_LAYERS": 2}
+
+
+def test_a_per_stage_cap_is_seen(monkeypatch):
+    """These names are derived from the model's declared stages, so no list could hold them."""
+    from agent.layer_depth import active_depth_caps
+
+    _clear(monkeypatch)
+    monkeypatch.setenv("TT_PERF_VOCODE_LAYERS", "4")
+
+    assert active_depth_caps() == {"TT_PERF_VOCODE_LAYERS": 4}
+
+
+def test_nothing_set_is_full_depth(monkeypatch):
+    from agent.layer_depth import active_depth_caps
+    from agent.weight_census import census_depth
+
+    _clear(monkeypatch)
+    assert active_depth_caps() == {}
+    assert census_depth() == "all"
+
+
+def test_zero_is_the_no_cap_sentinel_not_a_cap(monkeypatch):
+    """set_depth expresses "all layers" by REMOVING the variable, and the gate writes 0."""
+    from agent.layer_depth import active_depth_caps
+    from agent.weight_census import census_depth
+
+    _clear(monkeypatch)
+    monkeypatch.setenv("TT_PERF_LAYERS", "0")
+    assert active_depth_caps() == {}
+    assert census_depth() == "all"
+
+
+def test_the_census_refuses_a_per_stack_capped_build(monkeypatch):
+    """The case run 11 let through: TT_PERF_LAYERS unset, the stacks capped at 2."""
+    from agent.weight_census import census_depth
+
+    _clear(monkeypatch)
+    monkeypatch.setenv("TT_PERF_STACK0_LAYERS", "2")
+    monkeypatch.setenv("TT_PERF_STACK1_LAYERS", "2")
+
+    got = census_depth()
+    assert got != "all", "a per-stack capped census still reports itself as the whole model"
+    assert "STACK" in got and "2" in got, got
+
+
+def test_the_marker_names_the_knob_that_shrank_the_build(monkeypatch):
+    from agent.weight_census import census_depth
+
+    _clear(monkeypatch)
+    monkeypatch.setenv("TT_PERF_STACK0_LAYERS", "8")
+    monkeypatch.setenv("TT_PERF_STACK1_LAYERS", "2")
+
+    assert census_depth() == "TT_PERF_STACK1_LAYERS=2", "the tightest cap in force is not named"

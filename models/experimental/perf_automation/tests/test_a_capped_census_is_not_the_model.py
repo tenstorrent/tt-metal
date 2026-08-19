@@ -51,7 +51,9 @@ def test_the_marker_states_the_depth_it_was_taken_at(monkeypatch):
     assert "depth=all " in _marker()
 
     monkeypatch.setenv("TT_PERF_LAYERS", "2")
-    assert "depth=2 " in _marker()
+    # The knob is NAMED, not just its value: a multi-stack model is capped by several variables and
+    # a bare number could not say which one shrank the build. The reader only tests against "all".
+    assert "depth=TT_PERF_LAYERS=2 " in _marker()
 
 
 def test_all_layers_is_the_absence_of_a_cap_not_a_sentinel(monkeypatch):
@@ -62,7 +64,7 @@ def test_all_layers_is_the_absence_of_a_cap_not_a_sentinel(monkeypatch):
     monkeypatch.setenv("TT_PERF_LAYERS", "0")
     assert census_depth() == "all"
     monkeypatch.setenv("TT_PERF_LAYERS", "16")
-    assert census_depth() == "16"
+    assert census_depth() == "TT_PERF_LAYERS=16"
 
 
 def test_an_unreadable_depth_is_not_a_claim_of_full_depth(monkeypatch):

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 ENV = "TT_PERF_LAYERS"
@@ -226,6 +227,41 @@ def set_depth(env, depth, key: str | None = None) -> dict:
         env.pop(var, None)
         env[FORCE_ALL] = "1"
     return env
+
+
+_ANY_DEPTH_VAR = re.compile(r"^TT_PERF_[A-Z0-9_]*LAYERS$")
+
+
+def active_depth_caps(environ=None) -> dict:
+    """Every depth cap currently in force, as {variable: layers}. Empty means full depth.
+
+    READ_DEPTH SEES ONE VARIABLE, AND A MULTI-STACK MODEL IS CAPPED BY OTHERS. A model with two
+    towers is capped per stack -- TT_PERF_STACK0_LAYERS, TT_PERF_STACK1_LAYERS, and the per-stage
+    TT_PERF_<STAGE>_LAYERS the generated test binds -- while TT_PERF_LAYERS stays unset. Every reader
+    of depth in this tool asks read_depth() or reads TT_PERF_LAYERS directly, so all of them
+    concluded "all layers" for a build that had two of thirty.
+
+    Measured, run 11, 2026-08-19: the census reported depth=all and weighed 1.247 B parameters of a
+    4.676 B model. Its own sections say what it saw -- `rest`, which holds layers 3..30, came back at
+    114 MB, about two layers -- and the refusal added for exactly this case passed it, because the
+    caps in force were not the variable it looked at.
+
+    Matched on the SHAPE of the name, not a list of them: the tool derives these variables per stage
+    and per stack, so a list would need extending every time a model declares a stage nobody
+    anticipated.
+    """
+    src = os.environ if environ is None else environ
+    out: dict = {}
+    for k, v in src.items():
+        if not _ANY_DEPTH_VAR.match(str(k)):
+            continue
+        try:
+            n = int(str(v).strip())
+        except (TypeError, ValueError):
+            continue
+        if n > 0:
+            out[str(k)] = n
+    return out
 
 
 def read_depth(environ=None):

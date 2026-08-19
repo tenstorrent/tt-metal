@@ -577,8 +577,13 @@ def census_depth() -> str:
     "unknown" is not a claim of full depth: the reader treats it as untrustworthy, like a cap.
     """
     try:
-        from .layer_depth import read_depth
+        from .layer_depth import active_depth_caps, read_depth
 
+        caps = active_depth_caps()
+        if caps:
+            # Name the tightest cap in force, so the log says which knob shrank the build.
+            k = min(caps, key=lambda x: caps[x])
+            return "%s=%d" % (k, caps[k])
         d = read_depth()
     except Exception:  # noqa: BLE001
         return "unknown"
