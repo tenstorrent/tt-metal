@@ -4,14 +4,18 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
-#ifdef TRISC_MATH
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_custom_mm_api.h"
+// Blackhole-only: the custom_mm LLKs live only in the Blackhole llk_api / llk_lib trees.
+#if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
+#include "experimental/llk_math_custom_mm_api.h"
 #endif
-#ifdef TRISC_UNPACK
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_custom_mm_api.h"
+#if defined(TRISC_UNPACK) && defined(ARCH_BLACKHOLE)
+#include "experimental/llk_unpack_AB_custom_mm_api.h"
 #endif
 namespace ckernel {
+
+#if defined(ARCH_BLACKHOLE)
 
 // clang-format off
 /**
@@ -40,7 +44,11 @@ namespace ckernel {
  * | ct_dim         | The width of the output matrix in tiles                                                | uint32_t | 1 to 16                               | False (default 1)     |
  */
 // clang-format on
-template <bool transpose = false, bool split_acc = false, bool dense_packing = false, bool fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    bool transpose = false,
+    bool split_acc = false,
+    bool dense_packing = false,
+    bool fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void custom_mm_block_init(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -241,9 +249,9 @@ ALWI void custom_mm_block_math(
  *
  * Return value: None
  *
- * | Argument       | Description                                                                            | Type     | Valid Range                  | Required              |
- * |----------------|----------------------------------------------------------------------------------------|----------|------------------------------|-----------------------|
- * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                   | False (default false) |
+ * | Argument              | Description                                                                            | Type     | Valid Range                  | Required              |
+ * |-----------------------|----------------------------------------------------------------------------------------|----------|------------------------------|-----------------------|
+ * | dense_packing         | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                   | False (default false) |
  */
 // clang-format on
 template <bool dense_packing = false>
@@ -253,5 +261,7 @@ ALWI void custom_mm_block_uninit() {
         PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2)));
     }
 }
+
+#endif  // ARCH_BLACKHOLE
 
 }  // namespace ckernel

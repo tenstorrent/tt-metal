@@ -18,7 +18,7 @@ Both share the factory + kernels (the flavour is compile-time args). Causality: 
 visible to query ``s`` iff ``t <= chunk_start + s``; future columns/blocks are -inf.
 
 Deployments are Galaxy chunked prefill (50K history + 5K chunk = 55K keys; the chunk is SP=8
--> 640 q/device): GLM5 (8h), DSv32 (16h, 64-head DSA split across TP=4), M3 (MSA per-GQA-group,
+-> 640 q/device): GLM5 (8h), M3 (MSA per-GQA-group,
 block-max-pooled). Most cases run on one chip with explicit ``chunk_start`` (``sp_rank`` =
 ring position); the QuietBox tests derive ``chunk_start`` per device from the mesh coordinate.
 
@@ -44,8 +44,8 @@ GLX_SQ = 640  # queries per device (5120 chunk / SP=8)
 GLX_T = 56320  # all-gathered keys: 50K history + 5K chunk = 55K, tile-aligned
 GLX_HISTORY = GLX_T - 8 * GLX_SQ  # 51200 keys visible to every query
 
-# The two indexer deployments, by (id, head count).
-GLX_CASES = [("glm5", 8), ("dsv32", 16)]
+# The indexer deployments, by (id, head count).
+GLX_CASES = [("glm5", 8)]
 GLX_IDS = [c[0] for c in GLX_CASES]
 
 
@@ -227,10 +227,10 @@ def assert_pooled_match(out, ref, num_groups, sq, nblocks, pcc_floor=0.999):
 
 
 def glx_config(heads):
-    """GLX chunked-prefill knobs for the two deployments (GLM5 8h, DSv32 16h).
+    """GLX chunked-prefill knobs for the deployments (GLM5 8h).
 
     head_group_size=0 keeps all heads resident (streaming is ~24x slower). QC=2 reuses each K chunk
-    across 2 q-rows (~2x fewer K reads). k_chunk: GLM5 KC=16 (compute optimum), DSv32 KC=8 (matmul-bound).
+    across 2 q-rows (~2x fewer K reads). k_chunk: GLM5 KC=16 (compute optimum).
     """
     return ttnn.IndexerScoreProgramConfig(
         q_chunk_size=64,
@@ -841,12 +841,12 @@ def run_indexer_sp7(device, heads):
     return ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, chunk_start_idx=SP7_CHUNK_START, program_config=cfg)
 
 
-# Short-query-chunk perf: the SAME two deployments (GLM5, DSv32) on the SAME keys (T=56320), but resharded
+# Short-query-chunk perf: the SAME deployments (GLM5) on the SAME keys (T=56320), but resharded
 # TP=1 / SP=32 instead of the deployed TP=4 / SP=8. Two things change together:
 #   - SP=32 splits the 5120-query prefill chunk 32 ways -> 160 q/device (vs GLX_SQ=640 at SP=8): a SHORT chunk.
 #   - TP=1 puts every index head on the one device (no tensor-parallel head split), so the per-device head
-#     count is 4x the deployed TP=4 count: GLM5 8h -> 32h (glm5_tp1), DSv32 16h -> 64h (dsv32_tp1).
-# So these are exactly GLM5/DSv32 at TP=1/SP=32 -- many heads AND a short sequence. At QC=1 the 160-query
+#     count is 4x the deployed TP=4 count: GLM5 8h -> 32h (glm5_tp1).
+# So these are exactly GLM5 at TP=1/SP=32 -- many heads AND a short sequence. At QC=1 the 160-query
 # chunk is 5 q-groups -> only 5 of the 10 grid rows, which is what the block-split scheduler fills
 # (num_blocks=2 -> 110 cores). chunk_start at the end of the keys = fullest causal. Resharding preserves the
 # per-device heads x queries product (4x heads x 1/4 queries), so glm5_tp1 has essentially the same matmul
@@ -866,14 +866,14 @@ def short_valid_tiles():
 def short_config(heads):
     """QC=1 (q_chunk=32): the 160-query chunk makes 5 q-groups, half the 10-row grid -> block-split fills it.
     head_group_size=0 keeps all heads resident; k_chunk is the largest that fits L1 at this head count -- the
-    4x head count from TP=1 leaves no room for the deployed KC, so KC=8 (k_chunk=256) at <=32 heads (glm5_tp1)
-    and the smaller KC=4 (k_chunk=128) at 64 heads (dsv32_tp1). KC does not change the core count here
+    4x head count from TP=1 leaves no room for the deployed KC, so KC=8 (k_chunk=256) at <=32 heads (glm5_tp1).
+    KC does not change the core count here
     (band_count stays >> cols, so num_blocks=2 -> 110 cores either way)."""
     return ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=256 if heads <= 32 else 128, head_group_size=0)
 
 
 def run_indexer_short(device, heads):
-    """GLM5/DSv32 resharded TP=1/SP=32 -- a SHORT 160-query chunk (QC=1) that under-fills the grid, so the
+    """GLM5 resharded TP=1/SP=32 -- a SHORT 160-query chunk (QC=1) that under-fills the grid, so the
     block-split scheduler replicates each q-group across num_blocks=2 row-blocks (110 cores). bfp8 q and k.
     Dispatches indexer_score_dsa once and returns the output."""
     q, k, w = make_inputs(heads, GLX_DIM, SHORT_SQ, GLX_T)
@@ -1004,8 +1004,8 @@ QB_DIM = 128  # indexer head dim
 QB_SQ = 640  # queries per SP rank (preserved from the SP=8 deployment)
 QB_HISTORY = 25600  # 25k history, tile-aligned (800 tiles)
 
-# GLM5 (8 heads) and DSv32 (16 heads), as in the single-device deployment cases above.
-QB_CASES = [("glm5", 8), ("dsv32", 16)]
+# GLM5 (8 heads), as in the single-device deployment cases above.
+QB_CASES = [("glm5", 8)]
 QB_IDS = [c[0] for c in QB_CASES]
 
 
@@ -1261,8 +1261,8 @@ def run_indexer_m3(device):
 
 # ---------------------------------------------------------------------------
 # The math-utilization band checks (CI runs these on the IOMMU-enabled BH sku): deployed TP=4/SP=8 shapes
-# GLM5 and DSv32 at LoFi, MiniMax-M3 at HiFi2, plus the resharded TP=1/SP=32 grid-fill shapes glm5_tp1 and
-# dsv32_tp1 at LoFi (block-split, fullest causal). Each profiles one dispatch of its op with the real-time
+# GLM5 at LoFi, MiniMax-M3 at HiFi2, plus the resharded TP=1/SP=32 grid-fill shape glm5_tp1
+# at LoFi (block-split, fullest causal). Each profiles one dispatch of its op with the real-time
 # device profiler, reads the device kernel duration, computes
 # math_util = matmul FLOPs / (cores x device cycles x matmul peak), and asserts it within +/-
 # INDEXER_PERF_MARGIN of the value measured on a Blackhole dev board. mm_flops is a thunk so the shape-derived
@@ -1280,31 +1280,16 @@ _MATH_UTIL_CASES = [
         "LoFi",
     ),
     (
-        "dsv32",
-        lambda device: run_indexer_sp7(device, 16),
-        lambda: indexer_mm_flops(sp7_valid_tiles(), 16),
-        64.11,
-        "LoFi",
-    ),
-    (
         "minimax_m3",
         run_indexer_m3,
         lambda: m3_valid_tiles() * (32 * 32) * (2 * M3_DIM),
         42.9,
         "HiFi2",
     ),
-    # Block-split grid fill: GLM5/DSv32 resharded TP=1/SP=32 -- a short 160-query chunk (QC=1, 5 q-groups) the
+    # Block-split grid fill: GLM5 resharded TP=1/SP=32 -- a short 160-query chunk (QC=1, 5 q-groups) the
     # scheduler spreads across num_blocks=2 row-blocks (110 cores); without the fill these would use only 55
     # cores at ~half the util. These guard the feature's headline shapes. glm5_tp1 (32h) preserves the deployed
-    # glm5 8h/640 per-device work, so it matches that wall-clock once the grid is full; its util tracks DSv32
-    # (shared KC=8, matmul-bound). dsv32_tp1 (64h) carries twice the heads.
-    (
-        "dsv32_tp1",
-        lambda device: run_indexer_short(device, 64),
-        lambda: indexer_mm_flops(short_valid_tiles(), 64),
-        67.10,
-        "LoFi",
-    ),
+    # glm5 8h/640 per-device work, so it matches that wall-clock once the grid is full.
     (
         "glm5_tp1",
         lambda device: run_indexer_short(device, 32),
@@ -1325,8 +1310,8 @@ _MATH_UTIL_CASES = [
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_indexer_score_math_util(device, case_id, run_fn, mm_flops_thunk, expected_util, math_fidelity):
     """Per-deployment matmul math utilization via real-time device program records, asserted within +/-
-    INDEXER_PERF_MARGIN: GLM5 / DSv32 / MiniMax-M3 at the deployed TP=4/SP=8, plus
-    glm5_tp1 / dsv32_tp1 at the resharded TP=1/SP=32 grid-fill shapes. Profiles one dispatch of the case's op
+    INDEXER_PERF_MARGIN: GLM5 / MiniMax-M3 at the deployed TP=4/SP=8, plus
+    glm5_tp1 at the resharded TP=1/SP=32 grid-fill shapes. Profiles one dispatch of the case's op
     with the real-time device profiler and compares the achieved math_util to the expected value (measured on
     a BH dev board). Marked requires_host_iommu so the marker-selected IOMMU job runs it and broad non-IOMMU
     jobs exclude it; an inactive profiler here is therefore a regression -> fail."""

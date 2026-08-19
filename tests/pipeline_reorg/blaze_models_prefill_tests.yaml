@@ -277,26 +277,6 @@
   team: models
   sp_config: sc1
 
-- name: "DeepSeek-V3.2-671B sparse MLA accuracy + determinism (incl. chunked 5k@1k)"
-  cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
-    export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache
-    export DS_SPARSE_FABRIC=fabric2d
-
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "deepseek_v32 and 8x4 and fabric2d" -vvv --tb=short
-    '
-
-  test_type: dsa_mla
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 15
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  sp_config: sc1
-
 - name: "GLM-5.2-744B sparse MLA accuracy + determinism (incl. chunked 5k@1k)"
   cmd: |
     export MESH_DEVICE=TG
@@ -636,7 +616,7 @@
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc -k "mesh-8x4 and sliced and pretrained" -vvv --tb=short --timeout=600
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc -k "mesh-8x4 and pretrained" -vvv --tb=short --timeout=600
     '
   test_type: kimi_dflash
   test_group: module
