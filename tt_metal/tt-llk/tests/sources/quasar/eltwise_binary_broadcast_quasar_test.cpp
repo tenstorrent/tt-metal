@@ -10,6 +10,7 @@
 #include "llk_memory_checks.h"
 #include "perf.h"
 #include "profiler.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
 #ifdef LLK_TRISC_UNPACK
@@ -31,11 +32,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
 #endif
-    const std::uint32_t num_tiles_per_unpack = TILE_CNT;
 
     {
         ZONE_SCOPED("INIT")
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+        set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
             ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
@@ -46,7 +46,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-            num_tiles_per_unpack);
+            TILE_CNT);
         PROFILER_SYNC();
     }
     {
@@ -56,10 +56,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // The SCALAR math MOP clears SrcAB only on the final outer-loop iteration,
-            // so mock unpack must produce one SrcA/SrcB handshake per tile.
-            const std::uint32_t dvalids_per_tile = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
-            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT * dvalids_per_tile);
+            const std::uint32_t srcb_dvalids_per_tile = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
+                {
+                    // Real broadcast unpack emits SrcA once, then SrcB once
+                    // per broadcast face. Combining these handshakes blocks
+                    // the second SrcB face while SrcA remains valid.
+                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(1 /*iterations*/);
+                    _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(srcb_dvalids_per_tile);
+                }
+            }
         }
         else // UNPACK_ISOLATE, L1_CONGESTION, L1_TO_L1
         {
@@ -92,23 +100,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const std::uint32_t num_faces   = params.num_faces;
 #endif
-    // set_last_outer_loop_instr clears SrcAB once on the final face, not once per
-    // face. SCALAR unpack likewise produces one SrcA/SrcB dvalid pair per tile.
-    const std::uint32_t dvalids_per_tile    = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
-    const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT * dvalids_per_tile;
     {
         ZONE_SCOPED("INIT")
         // End-to-end and math-isolate runs require FPU destination ownership.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        DataFormat math_format     = static_cast<DataFormat>(formats.math);
-        DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
+        DataFormat math_format = static_cast<DataFormat>(formats.math);
         if constexpr (is_fp32_dest_acc_en)
         {
-            if (pack_src_format == DataFormat::Int32)
+            if (static_cast<DataFormat>(formats.pack_src) == DataFormat::Int32)
             {
                 _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
             }
@@ -130,16 +133,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(src_handshake_iters);
+            const std::uint32_t srcb_only_clears = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 0u : num_faces - 1u;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
+                {
+                    // ROW/COL math clears SrcB after each non-final face,
+                    // then clears SrcA and the final SrcB together.
+                    _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(srcb_only_clears);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(1 /*iterations*/);
+                }
+            }
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // Do exactly the handshakes produced by real unpack. An additional
-            // synthetic SET/CLEAR pair races the final unpack and leaves an
-            // unmatched clear token, causing the ~2048-cycle stall.
-            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(src_handshake_iters);
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                {
+                    _llk_math_eltwise_binary_broadcast_(i);
+                }
+            }
         }
         else
         {
@@ -149,10 +165,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_math_eltwise_binary_broadcast_(i);
                 }
-                if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
-                {
-                    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
-                }
+                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
             }
         }
         PROFILER_SYNC();
@@ -178,7 +191,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    const std::uint32_t num_tiles_per_pack = TILE_CNT;
 
     {
         ZONE_SCOPED("INIT")
@@ -186,18 +198,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
-            cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+            set_up_zero_dest_dvalid_handshake_for_pack();
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
             ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, num_tiles_per_pack);
+        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
         PROFILER_SYNC();
     }
     {

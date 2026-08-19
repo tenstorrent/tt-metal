@@ -51,7 +51,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const volatile FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t num_tiles = params.TILE_CNT;
 
     // -------------------------------------------------------------------------
     // Data format inference and dimensions
@@ -101,7 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_pack.f.y_dim       = PARAM_SRCS_YDIM;
     bd_pack.f.z_dim       = PARAM_SRCS_ZDIM;
     _configure_buf_desc_table_(buf_desc_id_pack, bd_pack);
-    _llk_pack_hw_configure_<p_pacr::PACK1, false>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
+    _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
 
     // Implied math format disable for SrcS and sfpmem mod selection
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
@@ -120,11 +119,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_sfpu_iterations      = PARAM_SRCS_YDIM >> 1; // Divide by 2 since SFSPU operates on 2 rows at a time
     const std::uint32_t replay_buf_len = num_sfpu_iterations * 4;
     load_replay_buf( // TODO: Replace with SFPI call when SFPI is supported for Quasar: https://github.com/tenstorrent/tt-llk/issues/1637
-        0,
+        0 /*start*/,
         replay_buf_len,
-        false,
-        0,
-        0,
+        false /*exec_while_loading*/,
+        0 /*set_mutex*/,
+        0 /*last*/,
         // Lambda function to load replay buffer
         [in0_base, in1_base, out_base, num_sfpu_iterations]
         {
@@ -143,7 +142,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
     _llk_math_eltwise_sfpu_init_();
 
-    for (std::uint32_t i = 0; i < num_tiles; ++i)
+    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, i * PARAM_SRCS_SLICE_COUNT);
 
@@ -164,7 +163,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
             TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
             TT_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>(); // Clears dvalid for SFPU read and write
+            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true /*SRCS_RD_DONE*/, true /*SRCS_WR_DONE*/>(); // Clears dvalid for SFPU read and write
         }
 
         // Remaining SFPU iterations with no unpacker instructions (since they are preloaded)
@@ -172,7 +171,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t j = 0; j < preload_count; j++)
         {
             TT_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>(); // Clears dvalid for SFPU read and write
+            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true /*SRCS_RD_DONE*/, true /*SRCS_WR_DONE*/>(); // Clears dvalid for SFPU read and write
         }
     }
 

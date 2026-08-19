@@ -101,8 +101,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t unpack_src_format = unpack_src_data_types[stage_index];
                     const std::uint32_t unpack_dst_format = unpack_dst_data_types[stage_index];
 
-                    const int stage_offset = stage_index * NUM_VALUE_TILES_PER_ROW;
-
                     ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
                         ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(params.buffer_A[0]), unpack_src_format);
                     _llk_unpack_configure_unary_<p_unpacr::UNP_A>(static_cast<DataFormat>(unpack_dst_format));
@@ -110,15 +108,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     if (first_iteration)
                     {
                         _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true /*transpose*/, is_fp32_dest_acc_en>(
-                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1);
+                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
                     }
                     else
                     {
                         _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false /*transpose*/, is_fp32_dest_acc_en>(
-                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1);
+                            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
                     }
 
-                    const int first_tile_index  = tile_row_offset + stage_offset + tile_pair_offset;
+                    const int first_tile_index  = tile_row_offset + stage_index * NUM_VALUE_TILES_PER_ROW + tile_pair_offset;
                     const int second_tile_index = first_tile_index + distance;
                     _llk_unpack_unary_operand_<p_unpacr::UNP_A>(first_tile_index, ckernel::DEFAULT_TENSOR_SHAPE);
                     _llk_unpack_unary_operand_<p_unpacr::UNP_A>(second_tile_index, ckernel::DEFAULT_TENSOR_SHAPE);
@@ -162,9 +160,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr bool APPROX             = false;
     constexpr std::uint32_t dst_index = 0;
     const int end_phase               = TOPK_LOGK - 1;
-    constexpr int start_phase         = 0;
-    constexpr int end_step            = 0;
-    constexpr int start_step          = 0;
 
     // Dest dvalid sync chain: FPU (datacopy) -> SFPU (topk) -> PACK. Math thread owns
     // both the FPU and SFPU clients.
@@ -178,7 +173,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Datacopy 4 tiles (2 value + 2 index) from SRC to DEST; the FPU dvalid
     // wait gates the writes until pack releases the bank.
-    const std::uint32_t num_rows = 4 * FACE_R_DIM;
 
     // The index datacopy intentionally leaves ALU_FORMAT_SPEC_REG set to Int16.
     // Restore the value format before the SFPU network; the TopK value
@@ -196,10 +190,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
             for (int current_tile_pair_idx = 0; current_tile_pair_idx < num_pairs; ++current_tile_pair_idx)
             {
-                // The datacopy addrmod/MOP depend only on num_rows (constant), not on the
-                // per-stage format, so configure once per pair. The SFPU topk ops below may
+                // The datacopy addrmod/MOP depend only on the constant row count, not on
+                // the per-stage format, so configure once per pair. The SFPU topk ops below may
                 // reprogram bank0, so this stays inside the pipeline loop.
-                _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(num_rows, 1);
+                _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(4 * FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
 
                 for (Stage stage : {Stage::Values, Stage::Indices})
                 {
@@ -234,9 +228,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         VectorMode::RC_custom,
                         TOPK_SORT_DIRECTION,
                         end_phase,
-                        start_phase,
-                        end_step,
-                        start_step);
+                        0 /*start_phase*/,
+                        0 /*end_step*/,
+                        0 /*start_step*/);
                 }
                 else
                 {
@@ -342,30 +336,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t pack_src_format = pack_src_data_types[stage_index];
                     const std::uint32_t pack_dst_format = pack_dst_data_types[stage_index];
 
-                    const int tile_dest_offset = stage_index * NUM_TILES_PER_STAGE;
-
                     // Configure the per-stage format and L1 address for packing.
                     std::uint32_t l1_addr_16B;
                     if (last_iter)
                     {
-                        const int tile_row_offset = current_tile_row * NUM_TILES_IN_RESULT_BUFFER_PER_ROW;
-                        const int tile_L1_offset  = tile_row_offset + stage_index;
+                        const int tile_L1_offset = current_tile_row * NUM_TILES_IN_RESULT_BUFFER_PER_ROW + stage_index;
                         l1_addr_16B               = params.buffer_Res[tile_L1_offset] / 16;
                     }
                     else
                     {
                         const int tile_row_offset  = current_tile_row * params.FULL_CT_DIM;
                         const int tile_pair_offset = current_tile_pair_idx * (distance * NUM_TILES_PER_STAGE);
-                        const int stage_offset     = stage_index * NUM_VALUE_TILES_PER_ROW;
-                        const int tile_L1_offset   = tile_row_offset + stage_offset + tile_pair_offset;
+                        const int tile_L1_offset   = tile_row_offset + stage_index * NUM_VALUE_TILES_PER_ROW + tile_pair_offset;
                         l1_addr_16B                = params.buffer_A[tile_L1_offset] / 16;
                     }
 
                     ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(ckernel::DEFAULT_TENSOR_SHAPE, l1_addr_16B, pack_dst_format);
-                    _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1);
+                    _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
 
                     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(pack_src_format), ckernel::ReluConfig::none());
-                    _llk_pack_(tile_dest_offset, 0, ckernel::DEFAULT_TENSOR_SHAPE);
+                    _llk_pack_(stage_index * NUM_TILES_PER_STAGE, 0 /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
 
                 } // Stage loop.
 

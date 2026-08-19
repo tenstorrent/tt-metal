@@ -78,7 +78,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false>(
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*EN_INT32_MATH_FORMAT*/>(
         static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
     _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(params.CT_DIM, params.RT_DIM);
 
@@ -109,7 +109,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const volatile FormatConfig& formats = params.formats;
 #endif
-    const std::uint32_t num_tiles = params.TILE_CNT;
 
     const bool PARAM_SRCS_32BIT_MODE                = _is_srcs_32bit_mode_(static_cast<DataFormat>(formats.unpack_S_dst));
     constexpr std::uint32_t PARAM_SRCS_XDIM         = srcs_dims::XDIM;
@@ -150,7 +149,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     bd_pack.f.y_dim       = PARAM_SRCS_YDIM;
     bd_pack.f.z_dim       = PARAM_SRCS_ZDIM;
     _configure_buf_desc_table_(buf_desc_id_pack, bd_pack);
-    _llk_pack_hw_configure_<p_pacr::PACK1, false>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
+    _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
 
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
 
@@ -161,11 +160,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_sfpu_iterations      = PARAM_SRCS_YDIM >> 1;
     const std::uint32_t replay_buf_len = num_sfpu_iterations * 4;
     load_replay_buf( // TODO: Replace with SFPI call (#1637)
-        0,
+        0 /*start*/,
         replay_buf_len,
-        false,
-        0,
-        0,
+        false /*exec_while_loading*/,
+        0 /*set_mutex*/,
+        0 /*last*/,
         [in0_base, in1_base, out_base, num_sfpu_iterations]
         {
 #pragma GCC unroll 4
@@ -181,7 +180,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
     _llk_math_eltwise_sfpu_init_();
 
-    for (std::uint32_t i = 0; i < num_tiles; ++i)
+    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_S, i * PARAM_SRCS_SLICE_COUNT);
 
@@ -205,14 +204,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, buf_desc_id_unpack_0, 0b0 /*no dvalid*/);
             TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, buf_desc_id_unpack_1, 0b1 /*Set dvalid*/);
             TT_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
+            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true /*SRCS_RD_DONE*/, true /*SRCS_WR_DONE*/>();
         }
 
 #pragma GCC unroll preload_count
         for (std::uint32_t j = 0; j < preload_count; j++)
         {
             TT_REPLAY(0, replay_buf_len, 0, 0, 0, 0);
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();
+            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true /*SRCS_RD_DONE*/, true /*SRCS_WR_DONE*/>();
         }
     }
 
@@ -246,9 +245,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _configure_buf_desc_table_(buf_desc_id_dst, bd_dst);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_matmul_init_(buf_desc_id_dst, params.RT_DIM, params.CT_DIM, 1);
+    _llk_pack_matmul_init_(buf_desc_id_dst, params.RT_DIM, params.CT_DIM, 1 /*num_subblocks_c_dim*/);
 
-    _llk_pack_matmul_(0, 0);
+    _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 
