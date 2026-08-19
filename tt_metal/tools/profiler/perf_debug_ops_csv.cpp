@@ -21,7 +21,7 @@ void PerfDebugOpsCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
     }
     for (const PerfDebugRec& rec : batch.records) {
         const auto type = rec.meta.type;
-        if ((type != PerfDebugRecType::ZoneStart && type != PerfDebugRecType::ZoneEnd) || rec.prog == 0) {
+        if (type != PerfDebugRecType::ZoneStart && type != PerfDebugRecType::ZoneEnd) {
             continue;
         }
         ZoneClass& cls = class_of_hash_[rec.meta.id];
@@ -35,27 +35,69 @@ void PerfDebugOpsCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
         if (rec.meta.lane >= lanes.size() || lanes[rec.meta.lane].role != PerfDebugLaneRole::Worker) {
             continue;
         }
-        OpAgg& op = ops_[{rec.meta.dev, rec.prog}];
-        const uint64_t ts = rec.ts;
         const uint32_t risc = rec.meta.lane % kNumRisc;
-        auto& core = op.cores[rec.meta.lane / kNumRisc];
+        CoreState& cs = cores_[{rec.meta.dev, rec.meta.lane / kNumRisc}];
         if (type == PerfDebugRecType::ZoneStart) {
-            op.k_start = std::min(op.k_start, ts);
-            op.k_start_last = std::max(op.k_start_last, ts);
-            if (risc <= 1) {
-                op.dm_start = std::min(op.dm_start, ts);
+            cs.open_start[risc] = rec.ts;
+        } else if (cs.open_start[risc] != 0) {
+            if (risc == 0) {
+                if (rec.prog != 0) {
+                    cs.windows.push_back({cs.open_start[0], rec.ts, rec.prog});
+                }
+            } else {
+                cs.pairs.push_back({cs.open_start[risc], rec.ts, static_cast<uint8_t>(risc)});
             }
-            op.risc_start[risc] = std::min(op.risc_start[risc], ts);
-            core.first = core.first == 0 ? ts : std::min(core.first, ts);
-        } else {
-            op.k_end = std::max(op.k_end, ts);
-            op.risc_end[risc] = std::max(op.risc_end[risc], ts);
-            core.second = std::max(core.second, ts);
+            cs.open_start[risc] = 0;
         }
     }
 }
 
-void PerfDebugOpsCsvConsumer::write_csv(const std::string& path) const {
+void PerfDebugOpsCsvConsumer::fold(
+    uint32_t dev, uint32_t prog, uint32_t core, uint8_t risc, uint64_t start, uint64_t end) {
+    OpAgg& op = ops_[{dev, prog}];
+    op.k_start = std::min(op.k_start, start);
+    op.k_start_last = std::max(op.k_start_last, start);
+    op.k_end = std::max(op.k_end, end);
+    if (risc <= 1) {
+        op.dm_start = std::min(op.dm_start, start);
+    }
+    op.risc_start[risc] = std::min(op.risc_start[risc], start);
+    op.risc_end[risc] = std::max(op.risc_end[risc], end);
+    auto& c = op.cores[core];
+    c.first = c.first == 0 ? start : std::min(c.first, start);
+    c.second = std::max(c.second, end);
+}
+
+void PerfDebugOpsCsvConsumer::write_csv(const std::string& path) {
+    for (auto& [key, cs] : cores_) {
+        const auto& [dev, core] = key;
+        for (const LanePair& p : cs.pairs) {
+            if (cs.windows.empty()) {
+                unassigned_pairs_++;
+                continue;
+            }
+            // The five RISCs get their go signals independently, so a lane's wrapper can open slightly
+            // BEFORE its own op's BRISC window -- nearest start, not latest-at-or-before.
+            auto it =
+                std::upper_bound(cs.windows.begin(), cs.windows.end(), p.start, [](uint64_t ts, const BriscWindow& w) {
+                    return ts < w.start;
+                });
+            if (it != cs.windows.begin() &&
+                (it == cs.windows.end() || it->start - p.start > p.start - std::prev(it)->start)) {
+                --it;
+            }
+            fold(dev, it->prog, core, p.risc, p.start, p.end);
+        }
+        for (const BriscWindow& w : cs.windows) {
+            fold(dev, w.prog, core, 0, w.start, w.end);
+        }
+    }
+    if (unassigned_pairs_ != 0) {
+        std::fprintf(
+            stderr,
+            "[perf-debug ops-csv] %llu kernel pairs preceded any BRISC window and were dropped\n",
+            static_cast<unsigned long long>(unassigned_pairs_));
+    }
     FILE* f = std::fopen(path.c_str(), "w");
     if (f == nullptr) {
         return;
