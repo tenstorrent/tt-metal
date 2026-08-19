@@ -22,9 +22,6 @@ class ChipArchitecture(Enum):
                 "blackhole": cls.BLACKHOLE,
                 "quasar": cls.QUASAR,
                 "wormhole": cls.WORMHOLE,
-                # Metal / UMD name for the same part. ttexalens reports
-                # devices[0]._arch as this, and ARCH_NAME/CHIP_ARCH are often
-                # exported this way from a tt-metal tree.
                 "wormhole_b0": cls.WORMHOLE,
             }
         return cls._cached_string_map

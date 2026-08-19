@@ -59,10 +59,7 @@ Options:
   -t, --timeout SEC     Per-test timeout in seconds (default: 300; env: TIMEOUT).
   -a, --architecture A  ttsim architecture: 'blackhole', 'wormhole', or
                         'quasar' (default: blackhole; env: TTSIM_ARCHITECTURE).
-                        Controls test selection and collection. Also controls
-                        auto-provisioning for blackhole/wormhole when
-                        TT_METAL_SIMULATOR is unset. Quasar currently requires
-                        TT_METAL_SIMULATOR to be set by the caller.
+                        Controls test selection and collection.
   -h, --help            Show this help message.
 
 Environment:

@@ -5,7 +5,6 @@ import datetime
 import os
 import time
 from enum import Enum, IntEnum
-from functools import lru_cache
 from pathlib import Path
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -114,7 +113,12 @@ ALL_CORES = get_all_cores()
 TRISC_CORES = get_all_cores(trisc_only=True)
 
 
-@lru_cache(maxsize=None)
+# Successful enumerations only. A miss must not stick: pytest_configure used to
+# call this before silicon/RTL Exalens init, and caching an empty tuple pinned
+# the session to a fake 8-wide grid.
+_functional_tensix_locations: dict[int, tuple] = {}
+
+
 def get_functional_tensix_locations(device_id: int = 0) -> tuple:
     """Logical coordinates of every Tensix this card actually has, in a stable order.
 
@@ -123,9 +127,12 @@ def get_functional_tensix_locations(device_id: int = 0) -> tuple:
     coordinates are already dense over that set and print as "x,y", which is the
     form TENSIX_LOCATION carries and OnChipCoordinate.create parses back.
 
-    Empty if the card cannot be reached, so a caller that does not need one (the
-    compile phase, a host with no card) is not stopped by asking.
+    Raises if Exalens cannot answer. Compile-producer never calls this; a miss
+    here is a device-backed run that failed to find its cores.
     """
+    cached = _functional_tensix_locations.get(device_id)
+    if cached is not None:
+        return cached
     try:
         device = check_context().devices[device_id]
         locations = [
@@ -133,28 +140,31 @@ def get_functional_tensix_locations(device_id: int = 0) -> tuple:
             for coordinate in device.get_block_locations("functional_workers")
         ]
     except Exception as err:
-        logger.warning(f"Could not enumerate Tensix cores: {type(err).__name__}: {err}")
-        return ()
+        raise RuntimeError(
+            f"Could not enumerate Tensix cores from Exalens: "
+            f"{type(err).__name__}: {err}"
+        ) from err
     # Every worker derives its own core from this list independently, so the order
     # has to come out identical in each process; get_block_locations promises none.
-    return tuple(
+    result = tuple(
         sorted(locations, key=lambda loc: tuple(int(v) for v in loc.split(",")))
     )
+    if not result:
+        raise RuntimeError(
+            "Exalens reported no functional Tensix workers on this device."
+        )
+    _functional_tensix_locations[device_id] = result
+    return result
 
 
 def tensix_location_for_worker(worker_index: int, device_id: int = 0) -> str:
     """The Tensix an xdist worker owns.
 
     Two workers sharing a core would silently corrupt each other's results, so
-    running wider than the card is fatal rather than wrapped.
+    running wider than the card is fatal rather than wrapped. Call after Exalens
+    has a context; an enumeration failure is not a reason to invent cores.
     """
     locations = get_functional_tensix_locations(device_id)
-    if not locations:
-        # Falling back keeps a card-less host working; it is only wrong on a part
-        # whose harvesting makes the nominal 8-wide grid untrue, which is exactly
-        # what we could not check here.
-        row, col = divmod(worker_index, 8)
-        return f"{row},{col}"
     if worker_index >= len(locations):
         # Also reachable without over-subscribing: xdist numbers a replacement for
         # a crashed worker above every existing one, so a run that keeps losing
