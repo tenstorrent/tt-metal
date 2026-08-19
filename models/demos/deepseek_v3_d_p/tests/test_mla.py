@@ -17,6 +17,7 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
+from models.demos.deepseek_v3_d_p.reference.mistral_small4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
@@ -31,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reverse_reorder_tensor_chunks,
     rotated_chip_positions,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     cpu_mla_reference,
@@ -469,6 +471,109 @@ def test_ds_mla(
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
 def test_kimi_mla(
+    use_pretrained,
+    request,
+    mesh_device,
+    seq_len,
+    skip_host_comparison,
+    scale_down_sl,
+    is_balanced,
+    is_ci_env,
+    is_ci_v2_env,
+    device_params,
+    variant,
+):
+    run_model(
+        variant,
+        use_pretrained,
+        request,
+        mesh_device,
+        seq_len,
+        skip_host_comparison,
+        scale_down_sl,
+        is_balanced,
+        is_ci_env,
+        is_ci_v2_env,
+        device_params,
+    )
+
+
+# Mistral Small 4 119B: dense MLA at dims no current resident uses -- qk_head_dim 128 (family: 192 or
+# 256), kv_lora_rank 256 (family: 512), 32 heads (family: 64 or 128), and a LIVE YaRN factor of 128
+# (DeepSeek 40, GLM 1.0 = disabled) so the attention softmax scale is 0.194969 rather than the bare
+# qk_head_dim**-0.5 = 0.088388 (mla.py:381-385). Random weights only: this row exercises the MLA
+# shapes, and the pretrained path is covered by the block and transformer tests.
+# (32,1) is included because it is a CI-listed BLACKHOLE_GALAXY mesh (conftest CI_ALLOWED_FABRICS) and
+# is the closest available probe of the TP=1 half of the PP=4 x (8,1) serving proposal.
+# (8,1) is the PP=4 serving-stage geometry under discussion. It is NOT in the BLACKHOLE_GALAXY
+# CI_ALLOWED_FABRICS table (every entry there uses all 32 chips), so on a galaxy it requires an
+# 8-chip carve via TT_VISIBLE_DEVICES. Left in the list so the probe is one -k away; it auto-skips
+# on a full 32-chip session with "Requested more devices" inverted -- see the mesh guard.
+#
+# mesh and fabric are parametrized TOGETHER rather than as a cross product, which is how every other
+# model in this file does it and what the production profile requires. The cross product produced two
+# combinations that cannot run -- 8x4 on FABRIC_1D (upstream retired it for the 8x4 prefill rows; it
+# now reports "unfeasible on the given hardware" and SKIPS with rc=0) and torus_xy on an Nx1 mesh
+# (torus_xy is the 8x4 ring/ring profile and does not apply) -- and a skip that exits 0 is
+# indistinguishable from a pass.
+#
+# `torus-xy-8x4` is the row a CI leg selects: `fabric_profile: torus_xy` in
+# tests/pipeline_reorg/blaze_models_prefill_tests.yaml maps to the production TorusXY descriptor, and
+# every Kimi / GLM / DeepSeek 8x4 row in this file is on torus_xy_device_params. Mistral had only the
+# plain FABRIC_2D profile, so it could not be gated on the shipping path at all.
+#
+# `fabric2d-8x4` is kept because every measured number in MISTRAL4_PREFILL_PERFORMANCE.md was taken
+# on it; dropping it would orphan the perf log.
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE,
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+            ),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+            },
+            id="fabric2d-8x4",
+        ),
+        pytest.param(
+            (32, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+            },
+            id="line-32x1",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+            },
+            id="line-8x1",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
+@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
+@pytest.mark.parametrize("seq_len", [5 * 1024, 25 * 1024], ids=["seq5k", "seq25k"])
+@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
+@pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
+@pytest.mark.parametrize("variant", ["mistral_small4"], indirect=True, ids=["mistral4"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 bring-up targets Blackhole")
+@pytest.mark.timeout(0)
+def test_mistral4_mla(
     use_pretrained,
     request,
     mesh_device,
@@ -954,11 +1059,12 @@ _CHUNKED_SCENARIOS = (
 @pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
 @pytest.mark.parametrize(
     "variant",
-    ["deepseek_v3_d_p", "kimi_k2_6", "kimi_k3"],
+    ["deepseek_v3_d_p", "kimi_k2_6", "kimi_k3", "mistral_small4"],
     indirect=True,
     # "k3", not "kimi_k3": pytest -k is substring-based, so a "kimi_k3" id would silently widen every
     # existing `-k kimi` selector (CI yaml, tests/perf/test_mla_perf.py) to include K3.
-    ids=["dsv3", "kimi", "k3"],
+    # "mistral4" for the same reason -- keeps `-k mistral` selectors unambiguous.
+    ids=["dsv3", "kimi", "k3", "mistral4"],
 )
 @pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
