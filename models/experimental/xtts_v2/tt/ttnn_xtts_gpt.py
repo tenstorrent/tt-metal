@@ -140,12 +140,13 @@ class TTNNGPTCore:
         # width-sharded program-config path; the prefill core keeps the interleaved path.
         return p(x, sharded=self.ln_sharded, compute_kernel_config=self.compute_kernel_config)
 
-    def _linear(self, x, p):
+    def _linear(self, x, p, prg=None):
         return ttnn.linear(
             x,
             p["weight"],
             bias=p["bias"],
             compute_kernel_config=self.compute_kernel_config,
+            program_config=prg,
         )
 
     def _attn(self, x, block):
@@ -202,7 +203,7 @@ class TTNNGPTCore:
         ttnn.deallocate(attn)
         return out
 
-    def _mlp(self, x, block):
+    def _mlp(self, x, block, prg_fc=None, prg_proj=None):
         # c_fc + gelu_new fused into one linear(activation="gelu") — matches the base
         # TTIR->TTNN lowering the compiler emits (validated to match the separate
         # tanh-gelu at PCC ~0.9999993). Avoids a standalone elementwise gelu kernel.
@@ -212,8 +213,9 @@ class TTNNGPTCore:
             bias=block["c_fc"]["bias"],
             activation="gelu",
             compute_kernel_config=self.compute_kernel_config,
+            program_config=prg_fc,
         )
-        return self._linear(h, block["mlp_proj"])
+        return self._linear(h, block["mlp_proj"], prg=prg_proj)
 
     def __call__(self, inputs_embeds):
         x = inputs_embeds

@@ -28,6 +28,35 @@ import ttnn
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import TTNNGPTConfig, TTNNGPTCore
 
 
+DECODE_IN0_BLOCK_W = 4  # tiles of the K reduction per step; see _decode_matmul_cfg
+
+
+def _decode_matmul_cfg(device, K, N):
+    """1D-multicast matmul config for a single-token (M=1) decode linear.
+
+    Spreads N across the largest usable core grid and cuts the K reduction into
+    DECODE_IN0_BLOCK_W-tile chunks, so the weight stream pipelines against the math. Returns None
+    when the shapes cannot express one, leaving ttnn's own heuristic in place. per_core_M=1 makes
+    these DECODE ONLY — prefill shares _linear/_mlp and passes nothing."""
+    Kt, Nt = K // 32, N // 32
+    g = device.compute_with_storage_grid_size()
+    rows = next((r for r in range(g.y, 0, -1) if Nt % (g.x * r) == 0), None)
+    if rows is None or Kt % DECODE_IN0_BLOCK_W:
+        return None
+    per_core_N = Nt // (g.x * rows)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(g.x, rows),
+        in0_block_w=DECODE_IN0_BLOCK_W,
+        out_subblock_h=1,
+        out_subblock_w=next(w for w in range(min(per_core_N, 8), 0, -1) if per_core_N % w == 0),
+        per_core_M=1,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
 class TTNNGPTDecoder(TTNNGPTCore):
     def __init__(
         self,
@@ -158,6 +187,11 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         self.batch = batch
         self.data_mapper = self.mesh_mapper if data_mapper is None else data_mapper
         self.ln_sharded = True  # single-token decode: use the width-sharded LayerNorm path
+        b0 = self.params["blocks"][0]
+        self._prg = {  # decode-only matmul configs, keyed by weight
+            n: _decode_matmul_cfg(device, *tuple(b0[n]["weight"].shape)[-2:])
+            for n in ("c_attn", "attn_proj", "c_fc", "mlp_proj")
+        }
         # BUG-1: sdpa_decode is wrong when the KV-cache length is an odd number of 32-tiles;
         # round up to an even tile count (multiple of 64). See TTNNGPTDecoder for details.
         self.max_seq = ((max_seq + 63) // 64) * 64
@@ -204,7 +238,7 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         cfg = self.config
         for li in range(cfg.n_layer):
             b = self.params["blocks"][li]
-            qkv = self._linear(self._layer_norm(x, b["ln_1"]), b["c_attn"])
+            qkv = self._linear(self._layer_norm(x, b["ln_1"]), b["c_attn"], prg=self._prg["c_attn"])
             # Fused per-head Q/K/V split: outputs are height-sharded in L1 (K/V feed the cache-update
             # directly, Q feeds sdpa_decode) -- replaces 3 slice + 3 reshape + 2 interleaved_to_sharded.
             q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -228,8 +262,8 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
                 compute_kernel_config=self.compute_kernel_config,
             )
             attn = ttnn.reshape(attn, (1, 1, cfg.n_embd))
-            x = ttnn.add(x, self._linear(attn, b["attn_proj"]))
-            x = ttnn.add(x, self._mlp(self._layer_norm(x, b["ln_2"]), b))
+            x = ttnn.add(x, self._linear(attn, b["attn_proj"], prg=self._prg["attn_proj"]))
+            x = ttnn.add(x, self._mlp(self._layer_norm(x, b["ln_2"]), b, self._prg["c_fc"], self._prg["mlp_proj"]))
         x = self._layer_norm(x, self.params["ln_f"])
         return self._layer_norm(x, self.params["final_norm"])
 
