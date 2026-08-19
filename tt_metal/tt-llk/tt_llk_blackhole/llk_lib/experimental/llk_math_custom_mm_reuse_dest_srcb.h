@@ -78,6 +78,12 @@ constexpr std::uint32_t CUSTOM_MM_REUSE_REPLAY_OFFSET = ckernel::math::replay_bu
 static_assert(
     CUSTOM_MM_REUSE_REPLAY_OFFSET >= ckernel::math::replay_buf_offset + 11,
     "replay program overlaps custom_mm's, which uses up to 11 entries at the window base");
+// The 11 above mirrors custom_mm's function-local replay_buf_len (operandB_face_r_dim == 8
+// ? 11 : 9), which is not exported; deriving both from one named constant is a follow-up
+// that touches the already-merged custom_mm.h.
+static_assert(
+    CUSTOM_MM_REUSE_REPLAY_OFFSET + CUSTOM_MM_REUSE_REPLAY_LEN <= ckernel::math::replay_buf_offset + CUSTOM_MM_REUSE_FPU_REPLAY_LEN,
+    "replay program runs past the FPU half of the math replay window");
 
 inline void custom_mm_reuse_dest_srcb_configure_mop()
 {
@@ -119,6 +125,11 @@ inline void _llk_math_custom_mm_reuse_dest_srcb_init_()
 // Preconditions:
 // - the unpacker has issued a zero-and-set-dvalid on SrcB
 // - DEST at dst_index is zero
+// - for in0_tile_r_dim < 4, rows of the producing custom_mm's output above the tile
+//   height should be zero (its clear_src=false power optimization can leave stale
+//   products there; MOV_4_ROWS drags two such rows into SrcB for in0_tile_r_dim == 2 —
+//   benign today because the packer reads only in0_tile_r_dim rows per face, but the
+//   cross-op coupling is real)
 template <std::uint32_t in0_tile_r_dim>
 inline void _llk_math_custom_mm_reuse_dest_srcb_(
     const std::uint32_t src_index, const std::uint32_t dst_index, const std::uint32_t kt_dim, const std::uint32_t nt_dim, const std::uint32_t src_tile_stride)
