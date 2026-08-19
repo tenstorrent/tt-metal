@@ -1,4 +1,11 @@
 #!/bin/bash
+# SUPERSEDED (verifier pass, 2026-08-19) — kept only as a record of the Phase-0
+# investigation. The wedge this driver worked around DOES NOT REPRODUCE: the full
+# 90-case acceptance suite passes in ONE pytest process in 61 s, and the 432-cell
+# golden cartesian in 143 s, both with the stock function-scoped mesh_device fixture
+# (one fabric mesh open/close per case). See changelog.md issue 5. Do not use this
+# one-process-per-case driver; use
+#   scripts/run_multidevice_sim_pytest.py --op point_to_point --runtime hardware -- <target>
 # One pytest process (+ forced device reset) per acceptance case.
 # On this board a multi-packet / multi-hop fabric transfer leaves the ethernet
 # wedged, so the PROCESS often aborts (SIGABRT, exit 134) during device teardown

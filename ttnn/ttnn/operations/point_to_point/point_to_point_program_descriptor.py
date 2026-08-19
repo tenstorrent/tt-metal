@@ -303,9 +303,6 @@ def create_mesh_program_descriptor(
         "l1_alignment": l1_alignment,
         "page_size": page_size,
         "num_pages": num_pages,
-        # INTRA-PACKET page stride: L1-aligned, because ccl_packet_dims derives
-        # packet_size from round_up(page_size, l1_alignment).
-        "aligned_page_size": _round_up(page_size, l1_alignment),
         # CB SLOT stride for the two CBs that touch DRAM: DRAM-aligned.
         "dram_slot_stride": _dram_slot_stride(page_size),
         "packet_size": dims.packet_size_bytes,

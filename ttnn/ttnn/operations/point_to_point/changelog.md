@@ -1,160 +1,103 @@
-# point_to_point — changelog
+# Changelog: point_to_point
 
-## 2026-08-19 — Phase 0: initial implementation from `op_design.md`
+## Phase 0 — Core Implementation
 
-Self-contained Python CCL op on `ttnn.generic_op` + `ttnn.MeshProgramDescriptor`.
-Newly authored from scratch — it does **not** re-export, import, call, wrap, or
-dispatch to `ttnn.point_to_point` / `ttnn._ttnn.operations.point_to_point`.
-
-### Shipped
-
-| Path | Purpose |
-|---|---|
-| `__init__.py` | re-exports `point_to_point`, `validate`, `SUPPORTED`, `EXCLUSIONS`, `INPUT_TAGGERS` |
-| `point_to_point.py` | four registry declarations, `validate()`, entry point, cached `GlobalSemaphore` |
-| `point_to_point_program_descriptor.py` | `MeshProgramDescriptor` (two per-coordinate programs) |
-| `kernels/point_to_point_sender_reader.cpp` | sender NCRISC: input DRAM → `cb_shard_pages` |
-| `kernels/point_to_point_sender_writer.cpp` | sender BRISC: handshake, framing, fabric egress |
-| `kernels/point_to_point_receiver_reader.cpp` | receiver NCRISC: ack, wait, read-back, de-frame |
-| `kernels/point_to_point_receiver_writer.cpp` | receiver BRISC: `cb_output_pages` → output DRAM |
-
-No compute kernel — the op is dataflow-only, on logical core `(0, 0)` of the two
-participating devices. Every other mesh coordinate gets no program entry, so relay
-hops are pure fabric routing.
-
-### Accuracy
-
-Pure byte copy, so the oracle is identity and the comparison is **exact**, not
-tolerance-based. `tests/.../test_point_to_point_debug.py` asserts
-`max|actual - expected| == 0.0` on the receiver shard **and** on every untouched
-shard, for all-ones, monotonic, and tile-position-encoded payloads across
-`ROW_MAJOR`/`TILE` and shapes `(1,1,32,32)`, `(1,1,64,128)`, `(1,1,32,48)`,
-`(1,1,24,24)`. The acceptance suite's PCC thresholds (0.995–0.999) are met with
-margin everywhere.
-
-### Test results
-
-- **Acceptance: 90 / 90 PASS, 0 failures** (`tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py`).
-  Run one case per pytest process with a device reset — see *Platform limitation*
-  below for why that is required. Per-case verdicts:
-  `agent_logs/acceptance_per_case_results.csv`; driver:
-  `agent_logs/acceptance_per_case_driver.sh`.
-- **Golden suite**: 432 cells collect cleanly; `SUPPORTED == TARGET` and
-  `EXCLUSIONS == []`, so no cell is xfailed.
-
-### `SUPPORTED`
-
-All of `TARGET`. The op is format-agnostic by construction: all four CBs carry
-opaque bytes (declared `uint32`), the only dtype-dependent rule lives in the bound
-`ccl_packet_dims` host helper (the `bfloat16` `bit_floor` on the channel buffer
-size), and both framing regimes (A coalesce / B segment) are implemented. So every
-dtype × layout × topology × alignment cell rides one code path.
-`EXCLUSIONS` is empty.
+- **Date**: 2026-08-19
+- **What was done**: Initial implementation via the incremental pipeline (planner → implementer →
+  verifier). A self-contained Python CCL op on `ttnn.generic_op` + `ttnn.MeshProgramDescriptor` with
+  four newly authored dataflow kernels under `kernels/` — sender reader/writer and receiver
+  reader/writer. No compute kernel (the op performs no arithmetic). It does **not** re-export, import,
+  call, wrap or dispatch to the bound C++ `ttnn.point_to_point`.
+- **SUPPORTED at Phase 0**: dtype=[bfloat16, float32, bfloat8_b, uint16, int32, uint32],
+  layout=[TILE, ROW_MAJOR], topology=[Linear, Ring], alignment=[tile_aligned, non_tile_aligned].
+  EXCLUSIONS=[]. This is the **full TARGET** on every axis.
+- **Accuracy achieved**: **bit-exact** — PCC=1.0000000, max_abs_err=0.0, mean_abs_err=0.0,
+  rms_err=0.0, measured on 4 shapes × 3 dtypes (12 cases) via
+  `test_point_to_point_precision_baseline.py`. Correct for a pure byte copy: no accumulation, no
+  fidelity/dest-accumulate trade-off, so anything short of exact would be a bug.
+- **Golden suite at Phase 0**: **396 / 396 cells passing** (+ 36 INVALID-skipped, 432 total) per
+  `generated/p2p_verify/verifier_report.json`. All loud categories 0: supported_fail=0,
+  xpass_drift=0, xfail_wrong_mode=0, supported_marked_xfail=0.
+- **Verified on**: real silicon — 4-chip Blackhole QuietBox, mesh `(1, 4)`, `FabricConfig.FABRIC_1D`
+  (topology `bh_quietbox_1x4_hw`), via
+  `scripts/run_multidevice_sim_pytest.py --op point_to_point --runtime hardware`. Aggregate exit 0.
+- **Tests added**: `test_point_to_point.py` (acceptance, 90), `test_point_to_point_debug.py`
+  (regression guards, 28), `test_point_to_point_extended.py` (5),
+  `test_point_to_point_precision_baseline.py` (12).
 
 ### Issues encountered
 
-**1. NoC DRAM-read alignment — found and fixed.**
-The watcher's NoC sanitizer, on a `(1,1,32,48)` bfloat16 `ROW_MAJOR` shard:
+**1. NoC DRAM-read alignment (implementer, fixed).** On a `(1,1,32,48)` bfloat16 `ROW_MAJOR` shard the
+NoC sanitizer reported *"tried to unicast read 96 bytes to local L1[0x01b360] from
+DRAM[0x00593e80] (invalid address alignment in NOC transaction)"*. A CB's page size **is** its
+per-slot address stride, and the NoC requires `(l1_addr & mask) == (dram_addr & mask)` with
+Blackhole's 64 B DRAM read alignment, so the design's `round_up(page_size, l1_alignment) = 96` put
+slot 1 at `base + 96` ≡ 32 (mod 64). Fixed with `_dram_slot_stride()` =
+`round_up(page_size, max(dram_align, l1_align))` on the two CBs that are the local side of a DRAM
+transfer. The **intra-packet** stride stays `round_up(page_size, l1_alignment)` because
+`ccl_packet_dims` derives `packet_size` from it; the kernels never conflate the two. No kernel change
+was needed. An advisory deviation from `op_design.md`'s CB sizing table, required for correctness.
 
-```
-NCRISC point_to_point_sender_reader.cpp tried to unicast read 96 bytes to local
-L1[0x01b360] from DRAM[0x00593e80] (invalid address alignment in NOC transaction)
-```
+**2. `ccl_packet_dims` sized the fabric payload with the channel-buffer size (verifier, fixed).**
+`ttnn/cpp/ttnn/operations/ccl/common/host/ccl_helpers_dataflow_host.hpp` capped a packet at
+`get_tt_fabric_channel_buffer_size_bytes()`, but a channel buffer is
+`packet_header_size + max_payload_size` and the worker writes the payload at
+`slot_base + sizeof(PACKET_HEADER_TYPE)` — so a packet sized at the channel-buffer size overruns the
+slot by the header size (48 B on Blackhole: `max_payload=4352`, `header=48`, `channel_buffer=4400`).
+The only in-kernel guard omits the header **and compiles out in Release**, so the overrun was silent.
+Reachable from the graded cartesian: the golden cell `(1,1,56,88)` `uint16` `ROW_MAJOR` framed 25
+× 176 B pages into a 4400 B packet, plus every non-`bfloat16` segmented (regime B) case.
+`bfloat16` was accidentally safe because its `std::bit_floor` lands on 4096.
+Fixed at the source (`get_tt_fabric_max_payload_size_bytes()`), which also fixes the bound C++
+`ttnn.point_to_point` that shares the helper, and keeps this op consuming the mandated helper with no
+reimplementation of the framing rule. Offending cells move to 4224 B / 4352 B; `bfloat16` and every
+tile-page case are unchanged.
 
-`l1 % 64 == 32`, `dram % 64 == 0`. Blackhole's `NOC_DRAM_READ_ALIGNMENT_BYTES` is
-**64**, and `sanitize.h:558` requires `(l1_addr & mask) == (noc_addr & mask)`. A CB's
-page size *is* its per-slot address stride, so the design's
-`round_up(page_size, l1_alignment)` = 96 put slot 1 at `base + 96` ≡ 32 (mod 64).
-CB base addresses are already DRAM-aligned (`program.cpp:1352`), so only the stride
-was wrong.
+**3. GlobalSemaphore cache keyed by `id(mesh_device)` (verifier, fixed).** A module-level dict keyed
+by `id()` outlives the device (leaking a closed device's L1 allocation for the process lifetime — the
+golden run opens 396 meshes) and can hand a *new* `MeshDevice` the *previous* device's semaphore,
+since CPython recycles `id()`s. The handle is now bound as an attribute on the mesh-device object, so
+its lifetime is exactly the device's. Deliberate deviation from `op_design.md`'s prescribed
+`_SEMAPHORE_CACHE[id(mesh_device)]`.
 
-Fix: `_dram_slot_stride()` sizes `cb_shard_pages` and `cb_output_pages` — the two CBs
-that are the local side of a DRAM transfer — at
-`round_up(page_size, max(dram_align, l1_align))`. The **intra-packet** stride stays
-`round_up(page_size, l1_alignment)` because `ccl_packet_dims` derives `packet_size`
-from it. No kernel change was needed: the kernels already address CB slots via
-`get_read_ptr`/`get_write_ptr` and compute intra-packet offsets from the `alignment`
-compile-time arg, so the two strides were never conflated. This is a CB-sizing
-choice, which `op_design.md` marks advisory.
+**4. Precision baseline opened the wrong mesh shape (verifier, fixed).** It requested `(1, 2)` on the
+`(1, 4)` graded topology and ERRORed on all 8 cases with `Fabric Router Sync: Timeout ... Ethernet
+handshake likely failed`. Repinned to `(1, 4)`.
 
-Because the sanitizer *halts* the offending core, this bug also presented as a
-device wedge, which is what made it look like a synchronization problem at first.
+**5. Refuted — the "multi-packet / multi-hop ethernet wedge".** Phase 0's implementer notes reported
+that any transfer of more than one packet or over more than one hop wedged the ethernet cores so that
+the next `open_mesh_device` failed in `assert_active_ethernet_cores_to_reset`, and therefore that
+every acceptance case needed its own pytest process plus a board reset (a 90-process driver script).
+**It does not reproduce.** Measured in single pytest processes with the stock function-scoped
+`mesh_device` fixture (one mesh open/close per case): acceptance 90/90 in 61 s, golden 396/396 in
+143 s, `test_hop_count_stress` (1/2/3 hops × 2 payloads × 20 reps) 120/120 — roughly 600 consecutive
+fabric mesh open/close cycles with real multi-hop, multi-packet traffic and no wedge. Most likely the
+wedge *was* the NoC-alignment fault of issue 1 (the sanitizer **halts** the offending core, which
+wedges the ethernet), removed by the `_dram_slot_stride` fix. No special per-case process isolation is
+needed.
 
-**2. Multi-packet / multi-hop ethernet wedge — pre-existing, NOT this op.**
-After a fabric transfer of more than one packet, or over more than one hop, the next
-`open_mesh_device` fails inside
-`RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset`:
+### Other verifier changes
 
-```
-Device 0: Timed out while waiting for active ethernet core 24-25 to become active
-again. Try resetting the board.
-```
+- `_same_row_or_column()` raised `IndexError` on a rank-1 `MeshCoordinate`; now guarded.
+- Removed the dead `geom["aligned_page_size"]` entry from the program descriptor.
+- `test_point_to_point_debug.py`: 267 → 28 cases. Deleted the C++-reference control (it dispatched the
+  bound `ttnn.point_to_point` from the generated op's own test directory, against the generation
+  mandate; its conclusion is preserved in the docstring), cut the stress repetitions from 20 → 2 and
+  the fixture-cycle control from 16 → 3, retargeted the `id()`-reuse probe as the guard for issue 3,
+  and **widened `test_packet_geometry_within_edm_slot` from 5 (dtype, layout) pairs to all 11** — the
+  narrow sweep is why issue 2 went unnoticed, and the widened one is what caught it.
+- Added `test_point_to_point_extended.py` closing the three real coverage gaps: regime-B packet
+  framing (`page_segments > 1` — entirely unexecuted code before, in both the sender and the
+  receiver), interleaved-**L1** memory config, and the caller-supplied `intermediate_tensor` path.
+- Strengthened the precision oracle from a PCC floor to **bit-exactness** (a PCC threshold hides a
+  single corrupted page on a large shard — exactly what the framing/page-stride logic can produce).
+- `black` (repo config, line-length 120) on the op module and the test files this pass owns.
 
-It is strictly **post-test**: pytest reports `PASSED`, the shard comparison is exact,
-and only then does the process `SIGABRT` while closing the mesh device. Nothing in
-the data path fails. Bisect (all on the graded Blackhole 1×4 QuietBox):
+### Refinement queue
 
-| case | this op | bound C++ `ttnn.point_to_point` |
-|---|---|---|
-| 16× op-free fabric mesh open/close | PASS | — |
-| `GlobalSemaphore` per cycle, no traffic, 4× | PASS | — |
-| 1 hop, 1-packet payload, 20 cycles | 20 PASS | PASS |
-| 1 hop, 4-packet payload | 1 then wedge | 1 then wedge |
-| 2 hops, 1-packet payload | 1 then wedge | 1 then wedge |
-
-The pre-existing C++ op — an **independent** implementation this op deliberately does
-not wrap — wedges identically: same core, same count, same duration. So this is a
-fabric-teardown limitation of the board, at full parity between the two
-implementations. Practical consequence: a pytest process that performs a
-multi-packet or multi-hop transfer must be the last to use the board before a reset,
-which is why the acceptance suite is driven one case per process.
-
-Hypotheses raised and **falsified** along the way (kept as regression guards in the
-debug file so they are not re-litigated):
-
-- *`id(mesh_device)` reuse in the semaphore cache* — 4 unique ids across 4 open/close
-  cycles, and the semaphore address is stable at `0x17FFC0` every cycle
-  (`test_mesh_device_id_reuse_probe`).
-- *`packet_size` overrunning the EDM channel slot* — measured `max_payload = 4352`,
-  `header = 48`. No acceptance or golden case oversteps
-  (`test_packet_geometry_within_edm_slot` asserts it). This is a **real latent trap**
-  worth knowing: `ccl_packet_dims` caps a packet at `header + max_payload` while the
-  worker writes its payload at `slot_base + header`, and the only guard is an
-  `ASSERT` that omits the header and compiles out in Release. Pages of 16/32/48 B
-  with ≥ 274/137/91 pages would overrun an ethernet core's L1. Shared with the C++ op.
-- *Half-open EDM connection* — the static analyzer confirmed every constructed
-  `FabricStreamSender` is unconditionally opened and closed on every path, matching
-  the reference kernels including the construct-before-blocking-wait ordering.
-
-### Tests added
-
-- `tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point_debug.py`
-  (committed, do not delete):
-  - **A** `test_fabric_mesh_open_close_only` — op-free fixture-cycle control
-  - **A2** `test_mesh_device_id_reuse_probe` — semaphore-cache key soundness
-  - **A3** `test_cpp_reference_op_fixture_cycle` — the C++ op under the identical
-    fixture, for diagnosis only (the op itself never references it)
-  - **A4** `test_packet_geometry_within_edm_slot` — asserts no case frames a packet
-    larger than the EDM payload slot
-  - **A5** `test_hop_count_stress` — hop-count × payload-size bisect
-  - **B** `test_all_ones_single_tile`, `test_monotonic_exact`,
-    `test_tile_position_encoding_row_major` — exact-value payload checks
-
-### Advisory deviations from `op_design.md`
-
-- **CB slot stride.** `cb_shard_pages` / `cb_output_pages` use a DRAM-aligned page
-  size instead of the design's `round_up(page_size, l1_alignment)`. Required for
-  correctness — see issue 1. The intra-packet stride is unchanged, and all other CB
-  sizes/indices follow the design.
-- **Stale note in the design.** `op_design.md` states the bound C++ op's coordinate
-  order is `(receiver, sender)`. Measured, it is
-  `(input, sender_coord, receiver_coord, *, output_tensor, intermediate_tensor, topology)`
-  — the same order as this op. No code impact (this op's signature follows the
-  design's own mandated order), but the warning is unnecessary.
-
-Everything binding — the algorithm, the dataflow topology and RISC ownership, the
-single-core/single-link work distribution, the semaphore handshake contract and its
-re-arm ordering, the helper mapping (`FabricStreamSender` → `open(route)` →
-`arm_unicast_write`/`arm_inc` → `write_page`/`inc` → `close`, plus `signal()` for the
-receiver's one-shot ack), the mandatory 2-argument `TensorAccessor`, and the public
-signature — is implemented as specified.
+**Empty.** `TARGET − SUPPORTED` is ∅ on all four axes, `EXCLUSIONS` is `[]`, `xfail_expected` is 0,
+and there are no failing cells in any non-trivial category — so no entry of the form "add X to
+`SUPPORTED[axis]`" or "move these failing cells to passing" exists to file. Beyond-`TARGET`
+directions (sharded I/O, multi-link/mux, multi-core split, a real `FABRIC_1D_RING` wraparound
+topology) are recorded in `verification_report.md`; each needs `/golden-tests` to expand
+`feature_spec.py`'s `TARGET` first. See `op_requirements.md`.

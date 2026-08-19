@@ -72,7 +72,22 @@ struct PacketDims {
  * (Moved verbatim from point_to_point detail::compute_aligned_packet_dims.)
  */
 inline PacketDims ccl_packet_dims(DataType dtype, uint32_t page_size_bytes, uint32_t num_pages, uint32_t alignment) {
-    const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    // The fabric PAYLOAD capacity -- NOT the channel-buffer size. A channel buffer is
+    // `packet_header_size + max_payload_size` (fabric_context.cpp:159), and the worker writes the
+    // header at the channel slot's base and the payload at `slot_base + sizeof(PACKET_HEADER_TYPE)`
+    // (edm_fabric_worker_adapters.hpp:685,708). Sizing a payload at the channel-buffer size
+    // therefore overruns the slot by exactly the header size (48 B on Blackhole) -- into the next
+    // slot's header, or past the end of the channel region for the last slot. The only in-kernel
+    // guard, `ASSERT(size_bytes <= this->buffer_size_bytes)`
+    // (edm_fabric_worker_adapters.hpp:713), omits the header and compiles out in Release, so the
+    // overrun is silent.
+    //
+    // Reachable before this fix (measured on Blackhole, max_payload=4352, header=48): every
+    // non-bfloat16 dtype whose aligned page divides 4400 closely -- e.g. a uint16 ROW_MAJOR
+    // (1, 1, 56, 88) shard (176 B page) framed 25 pages into a 4400 B packet, and any segmented
+    // page (regime B) framed at a flat 4400 B. bfloat16 was accidentally safe because its
+    // std::bit_floor lands on 4096.
+    const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
     const uint32_t max_packet_size_bytes =
         dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;

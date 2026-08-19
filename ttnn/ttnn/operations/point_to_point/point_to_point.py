@@ -50,7 +50,6 @@ except ImportError:  # pragma: no cover
 
 from .point_to_point_program_descriptor import create_mesh_program_descriptor
 
-
 # ---------------------------------------------------------------------------
 # 1. INPUT_TAGGERS
 # ---------------------------------------------------------------------------
@@ -102,22 +101,43 @@ SUPPORTED = {
 EXCLUSIONS: list = []
 
 
-# Module-level GlobalSemaphore cache: created ONCE per mesh_device (+ exactly one
-# synchronize_device, right after creation), reused across program-cache hits,
-# never recreated and never followed by a per-call barrier.
-_SEMAPHORE_CACHE: dict = {}
+# ONE op-internal GlobalSemaphore per LIVE mesh device: created once (+ exactly one
+# synchronize_device, right after creation), reused across program-cache hits, never
+# recreated and never followed by a per-call barrier.
+#
+# The handle is cached as an ATTRIBUTE ON the mesh-device object, not in a
+# module-level dict keyed by `id(mesh_device)`. A module-level dict is wrong in two
+# ways that only bite after a device is closed:
+#   * it outlives the device, so a closed mesh device's GlobalSemaphore L1
+#     allocation is pinned for the life of the process (an unbounded leak in a
+#     suite that opens/closes a mesh per test), and
+#   * CPython recycles `id()`s, so a NEW mesh device allocated at the address of a
+#     freed one silently inherits the PREVIOUS device's semaphore — a dangling
+#     handle that is then parked in `mpd.semaphores` and baked into both kernels'
+#     runtime args.
+# Binding the handle to the object makes the semaphore's lifetime exactly the
+# device's. `_SEMAPHORE_FALLBACK_CACHE` is only reached if a future MeshDevice
+# binding stops accepting dynamic attributes.
+_SEM_ATTR = "_ttnn_point_to_point_global_semaphore"
+_SEMAPHORE_FALLBACK_CACHE: dict = {}
 
 
 def _get_or_create_semaphore(mesh_device):
-    key = id(mesh_device)
-    sem = _SEMAPHORE_CACHE.get(key)
+    sem = getattr(mesh_device, _SEM_ATTR, None)
     if sem is None:
-        grid = mesh_device.compute_with_storage_grid_size()
-        num_cores = grid.x * grid.y
-        worker_cores = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
-        sem = ttnn.create_global_semaphore(mesh_device, worker_cores, 0)
-        ttnn.synchronize_device(mesh_device)
-        _SEMAPHORE_CACHE[key] = sem
+        sem = _SEMAPHORE_FALLBACK_CACHE.get(id(mesh_device))
+    if sem is not None:
+        return sem
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    worker_cores = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
+    sem = ttnn.create_global_semaphore(mesh_device, worker_cores, 0)
+    ttnn.synchronize_device(mesh_device)
+    try:
+        setattr(mesh_device, _SEM_ATTR, sem)
+    except AttributeError:  # pragma: no cover - MeshDevice rejects dynamic attrs
+        _SEMAPHORE_FALLBACK_CACHE[id(mesh_device)] = sem
     return sem
 
 
@@ -155,8 +175,15 @@ def _coord_in_mesh(coord, mesh_shape) -> bool:
 
 
 def _same_row_or_column(sender_coord, receiver_coord) -> bool:
-    """ccl_dm_route routes along a row OR a column; anything else it rejects."""
+    """ccl_dm_route routes along a row OR a column; anything else it rejects.
+
+    A 1-D mesh coordinate is trivially on the single row, so only a 2-D (or
+    higher) coordinate pair has a constraint to check — indexing ``[1]``
+    unconditionally would raise IndexError on a 1-D mesh instead of validating.
+    """
     s, r = tuple(sender_coord), tuple(receiver_coord)
+    if len(s) < 2 or len(r) < 2:
+        return True
     return s[0] == r[0] or s[1] == r[1]
 
 
