@@ -69,21 +69,24 @@ One cell directly, no driver:
 ```bash
 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \
   python -m tracy -p -r -v -m pytest \
-  'models/demos/gemma4/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunk7-global-4x8]' -sv
+  'models/demos/gemma4/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunk7-global-8x4]' -sv
 ```
 
 Swap `-global-` for `-sliding-` or `-both-`; use `chunkall` for the whole sweep in one process.
 Raw CSV lands in `generated/profiler/reports/<ts>/`. No `--timeout=0` needed — the test carries
 `@pytest.mark.timeout(7200)`.
 
-## Env knobs
+## Knobs
 
-| var | effect |
+Chunk selection is the pytest param, not an env var: `chunkall` walks every depth in one
+model load, `chunkN` measures one. A subset is a list of node ids, which costs a model load
+each — the driver does this for you when `--chunks` is not `all`.
+
+| knob | effect |
 |---|---|
-| `GEMMA4_PERF_WARMUP_ITERS` | warm replays per cell (default 5; driver uses 2 when profiling) |
 | `GEMMA4_PERF_KV_FILL` | how the prefix gets into the KV cache: `random` (default, flat cost), `replay` (exact, costs N replays), `none` (zeroed — reads ~15% low at depth) |
-| `GEMMA4_PERF_CHUNKS=0,4,8` | narrow the `chunkall` param to a list |
-| `GEMMA4_PERF_CONTEXT_LEN` | context length, default 262144 (sets the chunk count) |
+| `PERF_WARMUP_ITERS` (constant in the test) | warm replays per cell, 5. `analyze_ops_perf.py` skips `2 + 5` invocations to find the measured one, so the two move together |
+| `PERF_CONTEXT_LEN` (constant in the test) | context length, 262144; with the 8192-token chunk that is 32 chunks |
 
 ## Watch out
 
