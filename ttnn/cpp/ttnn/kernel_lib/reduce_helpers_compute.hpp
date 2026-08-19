@@ -114,7 +114,9 @@ enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNo
  *
  * Auto is the default. It selects AccumulateViaAdd when all of the following hold:
  *   - standard (unit-scaler) floating-point SUM in Fast fp32 mode,
- *   - BulkWaitBulkPop with a contiguous, tile-aligned input block,
+ *   - an input policy supported by AccumulateViaAdd (all combinations except
+ *     WaitAndPopPerTile with REDUCE_COL),
+ *   - a contiguous, tile-aligned input block,
  *   - NoAccumulation, and
  *   - at least ACCUMULATE_VIA_ADD_MIN_REDUCED_TILES tiles per output.
  * Everything else stays on ReduceTile. In particular, callers using prepare_reduce_scaler with a

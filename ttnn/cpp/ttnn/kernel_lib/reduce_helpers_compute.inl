@@ -517,8 +517,10 @@ ALWI void reduce(
 #endif
 
     constexpr bool explicitly_accumulate_via_add = algorithm == ReduceAlgorithm::AccumulateViaAdd;
+    constexpr bool input_policy_supports_accumulate_via_add =
+        input_policy != ReduceInputPolicy::WaitAndPopPerTile || reduce_dim != ReduceDim::REDUCE_COL;
     constexpr bool auto_can_accumulate_via_add = algorithm == ReduceAlgorithm::Auto && reduce_type == PoolType::SUM &&
-                                                 input_policy == ReduceInputPolicy::BulkWaitBulkPop &&
+                                                 input_policy_supports_accumulate_via_add &&
                                                  (reconfig_mode == ReduceDataFormatReconfigMode::INPUT ||
                                                   reconfig_mode == ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT) &&
                                                  fp32_mode == ReduceFp32Mode::Fast &&
@@ -539,7 +541,7 @@ ALWI void reduce(
             "AccumulateViaAdd does not support cross-call Accumulate; use ReduceTile or reduce each block "
             "independently");
         static_assert(
-            input_policy != ReduceInputPolicy::WaitAndPopPerTile || reduce_dim != ReduceDim::REDUCE_COL,
+            input_policy_supports_accumulate_via_add,
             "AccumulateViaAdd REDUCE_COL cannot use the contiguous WaitAndPopPerTile stream");
 
         // The current branch's ReduceTile partial descriptor is kept intact.  AccumulateViaAdd uses the

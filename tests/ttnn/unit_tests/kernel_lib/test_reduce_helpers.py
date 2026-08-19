@@ -7,7 +7,8 @@ The suite intentionally drives the helper itself through a tiny ProgramDescripto
 testing it indirectly through a migrated operation.  Cases marked xfail are positive specifications
 for combinations AccumulateViaAdd does not support yet; an implementation that starts working turns
 those cases into strict XPASS failures so the marker must be removed. Auto-dispatch cases exercise
-both sides of the eight-reduced-tile cutoff and every compile-time gate on the initial happy path.
+both sides of the eight-reduced-tile cutoff and every compile-time gate, including the complete
+AccumulateViaAdd input-policy support matrix.
 """
 
 from dataclasses import dataclass
@@ -642,16 +643,53 @@ def test_reduce_algorithm_auto_dispatch_cutoff_for_every_dimension(device, dim, 
     torch.testing.assert_close(auto, explicit, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("dim", DIMS)
+@pytest.mark.parametrize("policy", POLICIES)
+def test_reduce_algorithm_auto_input_policy_support_matrix(device, dim, policy):
+    expected_algorithm = "reduce_tile" if dim == "col" and policy == "stream" else "accumulate_via_add"
+    Ht, Wt = (8, 1) if dim == "col" else (1, 8)
+    auto, expected = _run_reduce(
+        device,
+        dim=dim,
+        pool="sum",
+        policy=policy,
+        algorithm="auto",
+        Ht=Ht,
+        Wt=Wt,
+    )
+    explicit, explicit_expected = _run_reduce(
+        device,
+        dim=dim,
+        pool="sum",
+        policy=policy,
+        algorithm=expected_algorithm,
+        Ht=Ht,
+        Wt=Wt,
+    )
+    _assert_result(auto, expected)
+    _assert_result(explicit, explicit_expected)
+    torch.testing.assert_close(auto, explicit, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize(
     "pool,policy,reconfig,input_dtype,fp32_mode,row_stride,expected_algorithm",
     [
         pytest.param("sum", "bulk", "input_and_output", ttnn.bfloat16, "fast", 0, "accumulate_via_add", id="eligible"),
         pytest.param("avg", "bulk", "input_and_output", ttnn.bfloat16, "fast", 0, "reduce_tile", id="avg"),
-        pytest.param("sum", "stream", "input_and_output", ttnn.bfloat16, "fast", 0, "reduce_tile", id="stream"),
+        pytest.param("sum", "stream", "input_and_output", ttnn.bfloat16, "fast", 0, "accumulate_via_add", id="stream"),
         pytest.param(
-            "sum", "wait_upfront", "input_and_output", ttnn.bfloat16, "fast", 0, "reduce_tile", id="wait-upfront"
+            "sum",
+            "wait_upfront",
+            "input_and_output",
+            ttnn.bfloat16,
+            "fast",
+            0,
+            "accumulate_via_add",
+            id="wait-upfront",
         ),
-        pytest.param("sum", "no_wait", "input_and_output", ttnn.bfloat16, "fast", 0, "reduce_tile", id="no-wait"),
+        pytest.param(
+            "sum", "no_wait", "input_and_output", ttnn.bfloat16, "fast", 0, "accumulate_via_add", id="no-wait"
+        ),
         pytest.param("sum", "bulk", "none", ttnn.bfloat16, "fast", 0, "reduce_tile", id="no-reconfig"),
         pytest.param("sum", "bulk", "output", ttnn.bfloat16, "fast", 0, "reduce_tile", id="output-reconfig-only"),
         pytest.param("sum", "bulk", "input", ttnn.bfloat16, "fast", 0, "accumulate_via_add", id="input-reconfig"),
