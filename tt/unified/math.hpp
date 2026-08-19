@@ -367,8 +367,15 @@ struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Tr, Chain>> {
 // it, and metal wants its dimension as a template argument. So it gets its own
 // kind and driver, reducing WITHIN each tile and ACROSS the block at once.
 //
-// The axis names say what COLLAPSES. Metal names the survivor instead, which is
-// the usual source of error, so the mapping is written out:
+// The axis names say which dimension the op ACTS ON: the one a reduction collapses,
+// and the one a broadcast expands again. One name for both halves, so a reduction and
+// the broadcast that undoes it read alike and cannot drift apart:
+//
+//     reduce_max<Axis::Cols>(x, one)      collapses Cols  ->  Shape<Ht, 1>
+//     x - bcast<Axis::Cols>(m)            expands Cols    ->  Shape<Ht, Wt>
+//
+// Metal names the survivor instead for reductions, which is the usual source of error,
+// so the mapping is written out:
 //
 //   Rows -> REDUCE_COL     Ht x Wt -> 1 x Wt, each column's value in row 0
 //   Cols -> REDUCE_ROW     Ht x Wt -> Ht x 1, each row's value in column 0
@@ -377,7 +384,10 @@ struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Tr, Chain>> {
 // reduce_init programs the packer's edge masks so every datum that is NOT part of
 // the result is written out as zero -- so a 4x4-tile block reduced over Rows
 // leaves one valid row spread across 1x4 tiles, and nothing else.
-enum class ReduceAxis { Rows, Cols, Both };
+enum class Axis { Rows, Cols, Both };
+
+// The name this had when reductions were the only op with an axis.
+using ReduceAxis = Axis;
 
 // Ours rather than metal's PoolType, because this names a template argument of a
 // type that appears in shared kernel code, and PoolType only exists on a compute
@@ -387,8 +397,151 @@ enum class ReducePool { Sum, Avg, Max };
 // The shape a reduction leaves behind: the collapsing axis becomes 1 and everything
 // else is preserved, leading extents included. This is exactly what the destination
 // Storage must hold.
-template <typename S, ReduceAxis Axis>
-using reduce_shape = with_hw<S, (Axis == ReduceAxis::Cols ? S::rows : 1), (Axis == ReduceAxis::Rows ? S::cols : 1)>;
+template <typename S, Axis A>
+using reduce_shape = with_hw<S, (A == Axis::Cols ? S::rows : 1), (A == Axis::Rows ? S::cols : 1)>;
+
+// The shape a broadcast along `A` requires of its vector, given the block it applies to.
+// Identical to what a reduction along the same axis PRODUCES, which is what makes a
+// reduce and the broadcast that undoes it check each other:
+//
+//   Rows -> Shape<1, cols>    a row,    replicated down the rows
+//   Cols -> Shape<rows, 1>    a column, replicated across the columns
+//   Both -> Shape<1, 1>       a scalar
+//
+// The axis has to be DECLARED rather than read off the vector, because a Shape counts
+// TILES and the distinction is inside one: a single tile holding a row, a column, or a
+// lone value at [0, 0] is Shape<1, 1> in all three cases. The shapes only differ when the
+// block's tile extents do, so inferring the axis would work for a 4x6 block and collide
+// for 1x6, 4x1 or 1x1.
+template <typename SB, Axis A>
+using bcast_vec_shape = reduce_shape<SB, A>;
+
+// Never true, but only once a template argument is substituted -- so a static_assert
+// using it fires on instantiation rather than on definition. Used by the guards that
+// reject an operand a hardware path cannot take.
+template <typename T>
+struct always_false : std::false_type {};
+
+// --- Broadcast ---
+//
+// A broadcast reads a BLOCK and a VECTOR from two circular buffers and expands the vector
+// along one axis as it goes. That is why it cannot be an expression-tree node: a tree
+// leaf copies whole tiles into DST, and what is needed here is the replication of one row
+// or one column WITHIN each tile, which only the unpacker's broadcast mode does.
+//
+// Its precedent is already in this file: Strategy<FPUFusion>::bias_finish is a tile loop
+// of add_tiles_bcast_rows, and a fused bias is the Rows case of exactly this op.
+
+struct BcastFusion {};
+
+// Which metal call each (op, axis) pair lowers to. Spelled out rather than composed,
+// because the init_short names are NOT uniform: add's scalar form omits `tiles_` while
+// sub's and mul's include it.
+//
+// The ROW/COL wording is metal's and describes the VECTOR's shape, not the axis walked --
+// established by the fused bias, which passes a row through add_tiles_bcast_rows and adds
+// it per column. Metal's own prose contradicts itself on this (its COL paragraph says
+// both "a filled 0-column" and "C[h,w] = A[h,w] + B[w]"), so the mapping below is what
+// test_unified_bcast.py measures rather than assumes.
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+template <typename Op, Axis A>
+struct BcastOps;
+
+#define TT_UNIFIED_BCAST_OPS(OpType, rows_init, rows_op, cols_init, cols_op, sc_init, sc_op) \
+    template <>                                                                              \
+    struct BcastOps<OpType, Axis::Rows> {                                                    \
+        static void init(uint32_t b, uint32_t v) { ckernel::rows_init(b, v); }               \
+        static void apply(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {    \
+            ckernel::rows_op(b, v, bt, vt, d);                                               \
+        }                                                                                    \
+    };                                                                                       \
+    template <>                                                                              \
+    struct BcastOps<OpType, Axis::Cols> {                                                    \
+        static void init(uint32_t b, uint32_t v) { ckernel::cols_init(b, v); }               \
+        static void apply(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {    \
+            ckernel::cols_op(b, v, bt, vt, d);                                               \
+        }                                                                                    \
+    };                                                                                       \
+    template <>                                                                              \
+    struct BcastOps<OpType, Axis::Both> {                                                    \
+        static void init(uint32_t b, uint32_t v) { ckernel::sc_init(b, v); }                 \
+        static void apply(uint32_t b, uint32_t v, uint32_t bt, uint32_t vt, uint32_t d) {    \
+            ckernel::sc_op(b, v, bt, vt, d);                                                 \
+        }                                                                                    \
+    };
+
+TT_UNIFIED_BCAST_OPS(
+    AddOp,
+    add_bcast_rows_init_short,
+    add_tiles_bcast_rows,
+    add_bcast_cols_init_short,
+    add_tiles_bcast_cols,
+    add_bcast_scalar_init_short,
+    add_tiles_bcast_scalar)
+TT_UNIFIED_BCAST_OPS(
+    SubOp,
+    sub_bcast_rows_init_short,
+    sub_tiles_bcast_rows,
+    sub_bcast_cols_init_short,
+    sub_tiles_bcast_cols,
+    sub_tiles_bcast_scalar_init_short,
+    sub_tiles_bcast_scalar)
+TT_UNIFIED_BCAST_OPS(
+    MulOp,
+    mul_bcast_rows_init_short,
+    mul_tiles_bcast_rows,
+    mul_bcast_cols_init_short,
+    mul_tiles_bcast_cols,
+    mul_tiles_bcast_scalar_init_short,
+    mul_tiles_bcast_scalar)
+
+#undef TT_UNIFIED_BCAST_OPS
+#endif
+
+// The marker that carries the axis. `bcast<Axis::Cols>(v)` says what the vector IS, which
+// is the one thing its shape cannot say; the shape is then checked against it in
+// BcastNode. Not an operand -- is_operand stays false for it -- so the SFPU operators
+// cannot swallow one and the broadcast overloads are unambiguous.
+template <Axis A, typename S>
+struct Broadcast {
+    static constexpr Axis axis = A;
+    using shape = S;
+
+    uint32_t cb_id;
+};
+
+template <typename SB, Axis A>
+struct BcastNodeChecks {
+    static_assert(SB::leading == 1, "broadcasting a shape with a leading (batch) extent is not implemented");
+};
+
+template <typename Op, Axis A, typename SB, typename SV, typename Chain>
+struct BcastNode : expr::Fluent<BcastNode<Op, A, SB, SV, Chain>>, BcastNodeChecks<SB, A> {
+    using fusion_kind = BcastFusion;
+    using op = Op;
+    static constexpr Axis axis = A;
+    using block_shape = SB;
+    using vec_shape = SV;
+    using chain = Chain;
+
+    // A broadcast is shape-preserving, so Storage::store's conformance check and
+    // node_shape's primary template both work with nothing added.
+    using shape = SB;
+
+    static_assert(
+        same_shape_v<SV, bcast_vec_shape<SB, A>>,
+        "the broadcast vector's shape does not match the axis it declares: Axis::Rows needs "
+        "Shape<1, cols>, Axis::Cols needs Shape<rows, 1>, Axis::Both needs Shape<1, 1>, all "
+        "relative to the block");
+
+    // Which vector tile pairs with block tile `t`, the block being row-major.
+    static constexpr uint32_t vec_tile(uint32_t t) {
+        return A == Axis::Rows ? t % SB::cols : (A == Axis::Cols ? t / SB::cols : 0);
+    }
+
+    uint32_t block_cb;
+    uint32_t vec_cb;
+};
 
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
 // Ours -> metal's, in the one place metal's enums are nameable. Note the axis
@@ -462,9 +615,19 @@ auto relu(const ReduceNode<S, A, P, Chain>& r) {
     return ReduceNode<S, A, P, expr::chain_append_t<Chain, ReluOp>>{{}, r.in_cb, r.scaler_cb};
 }
 
+template <typename Op, Axis A, typename SB, typename SV, typename Chain>
+auto relu(const BcastNode<Op, A, SB, SV, Chain>& b) {
+    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, ReluOp>>{{}, {}, b.block_cb, b.vec_cb};
+}
+
 template <typename S, ReduceAxis A, ReducePool P, typename Chain>
 auto exp_(const ReduceNode<S, A, P, Chain>& r) {
     return ReduceNode<S, A, P, expr::chain_append_t<Chain, ExpOp>>{{}, r.in_cb, r.scaler_cb};
+}
+
+template <typename Op, Axis A, typename SB, typename SV, typename Chain>
+auto exp_(const BcastNode<Op, A, SB, SV, Chain>& b) {
+    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, ExpOp>>{{}, {}, b.block_cb, b.vec_cb};
 }
 
 template <typename S, ReduceAxis A, ReducePool P, typename Chain>
@@ -472,14 +635,29 @@ auto recip(const ReduceNode<S, A, P, Chain>& r) {
     return ReduceNode<S, A, P, expr::chain_append_t<Chain, RecipOp>>{{}, r.in_cb, r.scaler_cb};
 }
 
+template <typename Op, Axis A, typename SB, typename SV, typename Chain>
+auto recip(const BcastNode<Op, A, SB, SV, Chain>& b) {
+    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, RecipOp>>{{}, {}, b.block_cb, b.vec_cb};
+}
+
 template <typename S, ReduceAxis A, ReducePool P, typename Chain>
 auto sqrt_(const ReduceNode<S, A, P, Chain>& r) {
     return ReduceNode<S, A, P, expr::chain_append_t<Chain, SqrtOp>>{{}, r.in_cb, r.scaler_cb};
 }
 
+template <typename Op, Axis A, typename SB, typename SV, typename Chain>
+auto sqrt_(const BcastNode<Op, A, SB, SV, Chain>& b) {
+    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, SqrtOp>>{{}, {}, b.block_cb, b.vec_cb};
+}
+
 template <typename S, ReduceAxis A, ReducePool P, typename Chain>
 auto rsqrt(const ReduceNode<S, A, P, Chain>& r) {
     return ReduceNode<S, A, P, expr::chain_append_t<Chain, RsqrtOp>>{{}, r.in_cb, r.scaler_cb};
+}
+
+template <typename Op, Axis A, typename SB, typename SV, typename Chain>
+auto rsqrt(const BcastNode<Op, A, SB, SV, Chain>& b) {
+    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, RsqrtOp>>{{}, {}, b.block_cb, b.vec_cb};
 }
 
 // --- Node shapes ---
@@ -615,6 +793,55 @@ auto rsqrt(const MatmulNode<SA, SB, Tr, Chain>& m) {
     return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, RsqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb};
 }
 
+// A broadcast is spelled with the ordinary operators, the marker on the right telling
+// them apart from an SFPU tree. Dispatch is on Broadcast's TYPE -- something the caller
+// wrote -- not on a shape mismatch, so strict shape equality between two plain blocks is
+// untouched. is_operand<Broadcast> is false, which is what keeps the SFPU operators from
+// swallowing one.
+//
+// The marker has to be the RIGHT operand: metal's broadcast ops read the vector from in1.
+
+// A broadcast's block operand has to be a stored buffer. TileSource is what as_node()
+// yields for one; an expression yields itself, and an expression lives in DST where the
+// FPU cannot read it as an operand.
+template <typename T, typename = void>
+struct bcast_block_shape {
+    using type = Shape<1, 1>;  // a placeholder, so the static_assert below is what reports
+    static constexpr bool ok = false;
+};
+
+template <typename S>
+struct bcast_block_shape<TileSource<S>> {
+    using type = S;
+    static constexpr bool ok = true;
+};
+
+#define TT_UNIFIED_BCAST_OPERATOR(sym, OpType)                                                            \
+    template <typename B, Axis A, typename SV, typename = std::enable_if_t<is_operand<B>::value>>         \
+    auto operator sym(const B& block, Broadcast<A, SV> vec) {                                             \
+        using BN = std::decay_t<decltype(as_node(block))>;                                                \
+        static_assert(                                                                                    \
+            bcast_block_shape<BN>::ok,                                                                    \
+            "a broadcast's left operand must be a stored buffer, not an expression -- the FPU "           \
+            "reads both operands from circular buffers while an expression lives in DST, so "             \
+            "store it to a Storage first");                                                               \
+        using SB = typename bcast_block_shape<BN>::type;                                                  \
+        return BcastNode<OpType, A, SB, SV, expr::UnaryChain<>>{{}, {}, as_node(block).cb_id, vec.cb_id}; \
+    }                                                                                                     \
+    template <typename R, Axis A, typename SV>                                                            \
+    auto operator sym(Broadcast<A, SV>, const R&) {                                                       \
+        static_assert(                                                                                    \
+            always_false<R>::value,                                                                       \
+            "a broadcast has to be the RIGHT operand -- metal reads the broadcast vector from in1, "      \
+            "so write `block " #sym " bcast<Axis::...>(vec)`");                                           \
+    }
+
+TT_UNIFIED_BCAST_OPERATOR(+, AddOp)
+TT_UNIFIED_BCAST_OPERATOR(-, SubOp)
+TT_UNIFIED_BCAST_OPERATOR(*, MulOp)
+
+#undef TT_UNIFIED_BCAST_OPERATOR
+
 // The hooks expr.hpp's Fluent calls. Unqualified inside, so ordinary lookup finds
 // the overloads above for the expression shapes, and ADL finds the ones declared
 // later for the core types -- ComputeBlock's live in tt/unified/api.h.
@@ -652,8 +879,6 @@ auto matmul(TileSource<SA> a, TileSource<SB> b) {
 // An FPU fusion cannot be an operand of a binary op: it already owns every DST
 // slot, so there is nowhere to materialise the other side. Keyed on the *kind*,
 // so future FPU ops inherit the rule without another overload.
-template <typename T>
-struct always_false : std::false_type {};
 
 template <typename T>
 struct is_fpu_fusion : std::is_same<expr::kind_of_t<T>, FPUFusion> {};
@@ -1021,6 +1246,50 @@ struct Strategy<FPUFusion> {
 // Reduce: metal's reduce, folding the input grid down one axis. Every contributor
 // to an output tile accumulates into DST slot 0 -- reduce_tile adds into idst
 // rather than overwriting it -- so this costs ONE slot whatever the geometry.
+// BcastFusion: the block and the vector both come from circular buffers, and the
+// unpacker's broadcast mode replicates the vector's one row or one column across each
+// tile as it is read. So there is nothing to allocate -- one DST slot holds the result of
+// one tile, whatever the block's size.
+//
+// Per TILE rather than per block, unlike bias_finish which packs the whole block. That
+// caps a block at the DST budget of 8 tiles, and attention's score block is 16.
+//
+// Neither operand is popped here. Both are ComputeBlocks whose destructors pop them,
+// which is the same contract Strategy<SFPUFusion> follows for its leaves.
+template <>
+struct Strategy<BcastFusion> {
+    template <typename Node>
+    static void run(const Node& node, uint32_t cb_id, uint32_t num_tiles) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        using Chain = typename Node::chain;
+        using Ops = BcastOps<typename Node::op, Node::axis>;
+
+        // Point the unpacker at this pair, then program the broadcast mode. Both are
+        // hoisted: neither buffer changes across the loop.
+        ckernel::reconfig_data_format(node.block_cb, node.vec_cb);
+        Ops::init(node.block_cb, node.vec_cb);
+
+        cb_reserve_back(cb_id, num_tiles);
+        for (uint32_t t = 0; t < num_tiles; ++t) {
+            ckernel::tile_regs_acquire();
+            Ops::apply(node.block_cb, node.vec_cb, t, Node::vec_tile(t), 0);
+            if constexpr (!Chain::empty) {
+                Chain::apply_in_place(0);
+            }
+            ckernel::tile_regs_commit();
+            ckernel::tile_regs_wait();
+            ckernel::pack_tile(0, cb_id);
+            ckernel::tile_regs_release();
+        }
+        cb_push_back(cb_id, num_tiles);
+#else
+        (void)node;
+        (void)cb_id;
+        (void)num_tiles;
+#endif
+    }
+};
+
 template <>
 struct Strategy<ReduceFusion> {
     template <typename Node>
