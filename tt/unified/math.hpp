@@ -1107,6 +1107,16 @@ struct Strategy<FPUFusion> {
         using Chain = typename Node::chain;
         constexpr uint32_t kTranspose = G::transpose;
 
+        // Program the block dimensions here rather than trusting matmul_init to still be in
+        // force. A broadcast, a reduction or an SFPU pass reconfigures the unpack and math
+        // units for itself, so a matmul that FOLLOWS one -- as attention's second matmul
+        // does -- would otherwise run against another op's state and return garbage.
+        //
+        // matmul_init still has to run once at kernel entry, for the hardware startup it
+        // carries, and that part must NOT be repeated: compute_kernel_hw_startup is MMIO
+        // plus a pack-sync init, and calling it a second time mid-kernel hangs the device.
+        ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, G::rt_dim, G::kt_dim);
+
         ckernel::tile_regs_acquire();
 
         if constexpr (Mode == AccumulatorMode::Dst) {

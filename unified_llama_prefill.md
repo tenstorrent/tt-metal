@@ -425,26 +425,56 @@ else in the suite notices.
 
 ## Phase 7 -- Attention kernel + test
 
-No library change if 1-5 land.
+**DONE.** `unified_kernels/attention.cpp` computes one head of
 
-- [ ] `unified_kernels/attention.cpp` -- Q@Kt (transpose) -> scale (bcast scalar)
-      -> + mask (two-CB add) -> row max (`reduce_max<Cols>`) -> `- max`
-      (bcast cols) -> `exp_` -> row sum (`reduce_sum<Cols>`) -> `recip` ->
-      `* recip` (bcast cols) -> @V
-- [ ] `test_unified_attention.py` -- against `F.scaled_dot_product_attention`
-- [ ] Verify the resident-`ComputeBlock` idiom holds `x` alive across both the
-      reduce and the bcast that consumes the same CB
-- [ ] **PCC is not enough here.** Rows sum to 1 and every value is ~1/S, so a
-      global scale error or a per-row offset sails through -- exactly like the
-      bias and mean cases did. Add max-abs-error **and** an explicit
-      row-sum-equals-1 check.
-- [ ] Prove both new checks fail under deliberate sabotage
-- [ ] Measure `exp_tile` default vs approx accuracy over a masked row before
-      assuming the default is fine
-- [ ] `git add -f` the test (`.gitignore:25` has `/test_*`)
+    out = softmax(Q @ Kt / sqrt(d) + mask) @ V
 
-**Done when:** matches torch within a stated tolerance, and every guard has been
-shown to fail when it should.
+on one core, non-flash, with a host-supplied additive causal mask. It composes the whole
+set built in phases 1-6: a transposed matmul, a scalar broadcast, a two-buffer elementwise
+add, a row max and row sum, a broadcast subtract with a fused exp, a reciprocal riding a
+reduction's epilogue, a broadcast multiply, and a second matmul.
+
+`test_unified_attention.py` passes 10 configurations against torch, max absolute error
+0.0009-0.0040, and the causal identity holds EXACTLY.
+
+### Two bugs, both real, both found by the test
+
+**The second matmul had no block-dimension init.** `Strategy<FPUFusion>` emitted
+`matmul_block_init` only from the restore paths; the normal path relied entirely on the
+one-time `matmul_init` at kernel entry. That is fine for a kernel whose only compute is
+matmul, and wrong the moment a broadcast, a reduction or an SFPU pass runs in between --
+each reconfigures the unpack and math units for itself, so attention's second matmul ran
+against another op's state. **Matmul was not composable with the other fusion kinds**, and
+nothing before phase 7 had ever put them in one kernel.
+
+Fixed in the strategy rather than the kernel: `run()` now programs its own block dimensions.
+The first attempt was a kernel-level `matmul_init` before the second matmul, which HUNG the
+device -- `compute_kernel_hw_startup` is MMIO plus a pack-sync init and must run exactly
+once, as this model's own api.h comment says. Only the `matmul_block_init` half may repeat.
+
+**The mask value was outside exp's domain.** `-1e4` -- the obvious choice, and what a
+reference implementation would use with `-inf` -- gave a max error of 616. The SFPU's `exp`
+has a finite input range and `exp(-1e4 - rowmax)` leaves it rather than underflowing to
+zero. `-30` is ample: `exp(-30)` is 1e-13 against a row sum of at least 1.
+
+### What the test gates on, and why not PCC
+
+Softmax rows sum to 1 and every probability is O(1/S), so a global scale error or a per-row
+offset correlates almost perfectly -- the blind spot that let a bias offset and a mean scale
+factor through at 0.9999 earlier in this model. The checks that carry information:
+
+  max absolute error vs torch    catches magnitude errors PCC cannot see
+  out[0] == V[0] under a causal mask    an IDENTITY, not a tolerance: position 0 attends
+                                       only to itself, so the first output row is V's first
+                                       row exactly. It holds to 0.0000, and it depends on
+                                       the mask, the softmax and both matmuls all being
+                                       right at once.
+
+### Bounded by the DST budget, not by L1
+
+Both matmul output blocks must fit 8 tiles, so `Sq*Sk <= 8` and `Sq*D <= 8`. That caps a
+single-shot head at 64x64 with a 2x2 tile score block. Larger S needs the output subblocked
+-- which is also what would make phase 3's two unreachable restore sites live.
 
 ## Phase 8 -- RMSNorm
 
