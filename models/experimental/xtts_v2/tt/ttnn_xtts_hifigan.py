@@ -31,6 +31,8 @@ a larger L1_SMALL than bf16 — open the device with `l1_small_size=65536` (bf16
 in fp32). See CLAUDE_XTTS_BUGS.md BUG-3.
 """
 
+import hashlib
+
 import ttnn
 
 import torch
@@ -126,6 +128,7 @@ class TTNNHifiganGenerator:
         self.dtype = dtype  # activation dtype
         self.weights_dtype = weights_dtype or dtype
         self._prepared_weights = {}  # device-prepared conv weights, keyed by (weight, input length)
+        self._weight_layouts = {}  # (weight, content digest) -> the one tensor of that layout
 
     def _conv_config(self):
         # Fresh Conv2dConfig per call: ttnn conv ops may write auto-selected sharding back into
@@ -137,6 +140,23 @@ class TTNNHifiganGenerator:
         if L > SLICE_L:
             return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=0)
         return None
+
+    def _dedup_prepared(self, key, wb):
+        """Cache the prepared (weight, bias), sharing one tensor per distinct content: layouts are
+        length-specific but rarely differ, so per-length copies hold 277 MB against 70."""
+        if key in self._prepared_weights:
+            return
+        w, b = wb
+        digest = (key[0], hashlib.sha1(ttnn.to_torch(w).float().numpy().tobytes()).hexdigest())
+        shared = self._weight_layouts.setdefault(digest, w)
+        if shared is not w:
+            ttnn.deallocate(w)  # a duplicate: free it rather than hold a twin
+        self._prepared_weights[key] = (shared, b)
+
+    def prepared_weight_stats(self):
+        """(pairs, distinct layouts, MB held) — lets a test pin the deduplication."""
+        mb = sum(t.volume() * t.element_size() for t in self._weight_layouts.values()) / 1e6
+        return len(self._prepared_weights), len(self._weight_layouts), mb
 
     def _post(self, out, L, C):
         """conv output -> interleaved DRAM, NHWC [1,1,L,C], TILE layout."""
@@ -171,7 +191,7 @@ class TTNNHifiganGenerator:
             return_output_dim=True,
             return_weights_and_bias=True,
         )
-        self._prepared_weights.setdefault(key, wb)
+        self._dedup_prepared(key, wb)
         return self._post(out, lo, out_ch), lo
 
     def _convT(self, x, w, b, in_ch, out_ch, L, k, s, pad):
@@ -206,7 +226,7 @@ class TTNNHifiganGenerator:
             dtype=self.dtype,
             **kwargs,
         )
-        self._prepared_weights.setdefault(key, wb)
+        self._dedup_prepared(key, wb)
         return self._post(out, ho * wo, out_ch), wo
 
     def _cond(self, g2d, lin_w, lin_b, out_ch):
