@@ -1313,6 +1313,42 @@ exit $RC
             "notes": [],
         }
 
+    def _measured_flags_gate(self, row, classifications, result):
+        """Contradiction lint (the welford pin-12 lesson): if classify proves
+        the ON set CHANGES this row's bytes, the measured silicon legs MUST
+        have carried the ON set.  A row measured at default/OFF flags while
+        classify says CHANGED is benchmarking with the mechanism available
+        but unrequested — RED, never silent."""
+        changed = any(
+            (classifications.get(sel) or {}).get("all") == "CHANGED"
+            for sel in ("sem-perf", "sem-corr")
+        )
+        if not changed:
+            return
+        for run_key, run in (result.get("runs") or {}).items():
+            flags = (run or {}).get("flags", "")
+            leg = str(run_key)
+            if (
+                ("-on" in leg or leg.endswith("on"))
+                and flags
+                and "-mtt-tensix" not in flags
+            ):
+                msg = (
+                    f"{row['op']}: classify says ON CHANGES bytes but measured leg "
+                    f"{leg} carried no ON flags — the mechanism was available and "
+                    f"unrequested (stale row wiring): RED"
+                )
+                self.reds.append(msg)
+                result["notes"].append(msg)
+        # default-flag-only rows (legacy pinpair shape) with CHANGED classify
+        if not any("-on" in str(k) for k in (result.get("runs") or {})):
+            msg = (
+                f"{row['op']}: classify says ON CHANGES bytes but the row has no "
+                f"ON-flag measured leg (legacy pinpair wiring): RED"
+            )
+            self.reds.append(msg)
+            result["notes"].append(msg)
+
     def _macro_lb_gate(self, row, classifications, result):
         """Structural issue_slot_lb requirement (enforcement layer): a
         macro-launch row without a bound is RED, named in the report with
@@ -1373,6 +1409,7 @@ exit $RC
         selector alternating gen/hand, hash-matched resume per job."""
         result = self._result_skeleton(row, classifications)
         self._macro_lb_gate(row, classifications, result)
+        self._measured_flags_gate(row, classifications, result)
         if self.a.dry_run:
             result["notes"].append(
                 "DRY-RUN: device jobs printed, not executed; no cells expected"
@@ -1428,6 +1465,7 @@ exit $RC
             return self.silicon_pinpair(row, classifications)
         result = self._result_skeleton(row, classifications)
         self._macro_lb_gate(row, classifications, result)
+        self._measured_flags_gate(row, classifications, result)
         if self.a.dry_run:
             # A dry run proves gate wiring, never metrics: mark the row so
             # report() treats its empty cells as blocked-by-design instead
