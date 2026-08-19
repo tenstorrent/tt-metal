@@ -102,6 +102,38 @@ def sdpa_bf8_enabled(args):
 
     The env var still overrides in EITHER direction if set: QWEN_SDPA_BF8=0 forces it off on N300,
     QWEN_SDPA_BF8=1 forces it on anywhere else (at the user's own risk/validation).
+
+    ATTEMPTED AND REVERTED for the 27B at T3K TP=8 (2026-08-19). Prefill validated fine and the wins
+    were large (below), but a bf8 cache BREAKS EVERY DECODE PATH:
+        TT_FATAL: Input and cache tensors must have same dtype!
+    5 of 20 test_model_tp cases failed -- contract, decode_batched[B8], decode_batched[B32],
+    long_prefill, prefill_paged_slots[B8] -- i.e. every case that decodes after a prefill.
+    ROOT CAUSE: the comment at attention/tp.py's paged_update_cache call claims the op "takes
+    bf16/fp32 and casts to bf8 cache". It does NOT -- paged_update_cache enforces input.dtype ==
+    cache.dtype, unlike paged_fill_cache (which accepts a bf8 cache with any input dtype, and is why
+    PREFILL worked). Enabling this needs the decode path to cast K/V to bf8 before the update, which
+    costs 2 typecasts per layer per token in the decode hot path and reduces decode precision -- so it
+    needs its own measurement and gate, not just this flag.
+    NOTE the 64k demo PASSED with this on, because it exercises prefill + traced decode through a path
+    that did not hit the failing update; module tests passed too. Only test_model_tp caught it.
+
+    WHAT IT WAS WORTH, once the decode blocker is fixed (all MEASURED at T3K TP=8, 27B).
+    The N300 clause is left exactly as it was so the 9B's measured behaviour is byte-identical.
+    MEASURED (T3K TP=8, 27B, layer3_fullattn, seq 2048):
+        SDPA                    455 -> 413us
+        PagedFillCache x2      11+11 -> 6+6us
+        new K/V/Q typecasts          -> +27us
+        block                  3,476 -> 3,409us
+    That understates it badly, because at seq 2048 the cache is nearly empty. The real wins are
+    (a) MEMORY -- 256k KV goes ~4.3GB -> ~2.15GB per device, and (b) DECODE, which reads the whole
+    cache every token: MEASURED at 64k, 16.41 -> 17.48 tok/s (+6.5%) with TTFT 22.72 -> 20.94s.
+    (c) and it UNBLOCKS the bf8 attention_norm gather -- paged_fill_cache asserts
+        (input==FP32 || input==BF16 || cache==BFP8 || cache==BFP4), so a bf8 cache satisfies it
+        whatever the K/V input dtype is. That gather is worth a further -443us plus -149us on the
+        qkv matmul that inherits the bf8 in0 (see layer.py). It is the single largest win of the day
+        and it is downstream of this flag.
+    Long-context gate: test_demo_text[traced_64k] passes with content checks (needs
+    --timeout=1800; pytest.ini's 300s default is too short for it).
     """
     env = os.environ.get("QWEN_SDPA_BF8")
     if env is not None:
