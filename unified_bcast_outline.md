@@ -95,23 +95,44 @@ naming the reason rather than a lookup failure. The block operand must also be a
 `ComputeBlock` rather than an expression, because the FPU reads both operands from
 circular buffers -- an SFPU tree lives in DST and has to be stored first.
 
-## 3. Direction: metal's own documentation contradicts itself
+## 3. Direction: determined by test, not by reading
 
-`add_tiles_bcast`'s doc says, for `BroadcastType::COL`, that B is "a single tile with a
-filled 0-column" and then that the result is `C[h,w] = A[h,w] + B[w]`. Those disagree: a
-filled column 0 means the values are indexed by `h`, not `w`. The same mismatch appears in
-the `Dim::C` paragraph.
+`add_tiles_bcast`'s documentation cannot settle which index the broadcast operand is read
+by. For `BroadcastType::COL` it asserts both that B is "a single tile with a filled
+0-column" (B indexed by `h`) and that the result is `C[h,w] = A[h,w] + B[w]` (B indexed by
+`w`). Those are opposite claims. The `Dim::C` paragraph has the same mismatch.
 
-So the direction is taken from evidence, not from the doc:
+What is actually known, in order of strength:
 
-- **rows** -- CONFIRMED here. `bias_finish` calls `add_tiles_bcast_rows(acc, bias, ...)`
-  with a bias whose data is in row 0, and `test_unified_matmul_bias.py` passes. So
-  `_bcast_rows` means "B is a row, replicated down the rows".
-- **cols** -- inferred, NOT yet confirmed. ttnn's softmax uses `sub_tiles_bcast_cols` for
-  `x - rowmax`, where `rowmax` comes from a `REDUCE_ROW` and is therefore a column. The
-  phase-6 test must pin this down empirically rather than assume it, and the test has to
-  be built so that getting the direction backwards FAILS -- which means a non-square
-  block and a vector whose entries differ along its length.
+1. **Verified in the header.** `_bcast_rows` instantiates `BroadcastType::ROW` and
+   `_bcast_cols` instantiates `BroadcastType::COL`, init_shorts included.
+2. **Verified numerically on silicon.** `bias_finish` calls `add_tiles_bcast_rows` with a
+   bias whose data is in row 0, and `test_unified_matmul_bias.py` checks `A@B + bias_row`
+   with torch broadcasting along the last axis -- a per-column add, identical for every
+   row. So `ROW` means "B is a ROW": the name describes B's shape, not the axis traversed.
+3. **Not verified.** That `COL` follows the same convention. Nothing in this repo uses
+   `_bcast_cols`, so there is exactly one data point for rows and none for cols.
+
+An earlier draft called rows "confirmed" and cols "inferred". That overstated the
+difference: both rest on one convention, and rows merely has a passing test sitting on it.
+The mapping from `Axis` to metal op is therefore something the phase-6 test DETERMINES
+rather than something this outline asserts.
+
+### Making the test unable to pass wrongly
+
+Two properties, both load-bearing:
+
+- **A non-square block**, e.g. `Shape<2,3>`. The rows vector is then `Shape<1,3>` and the
+  cols vector `Shape<2,1>` -- different types, so an axis mix-up on our side fails to
+  compile instead of running.
+- **Vector entries must VARY along the vector's length.** This catches the real risk. If
+  `Axis::Cols` emits `_bcast_cols` and `COL` turns out to mean "B is a row", then a column
+  vector (data down column 0) offers only `v[0]` at `[0,0]` with zeros across its row 0, so
+  the result collapses to `a + v[0]` in one tile-column and `a + 0` elsewhere --
+  unmissable. A constant-valued vector would hide exactly this.
+
+If the test says the mapping is reversed, the fix is one line in the axis-to-op traits and
+nothing else moves; the declared-axis API above is unaffected either way.
 
 ## 4. Types
 
@@ -231,7 +252,8 @@ to spell all nine out rather than compose the name.
       chained form. Trace changes -- an intentional re-baseline.
 - [ ] `test_unified_bcast.py` on device: {add, sub, mul} x {rows, cols, scalar} against
       torch, on a NON-SQUARE block with a vector whose entries vary along its length, so
-      a rows/cols mix-up cannot pass.
+      a rows/cols mix-up cannot pass. This test DETERMINES the axis-to-metal-op mapping
+      rather than checking an assumed one -- see section 3.
 - [ ] Prove the shape guard: a vector that is neither a row, a column, nor a scalar must
       fail to compile.
 - [ ] Prove the reduce -> bcast pairing end to end: `reduce_max<Cols>` then
