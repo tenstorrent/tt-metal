@@ -64,6 +64,7 @@ def main():
             seed=args.seed,
             device_id=args.device_id,
             hf_id=hf_id,
+            use_2cq=True,
         )
         rows.append((label, result))
 

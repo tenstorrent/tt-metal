@@ -176,21 +176,35 @@ def create_kv_cache_list(
     num_kv_heads = config.num_key_value_heads
     head_dim = config.head_dim
 
+    # TP>1: each chip owns only its slice of KV heads (same split ratio as the
+    # Attention module, which overrides self.num_kv_heads = num_kv_heads // tp_size).
+    # Replicate the zero-initialized cache across chips — the values are identical
+    # so any mesh_mapper preserves the invariant.
+    from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size, is_mesh_device
+
+    _is_mesh = is_mesh_device(device)
+    tp = get_tp_size(device) if _is_mesh else 1
+    assert num_kv_heads % tp == 0, f"num_kv_heads={num_kv_heads} must be divisible by tp_size={tp}"
+    local_kv_heads = num_kv_heads // tp
+    _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if _is_mesh else None
+
     kv_caches = []
     for _ in range(num_layers):
         k = ttnn.from_torch(
-            torch.zeros(max_batch_size, num_kv_heads, max_seq_len, head_dim, dtype=torch.bfloat16),
+            torch.zeros(max_batch_size, local_kv_heads, max_seq_len, head_dim, dtype=torch.bfloat16),
             device=device,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=_mesh_mapper,
         )
         v = ttnn.from_torch(
-            torch.zeros(max_batch_size, num_kv_heads, max_seq_len, head_dim, dtype=torch.bfloat16),
+            torch.zeros(max_batch_size, local_kv_heads, max_seq_len, head_dim, dtype=torch.bfloat16),
             device=device,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=_mesh_mapper,
         )
         kv_caches.append((k, v))
 

@@ -27,6 +27,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
 
 
 class SpeakerEncoderConfig:
@@ -263,24 +264,24 @@ class SpeakerEncoder(LightweightModule):
 
         ``weight``/``bias`` may be either torch.Tensor (preferred — avoids a
         device round-trip) or ttnn.Tensor on device (legacy callers). The
-        ``ttnn.to_torch(weight)`` round-trip on device-backed weights returns
+        ``_mesh_to_torch(weight)`` round-trip on device-backed weights returns
         garbage post-trace-exec, so when we have torch weights in hand we
         skip the round-trip entirely.
         """
-        x_t = ttnn.to_torch(x, dtype=torch.float32)
+        x_t = _mesh_to_torch(x, dtype=torch.float32)
         if x_t.dim() == 4:
             x_t = x_t.squeeze(1)
         x_t = x_t.permute(0, 2, 1).contiguous()
         if isinstance(weight, torch.Tensor):
             w_t = weight.float()
         else:
-            w_t = ttnn.to_torch(weight, dtype=torch.float32)
+            w_t = _mesh_to_torch(weight, dtype=torch.float32)
         if w_t.dim() == 4:
             w_t = w_t.squeeze(-1)
         if isinstance(bias, torch.Tensor):
             b_t = bias.float().reshape(-1)
         else:
-            b_t = ttnn.to_torch(bias, dtype=torch.float32).reshape(-1)
+            b_t = _mesh_to_torch(bias, dtype=torch.float32).reshape(-1)
 
         kernel_size = w_t.shape[-1]
         effective_kernel = dilation * (kernel_size - 1) + 1
@@ -398,8 +399,8 @@ class SpeakerEncoder(LightweightModule):
         y = ttnn.reshape(y, (batch, y_len, out2_ch), memory_config=dram)
         y = ttnn.sigmoid(y, memory_config=dram)
         if bool(int(os.environ.get("SE_VDBG", "0"))):
-            sv = ttnn.to_torch(y, dtype=torch.float32).flatten()
-            iv = ttnn.to_torch(x_nlc, dtype=torch.float32).flatten()
+            sv = _mesh_to_torch(y, dtype=torch.float32).flatten()
+            iv = _mesh_to_torch(x_nlc, dtype=torch.float32).flatten()
             print(
                 f"[SE_VDBG]   UNtraced scale: min={sv.min().item():.4f} max={sv.max().item():.4f} mean={sv.mean().item():.4f}",
                 flush=True,
@@ -439,8 +440,8 @@ class SpeakerEncoder(LightweightModule):
         ttnn.execute_trace(self.device, info["trace_id"], cq_id=0, blocking=True)
         _mk("execute_trace done")
         if bool(int(os.environ.get("SE_VDBG", "0"))):
-            scale_v = ttnn.to_torch(info["output_tt"], dtype=torch.float32).flatten()
-            inp_v = ttnn.to_torch(info["input_tt"], dtype=torch.float32).flatten()
+            scale_v = _mesh_to_torch(info["output_tt"], dtype=torch.float32).flatten()
+            inp_v = _mesh_to_torch(info["input_tt"], dtype=torch.float32).flatten()
             print(
                 f"[SE_VDBG]   block{block_idx} scale: min={scale_v.min().item():.4f} max={scale_v.max().item():.4f} mean={scale_v.mean().item():.4f}",
                 flush=True,
@@ -612,7 +613,7 @@ class SpeakerEncoder(LightweightModule):
             if _vdbg:
                 ttnn.synchronize_device(self.device)
                 try:
-                    arr = ttnn.to_torch(t, dtype=torch.float32)
+                    arr = _mesh_to_torch(t, dtype=torch.float32)
                     print(
                         f"[SE_VDBG] {label}: shape={tuple(arr.shape)} "
                         f"min={arr.min().item():.4g} max={arr.max().item():.4g} "
@@ -712,10 +713,10 @@ class SpeakerEncoder(LightweightModule):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             _mark("after FC linear")
-            hidden = ttnn.to_torch(out_tt, dtype=torch.float32).reshape(b, -1)
+            hidden = _mesh_to_torch(out_tt, dtype=torch.float32).reshape(b, -1)
             _mark("after to_torch")
         else:
-            hidden = ttnn.to_torch(hidden_tt, dtype=torch.float32).reshape(int(hidden_tt.shape[0]), -1)
+            hidden = _mesh_to_torch(hidden_tt, dtype=torch.float32).reshape(int(hidden_tt.shape[0]), -1)
 
         return hidden
 

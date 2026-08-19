@@ -17,6 +17,7 @@ from typing import Optional, Tuple
 import torch
 
 import ttnn
+from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
 
 
 class TTNNConv1d:
@@ -395,7 +396,7 @@ def test_ttnn_conv_decoder():
         )
         snake = TTNNSnakeActivation(device, 256, alpha, beta)
         y_tt = snake(x_tt)
-        y_torch = ttnn.to_torch(y_tt).squeeze(1).permute(0, 2, 1)
+        y_torch = _mesh_to_torch(y_tt).squeeze(1).permute(0, 2, 1)
 
         from scipy.stats import pearsonr
 
@@ -415,7 +416,7 @@ def test_ttnn_conv_decoder():
         conv = TTNNConv1d(device, 128, 256, 3, padding=1, weight=weight)
         y_tt, out_len = conv(x_tt, 64)
         y_tt = ttnn.from_device(y_tt)
-        y_torch = ttnn.to_torch(y_tt).reshape(1, out_len, 256).permute(0, 2, 1)
+        y_torch = _mesh_to_torch(y_tt).reshape(1, out_len, 256).permute(0, 2, 1)
 
         pcc = pearsonr(y_torch.flatten().float().numpy(), y_golden.flatten().numpy())[0]
         print(f"   Conv1d PCC: {pcc:.6f}")
@@ -434,7 +435,7 @@ def test_ttnn_conv_decoder():
 
         conv_t = TTNNConvTranspose1d(device, 512, 256, 4, stride=2, padding=padding, weight=weight)
         y_tt, out_len = conv_t(x_tt, 100)
-        y_torch = ttnn.to_torch(y_tt).reshape(1, 1, out_len, 256).squeeze(1).permute(0, 2, 1)
+        y_torch = _mesh_to_torch(y_tt).reshape(1, 1, out_len, 256).squeeze(1).permute(0, 2, 1)
 
         min_len = min(y_torch.shape[2], y_golden.shape[2])
         pcc = pearsonr(
