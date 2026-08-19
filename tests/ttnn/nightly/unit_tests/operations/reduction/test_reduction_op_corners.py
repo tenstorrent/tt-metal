@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Corner cases of topk/argmax/cumsum/cumprod/moe/sampling and multi-dim RM sum.
-# Split from test_reduction_ops.py: corner-case tests, not exhaustive sweeps.
 
 import pytest
 import torch
