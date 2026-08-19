@@ -178,9 +178,6 @@ _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_g
 # When on (default), the last transformer layer runs kv-only: it fills the KV cache for migration and
 # skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head. In a pipeline only the last rank applies it.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
-# Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
-# compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
-SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 # Some models (e.g. Kimi: single expert group, device gate) route the MoE routing all-gather's global
 # semaphores to L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static
 # CBs, which needs the mesh opened with an L1_SMALL region. The adapter owns both knobs.
@@ -465,11 +462,6 @@ def _compute_and_send(
         d2h_service=d2h_service,
         record_dev=record_dev,
     )
-    if SYNC_PER_CHUNK:
-        # Block on device completion so the delta is this rank's forward alone, not the downstream-start
-        # proxy. Serializes dispatch (no overlap) — measurement runs only.
-        ttnn.synchronize_device(runtime.mesh_device)
-        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={(time.time() - t_start) * 1000.0:.3f}")
     if not runtime.config.is_last_rank:
         # Traced: `out` is the runtime's persistent _trace_output (the next replay overwrites it in place),
         # so the send copies it into the socket backing but must not free it. Eager: `out` is fresh — free it.
