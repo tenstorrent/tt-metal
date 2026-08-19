@@ -30,7 +30,6 @@ struct PrepareChunkRecurrenceInputs {
     Tensor eye;
     Tensor tril;
     Tensor ones;
-    Tensor masks;
 };
 
 }  // namespace ttnn::experimental::prim

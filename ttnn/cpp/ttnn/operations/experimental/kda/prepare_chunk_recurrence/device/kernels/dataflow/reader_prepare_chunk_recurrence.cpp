@@ -23,7 +23,6 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t NC, uint32_
     const auto eye_accessor = TensorAccessor(tensor::eye);
     const auto tril_accessor = TensorAccessor(tensor::tril);
     const auto ones_accessor = TensorAccessor(tensor::ones);
-    const auto masks_accessor = TensorAccessor(tensor::masks);
     DataflowBuffer q(dfb::q);
     DataflowBuffer k(dfb::k);
     DataflowBuffer v(dfb::v);
@@ -32,7 +31,6 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t NC, uint32_
     DataflowBuffer eye(dfb::eye);
     DataflowBuffer tril(dfb::tril);
     DataflowBuffer ones(dfb::ones);
-    DataflowBuffer masks(dfb::u);
     Noc noc;
 
     auto read_into = [&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
@@ -51,7 +49,6 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t NC, uint32_
     read_into(eye_accessor, eye, 0, cc);
     read_into(tril_accessor, tril, 0, cc);
     read_into(ones_accessor, ones, 0, cc);
-    read_into(masks_accessor, masks, 0, 3);
 
     auto read_v_flat = [&](uint32_t hc) {
         const uint32_t bh = hc / NC;
