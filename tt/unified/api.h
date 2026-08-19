@@ -207,7 +207,7 @@ struct L1Pages {
 // exactly one consumer; consumers take it by value.
 // ---------------------------------------------------------------------------
 
-template <AccumulatorMode Mode, typename S>
+template <typename S, AccumulatorMode Mode = AccumulatorMode::Dst>
 class Accumulator;
 
 template <typename S>
@@ -249,7 +249,7 @@ private:
     struct Retained {};
     Block(const Storage<S>& storage, Retained);
 
-    template <AccumulatorMode M, typename S2>
+    template <typename S2, AccumulatorMode M>
     friend class Accumulator;
 
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
@@ -291,7 +291,7 @@ private:
 // warning in api/compute/cb_api.h).
 // ---------------------------------------------------------------------------
 
-template <AccumulatorMode Mode, typename S>
+template <typename S, AccumulatorMode Mode>
 class Accumulator {
 public:
     using shape = S;
