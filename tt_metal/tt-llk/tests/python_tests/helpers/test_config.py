@@ -421,6 +421,39 @@ class TestConfig:
         )
 
     @staticmethod
+    def perf_run_tag() -> str:
+        """Directory name for this run's reports. Unique per invocation.
+
+        Purely a filesystem concern: it never reaches the published table. The
+        Parquet's ``run_id`` cannot serve here because every shard of one CI
+        workflow shares it by design (it is a ROW_KEY column, and the data team's
+        notion of "one run" spans all shards) — naming directories after it would
+        make two shards collide the moment their artefacts are unzipped together.
+
+        Seeded into the environment on first use so xdist workers and the
+        controller agree; conftest sets it before workers spawn.
+        """
+        tag = os.environ.get("PERF_RUN_TAG", "").strip()
+        if not tag:
+            run = os.environ.get("GITHUB_RUN_ID", "").strip()
+            arch = os.environ.get("CHIP_ARCH", "unknown").strip()
+            stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            tag = f"{run}-{arch}" if run else f"local-{stamp}"
+            os.environ["PERF_RUN_TAG"] = tag
+        return tag
+
+    @staticmethod
+    def perf_run_dir() -> Path:
+        """This run's report directory, ``perf_data/runs/<tag>``.
+
+        One directory per invocation is what makes a report trustworthy: a shared
+        mutable directory lets a narrower second run leave the first run's test
+        directories in place, so the tree reads as complete while holding a blend
+        of two runs. Nothing here is ever written by a second invocation.
+        """
+        return TestConfig.LLK_ROOT / "perf_data" / "runs" / TestConfig.perf_run_tag()
+
+    @staticmethod
     def create_build_directories():
         """Create build directories. Uses class flag to skip redundant filesystem checks."""
         if TestConfig._BUILD_DIRS_CREATED:
