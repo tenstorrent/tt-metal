@@ -375,6 +375,14 @@ def test_perf_unary_max_min_fresh_cpp(
         MathOperation.Gelu,
         MathOperation.Expm1Cw,
         MathOperation.I1,
+        # Storm S5.
+        MathOperation.Softshrink,
+        MathOperation.Softsign,
+        MathOperation.Square,
+        MathOperation.Tanhshrink,
+        MathOperation.Threshold,
+        MathOperation.UnaryGe,
+        MathOperation.Acosh,
     ],
     fresh_cpp_impl=[0, 1],
 )
