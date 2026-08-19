@@ -68,18 +68,7 @@ def _host_inputs(
     eye = torch.eye(CHUNK_SIZE, dtype=torch.float32).reshape(1, 1, CHUNK_SIZE, CHUNK_SIZE)
     tril = torch.tril(torch.ones(CHUNK_SIZE, CHUNK_SIZE, dtype=torch.float32)).reshape(1, 1, CHUNK_SIZE, CHUNK_SIZE)
     ones = torch.ones(1, 1, CHUNK_SIZE, CHUNK_SIZE, dtype=torch.float32)
-    indices = torch.arange(CHUNK_SIZE)
-    rows, columns = indices[:, None], indices[None, :]
-    lower_rows, lower_columns = rows < CHUNK_SIZE // 2, columns < CHUNK_SIZE // 2
-    masks = torch.cat(
-        [
-            (lower_rows & lower_columns).float(),
-            (~lower_rows & ~lower_columns).float(),
-            (~lower_rows & lower_columns).float(),
-        ],
-        dim=1,
-    ).reshape(1, 1, CHUNK_SIZE, 3 * CHUNK_SIZE)
-    return q, k, v, g, beta, eye, tril, ones, masks
+    return q, k, v, g, beta, eye, tril, ones
 
 
 def _reshape_flat(tensor: torch.Tensor, num_heads: int, num_chunks: int, dim: int) -> torch.Tensor:
@@ -377,7 +366,7 @@ def test_prepare_chunk_recurrence_production_performance(device: ttnn.Device) ->
         )
 
 
-@pytest.mark.parametrize("host_index", range(9))
+@pytest.mark.parametrize("host_index", range(8))
 def test_prepare_chunk_recurrence_rejects_host_inputs(
     device: ttnn.Device,
     expect_error: Callable,
@@ -389,7 +378,7 @@ def test_prepare_chunk_recurrence_rejects_host_inputs(
     inputs[host_index] = ttnn.from_torch(host_inputs[host_index], dtype=dtype, layout=ttnn.TILE_LAYOUT)
     with expect_error(
         RuntimeError,
-        f"{('q', 'k', 'v', 'g', 'beta', 'eye', 'tril', 'ones', 'masks')[host_index]} must be an allocated device tensor",
+        f"{('q', 'k', 'v', 'g', 'beta', 'eye', 'tril', 'ones')[host_index]} must be an allocated device tensor",
     ):
         _run(tuple(inputs), 2)
 
@@ -409,7 +398,6 @@ def test_prepare_chunk_recurrence_rejects_host_inputs(
         ("value_alignment", "K and V must be positive and tile aligned"),
         ("beta", "beta shape must be"),
         ("eye", "eye shape must be"),
-        ("masks", "masks shape must be"),
         ("sharded", "q must use interleaved memory"),
     ],
 )
@@ -450,8 +438,6 @@ def test_prepare_chunk_recurrence_rejects_invalid_inputs(
         inputs[4] = _to_device(host_inputs[4][:, :1], device, ttnn.float32)
     elif case == "eye":
         inputs[5] = _to_device(torch.eye(64).reshape(1, 1, 64, 64), device, ttnn.float32)
-    elif case == "masks":
-        inputs[8] = _to_device(host_inputs[8][:, :, :, :64], device, ttnn.float32)
     elif case == "sharded":
         shard_spec = ttnn.ShardSpec(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),

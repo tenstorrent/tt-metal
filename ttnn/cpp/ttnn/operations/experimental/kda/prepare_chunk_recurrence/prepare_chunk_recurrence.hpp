@@ -21,7 +21,6 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
     const ttnn::Tensor& eye,
     const ttnn::Tensor& tril,
     const ttnn::Tensor& ones,
-    const ttnn::Tensor& masks,
     uint32_t num_heads,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
