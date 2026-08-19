@@ -26,27 +26,6 @@
 
 namespace compute_kernel_lib {
 
-constexpr IterationShape::IterationShape(uint32_t H, uint32_t W) :
-    Ht(H), Wt(W), block_tiles(1), tail_sync(BlockTailSync::ValidTiles) {}
-
-constexpr IterationShape::IterationShape(uint32_t n_tiles) : IterationShape(1, n_tiles) {}
-
-constexpr IterationShape IterationShape::tiles(uint32_t n) { return {1, n}; }
-
-constexpr IterationShape IterationShape::grid(uint32_t H, uint32_t W) { return {H, W}; }
-
-constexpr IterationShape IterationShape::row(uint32_t c) { return {1, c}; }
-
-constexpr IterationShape IterationShape::col(uint32_t r) { return {r, 1}; }
-
-constexpr IterationShape IterationShape::one_tile() { return {1, 1}; }
-
-constexpr IterationShape IterationShape::block_size(uint32_t value, BlockTailSync tail) {
-    block_tiles = value;
-    tail_sync = tail;
-    return *this;
-}
-
 constexpr bool is_legal_input_policy(WaitPolicy wait, PopPolicy pop) noexcept {
     switch (wait) {
         case WaitPolicy::None: return pop == PopPolicy::None || pop == PopPolicy::PerTile || pop == PopPolicy::AtEnd;

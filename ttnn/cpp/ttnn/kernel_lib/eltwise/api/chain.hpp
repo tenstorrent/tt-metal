@@ -144,22 +144,27 @@ struct IterationShape {
     uint32_t block_tiles;  // tiles per inner block iteration; named apart from the fluent method
     BlockTailSync tail_sync;
 
-    constexpr IterationShape(uint32_t H, uint32_t W);
+    constexpr IterationShape(uint32_t H, uint32_t W) :
+        Ht(H), Wt(W), block_tiles(1), tail_sync(BlockTailSync::ValidTiles) {}
 
     // Explicit: bare numbers are forbidden at call sites. Use IterationShape::tiles(n) or
     // IterationShape::one_tile() so the iteration shape is always written out.
-    explicit constexpr IterationShape(uint32_t n_tiles);
+    explicit constexpr IterationShape(uint32_t n_tiles) : IterationShape(1, n_tiles) {}
 
-    static constexpr IterationShape tiles(uint32_t n);
-    static constexpr IterationShape grid(uint32_t H, uint32_t W);
+    static constexpr IterationShape tiles(uint32_t n) { return {1, n}; }
+    static constexpr IterationShape grid(uint32_t H, uint32_t W) { return {H, W}; }
 
-    static constexpr IterationShape row(uint32_t c);
-    static constexpr IterationShape col(uint32_t r);
-    static constexpr IterationShape one_tile();
+    static constexpr IterationShape row(uint32_t c) { return {1, c}; }
+    static constexpr IterationShape col(uint32_t r) { return {r, 1}; }
+    static constexpr IterationShape one_tile() { return {1, 1}; }
 
     /// Configures blocking and returns the shape, so it chains on factory temporaries:
     /// `IterationShape::tiles(n).block_size(blk)`.
-    constexpr IterationShape block_size(uint32_t value, BlockTailSync tail = BlockTailSync::ValidTiles);
+    constexpr IterationShape block_size(uint32_t value, BlockTailSync tail = BlockTailSync::ValidTiles) {
+        block_tiles = value;
+        tail_sync = tail;
+        return *this;
+    }
 };
 
 /// Who performs the chain's one-time setup — init + reconfig — the leading template arg to
