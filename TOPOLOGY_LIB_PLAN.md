@@ -67,6 +67,18 @@ the `tt_fabric` router / discovery tests. Mechanical; mirrors what `scaleout_too
 
 ---
 
+## 4b. Header locations / includes
+
+- **PSD / MGD / PGD / solver / mapper-utils headers don't move** — they're already tt-metalium API headers under
+  `tt_metal/api/tt-metalium/experimental/fabric/`, included as `<tt-metalium/experimental/fabric/*.hpp>`. Only the
+  `.cpp` *compilation* moves to `scaleout_topology`; the headers and their include paths are unchanged.
+- **`fsd_to_psd.hpp` is promoted** into that same API tree →
+  `tt_metal/api/tt-metalium/experimental/fabric/fsd_to_psd.hpp`, included as
+  `<tt-metalium/experimental/fabric/fsd_to_psd.hpp>` (consistent with its siblings, installable for FM). The `.cpp`
+  stays where it is — no source files move, only this one header is promoted.
+- `.pb.h` proto headers are internal build artifacts (resolved from the generated dir), not part of the public
+  include surface.
+
 ## 5. How to use it
 
 ### In tt-metal (`generate_rank_bindings` — the FSD-mapping feature)
@@ -75,16 +87,14 @@ the `tt_fabric` router / discovery tests. Mechanical; mirrors what `scaleout_too
 target_link_libraries(generate_rank_bindings PRIVATE tt_metal TT::ScaleoutTopology scaleout_tools ...)
 ```
 ```cpp
-#include "fsd_to_psd/fsd_to_psd.hpp"
+#include <tt-metalium/experimental/fabric/fsd_to_psd.hpp>
 
 PhysicalSystemDescriptor psd = [&]() -> PhysicalSystemDescriptor {
     const auto& fsd_path = MetalContext::instance().rtoptions().get_factory_system_descriptor_path();
     if (!fsd_path.empty()) {
-        auto fsd       = tt::scaleout_tools::load_fsd_textproto(fsd_path);   // parse FSD
-        auto psd_proto = tt::scaleout_tools::build_psd_from_fsd(fsd);        // offline FSD → PSD proto
-        return PhysicalSystemDescriptor(psd_proto);                         // proto → C++ PSD
+        return tt::scaleout_tools::build_psd_from_fsd_file(fsd_path);   // path in → C++ PSD out (no protos)
     }
-    return run_psd_discovery();                                            // live fallback
+    return run_psd_discovery();                                        // live fallback
 }();
 // unchanged downstream:
 auto phys = experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
@@ -101,14 +111,14 @@ Or FM links a prebuilt tt-metalium (requires the lib installed):
 ```cmake
 # tt-metal side, one-time:
 install(TARGETS scaleout_topology EXPORT Metalium ARCHIVE COMPONENT metalium-dev)
-install(FILES tools/scaleout/fsd_to_psd/fsd_to_psd.hpp DESTINATION include/tt-metalium/fsd_to_psd)
+# fsd_to_psd.hpp already lives in the tt-metalium API tree, installed with the other tt-metalium headers
 # FM side:
 find_package(Metalium REQUIRED)
 target_link_libraries(tt-fabric-manager-controller PRIVATE TT::ScaleoutTopology protobuf::libprotobuf)
 ```
 **Code** — FM drops its FSD→PSD fork and calls the shared builder:
 ```cpp
-#include "fsd_to_psd/fsd_to_psd.hpp"
+#include <tt-metalium/experimental/fabric/fsd_to_psd.hpp>
 
 auto psd_proto = tt::scaleout_tools::build_psd_from_fsd(fsd);   // was FM's own copy of this
 // FM's existing mapping pipeline is unchanged:
@@ -126,14 +136,27 @@ protos this lib provides — not also compile its own copies — or protobuf abo
 ## 6. API surface
 
 ```cpp
-// tools/scaleout/fsd_to_psd/fsd_to_psd.hpp   (namespace tt::scaleout_tools)
+// tt_metal/api/tt-metalium/experimental/fabric/fsd_to_psd.hpp   (namespace tt::scaleout_tools)
+
+// Proto-FREE entry point (recommended for path-based consumers like tt-run): file path in, C++ PSD out.
+tt::tt_metal::PhysicalSystemDescriptor build_psd_from_fsd_file(const std::string& fsd_path);
+
+// Proto in / proto out (for consumers that already hold the FSD proto, e.g. Fabric Manager / gRPC):
 FactorySystemDescriptor load_fsd_textproto(const std::string& path);
 tt::fabric::proto::PhysicalSystemDescriptor build_psd_from_fsd(const FactorySystemDescriptor&);
 std::vector<tt::fabric::proto::PhysicalSystemDescriptor> build_psds_from_fsd(const FactorySystemDescriptor&);
+
 // + the topology types now in this lib: PhysicalSystemDescriptor(proto ctor), MeshGraphDescriptor,
 //   PhysicalGroupingDescriptor, build_physical_multi_mesh_adjacency_graph, build_logical_..._graph(MGD),
 //   map_multi_mesh_to_physical
 ```
+
+**Two entry points, by consumer need** (the FSD proto is inherent to the *input*, so a fully proto-free API is the
+path-based one):
+- `build_psd_from_fsd_file(path)` → returns the C++ `PhysicalSystemDescriptor`; caller needs **no** protobuf headers.
+  Best for tt-run / `generate_rank_bindings` (they only have a path). **Implemented + build-verified.**
+- `build_psd_from_fsd(FactorySystemDescriptor)` → proto in/out, for FM which already holds (and re-serializes) the
+  proto over gRPC.
 
 ---
 
