@@ -38,6 +38,7 @@ and yields 16 argmax values, which is exactly the ``len(candidates) + 1`` contra
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Sequence
@@ -93,6 +94,10 @@ class DFlashStats:
     taps_seconds: float = 0.0
     #: Uploading the (bucket-padded) accumulated context back to device.
     context_upload_seconds: float = 0.0
+    #: Writing the verify window's K/V into the persistent anchor cache.  Charged
+    #: separately because it is the anchor path's own added cost: with it uncounted, the
+    #: path looked free at the stages it improved while per-iteration total did not move.
+    anchor_append_seconds: float = 0.0
 
     @property
     def accepted_per_target_forward(self) -> float:
@@ -129,6 +134,7 @@ class DFlashStats:
             "trace_capture_seconds": self.trace_capture_seconds,
             "taps_seconds": self.taps_seconds,
             "context_upload_seconds": self.context_upload_seconds,
+            "anchor_append_seconds": self.anchor_append_seconds,
             "total_seconds": self.total_seconds,
             "ms_per_token": self.ms_per_token,
             "tokens_per_second": self.tokens_per_second,
@@ -1536,15 +1542,23 @@ class DFlashRunner:
             t_taps = time.perf_counter()
             prompt_taps = self._taps_to_device(prompt_taps_held, own=True)
             stats.taps_seconds += time.perf_counter() - t_taps
+            t_append = time.perf_counter()
             self.drafter.append_anchors(
                 prompt_taps,
                 cache=anchor_cache,
                 dest_row=0,
                 positions=torch.arange(int(prompt_taps.shape[2])),
             )
+            stats.anchor_append_seconds += time.perf_counter() - t_append
             ttnn.deallocate(prompt_taps)
             anchor_cache.note_committed(prompt_len)
             self._alloc_note("anchor cache seeded")
+            from loguru import logger as _cap_logger
+
+            _cap_logger.info(
+                f"DFlash: anchor cache capacity={capacity} "
+                f"(prompt {prompt_len} + osl {max_new_tokens} + block {block})"
+            )
         # The padded path is stateless on device, so the accumulated context lives
         # here instead of in a device K/V cache.  ``context_host`` stays the
         # per-iteration delta the incremental path wants; this is the running
@@ -1553,7 +1567,43 @@ class DFlashRunner:
         accumulated_context = context_host
 
         # ------------------------------------------------------------- loop
+        #: Per-iteration stage deltas, off unless DFLASH_ITER_LOG is set.  Cumulative
+        #: totals hide which stage grew; deltas name it directly.  Nothing between
+        #: "generation started" and "generation returned" was logged before this, so a
+        #: wedged loop and a fast one looked identical from the outside.
+        iter_log = bool(os.environ.get("DFLASH_ITER_LOG"))
+        _prev_stage: dict[str, float] = {}
+
+        def _log_iteration() -> None:
+            fields = (
+                "draft_noise_seconds",
+                "draft_forward_seconds",
+                "draft_candidates_seconds",
+                "verify_forward_seconds",
+                "verify_logits_seconds",
+                "trace_capture_seconds",
+                "taps_seconds",
+                "context_upload_seconds",
+                "anchor_append_seconds",
+            )
+            parts = []
+            for name in fields:
+                now = getattr(stats, name)
+                delta = now - _prev_stage.get(name, 0.0)
+                _prev_stage[name] = now
+                if delta >= 0.0005:
+                    parts.append(f"{name.replace('_seconds', '')}={delta * 1e3:.1f}ms")
+            from loguru import logger as _logger
+
+            _logger.info(
+                f"DFlash iter {stats.iterations}: {len(produced)}/{max_new_tokens} tokens, "
+                f"anchor_pos={anchor_pos}, elapsed={time.perf_counter() - started:.2f}s"
+                + (" | " + " ".join(parts) if parts else "")
+            )
+
         while len(produced) < max_new_tokens:
+            if iter_log:
+                _log_iteration()
             if stop_on_eos and produced[-1] in eos:
                 break
             if anchor_pos + block >= model.config.max_seq_len:
@@ -1702,12 +1752,14 @@ class DFlashRunner:
                 device_taps = self._taps_to_device(taps_src, own=owned_taps)
                 stats.taps_seconds += time.perf_counter() - t_taps
                 rows_written = int(device_taps.shape[2])
+                t_append = time.perf_counter()
                 self.drafter.append_anchors(
                     device_taps,
                     cache=anchor_cache,
                     dest_row=aligned_start,
                     positions=torch.arange(aligned_start, aligned_start + rows_written),
                 )
+                stats.anchor_append_seconds += time.perf_counter() - t_append
                 ttnn.deallocate(device_taps)
                 anchor_cache.note_committed(result.n_committed)
                 if hidden is not None:

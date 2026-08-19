@@ -1094,16 +1094,116 @@ OSL 32:
 Both targeted costs are gone, and `build_context_hidden_states` -- written, never called since
 -- finally does the job it was written for.
 
-**What does not work, and the bisect that is left.** At OSL 256, capacity 512, `generate()`
-goes CPU-bound for minutes where the padded path finishes in ~5 s. Three facts localise it:
-the drafter alone at capacity 512 is 17.9 ms/iteration; OSL 32 at capacity 128 completes in
-0.728 s; and the drafter probe does not touch verify, candidates, taps or accept. So the cost
-is O(capacity) inside the *runner*, not in the cache or the drafter. The next step is to time
-those runner stages directly at capacity 512 rather than guess -- two hypotheses were already
-eliminated by measurement and a third (JIT recompilation) is ruled out by the stable program
-cache.
+**What does not work.** At OSL 256, capacity 512, `generate()` never produces a second
+token. See F28: it is a hang at one line rather than a cost that scales, and the O(capacity)
+reading first recorded here was wrong in both halves.
 
 It ships **off** behind `anchor_cache=False` / `--anchor-cache`. Nothing shipped is affected.
+
+### F28 — The anchor-cache blocker is a capacity-gated hang at one line, not an O(capacity) cost
+
+F27 recorded the blocker as "O(capacity) somewhere in the runner". That was inference from
+three timings and it was wrong twice over: nothing scales with capacity, and nothing is
+spending the time.
+
+**The runner had no per-iteration logging at all.** Between "generation started" and
+"generation returned" it emitted nothing, so a wedged loop and a fast one produced byte-identical
+output, and every earlier claim about where time went *inside* a generation was necessarily
+indirect. That absence is what actually blocked the bisect, not the missing measurement it was
+blamed on. `DFLASH_ITER_LOG=1` now prints per-iteration stage deltas plus `anchor_pos` and
+elapsed time, and the cache logs its derived capacity, which no JSON recorded. Both are off by
+default; the shipped path is untouched.
+
+**Per-iteration cost is flat in capacity.** Three prompt lengths in one process at fixed
+OSL 32, so the target loads once, the kernel cache is warm, and differing acceptance affects
+only the iteration count -- which is why the comparison is ms/iteration and not totals:
+
+| capacity | prompt | drafter forward | verify forward | candidates |
+|---|---|---|---|---|
+| 128 | 67 | 6.6-7.3 ms | 24.8 ms | 7.6-8.1 ms |
+| 512 | 240 | 16.3 ms (one post-capture iteration) | 25.5 ms | 9.4 ms |
+| 1024 | 405 | **7.0-7.7 ms** | 26.0-26.2 ms | 9.6-10.0 ms |
+
+Capacity 1024 costs what capacity 128 costs. The 512 row is a single iteration immediately
+after a trace capture, not a trend -- and a monotone-in-capacity story would have to explain
+1024 being *faster*.
+
+**It is a hang, and `py-spy` names the line.** At OSL 256 the process sits in `_argmax_rows`
+-> `ttnn.to_torch` (`tt/dflash_runner.py:1320`, via `_candidate_ids` at `:1342`), unmoved
+across repeated samples minutes apart, having logged iteration 2 and never iteration 3. It
+burns 20.33 s of CPU per 20 s of wall clock, essentially all *utime* in native code: a host
+spin on a device read that never completes. The same call costs 8-10 ms on iterations 1 and 2.
+So "CPU-bound" was accurate and also beside the point -- it is a spin-wait, not work.
+
+**Trace lifetime is not the cause.** `--no-offset-free-verify` re-captures per 32-row window
+instead of holding one capture for the whole generation, and the cache stays eligible because
+it only requires *a* traced verify. It wedges at the same iteration, the same line, the same
+stack. That kills the most attractive hypothesis -- one long-lived trace whose addresses the
+anchor append walks into -- for the price of one run, before any redesign was built on it.
+
+**Capacity gates the hang even though it does not affect cost.** Same prompt (67 tokens), OSL
+45 so `context_bucket(67 + 45 + 16)` holds capacity at 128 while giving real iterations rather
+than the clamped tail of an OSL-32 run: **9 iterations, all clean**, `anchor_pos` 67 -> 105,
+crossing the 96-row window boundary, cost dead flat (drafter forward 6.7-7.8 ms, verify
+24.8-25.0 ms, candidates 7.5-8.1 ms), finishing at **44.29 t/s/u**. The identical prompt at
+capacity 512 hangs at iteration 3. So the window advance is not the trigger either -- capacity
+is, or something capacity carries with it.
+
+What is *not* yet isolated: capacity 1024 completed 4 iterations without hanging, which a plain
+"capacity > 128 hangs at iteration 3" rule does not explain. That run had a 405-token prompt
+and stopped at 32 tokens before it could go further, so it may simply never have reached the
+trigger. The open question is therefore narrow and well posed: what does capacity 512 with a
+short prompt reach on iteration 3 that capacity 128 does not, given that the arithmetic, the
+program cache and the per-iteration cost are all identical.
+
+**Hypotheses measurement killed before they reached this log**, each of which read as obvious:
+
+* *"It is stuck in iteration 1 -- 8.6 minutes produced no output."* There was no per-iteration
+  logging, so silence carried no positional information at all.
+* *"The anchor branch's `continue` strands the loop condition."* `produced.extend(...)` and
+  `stats.iterations += 1` both precede the branch; the loop advances normally.
+* *"It silently fell back to the padded path."* The "anchor cache unavailable" warning never
+  fired and the capacity line confirms a live cache.
+* *"The window advance is the trigger"* (F24 having broken exactly there). Capacity 128 crosses
+  it nine times without complaint.
+
+The lesson is the one F23 already paid for: the reasoning was sound and the premise was
+unmeasured. A stack dump of a live process cost less than any single inference it replaced and
+should have come first.
+
+**And where capacity 128 works, the cache is worth about 1 %, not the 1.2-1.3 s the plan
+projected.** A/B at OSL 45 on the same prompt, both legs 45 tokens:
+
+| ms/iteration | padded (shipped) | anchor cache |
+|---|---|---|
+| drafter forward | 17.04 | **10.88** |
+| context upload | 2.75 | **0.00** |
+| candidates | 8.52 | 7.44 |
+| taps | 0.86 | **0.49** |
+| verify forward | 24.92 | 24.95 |
+| trace capture | 17.60 | 19.85 |
+| **anchor append** | -- | **5.06** |
+| **total** | **84.18** | **84.12** |
+
+Every cost the design targeted did fall, by 10.36 ms/iteration together. They are then given
+back almost exactly: 5.06 for the append, 2.25 more capture, 2.20 more unaccounted. Net is
+0.85 ms of 84, about 1 %.
+
+`anchor_append_seconds` exists because of this: the append had no timer, so the path read as
+free at the stages it improved while the total refused to move, and the 9 ms it actually costs
+was visible only as a subtraction. A stage a change *adds* needs a counter as much as the
+stages it removes.
+
+The end-to-end figures (44.58 t/s/u with the cache against 41.12 without) are **not** the
+1 %. They are acceptance: 3.462 accepted/forward against 3.214, so 12 iterations instead of 13
+for the same 45 tokens. Per F2 small numeric differences move argmax, and per F7 a 45-token run
+cannot rank acceptance at all -- the two anchor runs returned bit-identical acceptance (3.462,
+12 iterations), so this is reproducible arithmetic rather than noise between them, but it is
+still not evidence the cache raises acceptance. Read the 1 %, not the 8 %.
+
+So Stage B is *correct* -- PCC 0.999886, nine clean iterations, both target costs eliminated --
+and, at present, not worth enabling. The remaining prize is Stage C: fold the append and the
+argmax into the traced graph, which is what removes the 5.06 ms rather than relocating it.
 
 ## Artifacts
 
