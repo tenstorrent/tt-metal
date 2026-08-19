@@ -114,31 +114,53 @@ Facts worth keeping:
 
 ## Phase 3 -- Matmul transpose flag (Q@Kt)
 
-The flag already exists as a defaulted parameter on `matmul_init`
-(`tt/unified/math.hpp:397`) and reaches `matmul_block_init`. Nothing ever passes
-non-zero and `MatmulGeometry` has no field for it. Confirmed as the right
-mechanism: ttnn's SDPA does its QK matmul with `true /*transpose*/` and its PV
-matmul with `false` (`compute_common.hpp:1707` and `:1870`). No separate transpose
-op is needed.
+**DONE.** Landed after the shape refactor, which is what gave it a home: the transpose
+is the one matmul property shapes cannot derive, so it is the only thing left to state.
 
-- [ ] Decide: a `Transpose` template parameter on `MatmulGeometry`, or a
-      `.transposed()` method on `MatmulNode`. Geometry is likely cleaner -- it is
-      compile-time, and every restore site already has `G` in hand.
-- [ ] `tt/unified/math.hpp` -- **five** sites hardcode transpose, and every one of
-      them must carry the geometry's value. Miss a *restore* site and the error
-      only shows on the second output block, not the first:
-      - `:400` `matmul_init` -> `matmul_block_init` (already has the parameter)
-      - `:515` `bias_finish`'s restore
-      - `:565` `Dst`-mode reload restore
-      - `:574` `matmul_block` itself, in the k loop
-      - `:678` `L1`-mode restore
-- [ ] Both `constexpr uint32_t kTranspose = 0;` declarations (`:486`, `:553`) go away
-- [ ] Test against `torch.matmul(q, k.transpose(-1, -2))`
+- [x] `enum class TransposeB { No, Yes }` -- not a bool, so call sites read
+      `matmul<u::TransposeB::Yes>(a, b)` rather than `matmul<true>(a, b)`
+- [x] `MatmulGeometry<SA, SB, Tr>` carries it; `MatmulNode<SA, SB, Tr, Chain>` threads it
+- [x] `matmul_init<SA, SB, Tr>` -- the transpose became compile-time here too
+- [x] Both `kTranspose` constants now read `G::transpose`, covering all four downstream
+      sites in one place
+- [x] `unified_kernels/matmul.cpp` names the flag ONCE as `kTransposeB` and passes it to
+      both `matmul_init` and every `matmul()`
+- [x] `test_unified_matmul_transpose.py` -- a real A@B.T over 11 configurations
 
-**Done when:** a transposed matmul matches torch; a fused-bias transposed matmul
-still matches; and a **multi-block** (`num_blocks > 1`) transposed matmul matches
-in both `Dst` and `L1` modes -- that last one is the only thing that exercises the
-reload restores at `:565` and `:678`.
+### What the flag actually is
+
+A PER-TILE transpose of B, and nothing more. The tile grid is untouched. So the flag
+alone gives neither A@B nor A@B.T once B is wider than one tile; a true transpose needs
+the reader to place page (r, c) at slot (c, r) as well. The test supplies that half from
+the host and matches torch's `a @ b.T` to 0.005-0.009 across all 11 rows.
+
+### Coverage boundary, stated because it is not obvious
+
+Forcing each site to `transpose=0` shows what each is worth:
+
+| site | what fails |
+|---|---|
+| `matmul_block` | every transposed row |
+| Dst reload restore | **only** `k_blocks>=2` in Dst mode -- all five single-block rows pass |
+| `bias_finish` restore | nothing |
+| L1 biased-finish restore | nothing |
+
+The last two are unreachable rather than untested: both restore the FPU "for the next
+output block", and no kernel here emits more than one output block per launch. Their
+transpose argument is correct by construction and unverified by execution. The first
+kernel that loops output blocks -- attention, over Q chunks -- makes them live and they
+must be re-verified then.
+
+The middle row is the one that justifies the multi-block cases: a single-block suite
+passes a missing transpose in the Dst reload path.
+
+### Deferred
+
+`matmul_init`'s transpose must match every `matmul()`'s, and nothing can check that
+across two calls. Resolved the way ttnn resolves it: one named constant in the kernel,
+used twice. A `matmul_nt(a, b)` paired with a grid-transposing loader -- so the two
+halves cannot be separated -- is the sugar worth revisiting once the attention kernel
+has written the pairing once by hand.
 
 ## Phase 4 -- Data-format reconfig between SFPU tree leaves
 
