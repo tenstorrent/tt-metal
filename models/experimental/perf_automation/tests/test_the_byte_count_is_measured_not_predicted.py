@@ -88,7 +88,10 @@ def test_r1_mixed_precision_is_summed_as_it_actually_is():
     c = census([L(), L()])
     want = 2 * (3840 * 15360 * 1.0625 + 3840 * 15360 * 0.5625)
     assert abs(c["weight_bytes"] - want) < 1, (c["weight_bytes"], want)
-    assert c["complete"] is True
+    # `complete` means "usable as the model's byte count", which now also requires a checkpoint to
+    # tell a weight from a runtime tensor -- there is none here. What this test is about is the
+    # dtype summation, and that is what it asserts.
+    assert c["unknown_dtype_tensors"] == 0
 
 
 def test_r1_a_shared_tensor_is_counted_once():
@@ -109,7 +112,8 @@ def test_r1_a_shared_tensor_is_counted_once():
 def test_r1_the_marker_states_enough_to_judge_it():
     c = census(_T((32, 32), _DT("BFLOAT16")), scope="pipeline")
     m = marker(c)
-    assert m.startswith("TRACE_WEIGHT_BYTES=") and "scope=pipeline" in m and "complete=1" in m
+    # complete=0 without a checkpoint: the census cannot classify weights from scratch, and says so.
+    assert m.startswith("TRACE_WEIGHT_BYTES=") and "scope=pipeline" in m and "complete=" in m
 
 
 def test_r1_dtype_names_come_from_ttnn_or_torch_alike():

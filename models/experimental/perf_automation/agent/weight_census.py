@@ -176,16 +176,21 @@ _NEVER_WALK = (str, bytes, bytearray, int, float, bool, complex, type(None))
 # from seq_len; the whole reason the two terms are separate is that weights are flat in the token
 # count and KV is linear in it.
 #
-# Skipped by ATTRIBUTE NAME, not by shape. The pipeline attaches them as named attributes --
-# `generator.tt_kv_cache`, `generator.page_table` (pipeline.py:206) -- so the structure already says
-# what these are. Matching on shape instead would mean re-deriving max_seq x kv_heads x layers x
-# head_dim per model and would silently mis-file any weight that happened to share it.
-_CACHE_ATTRS = ("kv_cache", "kvcache", "page_table", "paged_cache", "cache")
-
-
-def _is_cache_attr(name: str) -> bool:
-    n = str(name).lower().lstrip("_")
-    return any(c in n for c in _CACHE_ATTRS)
+# THE CHECKPOINT DECIDES, NOT A LIST OF NAMES. This skipped any attribute whose name contained one
+# of ("kv_cache", "kvcache", "page_table", "paged_cache", "cache") -- a substring match, defended on
+# the grounds that the pipeline attaches caches as named attributes. It does, in the models that
+# list was written against. Voxtral calls its cache `kv`, which matches none of them, and 83.9 MB of
+# KV cache was counted as model weights.
+#
+# The test that does not care what anything is called is two lines below and always was: a tensor
+# whose element count appears in the CHECKPOINT was loaded from the file, and one whose count
+# appears nowhere in it was made at runtime. That is true of a KV cache, an accumulator and a
+# staging buffer alike, in any naming convention, for a model nobody has written yet.
+#
+# It needed a checkpoint to compare against, and nothing passed one until 2026-08-19 -- so the name
+# list was the only filter that ever ran. With the checkpoint wired, it is redundant; without one,
+# the census now reports itself INCOMPLETE rather than quietly counting scratch as weights, and
+# every consumer already refuses an incomplete census.
 
 
 def _walkable(obj) -> bool:
@@ -452,7 +457,7 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
                 continue
             d = getattr(obj, "__dict__", None)
             if isinstance(d, dict):
-                queue.extend([(v, path + (k,)) for k, v in d.items() if _walkable(v) and not _is_cache_attr(k)])
+                queue.extend([(v, path + (k,)) for k, v in d.items() if _walkable(v)])
         except Exception:  # noqa: BLE001 -- one unwalkable node must not lose the whole census
             continue
     total = sum(t["numel"] * bytes_per_elem(t["dtype"]) for t in tensors)
@@ -494,7 +499,17 @@ def census(root, scope: str = "model", max_nodes: int = 2_000_000, checkpoint=No
         "scratch_bytes": int(round(scratch_bytes)),
         "checkpoint_matched": bool(ckpt),
         "unknown_dtype_tensors": unknown,
-        "complete": unknown == 0 and bool(tensors),
+        # AND A CHECKPOINT TO TELL A WEIGHT FROM SCRATCH. Without one, every resident tensor is
+        # counted -- KV caches, accumulators, staging buffers -- and the total is not a weight
+        # figure at all. gemma-3 reported 15.49 GB that way for about 8.6 GB of weights. That is an
+        # OVERCOUNT, so it reads as too LOW a ceiling, which is the direction that lets a run
+        # believe it has headroom it does not have.
+        #
+        # Incomplete is the honest answer, and it already has consequences: perf_target refuses an
+        # incomplete census outright rather than using it as a bound, and falls back to the
+        # checkpoint's own byte count -- which is exactly the right answer when no checkpoint was
+        # available to classify against.
+        "complete": unknown == 0 and bool(tensors) and _have_ckpt,
         "source": "device census (built model)",
     }
 
