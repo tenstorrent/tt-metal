@@ -339,7 +339,8 @@ Block<S> Accumulator<S, Mode>::accumulate(const Node& node, bool finish, Epilogu
         // Apply the epilogue to a bare-chain node of the same geometry to
         // recover just the ops it adds; those are the finish-only ones. The
         // node's own chain stays per-step.
-        using Bare = MatmulNode<typename Node::lhs_shape, typename Node::rhs_shape, expr::UnaryChain<>>;
+        using Bare =
+            MatmulNode<typename Node::lhs_shape, typename Node::rhs_shape, Node::transpose_b, expr::UnaryChain<>>;
         using Fused = decltype(epilogue(std::declval<Bare>()));
         static_assert(
             is_fpu_fusion<Fused>::value,
@@ -411,9 +412,9 @@ auto rsqrt(const ComputeBlock<S>& b) {
     return expr::Un<RsqrtOp, TileSource<S>>{{}, as_node(b)};
 }
 
-template <typename SA, typename SB>
+template <TransposeB Tr, typename SA, typename SB>
 auto matmul(const ComputeBlock<SA>& a, const ComputeBlock<SB>& b) {
-    return matmul(as_node(a), as_node(b));
+    return matmul<Tr>(as_node(a), as_node(b));
 }
 
 template <ReduceAxis Axis, typename SB, typename SC>
