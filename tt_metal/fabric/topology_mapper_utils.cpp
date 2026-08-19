@@ -257,10 +257,6 @@ TopologyMappingResult map_mesh_to_physical(
     return result;
 }
 
-// NOTE: build_adjacency_map_logical(const MeshGraph&) was removed — it had no callers, and MeshGraph stays in
-// fabric (this TU is part of the runtime-free topology library). The MeshGraph-based logical builders that ARE
-// used live in topology_mapper.cpp.
-
 std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
     tt::tt_metal::ClusterType cluster_type,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
@@ -691,9 +687,6 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
         mesh_adjacency_graphs, requested_intermesh_connections, requested_intermesh_ports);
 }
 
-// The MeshGraph overload lives in topology_mapper.cpp (fabric), because MeshGraph stays in fabric while this TU
-// is part of the runtime-free topology library. It builds the pieces from the MeshGraph and forwards to this
-// exposed "parts" overload.
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
     const std::map<MeshId, ::tt::tt_fabric::AdjacencyGraph<::tt::tt_fabric::FabricNodeId>>& mesh_adjacency_graphs,
     const ::tt::tt_fabric::RequestedIntermeshConnections& requested_intermesh_connections,

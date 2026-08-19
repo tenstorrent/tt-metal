@@ -133,10 +133,6 @@ tt_reuse_precompile_headers(scaleout_tools TT::CommonPCH)
 
 install(TARGETS scaleout_tools EXPORT Metalium LIBRARY COMPONENT metalium-runtime FILE_SET api COMPONENT metalium-dev)
 
-# NOTE: the offline FSD->PSD builder (tools/scaleout/fsd_to_psd/fsd_to_psd.cpp) is compiled into the lean
-# TT::ScaleoutTopology static library (tt_metal/fabric/CMakeLists.txt), alongside PSD/MGD/PGD, the topology
-# solver, and the topology mapper utils, so all the runtime-free topology code lives in one library.
-
 add_executable(2d_big_mesh_cabling_gen)
 target_sources(2d_big_mesh_cabling_gen PRIVATE ${SCALEOUT_2D_BIG_MESH_CABLING_GEN_SRCS})
 

@@ -87,9 +87,6 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(con
     return result;
 }
 
-// build_adjacency_graph_logical(const MeshGraph&) is defined in topology_mapper.cpp (fabric) — MeshGraph stays in
-// fabric while this TU is part of the runtime-free topology library. The MeshGraphDescriptor overload above is the
-// runtime-free path (used by generate_rank_bindings).
 
 std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_graph_physical(
     tt::tt_metal::ClusterType /*cluster_type*/,

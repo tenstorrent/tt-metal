@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unit tests for the offline FSD -> PSD builder (tools/scaleout/fsd_to_psd).
+// Unit tests for the offline FSD -> PSD builder (physical_descriptor_builder).
 // Ported/adapted from tenstorrent/tt-fabric-manager tests/unit/topology_mapper_test.cpp (FSD cases).
 
 #include <cstdint>
@@ -11,7 +11,7 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/experimental/fabric/fsd_to_psd.hpp>
+#include <tt-metalium/experimental/fabric/physical_descriptor_builder.hpp>
 #include "protobuf/factory_system_descriptor.pb.h"
 #include "protobuf/physical_system_descriptor.pb.h"
 
@@ -58,8 +58,8 @@ FSD make_two_host_fsd() {
     return fsd;
 }
 
-TEST(FsdToPsd, EnumeratesAsicsAndRanks) {
-    auto psd = build_psd_from_fsd(make_two_host_fsd());
+TEST(PhysicalDescriptorBuilder, EnumeratesAsicsAndRanks) {
+    auto psd = build_physical_descriptor(make_two_host_fsd());
 
     // 3 ASICs from the union of endpoints: (0,0,0), (0,0,1), (1,0,0).
     EXPECT_EQ(psd.asic_descriptors_size(), 3);
@@ -80,8 +80,8 @@ TEST(FsdToPsd, EnumeratesAsicsAndRanks) {
     }
 }
 
-TEST(FsdToPsd, EdgesAreBidirectionalAndLocalFlagged) {
-    auto psd = build_psd_from_fsd(make_two_host_fsd());
+TEST(PhysicalDescriptorBuilder, EdgesAreBidirectionalAndLocalFlagged) {
+    auto psd = build_physical_descriptor(make_two_host_fsd());
     ASSERT_TRUE(psd.has_system_graph());
 
     // Count edges and how many are marked local, per host, across the asic_connectivity_graph.
@@ -112,27 +112,27 @@ TEST(FsdToPsd, EdgesAreBidirectionalAndLocalFlagged) {
     EXPECT_EQ(exit_counts["hostB"], 1);
 }
 
-TEST(FsdToPsd, ConnectedComponentsSplit) {
+TEST(PhysicalDescriptorBuilder, ConnectedComponentsSplit) {
     // Connected (cross-host link present) => one PSD.
-    EXPECT_EQ(build_psds_from_fsd(make_two_host_fsd()).size(), 1u);
+    EXPECT_EQ(build_physical_descriptors(make_two_host_fsd()).size(), 1u);
 
     // Remove the cross-host link => two independent single-host components => two PSDs.
     FSD fsd = make_two_host_fsd();
     fsd.mutable_eth_connections()->mutable_connection()->RemoveLast();  // drop the cross-host connection
     // hostB now has no eth_connections; it still forms its own group.
-    auto psds = build_psds_from_fsd(fsd);
+    auto psds = build_physical_descriptors(fsd);
     EXPECT_EQ(psds.size(), 2u);
 }
 
-TEST(FsdToPsd, ThrowsOnOutOfRangeHostId) {
+TEST(PhysicalDescriptorBuilder, ThrowsOnOutOfRangeHostId) {
     FSD fsd = make_two_host_fsd();
     // Point an endpoint at a non-existent host_id.
     fsd.mutable_eth_connections()->mutable_connection(0)->mutable_endpoint_b()->set_host_id(99);
-    EXPECT_THROW(build_psd_from_fsd(fsd), std::runtime_error);
+    EXPECT_THROW(build_physical_descriptor(fsd), std::runtime_error);
 }
 
-TEST(FsdToPsd, LoadThrowsOnMissingFile) {
-    EXPECT_THROW(load_fsd_textproto("/nonexistent/path/to/fsd.textproto"), std::runtime_error);
+TEST(PhysicalDescriptorBuilder, LoadThrowsOnMissingFile) {
+    EXPECT_THROW(load_factory_descriptor("/nonexistent/path/to/fsd.textproto"), std::runtime_error);
 }
 
 }  // namespace

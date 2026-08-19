@@ -172,9 +172,6 @@ TopologyMappingResult map_mesh_to_physical(
     const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
     const TopologyMappingConfig& config = {});
 
-// build_adjacency_map_logical(const MeshGraph&) removed — no callers; MeshGraph-based logical builders live in
-// topology_mapper.cpp (fabric) since MeshGraph stays in fabric.
-
 /**
  * @brief Build physical adjacency maps from system descriptor connectivity
  *
@@ -309,14 +306,11 @@ struct LogicalMultiMeshGraph {
  *
  * @param mesh_graph Reference to the mesh graph object containing fabric topology
  * @return LogicalMultiMeshGraph containing mesh-level graph, internal mesh graphs, and optional exit node graphs
- *
- * NOTE: the MeshGraph overload is defined in topology_mapper.cpp (fabric) — MeshGraph stays in fabric while the
- * rest of this file is compiled into the runtime-free topology library. It forwards to the "parts" overload below.
  */
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph);
 
 // "parts" overload: assemble the multi-mesh graph from already-built per-mesh adjacency graphs + requested
-// intermesh connections/ports. Exposed so the MeshGraph overload (in fabric) can call the impl that lives here.
+// intermesh connections/ports.
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
     const std::map<MeshId, ::tt::tt_fabric::AdjacencyGraph<::tt::tt_fabric::FabricNodeId>>& mesh_adjacency_graphs,
     const ::tt::tt_fabric::RequestedIntermeshConnections& requested_intermesh_connections,

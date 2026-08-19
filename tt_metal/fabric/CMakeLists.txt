@@ -77,13 +77,13 @@ endif()
 target_include_directories(
     scaleout_topology
     PRIVATE
-        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>" # tt-metalium public headers (incl fsd_to_psd.hpp)
+        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>" # tt-metalium public headers (incl physical_descriptor_builder.hpp)
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scaleout # board/board.hpp
     SYSTEM
     PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR} # this lib's generated proto headers
-        ${Metalium_BINARY_DIR}/tools/scaleout # scaleout-generated FSD proto header (for fsd_to_psd)
+        ${Metalium_BINARY_DIR}/tools/scaleout # scaleout-generated FSD proto header (for physical_descriptor_builder)
 )
 target_link_libraries(
     scaleout_topology

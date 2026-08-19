@@ -34,7 +34,7 @@ set(TOPOLOGY_SOURCES
     physical_grouping_descriptor_core.cpp
     physical_grouping_descriptor_graph_building.cpp
     physical_grouping_descriptor_matching.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/scaleout/fsd_to_psd/fsd_to_psd.cpp
+    physical_descriptor_builder.cpp
 )
 
 set(FABRIC_SOURCES

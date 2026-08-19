@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// fsd_to_psd.hpp - Offline FactorySystemDescriptor (FSD) -> PhysicalSystemDescriptor (PSD) conversion.
+// physical_descriptor_builder.hpp - Offline FactorySystemDescriptor (FSD) -> PhysicalSystemDescriptor (PSD) conversion.
 //
 // These free functions build a `tt::fabric::proto::PhysicalSystemDescriptor` purely from a
 // `tt::scaleout_tools::fsd::proto::FactorySystemDescriptor` (the desired/as-built topology). They perform
@@ -30,11 +30,11 @@ namespace tt::scaleout_tools {
 // Convenience, proto-free entry point: parse an FSD textproto file and return the ready-to-use C++
 // PhysicalSystemDescriptor. Consumers with only a file path (e.g. tt-run / generate_rank_bindings) can use this
 // and need no protobuf headers on their include path.
-::tt::tt_metal::PhysicalSystemDescriptor build_psd_from_fsd_file(const std::string& fsd_path);
+::tt::tt_metal::PhysicalSystemDescriptor build_physical_descriptor_from_file(const std::string& fsd_path);
 
 // Parse a Factory System Descriptor textproto file from disk.
 // Throws std::runtime_error if the file cannot be read or parsed.
-::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor load_fsd_textproto(const std::string& path);
+::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor load_factory_descriptor(const std::string& path);
 
 // Build a PhysicalSystemDescriptor proto from a FactorySystemDescriptor (desired-state), fully offline.
 //
@@ -54,7 +54,7 @@ namespace tt::scaleout_tools {
 //
 // Throws std::runtime_error if an eth_connection endpoint references a host_id outside the hosts[] array, or
 // if a referenced (host_id, tray_id) has no matching entry in board_types.
-::tt::fabric::proto::PhysicalSystemDescriptor build_psd_from_fsd(
+::tt::fabric::proto::PhysicalSystemDescriptor build_physical_descriptor(
     const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd);
 
 // Build one PhysicalSystemDescriptor per connected component of FSD hosts.
@@ -62,9 +62,9 @@ namespace tt::scaleout_tools {
 // Hosts are partitioned into disjoint connected components (two hosts are connected when an eth_connection
 // has its endpoints on different hosts, directly or transitively). Each returned PSD covers exactly one
 // component: a sub-FSD restricted to that component (with host_ids densely renumbered) is fed through
-// build_psd_from_fsd above, so each descriptor is self-consistent and its host_to_rank is 0-based within the
+// build_physical_descriptor above, so each descriptor is self-consistent and its host_to_rank is 0-based within the
 // group. Components are ordered deterministically by their group's lowest member host name.
-std::vector<::tt::fabric::proto::PhysicalSystemDescriptor> build_psds_from_fsd(
+std::vector<::tt::fabric::proto::PhysicalSystemDescriptor> build_physical_descriptors(
     const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd);
 
 }  // namespace tt::scaleout_tools

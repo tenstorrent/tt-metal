@@ -22,4 +22,4 @@ set(TEST_INSTANCE_FILTER_SRCS test_instance_filter.cpp)
 
 set(TEST_GENERATE_RANK_BINDINGS_SRCS test_generate_rank_bindings.cpp)
 
-set(TEST_FSD_TO_PSD_SRCS test_fsd_to_psd.cpp)
+# physical_descriptor_builder test moved to tests/tt_metal/tt_fabric/fabric_router/ (part of fabric_unit_tests)

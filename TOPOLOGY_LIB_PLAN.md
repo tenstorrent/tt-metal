@@ -22,7 +22,7 @@ TT::ScaleoutTools  (OBJECT, exists today)          TT::ScaleoutTopology  (STATIC
                                                        · live discovery · links ScaleoutTopology
 ```
 
-They meet at the **FSD proto**: `CablingGenerator` produces it; `build_psd_from_fsd()` consumes it. No cycles.
+They meet at the **FSD proto**: `CablingGenerator` produces it; `build_physical_descriptor()` consumes it. No cycles.
 
 ---
 
@@ -33,7 +33,7 @@ They meet at the **FSD proto**: `CablingGenerator` produces it; `build_psd_from_
 | FSD proto, FSD `utils`/`query` | `scaleout_tools` | no |
 | **MGD, PSD, PGD** (proto + class) | `scaleout_topology` | **yes** |
 | topology **solver** + **mapper utils** | `scaleout_topology` | **yes** |
-| **FSD → PSD** builder (`fsd_to_psd`) | `scaleout_topology` | new |
+| **FSD → PSD** builder (`physical_descriptor_builder`) | `scaleout_topology` | new |
 | **mesh_graph** (`MeshGraph` class) | `fabric` | **no — stays** |
 | runtime protos (router/port/intermesh) | `fabric` | no |
 
@@ -41,15 +41,15 @@ They meet at the **FSD proto**: `CablingGenerator` produces it; `build_psd_from_
 
 ## 3. The only real code change: relocate 3 functions
 
-`mesh_graph` stays in `fabric`, so the **3 functions that touch `MeshGraph`** move out of the solver/mapper-utils
-into a new fabric-side TU `tt_metal/fabric/topology_logical_adapters.cpp`:
+`mesh_graph` stays in `fabric`, so the **3 functions that touch `MeshGraph`** are handled as follows (no new file):
 
-- `build_adjacency_graph_logical(const MeshGraph&)`  ← `topology_solver.cpp`
-- `build_adjacency_map_logical(const MeshGraph&)`  ← `topology_mapper_utils.cpp`
-- `build_logical_multi_mesh_adjacency_graph(const MeshGraph&)`  ← `topology_mapper_utils.cpp`
+- `build_adjacency_map_logical(const MeshGraph&)` — had no callers → **deleted**.
+- `build_adjacency_graph_logical(const MeshGraph&)` (was `topology_solver.cpp`) → **moved into `topology_mapper.cpp`**.
+- `build_logical_multi_mesh_adjacency_graph(const MeshGraph&)` (was `topology_mapper_utils.cpp`) → **moved into
+  `topology_mapper.cpp`**, forwarding to an exposed "parts" overload that stays in `topology_mapper_utils.cpp`.
 
 Everything else in the solver/mapper-utils is `MeshGraph`-free (the runtime-free path uses the **MGD** overload,
-which `generate_rank_bindings` already uses). No constructor/signature changes — just relocating 3 definitions.
+which `generate_rank_bindings` already uses).
 
 > Keeping `mesh_graph` in fabric means `mesh_graph.cpp` and `fabric_host_utils.*` stay **untouched** — simpler
 > than moving it.
@@ -72,9 +72,9 @@ the `tt_fabric` router / discovery tests. Mechanical; mirrors what `scaleout_too
 - **PSD / MGD / PGD / solver / mapper-utils headers don't move** — they're already tt-metalium API headers under
   `tt_metal/api/tt-metalium/experimental/fabric/`, included as `<tt-metalium/experimental/fabric/*.hpp>`. Only the
   `.cpp` *compilation* moves to `scaleout_topology`; the headers and their include paths are unchanged.
-- **`fsd_to_psd.hpp` is promoted** into that same API tree →
-  `tt_metal/api/tt-metalium/experimental/fabric/fsd_to_psd.hpp`, included as
-  `<tt-metalium/experimental/fabric/fsd_to_psd.hpp>` (consistent with its siblings, installable for FM). The `.cpp`
+- **`physical_descriptor_builder.hpp` is promoted** into that same API tree →
+  `tt_metal/api/tt-metalium/experimental/fabric/physical_descriptor_builder.hpp`, included as
+  `<tt-metalium/experimental/fabric/physical_descriptor_builder.hpp>` (consistent with its siblings, installable for FM). The `.cpp`
   stays where it is — no source files move, only this one header is promoted.
 - `.pb.h` proto headers are internal build artifacts (resolved from the generated dir), not part of the public
   include surface.
@@ -87,12 +87,12 @@ the `tt_fabric` router / discovery tests. Mechanical; mirrors what `scaleout_too
 target_link_libraries(generate_rank_bindings PRIVATE tt_metal TT::ScaleoutTopology scaleout_tools ...)
 ```
 ```cpp
-#include <tt-metalium/experimental/fabric/fsd_to_psd.hpp>
+#include <tt-metalium/experimental/fabric/physical_descriptor_builder.hpp>
 
 PhysicalSystemDescriptor psd = [&]() -> PhysicalSystemDescriptor {
     const auto& fsd_path = MetalContext::instance().rtoptions().get_factory_system_descriptor_path();
     if (!fsd_path.empty()) {
-        return tt::scaleout_tools::build_psd_from_fsd_file(fsd_path);   // path in → C++ PSD out (no protos)
+        return tt::scaleout_tools::build_physical_descriptor_from_file(fsd_path);   // path in → C++ PSD out (no protos)
     }
     return run_psd_discovery();                                        // live fallback
 }();
@@ -111,16 +111,16 @@ Or FM links a prebuilt tt-metalium (requires the lib installed):
 ```cmake
 # tt-metal side, one-time:
 install(TARGETS scaleout_topology EXPORT Metalium ARCHIVE COMPONENT metalium-dev)
-# fsd_to_psd.hpp already lives in the tt-metalium API tree, installed with the other tt-metalium headers
+# physical_descriptor_builder.hpp already lives in the tt-metalium API tree, installed with the other tt-metalium headers
 # FM side:
 find_package(Metalium REQUIRED)
 target_link_libraries(tt-fabric-manager-controller PRIVATE TT::ScaleoutTopology protobuf::libprotobuf)
 ```
 **Code** — FM drops its FSD→PSD fork and calls the shared builder:
 ```cpp
-#include <tt-metalium/experimental/fabric/fsd_to_psd.hpp>
+#include <tt-metalium/experimental/fabric/physical_descriptor_builder.hpp>
 
-auto psd_proto = tt::scaleout_tools::build_psd_from_fsd(fsd);   // was FM's own copy of this
+auto psd_proto = tt::scaleout_tools::build_physical_descriptor(fsd);   // was FM's own copy of this
 // FM's existing mapping pipeline is unchanged:
 auto psd  = tt::tt_metal::PhysicalSystemDescriptor(psd_proto);
 auto phys = tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
@@ -167,7 +167,7 @@ is pure data-structure / graph work that touches no hardware.
 target_link_libraries(tt-fabric-manager-controller PRIVATE TT::ScaleoutTopology protobuf::libprotobuf)
 ```
 
-**Proof it works:** the unit test `test_fsd_to_psd` links `TT::ScaleoutTopology` and — per `ldd` — **does not link
+**Proof it works:** the unit test `fabric_unit_tests (fabric_router/test_physical_descriptor_builder)` links `TT::ScaleoutTopology` and — per `ldd` — **does not link
 `libtt_metal`**; it runs the FSD→PSD path with zero runtime. FM's controller gets the same lightweight closure.
 
 **Only compile-time requirement:** the tt-metalium API *headers* must be available (installed with the package, or
@@ -178,15 +178,15 @@ via FM's vendored submodule) and FM must use the same protobuf. Those are header
 ## 6. API surface
 
 ```cpp
-// tt_metal/api/tt-metalium/experimental/fabric/fsd_to_psd.hpp   (namespace tt::scaleout_tools)
+// tt_metal/api/tt-metalium/experimental/fabric/physical_descriptor_builder.hpp   (namespace tt::scaleout_tools)
 
 // Proto-FREE entry point (recommended for path-based consumers like tt-run): file path in, C++ PSD out.
-tt::tt_metal::PhysicalSystemDescriptor build_psd_from_fsd_file(const std::string& fsd_path);
+tt::tt_metal::PhysicalSystemDescriptor build_physical_descriptor_from_file(const std::string& fsd_path);
 
 // Proto in / proto out (for consumers that already hold the FSD proto, e.g. Fabric Manager / gRPC):
-FactorySystemDescriptor load_fsd_textproto(const std::string& path);
-tt::fabric::proto::PhysicalSystemDescriptor build_psd_from_fsd(const FactorySystemDescriptor&);
-std::vector<tt::fabric::proto::PhysicalSystemDescriptor> build_psds_from_fsd(const FactorySystemDescriptor&);
+FactorySystemDescriptor load_factory_descriptor(const std::string& path);
+tt::fabric::proto::PhysicalSystemDescriptor build_physical_descriptor(const FactorySystemDescriptor&);
+std::vector<tt::fabric::proto::PhysicalSystemDescriptor> build_physical_descriptors(const FactorySystemDescriptor&);
 
 // + the topology types now in this lib: PhysicalSystemDescriptor(proto ctor), MeshGraphDescriptor,
 //   PhysicalGroupingDescriptor, build_physical_multi_mesh_adjacency_graph, build_logical_..._graph(MGD),
@@ -195,26 +195,30 @@ std::vector<tt::fabric::proto::PhysicalSystemDescriptor> build_psds_from_fsd(con
 
 **Two entry points, by consumer need** (the FSD proto is inherent to the *input*, so a fully proto-free API is the
 path-based one):
-- `build_psd_from_fsd_file(path)` → returns the C++ `PhysicalSystemDescriptor`; caller needs **no** protobuf headers.
+- `build_physical_descriptor_from_file(path)` → returns the C++ `PhysicalSystemDescriptor`; caller needs **no** protobuf headers.
   Best for tt-run / `generate_rank_bindings` (they only have a path). **Implemented + build-verified.**
-- `build_psd_from_fsd(FactorySystemDescriptor)` → proto in/out, for FM which already holds (and re-serializes) the
+- `build_physical_descriptor(FactorySystemDescriptor)` → proto in/out, for FM which already holds (and re-serializes) the
   proto over gRPC.
 
 ---
 
-## 7. Status
+## 7. Status — implemented on this branch
 
-- ✅ Feasibility proven (superset branch that also moved `mesh_graph`): `scaleout_topology` + `test_fsd_to_psd`
-  build clean; the test links with **no `libtt_metal`**; 5/5 FSD→PSD gtests pass.
-- ✅ `fabric` compiles with the sources removed; `generate_rank_bindings` needs the explicit
-  `TT::ScaleoutTopology` link (confirmed).
-- ☐ Rework the branch to this "mesh_graph stays" layout (less code), add the ~dozen consumer links, rebuild.
+- ✅ `TT::ScaleoutTopology` created (PSD/MGD/PGD + solver + mapper-utils + `physical_descriptor_builder`), hidden
+  visibility; `mesh_graph` + the runtime `TopologyMapper` class stay in `fabric`; `fabric` links the new lib.
+- ✅ Builds clean: `scaleout_topology`, `fabric`, `libtt_metal.so`, `generate_rank_bindings`, `fabric_unit_tests`,
+  `test_physical_discovery`, and the scaleout tools/tests — with the explicit `TT::ScaleoutTopology` link.
+- ✅ CPU tests pass: `fabric_unit_tests` topology suites (MeshGraphDescriptor / PhysicalGroupingDescriptor /
+  TopologySolver / TopologySatEncoder / TopologyMapperUtils / PhysicalDescriptorBuilder) **280 passed, 0 failed**;
+  `test_cabling_descriptor_mgd_generation` 6/6; `test_physical_discovery` 5 pass/1 skip. The only failing suites
+  need real hardware (galaxy / live GSD).
 
-## 8. Steps
+## 8. What was done
 
-1. New `tt_metal/fabric/topology_logical_adapters.cpp` — the 3 relocated `MeshGraph` functions.
-2. `sources.cmake` / `CMakeLists.txt`: define `TOPOLOGY_SOURCES` + `scaleout_topology`; split protos; `fabric`
+1. The 3 `MeshGraph` functions: one deleted (unused), two moved into `topology_mapper.cpp` (§3).
+2. `sources.cmake` / `CMakeLists.txt`: `TOPOLOGY_SOURCES` + `scaleout_topology` (hidden vis); protos split; `fabric`
    links `TT::ScaleoutTopology`.
-3. `fsd_to_psd.{hpp,cpp}` + `test_fsd_to_psd.cpp` (done) compiled into the lib.
-4. Leave `mesh_graph.cpp` / `fabric_host_utils.*` untouched.
-5. Add `PRIVATE TT::ScaleoutTopology` to the ~dozen consumers.
+3. `physical_descriptor_builder.{hpp,cpp}` (header in the tt-metalium API tree, `.cpp` in `tt_metal/fabric/`)
+   compiled into the lib; test in `tests/tt_metal/tt_fabric/fabric_router/` (part of `fabric_unit_tests`).
+4. `mesh_graph.cpp` / `fabric_host_utils.*` left untouched.
+5. `PRIVATE TT::ScaleoutTopology` added to the consumers that reference the moved types.

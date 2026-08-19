@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// fsd_to_psd.cpp - Implementation of the offline FSD -> PSD builder.
+// physical_descriptor_builder.cpp - Implementation of the offline FSD -> PSD builder.
 //
 // Ported from tenstorrent/tt-fabric-manager controller/physical_system_descriptor_builder.cpp (FSD overloads).
 // Notable tt-metal adaptations vs. the Fabric Manager original:
@@ -10,7 +10,7 @@
 //     library) instead of a hand-maintained table, so it stays in sync with tt::BoardType automatically.
 //   - logging uses tt::LogFabric (Fabric Manager used its own tt::LogFabricManager category).
 
-#include <tt-metalium/experimental/fabric/fsd_to_psd.hpp>
+#include <tt-metalium/experimental/fabric/physical_descriptor_builder.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -146,7 +146,7 @@ std::vector<std::vector<uint32_t>> partition_fsd_hosts_by_connectivity(
 
 }  // namespace
 
-::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor load_fsd_textproto(const std::string& path) {
+::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor load_factory_descriptor(const std::string& path) {
     std::ifstream f(path);
     if (!f.is_open()) {
         throw std::runtime_error(fmt::format("Unable to open Factory System Descriptor file: {}", path));
@@ -159,12 +159,12 @@ std::vector<std::vector<uint32_t>> partition_fsd_hosts_by_connectivity(
     return fsd;
 }
 
-::tt::tt_metal::PhysicalSystemDescriptor build_psd_from_fsd_file(const std::string& fsd_path) {
+::tt::tt_metal::PhysicalSystemDescriptor build_physical_descriptor_from_file(const std::string& fsd_path) {
     // parse FSD -> PSD proto -> wrap in the C++ PhysicalSystemDescriptor (no protos leak to callers).
-    return ::tt::tt_metal::PhysicalSystemDescriptor(build_psd_from_fsd(load_fsd_textproto(fsd_path)));
+    return ::tt::tt_metal::PhysicalSystemDescriptor(build_physical_descriptor(load_factory_descriptor(fsd_path)));
 }
 
-::tt::fabric::proto::PhysicalSystemDescriptor build_psd_from_fsd(
+::tt::fabric::proto::PhysicalSystemDescriptor build_physical_descriptor(
     const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd) {
     ::tt::fabric::proto::PhysicalSystemDescriptor psd;
 
@@ -368,7 +368,7 @@ std::vector<std::vector<uint32_t>> partition_fsd_hosts_by_connectivity(
     return psd;
 }
 
-std::vector<::tt::fabric::proto::PhysicalSystemDescriptor> build_psds_from_fsd(
+std::vector<::tt::fabric::proto::PhysicalSystemDescriptor> build_physical_descriptors(
     const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd) {
     std::vector<::tt::fabric::proto::PhysicalSystemDescriptor> psds;
 
@@ -377,7 +377,7 @@ std::vector<::tt::fabric::proto::PhysicalSystemDescriptor> build_psds_from_fsd(
 
     psds.reserve(groups.size());
     for (const auto& members : groups) {
-        psds.push_back(build_psd_from_fsd(build_sub_fsd(fsd, members)));
+        psds.push_back(build_physical_descriptor(build_sub_fsd(fsd, members)));
     }
     return psds;
 }
