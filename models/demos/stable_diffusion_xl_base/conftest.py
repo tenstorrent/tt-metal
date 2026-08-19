@@ -436,6 +436,23 @@ _LORA_CI_V2_CACHE_ENDPOINT = os.environ.get(
 )
 
 
+def _endpoint_is_permitted(endpoint):
+    """Whether the CIv2 cache endpoint may be fetched from.
+
+    https anywhere; http only for the cluster-internal cache service. Everything else,
+    including file:// and plaintext to an external host, is refused.
+    """
+    import urllib.parse
+
+    parsed = urllib.parse.urlparse(endpoint)
+    if parsed.scheme == "https":
+        return True
+    if parsed.scheme != "http":
+        return False
+    host = parsed.hostname or ""
+    return host.endswith(".svc.cluster.local") or host in ("localhost", "127.0.0.1")
+
+
 def _fetch_lora_from_ci_v2_cache(cache_dir, filename):
     """Fetch a single adapter file from the CIv2 large-file cache.
 
@@ -454,10 +471,15 @@ def _fetch_lora_from_ci_v2_cache(cache_dir, filename):
     endpoint = f"{_LORA_CI_V2_CACHE_ENDPOINT}/{cache_dir}/{filename}"
     # Fetched in-process rather than by shelling out to wget: no OS command means
     # nothing for the endpoint override to be injected into, and no dependency on
-    # wget being installed on the runner. The scheme is checked because urlopen
-    # would otherwise honour file:// and turn the override into a local file read.
-    if not endpoint.startswith(("http://", "https://")):
-        logger.warning(f"Refusing non-HTTP CIv2 LoRA cache endpoint: {endpoint}")
+    # wget being installed on the runner.
+    #
+    # The endpoint is checked rather than trusted. urlopen would otherwise honour
+    # file://, turning the override into a local file read, and plaintext to an
+    # arbitrary host would be a real exposure. Cleartext is allowed only for the
+    # in-cluster cache service, whose traffic never leaves the cluster and which is
+    # the reason this fetch path exists at all; anything else must be TLS.
+    if not _endpoint_is_permitted(endpoint):
+        logger.warning(f"Refusing CIv2 LoRA cache endpoint {endpoint}: use https, or the in-cluster cache over http")
         return None
     try:
         with urllib.request.urlopen(endpoint, timeout=300) as response, open(target, "wb") as out:  # noqa: S310
