@@ -34,10 +34,14 @@ inline constexpr uint32_t MAX_GLOBAL_EXPERTS = tt::constants::TILE_HW;  // 1024
 // the compute kernel via a compile-time define, so each variant caches as a
 // distinct program. For SwiGluOai the alpha/limit are baked to the M3/gpt-oss
 // values (1.702 / 7.0, SwiGLUConfigGPTOSS) in the kernel — no extra params.
+// Likewise SituGlu bakes the Kimi K3 betas (beta_gate=4.0, beta_up=25.0,
+// SituGluConfigKimi).
 enum class RoutedExpertActivation : uint8_t {
     Silu = 0,  // plain SiLU SwiGLU: silu(gate) * up                      (DeepSeek default)
     SwiGluOai =
         1,  // clamped swigluoai: (clamp(up,±L)+1)·clamp(gate,max=L)·σ(α·clamp(gate,max=L))  (MiniMax-M3 / gpt-oss)
+    // SiTU-GLU: (beta_gate*tanh(gate/beta_gate)*sigmoid(gate)) * (beta_up*tanh(up/beta_up))  (Kimi K3)
+    SituGlu = 2,
 };
 
 // Attributes (the constants known at host time).

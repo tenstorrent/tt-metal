@@ -30,6 +30,7 @@ from helpers.param_config import (
     is_invalid_quasar_sfpu_format_combination,
     parametrize,
     runtime,
+    select_perf_input_dimensions,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -761,7 +762,8 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
     Functional mode sweeps dest-sync, implied-math, and both [32, 32]/[64, 64]
     dimensions. Performance mode intentionally keeps the complete op, format,
     dest_acc, and approximation coverage while pinning those three axes to
-    DestSync.Half, ImpliedMathFormat.Yes, and [32, 32].
+    DestSync.Half, ImpliedMathFormat.Yes, and the largest functional matrix
+    because none of the preferred perf matrices are supported.
 
     Returns: list of (mathop, fmt, dest_acc, dest_sync, implied_math_format,
     approx_mode, input_dimensions) tuples.
@@ -810,7 +812,11 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
                     if is_perf
                     else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
                 )
-                input_dims = ([32, 32],) if is_perf else cfg.input_dims
+                input_dims = (
+                    select_perf_input_dimensions(cfg.input_dims)
+                    if is_perf
+                    else cfg.input_dims
+                )
                 for dest_sync in dest_sync_modes:
                     for implied_math_format in implied_math_formats:
                         for approx_mode in approx_modes:
