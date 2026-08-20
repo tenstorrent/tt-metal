@@ -5,41 +5,39 @@
 #include <stdint.h>
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
+#include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 #include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
 
-void kernel_main() {
-    uint32_t input_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks = get_arg_val<uint32_t>(1);
-    uint32_t start_stick_id = get_arg_val<uint32_t>(2);
-    int32_t cos_angle = static_cast<int32_t>(get_arg_val<uint32_t>(3));
-    int32_t sin_angle = static_cast<int32_t>(get_arg_val<uint32_t>(4));
-    int32_t center_x = static_cast<int32_t>(get_arg_val<uint32_t>(5));
-    int32_t center_y = static_cast<int32_t>(get_arg_val<uint32_t>(6));
-    uint32_t fill_value_bf16 = get_arg_val<uint32_t>(7);
+template <
+    uint32_t input_stick_nbytes,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t input_channels,
+    uint32_t input_stick_nbytes_unaligned,
+    uint32_t fill_is_zero,
+    uint32_t burst_size>
+TT_KERNEL void reader_rotate_nearest(
+    uint32_t num_sticks,
+    uint32_t start_stick_id,
+    uint32_t cos_angle_bits,
+    uint32_t sin_angle_bits,
+    uint32_t center_x_bits,
+    uint32_t center_y_bits,
+    uint32_t fill_value_bf16) {
+    const int32_t cos_angle = static_cast<int32_t>(cos_angle_bits);
+    const int32_t sin_angle = static_cast<int32_t>(sin_angle_bits);
+    const int32_t center_x = static_cast<int32_t>(center_x_bits);
+    const int32_t center_y = static_cast<int32_t>(center_y_bits);
+    const auto input_tensor_accessor = TensorAccessor(tensor::input);
 
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(1);
-    constexpr uint32_t input_batch = get_compile_time_arg_val(2);
-    constexpr uint32_t input_height = get_compile_time_arg_val(3);
-    constexpr uint32_t input_width = get_compile_time_arg_val(4);
-    constexpr uint32_t input_channels = get_compile_time_arg_val(5);
-    constexpr uint32_t num_cb_pages = get_compile_time_arg_val(6);
-    constexpr uint32_t fill_cb_id = get_compile_time_arg_val(7);
-    constexpr uint32_t input_stick_nbytes_unaligned = get_compile_time_arg_val(8);
-    constexpr bool fill_is_zero = get_compile_time_arg_val(9) != 0;
-    constexpr uint32_t burst_size = get_compile_time_arg_val(10);
-
-    constexpr auto src_args = TensorAccessorArgs<11>();
-    const auto input_tensor_accessor = TensorAccessor(src_args, input_addr);
-
-    DataflowBuffer output_dfb(output_cb_id);
-    DataflowBuffer fill_dfb(fill_cb_id);
+    DataflowBuffer output_dfb(dfb::output);
+    DataflowBuffer fill_dfb(dfb::fill);
     Noc noc;
     UnicastEndpoint self_ep;
 
     uint32_t fill_stick_addr = fill_dfb.get_write_ptr();
-    if constexpr (fill_is_zero) {
+    if constexpr (fill_is_zero != 0) {
         zero_out_page(noc, fill_dfb);
     } else {
         volatile tt_l1_ptr uint32_t* fill_ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_stick_addr);
