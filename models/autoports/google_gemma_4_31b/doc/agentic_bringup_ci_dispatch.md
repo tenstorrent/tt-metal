@@ -543,6 +543,106 @@ kind as the chat-endpoint default: `wait_healthy_timeout_s = 1200` is marginal f
 a 31B model with a cold cache, and a run can fail for reasons unrelated to the
 model under test.
 
+## Run 32271862302 attempt 2: first green benchmarks run
+
+`gh run rerun --failed` on the timed-out attempt. Only `run-tests` re-ran; the
+resolved SHAs and the built image carried over, so the refs are identical to
+attempt 1 (tt-metal `589f30d44c29`, tt-inference-server `5352535a9a28`,
+vllm-tt-plugin `bd150c7e9d75`) and it landed on the same node,
+`120-qb2-p03t02`. **Conclusion: `completed/success`, 17/17 sweep points, every
+request successful, zero failure signatures.**
+
+### The timeout diagnosis, confirmed by controlled comparison
+
+| | Attempt 1 | Attempt 2 |
+| --- | --- | --- |
+| HF weight fetch | 7m 46s | **0s** (`Fetching 10 files: 100%|...| 10/10 [00:00<00:00, 4916.54it/s]`) |
+| Health wait | 16:47:18, killed at 1200 s | 08:08:30 -> **healthy 08:25:50** |
+| Elapsed | 1200 s (timeout) | **17m 20s / 1040 s**, 2m 40s spare |
+
+Same node, same image, same commit; the only difference is that
+`cache_root/weights/gemma-4-31B` was already populated by attempt 1. So the
+7m 46s download was the whole cause, and the model load itself takes ~17m 20s --
+which fits the 1200 s budget only when the download has already happened. This
+also settles the load-vs-block question left open above: the load **was**
+progressing, and needed roughly the 4m 45s that attempt 1 was short.
+
+### Corrections to two claims made earlier in this document
+
+- **"The load phase emits no progress output" is wrong.** The weight download logs
+  a `Fetching 10 files` progress bar with per-file timing. It lives in the
+  `docker_server/vllm_*.log` artifact, which had not been opened when that claim
+  was written. The *conversion* phase after the download is still silent, so the
+  progress-log suggestion stands for that phase only.
+- **"Reuse the built image so setup falls outside the health clock" was wrong on
+  the mechanism**, and would not have helped. The image pull took one second in
+  attempt 1; the eight minutes went to the weight download, which lands inside the
+  clock regardless of image state. What actually fixes it is cached *weights*, not
+  a cached image.
+
+### Results (median values, `vllm bench serve`, random dataset)
+
+| isl | conc | n | ok | Median TTFT | Median TPOT | t/s/u | Output tok/s |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 | 1 | 8 | 8 | 592.99 ms | 31.52 ms | 31.73 | 27.87 |
+| 128 | 32 | 256 | 256 | 3310.80 ms | 58.55 ms | 17.08 | **348.59** |
+| 128 (osl 1024) | 1 | 4 | 4 | 591.04 ms | 32.13 ms | 31.12 | 30.60 |
+| 128 (osl 1024) | 32 | 128 | 128 | 3322.69 ms | 63.08 ms | 15.85 | 482.91 |
+| 1024 | 1 | 4 | 4 | 803.09 ms | 32.75 ms | 30.53 | 25.79 |
+| 1024 | 32 | 128 | 128 | 9975.07 ms | 67.09 ms | 14.91 | 221.40 |
+| 2048 | 32 | 128 | 128 | 17106.61 ms | 67.90 ms | 14.73 | 159.17 |
+| 4096 | 26 | 104 | 104 | 25545.24 ms | 64.91 ms | 15.41 | 95.93 |
+| 8192 | 13 | 26 | 26 | 26996.85 ms | 53.00 ms | 18.87 | 46.80 |
+| 16384 | 6 | 12 | 12 | 26851.07 ms | 46.00 ms | 21.74 | 22.13 |
+| 32768 | 3 | 3 | 3 | 37492.57 ms | 43.48 ms | 23.00 | 8.93 |
+| 65536 | 1 | 1 | 1 | 29903.73 ms | 35.57 ms | 28.11 | 3.72 |
+
+Single-user decode holds 28-32 t/s/u from 128 to 65,536 tokens of context; peak
+aggregate output is 482.91 tok/s at isl=128/osl=1024/conc=32.
+
+### Two figures that do not match the existing evidence
+
+**TTFT is ~6x the recorded local value.** 592.99 ms at conc=1 against 100.91 ms in
+`comparison_autoport_vs_demos_p300x2.md`, and 3310.80 ms at conc=32 against
+100.75 ms. The local measurements used `--backend vllm --endpoint /v1/completions`;
+this run used `--backend openai-chat --endpoint /v1/chat/completions` with the
+passthrough template. So the two are **not like-for-like**, and no TTFT regression
+should be claimed from this run. Candidates, in order of suspicion: per-request
+chat-template rendering, other per-request work on the chat path, or trace capture
+inside the measured window. Landing the driver fix
+(`fix/benchmark-completions-endpoint-for-base-models`) would restore
+comparability, which is a second reason to prefer it over the spec stopgap.
+
+**KV cache reads 113,280 tokens, not 103,872.** Every prior measurement in these
+docs reports `GPU KV cache size: 103,872` and derives it as the per-cache-group
+figure (`9740 blocks // 6 groups * 64`), with `1.00x` concurrency following from
+it. This run reports 113,280 with the same `1.00x`. The stripped spec omits
+`GEMMA4_MAX_TOKENS_ALL_USERS`, which the `gemma-4-31B-it` entry does set -- the
+likely cause, and it means the pool is sized differently from every figure
+recorded before. Unresolved.
+
+Also unresolved: the container entrypoint logs `Set MESH_DEVICE to P300x2` and
+`TT_CACHE_PATH .../cache_gemma-4-31B/P300x2`, while the spec sets `P150x4` and the
+worker reports `MESH_DEVICE=P150x4`. The spec value wins where it matters, but
+something upstream derives `P300x2` and uses it in the cache path. Given
+`comparison_autoport_vs_demos_p300x2.md` records that the p300_x2 descriptor "laid
+the TP collectives over the wrong fabric links and corrupted decode logits", this
+deserves its own check.
+
+### What this run does and does not establish
+
+Established: model resolution, image build, server bring-up, that the **autoport**
+serves rather than `models/demos/gemma4`, that the chat-template stopgap works,
+and throughput/latency across 17 shapes with zero failed requests.
+
+Not established: any accuracy claim. This was `--workflow benchmarks`; no eval ran
+(`No EvalConfig registered for model='gemma-4-31B'`), by design, since the eval
+entry was left out of the spec. The sampling change was **exercised** -- requests
+reached the model and the greedy guard did not fire -- but `vllm bench serve` runs
+`--ignore-eos` over random tokens and never inspects output, so "non-greedy
+sampling produces correct tokens" remains unverified. That needs the release lane
+or a qualitative check.
+
 ## Run history from this host
 
 | Run | Lane | Refs (tt-metal / TTI) | Outcome |
@@ -552,3 +652,4 @@ model under test.
 | [32245014913](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/32245014913) | benchmarks | branch / `...-on-release-flow` @ `0474b2c8` | **failed** `determine-server-type` in 20 s: the commit was missing the spec entry (see mistakes above). No build, no hardware |
 | [32245795692](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/32245795692) | benchmarks | branch / `...-on-release-flow` @ `09fc4fd6` | resolution + build + serving all **passed**; benchmark sweep 0/17 measured (chat-template), 15 points failed identically before the run was cancelled. See outcome above |
 | [32271862302](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/32271862302) | benchmarks | `...nongreedy-sampling` @ `589f30d` / `...-on-release-flow` @ `5352535a` | **failed**: server not healthy within 1200 s. Registration and mesh init fine; 8m12s of container setup inside the budget left too little for model load. See above |
+| [32271862302 attempt 2](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/32271862302) | benchmarks | same refs, `--failed` rerun on `120-qb2-p03t02` | **success** — healthy in 17m 20s with weights cached, 17/17 sweep points, 0 failed requests. See above |
