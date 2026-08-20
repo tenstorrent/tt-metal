@@ -7,8 +7,8 @@ from .sft_trainer import SFTConfig, SFTTrainer
 from .grpo_trainer import (
     GRPOCompleter,
     GRPOConfig,
+    GRPOMonitor,
     GRPOTrainer,
     get_grpo_config,
 )
-from .grpo_monitor import GRPOMonitor
 from ttml.modules.lora import LoraConfig

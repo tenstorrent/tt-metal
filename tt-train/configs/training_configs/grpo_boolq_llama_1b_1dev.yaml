@@ -2,6 +2,7 @@
 
 training_config:
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama3_2_1B.yaml"
+  model_source: "meta-llama/Llama-3.2-1B-Instruct"
 
   optimizer:
     type: MorehAdamW
