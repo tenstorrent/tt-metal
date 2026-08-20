@@ -75,16 +75,32 @@ inline void _configure_src_zero_flag_(const bool disable)
     _apply_src_zero_flag_(value);
 }
 
-// FP compute / format reconfig: the flag follows the operand formats. Cache them (reconfig_srca/srcb
-// reuse the other operand's cached format) and set the operand-driven value.
-inline void _configure_default_zero_flag_state_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
+// FP compute / format reconfig slow path: cache the operand formats + write the flag. Out-of-line so
+// the inline fast path below stays tiny -- an SDPA/matmul kernel with many init sites overflows its
+// slot if the format-cache stores are inlined at each one.
+inline __attribute__((noinline)) void _apply_default_zero_flag_state_(
+    const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format, const std::uint32_t value)
 {
     src_zero_flag_srca_fmt = srca_dst_format;
     src_zero_flag_srcb_fmt = srcb_dst_format;
-    // TODO(tt-metal#53652): per mcraigheadTT / ttsim#713 the flag must be CLEARED for all FPU compute;
-    // once that lands this becomes _configure_src_zero_flag_(false) and requires_disabled_src_zero_flag()
-    // is dropped entirely (it is only reachable from here).
-    _configure_src_zero_flag_(requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format));
+    _apply_src_zero_flag_(value);
+}
+
+// FP compute / format reconfig: the flag follows the operand formats. The fast path (inlined at every
+// init call site) computes the operand-driven value and returns if the flag already holds it -- the
+// steady state in hot loops. Only a genuine change pays the out-of-line _apply_ (which also refreshes
+// the cached formats reconfig_srca/srcb reuse).
+// TODO(tt-metal#53652): per mcraigheadTT / ttsim#713 the flag must be CLEARED for all FPU compute; once
+// that lands both bodies collapse to _configure_src_zero_flag_(false) and requires_disabled_src_zero_flag()
+// / the format cache are dropped (they are only reachable from here).
+inline void _configure_default_zero_flag_state_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
+{
+    const std::uint32_t value = requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format) ? 1u : 0u;
+    if (src_zero_flag_hw == value)
+    {
+        return;
+    }
+    _apply_default_zero_flag_state_(srca_dst_format, srcb_dst_format, value);
 }
 
 // Data-movement ops keep the flag set so values pass through faithfully (bf16 -0.0, 16b/32b ints).
