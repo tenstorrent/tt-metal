@@ -280,7 +280,7 @@ void run_alias_dfb_program(
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_a, result_b;
     slow_dispatch::ReadFromBuffer(out_a.mesh_buffer(), result_a);
@@ -614,7 +614,7 @@ TEST_F(UnitMeshFixture, AliasDFBDisjointHalvesDataFlow) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> out_la, out_lb, out_ra, out_rb;
     slow_dispatch::ReadFromBuffer(left.out_a.mesh_buffer(), out_la);
@@ -874,7 +874,7 @@ TEST_F(UnitMeshFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_a, result_b;
     slow_dispatch::ReadFromBuffer(out_a.mesh_buffer(), result_a);

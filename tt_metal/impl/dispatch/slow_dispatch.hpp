@@ -112,8 +112,4 @@ inline bool ReadFromDRAMChannel(
         physical_device_from_unit_mesh(unit_mesh), dram_channel, address, host_buffer);
 }
 
-inline void LaunchProgram(distributed::MeshDevice& unit_mesh, Program& program, bool wait_until_cores_done) {
-    detail::LaunchProgram(physical_device_from_unit_mesh(unit_mesh), program, wait_until_cores_done);
-}
-
 }  // namespace tt::tt_metal::slow_dispatch
