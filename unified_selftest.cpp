@@ -434,6 +434,28 @@ void example_bcast() {
     }
 }
 
+// State carried across a loop, which is what RetainedBlock is for: iteration 0 writes a
+// running value and iteration 1 reads it. The slot is what makes the lifetime visible --
+// taking the Block as a ComputeBlock instead would pop the state at the end of iteration 0,
+// and the push/wait rule in report() is what catches that.
+void example_retained_state() {
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t2 = TensorAccessor(FakeArgs{2}, 0);
+    using Row2 = Shape<1, 2>;
+    Storage<Row2> in(0), state(1), out(3);
+
+    RetainedBlock<Row2> carried;
+    for (uint32_t j = 0; j < 2; ++j) {
+        ComputeBlock x = noc_load<1>(in, t0, j).wait();
+        if (j == 0) {
+            carried = state.store(x.exp());
+        } else {
+            ComputeBlock<Row2> prev = carried.release();
+            noc_store<0>(out.store(prev + x), t2, j);
+        }
+    }
+}
+
 // Core-to-core hop, exercising NocAsyncCopyTx. The peer handshake is still not
 // right (see the TODO in unified.hpp) -- this only checks that the local half of
 // the protocol balances and that the handle's two halves fire.
@@ -684,6 +706,9 @@ static bool report(const char* title) {
     return !bad;
 }
 
+// Guarded so a scratch file can #include this whole harness -- all the ckernel and
+// dataflow stubs, the trace, report() -- and supply its own main. See tmp.cpp.
+#ifndef TT_UNIFIED_NO_MAIN
 int main() {
     bool ok = true;
     tt::unified::example_eltwise();
@@ -698,9 +723,12 @@ int main() {
     ok &= report("reduce");
     tt::unified::example_bcast();
     ok &= report("bcast");
+    tt::unified::example_retained_state();
+    ok &= report("retained state");
     tt::unified::example_peer_hop();
     ok &= report("peer_hop");
     ok &= report_same("syntax: free vs method", tt::unified::example_syntax_free, tt::unified::example_syntax_method);
     printf("\n%s: %s\n", TT_LABEL, ok ? "ALL BALANCED" : "FAILURES PRESENT");
     return ok ? 0 : 1;
 }
+#endif  // TT_UNIFIED_NO_MAIN

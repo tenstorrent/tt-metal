@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <new>
+
 #include <tt/unified/api.h>
 
 namespace tt {
@@ -311,6 +313,60 @@ void Block<S>::consume() {
     ASSERT(!consumed);
     consumed = true;
 #endif
+}
+
+// --- RetainedBlock ---
+
+template <typename S>
+RetainedBlock<S>::RetainedBlock(Held&& block) {
+    emplace(std::move(block));
+}
+
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+template <typename S>
+RetainedBlock<S>::~RetainedBlock() {
+    // A block still held here was pushed and never waited on: a dropped output. Nothing to
+    // destroy afterwards -- Block's own destructor only asserts, and this has already caught
+    // the case.
+    ASSERT(!held);
+}
+#endif
+
+template <typename S>
+RetainedBlock<S>& RetainedBlock<S>::operator=(Held&& in) {
+    emplace(std::move(in));
+    return *this;
+}
+
+template <typename S>
+typename RetainedBlock<S>::Held RetainedBlock<S>::release() {
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    ASSERT(held);
+#endif
+    Held out = std::move(get());
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    held = false;
+#endif
+    return out;
+}
+
+template <typename S>
+void RetainedBlock<S>::emplace(Held&& in) {
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    // Releasing first is the caller's job. Overwriting cannot un-push the old block's pages
+    // -- the buffer would simply hold two and the next reader would get the stale one -- so
+    // this is always a protocol bug rather than a bookkeeping slip.
+    ASSERT(!held);
+#endif
+    ::new (static_cast<void*>(buf)) Held(std::move(in));
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    held = true;
+#endif
+}
+
+template <typename S>
+typename RetainedBlock<S>::Held& RetainedBlock<S>::get() {
+    return *reinterpret_cast<Held*>(buf);
 }
 
 // --- Accumulator ---

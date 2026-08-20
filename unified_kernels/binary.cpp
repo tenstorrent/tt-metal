@@ -21,7 +21,7 @@
 //   1            in1 base address
 //   2            out base address
 //
-// Defines: one of BN_SUB, BN_MUL, BN_DIV, BN_CHAIN; add is the default.
+// Defines: one of BN_SUB, BN_MUL, BN_DIV, BN_MAX, BN_CHAIN; add is the default.
 
 #include <tt/unified/core>
 
@@ -37,6 +37,8 @@ constexpr uint32_t kCbOut = 16;
 #define BN_APPLY(a, b) ((a) * (b))
 #elif defined(BN_DIV)
 #define BN_APPLY(a, b) ((a) / (b))
+#elif defined(BN_MAX)
+#define BN_APPLY(a, b) (u::max_((a), (b)))
 #elif defined(BN_CHAIN)
 #define BN_APPLY(a, b) ((((a) + (b)) - (a)) * (b) / (a))
 #else

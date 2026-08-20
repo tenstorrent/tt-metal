@@ -269,6 +269,89 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// RetainedBlock -- a Block that outlives the statement that produced it
+//
+// For a value carried across a loop: written in one iteration, read in the next. The running
+// maximum, sum and output of an online softmax are the case this exists for.
+//
+// A Block cannot simply be left lying around. It owes a consumer, and ~Block asserts if it
+// never reached one, which is how a dropped output is caught. A ComputeBlock is not the
+// answer either: it waits in its constructor and POPS in its destructor, so using the value
+// you just wrote also consumes it -- the state is gone before the next iteration looks for
+// it, and on device that is a hang.
+//
+// So the obligation is MOVED here rather than discharged. That distinction is the whole
+// point: a `retain(block)` that just called consume() would switch off the very check worth
+// keeping, whereas ~RetainedBlock asserting that it is empty says "you pushed pages and
+// nobody ever waited on them" -- the same diagnostic, relocated.
+//
+//     RetainedBlock<Vec> m;                       // OUTSIDE the loop: that is the lifetime
+//     for (uint32_t j = 0; j < chunks; ++j) {
+//         if (j == 0) {
+//             m = m_storage.store(first(...));    // moves the obligation into the slot
+//         } else {
+//             ComputeBlock<Vec> prev = m.release();   // the consumer: waits, then pops
+//             m = m_storage.store(update(prev, ...));
+//         }
+//     }
+//
+// Costs nothing in a release build: every member below is assertion-only, so the slot is
+// byte-for-byte a Block.
+// ---------------------------------------------------------------------------
+
+template <typename S>
+class RetainedBlock {
+public:
+    using Held = Block<S>;
+
+    // The premise that lets the occupancy flag and the destructor be assertion-only: with
+    // assertions off Block has no user-declared destructor, so there is nothing to run and
+    // nothing to track. If Block ever acquires a resource this breaks the build rather than
+    // leaking quietly.
+#if !(defined(ASSERT_ENABLED) && ASSERT_ENABLED)
+    static_assert(
+        std::is_trivially_destructible<Held>::value,
+        "RetainedBlock does not destroy what it holds in a release build, because Block's "
+        "destructor is assertion-only. Block now has a real one, so this has to track "
+        "occupancy in every build.");
+#endif
+
+    RetainedBlock() = default;
+    explicit RetainedBlock(Held&& block);
+
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    ~RetainedBlock();
+#endif
+
+    // A slot is a fixed place, not a value: it names where the state lives for the whole loop.
+    RetainedBlock(const RetainedBlock&) = delete;
+    RetainedBlock& operator=(const RetainedBlock&) = delete;
+    RetainedBlock(RetainedBlock&&) = delete;
+    RetainedBlock& operator=(RetainedBlock&&) = delete;
+
+    // Take ownership of a freshly stored block. The MOVE is the mechanism: it transfers the
+    // obligation and leaves the source silent. Copying the cb id into a second Block would
+    // leave two obligations for one push, and the source would then assert as it died.
+    RetainedBlock& operator=(Held&& in);
+
+    // Hand the block to its consumer, leaving the slot empty. By value, so the caller
+    // move-constructs from the returned temporary.
+    Held release();
+
+private:
+    void emplace(Held&& in);
+    Held& get();
+
+    // Manual storage because Block has no default constructor -- which is also what lets the
+    // slot exist before the first value does.
+    alignas(Held) unsigned char buf[sizeof(Held)];
+
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    bool held = false;
+#endif
+};
+
+// ---------------------------------------------------------------------------
 // Accumulator -- multi-block matmul
 //
 // The k-loop belongs to the kernel, because the operand CBs have to be waited and
