@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 #include "experimental/kernel_args.h"
@@ -18,11 +18,12 @@ template <
     uint32_t reader_id,
     uint32_t grid_nsticks_per_core,
     uint32_t batch_size>
-TT_KERNEL void writer_grid_sample_nearest_sharded(uint32_t global_grid_stick_start) {
+TT_KERNEL void writer_grid_sample_nearest_interleaved(uint32_t start_page_id) {
     const auto input = TensorAccessor(tensor::input);
+    const auto grid = TensorAccessor(tensor::grid);
     grid_sample_nearest_impl<
         grid_dtype,
-        true,
+        false,
         use_precomputed_grid,
         align_corners,
         input_height,
@@ -37,5 +38,5 @@ TT_KERNEL void writer_grid_sample_nearest_sharded(uint32_t global_grid_stick_sta
         batch_size,
         dfb::grid,
         dfb::output,
-        dfb::fill>(input, NoGridTensorAccessor{}, global_grid_stick_start, 0);
+        dfb::fill>(input, grid, start_page_id, start_page_id);
 }

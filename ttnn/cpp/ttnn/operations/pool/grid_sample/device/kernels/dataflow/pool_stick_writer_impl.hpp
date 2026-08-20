@@ -2,24 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <stdint.h>
 #include <api/dataflow/dataflow_api.h>
 #include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
-void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks_to_write = get_arg_val<uint32_t>(1);
-    uint32_t start_stick_id = get_arg_val<uint32_t>(2);
-
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t output_stick_size = get_compile_time_arg_val(1);
-    constexpr uint32_t ntiles_c = get_compile_time_arg_val(2);
-
-    constexpr auto dst_args = TensorAccessorArgs<3>();
-
-    const auto s0 = TensorAccessor(dst_args, dst_addr);
-
+template <uint32_t output_stick_size, uint32_t ntiles_c, typename TensorAccessorType>
+inline __attribute__((always_inline)) void write_pool_sticks(
+    const TensorAccessorType& s0, uint32_t cb_id_out0, uint32_t num_sticks_to_write, uint32_t start_stick_id) {
     DataflowBuffer out_dfb(cb_id_out0);
     Noc noc;
 

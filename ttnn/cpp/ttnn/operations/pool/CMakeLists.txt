@@ -18,6 +18,8 @@ file(
     GLOB_RECURSE kernels
     device/kernels/*.hpp
     generic/device/kernels/*.cpp
+    generic/device/kernels/*.hpp
+    grid_sample/device/kernels/*.cpp
     grid_sample/device/kernels/*.hpp
     rotate/device/kernels/*.cpp
     upsample/device/kernels/*.cpp
