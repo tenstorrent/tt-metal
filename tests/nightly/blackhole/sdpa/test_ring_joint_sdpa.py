@@ -626,6 +626,17 @@ def open_ring_joint_sdpa_runtime(
         mesh_device = ttnn.open_mesh_device(**mesh_device_kwargs)
 
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
+        # MeshConfig derives the SDPA/CCL split from the grid it detected before any device was
+        # opened; the device is the authority. A mismatch means the split (and every expected_util
+        # normalized to mesh_config.sdpa_cores) is wrong for this host, so say so loudly.
+        if (full_compute_grid.x, full_compute_grid.y) != (mesh_config.grid_cols, mesh_config.grid_rows):
+            logger.warning(
+                f"MeshConfig grid {mesh_config.grid_cols}x{mesh_config.grid_rows} disagrees with the device's "
+                f"{full_compute_grid.x}x{full_compute_grid.y} compute grid: SDPA runs on "
+                f"{mesh_config.sdpa_cols}x{mesh_config.grid_rows} and utilization is normalized to "
+                f"{mesh_config.sdpa_cores} cores. Set SDPA_PERF_PROGRAM_GRID="
+                f"{full_compute_grid.x}x{full_compute_grid.y} to correct it."
+            )
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
         )

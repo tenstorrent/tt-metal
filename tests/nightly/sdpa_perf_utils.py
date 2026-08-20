@@ -39,19 +39,84 @@ ARCH_CONSTANTS = {
 # ============================================================================
 
 
-def _detect_devices_without_opening():
+def _pci_interface_ids():
     """
-    Detect the number of available TT devices WITHOUT opening them.
-    Uses /dev/tenstorrent/* device files to avoid holding device locks.
-    This is required for performance tests that use run_device_profiler().
+    PCI interface ids of the local TT devices, read from /dev/tenstorrent/* WITHOUT opening
+    them. Avoids holding device locks, which is required for performance tests that use
+    run_device_profiler().
     """
     import glob
     import os
 
     # Device nodes are named numerically (/dev/tenstorrent/0, .../1, ...). Filter to those
     # so sibling entries like the `by-id/` directory are not miscounted as devices.
-    device_files = [p for p in glob.glob("/dev/tenstorrent/*") if os.path.basename(p).isdigit()]
-    return len(device_files)
+    return sorted(int(os.path.basename(p)) for p in glob.glob("/dev/tenstorrent/*") if os.path.basename(p).isdigit())
+
+
+def _detect_devices_without_opening():
+    """Number of available TT devices, detected without opening them."""
+    return len(_pci_interface_ids())
+
+
+# Blackhole harvests whole tensix columns, so the row count is fixed and only the column
+# count varies with the flashed harvesting mask.
+BLACKHOLE_TENSIX_ROWS = 10
+# metal reserves one enabled tensix column for dispatch, so the program grid is one column
+# narrower than the enabled-column count.
+BLACKHOLE_DISPATCH_COLUMNS = 1
+
+
+def _detect_program_grid():
+    """
+    (cols, rows) metal program grid of the local chips, or None when it cannot be determined
+    (non-Blackhole, no pyluwen, no devices, telemetry read failure).
+
+    Detection reads the tensix column-harvesting mask out of chip telemetry: it opens the
+    /dev/tenstorrent char device only to read the telemetry mailbox (~1 ms per chip), taking no
+    metal device lock and allocating no TLBs -- the same access tt-smi makes while other processes
+    run. That keeps it safe to call at import time next to _detect_devices_without_opening().
+    Column harvesting is Blackhole-specific, hence the arch check below.
+
+    Stock p150 ships with product_spec_harvesting.tensix_col_disable_count=2 -> 12 enabled
+    columns -> an 11x10 program grid. Boards re-flashed to disable_count=1 have 13 enabled
+    columns -> 12x10 (verified against mesh_device.compute_with_storage_grid_size() on bh-lb-33,
+    whose 8 p150b boards report tensix_enabled_col=0x1fff and a 12x10 grid).
+
+    SDPA_PERF_PROGRAM_GRID="<cols>x<rows>" forces the answer, both as an escape hatch for hosts
+    where telemetry is unavailable and as a kill switch for the detection itself.
+    """
+    import os
+
+    forced = os.environ.get("SDPA_PERF_PROGRAM_GRID")
+    if forced:
+        cols, rows = (int(v) for v in forced.lower().split("x"))
+        return (cols, rows)
+
+    try:
+        import pyluwen
+    except ImportError:
+        return None
+
+    enabled_cols = []
+    for interface_id in _pci_interface_ids():
+        try:
+            chip = pyluwen.PciChip(pci_interface=interface_id)
+            if chip.as_bh() is None:  # column harvesting is Blackhole-specific
+                return None
+            mask = chip.get_telemetry().tensix_enabled_col
+        except Exception:
+            return None
+        if not mask:
+            return None
+        enabled_cols.append(bin(mask).count("1"))
+
+    if not enabled_cols:
+        return None
+    # Mixed harvesting across boards: metal's mesh grid is the one common to every chip.
+    cols = min(enabled_cols) - BLACKHOLE_DISPATCH_COLUMNS
+    if cols < 1:
+        return None
+    return (cols, BLACKHOLE_TENSIX_ROWS)
 
 
 @dataclass
@@ -68,11 +133,11 @@ class MeshConfig:
     GALAXY_SP_SIZE: ClassVar[int] = 8
 
     # Non-Galaxy hardware constants
-    # 12x10 full grid -> 11x10 (110 cores) for SDPA after reserving the last column for CCL.
-    # LOCAL, UNCOMMITTED: bh-lb-33's p150b boards were re-flashed to tensix_col_disable_count=1
-    # (130 tensix, 12x10 program grid) so the ring-8 SDPA split matches galaxy's 110 cores. Stock
-    # p150 ships with disable_count=2 -> an 11x10 program grid, for which this must read (11, 10).
-    NON_GALAXY_GRID: ClassVar[Tuple[int, int]] = (12, 10)  # (cols, rows)
+    # Fallback program grid when the harvesting mask cannot be read (see _detect_program_grid):
+    # stock p150, tensix_col_disable_count=2 -> 12 enabled columns -> an 11x10 program grid ->
+    # 10x10 (100 cores) for SDPA once the last column is reserved for CCL. Boards re-flashed to
+    # disable_count=1 detect as 12x10 -> 11x10 (110 SDPA cores), matching galaxy's split.
+    NON_GALAXY_GRID: ClassVar[Tuple[int, int]] = (11, 10)  # (cols, rows)
 
     # Instance fields (set by detect())
     is_galaxy: bool
@@ -101,7 +166,10 @@ class MeshConfig:
         """Detect hardware and create config with all values resolved."""
         num_devices = _detect_devices_without_opening()
         is_galaxy = num_devices == cls.GALAXY_DEVICE_COUNT
-        grid = cls.GALAXY_GRID if is_galaxy else cls.NON_GALAXY_GRID
+        # Galaxy keeps its constant: every committed galaxy baseline was measured against a 12x10
+        # grid, and detection there would have to reason about its 32-chip topology rather than the
+        # local PCI devices.
+        grid = cls.GALAXY_GRID if is_galaxy else (_detect_program_grid() or cls.NON_GALAXY_GRID)
         return cls(
             is_galaxy=is_galaxy,
             num_devices=num_devices,
