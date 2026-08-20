@@ -38,49 +38,35 @@ runs:
         LOGINS=$(echo "$GITHUB_LOGINS_JSON" | jq -r 'unique | .[]')
 
         echo "Fetching all Slack users..."
-        TEMP_USERS_FILE=$(mktemp)
-        echo "[]" > "$TEMP_USERS_FILE"
+        SLACK_USERS_FILE="${RUNNER_TEMP}/slack_users.json"
+        PAGES_FILE=$(mktemp)
         CURSOR=""
         while true; do
-          if [ -n "$CURSOR" ]; then
-            API_URL="https://slack.com/api/users.list?limit=1000&cursor=$CURSOR"
-          else
-            API_URL="https://slack.com/api/users.list?limit=1000"
+          RESPONSE=$(curl -s \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            "https://slack.com/api/users.list?limit=1000${CURSOR:+&cursor=$CURSOR}")
+
+          if [ "$(jq -r '.ok' <<< "$RESPONSE")" != "true" ]; then
+            echo "::warning::Failed to fetch Slack users: $(jq -r '.error // "Unknown error"' <<< "$RESPONSE")"
+            break
           fi
 
-          USER_SEARCH_RESPONSE=$(curl -s -X GET \
-            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-            -H "Content-Type: application/json" \
-            "$API_URL")
-
-          RESPONSE_FILE=$(mktemp)
-          echo "$USER_SEARCH_RESPONSE" > "$RESPONSE_FILE"
-
-          if [ "$(jq -r '.ok' "$RESPONSE_FILE")" = "true" ]; then
-            MERGE_FILE=$(mktemp)
-            jq -s '.[0] + .[1]' "$TEMP_USERS_FILE" <(jq '.members' "$RESPONSE_FILE") > "$MERGE_FILE"
-            mv "$MERGE_FILE" "$TEMP_USERS_FILE"
-            CURSOR=$(jq -r '.response_metadata.next_cursor // ""' "$RESPONSE_FILE")
-            rm -f "$RESPONSE_FILE"
-            if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
-              break
-            fi
-          else
-            ERROR_MSG=$(jq -r '.error // "Unknown error"' "$RESPONSE_FILE")
-            echo "::warning::Failed to fetch Slack users: $ERROR_MSG"
-            rm -f "$RESPONSE_FILE"
+          jq '.members' <<< "$RESPONSE" >> "$PAGES_FILE"
+          CURSOR=$(jq -r '.response_metadata.next_cursor // ""' <<< "$RESPONSE")
+          if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
             break
           fi
         done
-        SLACK_USERS_FILE="${RUNNER_TEMP}/slack_users.json"
-        mv "$TEMP_USERS_FILE" "$SLACK_USERS_FILE"
-        echo "Fetched $(jq '. | length' "$SLACK_USERS_FILE") Slack users"
+        # Flatten the per-page member arrays into one; an error before any page
+        # was fetched leaves an empty file, which becomes [].
+        jq -s 'add // []' "$PAGES_FILE" > "$SLACK_USERS_FILE"
+        rm -f "$PAGES_FILE"
+        echo "Fetched $(jq 'length' "$SLACK_USERS_FILE") Slack users"
 
         # Hardcoded overrides for known GitHub<->Slack mismatches, then fuzzy match.
         find_slack_user_id() {
           local full_name="$1"
           local github_username="$2"
-          local USERS_FILE="$3"
 
           case "$github_username" in
             "mradosavljevicTT") echo "U0837MYG788"; return 0 ;;
@@ -89,20 +75,17 @@ runs:
             "jvegaTT") echo "U07M7QZ0BQA"; return 0 ;;
           esac
 
-          USER_ID=$(jq -r --arg name "$full_name" \
-            '.[] | select(.real_name == $name or .profile.real_name == $name) | .id' "$USERS_FILE" | head -n1)
+          # Exact-match tiers, first hit wins: real name, then display name ==
+          # full name, then Slack username / display name == GitHub login.
+          USER_ID=$(jq -r --arg name "$full_name" --arg login "$github_username" '
+            map(select(.real_name == $name or .profile.real_name == $name))
+            + map(select(.profile.display_name == $name))
+            + map(select(.name == $login or .profile.display_name == $login))
+            | .[0].id // ""' "$SLACK_USERS_FILE")
 
-          if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
-            USER_ID=$(jq -r --arg name "$full_name" \
-              '.[] | select(.profile.display_name == $name) | .id' "$USERS_FILE" | head -n1)
-          fi
-
-          if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
-            USER_ID=$(jq -r --arg username "$github_username" \
-              '.[] | select(.name == $username or .profile.display_name == $username) | .id' "$USERS_FILE" | head -n1)
-          fi
-
-          if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+          # Fuzzy fallback: any >=3-char word of the full name that matches
+          # exactly one Slack user (an ambiguous word is never trusted).
+          if [ -z "$USER_ID" ]; then
             IFS=' ' read -ra NAME_WORDS <<< "$full_name"
             for word in "${NAME_WORDS[@]}"; do
               if [ ${#word} -ge 3 ]; then
@@ -111,7 +94,7 @@ runs:
                     (.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or
                     (.profile.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or
                     (.profile.display_name // "" | ascii_downcase | contains($word | ascii_downcase))
-                  ) | .id + "|" + (.real_name // .profile.real_name // .name)' "$USERS_FILE")
+                  ) | .id + "|" + (.real_name // .profile.real_name // .name)' "$SLACK_USERS_FILE")
 
                 if [ -n "$WORD_MATCHES" ]; then
                   MATCH_COUNT=$(echo "$WORD_MATCHES" | wc -l)
@@ -124,11 +107,7 @@ runs:
             done
           fi
 
-          if [ -n "$USER_ID" ] && [ "$USER_ID" != "null" ]; then
-            echo "$USER_ID"
-          else
-            echo ""
-          fi
+          echo "$USER_ID"
         }
 
         MENTIONS_JSON="{}"
@@ -140,7 +119,7 @@ runs:
           USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
           [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$gh_user"
 
-          SLACK_ID=$(find_slack_user_id "$USER_NAME" "$gh_user" "$SLACK_USERS_FILE")
+          SLACK_ID=$(find_slack_user_id "$USER_NAME" "$gh_user")
 
           if [ -n "$SLACK_ID" ]; then
             MENTION="<@$SLACK_ID>"

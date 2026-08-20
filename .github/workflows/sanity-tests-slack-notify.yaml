@@ -54,14 +54,13 @@ jobs:
           DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
         with:
           script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            let runId, headSha, runNumber, htmlUrl, dryRun;
+            const { owner, repo } = context.repo;
+            let run, dryRun;
 
             if (context.eventName === 'workflow_dispatch') {
-              runId = Number(process.env.DISPATCH_RUN_ID);
+              const runId = Number(process.env.DISPATCH_RUN_ID);
               dryRun = process.env.DISPATCH_DRY_RUN !== 'false';
-              const { data: run } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: runId });
+              run = (await github.rest.actions.getWorkflowRun({ owner, repo, run_id: runId })).data;
 
               // A manual replay/test must target a real "Sanity tests" push-on-main
               // failure -- otherwise this would confidently post a Slack message
@@ -75,23 +74,15 @@ jobs:
                 core.setFailed(`run_id ${runId} is not a valid target to replay: ${problems.join('; ')}.`);
                 return;
               }
-
-              headSha = run.head_sha;
-              runNumber = run.run_number;
-              htmlUrl = run.html_url;
             } else {
-              runId = context.payload.workflow_run.id;
-              headSha = context.payload.workflow_run.head_sha;
-              runNumber = context.payload.workflow_run.run_number;
-              htmlUrl = context.payload.workflow_run.html_url;
+              run = context.payload.workflow_run;
               dryRun = false;
             }
 
-            core.info(`run=${runId} sha=${headSha} number=${runNumber} dryRun=${dryRun}`);
-            core.setOutput('run_id', String(runId));
-            core.setOutput('head_sha', headSha);
-            core.setOutput('run_number', String(runNumber));
-            core.setOutput('html_url', htmlUrl);
+            core.info(`run=${run.id} sha=${run.head_sha} number=${run.run_number} dryRun=${dryRun}`);
+            core.setOutput('head_sha', run.head_sha);
+            core.setOutput('run_number', String(run.run_number));
+            core.setOutput('html_url', run.html_url);
             core.setOutput('dry_run', String(dryRun));
 
       - name: Find culprit PRs since last green run
@@ -212,6 +203,8 @@ jobs:
 
             core.info(`Found ${entries.length} culprit entr${entries.length === 1 ? 'y' : 'ies'} between #${prevGood.run_number} and #${currentRunNumber}`);
             core.setOutput('entries', JSON.stringify(entries));
+            core.setOutput('logins_json',
+              JSON.stringify([...new Set(entries.map(e => e.authorLogin).filter(l => l !== null))].sort()));
 
       - name: Checkout resolve-slack-mentions action
         if: steps.culprits.outputs.should_notify == 'true'
@@ -221,25 +214,12 @@ jobs:
           sparse-checkout: .github/actions/resolve-slack-mentions
           sparse-checkout-cone-mode: true
 
-      - name: Collect culprit logins
-        id: logins
-        if: steps.culprits.outputs.should_notify == 'true'
-        env:
-          ENTRIES_JSON: ${{ steps.culprits.outputs.entries }}
-        run: |
-          set -euo pipefail
-          {
-            echo 'logins_json<<EOF'
-            echo "$ENTRIES_JSON" | jq -c '[.[].authorLogin | select(. != null)] | unique'
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
-
       - name: Resolve Slack mentions for culprits
         id: mentions
         if: steps.culprits.outputs.should_notify == 'true'
         uses: ./.github/actions/resolve-slack-mentions
         with:
-          github-logins: ${{ steps.logins.outputs.logins_json }}
+          github-logins: ${{ steps.culprits.outputs.logins_json }}
           slack-bot-token: ${{ secrets.CODEOWNERS_PING_BOT }}
           github-token: ${{ github.token }}
 
@@ -258,7 +238,7 @@ jobs:
 
           LINES=$(echo "$ENTRIES_JSON" | jq -r --argjson mentions "$MENTIONS_JSON" '
             .[] | (if .authorLogin != null then ($mentions[.authorLogin] // ("@" + .authorLogin)) else "(unknown author)" end) as $who
-            | "\($who) <\(.url)|\(if .type == "pr" then "#\(.number) - \(.title)" else "\(.title)" end)> broke sanity."
+            | "\($who) <\(.url)|\(if .type == "pr" then "#\(.number) - \(.title)" else .title end)> broke sanity."
           ')
 
           TEXT="${LINES}"$'\n'"Failing run on that commit: ${FAILING_RUN_URL}"$'\n'"Previous passing run: ${PREV_RUN_URL}"$'\n'"Please fix."
@@ -281,16 +261,13 @@ jobs:
             exit 0
           fi
 
-          PAYLOAD_FILE=$(mktemp)
-          jq -n --arg channel "$SLACK_CHANNEL_ID" --arg text "$TEXT" \
-            '{channel: $channel, text: $text, unfurl_links: true, unfurl_media: true}' > "$PAYLOAD_FILE"
-
-          SLACK_RESPONSE=$(curl -s --max-time 30 -X POST \
-            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-            -H "Content-type: application/json" \
-            -d @"$PAYLOAD_FILE" \
-            "https://slack.com/api/chat.postMessage")
-          rm -f "$PAYLOAD_FILE"
+          SLACK_RESPONSE=$(jq -n --arg channel "$SLACK_CHANNEL_ID" --arg text "$TEXT" \
+            '{channel: $channel, text: $text, unfurl_links: true, unfurl_media: true}' |
+            curl -s --max-time 30 -X POST \
+              -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+              -H "Content-type: application/json" \
+              -d @- \
+              "https://slack.com/api/chat.postMessage")
 
           if [ "$(echo "$SLACK_RESPONSE" | jq -r '.ok')" = "true" ]; then
             echo "Slack notification sent successfully"
