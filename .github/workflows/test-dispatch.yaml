@@ -71,7 +71,7 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       tracy: ${{ inputs.tracy }}
-      build-wheel: true
+      build-inplace-wheel: true
       ref: ${{ inputs.commit || github.sha }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
