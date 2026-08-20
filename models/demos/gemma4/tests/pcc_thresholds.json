@@ -45,7 +45,12 @@
       "_comment_batched_decode_wh": "Wormhole twins of the two rows above, both at 0.98. Same node, same layer, same cache reached through two entry points: WH measures 0.983648 for BOTH, so the blackhole pair's 0.98/0.989 split does not reproduce here and one gate covers them. Not the reduce depth (a 4x k_chunk_size sweep moves these <1e-4) — bfp8 attention weights are the bulk of it: at bf16 both read 0.989143, and decode-SDPA HiFi4 (the shipped default) 0.989203. No configuration reaches 0.99, so this is the one 12B decode node that stays below the default even at full precision.",
       "test_attention_decode_paged[wormhole_b0-cache512-global-1x1]": 0.98,
       "test_attention_decode_paged_batched[wormhole_b0-cache512-batch1-global-1x1]": 0.98,
+      "_comment_decode_paged_wh_12b": "WH 1x1 measured 0.982388 (real-weights cache512 global) and 0.985300 (random-init cache1023 sliding) under shipped bfp8 + decode-SDPA HiFi4; both missed the 0.99 default. Gate matched to the existing cache512-global 0.98 row. HiFi4 does not clear 0.99 here (516d7c13).",
+      "test_attention_decode_paged_real_weights[wormhole_b0-cache512-global-1x1]": 0.98,
+      "test_attention_decode_paged[wormhole_b0-cache1023-sliding-1x1]": 0.98,
       "test_attention_decode_bounded_vs_unbounded_parity[blackhole-cache1500-1x1]": 0.97,
+      "_comment_bounded_parity_wh_12b": "Wormhole twin of the blackhole row above, same 0.97. WH 1x1 measures 0.975838 bounded-vs-HF and 0.989349 bounded-vs-unbounded (unbounded-vs-HF clears the default at 0.994463), so only the bounded path misses 0.99 — bit-reproducible across reruns. 12B is the only variant that diverges here: 31B runs the bounded path bit-identical to unbounded (pair PCC exactly 1.0) and needs no WH row. Not exercised by CI, whose 12B unit job is bh_quietbox_2-only; this row unblocks local WH runs.",
+      "test_attention_decode_bounded_vs_unbounded_parity[wormhole_b0-cache1500-1x1]": 0.97,
       "test_attention_prefill[blackhole-seq4096-global-1x1]": 0.98,
       "_comment_full_model": "Real-weight (gemma4_unified) full-model PCC ~0.94 at 1x1 (single chip measures lower than 1x4's ~0.96); known 12B unified-arch backbone-accumulation gap. Threshold set below measured.",
       "test_full_model[blackhole-1x1]": 0.92
