@@ -116,11 +116,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<DataFormat>(formats.pack_S_dst),
         IMPLIED_MATH_FORMAT);
 
-    llk_sfpu_srcs_binary(
-        num_tiles,
-        static_cast<DataFormat>(formats.unpack_S_dst),
-        [](const int in0_base_addr, const int in1_base_addr, const int store_base_addr, const int num_sfpu_iterations)
-        { _calculate_add_srcs_(in0_base_addr, in1_base_addr, store_base_addr, num_sfpu_iterations); });
+    llk_sfpu_srcs_binary(num_tiles, static_cast<DataFormat>(formats.unpack_S_dst), _calculate_add_srcs_);
 
     wait_unpack_idle();
     wait_sfpu_idle();

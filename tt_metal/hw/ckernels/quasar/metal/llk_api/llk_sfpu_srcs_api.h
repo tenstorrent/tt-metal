@@ -18,25 +18,18 @@
 // second (SFPU_SRCS_BASE_ADDR + YDIM); result in the third (SFPU_SRCS_BASE_ADDR + 2 * YDIM). A
 // 32x32 tile spans slice_count(mode) slices, each YDIM >> 1 SFPU rows (SFP_ROWS == 2).
 //
+// Unpack BFD ids are baked into a MOP at init (same pattern as llk_unpack_A / llk_unpack_AB).
+// PACK1 requires autoloop, so the pack id stays in bfd_current<Pack1>(). Execute never takes a
+// BFD id. Binary uses one UNP_S engine and two table rows, not UNP_A+UNP_B.
+//
 // TODO(#52522): integrate the SFPLOADMACRO fast path (merged on main) into the wrapper. Only
 // per-slice ops are supported for now.
 
-// Buffer descriptor ids are LLK-internal: callers never hold or pass one. Ids are allocated from
-// the TRISC3 partition [24, 32) at init time via the per-thread BFD allocator (see llk_bfd_alloc.h).
-// Both binary inputs stream through the single UNP_S engine, so bfd_current<UnpS>() can only track
-// the latest allocation; the binary init snapshots each input's id here for the execute call.
-inline std::uint8_t sfpu_srcs_bfd_in0 = 0;
-inline std::uint8_t sfpu_srcs_bfd_in1 = 0;
-
 // Allocates and programs one UNP_S buffer descriptor viewing an L1 input as SrcS slices.
 inline void llk_sfpu_srcs_configure_unpack(
-    const ckernel::TensorShape& srcs_shape,
-    const std::uint32_t l1_addr_16B,
-    const DataFormat l1_format,
-    const DataFormat srcs_format) {
+    const ckernel::TensorShape& srcs_shape, const std::uint32_t l1_addr_16B, const DataFormat l1_format) {
     ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::UnpS>(
         srcs_shape, l1_addr_16B, static_cast<std::uint32_t>(l1_format));
-    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(srcs_format);
 }
 
 // Allocates and programs the PACK1 buffer descriptor viewing the L1 output as SrcS slices.
@@ -59,10 +52,11 @@ inline ckernel::TensorShape llk_sfpu_srcs_slice_shape(const std::uint32_t ydim) 
 /**
  * @brief Configure the unary SrcS SFPU pipeline: unpack (UNP_S), pack (PACK1) and SFPU.
  *
- * Builds the unpack/pack buffer descriptors, programs the SrcS auto-loop for one tile and inits the
- * SFPU. SrcS geometry is derived from @p unpack_S_dst_format, not passed by the caller.
+ * Programs UNP_S / PACK1 buffer descriptors, bakes the unpack id into a MOP, programs the PACK1
+ * auto-loop for one tile and inits the SFPU. SrcS geometry is derived from
+ * @p unpack_S_dst_format, not passed by the caller.
  *
- * @tparam INSTRN_COUNT: Unpack/pack instructions per SrcS auto-loop (see llk_srcs.h).
+ * @tparam INSTRN_COUNT: Pack instructions per SrcS auto-loop (see llk_srcs.h).
  * @param l1_in_addr_16B: L1 input address (16B units).
  * @param unpack_S_src_format: L1 input format.
  * @param unpack_S_dst_format: SrcS format (also selects 32-bit SrcS mode).
@@ -72,7 +66,7 @@ inline ckernel::TensorShape llk_sfpu_srcs_slice_shape(const std::uint32_t ydim) 
  * @param implied_math_format: When false, disables implied SrcS math format for this TRISC.
  */
 template <std::uint8_t INSTRN_COUNT = 1>
-inline void llk_sfpu_srcs_init(
+inline void llk_sfpu_srcs_unary_init(
     const std::uint32_t l1_in_addr_16B,
     const DataFormat unpack_S_src_format,
     const DataFormat unpack_S_dst_format,
@@ -83,12 +77,17 @@ inline void llk_sfpu_srcs_init(
     const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
     const ckernel::TensorShape srcs_shape = llk_sfpu_srcs_slice_shape(ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode));
 
-    llk_sfpu_srcs_configure_unpack(srcs_shape, l1_in_addr_16B, unpack_S_src_format, unpack_S_dst_format);
+    llk_sfpu_srcs_configure_unpack(srcs_shape, l1_in_addr_16B, unpack_S_src_format);
+    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(unpack_S_dst_format);
     llk_sfpu_srcs_configure_pack(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
 
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::TRISC_ID] = !implied_math_format;
 
-    _llk_unpack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
+    // Auto-loop must not multiply MOP-issued UNPACR2 (see _llk_unpack_srcs_unary_mop_config_).
+    _llk_unpack_srcs_config_<1, 1>();
+    _llk_unpack_srcs_unary_mop_config_(
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::UnpS>(),
+        ckernel::trisc::srcs_dims::slice_count(srcs_32bit_mode));
     _llk_pack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
     _llk_math_eltwise_sfpu_init_();
 }
@@ -96,9 +95,10 @@ inline void llk_sfpu_srcs_init(
 /**
  * @brief Configure the binary SrcS SFPU pipeline: unpack (UNP_S), pack (PACK1) and SFPU.
  *
- * Like llk_sfpu_srcs_init, for ops with two inputs sharing formats. The unpack auto-loop cannot
- * alternate between two buffer descriptors (HW bug, tt-llk #1635), so it is forced to one
- * iteration and llk_sfpu_srcs_binary issues the unpacks per slice instead.
+ * Like llk_sfpu_srcs_unary_init, for ops with two inputs sharing formats. Both inputs use the
+ * single UNP_S engine (two BFD table rows). The unpack auto-loop cannot alternate descriptors
+ * (tt-llk #1635), so ids are baked into a two-instruction MOP and llk_sfpu_srcs_binary runs that
+ * MOP per slice.
  *
  * @tparam INSTRN_COUNT: Pack instructions per SrcS auto-loop (see llk_srcs.h).
  * @param l1_in0_addr_16B: L1 first input address (16B units).
@@ -123,16 +123,17 @@ inline void llk_sfpu_srcs_binary_init(
     const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
     const ckernel::TensorShape srcs_shape = llk_sfpu_srcs_slice_shape(ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode));
 
-    llk_sfpu_srcs_configure_unpack(srcs_shape, l1_in0_addr_16B, unpack_S_src_format, unpack_S_dst_format);
-    sfpu_srcs_bfd_in0 = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::UnpS>();
-    llk_sfpu_srcs_configure_unpack(srcs_shape, l1_in1_addr_16B, unpack_S_src_format, unpack_S_dst_format);
-    sfpu_srcs_bfd_in1 = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::UnpS>();
+    llk_sfpu_srcs_configure_unpack(srcs_shape, l1_in0_addr_16B, unpack_S_src_format);
+    const std::uint8_t bfd_in0 = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::UnpS>();
+    llk_sfpu_srcs_configure_unpack(srcs_shape, l1_in1_addr_16B, unpack_S_src_format);
+    const std::uint8_t bfd_in1 = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::UnpS>();
+    _llk_unpack_configure_unary_<p_unpacr::UNP_S>(unpack_S_dst_format);
     llk_sfpu_srcs_configure_pack(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
 
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::TRISC_ID] = !implied_math_format;
 
-    // Single-iteration unpack auto-loop so each issued UNPACR2 executes exactly once (see above).
     _llk_unpack_srcs_config_<1, 1>();
+    _llk_unpack_srcs_binary_mop_config_(bfd_in0, bfd_in1);
     _llk_pack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
     _llk_math_eltwise_sfpu_init_();
 }
@@ -144,14 +145,14 @@ inline void llk_sfpu_srcs_binary_init(
  * valids. The load/store base addresses and per-slice row count are computed here and passed to
  * @p sfpu_op, so the op carries no SrcS bookkeeping.
  *
- * @tparam INSTRN_COUNT: Must match the value passed to llk_sfpu_srcs_init.
+ * @tparam INSTRN_COUNT: Must match the value passed to llk_sfpu_srcs_unary_init.
  * @tparam SfpuOp: Callable sfpu_op(int load_base_addr, int store_base_addr, int num_sfpu_iterations).
  * @param num_tiles: Number of 32x32 tiles to process.
  * @param unpack_S_dst_format: SrcS format used to derive geometry.
  * @param sfpu_op: Per-slice SFPU computation.
  */
 template <std::uint8_t INSTRN_COUNT = 1, typename SfpuOp>
-inline void llk_sfpu_srcs(const std::uint32_t num_tiles, const DataFormat unpack_S_dst_format, SfpuOp&& sfpu_op) {
+inline void llk_sfpu_srcs_unary(const std::uint32_t num_tiles, const DataFormat unpack_S_dst_format, SfpuOp&& sfpu_op) {
     const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
     const std::uint32_t ydim = ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode);
     const std::uint32_t slice_count = ckernel::trisc::srcs_dims::slice_count(srcs_32bit_mode);
@@ -160,11 +161,10 @@ inline void llk_sfpu_srcs(const std::uint32_t num_tiles, const DataFormat unpack
     const int load_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR;
     const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * static_cast<int>(ydim);
 
-    const std::uint8_t bfd_unpack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::UnpS>();
     const std::uint8_t bfd_pack = ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>();
 
     for (std::uint32_t i = 0; i < num_tiles; ++i) {
-        _llk_unpack_srcs_<INSTRN_COUNT>(bfd_unpack, i * slice_count);  // Sets dvalid for SFPU to read
+        _llk_unpack_srcs_unary_(i * slice_count);  // Sets dvalid for SFPU to read
 
         // Pack is issued before the SFPU loop: the SFPU loop fills the instruction buffer and can
         // clog it, leading to hangs if the pack is queued after.
@@ -212,8 +212,7 @@ inline void llk_sfpu_srcs_binary(
         _llk_pack_srcs_<INSTRN_COUNT>(bfd_pack, i * slice_count);  // Sets dvalid for SFPU to write
 
         for (std::uint32_t slice = 0; slice < slice_count; slice++) {
-            TT_UNPACR2_TILE_INC(0b1 /*SrcS tile inc*/, 0b0 /*no L1 inc*/, sfpu_srcs_bfd_in0, 0b0 /*no dvalid*/);
-            TT_UNPACR2_TILE_INC(0b0 /*no SrcS tile inc*/, 0b1 /*L1 inc*/, sfpu_srcs_bfd_in1, 0b1 /*Set dvalid*/);
+            _llk_unpack_srcs_binary_();
             sfpu_op(in0_base_addr, in1_base_addr, store_base_addr, num_sfpu_iterations);
             _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();  // Clears dvalid for SFPU read and write
         }
