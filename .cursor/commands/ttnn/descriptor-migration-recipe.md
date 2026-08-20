@@ -287,11 +287,12 @@ supersedes binding patching (branch (a) of §1.2). Rules for writing it:
 1. **Single-source the work split.** Put the core split / per-core layout in one helper
    called by *both* `create_descriptor` and the override, so arg indices can't drift.
    **But keep the override lean**: the descriptor path has no `shared_variables_t`, so
-   whatever the helper computes is recomputed on EVERY hit. A full
-   `split_work_to_cores`/`grid_to_cores`/`CoreRangeSet` re-derivation costs ~2-3µs/dispatch
-   (measured on the randn trial: +7-9% vs the legacy op, which stashed `cores`) — that alone
-   can breach the §2.3 perf threshold. Re-derive only what the patch loop actually needs
-   (often just the core coords), and benchmark the hit path, not only correctness.
+   whatever the helper computes is recomputed on EVERY hit, and the cost scales with core
+   count. A full `split_work_to_cores`/`grid_to_cores`/`CoreRangeSet` re-derivation measured
+   ~+3µs/dispatch (+8-9%) on a 64-core grid vs the legacy op that stashed `cores` (randn
+   trial, interleaved A/B; single-core shapes were within noise) — that alone can breach the
+   §2.3 perf threshold. Re-derive only what the patch loop actually needs (often just the
+   core coords), and benchmark the hit path, not only correctness.
 2. **Must re-apply:** every buffer-address slot (anything emplaced as `Buffer*`), every
    scalar derived from a hash-excluded attribute, and every globally-allocated CB base
    address.
