@@ -84,6 +84,40 @@ public:
     void log_report() const;
 
 private:
+    // The PRODUCER-STALL zone ids, mirrored from the zone-meta registry BY NAME: the stall counter is
+    // the one thing the decode identifies per marker, and it may not do that by id VALUE -- a structural
+    // id legitimately moves whenever kernel_profiler.hpp does, and the stall zone genuinely has MANY ids,
+    // one per kernel TU, because that header declares it at namespace scope. Refreshed by cursor once per
+    // decode pass.
+    //
+    // The membership test runs PER MARKER on the decode hot path, so it is an open-addressed table (one
+    // L1 load on the overwhelming miss path), not a binary search -- and not a [min,max] pre-screen
+    // either: stall ids carry tu_id in their high bits like every other zone id, so their range spans
+    // the id space and a range screen admits everything (measured ~2x on the decode walk).
+    struct StallIdMirror {
+        uint32_t cursor = 0;
+        std::vector<uint32_t> ids;    // insertion order, source for rebuilds
+        std::vector<uint32_t> table;  // open addressing, linear probe; 0xFFFFFFFF = empty
+        uint32_t mask = 0;
+        void refresh();
+        bool contains(uint32_t id) const {
+            if (table.empty()) {
+                return false;
+            }
+            uint32_t slot = (id * 0x9E3779B9u) & mask;
+            while (true) {
+                const uint32_t v = table[slot];
+                if (v == id) {
+                    return true;
+                }
+                if (v == 0xFFFFFFFFu) {
+                    return false;
+                }
+                slot = (slot + 1) & mask;
+            }
+        }
+    };
+
     struct Stream {
         distributed::D2HSocket* sock = nullptr;
         uint32_t dev = 0;
