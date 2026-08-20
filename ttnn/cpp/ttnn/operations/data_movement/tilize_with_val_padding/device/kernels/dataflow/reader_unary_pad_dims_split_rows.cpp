@@ -72,7 +72,7 @@ void kernel_main() {
                 dataflow_kernel_lib::fill_l1_range<elem_size>(l1_write_addr + block_size, tail_bytes, pad_value);
             }
 
-            // Block before copying data from tmp to cb buffer
+            // Block before copying data from tmp to the DFB
             noc.async_read_barrier();
             l1_write_addr += block_row_size;
         }

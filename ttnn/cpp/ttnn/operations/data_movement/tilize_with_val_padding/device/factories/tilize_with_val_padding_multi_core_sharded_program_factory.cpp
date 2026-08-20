@@ -27,10 +27,10 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
 
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    tt::DataFormat input_dfb_data_format = datatype_to_dataformat_converter(a.dtype());
+    uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
+    tt::DataFormat output_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
+    uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
@@ -55,10 +55,10 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     // ---------------------------------------------------------------------
     // Program-scope resource names (typed handles → generated dfb:: / tensor:: tokens)
     // ---------------------------------------------------------------------
-    const DFBSpecName SRC_SHARD{"src_shard"};  // legacy src0 CB (c_1): the input shard, borrowed
-    const DFBSpecName STAGE{"stage"};          // legacy src1 CB (c_0): row-major staging for tilize
-    const DFBSpecName PAD{"pad"};              // legacy src2 CB (c_2): one row of pad value
-    const DFBSpecName OUT_SHARD{"out_shard"};  // legacy output CB (c_16): the output shard, borrowed
+    const DFBSpecName SRC_SHARD{"src_shard"};  // legacy src0 buffer c_1: the input shard, borrowed
+    const DFBSpecName STAGE{"stage"};          // legacy src1 buffer c_0: row-major staging for tilize
+    const DFBSpecName PAD{"pad"};              // legacy src2 buffer c_2: one row of pad value
+    const DFBSpecName OUT_SHARD{"out_shard"};  // legacy output buffer c_16: the output shard, borrowed
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
     const KernelSpecName COMPUTE{"compute"};
@@ -72,8 +72,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     // Tensor parameters. These carry no kernel TensorBinding: the sharded kernels never build a
     // TensorAccessor. They exist to back the two borrowed-memory DFBs below, whose L1 addresses are
     // resolved per enqueue from the corresponding TensorArgument (which is also what patches them on
-    // a program-cache hit — the job the legacy CBDescriptor::buffer assignment did). Each is declared
-    // under the same condition that gated the legacy `cb.buffer = …` assignment, so a DFB that would
+    // a program-cache hit — the job the legacy descriptor buffer assignment did). Each is declared
+    // under the same condition that gated the legacy borrowed-buffer assignment, so a DFB that would
     // not have borrowed keeps its own L1 allocation and pulls in no tensor plumbing.
     // ---------------------------------------------------------------------
     if (src_sharded) {
@@ -84,7 +84,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     }
 
     // ---------------------------------------------------------------------
-    // DataflowBufferSpecs (replaces the legacy c_1 / c_0 / c_2 / c_16 CBDescriptors)
+    // DataflowBufferSpecs (replaces the legacy c_1 / c_0 / c_2 / c_16 buffer descriptors)
     // ---------------------------------------------------------------------
     spec.dataflow_buffers = {
         // Sharded input DFB — built on the input buffer's borrowed memory.
@@ -92,27 +92,27 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
             .unique_id = SRC_SHARD,
             .entry_size = input_shard_width_bytes,
             .num_entries = num_input_rows,
-            .data_format_metadata = input_cb_data_format,
+            .data_format_metadata = input_dfb_data_format,
             .borrowed_from = src_sharded ? std::optional<TensorParamName>{INPUT} : std::nullopt,
         },
         DataflowBufferSpec{
             .unique_id = STAGE,
             .entry_size = input_single_tile_size,
             .num_entries = ntiles_per_batch * 2,
-            .data_format_metadata = input_cb_data_format,
+            .data_format_metadata = input_dfb_data_format,
         },
         DataflowBufferSpec{
             .unique_id = PAD,
             .entry_size = input_shard_width_bytes,
             .num_entries = 1,
-            .data_format_metadata = input_cb_data_format,
+            .data_format_metadata = input_dfb_data_format,
         },
         // Sharded output DFB — built on the output buffer's borrowed memory.
         DataflowBufferSpec{
             .unique_id = OUT_SHARD,
             .entry_size = output_single_tile_size,
             .num_entries = ntiles_per_core,
-            .data_format_metadata = output_cb_data_format,
+            .data_format_metadata = output_dfb_data_format,
             .borrowed_from = out_sharded ? std::optional<TensorParamName>{OUTPUT} : std::nullopt,
         },
     };
@@ -185,7 +185,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreShardedFac
     // Legacy ComputeConfigDescriptor set only fp32_dest_acc_en and unpack_to_dest_mode; every other
     // field stayed at its default, which ComputeGen1Config reproduces exactly. The legacy
     // unpack_to_dest_mode vector was Default everywhere except v[c_0] = UnpackToDestFp32 when
-    // fp32_llk_acc — c_0 is this factory's staging CB, i.e. the tilize input DFB (Default ==
+    // fp32_llk_acc — c_0 is this factory's staging buffer, i.e. the tilize input DFB (Default ==
     // UnpackToSrc is expressed by omitting the entry).
     ComputeGen1Config compute_gen1{.enable_32_bit_dest = fp32_llk_acc};
     if (fp32_llk_acc) {

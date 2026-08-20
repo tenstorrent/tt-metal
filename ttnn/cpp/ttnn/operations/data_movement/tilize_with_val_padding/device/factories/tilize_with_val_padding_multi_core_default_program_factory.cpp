@@ -24,10 +24,10 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor, Tensor& tensor_return_value) {
     const Tensor& a = input_tensor;
     const Tensor& output = tensor_return_value;
-    tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    tt::DataFormat input_dfb_data_format = datatype_to_dataformat_converter(a.dtype());
+    uint32_t input_single_tile_size = tt::tile_size(input_dfb_data_format);
+    tt::DataFormat output_dfb_data_format = datatype_to_dataformat_converter(output.dtype());
+    uint32_t output_single_tile_size = tt::tile_size(output_dfb_data_format);
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
@@ -56,8 +56,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
     // ---------------------------------------------------------------------
     // Program-scope resource names (typed handles → generated dfb:: / tensor:: tokens)
     // ---------------------------------------------------------------------
-    const DFBSpecName IN{"in"};    // legacy src0 CB (c_0): row-major staging for tilize
-    const DFBSpecName OUT{"out"};  // legacy output CB (c_16): tilized output
+    const DFBSpecName IN{"in"};    // legacy src0 buffer c_0: row-major staging for tilize
+    const DFBSpecName OUT{"out"};  // legacy output buffer c_16: tilized output
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
     const KernelSpecName COMPUTE{"compute"};
@@ -69,20 +69,20 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
     spec.name = "tilize_with_val_padding_multi_core_default";
 
     // ---------------------------------------------------------------------
-    // DataflowBufferSpecs (replaces the legacy c_0 / c_16 CBDescriptors)
+    // DataflowBufferSpecs (replaces the legacy c_0 / c_16 buffer descriptors)
     // ---------------------------------------------------------------------
     spec.dataflow_buffers = {
         DataflowBufferSpec{
             .unique_id = IN,
             .entry_size = input_single_tile_size,
             .num_entries = num_tiles_per_row,
-            .data_format_metadata = input_cb_data_format,
+            .data_format_metadata = input_dfb_data_format,
         },
         DataflowBufferSpec{
             .unique_id = OUT,
             .entry_size = output_single_tile_size,
             .num_entries = num_tiles_per_row,
-            .data_format_metadata = output_cb_data_format,
+            .data_format_metadata = output_dfb_data_format,
         },
     };
 
