@@ -1,0 +1,89 @@
+name: "LLK perf baseline snapshot"
+
+# Triggered after a commit lands on main
+# Captures perf data from the PR that was just merged and uploads it as the new baseline
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "tt_metal/tt-llk/**"
+
+permissions:
+  contents: read
+
+jobs:
+  upload-baseline:
+    name: "Upload baseline to Snowflake"
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9e0d6c9882fc7902038978ad1a988142 # v5.0.0
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas pyarrow
+
+      # Placeholder: Retrieve perf_data from SFTP staging
+      - name: Retrieve perf_data from SFTP staging
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          echo "TODO: Retrieve perf_data from SFTP staging"
+          echo ""
+          echo "SFTP staging path: /staging/llk-baselines/perf_${COMMIT_SHA}/"
+          echo ""
+          echo "Expected: perf_data directory structure with CSVs from the PR run"
+          echo "If not found: skip (commit had no perf-relevant changes)"
+          echo ""
+          echo "Credentials:"
+          echo "  - SFTP_HOST, SFTP_USER, SFTP_PASSWORD (or SFTP_KEY)"
+
+      # Placeholder: Convert to Parquet
+      - name: Convert perf_data to Parquet
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          echo "TODO: Convert perf_data CSVs to Parquet with provenance"
+          echo ""
+          echo "Using existing perf infrastructure:"
+          echo "  - tt_metal/tt-llk/tests/python_tests/helpers/perf/parquet.py"
+          echo "  - tt_metal/tt-llk/tests/python_tests/helpers/perf/wide_schema.py"
+          echo ""
+          echo "Metadata to stamp:"
+          echo "  - commit_sha: ${COMMIT_SHA}"
+          echo "  - arch: detect from CI context (wormhole | blackhole | quasar)"
+          echo "  - run_id: (from PR perf workflow)"
+          echo "  - timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "  - pipeline: 'post_merge'"
+
+      # Placeholder: Upload to Snowflake via SFTP
+      - name: Upload baseline to Snowflake
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          echo "TODO: Upload baseline.parquet to Snowflake"
+          echo ""
+          echo "SFTP destination: /baselines/llk/"
+          echo "File naming: baseline_<arch>_<commit_sha>.parquet"
+          echo ""
+          echo "After upload:"
+          echo "  - Data team ingests from SFTP"
+          echo "  - Baseline is now available in Snowflake for the next PR gate"
+          echo "  - Next PR will compare against this commit's measurements"
+
+      - name: Report status
+        if: always()
+        run: |
+          echo "Post-merge baseline snapshot"
+          echo "Commit: ${{ github.sha }}"
+          echo "Branch: ${{ github.ref }}"
+          echo "If this succeeded, the new baseline is ready for the next PR gate."
