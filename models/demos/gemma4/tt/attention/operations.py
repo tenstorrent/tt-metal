@@ -42,7 +42,7 @@ PREFILL_CHUNK_SIZE = int(os.environ.get("GEMMA4_PREFILL_CHUNK_SIZE", "8192"))
 PREFILL_SLIDING_CHUNK_SIZE = int(os.environ.get("GEMMA4_PREFILL_SLIDING_CHUNK_SIZE", "30720"))
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, tied: bool = False):
+def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
     """Fused QKV matmul (no bias for Gemma4).
 
     ``memory_config`` lets the packed-verify decode keep the projection output
@@ -53,17 +53,9 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
     must then split with ``kv_tied=True``, since the output is one section narrower.
     Falls back to the full weight when it was not built (GEMMA4_TIED_QKV=0, sliding layers).
     """
-    use_tied = tied and weights.wqk is not None
-    return ttnn.linear(hidden_states, weights.wqk if use_tied else weights.wqkv, memory_config=memory_config)
-
-
-def qkv_projection_is_tied(weights: AttentionWeights, tied: bool = False) -> bool:
-    """Whether apply_qkv_projection(tied=...) actually used the narrow weight.
-
-    Split calls have to agree with the projection about the layout, and the projection
-    silently falls back, so both read this rather than the request.
-    """
-    return tied and weights.wqk is not None
+    if kv_tied:
+        assert weights.wqk is not None, "requested kv_tied projection but no QK weights found"
+    return ttnn.linear(hidden_states, weights.wqk if kv_tied else weights.wqkv, memory_config=memory_config)
 
 
 def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False):
@@ -111,8 +103,7 @@ def split_qkv_heads_prefill(
     interleaved input yields L1 interleaved output).
 
     ``kv_tied`` says the input came from the Q+K weight and carries one K/V section, so the
-    op reads V from K's columns. It must match what apply_qkv_projection actually did —
-    ``qkv_projection_is_tied`` is the shared answer. K and V still come back as two
+    op reads V from K's columns. K and V still come back as two
     tensors, which is what the caller needs: K takes k_norm and RoPE, V takes v_norm.
     """
     num_local_heads = config.num_attention_heads // tp

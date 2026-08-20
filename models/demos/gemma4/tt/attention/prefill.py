@@ -26,7 +26,6 @@ from .operations import (
     concat_heads,
     effective_block_size,
     prefill_sdpa_program_config,
-    qkv_projection_is_tied,
     split_qkv_heads_prefill,
 )
 from .ring_prefill import ring_prefill_attention, write_chunk_to_ring_cache
@@ -140,11 +139,11 @@ def _prefill_forward_single(
     # (and the matmul would compute) the same K columns twice. Take the Q+K weight and let the
     # split read V back off K's columns. tied_qkv reflects what the projection actually used,
     # since it falls back to the full weight when wqk was not built.
-    tied_qkv = qkv_projection_is_tied(weights, weights.is_global)
-    xqkv = apply_qkv_projection(hidden_states, weights, tied=tied_qkv)
+    kv_tied = weights.is_global
+    xqkv = apply_qkv_projection(hidden_states, weights, kv_tied=kv_tied)
 
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(
-        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated, kv_tied=tied_qkv
+        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated, kv_tied=kv_tied
     )
 
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
@@ -577,15 +576,15 @@ def prefill_forward(
     original_seq_len = seq_len
 
     # See _prefill_forward_single: global layers project Q+K only and the split re-reads K as V.
-    tied_qkv = qkv_projection_is_tied(weights, weights.is_global)
-    xqkv = apply_qkv_projection(hidden_states, weights, tied=tied_qkv)
+    kv_tied = weights.is_global
+    xqkv = apply_qkv_projection(hidden_states, weights, kv_tied=kv_tied)
     ttnn.deallocate(hidden_states)
 
     xqkv = ttnn.reshape(xqkv, [batch_size, 1, seq_len // batch_size, -1])
     seq_len_per_user = seq_len // batch_size
 
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(
-        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated, kv_tied=tied_qkv
+        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated, kv_tied=kv_tied
     )
     ttnn.deallocate(xqkv)
 

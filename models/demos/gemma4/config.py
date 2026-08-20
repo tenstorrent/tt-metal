@@ -14,17 +14,8 @@ import ttnn
 
 
 def _cp_disabled() -> bool:
-    """``GEMMA4_DISABLE_CP=1`` forces the prefill context-parallel degree to 1.
+    """``GEMMA4_DISABLE_CP=1`` forces the prefill context-parallel degree to 1."""
 
-    An ablation switch, not a tuning knob. Context parallelism can only be
-    isolated by comparing against an otherwise-identical CP=1 run, and on a
-    32-device system that is hard to get any other way: a smaller mesh (1x8, 1x4)
-    fails fabric init because fabric expects every device in the system to be
-    open, and 1x32 hits a separate hang in the TP=32 all-reduce. Setting this on a
-    (4,8) mesh keeps the same 32 devices and the same TP, and simply replicates the
-    sequence across the four rows instead of sharding it — redundant work, but a
-    true apples-to-apples baseline.
-    """
     return os.environ.get("GEMMA4_DISABLE_CP", "0").lower() in ("1", "true", "yes")
 
 
@@ -66,8 +57,7 @@ class MeshConfig:
         self.total_devices = mesh_shape[0] * mesh_shape[1]
 
         self.decode = decode
-        # Rows carry sequence-parallel (context-parallel) prefill by default;
-        # GEMMA4_DISABLE_CP collapses that to 1 for ablation (see _cp_disabled).
+        # Rows carry sequence-parallel (context-parallel) prefill by default
         default_prefill_sp = 1 if _cp_disabled() else mesh_shape[0]
         self.prefill = prefill or ModeConfig(tp=decode.tp, sp=default_prefill_sp, ep=1)
 
