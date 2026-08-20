@@ -55,8 +55,8 @@ enum class BfdResource : std::uint8_t
 };
 
 // Sentinel for "no id allocated yet" in current[]. Real ids are 0..31, so 128 is safely out of
-// range and fits uint8_t. current[] is bss zero-init on device (0 is a valid id), so it must be
-// set to this sentinel inside the lazy-init block, not via a static initializer.
+// range and fits uint8_t. BfdAllocatorState's constexpr ctor seeds current[] to this sentinel
+// (materialized per-thread from .tdata), so it starts distinct from the valid id 0.
 constexpr std::uint8_t BFD_ID_INVALID = 128;
 
 constexpr bool bfd_engine_owned_by_trisc(const BfdResource engine, const std::uint32_t trisc)
@@ -108,20 +108,31 @@ constexpr std::uint8_t bfd_partition_size(const std::uint32_t trisc)
 
 struct BfdAllocatorState
 {
-    std::uint8_t next;                                                   // next id to hand out; valid only when initialized
+    std::uint8_t next;                                                   // next id to hand out
     std::uint8_t current[static_cast<std::uint8_t>(BfdResource::Count)]; // most recent id per engine; BFD_ID_INVALID until first alloc
-    bool initialized;                                                    // lazy init: globals are bss zero-init only, no dynamic init on device
+
+    // Constant-initialized per-thread from .tdata by do_thread_crt1 (trisck.cc): seeds next to this
+    // TRISC's partition base and every engine slot to the no-id sentinel. thread_local static init
+    // makes this valid (verified by QuasarComputeKernelTLS), so no runtime lazy-init is needed.
+    constexpr BfdAllocatorState() : next(bfd_partition_base(ckernel::TRISC_ID)), current {}
+    {
+        for (std::uint8_t i = 0; i < static_cast<std::uint8_t>(BfdResource::Count); ++i)
+        {
+            current[i] = BFD_ID_INVALID;
+        }
+    }
 };
 
-// One instance per TRISC image. thread_local so the host-threaded emulation gives each Neo's
-// TRISC its own allocator, matching the per-TRISC physical partitioning of the BFD table. A
-// single shared instance races the id allocator two ways when num_threads > 1 (see tt-llk#1678):
-// an unfenced read-modify-write on next hands the same id to two threads, and the unfenced lazy
-// init lets one role hand out ids from another role's partition. Mirrors trisc::dest_register_offset:
-// ENV_LLK_INFRA (standalone LLK infra, no firmware TU) uses a plain static; the metal build
-// declares it extern thread_local and defines it in firmware (tt_metal/hw/firmware/src/tt-2xx/trisc.cc).
+// One instance per TRISC image. thread_local so the host-threaded emulation gives each Neo's TRISC
+// its own allocator, each constexpr-seeded to that TRISC's own partition base (see the ctor above),
+// matching the per-TRISC physical partitioning of the BFD table. A single shared instance would race
+// the id allocator when num_threads > 1 (see tt-llk#1678): an unfenced read-modify-write on next
+// hands the same id to two threads, and a shared next mixes one role's ids into another's partition.
+// Mirrors trisc::dest_register_offset: ENV_LLK_INFRA (standalone LLK infra, no firmware TU) uses a
+// plain static; the metal build declares it extern thread_local and defines it in firmware
+// (tt_metal/hw/firmware/src/tt-2xx/trisc.cc).
 #ifdef ENV_LLK_INFRA
-static BfdAllocatorState bfd_state; // zero-init; next initialized lazily to the partition base
+static BfdAllocatorState bfd_state; // constexpr ctor seeds next=partition base, current[]=BFD_ID_INVALID
 #else
 extern thread_local BfdAllocatorState bfd_state; // defined in tt_metal/hw/firmware/src/tt-2xx/trisc.cc
 #endif
@@ -141,16 +152,6 @@ inline std::uint8_t bfd_alloc()
     constexpr std::uint8_t base = bfd_partition_base(ckernel::TRISC_ID);
     constexpr std::uint8_t end  = base + bfd_partition_size(ckernel::TRISC_ID);
 
-    if (!bfd_state.initialized)
-    {
-        bfd_state.next = base;
-        for (std::uint8_t i = 0; i < static_cast<std::uint8_t>(BfdResource::Count); ++i)
-        {
-            bfd_state.current[i] = BFD_ID_INVALID;
-        }
-        bfd_state.initialized = true;
-    }
-
     const std::uint8_t id                           = bfd_state.next;
     bfd_state.current[static_cast<std::uint8_t>(E)] = id;
     const std::uint8_t next                         = id + 1;
@@ -168,10 +169,9 @@ inline std::uint8_t bfd_current()
     static_assert(ckernel::TRISC_ID != 1, "math TRISC owns no buffer descriptors");
     static_assert(E < BfdResource::Count, "invalid BFD engine");
     static_assert(bfd_engine_owned_by_trisc(E, ckernel::TRISC_ID), "BFD engine not owned by compiling TRISC");
-    // current[] is bss zero before the first bfd_alloc (0 is a valid id), and the BFD_ID_INVALID
-    // sentinel is only written inside bfd_alloc's lazy-init; gate on initialized so a bfd_current
-    // that races ahead of any allocation trips the assert instead of returning a bogus id 0.
-    LLK_ASSERT(bfd_state.initialized && bfd_state.current[static_cast<std::uint8_t>(E)] != BFD_ID_INVALID, "bfd_current before first bfd_alloc");
+    // current[] is seeded to BFD_ID_INVALID by the constexpr ctor, so a bfd_current that races ahead
+    // of any bfd_alloc trips this assert instead of returning a bogus id 0.
+    LLK_ASSERT(bfd_state.current[static_cast<std::uint8_t>(E)] != BFD_ID_INVALID, "bfd_current before first bfd_alloc");
     return bfd_state.current[static_cast<std::uint8_t>(E)];
 }
 

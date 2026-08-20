@@ -85,9 +85,9 @@ namespace trisc {
 thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
 // BFD id allocator state (Quasar). Defined for all TRISC images alongside dest_register_offset;
 // thread_local so the host-threaded emulation gives each TRISC its own allocator (tt-llk#1678).
-// initialized=false is set explicitly (not left to .tbss zeroing) so the first bfd_alloc runs
-// lazy-init, which sets next to the partition base and current[] to BFD_ID_INVALID.
-thread_local BfdAllocatorState bfd_state __attribute__((used)) = {.next = 0, .current = {}, .initialized = false};
+// Constant-initialized by BfdAllocatorState's constexpr ctor (next=partition base, current[]=
+// BFD_ID_INVALID), materialized per-thread from .tdata by do_thread_crt1 (trisck.cc).
+thread_local BfdAllocatorState bfd_state __attribute__((used));
 }  // namespace trisc
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
