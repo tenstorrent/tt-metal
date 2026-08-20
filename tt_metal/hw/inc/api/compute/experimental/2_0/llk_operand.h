@@ -37,7 +37,7 @@
 //   to_llk_mem_descriptor(DFBBindingToken)
 //   to_llk_mem_descriptor(ScratchpadBindingToken)
 //   to_llk_mem_descriptor(TensorBindingToken<CTA, CRTA>)  // static_assert(!args_t::is_dram)
-//   llk_desc_from_members(LlkOperandMembers)              // format + four face-grid uint8_ts -> descriptor
+//   llk_desc_from_members(LlkOperandMembers / LLKMetadata)  // format + four face-grid uint8_ts -> descriptor
 // Final m2-neat layout (after the header restructure): declarations on llk_mem_descriptor.h, definitions
 // in each token header, COMPILE_FOR_TRISC-gated so data-movement builds of those headers do not pull LLK
 // include paths. Format-less conversion was UB; DRAM stayed the existing is_dram assert.

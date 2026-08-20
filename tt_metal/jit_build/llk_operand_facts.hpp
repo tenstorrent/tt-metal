@@ -20,7 +20,7 @@
 namespace tt::tt_metal {
 
 // The compile-time half of an LLK operand, normalized off a DFB / scratchpad / tensor spec. Baked onto
-// the kernel's binding token by genfiles (as device-side `LlkOperandMembers`) and hashed into the kernel
+// the kernel's binding token by genfiles (as device-side `LLKMetadata`) and hashed into the kernel
 // cache key. `present` is false when the source declared no data format, in which case the remaining
 // fields are meaningless and genfiles emits the token's no-metadata constructor.
 struct LlkOperandFacts {
@@ -155,10 +155,10 @@ inline LlkOperandFacts facts_from_format_tile_and_face(
             effective_tile.get_height(), effective_tile.get_width(), face->face_r_dim, face->num_faces));
 }
 
-// Designated-initializer text for the device-side `LlkOperandMembers` aggregate (llk_operand_members.h).
+// Designated-initializer text for the device-side `LLKMetadata` aggregate (internal/llk_metadata.h).
 // Positional init is deliberately avoided: a field reorder would silently swap geometry. Both the JIT
 // filegen and the emulation twin emit through here so the two cannot drift.
-inline std::string format_llk_operand_members(const LlkOperandFacts& facts) {
+inline std::string format_llk_metadata(const LlkOperandFacts& facts) {
     return fmt::format(
         "{{.format = {}u, .face_r_dim = {}u, .face_c_dim = {}u, .num_faces_r_dim = {}u, .num_faces_c_dim = {}u}}",
         facts.hw_format,
