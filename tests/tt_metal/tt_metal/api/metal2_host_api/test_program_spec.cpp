@@ -104,6 +104,7 @@ static_assert(hashable_v<DataflowBufferSpec>, "DataflowBufferSpec must be hashab
 static_assert(
     hashable_v<CrossNodeDataflowBufferSpec>, "CrossNodeDataflowBufferSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreSpec>, "SemaphoreSpec must be hashable via ttsl reflection");
+static_assert(hashable_v<ScratchpadSpec>, "ScratchpadSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<TensorParameter>, "TensorParameter must be hashable via ttsl reflection");
 
 // KernelSpec subcomponents
@@ -1611,6 +1612,85 @@ TEST_F(ProgramSpecTestQuasar, DifferentScratchpadSizeProducesDifferentKernelHash
     EXPECT_NE(hash_small, hash_large) << "Scratchpads of different sizes must produce different kernel hashes.";
 }
 
+TEST_F(ProgramSpecTestQuasar, ScratchpadFormatUnsupportedOnArchFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Bfp8,
+    }};
+    spec.kernels[1].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("ScratchpadSpec 'scratch_0' has data format")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadTileWithoutFormatFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .tile_format_metadata = Tile{{32, 32}},
+    }};
+    spec.kernels[1].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("no data_format_metadata")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadFaceGeometryWithoutFormatFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 4},
+    }};
+    spec.kernels[1].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("no data_format_metadata")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadInvalidFaceGeometryFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 0},
+    }};
+    spec.kernels[1].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face_r_dim == 0")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ScratchpadFaceGridDoesNotFitTileFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"scratch_0"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .tile_format_metadata = Tile{{32, 32}},
+        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 9, .num_faces = 8},
+    }};
+    spec.kernels[1].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face grid")));
+}
+
 TEST_F(ProgramSpecTestQuasar, TensorBindingOnComputeKernelIsAccepted) {
     // A tensor binding on a compute kernel is legal: the kernel constructs a LocalTensorAccessor
     // (NOC-free) from the binding token rather than a TensorAccessor. ValidateProgramSpec accepts it;
@@ -1961,6 +2041,55 @@ TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("DFB 'dfb' has data format")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBInvalidFaceGeometryFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 0};
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face_r_dim == 0")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DFBFaceGridDoesNotFitTileFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.tile_format_metadata = Tile{{32, 32}};
+    dfb.unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 9, .num_faces = 8};
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("face grid")));
 }
 
 TEST_F(ProgramSpecTestQuasar, TooManyDFBsFailsValidation) {
@@ -2847,6 +2976,8 @@ static_assert(
     "DataflowBufferSpec must remain an aggregate to support designated initializers");
 static_assert(
     std::is_aggregate_v<SemaphoreSpec>, "SemaphoreSpec must remain an aggregate to support designated initializers");
+static_assert(
+    std::is_aggregate_v<ScratchpadSpec>, "ScratchpadSpec must remain an aggregate to support designated initializers");
 static_assert(std::is_aggregate_v<DataMovementGen1Config>, "DataMovementGen1Config must remain an aggregate");
 static_assert(std::is_aggregate_v<DataMovementGen2Config>, "DataMovementGen2Config must remain an aggregate");
 static_assert(std::is_aggregate_v<ComputeGen1Config>, "ComputeGen1Config must remain an aggregate");
@@ -2926,6 +3057,27 @@ TEST(AggregateSpecTypes, DataflowBufferSpecDesignatedInitializers) {
     };
 
     EXPECT_EQ(borrowed_dfb.borrowed_from, std::optional<TensorParamName>{TensorParamName{"input_tensor"}});
+}
+
+TEST(AggregateSpecTypes, ScratchpadSpecDesignatedInitializers) {
+    ScratchpadSpec pad{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+    };
+    EXPECT_EQ(pad.unique_id.get(), "pad");
+    EXPECT_EQ(pad.size_per_node, 1024u);
+    EXPECT_FALSE(pad.data_format_metadata.has_value());
+    EXPECT_FALSE(pad.tile_format_metadata.has_value());
+    EXPECT_FALSE(pad.unpack_face_geometry_metadata.has_value());
+
+    ScratchpadSpec with_format{
+        .unique_id = ScratchpadSpecName{"pad_fmt"},
+        .size_per_node = 1024,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+    EXPECT_EQ(with_format.data_format_metadata, tt::DataFormat::Float16_b);
+    EXPECT_FALSE(with_format.tile_format_metadata.has_value());
+    EXPECT_FALSE(with_format.unpack_face_geometry_metadata.has_value());
 }
 
 TEST(AggregateSpecTypes, WorkUnitSpecDesignatedInitializers) {
@@ -4038,6 +4190,27 @@ void kernel_main() {
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 1024}};
     spec.kernels[1].scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, ScratchpadComputeBindWithoutFormatSucceeds) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    spec.kernels[1].source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    Scratchpad<int32_t> pad(scratch::pad);
+    volatile uint32_t base = pad.get_base_address();
+    (void)base;
+}
+)"};
+
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 1024}};
+    spec.kernels[1].scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
     IDevice* device = mesh_device_->get_devices()[0];
