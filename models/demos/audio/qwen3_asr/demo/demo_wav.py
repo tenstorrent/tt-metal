@@ -33,7 +33,14 @@ from qwen3_asr_decoder import Qwen3ASRDecoder  # noqa: E402
 
 WAV_DIR = os.environ.get("WAV_DIR", "/ttwork/qwen3_asr_wav")
 CKPT = os.environ.get("HF_MODEL", "/ttwork/qwen3_asr_text_decoder")
-SNAP = "/root/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/snapshots"
+SNAP = os.environ.get(
+    "QWEN3ASR_SNAP_BASE",
+    "/root/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/snapshots",
+)
+GOLDENS_PATH = os.environ.get(
+    "QWEN3ASR_GOLDENS",
+    os.path.join(os.path.dirname(__file__), "..", "n150_opt", "goldens.json"),
+)
 AUDIO_TOKEN_ID = 151676
 
 
@@ -57,8 +64,23 @@ def main():
     tok = AutoTokenizer.from_pretrained(CKPT)
     embed = load_embed_tokens()
     summary = json.load(open(os.path.join(WAV_DIR, "summary.json")))
+    goldens = {}
+    if os.path.isfile(GOLDENS_PATH):
+        goldens = json.load(open(GOLDENS_PATH, encoding="utf-8"))
 
-    dev = ttnn.open_device(device_id=0, trace_region_size=200000000, l1_small_size=32768)
+    mesh = os.environ.get("MESH_DEVICE", "").upper()
+    open_kwargs = dict(trace_region_size=200000000, l1_small_size=32768, num_command_queues=2)
+    if mesh == "N300":
+        # Decoder TP=2 uses fabric all-gather (distributed RMSNorm / LM head).
+        ttnn.set_fabric_config(
+            ttnn.FabricConfig.FABRIC_1D,
+            ttnn.FabricReliabilityMode.STRICT_INIT,
+            None,
+            ttnn.FabricTensixConfig.DISABLED,
+        )
+        dev = ttnn.open_mesh_device(ttnn.MeshShape(1, 2), **open_kwargs)
+    else:
+        dev = ttnn.open_device(device_id=0, **open_kwargs)
     try:
         enc_params = tt_enc.preprocess_weights(w, dev)
         args = ModelArgs(dev, max_batch_size=1, max_seq_len=2048)
@@ -91,16 +113,31 @@ def main():
             audio_sec = mel.shape[1] / 100.0
             rtf = (t_enc + t_dec) / audio_sec
             cpu = summary.get(name, {})
+            g = goldens.get("clips", {}).get(name, {})
             print(
                 f"\n===== {name}  ({audio_sec:.0f}s, RTF {rtf:.3f}, {len(ids)} tok, "
-                f"{len(ids)/t_dec:.0f} tok/s) ====="
+                f"{len(ids)/t_dec:.0f} tok/s)  enc={t_enc:.3f}s gen={t_dec:.3f}s ====="
             )
             print(f"  TT  lang={lang!r}")
             print(f"  TT  : {text!r}")
             print(f"  CPU lang={cpu.get('cpu_lang')!r}")
             print(f"  CPU : {cpu.get('cpu_text')!r}")
+            want_lang = g.get("lang")
+            want_text = g.get("text")
+            if want_lang:
+                print(f"  GATE lang={'PASS' if lang == want_lang else 'FAIL'}  want={want_lang!r}")
+            if g.get("gate") == "byte_identical" and want_text:
+                print(f"  GATE text={'PASS' if text == want_text else 'FAIL'}  (byte-identical)")
+            if g.get("gate") == "lang_japanese_cjk":
+                cjk = any("\u3040" <= ch <= "\u30ff" or "\u4e00" <= ch <= "\u9fff" for ch in text)
+                ok = lang == "Japanese" and cjk
+                print(f"  GATE ja={'PASS' if ok else 'FAIL'}  cjk={cjk}")
     finally:
-        ttnn.close_device(dev)
+        if mesh == "N300":
+            ttnn.close_mesh_device(dev)
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        else:
+            ttnn.close_device(dev)
 
 
 if __name__ == "__main__":
