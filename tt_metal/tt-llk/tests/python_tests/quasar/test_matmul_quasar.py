@@ -31,10 +31,9 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
@@ -44,7 +43,6 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     NUM_FACES,
-    PERF_RUN_TYPE,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
@@ -52,20 +50,22 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
 kt_dims = [1, 2, 4]
+PERF_KT_DIMS = [1, 4]
 
 
-def matmul_math_fidelities(format):
-    # Integer matmul is LoFi-only on Quasar.
-    return (
-        [MathFidelity.LoFi]
-        if format.input_format == DataFormat.Int8
-        else [
-            MathFidelity.LoFi,
-            MathFidelity.HiFi2,
-            MathFidelity.HiFi3,
-            MathFidelity.HiFi4,
-        ]
-    )
+def matmul_math_fidelities(format, *, is_perf=False):
+    # Integer matmul is LoFi-only on Quasar. MX is already full precision at LoFi,
+    # so perf skips the extra HiFi phases.
+    if format.input_format == DataFormat.Int8 or (
+        is_perf and format.input_format.is_mx_format()
+    ):
+        return [MathFidelity.LoFi]
+    return [
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ]
 
 
 def matmul_dest_sync_modes(*, is_perf=False):
@@ -80,20 +80,24 @@ def matmul_dest_acc_modes(format):
     )
 
 
-def matmul_dimensions(dest_acc, dest_sync, *, exact_dest_fill=False):
+def matmul_dimensions(dest_acc, dest_sync, *, exact_dest_fill=False, is_perf=False):
     max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // (
         2 if dest_acc == DestAccumulation.Yes else 1
     )
+    # Perf keeps dest-full tall (max_tiles, 1) and wide (1, max_tiles) so both
+    # ct>=rt and ct<rt MOP addr_mod branches are covered, and kt=1 vs kt=4.
+    mt_dims = (1, max_tiles) if is_perf else range(1, max_tiles + 1)
+    selected_kt_dims = PERF_KT_DIMS if is_perf else kt_dims
     return [
         ([mt_dim * TILE_DIM, kt_dim * TILE_DIM], [kt_dim * TILE_DIM, nt_dim * TILE_DIM])
-        for mt_dim in range(1, max_tiles + 1)
+        for mt_dim in mt_dims
         if not exact_dest_fill or max_tiles % mt_dim == 0
         for nt_dim in (
             [max_tiles // mt_dim]
             if exact_dest_fill
             else range(1, max_tiles // mt_dim + 1)
         )
-        for kt_dim in kt_dims
+        for kt_dim in selected_kt_dims
     ]
 
 
@@ -140,7 +144,7 @@ _ARCH = get_chip_architecture()
 @pytest.mark.quasar
 @parametrize(
     format=MATMUL_FORMAT,
-    math_fidelity=matmul_math_fidelities,
+    math_fidelity=lambda format: matmul_math_fidelities(format, is_perf=False),
     dest_sync_mode=lambda: matmul_dest_sync_modes(is_perf=False),
     dest_acc=matmul_dest_acc_modes,
     dimensions=runtime(
@@ -296,7 +300,7 @@ def test_matmul(
     ]
     runtimes = [
         CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
-        TILE_COUNT(matmul_dims.output_tile_cnt),
+        TILE_COUNT(matmul_dims.output_tile_cnt * matmul_dims.kt_dim),
         NUM_FACES(num_faces, num_faces, num_faces),
         LOOP_FACTOR(loop_factor),
     ]
@@ -330,20 +334,16 @@ def test_matmul(
         "disable_format_inference": disable_format_inference,
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    # The shared source keys off PERF_RUN_TYPE. PerfConfig injects it per run type;
-    # the functional path runs the plain L1-to-L1 kernel, so supply it explicitly.
-    configuration = TestConfig(
-        boot_mode=boot_mode,
-        **{
-            **test_config_kwargs,
-            "templates": templates + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
