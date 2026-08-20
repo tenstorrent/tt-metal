@@ -61,6 +61,28 @@
 // Dest-move opcode in `llk_math_top32_rm_configure_mop` (ELWADD against a zeroed SrcB at
 // fp32 Dest, MOVA2D otherwise). The consumer only ever builds fp32 Dest, so the
 // dest_acc=No cells are the first exercise the 16-bit half of this family has had.
+//
+// TOP32_MODE = 1: the pre-sorted 1024 path
+// ----------------------------------------
+// The second mode covers the other three SFPU entry points --
+// _bitonic_top32_of_1024_rm_pre_sorted_{prep,combine,final}_ -- and mirrors
+// top32_rm_dev_compute_v2.cpp, which is what the consumer runs at >= 1024 elements. It
+// does NOT use this family's unpack: a whole 32x32 tile is transposed into Dest
+// (transpose_tile's LLK sequence), so each Dest column holds 32 of the row's elements, and
+// prep/combine/final reduce 16 columns at a time instead of one 64-slot column.
+//
+// The contract that mode carries, and the reason it needs its own stimuli: the input must
+// already be sorted into descending runs of 32 ("pre_sorted" in the function names). prep
+// only builds bitonic sequences out of runs that are already monotone; hand it unsorted
+// data and it returns a wrong answer rather than failing. This driver leaves that to the
+// python side, which generates the same shape the family's own dev test does (value keyed
+// on i % 32, descending, plus a per-group tiebreak).
+//
+// Mode 1 is Float32-only, and that is forced rather than chosen: at >= 1024 elements the
+// indices leave bf16's exactly-representable range, and so do value tiebreaks fine enough
+// to keep 32 group leaders distinct. Float32 also routes the transpose through its 32-bit
+// path (unpack-to-dest + _llk_math_transpose_dest_), which is the branch transpose_tile
+// takes for uint32 index tiles in the consumer.
 
 #include <cstdint>
 
@@ -96,6 +118,15 @@ inline constexpr std::uint32_t chunk_num_faces(std::uint32_t first)
     return (first + ELEMENTS_PER_CHUNK > TOP32_ROW_ELEMENTS) ? 2 : 4;
 }
 
+// Mode 1 walks whole tiles instead of 64-element chunks.
+static constexpr std::uint32_t ELEMENTS_PER_TILE = 32 * 32;
+static constexpr std::uint32_t NUM_TILE_CHUNKS   = TOP32_ROW_ELEMENTS / ELEMENTS_PER_TILE;
+
+static constexpr bool PRE_SORTED_MODE = (TOP32_MODE == 1);
+
+static_assert(
+    !PRE_SORTED_MODE || (TOP32_ROW_ELEMENTS % ELEMENTS_PER_TILE == 0), "the pre-sorted mode has no tail path: row_elements must be a multiple of 1024");
+
 #ifdef LLK_TRISC_UNPACK
 
 // The experimental top32_rm LLK headers carry unused parameters that predate this test:
@@ -108,6 +139,7 @@ inline constexpr std::uint32_t chunk_num_faces(std::uint32_t first)
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #include "experimental/llk_unpack_A_top32_rm.h"
 #pragma GCC diagnostic pop
+#include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 
 // One operand of one chunk. Re-initialising per call mirrors the consumer, which has to
@@ -116,6 +148,19 @@ inline void unpack_chunk(std::uint32_t base_address, std::uint32_t chunk, std::u
 {
     _llk_unpack_A_top32_rm_init_(1 /* within_face_16x16_transpose */, src_format, dst_format);
     _llk_unpack_A_top32_rm_(num_faces, base_address + chunk * CHUNK_ADDR_STRIDE, src_format, dst_format);
+}
+
+// Mode 1: transpose_tile's unpack half. The 32-bit branch leaves the within-face 16x16
+// transpose to the math thread's _llk_math_transpose_dest_ and needs the SrcB dummy valid
+// that transpose feeds on; the branch is picked by the format, exactly as
+// api/compute/transpose.h picks it.
+inline void unpack_transpose_tile(std::uint32_t l1_tile, std::uint32_t src_format, std::uint32_t dst_format)
+{
+    _llk_unpack_A_<BroadcastType::NONE, false /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(l1_tile), src_format, dst_format);
+    if constexpr (unpack_to_dest)
+    {
+        _llk_unpack_set_srcb_dummy_valid_();
+    }
 }
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -128,6 +173,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
+
+    if constexpr (PRE_SORTED_MODE)
+    {
+        for (std::uint32_t chunk = 0; chunk < NUM_TILE_CHUNKS; chunk++)
+        {
+            // transpose_init, per api/compute/transpose.h: transpose_of_faces always;
+            // within-face 16x16 and acc_to_dest only on the non-32-bit path, where the
+            // unpacker does the whole 32x32 by itself (acc_to_dest with unpack_to_dest is
+            // static_asserted out in llk_unpack_A.h). Re-run per chunk to stay in step with
+            // the math thread's own re-init.
+            _llk_unpack_A_init_<BroadcastType::NONE, !unpack_to_dest /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                1 /* transpose_of_faces */, unpack_to_dest ? 0 : 1 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, src_format, dst_format);
+
+            unpack_transpose_tile(params.buffer_A[chunk], src_format, dst_format);
+            unpack_transpose_tile(params.buffer_B[chunk], src_format, dst_format);
+        }
+        return;
+    }
 
     const std::uint32_t values_base  = L1_ADDRESS(params.buffer_A[0]);
     const std::uint32_t indices_base = L1_ADDRESS(params.buffer_B[0]);
@@ -158,6 +221,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #pragma GCC diagnostic pop
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_common.h"
+#include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h"
@@ -198,6 +262,62 @@ inline void top32_rebuild(std::uint32_t dst_tile, bool direction, bool skip_seco
         ckernel::sfpu::_bitonic_top32_rebuild_<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>, dst_tile, VectorMode::RC_custom, direction, skip_second);
 }
 
+// Mode 1's three entry points. prep's third template argument is the direction its rebuild
+// leaves each column in, and the consumer alternates it per chunk -- descending for the
+// first chunk, ascending for every later one -- so combine sees one bitonic sequence across
+// the two tiles. It is a template argument, so both polarities are instantiated.
+template <bool top_min>
+inline void top32_pre_sorted_prep(std::uint32_t dst_tile)
+{
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_bitonic_top32_of_1024_rm_pre_sorted_prep_<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en, top_min>,
+        dst_tile,
+        VectorMode::RC_custom,
+        dst_tile);
+}
+
+inline void top32_pre_sorted_combine(std::uint32_t dst_tile)
+{
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_bitonic_top32_of_1024_rm_pre_sorted_combine_<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>,
+        dst_tile,
+        VectorMode::RC_custom,
+        dst_tile);
+}
+
+inline void top32_pre_sorted_final(std::uint32_t dst_tile)
+{
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_bitonic_top32_of_1024_rm_pre_sorted_final_<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>,
+        dst_tile,
+        VectorMode::RC_custom,
+        dst_tile);
+}
+
+// Mode 1: transpose_init's math half.
+inline void math_transpose_init(std::uint32_t math_format)
+{
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
+        TILE_NUM_FACES, math_format);
+    if constexpr (unpack_to_dest)
+    {
+        _llk_math_transpose_dest_init_<false /* transpose_of_faces */, true /* is_32bit */>();
+    }
+}
+
+// Mode 1: transpose_tile's math half, per format branch, mirroring api/compute/transpose.h.
+// On the 32-bit path the unpacker only reordered faces, so the within-face 16x16 transpose
+// happens here; on the 16-bit path the unpacker did the whole 32x32 and this is a datacopy.
+inline void math_transpose_tile(std::uint32_t dst_tile, std::uint32_t math_format)
+{
+    _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+        dst_tile, math_format, math_format);
+    if constexpr (unpack_to_dest)
+    {
+        _llk_math_transpose_dest_wrapper_<is_fp32_dest_acc_en, false /* transpose_of_faces */, true /* is_32bit */>(dst_tile);
+    }
+}
+
 // Move one unpacked operand into its Dest tile. All four faces always, per the LLK's own
 // comment: the faces the unpacker left at -inf have to reach Dest too, or a trailing
 // 32-element chunk would sort against stale data.
@@ -233,6 +353,40 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // coexist with _topk_xl_init_<K, fused>() in one kernel -- they overlap in all three
     // (measured on BH p100a: the math thread hangs) -- which is why nothing here touches
     // the topk_xl family.
+    if constexpr (PRE_SORTED_MODE)
+    {
+        // Chunk 0 seeds the running top32. The transpose init is re-run before every
+        // chunk's pair of transposes, as the consumer does: the SFPU family in between owns
+        // ADDR_MOD_6 and the SFPU control register, the datacopy owns the MOP and the rest
+        // of the ADDR_MODs, and only the datacopy half has to be reinstated.
+        math_transpose_init(math_format);
+        math_transpose_tile(VALUE_TILE, math_format);
+        math_transpose_tile(INDEX_TILE, math_format);
+
+        _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+        ckernel::sfpu::_top32_rm_init_();
+
+        top32_pre_sorted_prep<false /* top_min: descending */>(VALUE_TILE);
+
+        for (std::uint32_t chunk = 1; chunk < NUM_TILE_CHUNKS; chunk++)
+        {
+            math_transpose_init(math_format);
+            math_transpose_tile(STAGE_VALUE_TILE, math_format);
+            math_transpose_tile(STAGE_INDEX_TILE, math_format);
+
+            // Staged chunks are left ASCENDING so the two tiles form one bitonic sequence,
+            // which is what combine's across_tiles merge consumes.
+            top32_pre_sorted_prep<true /* top_min: ascending */>(STAGE_VALUE_TILE);
+            top32_pre_sorted_combine(VALUE_TILE);
+        }
+
+        // Reduce the 16 surviving columns of F0/F1 to one: the final top32, in column 0.
+        top32_pre_sorted_final(VALUE_TILE);
+
+        _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+        return;
+    }
+
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
     ckernel::sfpu::_top32_rm_init_();
 

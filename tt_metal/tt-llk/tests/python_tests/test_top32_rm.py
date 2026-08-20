@@ -36,14 +36,35 @@ sort (``InstrModLoadStore::INT32`` vs ``LO16``) *and* the Dest-move opcode in
 otherwise). The consumer only ever builds fp32 Dest, so the ``dest_acc=No`` cells are the
 first exercise the 16-bit half of this family has had.
 
+``test_top32_rm_pre_sorted`` covers the other mode
+-------------------------------------------------
+At >= 1024 elements the consumer switches to ``top32_rm_dev_compute_v2.cpp`` and a
+different set of entry points -- ``_bitonic_top32_of_1024_rm_pre_sorted_{prep,combine,final}_``
+-- reaching Dest through ``transpose_tile`` rather than through this family's own unpack, so
+each Dest column holds 32 of the row's elements and 16 columns are reduced at once.
+
+That mode carries a contract the plain one does not: **the input must already be sorted into
+descending runs of 32**. prep only builds bitonic sequences out of runs that are already
+monotone, so unsorted input returns a wrong answer rather than failing, which is why the
+stimuli there are generated with the value keyed on ``i % 32`` (the same shape the family's
+own dev test uses) plus a per-group tiebreak.
+
+It is Float32-only, and that is forced rather than chosen: at 1024+ elements the indices
+leave bf16's exactly-representable range, and so do value tiebreaks fine enough to keep the
+group leaders distinct. Float32 also routes the transpose through its 32-bit branch
+(unpack-to-dest + ``_llk_math_transpose_dest_``), which is the branch the consumer takes for
+its uint32 index tile.
+
 Not covered here, deliberately
 ------------------------------
-* The ``_bitonic_top32_of_1024_rm_pre_sorted_{prep,combine,final}_`` path (the >= 1024
-  element mode, ``top32_rm_dev_compute_v2.cpp``). It reaches Dest through
-  ``transpose_tile`` rather than this family's own unpack, and its indices exceed the
-  exact-integer range used here, so it needs a second driver.
+* The mixed shape -- whole 1024-element chunks *plus* a 64-element tail, i.e. the Metal dev
+  test's row=3232 -- which runs mode 1 and then finishes in mode 0. Both halves are covered
+  separately; their composition is not.
 * The 8-datum ``bitonic_top32_load8``/``store8`` helpers, which the header itself records
   as referenced by no kernel today.
+* The 7 ``llk_math_deepseek_top32_rm_*`` Metal wrappers on main, which still have no caller
+  anywhere: they wrap the same primitives this file drives, but through the Metal API layer,
+  so covering them needs a metal-side test (same shape as B1).
 """
 
 import torch
@@ -131,6 +152,7 @@ def test_top32_rm(formats, row_elements, dest_acc):
                 row_elements=row_elements,
                 datum_bytes=2,  # Float16_b
                 top_min=False,
+                mode=0,
             )
         ],
         runtimes=[],
@@ -176,6 +198,118 @@ def test_top32_rm(formats, row_elements, dest_acc):
         f"top32 indices wrong for row_elements={row_elements}, "
         f"dest_acc={dest_acc.name} -- the values may still be right, in which case the "
         f"index region is not being permuted with them\n"
+        f"  device: {device_indices.tolist()}\n"
+        f"  golden: {golden_indices.tolist()}"
+    )
+
+
+# --- pre-sorted mode (>= 1024 elements) ------------------------------------------------
+
+PRE_SORTED_FORMATS = input_output_formats([DataFormat.Float32], same=True)
+
+# 1024  one tile: prep then final, with no combine at all
+# 2048  two tiles, so combine runs and the top-32 has to be assembled across them
+PRE_SORTED_ROW_ELEMENTS = [1024, 2048]
+
+# Rank step inside a run of 32. Larger than any tiebreak below, so the runs are strictly
+# descending whatever the tiebreaks are -- which is the contract prep depends on.
+_RANK_STEP = 1000.0
+
+
+def _pre_sorted_stimuli(row_elements):
+    """Descending runs of 32, with a distinct per-run tiebreak.
+
+    Same shape as the family's own dev test (value keyed on ``i % 32``), but with the random
+    jitter replaced by a permutation of the run indices: that keeps every value distinct in
+    Float32, so "the top 32" determines the indices and they can be asserted exactly.
+    """
+    torch.manual_seed(0)
+
+    num_runs = row_elements // TOP_K
+    # Which run wins is a permutation, so the top-32 is not the first 32 runs and the
+    # answer depends on combine actually merging across tiles.
+    tiebreak = torch.randperm(num_runs, dtype=torch.int64).to(torch.float32)
+
+    rank = torch.arange(row_elements, dtype=torch.float32) % TOP_K
+    run = torch.arange(row_elements, dtype=torch.int64) // TOP_K
+
+    values = (TOP_K - rank) * _RANK_STEP + tiebreak[run]
+    indices = torch.arange(row_elements, dtype=torch.float32)
+    return values, indices
+
+
+@parametrize(
+    formats=PRE_SORTED_FORMATS,
+    row_elements=PRE_SORTED_ROW_ELEMENTS,
+)
+def test_top32_rm_pre_sorted(formats, row_elements):
+    """The >= 1024-element path: transpose whole tiles, then prep / combine / final."""
+    values, indices = _pre_sorted_stimuli(row_elements)
+
+    # Float32 holds every value and index here exactly, so the golden needs no rounding --
+    # asserted rather than assumed, as in the plain mode.
+    torch_format = format_dict[formats.output_format]
+    assert torch.equal(values.to(torch_format).to(torch.float32), values)
+    assert torch.equal(indices.to(torch_format).to(torch.float32), indices)
+
+    # The runs the mode's contract is about.
+    runs = values.reshape(-1, TOP_K)
+    assert bool((runs[:, :-1] > runs[:, 1:]).all()), (
+        "stimuli are not pre-sorted into descending runs of 32, which is the input "
+        "contract of _bitonic_top32_of_1024_rm_pre_sorted_prep_"
+    )
+
+    tiles_per_operand = row_elements // ELEMENTS_PER_TILE
+
+    configuration = TestConfig(
+        "sources/top32_rm_test.cpp",
+        formats,
+        templates=[
+            TOP32_RM(
+                row_elements=row_elements,
+                datum_bytes=4,  # Float32
+                top_min=False,
+                mode=1,
+            )
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            values,
+            formats.input_format,
+            indices,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tiles_per_operand,
+            tile_count_B=tiles_per_operand,
+            tile_count_res=2,
+        ),
+        # 32-bit operands take the unpack-to-dest transpose branch, and fp32 Dest is the
+        # only configuration this mode has ever run in.
+        unpack_to_dest=True,
+        dest_acc=DestAccumulation.Yes,
+    )
+
+    result = configuration.run().result
+
+    device_values = torch.tensor(result[:TOP_K], dtype=torch_format).to(torch.float32)
+    device_indices = torch.tensor(
+        result[ELEMENTS_PER_TILE : ELEMENTS_PER_TILE + TOP_K], dtype=torch_format
+    ).to(torch.float32)
+
+    golden_values, golden_indices = _golden(values, indices)
+
+    assert passed_test(
+        golden_values, device_values, formats.output_format, print_errors=False
+    ), (
+        f"pre-sorted top32 values wrong for row_elements={row_elements}\n"
+        f"  device: {device_values.tolist()}\n"
+        f"  golden: {golden_values.tolist()}"
+    )
+
+    assert torch.equal(device_indices, golden_indices), (
+        f"pre-sorted top32 indices wrong for row_elements={row_elements} -- the values "
+        f"may still be right, in which case the index region is not being permuted with "
+        f"them\n"
         f"  device: {device_indices.tolist()}\n"
         f"  golden: {golden_indices.tolist()}"
     )

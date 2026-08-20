@@ -996,22 +996,39 @@ class TOP32_RM(TemplateParameter):
                       Must match the format the stimuli are written in.
     ``top_min``       ``_bitonic_top32_merge_``'s template polarity. False (the consumer's
                       value) keeps the max half of each compare-exchange, i.e. a top-32.
+    ``mode``          0 walks the row in 64-element chunks through this family's own unpack
+                      (``top32_rm_dev_compute.cpp``); 1 is the pre-sorted path, which
+                      transposes whole 1024-element tiles into Dest and runs
+                      ``_bitonic_top32_of_1024_rm_pre_sorted_{prep,combine,final}_``
+                      (``top32_rm_dev_compute_v2.cpp``). Mode 1 requires the input to be
+                      pre-sorted into descending runs of 32 and has no tail path.
     """
 
     row_elements: int = 64
     datum_bytes: int = 2
     top_min: bool = False
+    mode: int = 0
 
     def convert_to_cpp(self) -> str:
         if self.row_elements % 32 != 0:
             raise ValueError(
                 f"row_elements must be a multiple of 32, got {self.row_elements}"
             )
+        if self.mode not in (0, 1):
+            raise ValueError(
+                f"mode must be 0 (plain) or 1 (pre-sorted), got {self.mode}"
+            )
+        if self.mode == 1 and self.row_elements % 1024 != 0:
+            raise ValueError(
+                "the pre-sorted mode has no tail path: row_elements must be a multiple "
+                f"of 1024, got {self.row_elements}"
+            )
         return "\n".join(
             [
                 f"constexpr std::uint32_t TOP32_ROW_ELEMENTS = {self.row_elements}u;",
                 f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.datum_bytes}u;",
                 f"constexpr bool TOP32_TOP_MIN = {str(self.top_min).lower()};",
+                f"constexpr std::uint32_t TOP32_MODE = {self.mode}u;",
             ]
         )
 
