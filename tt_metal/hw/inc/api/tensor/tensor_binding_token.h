@@ -10,19 +10,6 @@
 #include "api/tensor/tensor_accessor_args.h"
 
 namespace tensor_accessor {
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-struct TensorBindingToken;
-}  // namespace tensor_accessor
-
-namespace ckernel {
-namespace experimental {
-struct LLKMemDescriptor;
-template <uint32_t CTA, uint32_t CRTA>
-constexpr LLKMemDescriptor to_llk_mem_descriptor(tensor_accessor::TensorBindingToken<CTA, CRTA>);
-}  // namespace experimental
-}  // namespace ckernel
-
-namespace tensor_accessor {
 
 // TensorBindingToken:
 //
@@ -62,10 +49,6 @@ struct TensorBindingToken {
     constexpr TensorBindingToken(LlkOperandMembers llk) noexcept : llk_(llk) {}
 
 private:
-    template <uint32_t C, uint32_t A>
-    friend constexpr ckernel::experimental::LLKMemDescriptor ckernel::experimental::to_llk_mem_descriptor(
-        TensorBindingToken<C, A>);
-
     LlkOperandMembers llk_;
 };
 
