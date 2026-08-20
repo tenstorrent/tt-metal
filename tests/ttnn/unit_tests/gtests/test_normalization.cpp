@@ -25,10 +25,11 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/shape.hpp>
-#include "common_test_utils.hpp"
+#include "smoke_test_utils.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/normalization/batch_norm/batch_norm.hpp"
+#include "ttnn/operations/normalization/batch_norm/device/running_statistics_device_operation.hpp"
 #include "ttnn/operations/normalization/groupnorm/groupnorm.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"
 #include "ttnn/operations/normalization/layernorm_distributed/layernorm_post_all_gather.hpp"
@@ -49,78 +50,11 @@ class NormalizationSmoke : public TTNNFixtureWithSuiteDevice<NormalizationSmoke>
 
 namespace detail {
 
-inline MemoryConfig dram_interleaved() {
-    return MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-}
-
-template <typename T>
-Tensor make_device_tensor_mc(
-    tt::tt_metal::distributed::MeshDevice& device,
-    const ttnn::Shape& shape,
-    const std::vector<T>& data,
-    DataType dtype,
-    Layout layout,
-    const MemoryConfig& mem_cfg) {
-    const TensorLayout tensor_layout(dtype, PageConfig(layout), mem_cfg);
-    const tt::tt_metal::TensorSpec tensor_spec(shape, tensor_layout);
-    return Tensor::from_vector(data, tensor_spec).to_device(&device, mem_cfg, ttnn::QueueId(0));
-}
-
-template <typename T>
-Tensor make_device_tensor(
-    tt::tt_metal::distributed::MeshDevice& device,
-    const ttnn::Shape& shape,
-    const std::vector<T>& data,
-    DataType dtype,
-    Layout layout) {
-    return make_device_tensor_mc(device, shape, data, dtype, layout, dram_interleaved());
-}
-
-// Device tensor -> host float vector. bf16 needs an explicit element-wise
-// conversion; block-float and fp32 tensors decode directly via to_vector<float>.
-inline std::vector<float> to_float_vector(const Tensor& t) {
-    if (t.dtype() == DataType::BFLOAT16) {
-        const auto v = t.to_vector<bfloat16>();
-        std::vector<float> out(v.size());
-        std::transform(v.begin(), v.end(), out.begin(), [](bfloat16 x) { return static_cast<float>(x); });
-        return out;
-    }
-    return t.to_vector<float>();
-}
-
-// Tolerance-based comparison built on ttnn::test_utils: non-finite positions
-// must match, every element must satisfy allclose(rtol, atol), and optionally
-// PCC >= pcc_min and relative Frobenius error <= frob_max (pass -1 to skip).
-inline void expect_close(
-    const std::vector<float>& actual,
-    const std::vector<float>& expected,
-    float rtol,
-    float atol,
-    float pcc_min = -1.0f,
-    float frob_max = -1.0f) {
-    ASSERT_EQ(actual.size(), expected.size());
-    const ttnn::test_utils::NonfiniteReport nf = ttnn::test_utils::check_nonfinite_positions(actual, expected);
-    ASSERT_TRUE(nf.positions_match) << "non-finite mismatch at flat index " << nf.first_mismatch_index
-                                    << ": device=" << nf.first_mismatch_actual << " ref=" << nf.first_mismatch_expected;
-    const ttnn::test_utils::AllcloseReport report = ttnn::test_utils::allclose_report(actual, expected, rtol, atol);
-    EXPECT_EQ(report.failures, 0u) << report.failures << " element(s) failed allclose(rtol=" << rtol
-                                   << ", atol=" << atol << "); worst: flat index " << report.worst_margin_index
-                                   << " device=" << report.worst_margin_actual
-                                   << " ref=" << report.worst_margin_expected << " diff=" << report.worst_margin_diff
-                                   << " tol=" << report.worst_margin_tol;
-    if (nf.any_nonfinite) {
-        return;  // pcc / relative_frobenius NaN-poison on non-finite inputs
-    }
-    if (pcc_min >= 0.0f) {
-        const float p = ttnn::test_utils::pcc(actual, expected);
-        EXPECT_GE(p, pcc_min);
-    }
-    if (frob_max >= 0.0f) {
-        bool expected_norm_is_zero = false;
-        const float f = ttnn::test_utils::relative_frobenius(actual, expected, expected_norm_is_zero);
-        EXPECT_LE(f, frob_max) << (expected_norm_is_zero ? "absolute" : "relative") << " Frobenius error over limit";
-    }
-}
+using ttnn::test_utils::dram_interleaved;
+using ttnn::test_utils::expect_close;
+using ttnn::test_utils::make_device_tensor;
+using ttnn::test_utils::make_device_tensor_mc;
+using ttnn::test_utils::to_float_vector;
 
 }  // namespace detail
 
@@ -413,11 +347,16 @@ inline Tensor norm_welford_recip_lut(
 }  // namespace detail
 
 // LayerNormMultiCoreProgramFactory, interleaved TILE bf16, small-tensor path
-// (reader_unary_interleaved_ln.cpp + compute/layernorm.cpp).
+// (reader_unary_interleaved_ln.cpp + compute/layernorm.cpp), NO gamma/beta.
 // Rows alternate -1,+1 -> mean 0 and population var 1 are exact in bf16 (all partial
-// sums are small integers), so out = x/sqrt(1+eps) ~= +-1. With gamma=2, beta=0.5:
-// out = +-2 + 0.5 = {-1.5, +2.5}; +-1, 1.5, 2.5 are all bf16-exact, tolerance covers
-// device rsqrt + per-op rounding only (one bf16 ulp at 2.5 is ~0.0156).
+// sums are small integers), so out = x/sqrt(1+eps) ~= +-1, which is the input pattern
+// back unchanged. Tolerance covers device rsqrt only.
+//
+// The gamma/beta variant is LayerNormInterleavedGammaBeta below rather than a second
+// ttnn::layer_norm call here: gamma/beta presence is a compile-time kernel variant, so
+// bundling both doubled this cell's JIT bill (~4.0 s cold on BH p100a) against a 5 s
+// per-test merge-gate ceiling (merge-gate.yaml). Same reasoning for RmsNormInterleaved
+// and GroupNormShardedBlock1x1.
 TEST_F(NormalizationSmoke, LayerNormInterleaved) {
     auto& device = *device_;
     const ttnn::Shape shape({1, 1, 32, 64});
@@ -427,13 +366,26 @@ TEST_F(NormalizationSmoke, LayerNormInterleaved) {
 
     const auto out_plain = ttnn::layer_norm(x);
     detail::expect_close(detail::to_float_vector(out_plain), x_data, /*rtol=*/0.0f, /*atol=*/0.02f);
+}
 
-    // TILE gamma/beta take logical shape [1,1,1,W]: the validator wants padded[-1] == W,
-    // logical[-1] >= W and padded[-2] == tile height (layernorm_device_operation.cpp);
-    // tilization pads rows 1..31 with zeros, which is safe because the compute kernel applies
-    // gamma/beta via mul/add_tiles_bcast_rows -- only tile row 0 is ever read
-    // (kernels/compute/layernorm.cpp). This matches the python convention
-    // (test_layernorm.py passes gamma as (1,1,1,K) TILE).
+// LayerNormMultiCoreProgramFactory with TILE gamma/beta applied. Same input and normalization
+// as LayerNormInterleaved, so out = +-1 * gamma + beta = +-2 + 0.5 = {-1.5, +2.5}; +-1, 1.5 and
+// 2.5 are all bf16-exact, and the tolerance covers device rsqrt + per-op rounding only (one
+// bf16 ulp at 2.5 is ~0.0156).
+//
+// TILE gamma/beta take logical shape [1,1,1,W]: the validator wants padded[-1] == W,
+// logical[-1] >= W and padded[-2] == tile height (layernorm_device_operation.cpp);
+// tilization pads rows 1..31 with zeros, which is safe because the compute kernel applies
+// gamma/beta via mul/add_tiles_bcast_rows -- only tile row 0 is ever read
+// (kernels/compute/layernorm.cpp). This matches the python convention
+// (test_layernorm.py passes gamma as (1,1,1,K) TILE).
+TEST_F(NormalizationSmoke, LayerNormInterleavedGammaBeta) {
+    auto& device = *device_;
+    const ttnn::Shape shape({1, 1, 32, 64});
+    const size_t n = shape.volume();
+    const auto x = detail::make_device_tensor(
+        device, shape, detail::norm_alternating(n, -1.0f, 1.0f), DataType::BFLOAT16, Layout::TILE);
+
     const ttnn::Shape gb_shape({1, 1, 1, 64});
     const auto gamma =
         detail::make_device_tensor(device, gb_shape, std::vector<float>(64, 2.0f), DataType::BFLOAT16, Layout::TILE);
@@ -572,6 +524,16 @@ TEST_F(NormalizationSmoke, RmsNormInterleaved) {
 
     const auto out_plain = ttnn::rms_norm(x);
     detail::expect_close(detail::to_float_vector(out_plain), std::vector<float>(n, 1.0f), 0.0f, 0.02f);
+}
+
+// Same factory with the TILE weight applied (split out for the JIT-cost reason given on
+// LayerNormInterleaved): out = 1.0 * 0.5 = 0.5 everywhere, bf16-exact.
+TEST_F(NormalizationSmoke, RmsNormInterleavedWeight) {
+    auto& device = *device_;
+    const ttnn::Shape shape({1, 1, 32, 64});
+    const size_t n = shape.volume();
+    const auto x =
+        detail::make_device_tensor(device, shape, std::vector<float>(n, 2.0f), DataType::BFLOAT16, Layout::TILE);
 
     const auto weight = detail::make_device_tensor(
         device, ttnn::Shape({1, 1, 1, 64}), std::vector<float>(64, 0.5f), DataType::BFLOAT16, Layout::TILE);
@@ -639,32 +601,6 @@ inline std::vector<float> dist_norm_constant(size_t n, float value) { return std
 
 }  // namespace detail
 
-TEST_F(NormalizationSmoke, DistributedLayerNormEndToEnd) {
-    // LayerNormPreAllGatherProgramFactory + LayerNormPostAllGatherProgramFactory (1D interleaved,
-    // non-Welford). With num_devices = 1 the pre output IS the all-gathered stats tensor
-    // (post derives num_devices = stats_tiles_cols / 2), so the two-stage pipeline must
-    // reproduce single-stage ttnn::layer_norm.
-    auto& device = *device_;
-    const ttnn::Shape shape({1, 1, 32, 64});
-    const auto x_data = detail::dist_norm_alternating(32 * 64, 1.0f, -1.0f);
-    auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
-    const float eps = 1e-6f;
-
-    auto stats = ttnn::layer_norm_pre_all_gather(x);  // bf16 default dtype
-    ASSERT_EQ(stats.logical_shape()[-1], 64u);        // layernorm stats: 2 tiles wide
-    auto out_two_stage = ttnn::layer_norm_post_all_gather(x, stats, eps);
-    auto out_single = ttnn::layer_norm(x, eps);
-
-    const auto v2 = detail::to_float_vector(out_two_stage);
-    const auto v1 = detail::to_float_vector(out_single);
-    // Same math, different kernels/reduce order: tight tolerance + pcc, not bit-exact.
-    detail::expect_close(v2, v1, 0.02f, 0.02f, 0.999f);
-    // Closed form: each row is 32x(+1), 32x(-1) -> mean 0, var 1, out = x / sqrt(1 + eps) ~ +-1.
-    // sum(x)=0 and sum(x^2)=64 are exact in bf16; the only error source is the SFPU rsqrt
-    // approximation, hence atol 0.03 with rtol 0.
-    detail::expect_close(v2, x_data, 0.0f, 0.03f);
-}
-
 TEST_F(NormalizationSmoke, DistributedLayerNormStats) {
     // LayerNormPreAllGatherProgramFactory stats layout. Per the kernel header
     // (layernorm_pre_allgather.cpp) and the post kernel's consumption comment
@@ -691,6 +627,56 @@ TEST_F(NormalizationSmoke, DistributedLayerNormStats) {
     // Columns other than col 0 of each tile are reduce scratch (undefined) - deliberately unchecked.
 }
 
+TEST_F(NormalizationSmoke, DistributedLayerNormEndToEnd) {
+    // LayerNormPreAllGatherProgramFactory + LayerNormPostAllGatherProgramFactory (1D interleaved,
+    // non-Welford). With num_devices = 1 the pre output IS the all-gathered stats tensor
+    // (post derives num_devices = stats_tiles_cols / 2), so the two-stage pipeline must
+    // reproduce single-stage ttnn::layer_norm.
+    auto& device = *device_;
+    const ttnn::Shape shape({1, 1, 32, 64});
+    const auto x_data = detail::dist_norm_alternating(32 * 64, 1.0f, -1.0f);
+    auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
+    const float eps = 1e-6f;
+
+    auto stats = ttnn::layer_norm_pre_all_gather(x);  // bf16 default dtype
+    ASSERT_EQ(stats.logical_shape()[-1], 64u);        // layernorm stats: 2 tiles wide
+    auto out_two_stage = ttnn::layer_norm_post_all_gather(x, stats, eps);
+
+    // Checked against the closed form only. A single-stage ttnn::layer_norm(x, eps) used to run
+    // here as a second reference, but it adds the LayerNormDefaultProgramFactory kernels to this
+    // test's JIT bill for a weaker check than the closed form -- and LayerNormInterleaved above
+    // already covers that factory.
+    // Closed form: each row is 32x(+1), 32x(-1) -> mean 0, var 1, out = x / sqrt(1 + eps) ~ +-1.
+    // sum(x)=0 and sum(x^2)=64 are exact in bf16; the only error source is the SFPU rsqrt
+    // approximation, hence atol 0.03 with rtol 0.
+    detail::expect_close(detail::to_float_vector(out_two_stage), x_data, 0.0f, 0.03f);
+}
+
+TEST_F(NormalizationSmoke, DistributedRmsNormStats) {
+    // RMSNormPreAllGatherProgramFactory stats layout, the RMS counterpart of
+    // DistributedLayerNormStats. Per rmsnorm_pre_allgather.cpp the output is ONE tile wide
+    // (vs layernorm's two) holding sum(x^2) in the left-most column; there is no sum(x) tile
+    // because RMS needs no mean. Asserting it here also means DistributedRmsNormEndToEnd below
+    // pays only for the post kernels -- declaration order decides which cell is charged for the
+    // shared pre build, and splitting it keeps both under the 5 s per-test merge-gate ceiling.
+    auto& device = *device_;
+    const ttnn::Shape shape({1, 1, 32, 64});
+    const auto x_data = detail::dist_norm_constant(32 * 64, 2.0f);
+    auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
+
+    auto stats = ttnn::rms_norm_pre_all_gather(x);
+    ASSERT_EQ(stats.logical_shape()[-1], 32u);  // one tile wide
+    ASSERT_EQ(stats.logical_shape()[-2], 32u);
+    const auto s = detail::to_float_vector(stats);
+
+    // sum(x^2) = 64 * 2^2 = 256, exact in bf16 for any accumulation order (every partial sum is
+    // a multiple of 4 bounded by 256, <= 8 significand bits).
+    for (uint32_t r = 0; r < 32; ++r) {
+        EXPECT_FLOAT_EQ(s[r * 32 + 0], 256.0f) << "sum(x^2), col 0, row " << r;
+    }
+    // Columns other than col 0 are reduce scratch (undefined) - deliberately unchecked.
+}
+
 TEST_F(NormalizationSmoke, DistributedRmsNormEndToEnd) {
     // RMS pre (rmsnorm_pre_allgather.cpp: one-tile stats = sum(x^2) in col 0) +
     // rmsnorm_post_allgather_metal2.cpp via LayerNormPostAllGatherProgramFactory, num_devices = 1.
@@ -707,20 +693,44 @@ TEST_F(NormalizationSmoke, DistributedRmsNormEndToEnd) {
     auto stats = ttnn::rms_norm_pre_all_gather(x);
     ASSERT_EQ(stats.logical_shape()[-1], 32u);  // rmsnorm stats: 1 tile wide
     auto out_two_stage = ttnn::rms_norm_post_all_gather(x, stats, eps, weight);
-    auto out_single = ttnn::rms_norm(x, eps, weight);
 
-    const auto v2 = detail::to_float_vector(out_two_stage);
-    const auto v1 = detail::to_float_vector(out_single);
-    detail::expect_close(v2, v1, 0.02f, 0.05f, 0.999f);
-    // Closed form: E(x^2) = 4 exactly (sum 256 / 64), rms = sqrt(4 + eps) ~ 2, out = 3 * x / 2 = +-3.
+    // Closed form only, for the reason given in DistributedLayerNormEndToEnd: the single-stage
+    // ttnn::rms_norm reference that used to run here is covered by RmsNormInterleaved.
+    // E(x^2) = 4 exactly (sum 256 / 64), rms = sqrt(4 + eps) ~ 2, out = 3 * x / 2 = +-3.
     // Tolerance covers the SFPU sqrt/recip approximation only.
+    const auto v2 = detail::to_float_vector(out_two_stage);
     const auto expected = detail::dist_norm_alternating(32 * 64, 3.0f, -3.0f);
-    detail::expect_close(v2, expected, 0.02f, 0.05f);
+    detail::expect_close(v2, expected, 0.02f, 0.05f, 0.999f);
+}
+
+// LayerNormPreAllGather2DProgramFactory alone (worker cores + merge-core column reduce).
+// Split from DistributedRmsNorm2DGrid below so that cell pays only for the 2D post kernels;
+// same declaration-order reasoning as DistributedRmsNormStats.
+TEST_F(NormalizationSmoke, DistributedRmsNorm2DGridStats) {
+    auto& device = *device_;
+    const ttnn::Shape shape({1, 1, 32, 64});
+    const auto x_data = detail::dist_norm_constant(32 * 64, 2.0f);
+    auto x = detail::make_device_tensor(device, shape, x_data, DataType::BFLOAT16, Layout::TILE);
+
+    auto stats = ttnn::rms_norm_pre_all_gather(
+        x,
+        DataType::BFLOAT16,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        /*use_2d_core_grid=*/true);
+    ASSERT_EQ(stats.logical_shape()[-1], 32u);
+    // The 2D merge-core reduce must land on the same sum(x^2) = 64 * 2^2 = 256 as the 1D path.
+    const auto s = detail::to_float_vector(stats);
+    for (uint32_t r = 0; r < 32; ++r) {
+        EXPECT_FLOAT_EQ(s[r * 32 + 0], 256.0f) << "sum(x^2), col 0, row " << r;
+    }
 }
 
 TEST_F(NormalizationSmoke, DistributedRmsNorm2DGrid) {
-    // LayerNormPreAllGather2DProgramFactory (worker cores + merge-core column reduce) and the 2D
-    // work split inside LayerNormPostAllGatherProgramFactory (use_2d_core_grid = true).
+    // The 2D work split inside LayerNormPostAllGatherProgramFactory (use_2d_core_grid = true);
+    // the 2D pre factory is asserted by DistributedRmsNorm2DGridStats above.
     auto& device = *device_;
     const ttnn::Shape shape({1, 1, 32, 64});
     const auto x_data = detail::dist_norm_alternating(32 * 64, 2.0f, -2.0f);
@@ -1008,7 +1018,25 @@ TEST_F(NormalizationSmoke, GroupNormShardedBlock1x1) {
         std::nullopt,
         ttnn::CoreGrid(1, 1));
     detail::expect_close(detail::to_float_vector(out), detail::gn_golden_expected(32, 1.0f, 0.0f), 0.0f, 0.03f);
-    // gamma=2 / beta=1 variant: the zero-variance group lands on exactly 0*2 + 1 = 1.
+}
+
+// Same sharded factory and shard spec with gamma/beta applied (split out for the JIT-cost reason
+// given on LayerNormInterleaved). gamma=2 / beta=1: the zero-variance group lands on exactly
+// 0*2 + 1 = 1.
+TEST_F(NormalizationSmoke, GroupNormShardedBlock1x1GammaBeta) {
+    auto& device = *device_;
+    const CoreRangeSet grid(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    const MemoryConfig sharded_cfg(
+        tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
+        BufferType::L1,
+        tt::tt_metal::ShardSpec(grid, {32, 64}, tt::tt_metal::ShardOrientation::ROW_MAJOR));
+    auto input = detail::make_device_tensor_mc(
+        device,
+        ttnn::Shape({1, 1, 32, 64}),
+        detail::gn_golden_input(32, false),
+        DataType::BFLOAT16,
+        Layout::ROW_MAJOR,
+        sharded_cfg);
     auto gamma = detail::gn_make_gamma_beta(device, 2.0f);
     auto beta = detail::gn_make_gamma_beta(device, 1.0f);
     auto out_gb = ttnn::group_norm(
@@ -1180,47 +1208,46 @@ TEST_F(NormalizationSmoke, BatchNormInferenceSfpu) {
     detail::expect_close(detail::to_float_vector(y), std::vector<float>(2 * 32 * 32, 2.0f), 0.0f, 0.0f);
 }
 
-// Covers: training path (batch stats via mean_NHW / centered two-pass variance in batch_norm.cpp,
-// biased variance -- no Bessel correction) plus RunningStatistics::RunningStatisticsProgramFactory
+// Covers: RunningStatistics::RunningStatisticsProgramFactory
 // (running_statistics_program_factory.cpp) updating running_mean/running_var IN PLACE:
 //   new = (1 - momentum) * old + momentum * batch.
-// FLOAT32 throughout, deliberately: momentum 0.1 is NOT representable in bf16 (bf16(0.1) =
-// 0.10009765625), so the exact 0.1 / 1.0 readbacks below are only achievable on the fp32 path.
-TEST_F(NormalizationSmoke, BatchNormTrainingRunningStats) {
+// The prim is driven DIRECTLY rather than through ttnn::batch_norm(training=true). The training
+// composite (batch_norm.cpp) reaches this prim only after mean_NHW -- two chained ttnn::mean
+// reductions -- plus ttnn::subtract and ttnn::square, and those are reduction/eltwise factories
+// owned by ReductionSmoke, not normalization factories. Routing through them cost 51 JIT kernel
+// builds (13.6 s cold on BH p100a) against this file's 13 (1.7 s), for no normalization coverage
+// this file does not already have: BatchNormOperation::BatchNormFactory is covered by the four
+// inference cells above. Merge-gate rule is 5 s per test case (merge-gate.yaml), so the composite
+// wiring -- that batch_norm(training=true) feeds mean_NHW's output into this prim -- is left to
+// the post-merge suites, where the budget is 10-25x larger.
+//
+// bf16 with momentum 0.25: every term below is exact in bf16, so the readbacks are exact rather
+// than tolerance-based. Values are chosen so both terms of both accumulators are distinct
+// (1.5 != 8.0, and neither equals any input), which a swapped mean/var or a swapped
+// momentum/(1-momentum) would break:
+//   running_mean = 0.75 * 1 + 0.25 * 3 = 0.75 + 0.75 = 1.5
+//   running_var  = 0.75 * 9 + 0.25 * 5 = 6.75 + 1.25 = 8.0
+TEST_F(NormalizationSmoke, BatchNormRunningStatsUpdate) {
     auto& device = *device_;
-    constexpr float kEps = 1e-5f;
-    const ttnn::Shape x_shape({2, 1, 32, 32});
     const ttnn::Shape stat_shape({1, 1, 1, 1});
-    std::vector<float> x_data(2 * 32 * 32);
-    for (size_t i = 0; i < x_data.size(); ++i) {
-        x_data[i] = (i % 2 == 0) ? 0.0f : 2.0f;  // x[..., w] = 2*(w % 2): W = 32 is even, row-major
-    }
-    auto x = detail::make_device_tensor(device, x_shape, x_data, ttnn::DataType::FLOAT32, ttnn::Layout::TILE);
-    auto running_mean = detail::make_device_tensor(
-        device, stat_shape, std::vector<float>{0.0f}, ttnn::DataType::FLOAT32, ttnn::Layout::TILE);
-    auto running_var = detail::make_device_tensor(
-        device, stat_shape, std::vector<float>{1.0f}, ttnn::DataType::FLOAT32, ttnn::Layout::TILE);
+    auto make = [&](float v) {
+        return detail::make_device_tensor(
+            device, stat_shape, std::vector<float>{v}, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE);
+    };
+    const auto batch_mean = make(3.0f);
+    const auto batch_var = make(5.0f);
+    auto running_mean = make(1.0f);
+    auto running_var = make(9.0f);
 
-    auto y = ttnn::batch_norm(x, running_mean, running_var, /*training=*/true, kEps, /*momentum=*/0.1f);
+    ttnn::prim::running_statistics(batch_mean, batch_var, /*momentum=*/0.25f, running_mean, running_var);
 
-    // Batch stats are exact (all sums are small powers of two): mean = 1, biased var = E[(x-1)^2] = 1.
-    // y = (x - 1) / sqrt(1 + eps) = -+0.999995; atol absorbs SFPU rsqrt(1.00001) approximation error.
-    std::vector<float> y_expected(x_data.size());
-    const float inv_den = 1.0f / std::sqrt(1.0f + kEps);
-    for (size_t i = 0; i < y_expected.size(); ++i) {
-        y_expected[i] = (i % 2 == 0) ? -inv_den : inv_den;
-    }
-    detail::expect_close(detail::to_float_vector(y), y_expected, 0.0f, 0.02f);
-
-    // In-place update through the RunningStatistics prim, read back from the SAME tensor handles:
-    //   running_mean = (1-0.1)*0 + 0.1*1 = 0.1f  (0.1f * 1.0f is exact)
-    //   running_var  = (1-0.1)*1 + 0.1*1 = 1.0f  (1 - 0.1f == 0.9f and 0.9f + 0.1f == 1.0f in fp32 RNE)
-    auto rm = detail::to_float_vector(running_mean);
-    auto rv = detail::to_float_vector(running_var);
+    // Read back from the SAME tensor handles the prim wrote in place.
+    const auto rm = detail::to_float_vector(running_mean);
+    const auto rv = detail::to_float_vector(running_var);
     ASSERT_EQ(rm.size(), 1u);
     ASSERT_EQ(rv.size(), 1u);
-    EXPECT_FLOAT_EQ(rm[0], 0.1f);
-    EXPECT_FLOAT_EQ(rv[0], 1.0f);
+    EXPECT_FLOAT_EQ(rm[0], 1.5f);
+    EXPECT_FLOAT_EQ(rv[0], 8.0f);
 }
 
 // Covers: per-channel parameter indexing in BatchNormOperation::BatchNormFactory -- C = 2, so
