@@ -343,10 +343,13 @@ Not for merge, kept as evidence: `tests/python_tests/test_sfpu_wh_recipcompat_nu
 * **The plan's §4 step 0 is now answered with measurements, not derivation** (see §4.2): the public `recip()`
   defaults to `legacy_compat = true` (`recip.h:17,37`), and that path was both broken at the pole and 610×
   less accurate and ~2× slower than the non-default one it sat next to. Option A fixes all three. **The
-  coverage gap that let it hide is still open:** the tt-llk suite drives `MathOperation.Reciprocal` with
-  `legacy_compat = false`, so the shipped default has no edge test and no perf variant. The measurement here
-  used a temporary harness adapter that was reverted; a permanent `legacy_compat` axis on the existing
-  `Reciprocal` variants is the real fix and is not done here.
+  coverage gap that let it hide is now CLOSED:** the tt-llk suite used to drive
+  `MathOperation.Reciprocal` with `legacy_compat = false` only, so the shipped default had no edge test and
+  no perf variant, and the measurements in this document needed a temporary harness adapter that was
+  reverted. A permanent `MathOperation.ReciprocalCompat` op now covers the default path, wired the same way
+  `RsqrtCompat` covers legacy rsqrt. Verified to be a real regression test rather than a passing formality:
+  run against `main`'s unguarded kernel its edge variants fail 8 of 8, and against the guarded kernel all 16
+  pass.
 * **`_reciprocal_compat_` is now dead code except for one Blackhole caller** (§4.4, §5). If the sampling
   owners confirm the pole is unreachable under their `in > 0` contract, the function and
   `_calculate_reciprocal_compat_` can be deleted outright; that is the end state Option A was aiming at.

@@ -54,6 +54,25 @@ blaze"). It also documents `Callers must pass in > 0`, so the guard cannot fire 
 that contract permits: bit-identical across its entire legal domain, and the pole it never
 reaches is now correct anyway.
 
+**A coverage gap, found here and closed on this branch.** Row 2 is the largest user-visible
+change and the tt-llk suite did not exercise it at all: `sfpu_operations.h` called
+`calculate_reciprocal` and `recip_init` without a `legacy_compat` argument, so both defaulted to
+`false` and the suite only ever built the kernel the public API does *not* dispatch. The §4 and §6
+figures for that path were therefore taken with both trees patched identically to pass `true` — an
+instrument, reverted before the correctness sweeps in §7 and never committed.
+
+That is now fixed permanently. A `MathOperation.ReciprocalCompat` op covers the default path,
+wired exactly the way `RsqrtCompat` covers legacy rsqrt: a `SfpuType::reciprocal_compat` enum
+value on both arches, an init and call branch in `sfpu_operations.h` passing
+`legacy_compat = true`, and the op registered in `llk_params.py`, `sfpu_domains.py` (same domain
+and pole as `Reciprocal`) and `golden_generators.py` (same `_reciprocal` golden). It brings 8 sweep
+variants and 8 edge variants.
+
+It is a real regression test rather than a passing formality, and that was checked rather than
+assumed: built against `main`'s **unguarded** kernel, its edge variants **fail 8 of 8** — golden
+`inf`, kernel `1.7014e38`. Against the guarded kernel all 16 pass. Anyone reverting the guard now
+breaks CI.
+
 ## 3. Accuracy — `RsqrtCompat`
 
 168 recorded values (21 inputs × 8 format/dest_acc combinations). **Exactly 8 change**, one per
