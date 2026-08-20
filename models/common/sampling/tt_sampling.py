@@ -894,8 +894,11 @@ class TTSampling(LightweightModule):
             self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs
 
-        # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
-        x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
+        # Decode logits normally arrive in bfloat16 already; a bf16->bf16 ttnn.typecast is
+        # semantically a no-op but still dispatches a full copy program, so skip it.
+        x_bf16 = (
+            x if x.dtype == ttnn.bfloat16 else ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
+        )
         x_bf16 = self._mask_invalid_vocab_logits(x_bf16)
 
         # The single-device split below exists only because the stock top-k factories cap
