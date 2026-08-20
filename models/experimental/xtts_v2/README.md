@@ -108,7 +108,7 @@ Measured on Wormhole N150 (warm, program cache + trace in place):
 | Stage | Time | Notes |
 |---|---|---|
 | `compute_voice` | ~2–6 s | once per speaker (Blocks 1+2); the first clip of a new length pays one-time conv compiles |
-| GPT prefill | ~18–30 ms | one-shot (18 ms @ 61-token prompt; ~30 ms @ ≈425) |
+| GPT prefill | ~21–22 ms | one-shot, incl. tokenize + prompt assembly; near-flat across prompt length (the prompt is padded to one of 7 length buckets) |
 | GPT decode | ~9 ms/token | traced, tuned matmul configs; each token = 46.4 ms of audio → **~5x real-time** decode |
 | HiFi-GAN vocoder | 0.09–0.71 s | traced, per length bucket: 0.09 s ≤ 3.5 s of audio … 0.71 s ≤ 28 s |
 
