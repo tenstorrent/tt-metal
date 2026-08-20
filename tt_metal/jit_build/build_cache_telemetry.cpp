@@ -235,7 +235,10 @@ void BuildCacheTelemetry::dump_metrics() const {
             continue;
         }
         const double mean_val = snap.total / static_cast<double>(snap.count);
-        log_trace(
+        // log_info, not log_trace: this fires once per process at exit, and reaching it via
+        // TT_LOGGER_LEVEL=trace costs ~79 unrelated trace lines per compiled kernel (mostly
+        // MetalTrace), which distorts the very timings being read here.
+        log_info(
             tt::LogBuildKernels,
             "JIT telemetry [{}]: count={}, total={:.3f}ms, min={:.3f}ms, max={:.3f}ms, mean={:.3f}ms",
             token->name(),

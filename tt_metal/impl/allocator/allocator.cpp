@@ -527,6 +527,14 @@ AllocatorImpl::~AllocatorImpl() {
     l1_manager_->clear();
     l1_small_manager_->clear();
     trace_buffer_manager_->clear();
+
+    // Buffers keep a raw, non-owning back-pointer to their allocator (Buffer::allocator_), so any
+    // buffer still tracked here is about to outlive it. Mark them deallocated now: their memory
+    // goes away with the allocator, and Buffer::deallocate_impl() would otherwise call through the
+    // dangling pointer. The status check at the top of deallocate_impl() makes that a no-op.
+    for (auto* buffer : allocated_buffers_) {
+        buffer->mark_as_deallocated();
+    }
     allocated_buffers_.clear();
 }
 
