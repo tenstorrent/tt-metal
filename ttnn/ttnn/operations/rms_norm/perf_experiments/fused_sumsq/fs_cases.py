@@ -19,18 +19,23 @@
 import os
 
 import pytest
-import torch
 
 import ttnn
+
+# torch is imported lazily inside each function: ttnn/ forbids a module-level
+# torch import (pre-commit `check-torch-imports-in-ttnn`), and this module lives
+# under the operations tree.
 
 import importlib.util as _ilu
 from pathlib import Path as _Path
 
-_loader = _ilu.module_from_spec(_ilu.spec_from_file_location('_fused_sumsq_loader', _Path(__file__).resolve().parent / '_load.py'))
+_loader = _ilu.module_from_spec(
+    _ilu.spec_from_file_location("_fused_sumsq_loader", _Path(__file__).resolve().parent / "_load.py")
+)
 _loader.__spec__.loader.exec_module(_loader)
-bench = _loader.load('fs_bench')
-fsd = _loader.load('fs_descriptor')
-rms_norm = _loader.load('fs_rms_norm').rms_norm
+bench = _loader.load("fs_bench")
+fsd = _loader.load("fs_descriptor")
+rms_norm = _loader.load("fs_rms_norm").rms_norm
 
 EPS = 1e-6
 
@@ -68,6 +73,8 @@ def _row_scale_bias(xg, out, s_ref):
 
 
 def _measure(device, shape_name, variant, config="loose", extra_levers=None):
+    import torch
+
     shape, dtype, layout, glayout = bench.SHAPES[shape_name]
     W = shape[-1]
     if tuple(shape) not in bench._WT_CACHE:
@@ -159,14 +166,14 @@ BIAS_SHAPES = {32: (1, 1, 32, 1024), 64: (1, 1, 32, 2048), 128: (1, 1, 32, 4096)
 @pytest.mark.parametrize("variant", ["baseline", "fused", "fused_fold", "fused_g2", "fused_g4"])
 @pytest.mark.parametrize("wt", [32, 64, 128, 224])
 def test_bias(device, wt, variant):
+    import torch
+
     shape = BIAS_SHAPES[wt]
     W = shape[-1]
     torch.manual_seed(0)
     cfg = bench.cfg_loose()  # fp32_dest_acc_en=False — the 16-bit DEST corner
     x = ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    g = ttnn.from_torch(
-        torch.randn(1, 1, 1, W), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-    )
+    g = ttnn.from_torch(torch.randn(1, 1, 1, W), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     levers = dict(bench.VARIANTS[variant])
     levers["fs_force_b"] = 1

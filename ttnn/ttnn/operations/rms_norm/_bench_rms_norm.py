@@ -132,7 +132,13 @@ LEVER_ARMS = {
     "B5": _arm(levers=dict(coalesce=0)),
     "B6": _arm(levers=dict(coalesce=0)),
     "B7": _arm(levers=dict(barrier_per_block=0)),
-    "B9": _arm(levers=dict(noc_split=0)),
+    # B9's off-arm puts BOTH data-movement kernels on NOC_0, which the W-split
+    # combine cannot live with (property P5 in `_choose_group_size`: the combine
+    # makes the READER issue non-posted writes, and a per-NoC ack register shared
+    # with the writer's barrier never balances).  So the B9 pair is measured on the
+    # row-parallel plan at BOTH ends - see LEVER_ON_ARMS - which keeps it a
+    # single-knob counterfactual instead of silently conflating B9 with w_split.
+    "B9": _arm(levers=dict(noc_split=0, w_split=0)),
     "C16": _arm(levers=dict(double_buffer=0)),
     "compute_block_size": _arm(levers=dict(block_ht=1, dest_block=1)),
     "coarse_chunk": _arm(levers=dict(coarse_chunk=0)),
@@ -151,6 +157,17 @@ LEVER_ARMS = {
     "F25": _arm(levers=dict(dest_acc=0)),
     # F24: applied = the FAST bfloat8_b packer, so the OFF arm forces PRECISE.
     "F24": _arm(levers=dict(pack_precise=1)),
+    # --- Perf 1 -------------------------------------------------------------
+    # The W-split work distribution: OFF forces G = 1, the pure row-parallel plan
+    # the op shipped before this round.
+    "w_split": _arm(levers=dict(w_split=0)),
+}
+
+# Levers whose ON arm is NOT the applied default.  A lever lands here only when its
+# off-arm is incompatible with an applied lever, so measuring it against the plain
+# default would move two knobs at once (see "B9" above).
+LEVER_ON_ARMS = {
+    "B9": _arm(levers=dict(w_split=0)),
 }
 
 # Levers whose ON arm only exists at fp32_dest_acc_en=False, so measuring them on
@@ -235,10 +252,16 @@ def run_baseline(device, names=None):
 
 
 def run_levers(device, shape_name, levers=None):
-    """ON/OFF pairs for every lever, on one bench shape."""
+    """ON/OFF pairs for every lever, on one bench shape.
+
+    A lever with an entry in LEVER_ON_ARMS gets its OWN ON arm (labelled
+    `ON:<lever>`) so the pair still moves exactly one knob.
+    """
     manifest = []
     run_arm(device, manifest, f"{shape_name}/ON", shape_name)
     for lev in levers or [k for k in LEVER_ARMS if k not in LOOSE_ONLY_LEVERS]:
+        if lev in LEVER_ON_ARMS:
+            run_arm(device, manifest, f"{shape_name}/ON:{lev}", shape_name, LEVER_ON_ARMS[lev])
         run_arm(device, manifest, f"{shape_name}/OFF:{lev}", shape_name, LEVER_ARMS[lev])
     return manifest
 
@@ -289,6 +312,26 @@ def run_core_sweep(device, shape_name, caps=(16, 32, 64, 96, 0)):
         run_arm(
             device, manifest, f"{shape_name}/cores:{cap or 'full'}", shape_name, _arm(levers=dict(active_cores=cap))
         )
+    return manifest
+
+
+def run_group_sweep(device, shape_name, groups=(0, 1, 4, 8, 14, 16, 28, 32, 56), config="loose"):
+    """The W-split group size is a per-regime CHOICE, so sweep it.
+
+    `0` is the policy's own pick and `1` the row-parallel plan, so this arm set is
+    what re-fits `_choose_group_size`'s two combine coefficients on a new box or a
+    new shape instead of trusting the calibration comment.  Illegal group sizes for
+    the shape are skipped (the policy asserts on them by design).
+    """
+    from .rms_norm_program_descriptor import LEVER_DEFAULTS  # noqa: F401  (documents the knob)
+
+    manifest = []
+    for g in groups:
+        levers = None if g == 0 else (dict(w_split=0) if g == 1 else dict(w_group=g))
+        try:
+            run_arm(device, manifest, f"{shape_name}/G:{g or 'policy'}", shape_name, levers, config=config)
+        except AssertionError as exc:  # not a legal G here — record the fact, keep going
+            print(f"RMS_BENCH: {shape_name} G={g} skipped: {exc}")
     return manifest
 
 

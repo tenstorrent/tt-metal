@@ -58,6 +58,14 @@ constexpr uint32_t BARRIER_PER_BLOCK = get_compile_time_arg_val(19);
 constexpr uint32_t SKIP_DM_PAYLOAD = get_compile_time_arg_val(20);
 // Lever B5/B6: 1 = one whole-page transaction per tile (applied), 0 = two half-page ones.
 constexpr uint32_t COALESCE = get_compile_time_arg_val(21);
+// --- W-split work distribution (blocking_plan._choose_group_size) ------------
+// Under a W split a core owns Wt_core of WT_TOTAL columns, so the DRAM tile-row
+// stride is the FULL row width and every address carries this core's column base
+// (RT arg 3).  W_SPLIT == 0 makes ROW_STRIDE == Wt_core and W_OFFSET == 0, i.e.
+// byte-identical addressing to the pre-split row-parallel plan.
+constexpr uint32_t W_SPLIT = get_compile_time_arg_val(23);
+constexpr uint32_t WT_TOTAL = get_compile_time_arg_val(25);
+constexpr uint32_t ROW_STRIDE = W_SPLIT ? WT_TOTAL : Wt_core;
 
 // Lever B5/B6 off-arm: the tile page split into TWO transfers.  The split point
 // must stay NoC-alignment-legal on every dtype - Blackhole's DRAM alignment is
@@ -70,7 +78,7 @@ constexpr uint32_t SPLIT_SECOND = IN_TILE_BYTES - SPLIT_FIRST;
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t NUM_SCALE_CHUNKS = Wt_core / WT_SCALE_BLOCK;
 
-constexpr auto output_args = TensorAccessorArgs<23>();
+constexpr auto output_args = TensorAccessorArgs<30>();
 
 FORCE_INLINE uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
 
@@ -80,6 +88,7 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_row_block = get_arg_val<uint32_t>(1);
     const uint32_t num_row_blocks_here = get_arg_val<uint32_t>(2);
+    const uint32_t W_OFFSET = get_arg_val<uint32_t>(3);  // W-split: this core's column base (tiles)
 
     const auto out_acc = TensorAccessor(output_args, dst_addr);
 
@@ -99,7 +108,7 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("wr_issue");
             for (uint32_t r = 0; r < valid_ht; ++r) {
-                const uint32_t row_base = (rt0 + r) * Wt_core + w0;
+                const uint32_t row_base = (rt0 + r) * ROW_STRIDE + W_OFFSET + w0;
                 for (uint32_t w = 0; w < nw; ++w) {
                     if constexpr (!SKIP_DM_PAYLOAD) {
                         if constexpr (COALESCE) {
@@ -133,7 +142,7 @@ void kernel_main() {
         if (valid) {
             const uint32_t row0 = rt * TILE_DIM;
             const uint32_t nrows = umin(TILE_DIM, NUM_ROWS - row0);
-            const uint32_t byte_off = w0 * TILE_DIM * ELEM_SIZE;
+            const uint32_t byte_off = (W_OFFSET + w0) * TILE_DIM * ELEM_SIZE;
             const uint32_t padded = nw * TILE_DIM * ELEM_SIZE;
             const uint32_t chunk_bytes = umin(padded, ROW_BYTES - byte_off);
 

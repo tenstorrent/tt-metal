@@ -48,20 +48,55 @@
 //    (Placing tile row 0 directly with two per-face reads was tried first and is
 //    NOT legal: the second face read starts 32 B into the stick and Blackhole's
 //    DRAM NoC alignment is 64 B.)
+//
+// 3. The W-SPLIT COMBINE's N->1 GATHER leg (W_SPLIT=1, `kernel_main`'s combine
+//    block) is raw `noc_async_write` + `noc_semaphore_inc`/`_wait` and NOT
+//    `mcast_pipe`.  CAPABILITY, not ergonomics:
+//      * `SenderPipe::send(src_l1, dst_l1, size)` (mcast_pipe.hpp:189-197) is a
+//        1->N MULTICAST of ONE source region to an `McastRect` of destinations.
+//        The gather is the OPPOSITE direction - an N->1 unicast fan-in where each
+//        of the G senders lands in a DIFFERENT slot of ONE core's CB.  No
+//        constructor in that header expresses it.
+//      * `ReceiverPipe`'s NUM_SENDERS (mcast_pipe.hpp:242, 255-261) governs
+//        multi-sender SIGNALLING - which stored coord pair to ack on round `r` -
+//        not a multi-source DATA fan-in; it keeps coords, never landing slots.
+//    The 1->N leg DOES use the helper (`SenderPipe`/`ReceiverPipe` below) and must
+//    keep doing so.  The isolated bake-off ran a hand-rolled arm for that leg too -
+//    GROUP_SIZE-1 unicasts + GROUP_SIZE-1 semaphore incs, same handshake shape -
+//    and the helper WON at every group size measured, because it collapses those
+//    G-1 point-to-point writes into one multicast transaction.  So the split here
+//    is not a style preference: raw for the direction no helper expresses, helper
+//    for the direction it does.  Do not "restore" the gather to a helper - there
+//    is none - and do not hand-roll the broadcast.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
+#include "hostdevcommon/common_values.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
+using dataflow_kernel_lib::ACK_EQUALS_FANOUT;
+using dataflow_kernel_lib::McastRect;
+using dataflow_kernel_lib::ReceiverPipe;
+using dataflow_kernel_lib::SenderPipe;
 
 namespace {
 
 constexpr uint32_t cb_input_tiles = 0;
 constexpr uint32_t cb_gamma_tiles = 1;
 constexpr uint32_t cb_reduce_scaler = 2;
+constexpr uint32_t cb_sumsq = 4;
 constexpr uint32_t cb_rm_in = 8;
+constexpr uint32_t cb_sumsq_acc = 10;
 constexpr uint32_t cb_gamma_rm = 11;
+constexpr uint32_t cb_partial_gather = 12;
+constexpr uint32_t cb_sumsq_bcast = 13;
 
 // --- shared geometry compile-time args (identical prefix in all 3 kernels) ---
 constexpr uint32_t IS_ROW_MAJOR = get_compile_time_arg_val(0);
@@ -93,6 +128,20 @@ constexpr uint32_t COALESCE = get_compile_time_arg_val(21);
 // the non-tile-aligned partial the compute side consumes, so the reader has to
 // emit the matching tile - see the scaler block in kernel_main().
 constexpr uint32_t REDUCE_VIA_ADD = get_compile_time_arg_val(22);
+// --- W-split work distribution (blocking_plan._choose_group_size) ------------
+// W_SPLIT == 0 is the row-parallel plan: every branch below compiles out and this
+// kernel is byte-identical to the pre-split one.
+constexpr uint32_t W_SPLIT = get_compile_time_arg_val(23);
+constexpr uint32_t GROUP_SIZE = get_compile_time_arg_val(24);
+constexpr uint32_t WT_TOTAL = get_compile_time_arg_val(25);
+constexpr uint32_t ACC_TILE_BYTES = get_compile_time_arg_val(26);
+constexpr uint32_t SEM_DATA_READY = get_compile_time_arg_val(27);
+constexpr uint32_t SEM_CONSUMER_READY = get_compile_time_arg_val(28);
+constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(29);
+
+// The DRAM tile-row stride.  Under a W split a core owns Wt_core of WT_TOTAL
+// columns, so the stride is the FULL row width, not the per-core slice.
+constexpr uint32_t ROW_STRIDE = W_SPLIT ? WT_TOTAL : Wt_core;
 
 // Lever B5/B6 off-arm: the tile page split into TWO transfers.  The split point
 // must stay NoC-alignment-legal on every dtype - Blackhole's DRAM alignment is
@@ -107,7 +156,7 @@ constexpr uint32_t NUM_REDUCE_CHUNKS = Wt_core / WT_REDUCE_BLOCK;
 constexpr uint32_t NUM_SCALE_CHUNKS = Wt_core / WT_SCALE_BLOCK;
 constexpr uint32_t LAST_RT = Rt - 1;
 
-constexpr auto input_args = TensorAccessorArgs<23>();
+constexpr auto input_args = TensorAccessorArgs<30>();
 [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
 FORCE_INLINE uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
@@ -128,6 +177,10 @@ void kernel_main() {
     const uint32_t gamma_addr = get_arg_val<uint32_t>(1);
     const uint32_t start_row_block = get_arg_val<uint32_t>(2);
     const uint32_t num_row_blocks_here = get_arg_val<uint32_t>(3);
+    // W-split: this core's column base inside the full row (tiles), and its role.
+    // Both are 0 on the row-parallel plan, where every W_SPLIT branch is gone.
+    const uint32_t W_OFFSET = get_arg_val<uint32_t>(4);
+    const uint32_t IS_ROOT = get_arg_val<uint32_t>(5);
 
     const auto in_acc = TensorAccessor(input_args, src_addr);
 
@@ -188,7 +241,7 @@ void kernel_main() {
             if constexpr (GAMMA_IS_ROW_MAJOR) {
                 constexpr uint32_t group_bytes = GAMMA_INGEST_BLOCK * TILE_DIM * GAMMA_ELEM_SIZE;
                 for (uint32_t o = 0; o < n; o += GAMMA_INGEST_BLOCK) {
-                    const uint32_t byte_off = (w0 + o) * TILE_DIM * GAMMA_ELEM_SIZE;
+                    const uint32_t byte_off = (W_OFFSET + w0 + o) * TILE_DIM * GAMMA_ELEM_SIZE;
                     {
                         MaybeDeviceZoneScope("rd_gamma_reserve");
                         cb_reserve_back(cb_gamma_rm, GAMMA_INGEST_BLOCK);
@@ -216,7 +269,7 @@ void kernel_main() {
                 {
                     MaybeDeviceZoneScope("rd_gamma_issue");
                     for (uint32_t i = 0; i < n; ++i) {
-                        noc_async_read_tile(w0 + i, g_acc, addr);
+                        noc_async_read_tile(W_OFFSET + w0 + i, g_acc, addr);
                         addr += GAMMA_TILE_BYTES;
                     }
                 }
@@ -240,7 +293,7 @@ void kernel_main() {
         {
             MaybeDeviceZoneScope("rd_in_issue");
             for (uint32_t r = 0; r < BLOCK_HT; ++r) {
-                const uint32_t row_base = umin(rt0 + r, LAST_RT) * Wt_core + w0;
+                const uint32_t row_base = umin(rt0 + r, LAST_RT) * ROW_STRIDE + W_OFFSET + w0;
                 for (uint32_t w = 0; w < nw; ++w) {
                     if constexpr (!SKIP_DM_PAYLOAD) {
                         if constexpr (COALESCE) {
@@ -269,7 +322,7 @@ void kernel_main() {
     auto read_sticks = [&](uint32_t rt, uint32_t w0, uint32_t nw) {
         const uint32_t row0 = umin(rt, LAST_RT) * TILE_DIM;
         const uint32_t nrows = umin(TILE_DIM, NUM_ROWS - row0);
-        const uint32_t byte_off = w0 * TILE_DIM * ELEM_SIZE;
+        const uint32_t byte_off = (W_OFFSET + w0) * TILE_DIM * ELEM_SIZE;
         const uint32_t padded = nw * TILE_DIM * ELEM_SIZE;
         const uint32_t chunk_bytes = umin(padded, ROW_BYTES - byte_off);
 
@@ -324,6 +377,116 @@ void kernel_main() {
     // read cost 1x per core rather than 1x per row-block.
     if constexpr (REGIME_A) {
         fill_gamma(0, Wt_core);
+    }
+
+    // =====================================================================
+    // W-SPLIT: the cross-core combine over the DEPENDENT axis.
+    // =====================================================================
+    // Per row-block, after this core has read its own Wt_core-wide slice and the
+    // compute thread has folded it into ONE partial sum-of-squares accumulator
+    // tile per tile-row (cb_sumsq_acc):
+    //   step 2  N->1 GATHER   every core writes its BLOCK_HT partial tiles into
+    //                         slot `w_index` of the group ROOT's cb_partial_gather
+    //                         and increments the root's gather semaphore.  RAW NoC
+    //                         - see justification #3 in the header.
+    //   step 3  ROOT SUM      the root's compute thread sums the GROUP_SIZE
+    //                         partials and collapses within-tile in ONE
+    //                         reduce<..., AccumulateViaAdd> (rms_norm_compute.cpp).
+    //   step 4  1->N BCAST    `SenderPipe::send` / `ReceiverPipe::receive`, loopback
+    //                         ON so the root lands its own copy in the same call.
+    //                         PRE_HANDSHAKE gates each broadcast on the receivers
+    //                         having drained the previous row-block's tile, which is
+    //                         also what keeps the NEXT gather from racing this one.
+    // Held in its own `if constexpr` block because the two pipes must be
+    // constructed ONCE outside the row-block loop, and constructing them at all is
+    // illegal on the row-parallel plan (which creates no semaphores, so
+    // ReceiverPipe's ctor `data_ready_.set(INVALID)` would write an L1 word this
+    // program does not own).
+    if constexpr (W_SPLIT) {
+        Noc noc;
+        const uint32_t root_vx = get_arg_val<uint32_t>(6);
+        const uint32_t root_vy = get_arg_val<uint32_t>(7);
+        const uint32_t sender_coords[2] = {root_vx, root_vy};
+
+        // Both combine CBs hold EXACTLY one generation (blocking_plan asserts it),
+        // so their fifo pointer is always the CB base -> the address read here is
+        // the SAME L1 address on every core of the group.  That identity is what
+        // lets a non-root core address the root's landing slot with no runtime
+        // address table.
+        const uint32_t gather_base = get_write_ptr(cb_partial_gather);
+        const uint32_t sumsq_base = get_write_ptr(cb_sumsq);
+        constexpr uint32_t PARTIAL_BYTES = BLOCK_HT * ACC_TILE_BYTES;
+        const uint32_t w_index = W_OFFSET / Wt_core;
+
+        Semaphore<> gather_sem(SEM_GATHER);
+        SenderPipe<noc_index, SEM_DATA_READY, true, SEM_CONSUMER_READY> root_pipe(
+            noc,
+            McastRect<>{
+                get_arg_val<uint32_t>(8),
+                get_arg_val<uint32_t>(9),
+                get_arg_val<uint32_t>(10),
+                get_arg_val<uint32_t>(11)},
+            ACK_EQUALS_FANOUT);
+        ReceiverPipe<SEM_DATA_READY, true, SEM_CONSUMER_READY> leaf_pipe(noc, sender_coords);
+
+        for (uint32_t b = 0; b < num_row_blocks_here; ++b) {
+            const uint32_t rt0 = (start_row_block + b) * BLOCK_HT;
+            read_input_chunk(rt0, 0, Wt_core);
+
+            // ---- step 2: N->1 gather (raw NoC; header justification #3) -------
+            // `cb_gather_partial_wait` is this core STARVED on its own compute
+            // thread; `cb_gather_write` is the RISC-serial issue + the real NoC
+            // barrier.  Split because a hot wait and a hot write want opposite fixes.
+            {
+                MaybeDeviceZoneScope("cb_gather_partial_wait");
+                cb_wait_front(cb_sumsq_acc, BLOCK_HT);
+            }
+            {
+                MaybeDeviceZoneScope("cb_gather_write");
+                const uint32_t src = get_read_ptr(cb_sumsq_acc);
+                for (uint32_t r = 0; r < BLOCK_HT; ++r) {
+                    // Interleaved slot layout [ht][core] so the root's combine reduce
+                    // reads a contiguous (BLOCK_HT x GROUP_SIZE) tile block.
+                    const uint32_t slot = r * GROUP_SIZE + w_index;
+                    noc_async_write(
+                        src + r * ACC_TILE_BYTES,
+                        get_noc_addr(root_vx, root_vy, gather_base + slot * ACC_TILE_BYTES),
+                        ACC_TILE_BYTES);
+                }
+                noc_async_write_barrier();  // the DATA must be visible before the COUNT
+                gather_sem.up(noc, root_vx, root_vy, 1);
+                cb_pop_front(cb_sumsq_acc, BLOCK_HT);
+            }
+
+            if (IS_ROOT) {
+                {
+                    MaybeDeviceZoneScope("cb_gather_wait");
+                    cb_reserve_back(cb_partial_gather, GROUP_SIZE * BLOCK_HT);
+                    gather_sem.wait(GROUP_SIZE);
+                    gather_sem.set(0);  // reset BEFORE the broadcast releases the leaves
+                    cb_push_back(cb_partial_gather, GROUP_SIZE * BLOCK_HT);
+                }
+                {
+                    MaybeDeviceZoneScope("mcast_src_wait");
+                    cb_wait_front(cb_sumsq_bcast, BLOCK_HT);
+                    cb_reserve_back(cb_sumsq, BLOCK_HT);
+                }
+                {
+                    MaybeDeviceZoneScope("mcast_send");
+                    root_pipe.send(get_read_ptr(cb_sumsq_bcast), sumsq_base, PARTIAL_BYTES);
+                }
+                cb_push_back(cb_sumsq, BLOCK_HT);
+                cb_pop_front(cb_sumsq_bcast, BLOCK_HT);
+            } else {
+                cb_reserve_back(cb_sumsq, BLOCK_HT);
+                {
+                    MaybeDeviceZoneScope("mcast_recv");
+                    leaf_pipe.receive();
+                }
+                cb_push_back(cb_sumsq, BLOCK_HT);
+            }
+        }
+        return;  // the W-split arm owns its whole row-block loop
     }
 
     for (uint32_t b = 0; b < num_row_blocks_here; ++b) {

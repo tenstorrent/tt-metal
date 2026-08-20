@@ -9,12 +9,14 @@ counts, grid sizing) reads a field off the returned frozen dataclass.  Turning a
 knob is a one-line change inside `blocking_plan`.
 
 Axes:
-    Rt  (tile-rows)     INDEPENDENT  -> split across the whole core grid,
-                                        block factor BLOCK_HT.
-    Wt  (tile-columns)  DEPENDENT    -> one core owns a full row in Phase 0;
-                                        block factors WT_REDUCE_BLOCK /
+    Rt  (tile-rows)     INDEPENDENT  -> split across combine groups, block
+                                        factor BLOCK_HT.
+    Wt  (tile-columns)  DEPENDENT    -> split across the G cores of a combine
+                                        group (`_choose_group_size`); block
+                                        factors WT_REDUCE_BLOCK /
                                         WT_SCALE_BLOCK bound L1 in Regime B.
-    gamma[W]            REUSE-SHARED -> replicated per core (Lamp L2 = mcast).
+    gamma[W]            REUSE-SHARED -> replicated per group; each core reads
+                                        only its OWN column slice.
 
 Two compute regimes, selected by a pinned host predicate:
     A  RESIDENT-FUSED    single DRAM read, fused sum-of-squares, no mask.
@@ -79,6 +81,16 @@ LEVER_DEFAULTS = {
     # --- /perf-measure ablation arms (payload stubbed, sync scaffolding kept) ---
     "stub_dm": 0,  # 1: reader/writer keep every CB op + barrier, issue no NoC transfer
     "stub_compute": 0,  # 1: eltwise chains keep their CB lifecycle, do no math
+    # --- W-split work distribution (Perf 1 graduation) -----------------------
+    # 1 (applied) = `_choose_group_size` PICKS the combine-group size G from real
+    # properties; 0 = force G = 1, i.e. the pure row-parallel plan this op shipped
+    # before.  G = 1 is a value of the same policy, not a second code path, so the
+    # off-arm is a genuine counterfactual and not a different program shape.
+    "w_split": 1,
+    # 0 = let the policy choose; N = pin G = N.  This is what makes the group-size
+    # calibration in `_choose_group_size` re-MEASURABLE instead of asserted: a new
+    # box or a new shape can be swept without editing the policy.
+    "w_group": 0,
 }
 
 
@@ -104,6 +116,16 @@ CB_RM_IN = 8
 CB_RM_OUT = 9
 CB_SUMSQ_ACC = 10
 CB_GAMMA_RM = 11
+# --- W-split combine (only created when the plan picks G > 1) -----------------
+CB_PARTIAL_GATHER = 12  # reader (remote NoC writes) -> compute, group root only
+CB_SUMSQ_BCAST = 13  # compute (root) -> reader, the multicast source
+
+# Semaphores the W-split combine owns.  `mcast_pipe.hpp` requires `consumer_ready`
+# to be host-initialised to 0 (remote receivers increment it with no
+# happens-before to the sender's ctor), so all three are host-owned.
+SEM_DATA_READY = 0
+SEM_CONSUMER_READY = 1
+SEM_GATHER = 2
 
 
 def _div_up(a: int, b: int) -> int:
@@ -305,6 +327,12 @@ class BlockingPlan:
     regime: str
     reduce_via_add: int
     num_row_blocks: int
+    # --- W-split work distribution (group_size == 1 IS the row-parallel plan) --
+    group_size: int
+    group_x: int
+    group_y: int
+    num_groups: int  # groups the gx*gy tiling yields on this grid
+    groups_used: int  # groups that actually get row-blocks (<= num_groups)
     l1_cb_budget: int
     # The frozen CB set this plan implies: ((cb_index, num_pages, page_bytes,
     # kind), ...) straight out of _cb_layout().  create_program_descriptor
@@ -354,6 +382,7 @@ def _cb_layout(
     T_interm: int,
     T_acc: int,
     T_bf16: int,
+    w_split_group: int = 0,
 ):
     """Return [(cb_index, num_pages, page_bytes, kind)] for this knob assignment."""
     wmax = max(wr, ws)
@@ -391,6 +420,16 @@ def _cb_layout(
     if is_row_major:
         layout.append((CB_RM_IN, rm_depth * wmax, T_in, "in"))
         layout.append((CB_RM_OUT, rm_depth * ws, T_in, "out"))
+    if w_split_group:
+        # The combine's landing buffer, allocated on EVERY core of the group (not
+        # just the root) so `get_write_ptr(cb_partial_gather)` resolves to the SAME
+        # L1 address on every core.  That address identity is what lets a non-root
+        # core compute the root's landing slot with no runtime address table.
+        # Sized to EXACTLY one generation (group_size * BLOCK_HT pages) so the fifo
+        # pointer wraps back to the CB base after every push/pop pair - if it did
+        # not, the identity above would break after the first row-block.
+        layout.append((CB_PARTIAL_GATHER, w_split_group * block_ht, T_acc, "acc"))
+        layout.append((CB_SUMSQ_BCAST, block_ht, T_acc, "acc"))
     return layout
 
 
@@ -403,57 +442,42 @@ def _working_set_bytes(**kwargs) -> int:
     return sum(pages * page_bytes for _, pages, page_bytes, _ in _cb_layout(**kwargs))
 
 
-def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_config, levers=None) -> BlockingPlan:
-    """The ONLY place block factors, buffer depths and the regime are decided."""
-    shape = list(input_tensor.shape)
-    is_row_major = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
-    Rt, Wt, W_true, W_partial, num_rows = tile_geometry(shape, is_row_major)
+# ---------------------------------------------------------------------------
+# The L1 / blocking solver, parameterised by the per-core width.
+# ---------------------------------------------------------------------------
+# Factored out of `blocking_plan` so the W-split policy can SCORE a candidate
+# group size with the very same solver that will later produce the shipped plan -
+# the policy never guesses a regime or a block factor, it asks.
 
-    Wt_core = Wt  # Phase 0: no W split across cores.  Lamp L1 sets Wt/num_w_cores.
 
-    has_gamma = gamma is not None
-    gamma_is_row_major = bool(has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT)
+@dataclass(frozen=True)
+class _Solved:
+    regime: str
+    BLOCK_HT: int
+    WT_REDUCE_BLOCK: int
+    WT_SCALE_BLOCK: int
+    IN_BUF_DEPTH: int
+    OUT_BUF_DEPTH: int
+    RM_BUF_DEPTH: int
+    GAMMA_INGEST_BLOCK: int
+    num_row_blocks: int
 
-    elem_size = _elem_size(input_tensor.dtype)
-    gamma_elem_size = _elem_size(gamma.dtype) if has_gamma else elem_size
-    # A block-float tensor cannot be row-major (ttnn refuses to build one), so the
-    # stick-addressing path never sees a zero elem_size.
-    assert not (is_row_major and elem_size == 0), "block-float dtype on the ROW_MAJOR path"
 
-    # The two derived formats, decided HERE and nowhere else; _cb_layout consumes
-    # the tile sizes and create_program_descriptor the dtypes.
-    interm_dtype = _interm_dtype(input_tensor.dtype)
-    acc_dtype = _acc_dtype(compute_kernel_config, interm_dtype, bool(_lever(levers, "acc_narrow")))
-
-    T_in = ttnn.tile_size(input_tensor.dtype)
-    T_g = ttnn.tile_size(gamma.dtype) if has_gamma else T_in
-    T_interm = ttnn.tile_size(interm_dtype)
-    T_acc = ttnn.tile_size(acc_dtype)
-    T_bf16 = ttnn.tile_size(ttnn.bfloat16)
-
-    tile_out = not is_row_major
-    l1_cb_budget = ttnn.get_max_worker_l1_unreserved_size() - L1_RESERVED_BYTES
-
-    dest_limit = _dest_limit(compute_kernel_config)
-    forced_dest = _lever(levers, "dest_block")
-    if forced_dest:
-        dest_limit = min(dest_limit, forced_dest)
-
-    common = dict(
-        Wt_core=Wt_core,
-        has_gamma=has_gamma,
-        gamma_is_row_major=gamma_is_row_major,
-        is_row_major=is_row_major,
-        tile_out=tile_out,
-        W_partial=W_partial,
-        T_in=T_in,
-        T_g=T_g,
-        T_interm=T_interm,
-        T_acc=T_acc,
-        T_bf16=T_bf16,
-    )
-
-    gamma_cap_tiles = max(1, GAMMA_STAGE_MAX_BYTES // T_g)
+def _solve(
+    *,
+    Wt_core: int,
+    w_split_group: int,
+    row_parallel_units: int,
+    Rt: int,
+    maskless_w: bool,
+    dest_limit: int,
+    l1_cb_budget: int,
+    gamma_cap_tiles: int,
+    layout_common: dict,
+    levers,
+) -> _Solved:
+    """Regime + every block factor / buffer depth for ONE per-core width."""
+    common = dict(layout_common, Wt_core=Wt_core, w_split_group=w_split_group)
 
     def ws_bytes(regime, block_ht, in_depth, out_depth, rm_depth, wr, wsc):
         # The gamma staging chunk must divide every ingest count the kernel uses,
@@ -475,18 +499,12 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
     #      RM   -> the reader zero-fills every stick's pad tail: pad is exactly 0.
     #      TILE -> the pad lives in DRAM and may be poisoned: mask mandatory.
     #  (2) does the MINIMAL resident working set fit the CB budget?
-    maskless_w = is_row_major or (W_partial == 0)
     fits = ws_bytes("A", 1, 1, 1, 1, Wt_core, Wt_core) <= l1_cb_budget
     regime = "A" if (maskless_w and fits) else "B"
 
-    # --- Grid / core count (needed to cap BLOCK_HT so cores are not starved) -
-    grid = device.compute_with_storage_grid_size()
-    grid_cores = grid.x * grid.y
-    core_cap = _lever(levers, "active_cores") or ACTIVE_CORE_CAP
-    if core_cap:
-        grid_cores = min(grid_cores, core_cap)
-    # Coarsest useful row-block: any coarser and some cores get no work at all.
-    max_block_ht = max(1, _div_up(Rt, max(1, grid_cores)))
+    # Coarsest useful row-block: any coarser and some row-parallel unit (a core
+    # without a W split, a combine GROUP with one) gets no work at all.
+    max_block_ht = max(1, _div_up(Rt, max(1, row_parallel_units)))
     max_block_ht = min(max_block_ht, dest_limit)
 
     block_ht = 1
@@ -550,12 +568,419 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
 
     assert Wt_core % wr == 0 and Wt_core % wsc == 0, "W-chunk must divide Wt_core (CB-wrap constraint)"
 
-    gamma_ingest_block = _largest_divisor_at_most(wsc, gamma_cap_tiles)
+    return _Solved(
+        regime=regime,
+        BLOCK_HT=block_ht,
+        WT_REDUCE_BLOCK=wr,
+        WT_SCALE_BLOCK=wsc,
+        IN_BUF_DEPTH=in_depth,
+        OUT_BUF_DEPTH=out_depth,
+        RM_BUF_DEPTH=rm_depth,
+        GAMMA_INGEST_BLOCK=_largest_divisor_at_most(wsc, gamma_cap_tiles),
+        num_row_blocks=_div_up(Rt, block_ht),
+    )
+
+
+# ---------------------------------------------------------------------------
+# W-SPLIT: the work-distribution POLICY (op_design.md "Unlocked scheme L1")
+# ---------------------------------------------------------------------------
+# The INDEPENDENT axis (Rt) is spread over combine GROUPS of G cores; inside a
+# group the DEPENDENT axis (Wt) is spread over the G cores, each reducing Wt/G
+# columns.  The group root sums the G partial sums-of-squares cross-core and
+# broadcasts the total back, so every core can scale its own column slice.
+#
+# G IS CHOSEN, NEVER FIXED, AND G == 1 IS THE ROW-PARALLEL PLAN.  There is one
+# work-distribution path; "fall back to row-parallel" is the policy returning the
+# value 1, not a second branch.  A fixed G is measurably wrong: the same G that
+# gives 4.72x on (1,1,32,7168) gives 0.31x on (1,1,8192,1024).
+#
+# WHY IT PAYS - two INDEPENDENT mechanisms (both measured on Blackhole p150):
+#   (1) PARALLELISM.  The per-core RISC-issue + TRISC cost divides by G.  Only
+#       pays while the row axis leaves cores idle.
+#   (2) REGIME + GAMMA.  A narrow per-core slice makes the RESIDENT-FUSED Regime A
+#       fit L1, so x is read from DRAM ONCE instead of twice, and each core reads
+#       only its OWN gamma slice instead of the whole row.  Pays at every Rt.
+# WHAT IT COSTS - the combine, ~linear in G.  Measured on the focus case against a
+# combine-removed arm: 1,666 ns @ G=14, 2,310 @ G=28, 4,001 @ G=56, i.e.
+# ~890 + 56*G ns per row-block.  That is exactly why the focus optimum is G=32 and
+# not the largest legal G=56, and why the policy has to WEIGH rather than maximize.
+#
+# MEASURED SWEEP the calibration below reproduces (baseline = G 1; DEVICE KERNEL
+# DURATION ns, bf16 / HiFi2 / fp32_dest_acc_en=False, 13x10 grid):
+#   (1,1,32,7168)   Rt   1  Wt 224      44,314 -> G 32     9,386   4.72x
+#   (1,1,32,1024)   Rt   1  Wt  32       9,260 -> G 8..16  5,561   1.67x
+#   (1,1,32,32768)  Rt   1  Wt 1024    187,764 -> G 64    26,693   7.03x
+#   (1,1,64,12288)  Rt   2  Wt 384      68,821 -> G 32    19,165   3.59x
+#   (1,1,8192,7168) Rt 256  Wt 224   1,229,243 -> G 4..16 621,319  1.98x
+#   (1,1,8192,1024) Rt 256  Wt  32     117,456 -> G 2    100,336   1.17x
+#
+# HARD PROPERTIES a candidate G must satisfy.  Each is a correctness or
+# expressibility FACT about the split, never a list of the shapes that were
+# benchmarked - which is why the set shrinks as the kernels grow, instead of
+# having to be widened by hand:
+#
+#   P1  G divides Wt.  A short trailing slice needs a per-core RUNTIME width (the
+#       kernels take Wt_core as a compile-time arg) plus a partial mask on the
+#       split boundary.  Not implemented -> inexpressible, not slow.
+#   P2  the per-core slice must SOLVE to Regime A.  The combine consumes the
+#       PRE-collapse sum-of-squares accumulator tile (`cb_sumsq_acc`), which only
+#       Regime A produces; Regime B collapses inside its accumulating reduce and
+#       has no such tile.  This property is ALSO the whole carve-out for a
+#       non-tile-aligned W on the TILE path: there `maskless_w` is False, so every
+#       candidate solves to Regime B and the policy returns G=1 BY CONSTRUCTION -
+#       no `if W % 32` predicate anywhere.  (On the ROW_MAJOR path the reader
+#       zero-fills each stick's pad tail per core, so `maskless_w` holds and a
+#       non-aligned W CAN split.)
+#   P3  the group must tile the grid as a rectangle whose VIRTUAL-coordinate
+#       bounding box has multicast area exactly G.  The 1->N leg is one NoC
+#       multicast and its fan-out is `McastRect::area()` (mcast_pipe.hpp:130-138),
+#       so a box that is not dense in virtual coords would make the handshake
+#       counts wrong - a hang or a premature release, not a slowdown.
+#   P5  the reader and the writer must be on DIFFERENT NoCs (lever `noc_split`, the
+#       applied default).  `ncrisc_noc_nonposted_writes_flushed`
+#       (blackhole/noc_nonblocking_api.h:662-664) compares the PER-NOC hardware
+#       register NIU_MST_WR_ACK_RECEIVED - which counts acks from EVERY RISC on that
+#       NoC - against a PER-RISC software counter.  The combine makes the READER
+#       issue non-posted writes; if the writer is on the same NoC its
+#       `noc_async_write_barrier` sees the register run ahead of its own counter and
+#       spins forever (measured: hang on (1,1,32,7168) with `noc_split=0`, writer
+#       BRISC stuck in NWBW on the group root).  Under the applied default the
+#       reader owns NOC_0 and the writer NOC_1, so this holds; only the lever's
+#       off-arm - not any user-reachable cell - falls back to G=1.
+#   P4  ROW_MAJOR INPUT ONLY: the per-core stick chunk must stay >= 1024 B.  On the
+#       TILE path the read unit is a whole tile PAGE, so a split never shrinks a
+#       transaction.  On the RM path the read unit is a STICK and the split cuts it
+#       to Wt_core*32*elem bytes.  Measured: (1,1,8192,1024) RM 0.91x @1024 B/core,
+#       0.59x @512 B, 0.43x @256 B; (1,1,1024,7168) RM still WINS 1.26x @1792 B.
+#       Stated as a stick-byte property, not as "ROW_MAJOR is excluded" - an
+#       outright RM exclusion would throw the 1.26x away.
+#
+# Everything that survives P1..P4 is SCORED by one cost model and the cheapest
+# wins, with G=1 competing on exactly the same footing.
+
+# The per-core cost model, in units of "one tile-page read by one core".  The two
+# combine coefficients are the measured ~890 + 56*G ns above divided by the
+# measured 66 ns/tile of the same sweep, so the model is a calibration and stays
+# re-measurable: `_levers=dict(w_group=N)` pins G, so a new box or a new shape can
+# be swept and these two numbers re-fit without touching the policy's structure.
+_COMBINE_FIXED_TILES = 13.5
+_COMBINE_PER_CORE_TILES = 0.85
+# Candidates within this band of the best score are a measurement TIE (the device
+# noise band is ~2-3%), so the tie-break decides - and it prefers the arm that
+# puts more of the grid to work.  This is the "keep num_groups(G)*G near
+# grid_cores" criterion, applied as a tie-break rather than as a filter: as a
+# filter it would reject the focus optimum (G=32 leaves 66 of 130 cores idle and
+# is still 4.72x).
+_SCORE_TIE_BAND = 0.03
+# P4: the measured floor on a per-core ROW_MAJOR stick chunk.
+RM_MIN_CORE_STICK_BYTES = 1024
+
+
+def group_rect(group_size: int, grid):
+    """The (gx, gy) core rectangle one combine group occupies, or None.
+
+    A combine group must be a RECTANGLE because the 1->N leg is a single NoC
+    multicast, whose destination set is a bounding box (`McastRect`).  Pick the
+    WIDEST legal factorization (gx as large as the grid allows) so the group spans
+    the DRAM-facing axis first.
+    """
+    for gx in range(min(group_size, grid.x), 0, -1):
+        if group_size % gx == 0 and group_size // gx <= grid.y:
+            return gx, group_size // gx
+    return None
+
+
+def _virt(device, x, y):
+    c = device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+    return c.x, c.y
+
+
+def _group_tiling(device, grid, gx: int, gy: int, group_size: int):
+    """Every group of a gx*gy tiling of `grid`, or None if P3 fails for any of them.
+
+    Each entry is (logical_rect, root_virtual, bbox_virtual, members).  The bounding
+    box is taken over EVERY member's VIRTUAL coord because the logical->virtual
+    worker map is not monotonic in x on every arch, and it is the virtual box the
+    multicast actually addresses (mcast_host.hpp::noc_ordered_bbox does the same).
+    """
+    # Virtual x columns that carry a worker core.  `McastRect::area()` discounts
+    # the non-worker columns a box spans (mcast_pipe.hpp:130-138, hard-coded 8/9 on
+    # Blackhole); deriving the worker set from the device mirrors that arch-neutrally.
+    worker_vx = {_virt(device, x, 0)[0] for x in range(grid.x)}
+    groups_x, groups_y = grid.x // gx, grid.y // gy
+    out = []
+    for g in range(groups_x * groups_y):
+        g_ox, g_oy = (g % groups_x) * gx, (g // groups_x) * gy
+        members = [ttnn.CoreCoord(g_ox + i, g_oy + j) for j in range(gy) for i in range(gx)]
+        vs = [_virt(device, m.x, m.y) for m in members]
+        xlo, xhi = min(v[0] for v in vs), max(v[0] for v in vs)
+        ylo, yhi = min(v[1] for v in vs), max(v[1] for v in vs)
+        width = sum(1 for x in range(xlo, xhi + 1) if x in worker_vx)
+        if width * (yhi - ylo + 1) != group_size:
+            return None
+        out.append(
+            ((g_ox, g_oy, g_ox + gx - 1, g_oy + gy - 1), _virt(device, g_ox, g_oy), (xlo, ylo, xhi, yhi), members)
+        )
+    return out
+
+
+def _split_cost(solved, *, Wt_core, group_size, num_groups, has_gamma, T_in, T_g):
+    """Per-core cost of one candidate, in tile-page-read equivalents.
+
+    Only the READ side is modelled: the writer runs on the other NoC and the other
+    RISC, so the wall is max(read, write) and the read side is the larger one in
+    both regimes (Regime B reads x twice).  Byte-weighted so a wide gamma dtype is
+    not counted as if it were the input's.
+    """
+    groups_used = max(1, min(num_groups, solved.num_row_blocks))
+    blocks_per_group = _div_up(solved.num_row_blocks, groups_used)
+    passes = 1 if solved.regime == "A" else 2
+    read = blocks_per_group * solved.BLOCK_HT * Wt_core * passes
+    # Regime A holds gamma resident for the whole kernel (one read per core);
+    # Regime B re-reads the slice once per row-block.
+    gamma = 0 if not has_gamma else (Wt_core if solved.regime == "A" else blocks_per_group * Wt_core)
+    combine = (
+        0.0 if group_size == 1 else blocks_per_group * (_COMBINE_FIXED_TILES + _COMBINE_PER_CORE_TILES * group_size)
+    )
+    return read + gamma * (T_g / T_in) + combine, groups_used
+
+
+def _choose_group_size(
+    *,
+    device,
+    grid,
+    grid_cores: int,
+    Wt: int,
+    Rt: int,
+    maskless_w: bool,
+    is_row_major: bool,
+    elem_size: int,
+    has_gamma: bool,
+    T_in: int,
+    T_g: int,
+    dest_limit: int,
+    l1_cb_budget: int,
+    gamma_cap_tiles: int,
+    layout_common: dict,
+    levers,
+):
+    """Pick (group_size, gx, gy, num_groups, tiling).  1 == the row-parallel plan."""
+
+    # G = 1 is a candidate like any other, scored with the same model, so the
+    # row-parallel plan wins by MEASUREMENT wherever the split does not pay.
+    def evaluate(g):
+        if Wt % g:  # P1
+            return None
+        if g == 1:
+            gx = gy = 1
+            num_groups, tiling = grid_cores, None
+        else:
+            rect = group_rect(g, grid)
+            if rect is None:  # P3
+                return None
+            gx, gy = rect
+            tiling = _group_tiling(device, grid, gx, gy, g)
+            if tiling is None:  # P3
+                return None
+            num_groups = len(tiling)
+        Wt_core = Wt // g
+        if g > 1 and is_row_major and Wt_core * TILE_DIM * elem_size < RM_MIN_CORE_STICK_BYTES:  # P4
+            return None
+        solved = _solve(
+            Wt_core=Wt_core,
+            w_split_group=0 if g == 1 else g,
+            row_parallel_units=num_groups,
+            Rt=Rt,
+            maskless_w=maskless_w,
+            dest_limit=dest_limit,
+            l1_cb_budget=l1_cb_budget,
+            gamma_cap_tiles=gamma_cap_tiles,
+            layout_common=layout_common,
+            levers=levers,
+        )
+        if g > 1 and solved.regime != "A":  # P2
+            return None
+        cost, groups_used = _split_cost(
+            solved,
+            Wt_core=Wt_core,
+            group_size=g,
+            num_groups=num_groups,
+            has_gamma=has_gamma,
+            T_in=T_in,
+            T_g=T_g,
+        )
+        return {
+            "g": g,
+            "gx": gx,
+            "gy": gy,
+            "num_groups": num_groups,
+            "tiling": tiling,
+            "cost": cost,
+            "active": groups_used * g,
+        }
+
+    row_parallel = evaluate(1)
+    assert row_parallel is not None, "G=1 must always be a legal plan"
+
+    # P5: the combine makes the reader a WRITER, so it must not share a NoC with
+    # the output writer.  Checked before `w_group` so a forcing arm cannot ask for a
+    # configuration that hangs.
+    if not _lever(levers, "noc_split"):
+        return 1, 1, 1, grid_cores, None
+
+    forced = _lever(levers, "w_group")
+    if forced:
+        cand = evaluate(forced)
+        assert cand is not None, (
+            f"_levers w_group={forced} is not a legal group size for Wt={Wt} on this grid "
+            "(fails one of the P1..P4 properties in _choose_group_size)"
+        )
+        return cand["g"], cand["gx"], cand["gy"], cand["num_groups"], cand["tiling"]
+    if not _lever(levers, "w_split"):
+        return 1, 1, 1, grid_cores, None
+
+    cands = [row_parallel]
+    for g in range(2, min(Wt, grid_cores) + 1):
+        cand = evaluate(g)
+        if cand is not None:
+            cands.append(cand)
+
+    best = min(c["cost"] for c in cands)
+    # Within the noise band, prefer the arm that keeps more of the grid busy; then
+    # the smaller G (a smaller combine is the safer of two equal bets).
+    band = [c for c in cands if c["cost"] <= best * (1.0 + _SCORE_TIE_BAND)]
+    pick = min(band, key=lambda c: (-c["active"], c["g"]))
+    return pick["g"], pick["gx"], pick["gy"], pick["num_groups"], pick["tiling"]
+
+
+def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_config, levers=None) -> BlockingPlan:
+    """The ONLY place block factors, buffer depths, the regime and G are decided."""
+    shape = list(input_tensor.shape)
+    is_row_major = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    Rt, Wt, W_true, W_partial, num_rows = tile_geometry(shape, is_row_major)
+
+    has_gamma = gamma is not None
+    gamma_is_row_major = bool(has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT)
+
+    elem_size = _elem_size(input_tensor.dtype)
+    gamma_elem_size = _elem_size(gamma.dtype) if has_gamma else elem_size
+    # A block-float tensor cannot be row-major (ttnn refuses to build one), so the
+    # stick-addressing path never sees a zero elem_size.
+    assert not (is_row_major and elem_size == 0), "block-float dtype on the ROW_MAJOR path"
+
+    # The two derived formats, decided HERE and nowhere else; _cb_layout consumes
+    # the tile sizes and create_program_descriptor the dtypes.
+    interm_dtype = _interm_dtype(input_tensor.dtype)
+    acc_dtype = _acc_dtype(compute_kernel_config, interm_dtype, bool(_lever(levers, "acc_narrow")))
+
+    T_in = ttnn.tile_size(input_tensor.dtype)
+    T_g = ttnn.tile_size(gamma.dtype) if has_gamma else T_in
+    T_interm = ttnn.tile_size(interm_dtype)
+    T_acc = ttnn.tile_size(acc_dtype)
+    T_bf16 = ttnn.tile_size(ttnn.bfloat16)
+
+    tile_out = not is_row_major
+    l1_cb_budget = ttnn.get_max_worker_l1_unreserved_size() - L1_RESERVED_BYTES
+
+    dest_limit = _dest_limit(compute_kernel_config)
+    forced_dest = _lever(levers, "dest_block")
+    if forced_dest:
+        dest_limit = min(dest_limit, forced_dest)
+
+    #  (1) of the regime predicate: can the reduce see the padded columns without a
+    #      mask?  RM -> the reader zero-fills every stick's pad tail: pad is exactly
+    #      0.  TILE -> the pad lives in DRAM and may be poisoned: mask mandatory.
+    maskless_w = is_row_major or (W_partial == 0)
+
+    layout_common = dict(
+        has_gamma=has_gamma,
+        gamma_is_row_major=gamma_is_row_major,
+        is_row_major=is_row_major,
+        tile_out=tile_out,
+        W_partial=W_partial,
+        T_in=T_in,
+        T_g=T_g,
+        T_interm=T_interm,
+        T_acc=T_acc,
+        T_bf16=T_bf16,
+    )
+    gamma_cap_tiles = max(1, GAMMA_STAGE_MAX_BYTES // T_g)
+
+    # --- Grid / core count --------------------------------------------------
+    grid = device.compute_with_storage_grid_size()
+    core_cap = _lever(levers, "active_cores") or ACTIVE_CORE_CAP
+    if core_cap:
+        # Truncate the grid row-wise so the cap keeps the DRAM-facing spread.  The
+        # SAME truncation create_program_descriptor applies, so the plan's group
+        # tiling and the descriptor's core ranges cannot disagree.
+        grid = ttnn.CoreCoord(grid.x, min(grid.y, max(1, _div_up(core_cap, grid.x))))
+    grid_cores = grid.x * grid.y
+
+    # --- W-split policy: choose G (1 == row-parallel) ------------------------
+    group_size, gx, gy, num_groups, _tiling = _choose_group_size(
+        device=device,
+        grid=grid,
+        grid_cores=grid_cores,
+        Wt=Wt,
+        Rt=Rt,
+        maskless_w=maskless_w,
+        is_row_major=is_row_major,
+        elem_size=elem_size,
+        has_gamma=has_gamma,
+        T_in=T_in,
+        T_g=T_g,
+        dest_limit=dest_limit,
+        l1_cb_budget=l1_cb_budget,
+        gamma_cap_tiles=gamma_cap_tiles,
+        layout_common=layout_common,
+        levers=levers,
+    )
+    Wt_core = Wt // group_size
+    w_split_group = 0 if group_size == 1 else group_size
+
+    solved = _solve(
+        Wt_core=Wt_core,
+        w_split_group=w_split_group,
+        row_parallel_units=num_groups,
+        Rt=Rt,
+        maskless_w=maskless_w,
+        dest_limit=dest_limit,
+        l1_cb_budget=l1_cb_budget,
+        gamma_cap_tiles=gamma_cap_tiles,
+        layout_common=layout_common,
+        levers=levers,
+    )
+    regime = solved.regime
+    groups_used = max(1, min(num_groups, solved.num_row_blocks))
 
     # R5: cb_gamma_tiles is never popped in Regime A, so one pass-B call must
     # span every gamma column from the CB front.
     if regime == "A":
-        assert wsc == Wt_core, "Regime A requires WT_SCALE_BLOCK == Wt_core (gamma is never popped)"
+        assert solved.WT_SCALE_BLOCK == Wt_core, "Regime A requires WT_SCALE_BLOCK == Wt_core (gamma is never popped)"
+
+    common = dict(layout_common, Wt_core=Wt_core, w_split_group=w_split_group)
+    cb_layout = tuple(
+        _cb_layout(
+            regime=regime,
+            block_ht=solved.BLOCK_HT,
+            in_depth=solved.IN_BUF_DEPTH,
+            out_depth=solved.OUT_BUF_DEPTH,
+            rm_depth=solved.RM_BUF_DEPTH,
+            wr=solved.WT_REDUCE_BLOCK,
+            ws=solved.WT_SCALE_BLOCK,
+            gamma_ingest_block=solved.GAMMA_INGEST_BLOCK,
+            **common,
+        )
+    )
+
+    if w_split_group:
+        # P2, re-asserted on the shipped plan: only Regime A produces the
+        # pre-collapse accumulator tile the combine sums.
+        assert regime == "A", f"W-split needs Regime A per core, got B at Wt_core={Wt_core}"
+        # Both combine CBs must hold EXACTLY one generation so their fifo pointer is
+        # always the CB base - the cross-core address identity the gather relies on.
+        sumsq_pages = [n for i, n, _, _ in cb_layout if i == CB_SUMSQ]
+        assert sumsq_pages == [solved.BLOCK_HT], f"W-split: cb_sumsq must be exactly BLOCK_HT pages, got {sumsq_pages}"
 
     return BlockingPlan(
         Rt=Rt,
@@ -579,34 +1004,39 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         bf16_tile_bytes=T_bf16,
         row_bytes=W_true * elem_size,
         gamma_row_bytes=W_true * gamma_elem_size,
-        BLOCK_HT=block_ht,
-        WT_REDUCE_BLOCK=wr,
-        WT_SCALE_BLOCK=wsc,
+        BLOCK_HT=solved.BLOCK_HT,
+        WT_REDUCE_BLOCK=solved.WT_REDUCE_BLOCK,
+        WT_SCALE_BLOCK=solved.WT_SCALE_BLOCK,
         DEST_BLOCK=dest_limit,
-        GAMMA_INGEST_BLOCK=gamma_ingest_block,
-        IN_BUF_DEPTH=in_depth,
-        OUT_BUF_DEPTH=out_depth,
-        RM_BUF_DEPTH=rm_depth,
+        GAMMA_INGEST_BLOCK=solved.GAMMA_INGEST_BLOCK,
+        IN_BUF_DEPTH=solved.IN_BUF_DEPTH,
+        OUT_BUF_DEPTH=solved.OUT_BUF_DEPTH,
+        RM_BUF_DEPTH=solved.RM_BUF_DEPTH,
         regime=regime,
         reduce_via_add=_reduce_via_add(
             regime, compute_kernel_config, interm_dtype, W_partial, bool(_lever(levers, "reduce_via_add"))
         ),
-        num_row_blocks=_div_up(Rt, block_ht),
+        num_row_blocks=solved.num_row_blocks,
+        group_size=group_size,
+        group_x=gx,
+        group_y=gy,
+        num_groups=num_groups,
+        groups_used=groups_used,
         l1_cb_budget=l1_cb_budget,
-        cb_layout=tuple(
-            _cb_layout(
-                regime=regime,
-                block_ht=block_ht,
-                in_depth=in_depth,
-                out_depth=out_depth,
-                rm_depth=rm_depth,
-                wr=wr,
-                ws=wsc,
-                gamma_ingest_block=gamma_ingest_block,
-                **common,
-            )
-        ),
+        cb_layout=cb_layout,
     )
+
+
+# The shared geometry compile-time prefix is CT_ACCESSOR_BASE args wide; every
+# kernel spells its TensorAccessorArgs<CT_ACCESSOR_BASE>, so the two cannot drift
+# (create_program_descriptor asserts the prefix length).
+CT_ACCESSOR_BASE = 30
+
+
+def _even_split(total, buckets):
+    """[count] per bucket — the same shape split_work_to_cores produces."""
+    base, extra = divmod(total, buckets)
+    return [base + (1 if i < extra else 0) for i in range(buckets)]
 
 
 def _cb(index, num_pages, page_size, data_format, core_ranges):
@@ -633,7 +1063,10 @@ def create_program_descriptor(
     compute_kernel_config = _apply_precision_levers(compute_kernel_config, levers)
     plan = blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_config, levers)
 
-    # ---------------- work distribution over the INDEPENDENT axis ------------
+    # ---------------- work distribution -------------------------------------
+    # ONE assignment builder for both values of plan.group_size: a list of
+    # (core, start_row_block, blocks_here, w_index, group).  With G == 1 the group
+    # is None and w_index is always 0, which is exactly the row-parallel plan.
     grid = device.compute_with_storage_grid_size()
     core_cap = _lever(levers, "active_cores") or ACTIVE_CORE_CAP
     if core_cap:
@@ -641,17 +1074,62 @@ def create_program_descriptor(
         rows = max(1, _div_up(core_cap, grid.x))
         grid = ttnn.CoreCoord(grid.x, min(grid.y, rows))
 
-    row_wise = bool(_lever(levers, "row_wise"))  # lever A1: spread along the DRAM-facing axis
-    (
-        num_cores,
-        all_cores,
-        core_group_1,
-        core_group_2,
-        blocks_per_core_g1,
-        blocks_per_core_g2,
-    ) = ttnn.split_work_to_cores(grid, plan.num_row_blocks, row_wise)
+    semaphores = []
+    if plan.group_size == 1:
+        row_wise = bool(_lever(levers, "row_wise"))  # lever A1: spread along the DRAM-facing axis
+        (
+            num_cores,
+            all_cores,
+            core_group_1,
+            core_group_2,
+            blocks_per_core_g1,
+            blocks_per_core_g2,
+        ) = ttnn.split_work_to_cores(grid, plan.num_row_blocks, row_wise)
 
-    cores = ttnn.grid_to_cores(num_cores, grid.x, grid.y, row_wise)
+        cores = ttnn.grid_to_cores(num_cores, grid.x, grid.y, row_wise)
+
+        def _blocks_of(core):
+            if core_group_1.contains(core):
+                return blocks_per_core_g1
+            if core_group_2.contains(core):
+                return blocks_per_core_g2
+            return 0
+
+        assignment = []
+        start = 0
+        for core in cores:
+            n = _blocks_of(core)
+            assignment.append((core, start, n, 0, None))
+            start += n
+    else:
+        # Row-blocks go to combine GROUPS; inside a group the W axis is split.  An
+        # idle group would still have to take part in its own combine handshake, so
+        # only as many groups are instantiated as there are row-blocks to hand out.
+        tiling = _group_tiling(device, grid, plan.group_x, plan.group_y, plan.group_size)
+        assert tiling is not None and len(tiling) == plan.num_groups, "group tiling disagrees with the plan"
+        groups_used = plan.groups_used
+        per_group = _even_split(plan.num_row_blocks, groups_used)
+
+        assignment = []
+        core_ranges_used = []
+        start = 0
+        for g in range(groups_used):
+            logical_rect, root_v, rect_v, members = tiling[g]
+            core_ranges_used.append(logical_rect)
+            group = {"root": root_v, "rect": rect_v}
+            for w_index, core in enumerate(members):
+                assignment.append((core, start, per_group[g], w_index, group))
+            start += per_group[g]
+        all_cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(a, b), ttnn.CoreCoord(c, d)) for a, b, c, d in core_ranges_used]
+        )
+        semaphores = [
+            ttnn.SemaphoreDescriptor(id=SEM_DATA_READY, core_ranges=all_cores, initial_value=0),
+            # mcast_pipe.hpp: `consumer_ready` is incremented by REMOTE receivers with
+            # no happens-before to the sender's ctor, so its initial 0 MUST be host-owned.
+            ttnn.SemaphoreDescriptor(id=SEM_CONSUMER_READY, core_ranges=all_cores, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=all_cores, initial_value=0),
+        ]
 
     # ---------------- circular buffers ---------------------------------------
     # Instantiated straight off plan.cb_layout — the SAME list the L1 budget
@@ -696,7 +1174,16 @@ def create_program_descriptor(
         _lever(levers, "stub_dm"),  # 20 (ablation arm)
         _lever(levers, "coalesce"),  # 21 (lever B5/B6 off-arm)
         plan.reduce_via_add,  # 22 (Regime B reduce datapath)
+        # --- W-split combine (all zero / inert when the policy picked G == 1) ---
+        1 if plan.group_size > 1 else 0,  # 23 W_SPLIT
+        plan.group_size,  # 24 GROUP_SIZE
+        plan.Wt,  # 25 WT_TOTAL (the DRAM tile-row stride when a core owns a slice)
+        plan.acc_tile_bytes,  # 26 ACC_TILE_BYTES (the combine payload unit)
+        SEM_DATA_READY,  # 27
+        SEM_CONSUMER_READY,  # 28
+        SEM_GATHER,  # 29
     ]
+    assert len(geometry_ct_args) == CT_ACCESSOR_BASE, "geometry prefix must match TensorAccessorArgs<CT_ACCESSOR_BASE>"
 
     # ---------------- reader --------------------------------------------------
     reader_ct_args = list(geometry_ct_args)
@@ -723,18 +1210,29 @@ def create_program_descriptor(
     out_addr = output_tensor.buffer_address()
     gamma_addr = gamma.buffer_address() if gamma is not None else 0
 
-    start = 0
-    for core in cores:
-        if core_group_1.contains(core):
-            blocks_here = blocks_per_core_g1
-        elif core_group_2.contains(core):
-            blocks_here = blocks_per_core_g2
+    # Reader RT layout (fixed width, so the kernel indexes it unconditionally):
+    #   0 in_addr, 1 gamma_addr, 2 start_row_block, 3 blocks_here,
+    #   4 w_offset (tiles), 5 is_root, 6..7 group root (virtual),
+    #   8..11 group multicast rect corners (virtual).
+    # With G == 1 slots 4..11 are zero and the kernel's W_SPLIT branch is compiled out.
+    for core, start, blocks_here, w_index, group in assignment:
+        w_offset = w_index * plan.Wt_core
+        if group is None:
+            reader_rt[core.x][core.y] = [in_addr, gamma_addr, start, blocks_here, 0, 0, 0, 0, 0, 0, 0, 0]
         else:
-            blocks_here = 0
-        reader_rt[core.x][core.y] = [in_addr, gamma_addr, start, blocks_here]
-        writer_rt[core.x][core.y] = [out_addr, start, blocks_here]
-        compute_rt[core.x][core.y] = [inv_w_bits, eps_bits, start, blocks_here]
-        start += blocks_here
+            reader_rt[core.x][core.y] = [
+                in_addr,
+                gamma_addr,
+                start,
+                blocks_here,
+                w_offset,
+                1 if w_index == 0 else 0,
+                group["root"][0],
+                group["root"][1],
+                *group["rect"],
+            ]
+        writer_rt[core.x][core.y] = [out_addr, start, blocks_here, w_offset]
+        compute_rt[core.x][core.y] = [inv_w_bits, eps_bits, start, blocks_here, 1 if w_index == 0 else 0]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
@@ -770,6 +1268,6 @@ def create_program_descriptor(
 
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
-        semaphores=[],
+        semaphores=semaphores,
         cbs=cbs,
     )

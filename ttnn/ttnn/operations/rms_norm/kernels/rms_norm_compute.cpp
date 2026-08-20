@@ -1,6 +1,20 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
+// W-SPLIT combine, step 3 (only on a group ROOT, only when W_SPLIT=1): the
+// GROUP_SIZE gathered PARTIAL sum-of-squares tiles are summed element-wise and
+// collapsed along W in ONE reduce<SUM, REDUCE_ROW, ..., AccumulateViaAdd> call.
+//
+// WHY the tile that crosses the NoC is the PRE-collapse accumulator (32 live
+// columns) and not a col0-collapsed one: `AccumulateViaAdd` IS "pairwise FPU
+// add_tiles into one DEST register, then ONE SFPU within-tile finalize".  Feeding
+// it the GROUP_SIZE accumulator tiles therefore performs the cross-core
+// element-wise sum AND the within-tile collapse in a single call of the SAME
+// helper this op already uses for its Regime B reduce - no new datapath.
+// Collapsing per core first would need a separate element-wise add over
+// GROUP_SIZE tiles plus the collapse.  It is also why the split requires Regime A
+// per core: only Regime A produces that pre-collapse tile.
+//
 // rms_norm compute (TRISC x3).  Every phase is kernel_lib-helper covered; there
 // is no raw-LLK compute anywhere in this file.  `compute_kernel_hw_startup` is
 // the chain's documented caller-init contract, not a bypass.
@@ -59,6 +73,8 @@ constexpr uint32_t cb_rm_in = 8;
 constexpr uint32_t cb_rm_out = 9;
 constexpr uint32_t cb_sumsq_acc = 10;
 constexpr uint32_t cb_gamma_rm = 11;
+constexpr uint32_t cb_partial_gather = 12;
+constexpr uint32_t cb_sumsq_bcast = 13;
 
 constexpr uint32_t IS_ROW_MAJOR = get_compile_time_arg_val(0);
 constexpr uint32_t REGIME_A = get_compile_time_arg_val(1);
@@ -87,6 +103,10 @@ constexpr uint32_t GAMMA_INGEST_BLOCK = get_compile_time_arg_val(18);
 // AccumulateViaAdd is that same pairwise-accumulate shape - the helper documents
 // it as "more accurate ... wins for wide reduces (many tiles per output)".
 constexpr uint32_t REDUCE_VIA_ADD = get_compile_time_arg_val(22);
+// --- W-split work distribution (blocking_plan._choose_group_size) ------------
+// W_SPLIT == 0 is the row-parallel plan and every branch below compiles out.
+constexpr uint32_t W_SPLIT = get_compile_time_arg_val(23);
+constexpr uint32_t GROUP_SIZE = get_compile_time_arg_val(24);
 
 constexpr uint32_t NUM_REDUCE_CHUNKS = Wt_core / WT_REDUCE_BLOCK;
 constexpr uint32_t NUM_SCALE_CHUNKS = Wt_core / WT_SCALE_BLOCK;
@@ -163,6 +183,7 @@ void kernel_main() {
     const uint32_t inv_w_bits = get_arg_val<uint32_t>(0);
     const uint32_t eps_bits = get_arg_val<uint32_t>(1);
     const uint32_t num_row_blocks_here = get_arg_val<uint32_t>(3);
+    const uint32_t IS_ROOT = get_arg_val<uint32_t>(4);  // W-split: this core is its group's combine root
 
     if constexpr (IS_ROW_MAJOR) {
         compute_kernel_hw_startup(cb_rm_in, cb_rm_in, cb_input_tiles);
@@ -205,7 +226,7 @@ void kernel_main() {
                     ckl::row_output(cb_sumsq_acc)>(ckl::IterationShape::grid(BLOCK_HT, Wt_core).block_size(DEST_BLOCK));
             }
 
-            {
+            if constexpr (!W_SPLIT) {
                 MaybeDeviceZoneScope("cp_reduce");
                 ckl::reduce<
                     ckernel::PoolType::SUM,
@@ -213,6 +234,23 @@ void kernel_main() {
                     cb_sumsq_acc,
                     cb_reduce_scaler,
                     cb_sumsq>(ckl::ReduceInputBlockShape::of(BLOCK_HT, 1, 1));
+            } else if (IS_ROOT) {
+                // The reader has landed slot i of every group member at tile
+                // (r * GROUP_SIZE + i) - a contiguous (BLOCK_HT x GROUP_SIZE) block -
+                // and pushed it.  cb_sumsq itself is filled by the reader's broadcast
+                // on EVERY core of the group, root included, so the rms chain below
+                // is identical on all of them.
+                MaybeDeviceZoneScope("cp_combine");
+                ckl::reduce<
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_ROW,
+                    cb_partial_gather,
+                    cb_reduce_scaler,
+                    cb_sumsq_bcast,
+                    ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                    ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    ReduceFp32Mode::Fast,
+                    ckl::ReduceAlgorithm::AccumulateViaAdd>(ckl::ReduceInputBlockShape::of(BLOCK_HT, GROUP_SIZE, 1));
             }
         } else {
             for (uint32_t c = 0; c < NUM_REDUCE_CHUNKS; ++c) {
