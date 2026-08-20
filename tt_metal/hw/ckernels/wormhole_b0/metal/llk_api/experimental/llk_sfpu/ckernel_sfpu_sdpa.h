@@ -36,14 +36,14 @@ inline void calculate_recip_first_column() {
     if constexpr (legacy_compat) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
-            // _reciprocal_compat_ opens with setsgn(in, 1) and returns a magnitude, so the
-            // caller owns the sign. Without this the legacy path computed 1/|x|, not 1/x.
-            // Same restore, in the same position, as _calculate_reciprocal_compat_ in
-            // tt_llk_*/common/inc/sfpu/ckernel_sfpu_rsqrt_compat.h -- the legacy branch here
-            // was the one consumer of that primitive that omitted it.
-            v_if(in < 0.0f) { out = -out; }
-            v_endif;
+            // _reciprocal_compat_signed_ is the bare _reciprocal_compat_ plus the negate that
+            // restores the sign the primitive drops; this path used to call the primitive
+            // directly and so returned 1/|x| rather than 1/x. The one consumer that still takes
+            // it bare is sampling_recip_value in blackhole's ckernel_sfpu_sampling.h, which keeps |1/x|
+            // deliberately because its legacy path has to stay bit-identical for blaze. No such
+            // contract covers legacy_compat here -- it selects the algorithm, nothing pins the
+            // output bits -- so the sign is restored rather than documented.
+            sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_signed_<APPROX ? 2 : 3>(in);
             if constexpr (!(DST_ACCUM_MODE || APPROX)) {
                 out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
             }
