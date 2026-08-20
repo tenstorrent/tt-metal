@@ -283,6 +283,10 @@ class TtPrefillTransformer(LightweightModule):
         # block-cyclic path as one full-seq chunk (chunk_size_global == seq_len), so build the indexed
         # tables whenever the model is sparse too, not only when chunked. Dense single-shot keeps None
         # (rotary_embedding_llama via get_rope_tensors).
+        # Lazily-built twin of `indexed_rope` for the single-shot path; see forward(). Built on first
+        # use rather than here so construction allocates nothing extra for callers that never take
+        # that branch.
+        self._rope_tensors_cache = None
         self._has_indexer = resolve_has_indexer(config)
         self.indexed_rope = (
             self.rope_setup.get_rope_tensors_indexed(
@@ -371,6 +375,7 @@ class TtPrefillTransformer(LightweightModule):
         cache_user_id: int = 0,
         index_kv_cache: Optional[ttnn.Tensor] = None,
         metadata: Optional[ttnn.Tensor] = None,
+        stop_after_blocks: bool = False,
     ):
         """
         Forward pass: [embed] -> [block x N] -> [norm -> lm_head -> sample].
@@ -441,7 +446,21 @@ class TtPrefillTransformer(LightweightModule):
             # so it uses the indexed rope tables just like the chunked path.
             rope_tensors = self.indexed_rope
         else:
-            rope_tensors = self.rope_setup.get_rope_tensors(self.seq_len)
+            # Built ONCE and reused. `get_rope_tensors` recomputes cos/sin on host and uploads three
+            # tensors via from_torch(device=...) on every call, but its only argument is
+            # `self.seq_len`, which is fixed for the life of this object — so every forward was
+            # rebuilding and re-uploading identical tables.
+            #
+            # Two reasons that matters. It is per-forward host work in a forward that is ~95%
+            # host-bound; and a host->device write inside a ttnn trace capture is illegal
+            # ("TT_FATAL: Writes are not supported during trace capture"), so this alone made the
+            # single-shot path impossible to trace. The chunked path already prebuilds its tables
+            # once (`self.indexed_rope`, set in __init__) — this brings the single-shot path in line.
+            # Safe to hold: the rotary op deallocates its own outputs (tt_q_rope/tt_kv_rope), never
+            # these input tables.
+            if self._rope_tensors_cache is None:
+                self._rope_tensors_cache = self.rope_setup.get_rope_tensors(self.seq_len)
+            rope_tensors = self._rope_tensors_cache
         intermediates = {} if return_intermediates else None
 
         if self.is_first_rank:
@@ -512,6 +531,18 @@ class TtPrefillTransformer(LightweightModule):
         # GLM-5.2 reuse: free the last full layer's held top-k indices after the final layer.
         if reuse and indexer_indices is not None:
             ttnn.deallocate(indexer_indices)
+
+        # Trace capture: stop before the tail and hand back the block stack's output.
+        #
+        # The tail ends in logit_to_host() -- a blocking device->host read -- plus host-side
+        # sampling, and neither can live inside a ttnn trace. The runtime sidesteps this by building
+        # the model with kv_only_last_layer=True so the tail does not exist, but a generating caller
+        # needs the token, so it instead captures the block stack (~2280 of the 2316 device ops) and
+        # runs norm/LM-head/sample eagerly on the returned activation afterwards. On replay the
+        # captured forward leaves its output at the SAME address, so the handle returned here stays
+        # valid for every subsequent replay.
+        if stop_after_blocks:
+            return h
 
         # Non-last pipeline ranks stop here: the layer slice's output activation is
         # handed to the next rank, which continues from this hidden state. The norm /
