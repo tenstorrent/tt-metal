@@ -234,8 +234,26 @@ ttnn.attach_golden_function(ttnn.reshape, golden_function=_golden_function)
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
 
-def _golden_function(input_tensor, *args, **kwargs):
-    return input_tensor
+def _golden_function(input_tensor, dtype=None, *, spec=None, **_):
+    if input_tensor is None:
+        return None
+
+    import torch
+
+    target_dtype = spec.dtype if spec is not None else dtype
+    if target_dtype is None:
+        return input_tensor
+
+    # Host float-to-uint16 conversion truncates and clamps, unlike PyTorch's direct unsigned cast.
+    if isinstance(input_tensor, torch.Tensor) and input_tensor.is_floating_point() and target_dtype == ttnn.uint16:
+        return torch.clamp(input_tensor.to(torch.int32), min=0, max=65535).to(torch.uint16)
+
+    if target_dtype == ttnn.fp8_e4m3:
+        # Match FP8 storage quantization while keeping the golden exportable as torch.float32.
+        return input_tensor.to(torch.float8_e4m3fn).to(torch.float32)
+
+    # Mirror explicit TT dtype conversion so the golden matches values stored by from_torch.
+    return input_tensor.to(ttnn.ttnn_dtype_to_torch_dtype(target_dtype))
 
 
 @ttnn.register_python_operation(name="ttnn.from_torch", golden_function=_golden_function)

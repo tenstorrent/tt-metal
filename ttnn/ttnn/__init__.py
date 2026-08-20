@@ -435,6 +435,7 @@ from ttnn.core import (
     split_work_to_cores,
     grid_to_cores,
     get_current_command_queue_id_for_thread,
+    ttnn_dtype_to_torch_dtype,
 )
 
 tile_size = ttnn._ttnn.tensor.tile_size
