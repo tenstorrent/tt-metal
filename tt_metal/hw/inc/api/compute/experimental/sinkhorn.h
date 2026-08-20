@@ -34,6 +34,18 @@ ALWI void sinkhorn_row_max_sub(std::uint32_t input_index) { MATH((_llk_math_sink
 // EPS_BITS is the fp32 bit pattern of the eps constant guarding 0/0 in the
 // row/col reciprocals. The default preserves the pre-EPS_BITS-plumbing
 // behavior (bf16 0x3589 == 1.001358e-06, zero-extended to fp32).
+//
+// NUM_FACES_USED enables faces as a prefix: face 0 is always processed, and
+// faces 1..3 are added as the count rises. VALID_H / VALID_W describe the
+// logical rectangle inside that face set, and the padding outside it is zeroed.
+// The tt-blaze caller drives all six parameters from one op-level config, so
+// the face count and the rectangle always agree; nothing here diagnoses a
+// combination where the rectangle reaches past the selected faces, and a count
+// of 0 still normalizes face 0.
+//
+// DEST is assumed to be 16-bit: the strip-pair store converts the fp32 LREG
+// values with FP32_TO_FP16B on the way out, so an FP32 DEST would be addressed
+// and rounded incorrectly. The mode is not threaded into this API.
 template <
     std::uint32_t NUM_FACES_USED = 4,
     std::uint32_t ITERS = 20,
