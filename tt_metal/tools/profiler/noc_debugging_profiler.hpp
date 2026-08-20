@@ -24,9 +24,8 @@ FORCE_INLINE void recordScopedLockEvent(uint32_t locked_address_base, uint32_t n
     ev_md.setEventType(event_type);
     ev_md.setLockedRegion(locked_address_base, num_bytes);
 
-    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-    kernel_profiler::timeStampedData<noc_debugging_profiler::kNocDebugZoneId, kernel_profiler::DoingDispatch::DISPATCH>(
-        ev_md.asU64());
+    kernel_profiler::flush_to_dram_if_full();
+    kernel_profiler::timeStampedData<noc_debugging_profiler::kNocDebugZoneId>(ev_md.asU64());
 }
 
 }  // namespace noc_debugging_profiler

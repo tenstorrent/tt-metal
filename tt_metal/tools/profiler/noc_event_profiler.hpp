@@ -115,6 +115,10 @@ FORCE_INLINE void recordNocEvent(
     local_noc_event.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
+#if defined(ARCH_QUASAR)
+    // DRAM-backend shape, verbatim: DoingDispatch::DISPATCH selects that backend's dispatch buffer
+    // half, and its non-dropping (debug-dump) mode ships a 16 B event with a dst trailer. The
+    // streaming backend has neither concept, which is why the two shapes split here.
     if constexpr (kernel_profiler::NON_DROPPING) {
         KernelProfilerNocEventMetadata dst_data =
             createNocEventDstTrailer<noc_event_type, posted>(local_addr, dst_local_addr);
@@ -130,6 +134,12 @@ FORCE_INLINE void recordNocEvent(
         kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
         kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
     }
+#else
+    // Streaming backend: one self-describing PP_DATA packet.
+    (void)local_addr;
+    (void)dst_local_addr;
+    kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
+#endif
 }
 
 template <
@@ -159,6 +169,8 @@ FORCE_INLINE void recordMulticastNocEvent(
     local_noc_event.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
+#if defined(ARCH_QUASAR)
+    // DRAM-backend shape, verbatim -- see recordNocEvent above.
     if constexpr (kernel_profiler::NON_DROPPING) {
         uint32_t dst_local_addr = decode_noc_addr_to_local_addr(dst_noc_addr);
         KernelProfilerNocEventMetadata dst_data =
@@ -175,6 +187,12 @@ FORCE_INLINE void recordMulticastNocEvent(
         kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
         kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
     }
+#else
+    // Streaming backend: one self-describing PP_DATA packet.
+    (void)local_addr;
+    (void)dst_noc_addr;
+    kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
+#endif
 }
 
 template <KernelProfilerNocEventMetadata::NocEventType noc_event_type, bool posted, typename AddrGen, typename NocIDU32>

@@ -138,12 +138,6 @@ constexpr uint32_t TAIL_INDEX = SPSC_RING_TAIL_0 + myRiscID;  // producer (this 
 constexpr uint32_t HEAD_INDEX = SPSC_RING_HEAD_0 + myRiscID;  // consumer (drainer)
 static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in the SPSC control layout");
 
-// Retained ONLY because the backend-agnostic event-profiler headers (noc_event/fabric_event/
-// perf_counters/noc_debugging) pass DoingDispatch::DISPATCH explicitly -- on the DRAM backend
-// (kernel_profiler_push.hpp) it selects a buffer half. This backend has one path and every taker
-// ignores it; nothing here branches on dispatch vs non-dispatch.
-enum class DoingDispatch { DISPATCH, DISPATCH_META, NOT_DISPATCH };
-
 // Zone kind, this backend's own. Previously the kind was packed into bits 16-18 of the id as a
 // hostdevcommon PacketTypes value and unpacked in zone_w0 -- a 3-bit channel into a 5-bit wire, whose
 // correctness depended on the numeric ordinals of an enum this backend does not own. The id now carries
@@ -504,7 +498,6 @@ inline __attribute__((always_inline)) void quick_push_if_linked(uint32_t cmd_buf
     (void)linked;
 }
 
-template <DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
 inline __attribute__((always_inline)) void flush_to_dram_if_full(uint32_t additional_slots = 0) {
     (void)additional_slots;
 }
@@ -547,14 +540,13 @@ struct profileScopeAccumulate {
     }
 };
 
-// No PacketTypes template parameter: every call site took the TS_DATA default, whose
-// TimestampedDataSize is 1, so the check only ever asserted "one datum, no trailers". Stated directly
-// instead of routed through the other backend's enum. The DoingDispatch parameter is compat-only
-// (see the enum above) and ignored.
-template <uint32_t data_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH, typename... Args>
+// No PacketTypes template parameter: the payload length is self-describing on this wire (PP_DATA
+// word2), so trailers just extend the one packet -- no per-type size enum. The only real bound is
+// the 7-bit length field.
+template <uint32_t data_id, typename... Args>
 inline __attribute__((always_inline)) void timeStampedData(uint64_t data, Args... trailers) {
     constexpr uint32_t total_data_count = 1 + sizeof...(trailers);
-    static_assert(total_data_count == 1, "timeStampedData takes exactly one uint64_t datum");
+    static_assert(2 * total_data_count <= ppfmt::DATA_SIZE_MASK, "payload overflows PP_DATA's 7-bit length field");
 
     // Reserve worst case BEFORE reading the clock, so a full-ring stall does not backdate the marker (see
     // mark_time's ordering note). A PP_DATA packet is 3 words of header (word0 | timer_low | size) plus the

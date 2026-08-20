@@ -4,8 +4,9 @@
 
 #pragma once
 
-#if defined(PROFILE_NOC_EVENTS) && \
-    (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES)))
+// Dispatch kernels never profile on the streaming backend (see kernel_profiler.hpp); fabric events
+// come from fabric-router kernels, so the old dispatch-enabled clause guarded nothing real.
+#if defined(PROFILE_NOC_EVENTS) && !defined(DISPATCH_KERNEL)
 
 #include "tools/profiler/noc_event_profiler.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
@@ -42,8 +43,8 @@ FORCE_INLINE void recordFabricNocEvent(
                                         : KernelProfilerNocEventMetadata::NocType::NOC_0;
     fabric_noc_event.routing_fields_type = packet_type;
 
-    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
+    kernel_profiler::flush_to_dram_if_full();
+    kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
 }
 
 template <uint32_t STATIC_ID = noc_event_profiler::kNocTraceZoneId>
@@ -68,8 +69,8 @@ FORCE_INLINE void recordFabricNocEventMulticast(
                                         : KernelProfilerNocEventMetadata::NocType::NOC_0;
     fabric_noc_event.routing_fields_type = packet_type;
 
-    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
+    kernel_profiler::flush_to_dram_if_full();
+    kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
 }
 
 template <uint32_t STATIC_ID = noc_event_profiler::kNocTraceZoneId>
@@ -101,8 +102,8 @@ FORCE_INLINE void recordFabricScatterEvent(
         fabric_scatter_event.num_chunks = num_chunks;
         fabric_scatter_event.routing_fields_type = packet_type;
 
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
+        kernel_profiler::flush_to_dram_if_full();
+        kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
     }
 }
 
@@ -113,8 +114,8 @@ FORCE_INLINE void recordRoutingFields1D(uint32_t routing_fields) {
         KernelProfilerNocEventMetadata::NocEventType::FABRIC_ROUTING_FIELDS_1D;
     event_routing_fields.data.fabric_routing_fields_1d.routing_fields_value = routing_fields;
 
-    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(event_routing_fields.asU64());
+    kernel_profiler::flush_to_dram_if_full();
+    kernel_profiler::timeStampedData<STATIC_ID>(event_routing_fields.asU64());
 }
 
 // how slow is this? alternative is storing entire route buffer which isn't ideal either...
@@ -160,8 +161,8 @@ FORCE_INLINE void recordRoutingFields2D(
         routing_fields_2d.is_mcast = true;
     }
 
-    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
+    kernel_profiler::flush_to_dram_if_full();
+    kernel_profiler::timeStampedData<STATIC_ID>(ev_md.asU64());
 }
 
 void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) {
