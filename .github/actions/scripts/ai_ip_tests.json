@@ -82,7 +82,7 @@
       "summary": "UMD: \"Higher Level Layer\" support",
       "team": "UMD",
       "owner": "unassigned",
-      "_evidence": "UMD-side; Quasar appears in tt_metal/third_party/umd/tests (soc_descs/quasar_simulation_1x1.yaml, simulation/test_simulation_device.cpp) but no test maps to the higher-level-layer requirement -- NOT fully verified, owner to confirm"
+      "_evidence": "Tested in the private tt-umd-horizon repo, not by the Quasar gate. Evidence will be pulled from that repo's published results once it is ready; until then this requirement correctly shows no evidence here"
     },
     {
       "key": "AIIPSW-7",
