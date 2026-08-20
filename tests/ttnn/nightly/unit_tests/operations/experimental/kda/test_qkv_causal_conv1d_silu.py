@@ -150,16 +150,12 @@ def test_qkv_causal_conv1d_silu_contract(device: ttnn.Device, widths: tuple[int,
     input_tensors = (input_tt, history_tt, *taps_tt)
     snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in input_tensors)
 
-    def run(
-        current_input: ttnn.Tensor = input_tt,
-        current_history: ttnn.Tensor = history_tt,
-        current_taps: tuple[ttnn.Tensor, ...] = taps_tt,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            return _run(current_input, current_history, current_taps, widths=widths)
+            return _run(input_tt, history_tt, taps_tt, widths=widths)
 
     outputs = run()
-    for name, output, width in zip(("q", "k", "v"), outputs, widths, strict=True):
+    for output, width in zip(outputs, widths, strict=True):
         assert output.dtype == ttnn.bfloat16
         assert output.layout == ttnn.TILE_LAYOUT
         assert output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
