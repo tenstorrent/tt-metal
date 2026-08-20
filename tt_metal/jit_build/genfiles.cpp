@@ -361,6 +361,16 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     //   1. get_num_compile_time_varargs() — baked prefix length
     //   2. get_compile_time_vararg<idx>() — template index (with bounds check)
     //   3. get_compile_time_vararg(idx) — function-parameter index
+    //
+    // The out-of-range report for (3) sits behind a non-constexpr call rather than being an
+    // ASSERT in the constexpr body: the lightweight-assert flavor of ASSERT expands to inline
+    // asm ("ebreak"), which C++20 allows inside a constexpr function but C++17 rejects
+    // (-Werror=c++20-extensions), and kernels are built with -std=c++17. Calling a
+    // non-constexpr function from a constexpr one is fine in C++17 as long as constant
+    // evaluation never reaches the call, which an in-range index never does — so (3) stays
+    // usable in constant expressions under every assert flavor. Out-of-range indices keep the
+    // runtime assert, and in a constant expression they now fail the build outright instead of
+    // reading past the array.
     content << fmt::format(
         R"(
 FORCE_INLINE constexpr uint32_t get_num_compile_time_varargs() {{
@@ -371,8 +381,13 @@ FORCE_INLINE constexpr uint32_t get_compile_time_vararg() {{
     static_assert(idx < get_num_compile_time_varargs(), "Compile-time vararg index out of range");
     return kernel_compile_time_args[idx];
 }}
+inline void assert_compile_time_vararg_index_out_of_range() {{
+    ASSERT(false);  // Attempt to access out of bound vararg CTA.
+}}
 FORCE_INLINE constexpr uint32_t get_compile_time_vararg(uint32_t idx) {{
-    ASSERT(idx < get_num_compile_time_varargs());  // Attempt to access out of bound vararg CTA.
+    if (idx >= get_num_compile_time_varargs()) {{
+        assert_compile_time_vararg_index_out_of_range();
+    }}
     return kernel_compile_time_args[idx];
 }}
 )",

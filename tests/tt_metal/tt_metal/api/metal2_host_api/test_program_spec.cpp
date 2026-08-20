@@ -47,6 +47,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>  // for CompileProgram (JIT trigger)
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgsConfig / ArgConfig::RuntimePageSize
+#include "impl/context/metal_context.hpp"                // for rtoptions (kernel-assert flavor overrides)
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -4403,6 +4404,110 @@ TEST_F(ProgramSpecTestGen1, DifferentCompileTimeVarargCountProducesDifferentKern
 
     kernel_b->set_compile_time_vararg_count(1u);
     EXPECT_NE(kernel_a->compute_hash(), kernel_b->compute_hash());
+}
+
+// ============================================================================
+// Compile-time varargs with kernel asserts enabled
+// ============================================================================
+//
+// get_compile_time_vararg(idx) is constexpr AND bounds-checked, and those two properties collide
+// with how ASSERT is defined. The lightweight-assert flavor expands to inline asm ("ebreak");
+// C++20 permits inline asm inside a constexpr function but C++17 rejects it
+// (-Werror=c++20-extensions), and kernels build with -std=c++17. So an ASSERT sitting directly in
+// the constexpr body fails EVERY Metal 2.0 kernel build whenever lightweight asserts are on --
+// the accessor is emitted unconditionally, even for kernels with no varargs at all.
+//
+// These two tests pin both halves of the contract with asserts turned on:
+//   1. an in-range index still folds in a constant expression (the accessor stays constexpr), and
+//   2. an out-of-range index in a constant expression is still rejected at build time.
+//
+// Fixture note: the flag must be flipped BEFORE the device opens. JitBuildState assembles its -D
+// defines in its constructor (jit_build/build.cpp) and those states are built at device open, so
+// setting the option from a test body -- after mesh_device_ exists -- would never reach the
+// compiler and the test would pass while exercising nothing.
+//
+// Watcher note: assert.h is `#if WATCHER_ENABLED ... #elif LIGHTWEIGHT_KERNEL_ASSERTS`, and the
+// watcher flavor expands to a plain function call that compiles fine under C++17. Watcher is
+// forced off so that running this suite under TT_METAL_WATCHER does not silently exercise the
+// wrong branch and go green.
+class ProgramSpecTestGen1LightweightAsserts : public ProgramSpecTestGen1 {
+protected:
+    void SetUp() override {
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        prev_lightweight_kernel_asserts_ = rtoptions.get_lightweight_kernel_asserts();
+        prev_watcher_enabled_ = rtoptions.get_watcher_enabled();
+        rtoptions.set_lightweight_kernel_asserts(true);
+        rtoptions.set_watcher_enabled(false);
+        // Device opens here; the JIT build state picks up -DLIGHTWEIGHT_KERNEL_ASSERTS.
+        ProgramSpecTestGen1::SetUp();
+    }
+    void TearDown() override {
+        ProgramSpecTestGen1::TearDown();
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        rtoptions.set_lightweight_kernel_asserts(prev_lightweight_kernel_asserts_);
+        rtoptions.set_watcher_enabled(prev_watcher_enabled_);
+    }
+
+private:
+    bool prev_lightweight_kernel_asserts_ = false;
+    bool prev_watcher_enabled_ = false;
+};
+
+// In-range index, asserts on: the bounds check must not cost the accessor its constexpr-ness.
+// Before the fix this failed to build with
+//   error: 'asm' in 'constexpr' function only available with '-std=c++20'
+// for every Metal 2.0 kernel, regardless of the index used.
+TEST_F(ProgramSpecTestGen1LightweightAsserts, InRangeCompileTimeVarargCompilesWithAssertsEnabled) {
+    NodeCoord node{0, 0};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    // Constant-evaluated: proves the accessor is still usable in a constant expression while the
+    // out-of-range path carries a (non-constexpr) assert.
+    static_assert(get_compile_time_vararg(0) == 0xCAFEBABEu);
+    static_assert(get_compile_time_vararg(2) == 0x11112222u);
+    // Runtime-evaluated: the index is not a constant expression, so this is the path that actually
+    // emits the bounds check and the ebreak.
+    volatile uint32_t idx = 1;
+    volatile uint32_t sink = get_compile_time_vararg(idx);
+    (void)sink;
+}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = {0xCAFEBABEu, 0xDEADBEEFu, 0x11112222u};
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_in_range_asserts_on";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// Out-of-range index in a constant expression, asserts on: must still fail the build. Constant
+// evaluation reaches the non-constexpr out-of-range report, which is not a constant expression --
+// so this is a clean build failure rather than a read past kernel_compile_time_args.
+TEST_F(ProgramSpecTestGen1LightweightAsserts, OutOfRangeCompileTimeVarargFailsToCompileWithAssertsEnabled) {
+    NodeCoord node{0, 0};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    // Only 1 vararg is baked, so index 1 is out of range. Should not compile.
+    static_assert(get_compile_time_vararg(1) == 0u);
+}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = {0xCAFEBABEu};
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_oob_asserts_on";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    // MakeProgramFromSpec compiles; the OOB constant evaluation must fail that build.
+    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 // ============================================================================
