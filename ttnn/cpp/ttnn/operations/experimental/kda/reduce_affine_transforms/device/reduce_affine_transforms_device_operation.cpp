@@ -3,26 +3,16 @@
 
 #include "reduce_affine_transforms_device_operation.hpp"
 
+#include <array>
+
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-namespace {
-void check_affine_tensor(const Tensor& tensor, const char* name) {
-    TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE && tensor.buffer() != nullptr,
-        "reduce_affine_transforms: {} must be an allocated device tensor",
-        name);
-    TT_FATAL(tensor.layout() == Layout::TILE, "reduce_affine_transforms: {} must use TILE layout", name);
-    TT_FATAL(
-        tensor.dtype() == DataType::FLOAT32 || tensor.dtype() == DataType::BFLOAT16,
-        "reduce_affine_transforms: {} must be FLOAT32 or BFLOAT16",
-        name);
-}
-}  // namespace
 
 ReduceAffineTransformsOperation::program_factory_t ReduceAffineTransformsOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
@@ -30,18 +20,20 @@ ReduceAffineTransformsOperation::program_factory_t ReduceAffineTransformsOperati
 }
 void ReduceAffineTransformsOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    check_affine_tensor(in.a, "a");
-    check_affine_tensor(in.b, "b");
-    TT_FATAL(in.a.device() == in.b.device(), "reduce_affine_transforms: all inputs must be on the same device");
-    TT_FATAL(in.a.dtype() == in.b.dtype(), "reduce_affine_transforms: inputs must have matching dtypes");
+    using namespace kda_factory_detail;
+    constexpr std::string_view operation_name = "reduce_affine_transforms";
+    constexpr std::array accepted_summary_dtypes = {DataType::FLOAT32, DataType::BFLOAT16};
+    check_allocated_device_tensor(in.a, operation_name, "a");
+    check_layout(in.a, Layout::TILE, operation_name, "a");
+    check_dtype_in(in.a, accepted_summary_dtypes, "FLOAT32 or BFLOAT16", operation_name, "a");
+    check_allocated_device_tensor(in.b, operation_name, "b");
+    check_layout(in.b, Layout::TILE, operation_name, "b");
+    check_dtype_in(in.b, accepted_summary_dtypes, "FLOAT32 or BFLOAT16", operation_name, "b");
+    check_same_device(in.a, in.b, operation_name, "b");
+    check_matching_dtype(in.a, in.b, operation_name, "inputs");
     TT_FATAL(attrs.groups_per_head > 0, "reduce_affine_transforms: groups_per_head must be positive");
-    TT_FATAL(
-        !attrs.output_mem_config.is_sharded(),
-        "reduce_affine_transforms: output memory configuration must be interleaved");
-    TT_FATAL(
-        !attrs.compute_kernel_config.packer_l1_acc,
-        "reduce_affine_transforms: packer_l1_acc=true is unsupported because the compute kernel does not "
-        "accumulate through L1");
+    check_output_interleaved(attrs.output_mem_config, operation_name);
+    check_compute_config(attrs.compute_kernel_config, operation_name);
 
     const auto& a_shape = in.a.logical_shape();
     const auto& b_shape = in.b.logical_shape();
