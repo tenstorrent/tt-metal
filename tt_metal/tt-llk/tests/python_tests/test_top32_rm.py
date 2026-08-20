@@ -67,6 +67,7 @@ Not covered here, deliberately
   so covering them needs a metal-side test (same shape as B1).
 """
 
+import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat
@@ -86,15 +87,25 @@ ELEMENTS_PER_CHUNK = 64
 
 TOP_K = 32
 
-# Float16_b only: indices ride in the same format as the values, and bf16's 8 mantissa bits
-# are what bound the sweep at 256. A wider format would lift that bound but would also send
-# both operands down the 32-bit unpack-to-dest path, which is not the one the consumer uses
-# for values -- and that path pads with zeros instead of -inf (see the module docstring).
-FORMATS = input_output_formats([DataFormat.Float16_b], same=True)
+# Both widths. They are not the same test: the format decides which branch of the family's
+# unpack/copy pair runs, exactly as it does in llk_unpack_A_top32_rm_api.h.
+#
+#   Float16_b  the unpacker does the within-face transpose and clears SrcA to -infinity
+#              first. This is the branch the consumer uses for its VALUE tile.
+#   Float32    too wide for SrcA, so the tile goes to Dest via unpack-to-dest and the
+#              transpose moves to the math thread. This is the branch the consumer uses for
+#              its uint32 INDEX tile.
+#
+# bf16's 8 mantissa bits are what bound the row at 256, since indices ride in the same format
+# as the values; Float32 would not bind, but keeping one sweep makes the two branches
+# comparable cell by cell.
+FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True)
 
 # 64   one chunk, no merge across tiles at all -- phases_steps + merge + rebuild only
 # 128  two full chunks, so the across-tiles merge runs once
-# 160  the Metal dev test's tail case: two full chunks plus a 32-element num_faces=2 chunk
+# 160  the Metal dev test's tail case: two full chunks plus a 32-element num_faces=2 chunk.
+#      **16-bit only** -- see test_top32_rm_32bit_partial_chunk below for why the 32-bit
+#      branch cannot do this and what it returns instead.
 # 256  four full chunks, and the largest row whose indices stay exact in bf16
 ROW_ELEMENTS = [64, 128, 160, 256]
 
@@ -129,6 +140,15 @@ def _pad_to_tile(flat):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_top32_rm(formats, row_elements, dest_acc):
+    is_32bit = formats.input_format.is_32_bit()
+    if is_32bit and dest_acc == DestAccumulation.No:
+        pytest.skip("32-bit datums need fp32 Dest")
+    if is_32bit and row_elements % ELEMENTS_PER_CHUNK != 0:
+        pytest.skip(
+            "a partially-filled chunk is broken on the 32-bit branch -- pinned by "
+            "test_top32_rm_32bit_partial_chunk"
+        )
+
     values, indices = _stimuli(row_elements)
 
     torch_format = format_dict[formats.output_format]
@@ -150,7 +170,7 @@ def test_top32_rm(formats, row_elements, dest_acc):
         templates=[
             TOP32_RM(
                 row_elements=row_elements,
-                datum_bytes=2,  # Float16_b
+                datum_bytes=4 if is_32bit else 2,
                 top_min=False,
                 mode=0,
             )
@@ -167,7 +187,7 @@ def test_top32_rm(formats, row_elements, dest_acc):
             # Two result tiles: the top-32 values, then their indices.
             tile_count_res=2,
         ),
-        unpack_to_dest=False,
+        unpack_to_dest=is_32bit,
         dest_acc=dest_acc,
     )
 
@@ -209,7 +229,14 @@ PRE_SORTED_FORMATS = input_output_formats([DataFormat.Float32], same=True)
 
 # 1024  one tile: prep then final, with no combine at all
 # 2048  two tiles, so combine runs and the top-32 has to be assembled across them
-PRE_SORTED_ROW_ELEMENTS = [1024, 2048]
+# 1088  one tile plus one full 64-element tail chunk
+# 1152  one tile plus two full tail chunks, so the tail loop iterates
+#
+# The tail chunks are all full 64s on purpose. This mode is Float32, i.e. the 32-bit branch,
+# and a partially-filled chunk there is broken -- see test_top32_rm_32bit_partial_chunk. The
+# Metal dev test's row=3232 has a 32-element tail chunk, so that exact shape is NOT reachable
+# today; the two halves either side of it are.
+PRE_SORTED_ROW_ELEMENTS = [1024, 2048, 1088, 1152]
 
 # Rank step inside a run of 32. Larger than any tiebreak below, so the runs are strictly
 # descending whatever the tiebreaks are -- which is the contract prep depends on.
@@ -229,6 +256,18 @@ def _pre_sorted_stimuli(row_elements):
     # Which run wins is a permutation, so the top-32 is not the first 32 runs and the
     # answer depends on combine actually merging across tiles.
     tiebreak = torch.randperm(num_runs, dtype=torch.int64).to(torch.float32)
+
+    # For a row with a tail, force the single largest tiebreak into the LAST run, so at least
+    # one member of the top-32 can only be found by the tail path. Without this the
+    # permutation might put every winner in the whole-tile region and the tail chunks would
+    # be dead weight the test could not tell apart from a tail loop that did nothing.
+    if row_elements % ELEMENTS_PER_TILE != 0:
+        top_run = int(torch.argmax(tiebreak).item())
+        last_run = num_runs - 1
+        tiebreak[top_run], tiebreak[last_run] = (
+            tiebreak[last_run].clone(),
+            tiebreak[top_run].clone(),
+        )
 
     rank = torch.arange(row_elements, dtype=torch.float32) % TOP_K
     run = torch.arange(row_elements, dtype=torch.int64) // TOP_K
@@ -259,7 +298,9 @@ def test_top32_rm_pre_sorted(formats, row_elements):
         "contract of _bitonic_top32_of_1024_rm_pre_sorted_prep_"
     )
 
-    tiles_per_operand = row_elements // ELEMENTS_PER_TILE
+    # Whole tiles for the pre-sorted path, plus one more to hold the tail elements: the tail
+    # is read 64 elements at a time out of the same row-major buffer, so it needs L1 behind it.
+    tiles_per_operand = -(-row_elements // ELEMENTS_PER_TILE)
 
     configuration = TestConfig(
         "sources/top32_rm_test.cpp",
@@ -298,6 +339,15 @@ def test_top32_rm_pre_sorted(formats, row_elements):
 
     golden_values, golden_indices = _golden(values, indices)
 
+    tail_first = (row_elements // ELEMENTS_PER_TILE) * ELEMENTS_PER_TILE
+    if tail_first < row_elements:
+        # Guards the point of the mixed-shape cases: if no winner comes from the tail, the
+        # test cannot distinguish a working tail loop from one that does nothing.
+        assert bool((golden_indices >= tail_first).any()), (
+            f"row_elements={row_elements}: no element of the top-32 comes from the tail "
+            f"region (index >= {tail_first}), so this case does not exercise the tail path"
+        )
+
     assert passed_test(
         golden_values, device_values, formats.output_format, print_errors=False
     ), (
@@ -312,4 +362,75 @@ def test_top32_rm_pre_sorted(formats, row_elements):
         f"them\n"
         f"  device: {device_indices.tolist()}\n"
         f"  golden: {golden_indices.tolist()}"
+    )
+
+
+# --- the 32-bit branch cannot take a partially-filled chunk -------------------------------
+
+_PARTIAL_CHUNK_XFAIL = (
+    "DEFECT: on the 32-bit (unpack-to-dest) branch of the top32_rm unpack, a chunk that "
+    "fills fewer than 4 faces sorts against whatever Dest already held. Measured on BH "
+    "p100a: with a 160-element row of values in [-80, 79], the returned top-32 contained "
+    "11026.0, 10041.0, 9058.0 and more -- values that are not in the input at all. The "
+    "16-bit branch has no such problem: its unpacker clears SrcA to -infinity "
+    "(CLR_SRC_NEGINF) before unpacking, so the unfed faces lose every comparison. The "
+    "32-bit branch never clears anything, and the ZEROACC in _llk_math_top32_rm_ covers "
+    "only `num_faces` faces, leaving the rest of the tile untouched."
+)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    row_elements=[160],
+)
+def test_top32_rm_32bit_partial_chunk(formats, row_elements, request):
+    """Pins the defect above, and flips to XPASS the moment the 32-bit branch clears its tile.
+
+    Latent in the consumer rather than harmless: `top32_rm_dev_compute.cpp` does call this
+    branch with `num_faces=2`, but only for its **uint32 index** tile, and an index slot can
+    only be selected if the paired value slot wins -- and the value tile is bf16, so its
+    padding is -infinity and never wins. The defect is therefore invisible until someone puts
+    *values* through the 32-bit branch, which the family's doc tables permit.
+
+    Marked xfail rather than asserting the wrong answer: what leaks in is whatever Dest held,
+    so the failure is real but its contents are not a stable thing to assert on.
+    """
+    request.node.add_marker(
+        pytest.mark.xfail(reason=_PARTIAL_CHUNK_XFAIL, strict=False)
+    )
+
+    values, indices = _stimuli(row_elements)
+    torch_format = format_dict[formats.output_format]
+
+    configuration = TestConfig(
+        "sources/top32_rm_test.cpp",
+        formats,
+        templates=[
+            TOP32_RM(row_elements=row_elements, datum_bytes=4, top_min=False, mode=0)
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            _pad_to_tile(values),
+            formats.input_format,
+            _pad_to_tile(indices),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=1,
+            tile_count_B=1,
+            tile_count_res=2,
+        ),
+        unpack_to_dest=True,
+        dest_acc=DestAccumulation.Yes,
+    )
+
+    result = configuration.run().result
+    device_values = torch.tensor(result[:TOP_K], dtype=torch_format).to(torch.float32)
+    golden_values, _ = _golden(values, indices)
+
+    assert passed_test(
+        golden_values, device_values, formats.output_format, print_errors=False
+    ), (
+        f"32-bit branch, 160-element row (one 32-element chunk)\n"
+        f"  device: {device_values.tolist()}\n"
+        f"  golden: {golden_values.tolist()}"
     )

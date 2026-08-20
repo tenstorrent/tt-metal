@@ -1000,8 +1000,9 @@ class TOP32_RM(TemplateParameter):
                       (``top32_rm_dev_compute.cpp``); 1 is the pre-sorted path, which
                       transposes whole 1024-element tiles into Dest and runs
                       ``_bitonic_top32_of_1024_rm_pre_sorted_{prep,combine,final}_``
-                      (``top32_rm_dev_compute_v2.cpp``). Mode 1 requires the input to be
-                      pre-sorted into descending runs of 32 and has no tail path.
+                      (``top32_rm_dev_compute_v2.cpp``), then finishes any remainder in
+                      64-element chunks the way that kernel does. Mode 1 requires the input to
+                      be pre-sorted into descending runs of 32.
     """
 
     row_elements: int = 64
@@ -1018,10 +1019,10 @@ class TOP32_RM(TemplateParameter):
             raise ValueError(
                 f"mode must be 0 (plain) or 1 (pre-sorted), got {self.mode}"
             )
-        if self.mode == 1 and self.row_elements % 1024 != 0:
+        if self.mode == 1 and self.row_elements < 1024:
             raise ValueError(
-                "the pre-sorted mode has no tail path: row_elements must be a multiple "
-                f"of 1024, got {self.row_elements}"
+                "the pre-sorted mode needs at least one whole 1024-element chunk, got "
+                f"{self.row_elements}"
             )
         return "\n".join(
             [

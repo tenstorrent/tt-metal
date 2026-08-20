@@ -118,14 +118,14 @@ inline constexpr std::uint32_t chunk_num_faces(std::uint32_t first)
     return (first + ELEMENTS_PER_CHUNK > TOP32_ROW_ELEMENTS) ? 2 : 4;
 }
 
-// Mode 1 walks whole tiles instead of 64-element chunks.
+// Mode 1 walks whole tiles first, then finishes any remainder in 64-element chunks.
 static constexpr std::uint32_t ELEMENTS_PER_TILE = 32 * 32;
 static constexpr std::uint32_t NUM_TILE_CHUNKS   = TOP32_ROW_ELEMENTS / ELEMENTS_PER_TILE;
+static constexpr std::uint32_t TAIL_FIRST        = NUM_TILE_CHUNKS * ELEMENTS_PER_TILE;
 
 static constexpr bool PRE_SORTED_MODE = (TOP32_MODE == 1);
 
-static_assert(
-    !PRE_SORTED_MODE || (TOP32_ROW_ELEMENTS % ELEMENTS_PER_TILE == 0), "the pre-sorted mode has no tail path: row_elements must be a multiple of 1024");
+static_assert(!PRE_SORTED_MODE || TOP32_ROW_ELEMENTS >= ELEMENTS_PER_TILE, "the pre-sorted mode needs at least one whole 1024-element chunk");
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -144,10 +144,25 @@ static_assert(
 
 // One operand of one chunk. Re-initialising per call mirrors the consumer, which has to
 // because it reconfigures srcA between the value and index operands.
+//
+// Two branches, picked exactly as llk_unpack_A_top32_rm_api.h picks them (there on the src
+// format being Int32, here on the harness's unpack_to_dest, which is the same question asked
+// of the whole variant):
+//
+//   16-bit  the unpacker does the within-face 16x16 transpose itself and clears SrcA to
+//           -infinity first, so unfed faces lose every comparison.
+//   32-bit  the datum is too wide for SrcA, so the tile goes straight to Dest and the
+//           within-face transpose moves to the math thread. Nothing clears to -infinity:
+//           unfed faces arrive as ZEROACC zeros, so a partially-filled chunk is only safe
+//           for strictly positive inputs.
 inline void unpack_chunk(std::uint32_t base_address, std::uint32_t chunk, std::uint32_t num_faces, std::uint32_t src_format, std::uint32_t dst_format)
 {
-    _llk_unpack_A_top32_rm_init_(1 /* within_face_16x16_transpose */, src_format, dst_format);
-    _llk_unpack_A_top32_rm_(num_faces, base_address + chunk * CHUNK_ADDR_STRIDE, src_format, dst_format);
+    _llk_unpack_A_top32_rm_init_<unpack_to_dest>(unpack_to_dest ? 0 : 1 /* within_face_16x16_transpose */, src_format, dst_format);
+    _llk_unpack_A_top32_rm_<unpack_to_dest>(num_faces, base_address + chunk * CHUNK_ADDR_STRIDE, src_format, dst_format);
+    if constexpr (unpack_to_dest)
+    {
+        _llk_unpack_set_srcb_dummy_valid_();
+    }
 }
 
 // Mode 1: transpose_tile's unpack half. The 32-bit branch leaves the within-face 16x16
@@ -189,13 +204,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             unpack_transpose_tile(params.buffer_A[chunk], src_format, dst_format);
             unpack_transpose_tile(params.buffer_B[chunk], src_format, dst_format);
         }
-        return;
     }
 
     const std::uint32_t values_base  = L1_ADDRESS(params.buffer_A[0]);
     const std::uint32_t indices_base = L1_ADDRESS(params.buffer_B[0]);
 
-    for (std::uint32_t first = 0; first < TOP32_ROW_ELEMENTS; first += ELEMENTS_PER_CHUNK)
+    // Mode 0 walks the whole row; mode 1 only the remainder after its whole tiles, which is
+    // how top32_rm_dev_compute_v2.cpp finishes a row that is not a multiple of 1024. Both use
+    // the same per-chunk pair, which branches on unpack_to_dest -- see unpack_chunk.
+    constexpr std::uint32_t FIRST_CHUNK = PRE_SORTED_MODE ? TAIL_FIRST : 0;
+
+    for (std::uint32_t first = FIRST_CHUNK; first < TOP32_ROW_ELEMENTS; first += ELEMENTS_PER_CHUNK)
     {
         const std::uint32_t chunk     = first / ELEMENTS_PER_CHUNK;
         const std::uint32_t num_faces = chunk_num_faces(first);
@@ -318,13 +337,24 @@ inline void math_transpose_tile(std::uint32_t dst_tile, std::uint32_t math_forma
     }
 }
 
-// Move one unpacked operand into its Dest tile. All four faces always, per the LLK's own
-// comment: the faces the unpacker left at -inf have to reach Dest too, or a trailing
-// 32-element chunk would sort against stale data.
+// Move one unpacked operand into its Dest tile, the math half of the pair above and split the
+// same way (llk_math_top32_rm_api.h). On the 16-bit path this runs the MOP over all four faces
+// always -- per the LLK's own comment, the faces the unpacker left at -infinity have to reach
+// Dest too, or a trailing 32-element chunk would sort against stale data. On the 32-bit path
+// the data is already in Dest and what is left is the within-face transpose.
 inline void copy_chunk_to_dest(std::uint32_t dst_tile, std::uint32_t num_faces, std::uint32_t src_format, std::uint32_t dst_format)
 {
     _llk_math_top32_rm_init_<is_fp32_dest_acc_en>(num_faces, dst_format);
-    _llk_math_top32_rm_<DST_SYNC, is_fp32_dest_acc_en, false /* unpack_to_dest */>(dst_tile, src_format, dst_format, num_faces);
+    if constexpr (unpack_to_dest)
+    {
+        _llk_math_transpose_dest_init_<false /* transpose_of_faces */, true /* is_32bit */>();
+        _llk_math_top32_rm_<DST_SYNC, is_fp32_dest_acc_en, true /* unpack_to_dest */>(dst_tile, src_format, dst_format, num_faces);
+        _llk_math_transpose_dest_wrapper_<is_fp32_dest_acc_en, false /* transpose_of_faces */, true /* is_32bit */>(dst_tile);
+    }
+    else
+    {
+        _llk_math_top32_rm_<DST_SYNC, is_fp32_dest_acc_en, false /* unpack_to_dest */>(dst_tile, src_format, dst_format, num_faces);
+    }
 }
 
 // Sort a freshly loaded 64-slot column down to its top 32, in `direction`.
@@ -382,6 +412,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         // Reduce the 16 surviving columns of F0/F1 to one: the final top32, in column 0.
         top32_pre_sorted_final(VALUE_TILE);
+
+        // Tail, for a row that is not a multiple of 1024: fold the leftover 64-element chunks
+        // into the running top32 with the plain family's Dest moves. The step sequence is v2's,
+        // and it is NOT the plain mode's: where mode 0 opens with phases_steps (a full bitonic
+        // sort of an arbitrary 64), v2 opens with `rebuild(skip_second=false)`, which sorts a
+        // *bitonic* 64 rather than an arbitrary one. That is sound only because this mode's
+        // input contract already holds -- two adjacent descending runs of 32 are bitonic as a
+        // cyclic sequence -- and it is the reason the tail cannot be shared with mode 0.
+        for (std::uint32_t first = TAIL_FIRST; first < TOP32_ROW_ELEMENTS; first += ELEMENTS_PER_CHUNK)
+        {
+            const std::uint32_t num_faces = chunk_num_faces(first);
+
+            copy_chunk_to_dest(STAGE_VALUE_TILE, num_faces, math_format, math_format);
+            copy_chunk_to_dest(STAGE_INDEX_TILE, num_faces, math_format, math_format);
+
+            top32_rebuild(STAGE_VALUE_TILE, DESCENDING, false /* skip_second */);
+            top32_merge(STAGE_VALUE_TILE, false /* across_tiles */);
+            top32_rebuild(STAGE_VALUE_TILE, ASCENDING, true /* skip_second */);
+
+            top32_merge(VALUE_TILE, true /* across_tiles */);
+            top32_rebuild(VALUE_TILE, DESCENDING, true /* skip_second */);
+        }
 
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
         return;
