@@ -81,7 +81,11 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         // [total_elems_to_reduce, num_tilized_rows) are never overwritten by the async_reads
         // below and would otherwise contribute junk to the reduce. Fill only that tail region
         // with the init value -- the leading rows will be fully overwritten by process_h().
-        if constexpr (!is_large_kernel) {
+        //
+        // For max pool this per-stick fill is skipped: the init-time async_write_zeros already
+        // zeroed the entire in_cb ring (0 is a safe max identity for post-ReLU inputs), and
+        // since the reader only overwrites the window rows, the tail stays zero across sticks.
+        if constexpr (!is_large_kernel && is_avg_pool) {
             if constexpr (num_tilized_rows > total_elems_to_reduce) {
                 constexpr uint32_t row_stride_elems =
                     wide_reduction ? (MAX_TILES_PER_REDUCTION * TILE_WIDTH) : (in_ntiles_c * TILE_WIDTH);
@@ -299,8 +303,10 @@ void kernel_main() {
     // so pre-clearing can never change a correct max; the once-at-init clear persists across the in_cb ring
     // because the reader never overwrites those rows. (Real fix: make the quasar reduce respect face_r_dim.)
     constexpr bool force_max_clear = !is_avg_pool;
-    // fill the clear cb
-    if constexpr (is_avg_pool || need_to_initialize_in_cb || force_max_clear) {
+    // fill the clear cb -- only needed for avg pool (large-kernel avg pool uses clear_value_cb
+    // via clear_out_tiles in the reduction loop). Max pool's init-time clear uses
+    // async_write_zeros directly on in_cb and never reads clear_value_cb.
+    if constexpr (is_avg_pool) {
         if constexpr (reader_id == 0) {
             fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
             clear_value_cb.push_back(1);
@@ -308,6 +314,8 @@ void kernel_main() {
         if constexpr (reader_id == 1) {
             clear_value_cb.wait_front(1);
         }
+    }
+    if constexpr (is_avg_pool || need_to_initialize_in_cb || force_max_clear) {
         // for average pool clear out tiles runs in loop, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
             if constexpr (is_avg_pool) {
