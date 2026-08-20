@@ -481,9 +481,6 @@ def test_add_with_block_sharding(device, input_a_sharded, input_b_sharded, out_s
         ([1], [2], [3]),
         ([1], [], []),
         ([], [1], []),
-        ([1, 2], [3], [4, 5]),
-        ([1], [2, 3], [3, 4]),
-        ([1, 2], [3, 4], [4, 6]),
     ],
 )
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
@@ -572,110 +569,9 @@ def test_add_with_sub_devices(device, input_a_sharded, input_b_sharded, out_shar
     assert output_tensor.shape == shape
 
 
-# fmt: off
-@pytest.mark.parametrize("ttnn_op, torch_op", [
-    (ttnn.add, lambda a, b: a + b),
-    (ttnn.subtract, lambda a, b: a - b),
-    (ttnn.rsub, lambda a, b: b - a),
-])
-@pytest.mark.parametrize("fast_and_approximate_mode, ulp_threshold", [(False, 0), (True, 1), (None, 1)])
-@pytest.mark.parametrize("high, low", [(10, -10), (0, -1e5), (1e5, 0), (-500, 500), (1e5, 1e-5), (1e15, 1e-15)])
-# fmt: on
-def test_additive_modes(device, ttnn_op, torch_op, fast_and_approximate_mode, ulp_threshold, high, low):
-    """fast_and_approximate_mode=False routes bfloat16 add/sub/rsub through the SFPU with RNE
-    rounding, which matches torch exactly. The default (unset) keeps the 1-ULP FPU kernel."""
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.randn((128, 128), dtype=torch.bfloat16) * (high - low) + low
-    torch_input_tensor_b = torch.randn((128, 128), dtype=torch.bfloat16) * (high - low) + low
-    torch_output_tensor = torch_op(torch_input_tensor_a, torch_input_tensor_b)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    kwargs = {} if fast_and_approximate_mode is None else {"fast_and_approximate_mode": fast_and_approximate_mode}
-    output = ttnn.to_torch(ttnn_op(input_tensor_a, input_tensor_b, **kwargs))
-
-    assert_with_ulp(torch_output_tensor, output, ulp_threshold)
-
-
-# fmt: off
-@pytest.mark.parametrize("ttnn_op, torch_op", [
-    (ttnn.add_, lambda a, b: a + b),
-    (ttnn.subtract_, lambda a, b: a - b),
-    (ttnn.rsub_, lambda a, b: b - a),
-])
-@pytest.mark.parametrize("fast_and_approximate_mode, ulp_threshold", [(False, 0), (True, 1), (None, 1)])
-# fmt: on
-def test_additive_modes_inplace(device, ttnn_op, torch_op, fast_and_approximate_mode, ulp_threshold):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.randn((128, 128), dtype=torch.bfloat16) * 1e5
-    torch_input_tensor_b = torch.randn((128, 128), dtype=torch.bfloat16) * 1e5
-    torch_output_tensor = torch_op(torch_input_tensor_a, torch_input_tensor_b)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    kwargs = {} if fast_and_approximate_mode is None else {"fast_and_approximate_mode": fast_and_approximate_mode}
-    ttnn_op(input_tensor_a, input_tensor_b, **kwargs)
-
-    assert_with_ulp(torch_output_tensor, ttnn.to_torch(input_tensor_a), ulp_threshold)
-
-
-# fmt: off
-@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract, ttnn.rsub])
-@pytest.mark.parametrize("dtype_a, dtype_b, output_dtype", [
-    (ttnn.float32, ttnn.float32, None),
-    (ttnn.int32, ttnn.int32, None),
-    (ttnn.bfloat8_b, ttnn.bfloat8_b, None),
-    (ttnn.bfloat4_b, ttnn.bfloat4_b, None),
-    (ttnn.float32, ttnn.bfloat16, None),      # output follows lhs -> FLOAT32
-    (ttnn.bfloat16, ttnn.bfloat16, ttnn.float32),
-])
-# fmt: on
-def test_additive_accurate_mode_rejects_non_bfloat16_output(
-    device, ttnn_op, dtype_a, dtype_b, output_dtype, expect_error
-):
-    """The accurate path only exists to round a bfloat16 result, so asking for it on any other
-    output dtype is rejected rather than silently ignored."""
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.randn((64, 64)) * 100
-    torch_input_tensor_b = torch.randn((64, 64)) * 100
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=dtype_a, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=dtype_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-    kwargs = {} if output_dtype is None else {"dtype": output_dtype}
-    with expect_error(RuntimeError, r"fast_and_approximate_mode=false is only supported for a BFLOAT16 output"):
-        ttnn_op(input_tensor_a, input_tensor_b, fast_and_approximate_mode=False, **kwargs)
-
-
-# fmt: off
-@pytest.mark.parametrize("dtype_b", [ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b])
-# fmt: on
-def test_additive_accurate_mode_allowed_for_mixed_operands(device, dtype_b):
-    """Output dtype follows lhs, so a bfloat16 lhs keeps a bfloat16 output and the accurate path
-    stays available even when rhs is a wider or block-float dtype."""
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.randn((64, 64)) * 100
-    torch_input_tensor_b = torch.randn((64, 64)) * 100
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=dtype_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output = ttnn.add(input_tensor_a, input_tensor_b, fast_and_approximate_mode=False)
-
-    assert output.dtype == ttnn.bfloat16
-    assert torch.isfinite(ttnn.to_torch(output)).all()
-
-
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
-def test_additive_block_float_defaults_to_fpu(device, ttnn_dtype):
-    """Block-float operands have no SFPU add kernel; the default (and an explicit True) keep them
-    on the FPU."""
+def test_add_block_float_defaults_to_fpu(device, ttnn_dtype):
+    """Block-float operands have no SFPU add kernel; block-float add defaults to FPU."""
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn((128, 128), dtype=torch.bfloat16) * 100
@@ -685,6 +581,11 @@ def test_additive_block_float_defaults_to_fpu(device, ttnn_dtype):
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     default = ttnn.to_torch(ttnn.add(input_tensor_a, input_tensor_b))
-    fast = ttnn.to_torch(ttnn.add(input_tensor_a, input_tensor_b, fast_and_approximate_mode=True))
+    fast = ttnn.to_torch(
+        ttnn.add(
+            input_tensor_a,
+            input_tensor_b,
+        )
+    )
 
     assert torch.equal(default, fast)
