@@ -8,8 +8,12 @@ no device:
   1. KNOB-LEG MODES (harness gap 1): knob_legs() produces EXACT flag lists —
      solo knobs keep the historical OFF vs OFF+flag shape; drop-one knobs
      (replay-exec-record, planner-residency, init-hoist) get reviewed-ON
-     minus exactly their flag token(s) vs the full reviewed-ON set; a
-     drop-one flag outside the ON set refuses loudly; attribute_knobs and
+     minus exactly their flag token(s) vs the full reviewed-ON set; on-plus
+     knobs (replay-loop-unroll, int-abs, lut-select-leaf-ext, repr-prop —
+     the default-off booking flags) get plain reviewed-ON vs reviewed-ON
+     plus exactly their outside-ON token(s), in-ON tokens deduped; a
+     drop-one flag outside the ON set refuses loudly, and an on-plus flag
+     entirely inside it refuses loudly (mirror images); attribute_knobs and
      knob_silicon build their legs from knob_legs (no site left on the old
      hardcoded solo shape); init-hoist HAS a knob row (it had none) and is
      drop-one (laneCJ census-timing fact: solo init-hoist ALWAYS refuses).
@@ -75,7 +79,7 @@ check(
 check(
     "knob modes: every KNOB_MODES key is a KNOBS key, values legal",
     all(k in sweep.KNOBS for k in sweep.KNOB_MODES)
-    and all(v in ("solo", "drop-one") for v in sweep.KNOB_MODES.values()),
+    and all(v in ("solo", "drop-one", "on-plus") for v in sweep.KNOB_MODES.values()),
     sweep.KNOB_MODES,
 )
 
@@ -105,7 +109,7 @@ for knob in DROP_ONE_EXPECTED:
     )
 
 # solo knobs keep the historical shape, exactly
-for knob in ("ccmask", "replay-hoist", "lut-select-leaf-ext"):
+for knob in ("ccmask", "replay-hoist", "invariant-loadi"):
     legs = sweep.knob_legs(knob)
     check(
         f"solo {knob}: OFF vs OFF+flag, exact flag lists",
@@ -123,6 +127,59 @@ except SystemExit as e:
     check(
         "drop-one: flag outside the ON set refuses (SystemExit)",
         "NOT in the reviewed ON set" in str(e),
+        e,
+    )
+
+# ---- on-plus mode (default-off booking flags; coordinator extension) ----
+ON_PLUS_EXPECTED = ("replay-loop-unroll", "int-abs", "lut-select-leaf-ext", "repr-prop")
+check(
+    "knob modes: the four default-off booking knobs are on-plus",
+    all(sweep.knob_mode(k) == "on-plus" for k in ON_PLUS_EXPECTED),
+    {k: sweep.knob_mode(k) for k in ON_PLUS_EXPECTED},
+)
+for knob in ON_PLUS_EXPECTED:
+    legs = sweep.knob_legs(knob)
+    off_leg, knob_leg = dict(legs)["off"], dict(legs)["knob"]
+    new_tokens = [t for t in sweep.KNOBS[knob].split() if t not in ON_TOKENS]
+    check(
+        f"on-plus {knob}: off leg is the PLAIN reviewed-ON set, exactly",
+        off_leg == sweep.ON_FLAGS,
+        off_leg,
+    )
+    check(
+        f"on-plus {knob}: knob leg is reviewed-ON plus exactly its "
+        "outside-ON token(s), order preserved (exact list)",
+        knob_leg.split() == ON_TOKENS + new_tokens and len(new_tokens) >= 1,
+        knob_leg,
+    )
+    check(
+        f"on-plus {knob}: leg names stay ('off','knob') — the knob leg "
+        "contains the flag, delta sign convention unchanged",
+        [n for n, _ in legs] == ["off", "knob"],
+        legs,
+    )
+
+# lut-select-leaf-ext's parent lut-select token is already IN the ON set:
+# on-plus must DEDUPE it (append only leaf-ext + license), never double it.
+_lleg = dict(sweep.knob_legs("lut-select-leaf-ext"))["knob"].split()
+check(
+    "on-plus lut-select-leaf-ext: in-ON parent token deduped (appears once), "
+    "leaf-ext + finite-math license appended",
+    _lleg.count("-mtt-tensix-optimize-lut-select") == 1
+    and _lleg[-2:]
+    == ["-mtt-tensix-optimize-lut-select-leaf-ext", "-ffinite-math-only"],
+    _lleg[-4:],
+)
+
+# an on-plus flag ENTIRELY inside the reviewed ON set refuses loudly (an
+# A/A of the full ON set — the mirror image of drop-one's check)
+try:
+    sweep.on_plus_flags("-mtt-tensix-optimize-ccmask")
+    check("on-plus: flag entirely inside the ON set refuses (SystemExit)", False)
+except SystemExit as e:
+    check(
+        "on-plus: flag entirely inside the ON set refuses (SystemExit)",
+        "ENTIRELY inside the reviewed ON" in str(e),
         e,
     )
 
@@ -225,7 +282,7 @@ with tempfile.TemporaryDirectory() as td:
             "op": "kop2",
             "selector": "sem-perf",
             "status": "OK",
-            "firing_knobs": ["init-hoist", "ccmask"],
+            "firing_knobs": ["init-hoist", "ccmask", "replay-loop-unroll"],
         },
     )
     out = json.loads((sw2.ev / "kop2" / "knob-silicon.json").read_text())
@@ -245,9 +302,20 @@ with tempfile.TemporaryDirectory() as td:
         out.get("ccmask"),
     )
     check(
+        "knob_silicon: on-plus knob's legs/flags come from knob_legs "
+        "(off = plain ON, knob = ON + flag, mode recorded)",
+        seen2.get("knobs/replay-loop-unroll") == sweep.knob_legs("replay-loop-unroll")
+        and out["replay-loop-unroll"]["off_flags"] == sweep.ON_FLAGS
+        and out["replay-loop-unroll"]["flags"]
+        == f"{sweep.ON_FLAGS} {sweep.KNOBS['replay-loop-unroll']}"
+        and out["replay-loop-unroll"]["mode"] == "on-plus",
+        out.get("replay-loop-unroll"),
+    )
+    check(
         "knob_silicon: byte-identical knob pair still refuses (no device run)",
         out["init-hoist"]["status"] == "REFUSAL_BYTE_IDENTICAL"
-        and out["ccmask"]["status"] == "REFUSAL_BYTE_IDENTICAL",
+        and out["ccmask"]["status"] == "REFUSAL_BYTE_IDENTICAL"
+        and out["replay-loop-unroll"]["status"] == "REFUSAL_BYTE_IDENTICAL",
         out,
     )
 

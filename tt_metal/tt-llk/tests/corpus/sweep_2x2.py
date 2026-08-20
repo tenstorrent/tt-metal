@@ -35,9 +35,11 @@ Post-review hardening (PULL_ANALYSIS-20260817 §4):
     are keyed to the cc1plus (and simulator) sha and re-run on mismatch;
   * weekly per-knob silicon legs run the identical classify -> paired CRAQ ->
     correctness-then-perf pipeline as the main legs (D3); each knob's leg
-    shape follows its KNOB_MODES mode — solo (OFF vs OFF+flag) or drop-one
+    shape follows its KNOB_MODES mode — solo (OFF vs OFF+flag), drop-one
     (reviewed-ON minus the flag vs full reviewed-ON, the only shape that can
-    see a dependent/service pass fire — laneDO);
+    see a dependent/service pass fire), or on-plus (reviewed-ON plus the
+    flag vs plain reviewed-ON, the booking shape for default-off flags whose
+    fire needs the ON baseline — laneDO);
   * report() is class-aware: baseline rows carry an expected class
     (win/parity/loss/refusal); a prior win row that becomes a byte-identical
     refusal is RED, refusal->changed is a flagged notice (D4;
@@ -402,7 +404,15 @@ REMOVED_FLAGS = ("-mtt-tensix-emit-loadmacro", "-mtt-tensix-analyze-loadmacro")
 #             all-off base, so its solo knob leg measured an A/A forever and
 #             the weekly recorded an eternal no-fire for a flag that fires in
 #             every reviewed-ON build.
-# In BOTH modes the leg named "knob" is the one CONTAINING the flag, so
+#   on-plus:  reviewed-ON PLUS this knob's flag(s) vs the plain reviewed-ON
+#             set (the mirror image of drop-one, for DEFAULT-OFF flags whose
+#             shape only materializes on the ON baseline).  Booking evidence
+#             (booking2 run, castfp32tofp16a): the replay-loop-unroll knob in
+#             solo mode produced byte-identical legs — all six cells 160.477
+#             — because the unroll shape needs the ON-25 pipeline (lane DJ's
+#             word-identity proof: ON-25 + unroll == hand), so a solo leg can
+#             never book the win the flag actually delivers.
+# In ALL modes the leg named "knob" is the one CONTAINING the flag, so
 # delta_pct = knob-vs-off keeps one sign convention (the flag's own effect).
 KNOBS = {
     "latency-schedule": "-mtt-tensix-optimize-latency-schedule",
@@ -441,10 +451,13 @@ KNOBS = {
     # permanent A/A.
     "init-hoist": "-mtt-tensix-optimize-init-hoist",
     # ---- pin-14 NEW default-off flags: knob legs ONLY.  Deliberately
-    # NOT in the reviewed ON set — the weekly measures each solo on its
+    # NOT in the reviewed ON set — the weekly measures each on its
     # target rows (attribution on every changed row; silicon legs on the
-    # knob-silicon row list).  Promotion into the ON set is a separate
-    # reviewed step carrying its own R9 union fire witness.
+    # knob-silicon row list) in on-plus mode: (reviewed-ON + flag) vs
+    # plain reviewed-ON, the booking A/B for a default-off flag whose
+    # shape needs the ON baseline (see KNOB_MODES).  Promotion into the
+    # ON set is a separate reviewed step carrying its own R9 union fire
+    # witness.
     # CU (int-peephole-harvest): v_if(v<0){r=0-v} -> one integer SFPABS
     # ccmask-fold; 2^32-exhaustive EQUAL, QSR fail-closed by name.
     # Target row: absint32 (fresh row hand-EXACT 3-word stream).
@@ -455,10 +468,10 @@ KNOBS = {
     # hardsigmoid-fresh / softsign-fresh (CRAQ 5/5 bit-exact favorable).
     "replay-loop-unroll": "-mtt-tensix-optimize-replay-loop-unroll",
     # CY (lut-select-leaf-arity): certified non-affine LUT leaf classes +
-    # below-arity duplication.  Parent lut-select is Init(1) but the knob
-    # leg is built on OFF_FLAGS (parent forced off), so the leg carries
-    # parent+leaf-ext; the leaf-ext-only delta reads against the plain
-    # lut-select knob leg.  LICENSED-LEG-PENDING-OWNER, FAIL-CLOSED: the
+    # below-arity duplication.  Under on-plus the parent lut-select token
+    # is already IN the reviewed ON set (deduped), so the knob leg is
+    # ON + leaf-ext + license — the leaf-ext-only delta reads directly
+    # against the plain ON off-leg.  LICENSED LEG: the
     # fire additionally needs per-TU -ffinite-math-only (an UNSIGNED
     # owner decision, HANDOFF #6): OWNER SIGNED 2026-08-20 (session order
     # "run with whatever passes we did not enable" + booking-pass order) —
@@ -487,15 +500,26 @@ KNOBS = {
 #     not even in its pass's gate solo (needs the planner pipeline);
 #   init-hoist         — laneCJ census-timing fact: solo ALWAYS refuses
 #     (stage-2 proof needs the planner formation the OFF base disables).
+# The four seeded on-plus knobs are the pin-14 DEFAULT-OFF booking flags:
+# their wins only materialize on the reviewed-ON baseline (booking2:
+# replay-loop-unroll solo = byte-identical legs on castfp32tofp16a, all six
+# cells 160.477; lane DJ word-identity proof ON-25 + unroll == hand), so the
+# booking A/B is (ON + flag) vs plain ON.  lut-select-leaf-ext's parent
+# lut-select token is already IN the ON set — on-plus dedupes it and appends
+# only the leaf-ext + license tokens.
 KNOB_MODES = {
     "replay-exec-record": "drop-one",
     "planner-residency": "drop-one",
     "init-hoist": "drop-one",
+    "replay-loop-unroll": "on-plus",
+    "int-abs": "on-plus",
+    "lut-select-leaf-ext": "on-plus",
+    "repr-prop": "on-plus",
 }
 
 
 def knob_mode(knob):
-    """Leg mode for one knob: 'solo' (default) or 'drop-one'."""
+    """Leg mode for one knob: 'solo' (default), 'drop-one', or 'on-plus'."""
     return KNOB_MODES.get(knob, "solo")
 
 
@@ -518,26 +542,54 @@ def drop_one_flags(flag):
     return " ".join(tokens)
 
 
+def on_plus_flags(flag):
+    """Reviewed-ON plus one knob's flag token(s), token order preserved —
+    the mirror image of drop_one_flags.
+
+    At least one token must be OUTSIDE ON_FLAGS: an on-plus knob whose flag
+    is entirely inside the reviewed ON set adds nothing — its legs would be
+    a silent A/A of the full ON set, the exact blind-leg class the mode
+    exists to kill.  Loud config error instead.  Tokens ALREADY in the ON
+    set (e.g. lut-select-leaf-ext's parent lut-select) are harmless
+    duplicates and are dropped, so the knob leg is ON + only the genuinely
+    new token(s)."""
+    on_tokens = ON_FLAGS.split()
+    new = [tok for tok in flag.split() if tok not in on_tokens]
+    if not new:
+        sys.exit(
+            f"on-plus knob flag '{flag}' is ENTIRELY inside the reviewed ON "
+            "set — an on-plus leg can only add a flag the union does not "
+            "already carry (fix KNOB_MODES, or use drop-one for an ON-set "
+            "flag)"
+        )
+    return f"{ON_FLAGS} {' '.join(new)}"
+
+
 def knob_legs(knob):
     """The (legname, flags) pair spec for one knob's A/B (KNOBS comment):
     solo = OFF vs OFF+flag; drop-one = reviewed-ON-minus-flag vs full
-    reviewed-ON.  The 'knob' leg is the one CONTAINING the flag in both
-    modes, so knob-vs-off deltas keep one sign convention."""
+    reviewed-ON; on-plus = full reviewed-ON vs reviewed-ON-plus-flag.  The
+    'knob' leg is the one CONTAINING the flag in ALL modes, so knob-vs-off
+    deltas keep one sign convention."""
     flag = KNOBS[knob]
-    if knob_mode(knob) == "drop-one":
+    mode = knob_mode(knob)
+    if mode == "drop-one":
         return (("off", drop_one_flags(flag)), ("knob", ON_FLAGS))
+    if mode == "on-plus":
+        return (("off", ON_FLAGS), ("knob", on_plus_flags(flag)))
     return (("off", OFF_FLAGS), ("knob", f"{OFF_FLAGS} {flag}"))
 
 
 # Schema validation at import (fail loud at load, not mid-sweep): every
-# KNOB_MODES key is a KNOBS key, and every drop-one knob's flag really is
-# droppable from the reviewed ON set.
+# KNOB_MODES key is a KNOBS key, every drop-one knob's flag really is
+# droppable from the reviewed ON set, and every on-plus knob's flag really
+# adds something the ON set does not already carry.
 for _k in KNOB_MODES:
     if _k not in KNOBS:
         sys.exit(f"KNOB_MODES names an unknown knob: {_k}")
-    if KNOB_MODES[_k] not in ("solo", "drop-one"):
-        sys.exit(f"KNOB_MODES[{_k}] must be 'solo' or 'drop-one'")
-    knob_legs(_k)  # drop-one flags must be in the ON set (exits loudly)
+    if KNOB_MODES[_k] not in ("solo", "drop-one", "on-plus"):
+        sys.exit(f"KNOB_MODES[{_k}] must be 'solo', 'drop-one' or 'on-plus'")
+    knob_legs(_k)  # drop-one/on-plus flag checks exit loudly
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
 SILICON_LOCK = "/tmp/tt-llk-sfpu-silicon.lock"
