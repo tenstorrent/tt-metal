@@ -1,0 +1,346 @@
+name: "Sanity tests - Slack break notification"
+
+on:
+  workflow_run:
+    workflows: ["Sanity tests"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Sanity tests run ID to process (for testing/re-sending)"
+        required: true
+        type: string
+      dry_run:
+        description: "Log the resolved Slack message instead of posting it"
+        required: false
+        type: boolean
+        default: true
+
+# One group per run so a duplicate workflow_run delivery (GitHub occasionally
+# sends these) or a re-dispatch of the same run can't race and post twice.
+concurrency:
+  group: sanity-tests-slack-notify-${{ github.event.workflow_run.id || github.event.inputs.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-slim
+    # Only act on a real failed push run, or an explicit manual test/replay.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'push') }}
+    steps:
+      - name: Resolve run context
+        id: context
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          DISPATCH_RUN_ID: ${{ github.event.inputs.run_id }}
+          DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            let runId, headSha, runNumber, htmlUrl, dryRun;
+
+            if (context.eventName === 'workflow_dispatch') {
+              runId = Number(process.env.DISPATCH_RUN_ID);
+              dryRun = process.env.DISPATCH_DRY_RUN !== 'false';
+              const { data: run } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: runId });
+              headSha = run.head_sha;
+              runNumber = run.run_number;
+              htmlUrl = run.html_url;
+            } else {
+              runId = context.payload.workflow_run.id;
+              headSha = context.payload.workflow_run.head_sha;
+              runNumber = context.payload.workflow_run.run_number;
+              htmlUrl = context.payload.workflow_run.html_url;
+              dryRun = false;
+            }
+
+            core.info(`run=${runId} sha=${headSha} number=${runNumber} dryRun=${dryRun}`);
+            core.setOutput('run_id', String(runId));
+            core.setOutput('head_sha', headSha);
+            core.setOutput('run_number', String(runNumber));
+            core.setOutput('html_url', htmlUrl);
+            core.setOutput('dry_run', String(dryRun));
+
+      - name: Find culprit PRs since last green run
+        id: culprits
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          CURRENT_RUN_NUMBER: ${{ steps.context.outputs.run_number }}
+          CURRENT_HEAD_SHA: ${{ steps.context.outputs.head_sha }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const currentRunNumber = Number(process.env.CURRENT_RUN_NUMBER);
+            const currentHeadSha = process.env.CURRENT_HEAD_SHA;
+
+            const { data: runsResp } = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: 'sanity-tests.yaml',
+              branch: 'main',
+              event: 'push',
+              per_page: 100,
+            });
+
+            const prevGood = runsResp.workflow_runs
+              .filter(r => r.run_number < currentRunNumber && r.conclusion === 'success')
+              .sort((a, b) => b.run_number - a.run_number)[0];
+
+            if (!prevGood) {
+              core.warning('No previous successful "Sanity tests" push run found on main within the last 100 runs; skipping.');
+              core.setOutput('found_baseline', 'false');
+              return;
+            }
+
+            core.setOutput('found_baseline', 'true');
+            core.setOutput('prev_run_url', prevGood.html_url);
+            core.setOutput('prev_run_number', String(prevGood.run_number));
+
+            const { data: cmp } = await github.rest.repos.compareCommits({
+              owner,
+              repo,
+              base: prevGood.head_sha,
+              head: currentHeadSha,
+            });
+
+            const entries = [];
+            const seenPrNumbers = new Set();
+
+            for (const commit of cmp.commits) {
+              const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner,
+                repo,
+                commit_sha: commit.sha,
+              });
+
+              if (pulls.length > 0) {
+                for (const pr of pulls) {
+                  if (seenPrNumbers.has(pr.number)) continue;
+                  seenPrNumbers.add(pr.number);
+                  entries.push({
+                    type: 'pr',
+                    number: pr.number,
+                    url: pr.html_url,
+                    title: pr.title,
+                    authorLogin: pr.user ? pr.user.login : null,
+                  });
+                }
+              } else {
+                // No associated PR (direct push, or API lag right after merge) --
+                // fall back to the commit's own author so a culprit is never silently dropped.
+                entries.push({
+                  type: 'commit',
+                  sha: commit.sha,
+                  url: commit.html_url,
+                  title: commit.commit.message.split('\n')[0],
+                  authorLogin: commit.author ? commit.author.login : null,
+                });
+              }
+            }
+
+            core.info(`Found ${entries.length} culprit entr${entries.length === 1 ? 'y' : 'ies'} between #${prevGood.run_number} and #${currentRunNumber}`);
+            core.setOutput('entries', JSON.stringify(entries));
+
+      - name: Resolve Slack mentions for culprits
+        id: mentions
+        if: steps.culprits.outputs.found_baseline == 'true'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
+          GH_TOKEN: ${{ github.token }}
+          ENTRIES_JSON: ${{ steps.culprits.outputs.entries }}
+        run: |
+          set -euo pipefail
+
+          LOGINS=$(echo "$ENTRIES_JSON" | jq -r '[.[].authorLogin | select(. != null)] | unique | .[]')
+
+          echo "Fetching all Slack users..."
+          TEMP_USERS_FILE=$(mktemp)
+          echo "[]" > "$TEMP_USERS_FILE"
+          CURSOR=""
+          while true; do
+            if [ -n "$CURSOR" ]; then
+              API_URL="https://slack.com/api/users.list?limit=1000&cursor=$CURSOR"
+            else
+              API_URL="https://slack.com/api/users.list?limit=1000"
+            fi
+
+            USER_SEARCH_RESPONSE=$(curl -s -X GET \
+              -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "$API_URL")
+
+            RESPONSE_FILE=$(mktemp)
+            echo "$USER_SEARCH_RESPONSE" > "$RESPONSE_FILE"
+
+            if [ "$(jq -r '.ok' "$RESPONSE_FILE")" = "true" ]; then
+              MERGE_FILE=$(mktemp)
+              jq -s '.[0] + .[1]' "$TEMP_USERS_FILE" <(jq '.members' "$RESPONSE_FILE") > "$MERGE_FILE"
+              mv "$MERGE_FILE" "$TEMP_USERS_FILE"
+              CURSOR=$(jq -r '.response_metadata.next_cursor // ""' "$RESPONSE_FILE")
+              rm -f "$RESPONSE_FILE"
+              if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
+                break
+              fi
+            else
+              ERROR_MSG=$(jq -r '.error // "Unknown error"' "$RESPONSE_FILE")
+              echo "::warning::Failed to fetch Slack users: $ERROR_MSG"
+              rm -f "$RESPONSE_FILE"
+              break
+            fi
+          done
+          SLACK_USERS_FILE="${RUNNER_TEMP}/slack_users.json"
+          mv "$TEMP_USERS_FILE" "$SLACK_USERS_FILE"
+          echo "Fetched $(jq '. | length' "$SLACK_USERS_FILE") Slack users"
+
+          # Same resolution algorithm as .github/workflows/notify-slack-on-mention.yaml
+          # (hardcoded overrides for known GitHub<->Slack mismatches, then fuzzy match).
+          find_slack_user_id() {
+            local full_name="$1"
+            local github_username="$2"
+            local USERS_FILE="$3"
+
+            case "$github_username" in
+              "mradosavljevicTT") echo "U0837MYG788"; return 0 ;;
+              "nsextonTT") echo "U08TVGQGGAE"; return 0 ;;
+              "ncvetkovicTT") echo "U07AUABTEP6"; return 0 ;;
+              "jvegaTT") echo "U07M7QZ0BQA"; return 0 ;;
+            esac
+
+            USER_ID=$(jq -r --arg name "$full_name" \
+              '.[] | select(.real_name == $name or .profile.real_name == $name) | .id' "$USERS_FILE" | head -n1)
+
+            if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+              USER_ID=$(jq -r --arg name "$full_name" \
+                '.[] | select(.profile.display_name == $name) | .id' "$USERS_FILE" | head -n1)
+            fi
+
+            if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+              USER_ID=$(jq -r --arg username "$github_username" \
+                '.[] | select(.name == $username or .profile.display_name == $username) | .id' "$USERS_FILE" | head -n1)
+            fi
+
+            if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+              IFS=' ' read -ra NAME_WORDS <<< "$full_name"
+              for word in "${NAME_WORDS[@]}"; do
+                if [ ${#word} -ge 3 ]; then
+                  WORD_MATCHES=$(jq -r --arg word "$word" \
+                    '.[] | select(
+                      (.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or
+                      (.profile.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or
+                      (.profile.display_name // "" | ascii_downcase | contains($word | ascii_downcase))
+                    ) | .id + "|" + (.real_name // .profile.real_name // .name)' "$USERS_FILE")
+
+                  if [ -n "$WORD_MATCHES" ]; then
+                    MATCH_COUNT=$(echo "$WORD_MATCHES" | wc -l)
+                    if [ "$MATCH_COUNT" -eq 1 ]; then
+                      USER_ID=$(echo "$WORD_MATCHES" | cut -d'|' -f1)
+                      break
+                    fi
+                  fi
+                fi
+              done
+            fi
+
+            if [ -n "$USER_ID" ] && [ "$USER_ID" != "null" ]; then
+              echo "$USER_ID"
+            else
+              echo ""
+            fi
+          }
+
+          MENTIONS_JSON="{}"
+          while IFS= read -r gh_user; do
+            [ -z "$gh_user" ] && continue
+
+            USER_DATA=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/users/$gh_user" 2>/dev/null || echo "{}")
+            USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+            [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$gh_user"
+
+            SLACK_ID=$(find_slack_user_id "$USER_NAME" "$gh_user" "$SLACK_USERS_FILE")
+
+            if [ -n "$SLACK_ID" ]; then
+              MENTION="<@$SLACK_ID>"
+              echo "Resolved @$gh_user -> Slack <@$SLACK_ID>"
+            else
+              MENTION="@$gh_user"
+              echo "Could not resolve @$gh_user to Slack, using GitHub username fallback"
+            fi
+
+            MENTIONS_JSON=$(echo "$MENTIONS_JSON" | jq --arg login "$gh_user" --arg mention "$MENTION" '. + {($login): $mention}')
+          done <<< "$LOGINS"
+
+          {
+            echo 'mentions_json<<EOF'
+            echo "$MENTIONS_JSON"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compose and send Slack message
+        if: steps.culprits.outputs.found_baseline == 'true'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
+          SLACK_CHANNEL_ID: "C05GRJC4J4A" # #tt-metal-pipelines
+          DRY_RUN: ${{ steps.context.outputs.dry_run }}
+          ENTRIES_JSON: ${{ steps.culprits.outputs.entries }}
+          MENTIONS_JSON: ${{ steps.mentions.outputs.mentions_json }}
+          FAILING_RUN_URL: ${{ steps.context.outputs.html_url }}
+          PREV_RUN_URL: ${{ steps.culprits.outputs.prev_run_url }}
+        run: |
+          set -euo pipefail
+
+          LINES=$(echo "$ENTRIES_JSON" | jq -r --argjson mentions "$MENTIONS_JSON" '
+            .[] | (if .authorLogin != null then ($mentions[.authorLogin] // ("@" + .authorLogin)) else "(unknown author)" end) as $who
+            | "\($who) <\(.url)|\(if .type == "pr" then "#\(.number) - \(.title)" else "\(.title)" end)> broke sanity."
+          ')
+
+          TEXT="${LINES}"$'\n'"Failing run on that commit: ${FAILING_RUN_URL}"$'\n'"Previous passing run: ${PREV_RUN_URL}"$'\n'"Please fix."
+
+          # Neutralize Slack broadcast mentions, out of caution -- text here is
+          # machine-built from PR titles/authors, not raw user content.
+          TEXT=$(echo "$TEXT" | sed 's/<!here>/\&lt;!here\&gt;/g; s/<!channel>/\&lt;!channel\&gt;/g; s/<!everyone>/\&lt;!everyone\&gt;/g')
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "DRY RUN -- would send to channel ${SLACK_CHANNEL_ID}:"
+            echo "---"
+            echo "$TEXT"
+            echo "---"
+            {
+              echo '### Dry-run Slack message (not sent)'
+              echo '```'
+              echo "$TEXT"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          PAYLOAD_FILE=$(mktemp)
+          jq -n --arg channel "$SLACK_CHANNEL_ID" --arg text "$TEXT" \
+            '{channel: $channel, text: $text, unfurl_links: true, unfurl_media: true}' > "$PAYLOAD_FILE"
+
+          SLACK_RESPONSE=$(curl -s --max-time 30 -X POST \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-type: application/json" \
+            -d @"$PAYLOAD_FILE" \
+            "https://slack.com/api/chat.postMessage")
+          rm -f "$PAYLOAD_FILE"
+
+          if [ "$(echo "$SLACK_RESPONSE" | jq -r '.ok')" = "true" ]; then
+            echo "Slack notification sent successfully"
+          else
+            ERROR=$(echo "$SLACK_RESPONSE" | jq -r '.error // "unknown error"')
+            echo "::error::Failed to send Slack notification: $ERROR"
+            exit 1
+          fi
+
+      - name: No baseline found
+        if: steps.culprits.outputs.found_baseline != 'true'
+        run: echo "No previous successful run to diff against -- nothing to notify."
