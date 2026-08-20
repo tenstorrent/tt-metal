@@ -56,6 +56,20 @@ inline void noc_async_write() { T("noc_async_write()"); }
 // ---- Tensix compute --------------------------------------------------------
 // The model calls these as ckernel::* straight from fusion.hpp, so the harness
 // fakes metal's namespace rather than a shim of its own.
+
+// Metal generates APPROX into chlkc_descriptors.h from the ComputeConfigDescriptor's
+// math_approx_mode, and declares it on the math TRISC only. TRISC_MATH is how the
+// library asks whether the name is in scope, and this projection is the one that
+// stands in for that thread -- it is the trace that carries the math ops. Overridable
+// so the trace can be taken down both paths: -DAPPROX=true is what a
+// math_approx_mode=true program compiles as.
+#ifndef APPROX
+#define APPROX false
+#endif
+#ifndef TRISC_MATH
+#define TRISC_MATH 1
+#endif
+
 namespace ckernel {
 inline void tile_regs_acquire() { T("  tile_regs_acquire"); }
 inline void tile_regs_commit() { T("  tile_regs_commit"); }
@@ -159,8 +173,15 @@ inline void div_binary_tile_init() {}
 inline void div_binary_tile(uint32_t a, uint32_t b, uint32_t o) {
     T("      div_binary_tile(dst" + n(a) + ",dst" + n(b) + " -> dst" + n(o) + ")");
 }
+template <bool Approx = false>
 inline void exp_tile_init() {}
-inline void exp_tile(uint32_t o) { T("    exp_tile (dst" + n(o) + ")"); }
+// The approximation flag is traced, not dropped: it is a template argument the caller
+// has to thread from APPROX, and a trace that omitted it could not tell the cheap
+// path from the expensive one.
+template <bool Approx = false>
+inline void exp_tile(uint32_t o) {
+    T("    exp_tile (dst" + n(o) + ", approx=" + std::string(Approx ? "1" : "0") + ")");
+}
 inline void relu_tile_init() {}
 inline void relu_tile(uint32_t o) { T("    relu_tile(dst" + n(o) + ")"); }
 inline void recip_tile_init() {}
