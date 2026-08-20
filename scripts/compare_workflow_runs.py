@@ -461,6 +461,7 @@ def main():
         "galaxy-integration-tests.yaml",
         "galaxy-perf-tests.yaml",
         "galaxy-multi-user-isolation-tests.yaml",
+        "galaxy-profiler-tests.yaml",
         "galaxy-sanity.yaml",
         "galaxy-stress-tests.yaml",
         "galaxy-unit-tests.yaml",

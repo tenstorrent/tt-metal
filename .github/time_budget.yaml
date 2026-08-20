@@ -125,8 +125,6 @@ ttnn:
     wh_n150_civ2: 60
     bh_p100: 30
     bh_p150b_civ2_viommu: 30
-  profiler:
-    wh_llmbox: 29
   demo:
     bh_sc1_high_power: 10
   sweep:
@@ -245,26 +243,28 @@ runtime:
     sim_wh_galaxy: 10
     sim_bh_galaxy: 10
   unit:
-    wh_n150_civ2: 272
-    wh_n300_civ2: 139
+    wh_n150_civ2: 232
+    wh_n300_civ2: 99
     wh_llmbox: 20
-    wh_llmbox_civ2: 25
     bh_p150b_civ2: 214
     bh_p300: 69
-    bh_p150b_civ2_viommu: 51
-    bh_p100a_civ2_viommu: 119
+    bh_p150b_civ2_viommu: 11
+    bh_p100a_civ2_viommu: 79
     bh_loudbox: 20
-    wh_galaxy: 84
+    wh_galaxy: 39
   integration:
-    wh_n150_civ2: 379
-    wh_n300_civ2: 19
-    wh_llmbox_civ2: 36
+    wh_n150_civ2: 360
     bh_p150b_civ2: 360
-    bh_p100a_civ2_viommu: 19
-    bh_p150b_civ2_viommu: 19
     bh_loudbox: 25
     wh_galaxy: 15
     bh_galaxy: 15
+  profiler:
+    wh_llmbox: 90
+    wh_galaxy: 50
+    wh_n150_civ2: 60
+    wh_n300_civ2: 60
+    bh_p100a_civ2_viommu: 60
+    bh_p150b_civ2_viommu: 60
   perf:
     wh_n300_civ2: 65
     bh_p150_perf: 50
