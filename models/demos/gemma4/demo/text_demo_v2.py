@@ -220,19 +220,17 @@ def _device_params():
     Default ``num_command_queues=1`` (safe with host or on-device sampling).
     Set ``GEMMA4_NUM_CQS=2`` for serving/H2D-bound workloads once sampling stays
     on-device (Phase D3); measure batched users, not single-stream 128k TTFT.
-    ``GEMMA4_TRACE_REGION_SIZE`` overrides the trace budget (both arches).
+    ``GEMMA4_TRACE_REGION_SIZE`` overrides the BH trace budget.
 
     CCL residual knobs (set before pytest collection):
       ``GEMMA4_FABRIC=ring`` → ``FABRIC_1D_RING`` (default ``1d``; ring
         regressed TTFT ~28.8s→~30.9s on 31B/P150x8 — leave off).
       ``GEMMA4_CCL_PACKET_BYTES`` → FabricRouterConfig max payload.
-        Defaults (both arches): WH 31B=6144 / BH 31B=5376 / 12B=3840.
+        BH defaults: 5376 (31B) / 3840 (12B) to match CCL page packing.
         Set ``0`` / ``none`` / ``default`` to keep Fabric's default.
     ``l1_small_size`` is set so all_gather semaphores land in L1_SMALL (avoids
     fragmenting the main L1 pool).
     """
-    from models.demos.gemma4.tt.ccl import fabric_router_config_from_env
-
     num_cqs = max(1, int(os.environ.get("GEMMA4_NUM_CQS", "1")))
     fabric_env = os.environ.get("GEMMA4_FABRIC", "1d").strip().lower()
     if fabric_env in ("ring", "1d_ring", "fabric_1d_ring"):
@@ -246,15 +244,21 @@ def _device_params():
         # CCL all_gather allocates semaphores in L1_SMALL when this is > 0.
         "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
     }
-    # ``trace_region_size`` must cover the CUMULATIVE size of every captured
-    # trace, not the largest one (limit is hit at the last end_trace_capture,
-    # usually decode). Batched demos add B=2/4 prefill traces plus a larger
-    # decode graph; WH 96 MB is not enough for 31B batch-8/32. BH stays at 256 MB.
-    default_trace_region = 256_000_000 if is_blackhole() else 192_000_000
-    params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
+    if is_blackhole():
+        params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", 256_000_000))
+    else:
+        params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", 30_000_000))
 
-    router = fabric_router_config_from_env()
-    if router is not None:
+    pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
+    if pkt_env is None:
+        pkt_bytes = _default_ccl_packet_bytes() if is_blackhole() else None
+    elif pkt_env.strip().lower() in ("0", "none", "default", ""):
+        pkt_bytes = None
+    else:
+        pkt_bytes = max(4352, int(pkt_env))
+    if pkt_bytes is not None:
+        router = ttnn.FabricRouterConfig()
+        router.max_packet_payload_size_bytes = pkt_bytes
         params["fabric_router_config"] = router
     return params
 
@@ -529,14 +533,13 @@ def test_demo_text(
     # Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK.
     lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
     bounded_sliding = lc["bounded_sliding"]
-    from models.demos.gemma4.tt.generator_trace import maybe_auto_enable_chunked_prefill_trace
-
-    maybe_auto_enable_chunked_prefill_trace(
-        batch_size=batch_size,
-        max_seq_len=max_seq_len,
-        prefill_chunk=lc["prefill_chunk"],
-        bounded_sliding=bounded_sliding,
+    from models.demos.gemma4.tt.generator_trace import (
+        reset_trace_prefill_seq_lens_to_default,
+        trim_demo_prefill_trace_buckets,
     )
+
+    reset_trace_prefill_seq_lens_to_default()
+    trim_demo_prefill_trace_buckets(input_prompts=input_prompts, max_seq_len=max_seq_len)
 
     # ── Model (all optimizations applied inside create_tt_model) ───────────
     logger.info(
@@ -544,6 +547,7 @@ def test_demo_text(
         f"bounded_sliding={bounded_sliding}, prefill_chunk={lc['prefill_chunk']}, "
         f"policy={lc['policy_source']})..."
     )
+    profiler.start("model_load")
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
         model_path=model_path,
@@ -553,6 +557,7 @@ def test_demo_text(
         paged_attention_config=paged_attention_config,
         bounded_sliding_kv_cache=bounded_sliding,
     )
+    profiler.end("model_load")
     model_args_list = generator.model_args  # preprocess_inputs_prefill iterates this
     model_args = model_args_list[0]
 
@@ -587,10 +592,10 @@ def test_demo_text(
     )
 
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and (max_seq_len <= prefill_trace_max or chunked_prefill_trace_enabled())
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
     if enable_trace and not prefill_enable_trace:
         logger.info(
-            f"Prefill trace disabled (max_seq_len={max_seq_len} > {prefill_trace_max}); "
+            f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
             f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
             f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
         )
@@ -624,12 +629,14 @@ def test_demo_text(
     log_sampling_mode(can_sample, sampling_params)
 
     logger.info("Warming up prefill...")
+    profiler.start("warmup_prefill")
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache,
         enable_trace=prefill_enable_trace,
         can_sample_on_device=can_sample,
         greedy_only=greedy_only,
     )
+    profiler.end("warmup_prefill")
     logger.info("Warmup complete")
 
     # ── Prefill ────────────────────────────────────────────────────────────
@@ -694,14 +701,7 @@ def test_demo_text(
     )
     pending = []
 
-    def _consume_tokens(host_out, read_events):
-        """Wait for one pipelined read, then fold its tokens into the output."""
-        for event in read_events:
-            ttnn.event_synchronize(event)
-        toks, _ = generator.process_decode_output_host(host_out, is_tokens=True)
-        return _fold_tokens(toks)
-
-    def _fold_tokens(toks):
+    def _fold_tokens(toks, *, log_progress=True):
         """Fold one step's sampled tokens into the output; True to keep going."""
         toks = toks.long().view(batch_size, -1)
         keep_going = True
@@ -713,7 +713,7 @@ def test_demo_text(
                 user_done[user] = True
                 if all(user_done):
                     keep_going = False
-        if not is_ci_env:
+        if log_progress and not is_ci_env:
             for user in range(batch_size):
                 # Detokenize the GENERATED slice only. Decoding all_outputs whole
                 # re-detokenized the entire prompt every step — O(prompt) host work
@@ -724,6 +724,23 @@ def test_demo_text(
                     text = "..." + text[-97:]
                 logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
         return keep_going
+
+    def _log_decode_progress():
+        if is_ci_env:
+            return
+        for user in range(batch_size):
+            generated = all_outputs[user][prefill_lens[user] :]
+            text = tokenizer.decode(generated[-_LOG_TAIL_TOKENS:])
+            if len(generated) > _LOG_TAIL_TOKENS or len(text) > 100:
+                text = "..." + text[-97:]
+            logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
+
+    def _consume_tokens(host_out, read_events):
+        """Wait for one pipelined read, then fold its tokens into the output."""
+        for event in read_events:
+            ttnn.event_synchronize(event)
+        toks, _ = generator.process_decode_output_host(host_out, is_tokens=True)
+        return _fold_tokens(toks, log_progress=False)
 
     logger.info(
         "Starting decode loop... (pipelined token reads: {}, positions on device: {})",
@@ -766,20 +783,24 @@ def test_demo_text(
             current_pos += 1
         iteration += 1
 
+        consumed = False
         if pipeline_reads:
             # One step of slack: the read issued last iteration has had a full
             # decode submit to land, so this sync is off the critical path.
             if len(pending) > 1:
                 users_decoding = _consume_tokens(*pending.pop(0))
+                consumed = True
         else:
-            users_decoding = _fold_tokens(out_tok)
+            users_decoding = _fold_tokens(out_tok, log_progress=False)
+            consumed = True
 
         profiler.end(f"inference_decode_time_{step}")
+        if consumed and not is_ci_env:
+            _log_decode_progress()
         if iteration >= max_generated_tokens:
             users_decoding = False
 
     # Drain the in-flight reads so the emitted text holds every submitted step.
-    # Inside the decode timer: this is real work for the tokens being counted.
     for entry in pending:
         _consume_tokens(*entry)
     pending.clear()
@@ -822,6 +843,8 @@ def test_demo_text(
         # No steady-state decode timing (e.g. EoS hit on the first token, so only
         # the compile iteration ran) — avoid dividing by zero.
         logger.info("Decode: n/a (no steady-state decode iterations recorded)")
+    logger.info(f"Model load: {profiler.get_duration('model_load'):.1f} s")
+    logger.info(f"Prefill warmup: {profiler.get_duration('warmup_prefill'):.1f} s")
     logger.info(f"Full demo runtime: {profiler.get_duration('run'):.1f} s")
 
     if is_ci_env:
@@ -925,7 +948,7 @@ def _run_spec_decode(
     )
 
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and (max_seq_len <= prefill_trace_max or chunked_prefill_trace_enabled())
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
     args_list = model_args if isinstance(model_args, (list, tuple)) else [model_args]
     if prefill_enable_trace:
         enable_single_chunk_demo_prefill_trace_bucket(
@@ -1132,7 +1155,7 @@ def _run_spec_decode_batched(
     )
 
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and (max_seq_len <= prefill_trace_max or chunked_prefill_trace_enabled())
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
     args_list = model_args if isinstance(model_args, (list, tuple)) else [model_args]
     if prefill_enable_trace:
         enable_single_chunk_demo_prefill_trace_bucket(
