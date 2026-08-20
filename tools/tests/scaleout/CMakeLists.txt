@@ -165,6 +165,3 @@ target_link_libraries(
         gmock_main
         enchantum::enchantum
 )
-
-# NOTE: the physical_descriptor_builder (FSD -> PSD) test now lives with the other fabric unit tests:
-# tests/tt_metal/tt_fabric/fabric_router/test_physical_descriptor_builder.cpp (part of fabric_unit_tests).

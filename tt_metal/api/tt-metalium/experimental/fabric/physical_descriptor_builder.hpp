@@ -21,7 +21,7 @@
 #include <string>
 #include <vector>
 
-#include "protobuf/factory_system_descriptor.pb.h"  // tt::scaleout_tools::fsd::proto (from scaleout_tools)
+#include "protobuf/factory_system_descriptor.pb.h"   // tt::scaleout_tools::fsd::proto (from scaleout_tools)
 #include "protobuf/physical_system_descriptor.pb.h"  // tt::fabric::proto (compiled into this lib)
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>  // tt::tt_metal::PhysicalSystemDescriptor
 

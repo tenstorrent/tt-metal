@@ -135,12 +135,7 @@ set_target_properties(
 # EXPORT set: as a STATIC lib its private deps (protobuf/cadical/yaml-cpp) become link-interface requirements,
 # and install(EXPORT) would need each of those in an export set too. Wiring find_package(Metalium) to
 # re-find_dependency() them is a follow-up; for now consumers link the installed archive directly.
-install(
-    TARGETS
-        scaleout_topology
-    ARCHIVE
-        COMPONENT metalium-dev
-)
+install(TARGETS scaleout_topology ARCHIVE COMPONENT metalium-dev)
 
 # --- fabric: remaining runtime protos + link the topology lib -------
 add_custom_target(fabric_generated_protos DEPENDS ${FABRIC_GENERATED_PROTO_SRCS})

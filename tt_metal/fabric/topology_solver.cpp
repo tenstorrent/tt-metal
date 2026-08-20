@@ -87,7 +87,6 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(con
     return result;
 }
 
-
 std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_graph_physical(
     tt::tt_metal::ClusterType /*cluster_type*/,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,

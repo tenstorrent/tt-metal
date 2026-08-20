@@ -21,5 +21,3 @@ set(TEST_HOST_ID_ASSIGNMENT_SRCS test_host_id_assignment.cpp)
 set(TEST_INSTANCE_FILTER_SRCS test_instance_filter.cpp)
 
 set(TEST_GENERATE_RANK_BINDINGS_SRCS test_generate_rank_bindings.cpp)
-
-# physical_descriptor_builder test moved to tests/tt_metal/tt_fabric/fabric_router/ (part of fabric_unit_tests)

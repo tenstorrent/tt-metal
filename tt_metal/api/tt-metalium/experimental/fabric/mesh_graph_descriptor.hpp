@@ -110,10 +110,8 @@ class MeshGraphDescriptor {
 public:
     // backwards_compatible will enable all checks related to MGD 1.0. This will limit the functionality of MGD 2.0
     //
-    // name_uniquify_id: when set, every instance name is prefixed with "mgd{id}_" so split-job partitions load
-    // disjoint logical names. This keeps the descriptor runtime-free: the id (a DistributedContext sub-context id
-    // in the live path) is supplied by the caller rather than queried from the runtime here. Offline consumers
-    // leave it unset.
+    // name_uniquify_id: when set, instance names are prefixed with "mgd{id}_" (caller-supplied so this stays
+    // runtime-free; the live path passes a DistributedContext sub-context id, offline consumers leave it unset).
     explicit MeshGraphDescriptor(
         const std::string& text_proto,
         bool backwards_compatible = false,
@@ -226,10 +224,9 @@ public:
     uint32_t get_switch_chip_count(GlobalNodeId switch_instance_id) const;
     uint32_t get_switch_chip_count(const InstanceData& switch_instance) const;
 
-    // Which host rank owns a given chip within a mesh, derived from the mesh's device_topology vs.
-    // host_topology dims (host ranks tile the device grid row-major, mirroring MeshGraph). `mesh_id` is the
-    // mesh instance's local id (MeshId{instance.local_id}); `chip_id` is the row-major device index within
-    // that mesh. Returns std::nullopt if the mesh is unknown or the chip index is out of range.
+    // Host rank owning a chip in a mesh, from device_topology vs host_topology dims (host ranks tile the grid
+    // row-major). `mesh_id` is the mesh's local id; `chip_id` is the row-major device index. nullopt if the mesh
+    // is unknown or the chip index is out of range.
     std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const;
 
     // Count instances by type

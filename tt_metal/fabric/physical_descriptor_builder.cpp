@@ -13,6 +13,7 @@
 #include <tt-metalium/experimental/fabric/physical_descriptor_builder.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <fstream>
 #include <iterator>
@@ -36,7 +37,17 @@ namespace {
 
 // FSD board_type string -> the uint32 the PSD proto stores (the raw tt::BoardType enum value). Reuses the
 // canonical, reflection-based lookup from the board library so it never drifts from tt::BoardType.
+//
+// UBB_WORMHOLE is a compile-time alias of UBB (same enum value, 9). enchantum reflection (used by
+// get_board_type_from_string) does not surface aliased enumerators, so it would reject "UBB_WORMHOLE" even
+// though tt::BoardType defines it. Fabric Manager's FSDs use that spelling, so normalize it to the canonical
+// "UBB" to preserve backward compatibility.
 uint32_t fsd_board_type_to_psd(const std::string& name) {
+    std::string upper = name;
+    std::transform(upper.begin(), upper.end(), upper.begin(), [](unsigned char c) { return std::toupper(c); });
+    if (upper == "UBB_WORMHOLE") {
+        return static_cast<uint32_t>(get_board_type_from_string("UBB"));
+    }
     return static_cast<uint32_t>(get_board_type_from_string(name));
 }
 

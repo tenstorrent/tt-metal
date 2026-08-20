@@ -131,6 +131,24 @@ TEST(PhysicalDescriptorBuilder, ThrowsOnOutOfRangeHostId) {
     EXPECT_THROW(build_physical_descriptor(fsd), std::runtime_error);
 }
 
+TEST(PhysicalDescriptorBuilder, AcceptsUbbWormholeBoardTypeAlias) {
+    // UBB_WORMHOLE is a compile-time alias of UBB (same enum value). It must be accepted (and its lowercase
+    // form) for backward compatibility with Fabric Manager FSDs, mapping to the same value as "UBB".
+    auto first_asic_board_type = [](const std::string& board_type_str) {
+        FSD fsd = make_two_host_fsd();
+        for (auto& loc : *fsd.mutable_board_types()->mutable_board_locations()) {
+            loc.set_board_type(board_type_str);
+        }
+        auto psd = build_physical_descriptor(fsd);
+        return psd.asic_descriptors(0).asic_descriptor().board_type();
+    };
+
+    uint32_t ubb = 0;
+    EXPECT_NO_THROW(ubb = first_asic_board_type("UBB"));
+    EXPECT_EQ(first_asic_board_type("UBB_WORMHOLE"), ubb);
+    EXPECT_EQ(first_asic_board_type("ubb_wormhole"), ubb);
+}
+
 TEST(PhysicalDescriptorBuilder, LoadThrowsOnMissingFile) {
     EXPECT_THROW(load_factory_descriptor("/nonexistent/path/to/fsd.textproto"), std::runtime_error);
 }

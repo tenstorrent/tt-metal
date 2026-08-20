@@ -1841,7 +1841,8 @@ void TopologyMapper::verify_topology_mapping(const Cluster& cluster) const {
     log_debug(tt::LogFabric, "TopologyMapper: Verification completed successfully for all mapped entries");
 }
 
-// MeshGraph-based logical-adjacency builders (the MGD-based and "parts" overloads they call live in the topology library).
+// MeshGraph-based logical-adjacency builders (the MGD-based and "parts" overloads they call live in the topology
+// library).
 std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraph& mesh_graph) {
     std::map<MeshId, AdjacencyGraph<FabricNodeId>> adjacency_map;
 

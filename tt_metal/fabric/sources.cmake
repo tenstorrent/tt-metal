@@ -24,7 +24,6 @@ set(FABRIC_JIT_API_HEADERS
 set(TOPOLOGY_SOURCES
     mesh_graph_descriptor.cpp
     routing_table_generator.cpp
-    fabric_types.cpp
     physical_system_descriptor.cpp
     serialization/physical_system_descriptor_serialization.cpp
     topology_mapper_utils.cpp
@@ -40,6 +39,10 @@ set(TOPOLOGY_SOURCES
 set(FABRIC_SOURCES
     control_plane.cpp
     mesh_graph.cpp
+    # fabric_types.cpp stays in fabric (NOT the topology lib): it defines formatters/hashes/operators for
+    # ubiquitous strong types (FabricNodeId, MeshId, AsicID, ...) that must be exported from libtt_metal.so for
+    # downstream consumers. It carries no protobuf symbols, so it does not need the topology lib's hidden visibility.
+    fabric_types.cpp
     erisc_datamover_builder.cpp
     fabric_router_channel_mapping.cpp
     fabric_router_builder.cpp
