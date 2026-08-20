@@ -159,7 +159,10 @@ class VisionEmbed(LightweightModule):
         rows = ((n + 31) // 32) * 32
 
         # --- patch projection ---
-        x = pixel_values
+        # Cast on host: the processor hands us fp32, and uploading that made ttnn tilize fp32 on
+        # device and then typecast (849 + 481 us/image on an N300). bf16 halves the bytes over PCIe
+        # and lands in the dtype the matmul wants.
+        x = pixel_values.to(torch.bfloat16)
         if rows != n:
             x = torch.nn.functional.pad(x, (0, 0, 0, rows - n))
         x_tt = ttnn.from_torch(
@@ -195,7 +198,7 @@ class VisionEmbed(LightweightModule):
 
         # --- interpolated positional embedding: sum_c w_c * table[idx_c] ---
         idx = bilinear_indices.to(torch.int32)
-        wts = bilinear_weights.to(torch.float32)
+        wts = bilinear_weights.to(torch.bfloat16)  # same reason as the pixels above
         if rows != n:
             # Pad rows look up entry 0 with weight 0, contributing exactly nothing.
             idx = torch.nn.functional.pad(idx, (0, rows - n))
