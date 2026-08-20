@@ -444,6 +444,11 @@ TileSource<S> as_node(const ComputeBlock<S>& b) {
 }
 
 template <typename S>
+TileSource<S> copy(const ComputeBlock<S>& b) {
+    return as_node(b);
+}
+
+template <typename S>
 auto relu(const ComputeBlock<S>& b) {
     return expr::Un<ReluOp, TileSource<S>>{{}, as_node(b)};
 }
