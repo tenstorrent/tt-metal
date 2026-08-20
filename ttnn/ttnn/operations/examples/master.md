@@ -321,3 +321,8 @@ tile-index `reduce_scatter_mcast` wins instead (**~2×** over root) by paralleli
 at **1 tile/core** tree reduce wins again (low fan-in; reduce-scatter degenerates to one worker).
 Rule of thumb: **tree reduce when the grid is busy or the payload is tiny; tile-index reduce-scatter
 for an isolated, well-fed group.** On a 1-D group tree reduce collapses to the single root reduce.
+**Correctness note it demonstrates:** when a reduce-scatter split is *ragged* (worker `i` owns `q` or
+`q+1` tiles), the CB push/pop quantum and the gather stride must both use the **uniform** `max_assigned`,
+never each worker's own share — a CB's capacity must be an exact multiple of its quantum, so a short
+worker's ragged quantum wraps illegally and overwrites another contributor's gather slot (this silently
+corrupted 62.5% of the output at 16 tiles/core over 7 workers; the unread pad slots cost nothing).
