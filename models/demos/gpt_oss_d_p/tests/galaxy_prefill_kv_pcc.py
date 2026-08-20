@@ -17,6 +17,10 @@ Env:
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode only)                             [default 8192]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement                   [default 1]
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs) [default: all]
+  PREFILL_BOUNDED_SLIDING_KV  "1" -> bounded circular KV cache on sliding layers (PR1: allocation +
+                      circular write + host-readback PCC; the on-device ring cache-read of a bounded
+                      layer asserts until PR2, and the ring path now serves EVERY chunk, so chunked
+                      mode cannot run yet)                                                  [default 0]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8"                        [default bf4]
   GPT_OSS_WEIGHTS_FROM_CACHE  "1" -> pass an empty state_dict (load tilized weights from the TTNN cache)
   HF_MODEL            real gpt-oss weights dir (read by ModelArgs)
@@ -96,11 +100,13 @@ def main():
     chunk_size = int(os.getenv("PREFILL_CHUNK_SIZE", "8192"))
     tps_iters = int(os.getenv("PREFILL_TPS_ITERS", "1"))
 
+    bounded_kv = os.getenv("PREFILL_BOUNDED_SLIDING_KV", "0") == "1"
+
     n_chunks, chunk, total = plan(n_tokens, chunk_size, chunked, ROWS)
     print(
         f"[prefill-pcc] golden={golden_dir} n_tokens={n_tokens} "
         f"mode={'chunked' if chunked else 'one-shot'} chunk={chunk} n_chunks={n_chunks} total={total} "
-        f"tps_iters={tps_iters}",
+        f"tps_iters={tps_iters} bounded_sliding_kv={bounded_kv}",
         flush=True,
     )
     if chunked:
@@ -159,6 +165,7 @@ def main():
             weight_cache_path=cache_path,
             owns_kv_cache=True,  # standalone harness owns its cache (runtime.kv_cache)
             topology=ttnn.Topology.Linear if _linear else ttnn.Topology.Ring,
+            bounded_sliding_kv_cache=bounded_kv,
         )
         runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
         del state_dict

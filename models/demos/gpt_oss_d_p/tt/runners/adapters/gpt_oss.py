@@ -104,6 +104,12 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         """
         from models.demos.gpt_oss_d_p.tt.attention import allocate_kv_cache
 
+        # Bounded sliding-window KV (PR1) opt-in. The env read lives HERE (engine/harness glue), not
+        # in the runtime; the flag needs this rank's layer-type slice + chunk size (slab granularity).
+        bounded = os.environ.get("PREFILL_BOUNDED_SLIDING_KV", "0") == "1"
+        layer_types = getattr(hf_config, "layer_types", None)
+        if layer_types is not None:
+            layer_types = list(layer_types)[params.first_layer_idx : params.first_layer_idx + params.num_layers]
         return GptOssKvCaches(
             [
                 allocate_kv_cache(
@@ -113,6 +119,10 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
                     sp_axis=params.sp_axis,
                     num_users=params.num_users,
                     head_dim=hf_config.head_dim,
+                    layer_types=layer_types,
+                    bounded_sliding_kv_cache=bounded,
+                    chunk_size=params.chunk_size,
+                    sliding_window=getattr(hf_config, "sliding_window", 128),
                 )
             ]
         )
@@ -142,6 +152,9 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
             first_layer_idx=params.first_layer_idx,
+            # Mirror allocate_kv_cache's env opt-in so the runtime's gating (migration / cache-read
+            # asserts) agrees with the engine-owned cache it is handed.
+            bounded_sliding_kv_cache=os.environ.get("PREFILL_BOUNDED_SLIDING_KV", "0") == "1",
         )
 
         if os.getenv("GPT_OSS_WEIGHTS_FROM_CACHE") == "1":
