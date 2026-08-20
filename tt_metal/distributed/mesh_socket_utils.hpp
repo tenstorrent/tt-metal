@@ -9,6 +9,9 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/tt_align.hpp>
 
+#include <cerrno>
+#include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 #include "impl/context/metal_context.hpp"
@@ -95,8 +98,25 @@ void execute_with_timeout(OperationType&& operation, Args&&... args) {
     // serialized by the dispatch lock), so a silicon-sized budget expires on skew rather than on a
     // real failure. Still bounded: this is a safety net, not a synchronization mechanism.
     static const float timeout_s = [] {
+        constexpr float kDefault = 900.0f;
         const char* v = std::getenv("TT_EMULE_SOCKET_CONNECT_TIMEOUT_S");
-        return (v != nullptr && v[0] != '\0') ? std::strtof(v, nullptr) : 900.0f;
+        if (v == nullptr || v[0] == '\0') {
+            return kDefault;
+        }
+        // Validate rather than trust strtof: a typo parses as 0 and expires instantly, and "nan"
+        // makes `elapsed >= timeout` permanently false, which silently removes the bound entirely.
+        char* end = nullptr;
+        errno = 0;
+        const float parsed = std::strtof(v, &end);
+        if (end == v || *end != '\0' || errno == ERANGE || !std::isfinite(parsed) || parsed <= 0.0f) {
+            std::fprintf(
+                stderr,
+                "[EMULE] ignoring TT_EMULE_SOCKET_CONNECT_TIMEOUT_S=\"%s\": expected a positive finite "
+                "number of seconds; using %.0fs.\n",
+                v, static_cast<double>(kDefault));
+            return kDefault;
+        }
+        return parsed;
     }();
     const auto timeout = std::chrono::duration<float>(timeout_s);
 #else

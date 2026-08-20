@@ -3419,10 +3419,33 @@ static void __emule_fabric_deliver_ops(
             uint8_t chunk_count = *(h + 38);
             uint8_t chunk_encoding = *(h + 39);
             uint32_t off = 0;
+            // A seminc chunk is the readiness signal for the write chunks beside it, so a dropped
+            // write must suppress it: resolve every write first, and if any is unreachable the
+            // consumer is left waiting (diagnosable) rather than reading bytes that never arrived.
+            bool writes_all_resolved = true;
+            for (uint8_t i = 0; i < chunk_count; ++i) {
+                const uint8_t enc = (chunk_encoding >> (i * 2)) & 0x3;
+                if (enc == 2 || enc == 3) {
+                    continue;
+                }
+                if (__emule_fabric_resolve_remote(dst_chip, na[i]) == nullptr) {
+                    writes_all_resolved = false;
+                }
+            }
+            if (!writes_all_resolved) {
+                std::fprintf(
+                    stderr,
+                    "[EMULE_FABRIC] WARNING: scatter write+inc on chip %u could not resolve every write "
+                    "chunk; withholding its semaphore increment rather than signalling stale bytes.\n",
+                    static_cast<unsigned>(dst_chip));
+            }
             for (uint8_t i = 0; i < chunk_count; ++i) {
                 const uint8_t enc = (chunk_encoding >> (i * 2)) & 0x3;
                 uint8_t* d = __emule_fabric_resolve_remote(dst_chip, na[i]);
                 if (enc == 2 /*SEMINC_NO_FLUSH*/ || enc == 3 /*SEMINC_FLUSH*/) {
+                    if (!writes_all_resolved) {
+                        continue;
+                    }
                     uint32_t val = cs[i];  // seminc value packed into this chunk's size slot
                     if (d != nullptr) {
                         reinterpret_cast<std::atomic<uint32_t>*>(d)->fetch_add(val, std::memory_order_release);
@@ -4739,11 +4762,16 @@ static std::chrono::seconds peer_driver_timeout() {
         errno = 0;
         char* end = nullptr;
         const unsigned long long n = std::strtoull(v, &end, 10);
-        if (end == v || *end != '\0' || errno == ERANGE || std::strchr(v, '-') != nullptr) {
+        // Reject 0 as well as garbage: it is not "no timeout", it expires on the first check and
+        // abandons every run. Cap it so the value still fits a steady_clock duration unwrapped.
+        constexpr uint64_t kMaxSeconds = 86400;  // a day; anything longer is indistinguishable
+        if (end == v || *end != '\0' || errno == ERANGE || std::strchr(v, '-') != nullptr || n == 0 ||
+            static_cast<uint64_t>(n) > kMaxSeconds) {
             log_warning(
                 tt::LogMetal,
-                "TT_EMULE_PEER_DRIVER_TIMEOUT_SEC='{}' is not a non-negative integer; using 120",
-                v);
+                "TT_EMULE_PEER_DRIVER_TIMEOUT_SEC='{}' is not an integer in 1..{} seconds; using 120",
+                v,
+                kMaxSeconds);
             return uint64_t{120};
         }
         return static_cast<uint64_t>(n);
@@ -4877,7 +4905,10 @@ private:
                 std::unique_lock<std::mutex> lk(wait_mu_);
                 cv_.wait_until(lk, std::min(deadline, std::chrono::steady_clock::now() + std::chrono::milliseconds(250)),
                                [this, sequence] {
-                    return stop_ || !emule_run_has_peer_fed_waiter() ||
+                    // The SAME predicate the loop is gated on. Waking on the narrower socket-poller
+                    // form left a plain PeerWait passing this immediately, so the driver re-took the
+                    // run mutex every iteration until its deadline instead of backing off.
+                    return stop_ || !emule_run_needs_peer_pump() ||
                            sequence != g_emule_run_sequence.load(std::memory_order_acquire);
                 });
                 continue;

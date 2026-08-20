@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <mutex>
 #include "sd_mesh_command_queue.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
@@ -71,11 +72,28 @@ std::set<const void*>& emule_pending_queues() {
     return queues;
 }
 
+// The queue set and the pending flag are PROCESS-wide, while lock_api_function_() serialises one
+// mesh/queue. Co-scheduling across queues is the whole point here, so two meshes reach this state
+// concurrently and neither the container nor a test-then-insert is safe without its own lock.
+std::mutex& emule_pending_mutex() {
+    static std::mutex mu;
+    return mu;
+}
+
 // Run whatever has been registered but not yet run. Safe to call at any fence, including when
 // nothing is pending.
 void emule_flush_deferred() {
-    if (emule_deferred_pending().exchange(false)) {
-        emule_pending_queues().clear();
+    bool had_pending = false;
+    {
+        std::lock_guard<std::mutex> g(emule_pending_mutex());
+        had_pending = emule_deferred_pending().exchange(false);
+        if (had_pending) {
+            emule_pending_queues().clear();
+        }
+    }
+    // run_mesh_dispatch takes the dispatch mutex and can re-enter this file, so it runs OUTSIDE the
+    // pending lock: clearing the set and running the generation need not be one critical section.
+    if (had_pending) {
         tt::tt_metal::emule::run_mesh_dispatch();
     }
 }
@@ -350,7 +368,12 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // parked receiver. Register all (deferred) sequentially (not the thread pool, to avoid a
         // fiber-registration race), then run once. See tt-emule docs/fiber-engine.md.
         // Excludes the socket feeders' pump_device(): a dispatch onto a parked run resumes it.
-        if (emule_defer_enabled() && !blocking && emule_pending_queues().count(this) > 0) {
+        bool already_registered = false;
+        if (emule_defer_enabled() && !blocking) {
+            std::lock_guard<std::mutex> g(emule_pending_mutex());
+            already_registered = emule_pending_queues().count(this) > 0;
+        }
+        if (already_registered) {
             // This queue already registered into the pending generation; running it now keeps that
             // registration's core state intact (see emule_pending_queues).
             emule_flush_deferred();
@@ -364,8 +387,11 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             // Leave the programs registered so a peer queue's workload can join this generation;
             // the run happens at the next fence (see emule_flush_deferred). A blocking enqueue must
             // still run here — its caller is entitled to assume the work completed on return.
-            emule_deferred_pending().store(true);
-            emule_pending_queues().insert(this);
+            {
+                std::lock_guard<std::mutex> g(emule_pending_mutex());
+                emule_deferred_pending().store(true);
+                emule_pending_queues().insert(this);
+            }
             std::lock_guard<std::mutex> guard(logical_cores_mutex_);
             logical_cores_for_previous_workload_.clear();
             return;

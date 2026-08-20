@@ -12,27 +12,24 @@ rank_bindings:
       TT_VISIBLE_DEVICES: "2,3,6,7"   # mesh cols 2-3; ring 2-3-7-6
 
 global_env:
+  # NOT set here on purpose. These name a build tree and a sibling tt-emule checkout, which are
+  # properties of the machine, not of this topology, and hardcoding one developer's paths made this
+  # file unusable anywhere else. tt-run forwards TT_-prefixed variables from its own environment, so
+  # export these before launching:
+  #   TT_METAL_MOCK_CLUSTER_DESC_PATH  <tt-emule>/cluster_descriptors/<board>.yaml
+  #   TT_EMULE_JIT_INCLUDE_DIR         <tt-emule>/include/jit_hw
+  #   TT_EMULE_SHM_JOB_ID              unique PER INVOCATION, identical across ranks -- two
+  #                                    concurrent runs sharing one id attach the same chip segments
+  # LD_LIBRARY_PATH and PYTHONPATH are derived by tt-run from TT_METAL_HOME; point that at the
+  # ENABLE_DISTRIBUTED=ON build tree, or override them in the launcher.
   TT_METAL_EMULE_MODE: "1"
   TT_METAL_SLOW_DISPATCH_MODE: "1"
-  # Both ranks model the same physical board and slice it with TT_VISIBLE_DEVICES, so one descriptor
-  # serves both -- which is also what makes the chip unique ids agree, and therefore what makes a
-  # chip_store segment name mean the same chip in either rank.
-  TT_METAL_MOCK_CLUSTER_DESC_PATH: "/localdev/xchin/emule-blaze-2/tt-emule/cluster_descriptors/blackhole_8xP150_unharvested.yaml"
   # Shared chip backing, so a teleport into a chip the other rank owns stays a direct write.
   TT_EMULE_CHIP_SHM: "1"
-  # The ranks cannot agree on a pid, so the launcher must name the job; without this each rank
-  # derives a different segment name from its own pid and no peer is ever found.
-  TT_EMULE_SHM_JOB_ID: "emule_2rank"
   # EMULE_FABRIC8 matches none of tt-run's env passthrough prefixes (TT_, ARCH_, WH_, TTNN_,
   # DEEPSEEK_, MESH_), so it reaches the ranks only from here.
   EMULE_FABRIC8: "1"
   # Per PROCESS, so 2 ranks x 32 rather than the single-process default of 64.
   TT_EMULE_FIBER_WORKERS: "32"
-  # tt-run derives these from TT_METAL_HOME and lands on <home>/build, which is not the
-  # ENABLE_DISTRIBUTED=ON tree this config is for. global_env is applied after the derived
-  # values, so it wins.
-  LD_LIBRARY_PATH: "/localdev/xchin/emule-blaze-2/tt-blaze/tt-metal/build_emule_dist/lib"
-  PYTHONPATH: "/localdev/xchin/emule-blaze-2/tt-blaze/tt-metal/build_emule_dist/lib:/localdev/xchin/emule-blaze-2/tt-blaze/tt-metal/ttnn:/localdev/xchin/emule-blaze-2/tt-blaze/tt-metal"
-  TT_EMULE_JIT_INCLUDE_DIR: "/localdev/xchin/emule-blaze-2/tt-emule/include/jit_hw"
 
 mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_lb_2x4_dual_rank_mesh_graph_descriptor.textproto"
