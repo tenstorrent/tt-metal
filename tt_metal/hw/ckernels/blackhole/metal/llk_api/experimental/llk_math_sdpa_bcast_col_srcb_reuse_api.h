@@ -1,17 +1,22 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_math_common_api.h"
-#include "../../../../../../tt_llk/tt_llk_blackhole/llk_lib/llk_math_sdpa_bcast_col_srcb_reuse.h"
+#include "experimental/llk_math_sdpa_bcast_col_srcb_reuse.h"
 
 /*************************************************************************
  * LLK ELTWISE BINARY
  *************************************************************************/
 
 // Version with operands
-template <EltwiseBinaryType eltwise_binary_type, uint32_t num_tiles, MathFidelity math_fidelity, bool dense = false>
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    std::uint32_t num_tiles,
+    MathFidelity math_fidelity,
+    bool dense = false>
 inline void llk_math_sdpa_bcast_col_srcb_reuse_init_with_operands(
     const std::uint32_t operand_A, const std::uint32_t operand_B, const std::uint32_t acc_to_dest = 0) {
     const std::uint32_t operand_id = get_operand_id(operand_A);  // both operands must have same number of faces
@@ -30,7 +35,7 @@ inline void llk_math_sdpa_bcast_col_srcb_reuse_postamble() { _llk_math_sdpa_bcas
 
 template <
     EltwiseBinaryType eltwise_binary_type,
-    uint32_t num_tiles,
+    std::uint32_t num_tiles,
     bool is_fp32_dest_acc_en,
     MathFidelity math_fidelity>
 inline void llk_math_sdpa_bcast_col_srcb_reuse(const std::uint32_t dst_index) {

@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "../../../../../../tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_A_sdpa.h"
+#include <cstdint>
+#include "experimental/llk_unpack_A_sdpa.h"
 #include "llk_unpack_common_api.h"
 
 /*************************************************************************
@@ -11,7 +12,7 @@
  *************************************************************************/
 
 template <
-    uint32_t num_tiles,
+    std::uint32_t num_tiles,
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,

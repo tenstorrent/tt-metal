@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "../../../../../third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_sdpa_custom_mm.h"
+#include <cstdint>
+#include "experimental/llk_unpack_AB_sdpa_custom_mm.h"
 #include "llk_unpack_common_api.h"
 
 template <bool read_transposed = false>
@@ -25,7 +26,7 @@ inline void llk_unpack_AB_sdpa_custom_mm(
     const std::uint32_t tile_index_B = tile_index_0;
     const std::uint32_t tile_size_A = get_local_cb_interface(operandA_id).fifo_page_size;
     const std::uint32_t tile_size_B = get_local_cb_interface(operandB_id).fifo_page_size;
-    const std::uint32_t base_address_mask =
+    std::uint32_t base_address_mask =
         mask_chunk ? get_local_cb_interface(get_operand_id(operand_mask)).fifo_rd_ptr - 1 : 0;
     _llk_unpack_AB_sdpa_custom_mm_<read_transposed>(
         base_address_A,
