@@ -9,6 +9,7 @@ Compares TorchExpert (reference) against TtFFN (multi-chip TTNN)
 to verify correctness with DeepSeek 671B FFN dimensions.
 """
 
+
 import pytest
 import torch
 from loguru import logger
@@ -23,6 +24,19 @@ from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+def _ci_unsupported_param_combos(**params):
+    is_ci_env = params["is_ci_env"]
+    is_ci_v2_env = params["is_ci_v2_env"]
+    fabric_config = params["device_params"]["fabric_config"]
+
+    if not (is_ci_env or is_ci_v2_env):
+        return False
+    if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize("batch_seq_len", [4096, 3200], ids=["4K", "3.2K"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",

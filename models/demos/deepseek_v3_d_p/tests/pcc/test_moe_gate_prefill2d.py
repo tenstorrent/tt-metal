@@ -391,6 +391,33 @@ def _validate_gate(
     merged.assert_passed("Gate prefill2d validation failed")
 
 
+def _ci_unsupported_param_combos_forward_pass(**params):
+    is_ci_env = params["is_ci_env"]
+    is_ci_v2_env = params["is_ci_v2_env"]
+    fabric_config = params["device_params"]["fabric_config"]
+    gate_fallback_mode = params["gate_fallback_mode"]
+
+    if not (is_ci_env or is_ci_v2_env):
+        return False
+    if fabric_config != ttnn.FabricConfig.FABRIC_2D:
+        return True
+    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
+        return True
+    return False
+
+
+def _ci_unsupported_param_combos_hash_gate_forward_pass(**params):
+    is_ci_env = params["is_ci_env"]
+    is_ci_v2_env = params["is_ci_v2_env"]
+    fabric_config = params["device_params"]["fabric_config"]
+
+    if not (is_ci_env or is_ci_v2_env):
+        return False
+    if fabric_config != ttnn.FabricConfig.FABRIC_2D:
+        return True
+    return False
+
+
 def _reference_topk(config, gate_model, gate_fallback_mode, gate_w, torch_input):
     """Golden top-k indices and scores from each model's own reference router.
 
@@ -467,6 +494,7 @@ def _reference_topk(config, gate_model, gate_fallback_mode, gate_w, torch_input)
     return reference_topk_indices, reference_topk_scores
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_forward_pass)
 @pytest.mark.parametrize("gate_model, gate_fallback_mode", REGULAR_GATE_CASES)
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
@@ -567,6 +595,7 @@ HASH_GATE_MODES = [
 ]
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_hash_gate_forward_pass)
 @pytest.mark.parametrize("gate_model", ["dsv4_pro", "dsv4_flash"])
 @pytest.mark.parametrize("gate_compute_mode", HASH_GATE_MODES)
 @pytest.mark.parametrize(

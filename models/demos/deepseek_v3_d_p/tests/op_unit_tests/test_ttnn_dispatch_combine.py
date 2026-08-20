@@ -10,6 +10,9 @@ combined back using TTNN combine produce the original input after host-side redu
 validating the full round-trip through TTNN dispatch and combine operations.
 """
 
+
+from dataclasses import dataclass
+
 import pytest
 import torch
 from loguru import logger
@@ -27,7 +30,7 @@ from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM2
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_y_device_params
-from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
@@ -405,15 +408,101 @@ def dispatch_combine_shape_params():
     return params
 
 
+@dataclass
+class _Test_Mesh:
+    full_model_mesh: tuple[int, int]  # Intended for full production-scale testing
+    target_meshes: dict[tuple[int, int], ttnn.FabricConfig]  # Intended for [0..N] proxy tests, typically on smaller HW
+
+
+SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh(
+    (8, 4),
+    {
+        # Ideally all would run torus XY, but some HW configurations like LB/QB cannot support
+        # rings in all configurations. Pick fabric option as representative as possible.
+        (8, 4): ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        (4, 2): ttnn.FabricConfig.FABRIC_2D,  # 8-chip proxy
+        (2, 2): ttnn.FabricConfig.FABRIC_2D,  # 4-chip proxy
+        (2, 1): ttnn.FabricConfig.FABRIC_1D,
+    },
+)
+
+
+_SP_RING_CAPABLE_FABRICS = (
+    ttnn.FabricConfig.FABRIC_1D_RING,
+    ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+    ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+)
+
+
+def _fabric_id(fabric_cfg):
+    return fabric_cfg.name.lower().replace("fabric_", "fabric").replace("_torus_", "-").replace("_", "-")
+
+
+def _dispatch_combine_mesh_params():
+    params = []
+    for target_mesh, fabric_cfg in SINGLE_GLX_AND_PROXY_MESHES.target_meshes.items():
+        mesh_id = f"mesh-{target_mesh[0]}x{target_mesh[1]}"
+        topologies = [ttnn.Topology.Linear]
+        if fabric_cfg in _SP_RING_CAPABLE_FABRICS:
+            topologies.append(ttnn.Topology.Ring)
+        for topology in topologies:
+            topo_id = "ring" if topology == ttnn.Topology.Ring else "linear"
+            params.append(
+                pytest.param(
+                    target_mesh,
+                    fabric_to_device_params(fabric_cfg),
+                    topology,
+                    marks=pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=mesh_id),
+                    id=f"{mesh_id}-{_fabric_id(fabric_cfg)}-{topo_id}",
+                )
+            )
+    return params
+
+
+def _ci_unsupported_param_combos_dispatch_combine(**params):
+    is_ci_env = params["is_ci_env"]
+    is_ci_v2_env = params["is_ci_v2_env"]
+    dispatched_buffer_layout = params["dispatched_buffer_layout"]
+    num_links = params["num_links"]
+
+    if not (is_ci_env or is_ci_v2_env):
+        return False
+    if dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
+        return True
+    if num_links == 1:
+        return True
+    return False
+
+
+def _ci_unsupported_param_combos_dispatch_combine_overflow(**params):
+    is_ci_env = params["is_ci_env"]
+    is_ci_v2_env = params["is_ci_v2_env"]
+
+    if not (is_ci_env or is_ci_v2_env):
+        return False
+    return True
+
+
+def _ci_unsupported_param_combos_dispatch_combine_top4(**params):
+    is_ci_env = params["is_ci_env"]
+    is_ci_v2_env = params["is_ci_v2_env"]
+
+    if not (is_ci_env or is_ci_v2_env):
+        return False
+    return True
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_dispatch_combine)
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     dispatch_combine_shape_params(),
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
-    ALL_MESH_CONFIGS,
+    "mesh_device, device_params, topology",
+    _dispatch_combine_mesh_params(),
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
 @pytest.mark.parametrize(
     "dispatched_buffer_layout",
@@ -510,7 +599,8 @@ def test_ttnn_dispatch_combine(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("overflow_mode", ["cut_short_last", "omit_last"])
-def test_ttnn_dispatch_combine_overflow(mesh_device, device_params, num_links, overflow_mode):
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_dispatch_combine_overflow)
+def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overflow_mode):
     """Verify dispatch/combine does not hang when the flat dispatch buffer overflows.
 
     The dispatch buffer is a flat shared region sized
@@ -677,6 +767,7 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, device_params, num_links, o
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     ids=["dispatched_buffer_tile", "dispatched_buffer_row_major"],
 )
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_dispatch_combine_top4)
 def test_ttnn_dispatch_combine_top4(
     mesh_device, device_params, num_links, dispatched_buffer_layout, is_ci_env, is_ci_v2_env
 ):

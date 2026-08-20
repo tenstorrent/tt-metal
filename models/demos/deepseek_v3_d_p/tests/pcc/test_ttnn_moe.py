@@ -684,6 +684,22 @@ def run_model(
         logger.debug(f"{key}: {profiler.get(key) * 1000:.2f} ms")
 
 
+def _ci_unsupported_param_combos_ds_moe(**params):
+    is_ci_env = params["is_ci_env"]
+    is_ci_v2_env = params["is_ci_v2_env"]
+    fabric_config = params["device_params"]["fabric_config"]
+    gate_fallback_mode = params["gate_fallback_mode"]
+
+    if not (is_ci_env or is_ci_v2_env):
+        return False
+    if fabric_config != ttnn.FabricConfig.FABRIC_2D:
+        return True
+    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_ds_moe)
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "

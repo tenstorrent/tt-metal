@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+
 import pytest
 import torch
 from loguru import logger
@@ -20,7 +21,20 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 PCC_REQUIRED = 0.99
 
 
+def _ci_unsupported_param_combos(**params):
+    is_ci_env = params["is_ci_env"]
+    is_ci_v2_env = params["is_ci_v2_env"]
+    is_balanced = params["is_balanced"]
+
+    if not (is_ci_env or is_ci_v2_env):
+        return False
+    if is_balanced:
+        return True
+    return False
+
+
 # sp x tp
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "mesh_device",
     [(4, 2), (2, 4)],

@@ -401,7 +401,23 @@ def run_model(
     logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")
 
 
+def _ci_unsupported_param_combos(**params):
+    is_ci_env = params["is_ci_env"]
+    is_ci_v2_env = params["is_ci_v2_env"]
+    fabric_config = params["device_params"]["fabric_config"]
+    is_balanced = params["is_balanced"]
+
+    if not (is_ci_env or is_ci_v2_env):
+        return False
+    if fabric_config != ttnn.FabricConfig.FABRIC_1D:
+        return True
+    if not is_balanced:
+        return True
+    return False
+
+
 # sp x tp
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [

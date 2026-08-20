@@ -9,6 +9,7 @@ This test verifies that the TTNN dispatch operation produces the same output as 
 PyTorch reference implementation when dispatching tokens to experts.
 """
 
+
 import pytest
 import torch
 from loguru import logger
@@ -41,8 +42,21 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
+def _ci_unsupported_param_combos(**params):
+    is_ci_env = params["is_ci_env"]
+    is_ci_v2_env = params["is_ci_v2_env"]
+    fabric_config = params["device_params"]["fabric_config"]
+
+    if not (is_ci_env or is_ci_v2_env):
+        return False
+    if fabric_config != ttnn.FabricConfig.FABRIC_2D:
+        return True
+    return False
+
+
 # integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
 # Real traffic never approaches the worst case, so half-capacity is sufficient.
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     [
