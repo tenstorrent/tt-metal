@@ -3,6 +3,7 @@
 
 #include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/qkv_causal_conv1d_silu_program_factory.hpp"
 
+#include <limits>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -23,6 +24,20 @@ namespace ttnn::experimental::prim {
 
 namespace m2 = tt::tt_metal::experimental;
 
+namespace {
+
+uint32_t choose_channel_block_tiles(uint32_t channel_tiles) {
+    constexpr uint32_t max_single_block_channel_tiles = 48;
+    constexpr uint32_t wide_channel_block_tiles = 24;
+    uint32_t block_tiles = channel_tiles <= max_single_block_channel_tiles ? channel_tiles : wide_channel_block_tiles;
+    while (channel_tiles % block_tiles != 0) {
+        --block_tiles;
+    }
+    return block_tiles;
+}
+
+}  // namespace
+
 ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::create_program_artifacts(
     const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1dSiluInputs& in, std::vector<Tensor>& outputs) {
     const auto& input = in.input.mesh_tensor();
@@ -42,12 +57,10 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     const uint32_t Kt = attrs.k_width / TILE_WIDTH;
     const uint32_t Vt = attrs.v_width / TILE_WIDTH;
     const uint32_t Ct = Qt + Kt + Vt;
-    uint32_t block_ct = Ct <= 48 ? Ct : 24u;
-    while (Ct % block_ct != 0) {
-        --block_ct;
-    }
+    const uint32_t block_ct = choose_channel_block_tiles(Ct);
     const uint32_t num_blocks = Ct / block_ct;
-    auto dist = kda_factory_detail::distribute_prep(device.compute_with_storage_grid_size(), Mt * num_blocks, ~0u);
+    auto dist = kda_factory_detail::distribute_prep(
+        device.compute_with_storage_grid_size(), Mt * num_blocks, std::numeric_limits<uint32_t>::max());
     const auto& cores = dist.core_set;
 
     const m2::KernelSpecName READER{"reader"};
@@ -70,10 +83,11 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     const m2::TensorParamName K{"k"};
     const m2::TensorParamName V{"v"};
 
-    auto make_dfb = [](const m2::DFBSpecName& name, uint32_t tiles) {
+    const uint32_t tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    auto make_dfb = [tile_size](const m2::DFBSpecName& name, uint32_t tiles) {
         return m2::DataflowBufferSpec{
             .unique_id = name,
-            .entry_size = tt::tile_size(tt::DataFormat::Float16_b),
+            .entry_size = tile_size,
             .num_entries = tiles,
             .data_format_metadata = tt::DataFormat::Float16_b,
         };
