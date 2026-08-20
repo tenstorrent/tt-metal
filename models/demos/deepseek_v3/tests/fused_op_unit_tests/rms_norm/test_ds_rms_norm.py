@@ -394,7 +394,7 @@ def test_ds_rms_norm(
     mesh_device,
     force_recalculate_weight_config,
     set_deterministic_env,
-    state_dict: dict[str, torch.Tensor],
+    request,
     is_ci_env,
 ):
     # CI skip logic: keep only decode/1/trace and prefill/128/eager in CI with program_cache and real_weights
@@ -422,7 +422,7 @@ def test_ds_rms_norm(
         mode,
         seq_len,
         hf_config_size_attr,
-        state_dict if use_real_weights else None,
+        request.getfixturevalue("state_dict") if use_real_weights else None,
     )
     _run_ds_rms_norm_test(
         mesh_device,
