@@ -19,6 +19,10 @@ sfpi_inline sfpi::vFloat _sfpu_prelu_binary_(sfpi::vFloat a, sfpi::vFloat w) {
     v_if(a < 0.0f) { a = a * w; }
     v_endif;
 
+    if constexpr (!is_fp32_dest_acc_en) {
+        a = sfpi::convert<sfpi::vFloat16b>(a, sfpi::RoundMode::Nearest);
+    }
+
     return a;
 }
 
