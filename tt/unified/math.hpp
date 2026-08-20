@@ -104,7 +104,37 @@ struct TileSource : expr::Fluent<TileSource<S>> {
     }
 };
 
+// add, sub and mul exist on BOTH units. The SFPU form below takes two DST slots,
+// which is why every operand has to be copy_tile'd into DST first; the FPU form
+// reads its operands straight out of circular buffers and needs no copy at all.
+// That is the whole reason for FpuEltwiseFusion: the measured SFPU cost in flash is
+// dominated by those leaf copies, not by the arithmetic.
+//
+// Note which init this uses. add_tiles_init only reprograms the math and unpack
+// units for this op; binary_op_init_common is the one that carries hw_configure and
+// pack_sync_init, and calling THAT a second time mid-kernel hangs the device, the
+// same trap phase 7 hit with matmul.
 struct AddOp {
+    static constexpr bool fpu_capable = true;
+    static void init_fpu(uint32_t cb0, uint32_t cb1) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        ckernel::add_tiles_init(cb0, cb1);
+#else
+        (void)cb0;
+        (void)cb1;
+#endif
+    }
+    static void apply_fpu(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t dst) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        ckernel::add_tiles(cb0, cb1, t0, t1, dst);
+#else
+        (void)cb0;
+        (void)cb1;
+        (void)t0;
+        (void)t1;
+        (void)dst;
+#endif
+    }
     static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         ckernel::add_binary_tile_init();
@@ -127,6 +157,26 @@ struct AddOp {
 // unary epilogue chain the way relu and exp can.
 
 struct SubOp {
+    static constexpr bool fpu_capable = true;
+    static void init_fpu(uint32_t cb0, uint32_t cb1) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        ckernel::sub_tiles_init(cb0, cb1);
+#else
+        (void)cb0;
+        (void)cb1;
+#endif
+    }
+    static void apply_fpu(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t dst) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        ckernel::sub_tiles(cb0, cb1, t0, t1, dst);
+#else
+        (void)cb0;
+        (void)cb1;
+        (void)t0;
+        (void)t1;
+        (void)dst;
+#endif
+    }
     static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         ckernel::sub_binary_tile_init();
@@ -140,6 +190,26 @@ struct SubOp {
 };
 
 struct MulOp {
+    static constexpr bool fpu_capable = true;
+    static void init_fpu(uint32_t cb0, uint32_t cb1) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        ckernel::mul_tiles_init(cb0, cb1);
+#else
+        (void)cb0;
+        (void)cb1;
+#endif
+    }
+    static void apply_fpu(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t dst) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        ckernel::mul_tiles(cb0, cb1, t0, t1, dst);
+#else
+        (void)cb0;
+        (void)cb1;
+        (void)t0;
+        (void)t1;
+        (void)dst;
+#endif
+    }
     static void apply(uint32_t lhs, uint32_t rhs, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         ckernel::mul_binary_tile_init();
@@ -296,6 +366,23 @@ struct RsqrtOp {
 using SFPUFusion = expr::TreeKind;
 
 struct FPUFusion {};
+
+// One elementwise binary of two whole blocks, done on the FPU. Deliberately NOT
+// wired into kind_of yet: this is the shape being priced against the SFPU path
+// before deciding whether trees should dispatch here on their own.
+struct FpuEltwiseFusion {};
+
+template <typename Op, typename S>
+struct FpuBinNode : expr::Fluent<FpuBinNode<Op, S>> {
+    using is_expr_node = std::true_type;
+    using shape = S;
+    using fusion_kind = FpuEltwiseFusion;
+    using op = Op;
+    static_assert(Op::fpu_capable, "this op has no FPU form; it belongs on the SFPU path");
+
+    uint32_t lhs_cb;
+    uint32_t rhs_cb;
+};
 
 struct ReduceFusion {};
 
@@ -1095,6 +1182,45 @@ struct Strategy<SFPUFusion> {
                 ckernel::pack_tile(expr::result_slot_v<Node>, cb_id);
                 ckernel::tile_regs_release();
             }
+        }
+        cb_push_back(cb_id, num_tiles);
+#else
+        (void)node;
+        (void)cb_id;
+        (void)num_tiles;
+#endif
+    }
+};
+
+// FPU elementwise: the operands stay in L1 and the FPU reads them itself, so DST
+// holds only results -- one slot per output tile, whatever the operand count. That is
+// the opposite of the SFPU tree, where every operand needs its own slot and its own
+// copy_tile to get there.
+template <>
+struct Strategy<FpuEltwiseFusion> {
+    template <typename Node>
+    static void run(const Node& node, uint32_t cb_id, uint32_t num_tiles) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        using Op = typename Node::op;
+        // A whole group per acquire, because nothing competes for DST here.
+        constexpr uint32_t kPerAcquire = kMaxDstTiles;
+        cb_reserve_back(cb_id, num_tiles);
+        // Once per pass: this reprograms the unpackers for the operand pair and the
+        // math unit for the op, and both survive the tile_regs cycle below.
+        Op::init_fpu(node.lhs_cb, node.rhs_cb);
+        for (uint32_t base = 0; base < num_tiles; base += kPerAcquire) {
+            const uint32_t remaining = num_tiles - base;
+            const uint32_t count = remaining < kPerAcquire ? remaining : kPerAcquire;
+            ckernel::tile_regs_acquire();
+            for (uint32_t k = 0; k < count; ++k) {
+                Op::apply_fpu(node.lhs_cb, node.rhs_cb, base + k, base + k, k);
+            }
+            ckernel::tile_regs_commit();
+            ckernel::tile_regs_wait();
+            for (uint32_t k = 0; k < count; ++k) {
+                ckernel::pack_tile(k, cb_id);
+            }
+            ckernel::tile_regs_release();
         }
         cb_push_back(cb_id, num_tiles);
 #else

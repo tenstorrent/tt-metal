@@ -36,11 +36,19 @@ CB_IN, CB_VEC, CB_OUT = 0, 8, 16
 CB_SCRATCH = range(1, 8)
 
 DEFINE = {"copy": None, "bcast": "PC_BCAST", "matmul": "PC_MATMUL", "alt": "PC_ALT", "reduce": "PC_REDUCE"}
+# name -> defines, for the FPU-vs-SFPU binary comparison.
+BIN = {
+    f"{unit}_{op}": [("PC_BIN", "1")]
+    + ([("PC_FPU", "1")] if unit == "fpu" else [])
+    + ([(f"PC_OP_{op.upper()}", "1")] if op != "add" else [])
+    for unit in ("fpu", "sfpu")
+    for op in ("add", "sub", "mul")
+}
 
 
-def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0, buffering=2):
+def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0, buffering=2, fidelity=None):
     """Returns (got, want). For reduce, `want` is the row fold and got is column 0."""
-    assert mode in DEFINE
+    assert mode in DEFINE or mode in BIN
     if mode == "reduce":
         assert passes == 1, "a reduction cannot be chained"
     if mode == "matmul":
@@ -58,6 +66,15 @@ def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0, buffering=2):
     # Distinct per row, so a broadcast that picked up the wrong row cannot pass.
     step = (1 + torch.arange(rows * TILE) % 8).reshape(1, 1, -1, 1) * lsb
     v = step.expand(1, 1, rows * TILE, TILE).to(torch.bfloat16).contiguous()
+    if mode in BIN:
+        # Full shape, and exact: 1 + k*2^-7 times/plus/minus a small multiple of 2^-7
+        # stays representable, so the binary checks gate on equality like the rest.
+        # Small for add and sub, so the running value never leaves [0.5, 2) where a
+        # multiple of 2^-7 is representable -- an rhs near 1.0 pushes the sum past 2,
+        # into 2^-6 spacing, and the check then fails by one LSB on both units.
+        v = (torch.randint(1, 5, [1, 1, rows * TILE, cols * TILE]) * lsb).to(torch.bfloat16)
+        if mode.endswith("mul"):
+            v = torch.ones([1, 1, rows * TILE, cols * TILE]).to(torch.bfloat16)
     if mode == "matmul":
         # The identity: every product but one is a zero, so the chain is exact while the
         # FPU still does the full inner product.
@@ -73,14 +90,15 @@ def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0, buffering=2):
 
     core_ranges, cores = single_core()
 
-    tensors = [ta, tv, tout] if mode in ("bcast", "matmul", "alt") else [ta, tout]
+    two_operand = mode in ("bcast", "matmul", "alt") or mode in BIN
+    tensors = [ta, tv, tout] if two_operand else [ta, tout]
     ct_args = [rows, cols]
     for t in tensors:
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     rt_args = [t.buffer_address() for t in tensors]
 
     # The vector CB holds the broadcast operand, or the 1x1 reduce scaler.
-    vec_pages = rows if mode in ("bcast", "alt") else (rows * cols if mode == "matmul" else 1)
+    vec_pages = rows if mode in ("bcast", "alt") else (rows * cols if mode == "matmul" or mode in BIN else 1)
     cbs = [
         make_cb(CB_IN, core_ranges, num_pages=buffering * rows * cols),
         make_cb(CB_VEC, core_ranges, num_pages=buffering * vec_pages),
@@ -89,7 +107,9 @@ def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0, buffering=2):
     cbs += [make_cb(cb, core_ranges, num_pages=buffering * rows * cols) for cb in CB_SCRATCH]
 
     defines = [("PASSES", str(passes))]
-    if DEFINE[mode]:
+    if mode in BIN:
+        defines.extend(BIN[mode])
+    elif DEFINE[mode]:
         defines.append((DEFINE[mode], "1"))
 
     program = unified_program(
@@ -100,6 +120,7 @@ def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0, buffering=2):
         compile_time_args=ct_args,
         runtime_args=rt_args,
         defines=defines,
+        **(fidelity or {}),
     )
 
     out = ttnn.generic_op(tensors, program)
@@ -113,6 +134,12 @@ def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0, buffering=2):
     if mode == "bcast":
         # vec[r] applies to every column of row r, once per pass.
         return got[0, 0], (af + passes * vf[:, :, :, 0:1])[0, 0]
+    if mode in BIN:
+        op = mode.split("_")[1]
+        acc = af
+        for _ in range(passes):
+            acc = acc - vf if op == "sub" else (acc * vf if op == "mul" else acc + vf)
+        return got[0, 0], acc[0, 0]
     if mode == "matmul":
         return got[0, 0], af[0, 0]  # a @ I @ ... @ I == a
     if mode == "alt":

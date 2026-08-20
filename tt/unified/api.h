@@ -480,6 +480,17 @@ auto rsqrt(const ComputeBlock<S>& b);
 template <TransposeB Tr = TransposeB::No, typename SA, typename SB>
 auto matmul(const ComputeBlock<SA>& a, const ComputeBlock<SB>& b);
 
+// Elementwise add/sub/mul run on the FPU instead of the SFPU. Explicit for now: the
+// point of these is to price the FPU path against `a + b` before deciding whether the
+// operators should choose it themselves. Both operands must be whole resident blocks
+// of the same shape -- the FPU reads them from L1, so neither can be an expression.
+template <typename S>
+auto fpu_add(const ComputeBlock<S>& a, const ComputeBlock<S>& b);
+template <typename S>
+auto fpu_sub(const ComputeBlock<S>& a, const ComputeBlock<S>& b);
+template <typename S>
+auto fpu_mul(const ComputeBlock<S>& a, const ComputeBlock<S>& b);
+
 // Mark a ComputeBlock as a BROADCAST operand along `A`, for use as the right-hand side
 // of +, - or *:
 //
