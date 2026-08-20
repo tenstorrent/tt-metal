@@ -183,7 +183,7 @@ def test_gate_up_prefill_progcfg_1d_matches_sweep_winner():
     prog, out_mc, ckc = interleaved_gate_up_prefill_config(128, 5376, 5376)
     assert prog is not None
     assert out_mc == ttnn.L1_MEMORY_CONFIG
-    assert ckc.math_fidelity == ttnn.MathFidelity.HiFi2
+    assert ckc.math_fidelity == ttnn.MathFidelity.HiFi4
     # Decode / long-context: no override
     assert interleaved_gate_up_prefill_config(32, 5376, 5376) == (None, None, None)
     assert interleaved_gate_up_prefill_config(2048, 5376, 5376) == (None, None, None)
@@ -206,7 +206,7 @@ def test_down_proj_prefill_progcfg_1d_matches_sweep_winner():
     prog, out_mc, ckc = interleaved_down_proj_prefill_config(128, 2688, 5376)
     assert prog is not None
     assert out_mc == ttnn.L1_MEMORY_CONFIG
-    assert ckc.math_fidelity == ttnn.MathFidelity.HiFi2
+    assert ckc.math_fidelity == ttnn.MathFidelity.HiFi4
     assert interleaved_down_proj_prefill_config(32, 2688, 5376) == (None, None, None)
     assert interleaved_down_proj_prefill_config(2048, 2688, 5376) == (None, None, None)
 

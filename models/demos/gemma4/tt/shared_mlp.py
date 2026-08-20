@@ -175,7 +175,7 @@ class SharedMLP:
             # Interleaved-weight path (everything off Blackhole). Prefill gets an
             # explicit 1D program config from interleaved_gate_up_prefill_config —
             # see SharedMLP.__call__. Keep the weight as a tensor (not a lambda)
-            # so the call site can pass program_config / out memcfg / HiFi2.
+            # so the call site can pass program_config / out memcfg / HiFi4.
             self.gate_up_proj = ttnn.as_tensor(
                 gate_up_weight,
                 device=mesh_device,
@@ -247,7 +247,7 @@ class SharedMLP:
         if isinstance(self.gate_up_proj, DramShardedLinear):
             return self.gate_up_proj(hidden_states)
 
-        # Interleaved-weight prefill: pin 1D progcfg + L1 interleaved out + HiFi2.
+        # Interleaved-weight prefill: pin 1D progcfg + L1 interleaved out + HiFi4.
         # Decode (M<=TILE) may consume a width-sharded LN out on that core grid
         # and skip S2I. Prefill-sized 1D CBs on the same shard clash on Wormhole,
         # so M>TILE always S2I's to the tuned interleaved config.
