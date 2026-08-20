@@ -66,8 +66,11 @@
 
 #include "internal/ethernet/erisc.h"
 
-#if defined(PROFILE_KERNEL) && \
-    (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES)))
+// Dispatch kernels NEVER profile on this backend, PROFILER_OPT_DO_DISPATCH_CORES or not: the drainer's
+// lane tables cover the profiled worker grid only, so a dispatch core emitting into its (undrained,
+// lossless-blocking) SPSC ring would wedge at the first full ring. Dispatch builds take the no-op
+// branch at the bottom of this file like any unprofiled build.
+#if defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL)
 namespace kernel_profiler {
 
 extern uint32_t wIndex;  // producer tail (monotonic word count for this RISC's ring)
@@ -135,6 +138,10 @@ constexpr uint32_t TAIL_INDEX = SPSC_RING_TAIL_0 + myRiscID;  // producer (this 
 constexpr uint32_t HEAD_INDEX = SPSC_RING_HEAD_0 + myRiscID;  // consumer (drainer)
 static_assert(myRiscID < PROFILER_SPSC_MAX_RISC, "this processor has no slot in the SPSC control layout");
 
+// Retained ONLY because the backend-agnostic event-profiler headers (noc_event/fabric_event/
+// perf_counters/noc_debugging) pass DoingDispatch::DISPATCH explicitly -- on the DRAM backend
+// (kernel_profiler_push.hpp) it selects a buffer half. This backend has one path and every taker
+// ignores it; nothing here branches on dispatch vs non-dispatch.
 enum class DoingDispatch { DISPATCH, DISPATCH_META, NOT_DISPATCH };
 
 // Zone kind, this backend's own. Previously the kind was packed into bits 16-18 of the id as a
@@ -502,7 +509,7 @@ inline __attribute__((always_inline)) void flush_to_dram_if_full(uint32_t additi
     (void)additional_slots;
 }
 
-template <uint32_t timer_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
+template <uint32_t timer_id>
 struct profileScope {
     inline __attribute__((always_inline)) profileScope() { mark_time(timer_id); }
     inline __attribute__((always_inline)) ~profileScope() { mark_time(timer_id, ZoneKind::End); }
@@ -542,7 +549,8 @@ struct profileScopeAccumulate {
 
 // No PacketTypes template parameter: every call site took the TS_DATA default, whose
 // TimestampedDataSize is 1, so the check only ever asserted "one datum, no trailers". Stated directly
-// instead of routed through the other backend's enum.
+// instead of routed through the other backend's enum. The DoingDispatch parameter is compat-only
+// (see the enum above) and ignored.
 template <uint32_t data_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH, typename... Args>
 inline __attribute__((always_inline)) void timeStampedData(uint64_t data, Args... trailers) {
     constexpr uint32_t total_data_count = 1 + sizeof...(trailers);
@@ -588,7 +596,7 @@ inline __attribute__((always_inline)) void mark_point(uint32_t word0) {
 
 // A compile-time-tagged FLAG with no payload: PP_EVENT, 2 words, and a structural source-location id that
 // the host names from the ELF exactly like a zone.
-template <uint32_t data_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
+template <uint32_t data_id>
 inline __attribute__((always_inline)) void recordFlag() {
     mark_point(ppfmt::event_w0(data_id));
 }
@@ -601,7 +609,7 @@ inline __attribute__((always_inline)) void recordFlag() {
 // would silently borrow the name of whatever zone happens to own that id. Carrying it as data costs one
 // word and makes "every marker on this wire resolves" an invariant instead of an aspiration -- which is
 // what lets the consumer treat any unnamed id as a bug.
-template <uint32_t data_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
+template <uint32_t data_id>
 inline __attribute__((always_inline)) void recordRuntimeEvent(uint32_t runtime_id) {
     ring_ensure_room(1 + 3 + 1);
     uint32_t hi, lo;
@@ -623,9 +631,6 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 
 #include "noc_event_profiler.hpp"
 #include "perf_counters.hpp"
-
-// Not dispatch
-#if (!defined(DISPATCH_KERNEL))
 
 #define DeviceZoneScopedN(name)    \
     TT_ZONE_DEFINE_ID(hash, name); \
@@ -651,45 +656,6 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
         TT_ZONE_DEFINE_ID(rt_hash, "RUNTIME-EVENT");              \
         kernel_profiler::recordRuntimeEvent<rt_hash>(runtime_id); \
     }
-
-// Dispatch and enabled
-#elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
-
-#define DeviceZoneScopedN(name)                                                          \
-    TT_ZONE_DEFINE_ID(hash, name);                                                       \
-    kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
-        kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
-
-#define DeviceData(name, data)                                                                       \
-    {                                                                                                \
-        TT_ZONE_DEFINE_ID(hash, name);                                                               \
-        kernel_profiler::timeStampedData<hash, kernel_profiler::DoingDispatch::DISPATCH_META>(data); \
-    }
-
-#define DeviceFlag(name)                                                               \
-    {                                                                                  \
-        TT_ZONE_DEFINE_ID(hash, name);                                                 \
-        kernel_profiler::recordFlag<hash, kernel_profiler::DoingDispatch::DISPATCH>(); \
-    }
-
-#define DeviceRuntimeEvent(runtime_id)                                                                      \
-    {                                                                                                       \
-        TT_ZONE_DEFINE_ID(rt_hash, "RUNTIME-EVENT");                                                        \
-        kernel_profiler::recordRuntimeEvent<rt_hash, kernel_profiler::DoingDispatch::DISPATCH>(runtime_id); \
-    }
-
-// Dispatch but disabled
-#else
-
-#define DeviceZoneScopedN(name) (void(sizeof(name)))
-
-#define DeviceData(data_id, data) (void(sizeof(data_id) + sizeof(data)))
-
-#define DeviceFlag(data_id) (void(sizeof(data_id)))
-
-#define DeviceRuntimeEvent(runtime_id) (void(sizeof(runtime_id)))
-
-#endif
 
 #define DeviceValidateProfiler(condition) kernel_profiler::set_profiler_zone_valid(condition);
 
