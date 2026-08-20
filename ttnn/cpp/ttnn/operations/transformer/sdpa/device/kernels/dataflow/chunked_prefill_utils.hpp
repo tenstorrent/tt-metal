@@ -45,6 +45,25 @@ constexpr uint32_t chunks_until_next_multiple(uint32_t processed_chunks, uint32_
 // program factory, the reader, and the compute kernel. In-place latent-V reads V straight
 // from K^T (skipping V materialization) when the latent K/V buffer is shared AND the Q chunk
 // is a single tile, where the softmax@V matmul is data-movement bound.
+// Rotated-Q-split handoff semaphores. The semaphore for ring iteration t is live only within
+// iteration t: the donor's deferred accumulator save flushes and signals at the start of the
+// receiver's use iteration, and the receiver waits in that same iteration. Distinct ids per
+// iteration therefore only guard against CROSS-ITERATION aliasing -- a donor already in iteration
+// t+1 bumping a slot a slower core is still consuming for iteration t. Inter-core skew is bounded
+// well below one iteration by two per-iteration rendezvous (the K mcast chain's valid relay, which
+// every receiver blocks on per K chunk, and the fused all-gather that must land before compute
+// consumes an iteration's KV), so a small ring of slots indexed by (ring_iter - 1) % depth is
+// sufficient. 3 tolerates a full iteration of drift with margin, versus ring_size-1 before, which
+// scaled the scarce 16-semaphore program budget with ring length and capped rotation at ring-8.
+constexpr uint32_t kRotHandoffSemDepth = 3;
+
+// Number of handoff semaphores to allocate/read for a given ring size. Host and kernel derive it
+// from this one place so the runtime-arg count can't drift.
+constexpr uint32_t rot_handoff_sem_count(uint32_t ring_size) {
+    const uint32_t receiving_iters = ring_size > 0 ? ring_size - 1 : 0;
+    return receiving_iters < kRotHandoffSemDepth ? receiving_iters : kRotHandoffSemDepth;
+}
+
 constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t) {
     return v_shares_k_buffer && (Sq_chunk_t == 1);
 }

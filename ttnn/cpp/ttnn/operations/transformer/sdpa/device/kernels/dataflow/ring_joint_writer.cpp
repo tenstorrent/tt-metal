@@ -490,8 +490,9 @@ void kernel_main() {
         argidx);
 
 #ifdef ROTATED_Q_SPLIT
-    // Rotated per-ring-iteration Q distribution: the factory appends ring_size handoff semaphore
-    // ids, then per ring iteration [my_count, migrated_in_count, float_dest, chunk ids x
+    // Rotated per-ring-iteration Q distribution: the factory appends
+    // rot_handoff_sem_count(ring_size) handoff semaphore ids, then per ring iteration
+    // [my_count, migrated_in_count, float_dest, chunk ids x
     // ROTATED_Q_SPLIT]. float_dest is the packed (x<<8)|y physical core owning this core's last
     // ("float") chunk next iteration, or ROT_NO_DEST when it does not migrate. The donor signals
     // the receiver's per-iteration handoff semaphore after its accumulator save has landed in
@@ -502,13 +503,22 @@ void kernel_main() {
     constexpr uint32_t rot_max_slots = ROTATED_Q_SPLIT;
     constexpr uint32_t rot_iter_stride = 3 + rot_max_slots;
     constexpr uint32_t ROT_NO_DEST = 0xFFFFFFFF;
-    // ring_size-1 handoff semaphores: only iterations 1..ring_size-1 can receive a migrated
-    // float (iteration 0 starts fresh). Indexed by [ring_iter - 1] at both use sites, which the
-    // factory schedule guarantees run at ring_iter >= 1.
-    uint32_t rot_sem_ids[ring_size - 1];
-    for (uint32_t r = 0; r + 1 < ring_size; ++r) {
+    // Only iterations 1..ring_size-1 can receive a migrated float (iteration 0 starts fresh), and
+    // a slot is live only within its own iteration, so the slots are reused as a ring of
+    // rot_handoff_sem_count(ring_size) -- see the derivation in chunked_prefill_utils.hpp. Indexed
+    // by rot_sem_slot(ring_iter) at both use sites, which the factory schedule guarantees run at
+    // ring_iter >= 1.
+    constexpr uint32_t rot_sem_count = rot_handoff_sem_count(ring_size);
+    uint32_t rot_sem_ids[rot_sem_count];
+    for (uint32_t r = 0; r < rot_sem_count; ++r) {
         rot_sem_ids[r] = get_arg_val<uint32_t>(argidx++);
     }
+    // ring_iter >= 1 at both call sites; ASSERT guards the invariant the comments above rely on,
+    // since an underflow here would index the array at a garbage offset.
+    auto rot_sem_slot = [&](uint32_t iter) {
+        ASSERT(iter >= 1);
+        return (iter - 1) % rot_sem_count;
+    };
     const uint32_t rot_args_base = argidx;
 #endif
 
@@ -823,7 +833,7 @@ void kernel_main() {
                 // restore reads, then reset the semaphore for the next (possibly cached) run.
                 if (rot_mig_in != 0 && next_q_index == last_q_index) {
                     // rot_mig_in is 0 on the first active iteration, so ring_iter >= 1 here.
-                    Semaphore<> handoff_sem(rot_sem_ids[ring_iter - 1]);
+                    Semaphore<> handoff_sem(rot_sem_ids[rot_sem_slot(ring_iter)]);
                     handoff_sem.wait_min(rot_mig_in);
                     handoff_sem.set(0);
                 }
@@ -883,7 +893,7 @@ void kernel_main() {
                     noc.async_write_barrier<NocOptions::TXN_ID>({.trid = deferred.trid});
                     // Migrating floats sit last in the donor's list, so this flush always runs at
                     // the receiver's use iteration (ring_iter >= 1).
-                    Semaphore<>(rot_sem_ids[ring_iter - 1])
+                    Semaphore<>(rot_sem_ids[rot_sem_slot(ring_iter)])
                         .up(noc, deferred.mig_dest >> 8, deferred.mig_dest & 0xFFu, 1);
                     deferred.mig_dest = ROT_NO_DEST;
                 }

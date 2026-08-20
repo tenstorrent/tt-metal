@@ -2688,13 +2688,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 cfg.next_core_q_chunks = rot_base_chunks + 1;
             }
         }
-        // One handoff semaphore per ring iteration that can RECEIVE a migrated float (iterations
-        // 1..ring_size-1 — iteration 0 starts fresh, no handoffs). Receiver resets its semaphore
-        // to 0 after the wait so a cached program replays cleanly. Program semaphores are a scarce
-        // resource (NUM_SEMAPHORES=16 total, shared with the chain and fused all-gather sems), so
-        // allocate only ring_size-1: with the head chain skipped for latent-V, ring-8 uses
-        // 2 (fused) + 3 (batch chain) + 7 (handoff) + 3 (all-gather) = 15.
-        for (uint32_t t = 1; t < ring_size; ++t) {
+        // Handoff semaphores for the iterations that can RECEIVE a migrated float (1..ring_size-1;
+        // iteration 0 starts fresh). Receiver resets its slot to 0 after the wait so a cached
+        // program replays cleanly. Slots are REUSED across iterations as a ring of
+        // kRotHandoffSemDepth (see rot_handoff_sem_count) rather than one per iteration: program
+        // semaphores are a scarce resource (NUM_SEMAPHORES=16, shared with the chain and fused
+        // all-gather sems), and one-per-iteration made this feature the largest single consumer
+        // (7 of 16 at ring-8) and scaled with ring length. With the head chain skipped for
+        // latent-V, ring-8 now uses 2 (fused) + 3 (batch chain) + 3 (handoff) + 3 (all-gather)
+        // = 11 of 16, and the count no longer grows with ring_size.
+        for (uint32_t t = 0; t < rot_handoff_sem_count(ring_size); ++t) {
             const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
             desc.semaphores.push_back(SemaphoreDescriptor{
                 .id = sem_id,
@@ -2923,10 +2926,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
-        // Rotated Q split: ring_size-1 handoff semaphore ids (for iterations 1..ring_size-1),
-        // then per ring iteration [my_count, migrated_in_count, float_dest, chunk ids (stride)].
+        // Rotated Q split: rot_handoff_sem_count(ring_size) handoff semaphore ids, indexed by
+        // (ring_iter - 1) % count on both sides, then per ring iteration
+        // [my_count, migrated_in_count, float_dest, chunk ids (stride)].
         if (use_rotated_q_split) {
-            for (uint32_t t = 0; t + 1 < ring_size; ++t) {
+            for (uint32_t t = 0; t < rot_handoff_sem_count(ring_size); ++t) {
                 writer_args.push_back(rot_handoff_sem_ids[t]);
             }
             for (uint32_t t = 0; t < ring_size; ++t) {
