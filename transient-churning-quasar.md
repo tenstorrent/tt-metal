@@ -20,28 +20,40 @@ command queues, trace capture and replay, events, active-Ethernet accounting, an
 for workers" path. The interim `TT_METAL_TENSIX_DISPATCH_CORES=1` path keeps the existing NOC
 atomic mechanism.
 
-This plan is now explicitly **conditional**. No dispatch implementation starts until Gate 0
-settles the FDS register semantics and Gate 0b identifies a completion fence that orders every
-issuing worker hart's writes before sideband done. A passing simulator test is necessary but is
-not evidence that silicon has the same semantics.
+This plan is **conditional**. No dispatch implementation starts until Gate 0 settles the FDS
+register semantics and Gate 0b identifies a completion fence that orders every issuing worker hart's
+writes before sideband done. A passing simulator test is necessary but is not evidence that silicon
+has the same semantics.
 
-**Gate 0 has now been run and does not pass.** The register interface is real and fully
-characterised, but no signal crosses between the dispatch-engine tile and the Tensix tiles on the
-available simulator configuration. See "Gate 0 result" below. Nothing in this plan proceeds until
-that is resolved, and it is not resolvable by further software probing.
+**Gate 0's transport question now passes.** On a new simulator build, as of 2026-08-20, a go crosses
+from the dispatch-engine tile to every Tensix tile, a done crosses back, and the dispatch side
+aggregates dones across tiles. An earlier revision of this plan was parked on the opposite finding:
+on the previous build nothing crossed in either direction. Nothing about the software changed, and
+none of the register-interface findings changed either.
+
+**Gate 0's remaining items have now also been run.** The same-group re-arm cycle works: a sink-side
+inbox clear holds against a live source, the go de-asserts, and a second done for the same group
+produces exactly one new credit. So the P1 protocol this plan is built on is viable, and the explicit
+device-visible epoch that would otherwise have been needed in every go is not. The lane mapping is
+measured for two tiles — lanes 0 and 4 — which is enough to show one lane per tile but not enough to
+establish the assignment rule.
+
+What remains is Gate 0b, the completion fence, which has not started and cannot be settled on a
+simulator; the lane-assignment rule for topologies beyond two tiles; and the two-CQ ownership model.
+See "Gate 0 result" below.
 
 ## Decision summary
 
 | Question | Answer |
 |---|---|
 | What does FDS replace? | Tensix worker→dispatch transport on eligible launches. The cumulative 32-bit counting model remains the public interface. |
-| Which hardware register drives it? | **Still undecided.** Gate 0 showed `GROUPID_STATUS` is a live, read-only, per-lane mask that is not gated by the enable register, which suits the design — but only idle lanes have ever been observed, so its behaviour under a real assertion is untested. |
+| Which hardware register drives it? | `GROUPID_STATUS` — a live, read-only, per-lane mask, not gated by the enable register, and now observed asserting under a real go. The engine-side field named dispatch instance 0 as the source. Its behaviour on deassertion and on re-arm within a group is still untested. |
 | Which processors can talk to FDS? | **Data-movement cores only.** Gate 0 established that the Tensix engine processors cannot reach the interface at all, so the tile-wide owner must be a data-movement core and worker completion cannot be signalled from a compute kernel. |
 | Who talks to FDS? | Exactly one **tile-wide** owner for all CQs on a dispatch-engine tile. A per-CQ `dispatch_s` owner is invalid unless hardware proves queue-selective isolation and routing. |
 | Who writes the cumulative L1 words? | The tile-wide owner only. Clears, virtual-worker credits, and any non-FDS contributions must be serialized through it. |
 | Can `WORKER_COMPLETION_SEMAPHORES` be deleted? | **No.** It remains the persistent interface consumed by dispatch waits and host-generated commands. |
 | Gate | A worker-visible transport mode selected only when the resolved dispatch core is `CoreType::DISPATCH` and every completion producer is supported. `ARCH_QUASAR` is insufficient. |
-| P2 fallback? | **No automatic fallback.** If P1 cannot be made repeatable, stop and redesign an explicit shared epoch protocol rather than silently reducing the sub-device limit. |
+| P2 fallback? | **Not needed on this build.** P1 was made repeatable: see "Gate 0 result". Should it prove unrepeatable on other hardware, the rule stands — stop and redesign an explicit shared epoch protocol rather than silently reducing the sub-device limit. |
 
 ### Review disposition
 
@@ -52,16 +64,20 @@ configuration, a worker-visible transport gate, and a fully tested same-ID epoch
 
 ---
 
-## Gate 0 result: the register interface is proven, the sideband is not
+## Gate 0 result: the register interface is proven and so is the transport
 
-Gate 0 has been run against the `quasar_simulation_2x3_arch` slow-dispatch configuration using
-`tests/tt_metal/tt_metal/test_quasar_dispatch_engines.cpp` and its dispatch-engine, data-movement
-and Tensix-engine kernels. The outcome divides cleanly in two.
+Gate 0 has been run on the `emu-quasar-2x3_DISPATCH` simulator config — core descriptor
+`quasar_simulation_2x3_arch.yaml`, two worker tiles, native dispatch-engine cores — under slow
+dispatch, using
+`tests/tt_metal/tt_metal/test_quasar_dispatch_engines.cpp`, twice: against the previous simulator
+build with the instrumented kernels described in change 1, and against a new build with the reduced
+kernels that are in the tree now.
 
-The register interface is real, complete, and now characterised in detail. **No signal has ever
-crossed between the dispatch-engine tile and a Tensix tile, in either direction, from any
-processor software can reach.** Gate 0 is blocked, and it is blocked on hardware configuration
-rather than on anything further a software probe can settle.
+The register interface is real, complete, and characterised in detail; that work was done on the
+previous build and stands unchanged. **On the new build both directions of the sideband carry.** The
+register-interface findings below were measured before the transport worked and were not contradicted
+by it, which is worth knowing: they were the reason the silence could be attributed to configuration
+rather than to software.
 
 ### The register interface
 
@@ -115,19 +131,59 @@ corroborates treating group id zero as reserved.
 
 ### The sideband
 
-The dispatch engine held group 1 in its outbox for entire runs, with the value read back. Twelve
-data-movement blocks across both worker tiles drove done and held it. Throughout:
+Five results, all from the 2026-08-20 run. The full status lines are in
+`quasar-fds-sideband-findings.md`.
 
-- the dispatch engine's quiet-lane map never changed from all thirty-two;
-- all thirty-two of its raw inbox registers stayed at zero, and its group count at zero;
-- every worker block's three raw inbox registers stayed at zero, and its group status at zero.
+**Both directions carry.** One worker latched a go and answered with a done that the dispatch engine
+counted. This is the result the whole plan was waiting on.
 
-The raw inbox registers sit before all aggregation, so no group, enable or threshold setting can
-account for them. Both sides' receive logic is demonstrably instantiated and evaluating its lanes
-— that is what the quiet-lane maps mean — and both sides' transmit registers hold what is written
-to them. Nothing passes between the two.
+**Dones aggregate across tiles.** Two worker tiles signalling the same group produced a done count of
+two. This is the load-bearing measurement, because it is the one result the
+uninitialised-destination-register problem cannot fabricate: a dead read instruction can return a
+plausible 1 — the group id and the last value written both happen to be 1 — but not a 2 arising from
+two separate tiles. Treat any future result that rests on a count of 1 as weaker than it looks.
 
-### What has been eliminated
+**`GROUPID_STATUS` asserts, and names its source.** The engine-side three-bit field read 1, so
+dispatch instance 0 drove the go. This is the register the owner publish loop is built on, observed
+under a real assertion for the first time.
+
+**The go wire is shared across groups, and the group filter is what separates them.** With half the
+tiles in group 1 and half in group 2 and only group 1 signalled, a group 2 tile saw group 1's value
+in a raw inbox register and did not latch it: its own group status stayed zero. This is the
+mechanism the group-per-sub-device mapping depends on, and it is now measured rather than assumed.
+It also means a foreign group's value in a raw inbox is normal and is not a leak — only the group
+status says whether a go was accepted.
+
+**An unsignalled group accumulates nothing.** Group 2 was configured with the same lane mask and a
+threshold of one, so a single stray done would have satisfied it. Its count stayed at zero.
+
+**Consecutive epochs of one group are distinguishable, so P1 stands.** `round1 count=1, count after
+inbox clear=0, after settle=0, round2 count=1`, and on the worker side `round1 go=1, go de-assert
+seen=1, group status after de-assert=0, round2 go=1`. Every step of the cycle set out under
+"Distinguishing consecutive epochs" below holds: the sink-side clear survives a live source, the go
+de-asserts and the group latch follows it back to idle, and the second done yields exactly one new
+credit rather than two or none.
+
+**Each tile drives one lane, and two tiles landed four apart.** `lane 0 carries group 1 -> core 0-0`,
+`lane 4 carries group 2 -> core 1-0`, with group 0's status reading `0xffffffee` — exactly bits 0 and
+4 clear. Two readings from opposite sides of the aggregation logic naming the same lanes. Per-group
+counts agreed with the lane scan and every undriven group counted zero, which is the done-direction
+isolation result the handshake tests could not produce.
+
+The stride of four fits a lane space of four per tile — four engines per cluster, eight tiles,
+thirty-two lanes — with software driving only the first of each four because the outbox is per tile.
+If that holds it caps a dispatch tile at **eight** worker tiles rather than thirty-two, which the
+mask model needs to account for. Two data points do not establish it; a descriptor with more tiles
+would.
+
+The handshake runs with the deglitch filter at zero, its reset value.
+
+### What the previous build's silence eliminated
+
+Kept because it says which explanations are already excluded if the symptom ever returns. On the
+previous build, with the dispatch engine holding group 1 in its outbox for entire runs and twelve
+data-movement blocks across both worker tiles driving done, every raw inbox on both sides stayed at
+zero and neither quiet-lane map ever changed.
 
 | Candidate cause | How it was eliminated |
 |---|---|
@@ -139,24 +195,35 @@ to them. Nothing passes between the two.
 | Wrong processor | All twelve user data-movement cores across both worker tiles |
 | Instrument error | Field-width truncation and cross-address probes prove real registers and correct addressing |
 
+The diagnosis at the time was that the lanes were not connected in that configuration, and that it
+was a hardware-configuration question rather than a software one. A new build confirmed it. None of
+the causes above is a live suspect, so if the sideband goes quiet again, suspect the build first.
+
 ### What to put to the hardware configuration owners
 
-1. Does the 2x3 simulation configuration instantiate and connect the fast dispatch signal lanes
-   between the dispatch tile at `1-2` and the Tensix tiles at `0-1` and `1-1`?
-2. If not, is there a configuration that does?
-3. If it does, is there a block-level enable outside the two register maps? Neither map contains
-   anything resembling one.
-4. Which processor is the intended lane endpoint on each side?
+Two of the four original questions are answered by the new build: the lanes are instantiated and
+connected in this configuration, and no block-level enable outside the two register maps is needed
+to make them work. Still outstanding:
+
+1. What does each of the 32 done lanes correspond to — one per tile, or one per Tensix engine? The
+   block is named for the engine, but there is one block per tile with a single outbox register in
+   it, which points at one lane per tile. This determines the worker-to-bit mapping.
+2. The authoritative register specification: access types, whether status latches, deglitch threshold
+   units, level versus pulse on the outbox, and clear/re-arm semantics. The generated headers give
+   addresses, widths and reset values and nothing behavioural.
+3. Whether silicon shares this build's ordering, clear and ownership semantics.
 
 ### Confidence in these findings
 
-High on the register interface and on the reachability finding. Each rests on a measurement shaped
-so that the alternatives produce visibly different answers, and each was reproduced across
-processors and tiles. High that no reachable processor can move a lane on this build.
+High on the register interface and the reachability finding. Each rests on a measurement shaped so
+that the alternatives produce visibly different answers, and each was reproduced across processors
+and tiles.
 
-The one possibility software cannot exclude is a block-level enable in a register we do not know
-exists. Nothing in either map resembles one, but a register's absence from a description file is
-not proof of its absence from the hardware.
+High on transport in both directions, on the strength of the two-tile done count.
+
+Lower on everything the transport now makes testable but which has not been tested: lane mapping,
+re-arm, deassertion, done-direction isolation, and anything beyond two groups or two tiles. A single
+successful epoch is not a protocol.
 
 ---
 
@@ -280,6 +347,22 @@ device-side ownership generation. Host `CQOwnerState` alone is insufficient. If 
 demultiplex a shared group to an active CQ without ambiguity, the combination of two CQs and
 eight sub-devices does not fit 15 usable IDs and the change must not proceed.
 
+The hardware premise underneath that mapping — that groups are isolated from each other — now has a
+test, `DispatchEngineSubDeviceGroupIsolation`. Two disjoint sets of worker tiles take group 1 and
+group 2, the dispatch engine sends a go for group 1 only, and the test asserts that group 2's tiles
+never latch a go for their own group and that group 2's done count on the dispatch side stays at
+zero while group 1's reaches its full total. A group 2 tile that sees group 1's value in a raw inbox
+without latching it is reported rather than failed, since the go wire may be shared across groups
+and in that case the group filter is the only thing separating them — which is exactly the mechanism
+the sub-device mapping would be relying on.
+
+Three things it does not establish. It exercises the FDS group mechanism, not the sub-device API:
+nothing connects a `SubDevice` to a group id until the dispatch work in changes 4 through 7 exists,
+so the worker sets are stand-ins. It does not test the done direction under load, because a quiet
+group's workers never see a go and so never drive done — proving that a group 2 done cannot credit
+group 1 needs a worker that drives done unprompted, which the reduced test deliberately no longer
+does. And it covers two groups, not the full budget of eight.
+
 ---
 
 ## Changes, with confidence
@@ -288,13 +371,58 @@ Confidence is about *my analysis being right*, not about the change being easy.
 
 ### 1. Bring-up tests first — before any dispatch code. **Done, and blocking.**
 
-This exists as `tests/tt_metal/tt_metal/test_quasar_dispatch_engines.cpp` under slow dispatch,
-with three kernels: a dispatch-engine sender, a data-movement worker that runs on every user
-data-movement core, and a Tensix-engine variant. The dispatch-engine kernel programs and reads
-back the dispatch-side filter length, `GROUPID_ENABLE`, threshold, interrupt enable and
-auto-dispatch enable, and the two directions are deliberately not chained: the worker drives done
-part way through its wait whether or not a go arrived, so one run reports on each direction
-independently.
+This exists as `tests/tt_metal/tt_metal/test_quasar_dispatch_engines.cpp` under slow dispatch, with
+two kernels: a dispatch-engine sender and a data-movement worker. The dispatch engine sends a go and
+waits for done; each worker waits for the go and answers with done.
+
+One data-movement core per *tile*, because Gate 0 established that a tile has a single register
+block shared by all of its data-movement cores, so two cores on one tile would overwrite each
+other's configuration and consume each other's status. Separate tiles have separate blocks, which
+is why fanning out across the grid is meaningful where fanning out within a tile is not. Three
+tests use that, sharing one launch path and differing only in how the worker tiles are grouped:
+
+- `DispatchEngineSingleWorker` — the minimal one-to-one handshake.
+- `DispatchEngineAllWorkers` — fan-out to every worker tile, which is the one that can fail on a
+  wrong mask or lane mapping. See Gate 1.
+- `DispatchEngineSubDeviceGroupIsolation` — half the tiles in group 1 and half in group 2, with a
+  go sent for group 1 only. See "Group-id budget" for what it does and does not establish.
+
+Two further tests are the Gate 0 experiments the working transport made possible, both now run and
+passing. They use their own kernel pairs, because each runs a different protocol rather than a
+differently grouped handshake:
+
+- `DispatchEngineSameGroupReArm` — two epochs of one group, with the receive inboxes cleared while
+  the worker is still driving the first done, and the go de-asserted and re-asserted between epochs.
+  The two counts either side of that clear are the P1 measurement. Kernels:
+  `quasar_dispatch_engine_rearm.cpp`, `quasar_fds_worker_rearm.cpp`.
+- `DispatchEngineLaneMap` — no go at all. Every tile drives a done carrying its own group id, and
+  the dispatch side's raw inbox registers name the lane each value arrived on. Kernels:
+  `quasar_dispatch_engine_lane_map.cpp`, `quasar_fds_worker_drive_done.cpp`. It also carries the
+  done-direction isolation check, since every group is enabled on every lane and a group no tile
+  drove must still count zero.
+- `DispatchEngineWriteOrdering` — the Gate 0b harness. The worker writes a payload to the dispatch
+  core's L1 over the NOC and drives its done; the dispatch engine reads the payload on seeing the
+  done. Two arms, with and without a barrier before the done. Kernels:
+  `quasar_dispatch_engine_ordered_read.cpp`, `quasar_fds_worker_ordered_write.cpp`.
+
+The other tests do not exercise write ordering at all, and it is worth being explicit about why: in
+them the worker writes status to its own L1, which is a local store with nothing in flight, and the
+host reads it only after the program completes rather than on observing a done. They establish that
+the signal arrives, not that data the signal announces is visible.
+
+The test that produced the Gate 0 findings was larger, and deliberately so. It ran on every
+data-movement core of both worker tiles and the dispatch tile plus every Tensix engine processor,
+printed configuration readbacks, dumped every raw inbox, swept the deglitch filter across five
+settings mid-wait, and drove done part way through the worker's wait whether or not a go had
+arrived so that each direction reported independently. It also carried a probe header that
+distinguished a real register from plain storage and from a custom instruction that does nothing,
+and a per-processor stamp that settled the one-block-per-tile question.
+
+That apparatus has been removed now that its questions are answered. The three tests in the tree
+prove transport and report a readable result, but they do not reproduce the register-interface
+evidence. Restoring instrumentation is a prerequisite for the next experiments, not just for
+re-opening old ones; the techniques and the commit that holds them are recorded in
+`quasar-fds-sideband-findings.md`.
 
 Of the original matrix, these are settled:
 
@@ -302,50 +430,150 @@ Of the original matrix, these are settled:
   zeroed;
 - read visibility from every candidate owner processor — all of them share one block per tile, so
   every processor sees the same registers and there is no isolation to establish;
-- which processors can reach the interface at all.
+- which processors can reach the interface at all;
+- transport in both directions, aggregation of dones across tiles, and `GROUPID_STATUS` asserting
+  under a real go;
+- go-direction group isolation, on a shared wire separated by the group filter.
 
-These cannot be attempted until a signal crosses:
+These are now possible and not yet done. They were previously blocked on an assertion arriving:
 
-- all 32 worker inboxes one-hot, and harvested layouts;
-- live versus latched `GROUPID_STATUS` under an assertion, and `GROUPID_COUNT`;
-- the same-ID two-epoch P1 cycle;
-- routing to every dispatch instance, and two processors polling concurrently.
+- the same-ID two-epoch P1 cycle — **done and passing**, `DispatchEngineSameGroupReArm`. This is the
+  result that lets changes 5 and 7 be written as designed;
+- done-direction isolation — **done and passing**, folded into `DispatchEngineLaneMap`;
+- deassertion, and `GROUPID_COUNT` behaviour beyond a simple increment — **done** for the go
+  direction and for count-versus-lane agreement;
+- the physical lane mapping — **measured for two tiles, rule not established**. Lanes 0 and 4, one
+  lane per tile, cross-checked against the group-0 status map. Two tiles is all
+  `emu-quasar-2x3_DISPATCH` has, so this waits on a simulator build for a larger config;
+  `DispatchEngineLaneMap` maps up to fifteen tiles in one run with no changes. Harvested layouts are
+  still untried;
+- routing to every dispatch instance, which needs a descriptor with more than one dispatch tile.
 
-Gate 0 was to choose status-mask versus inbox polling and decide whether P1 exists. It has done
-neither, because both questions require an assertion to arrive. It has instead established that
-none does.
+The shim gained the two accessors these need: a dispatch-side `fds_read_group_status`, and
+`fds_read_neo_status` for the raw inbox, restored now that a consumer exists.
+
+Gate 0 was to choose status-mask versus inbox polling and decide whether P1 exists. It has now
+answered the first — status asserts, is live, and names its source, so the status-mask model in the
+publish loop stands — and left the second open, because P1 needs two epochs and every test runs one.
 
 *Side effect:* none — additive.
 
-### 2. Make the vendored shim usable. **High confidence.**
+### 2. Make the vendored shim usable. **Done.**
 
-- `overlay/fds_functions.hpp:10-11` — change the two bare includes to
-  `"meta/fds_registers/..."`. This resolves by the quoted-include rule, so **no change to
-  `qa_hal.cpp` `includes()` is needed**, which is the cheaper of the two fixes.
-- `fds_functions.cpp:44-46` — `fds_clear_neo_status` uses `_REG_OFFSET` (0x004) where every other
-  dispatch-side helper uses `_REG_ADDR` (0x204). **This is not a defect, contrary to the earlier
-  reading here.** Gate 0 established that only nine address bits are decoded, so bit nine is
-  discarded and both forms reach the same register. Making it consistent is still worth doing for
-  readability, but nothing depends on it and it was never writing into the worker-side map.
-- Both `fds_config_auto_dispatch(false, ...)` implementations currently skip the enable-register
-  write. Change them to write zero unconditionally and read back zero in Gate 0; stale emulator
-  state is one of the conditions this initialization is intended to survive.
-- The helpers we need are one-line register accesses. Make them `inline` in the header and
-  leave `fds_functions.cpp` unbuilt — adding it to a CMake target means new link plumbing for
-  both firmware and JIT kernels for no benefit.
-- Drop or fix `fds_go_blocking`/`fds_done_blocking` (`:41`, `:92`), whose comments promise FIFO
-  back-pressure their bodies do not implement. We use neither.
+- `overlay/fds_functions.hpp:10-11` — the two bare includes now name `"meta/fds_registers/..."`.
+  This resolves by the quoted-include rule, so **no change to `qa_hal.cpp` `includes()` was
+  needed**, which was the cheaper of the two fixes.
+- `fds_clear_neo_status` used `_REG_OFFSET` (0x004) where every other dispatch-side helper uses
+  `_REG_ADDR` (0x204). **This was not a defect, contrary to the earlier reading here.** Gate 0
+  established that only nine address bits are decoded, so bit nine is discarded and both forms
+  reach the same register. It is now consistent for readability, but nothing depended on it and it
+  was never writing into the worker-side map.
+- Both `fds_config_auto_dispatch` implementations skipped the enable-register write when disabling,
+  so passing `false` left whatever the register already held. They now write it unconditionally.
+  Stale state is one of the conditions this initialization is meant to survive, and Gate 0 read the
+  register as zero before zeroing it explicitly.
+- The helpers are one-line register accesses, so they are now `inline` in the header, and
+  `fds_functions.cpp` is deleted rather than merely left unbuilt: nothing referenced it, and adding
+  it to a CMake target would have meant new link plumbing for both firmware and JIT kernels for no
+  benefit.
+- `fds_go_blocking` and `fds_done_blocking` promised FIFO back-pressure their bodies did not
+  implement, and nothing used either. Both are removed. The `ad_enable = true` path of `fds_go` and
+  `fds_done` already spins on the FIFO-full register, which is the behaviour those comments
+  described.
 
-*Side effect:* the header gains live consumers for the first time, so its defects stop being
-harmless.
+Five read accessors now exist. Three came from the bring-up tests and are used by `fds_poll` on both
+sides: `fds_read_group_count` on the dispatch side, `fds_read_group_status` and `fds_read_de_status`
+on the engine side. Two were added for the Gate 0 experiments: a dispatch-side `fds_read_group_status`
+for the quiet-lane map, and `fds_read_neo_status` for the raw done inbox, which had been dropped when
+nothing used it. The engine-side status accessor is documented as a live
+per-lane mask rather than a latch, per open question 1.
+
+*Side effect:* the header gained live consumers for the first time, so its defects stopped being
+harmless — which is how the last two were found.
 
 ### 3. Completion ordering on every worker hart. **Correctness blocker until proven.**
 
 The ROCC macros are `asm volatile` with no `"memory"` clobber, FDS bypasses NOC ordering, and the
-per-kernel NOC completion checks in `dmk.cc:109-119` are disabled. A compiler barrier orders the
+per-kernel NOC completion checks in `dmk.cc:113-123` are disabled. A compiler barrier orders the
 compiler only. `noc_async_full_barrier()` on DM0 is not yet sufficient evidence: current code
 does not prove that it drains transactions issued by subordinate DMs, and its posted-write
 condition is "sent", not necessarily committed at the remote destination.
+
+**What reading the current path adds.** The NOC-atomic completion it replaces has no barrier before
+it either: `dm.cc:410` calls `notify_dispatch_core_done` straight after `wait_subordinates()`, and on
+Quasar that helper is a plain `noc_fast_atomic_increment` (`firmware_common.h:224`). What holds
+today's path together is the kernel-level contract that a kernel drains its own NOC traffic before
+returning — and the firmware checks that were meant to catch violations are commented out at
+`dmk.cc:113-123`, "TODO enable once NOC is ready".
+
+Two consequences. FDS introduces no new requirement in the ordinary case: a kernel that honours the
+drain contract is as safe over the sideband as over the atomic. What FDS removes is the coincidental
+backstop — when a kernel forgets to barrier, an undrained write and the atomic are both NOC traffic
+and the atomic may still arrive behind the write, so the bug stays latent. Dedicated wires cannot be
+ordered behind NOC traffic, so the same omission becomes reliable corruption.
+
+That narrows this change from one open question to three tractable ones: does a DM0-level barrier
+drain traffic issued by subordinate DMs, or must every hart drain before signalling subordinate
+completion; is `noc_async_full_barrier`'s posted-write condition "sent" or "committed at the
+destination"; and can the `dmk.cc` assertions be re-enabled so a non-draining kernel is caught rather
+than inferred. The third is plain work and worth doing regardless of FDS.
+
+**The hazard is demonstrated.** `DispatchEngineWriteOrdering` has a worker write 32 KB into the
+dispatch core's L1 over the NOC and drive its done, and the dispatch engine read that payload the
+moment the done appears, in two arms:
+
+```
+barrier=true:  tail word=0xdef1fff (expected 0xdef1fff)  mismatched words=0 of 8192
+barrier=false: tail word=0xbaadf00d (expected 0xdef1fff)  mismatched words=16 of 8192, first at index 8176
+```
+
+Without a barrier the last 64 bytes of the transfer — one cache line — were still unwritten when the
+done was observed. With a barrier the payload was intact. So a fence is **mandatory**, on this build,
+with evidence rather than by argument, and `noc_async_write_barrier()` on the issuing hart is
+sufficient for that hart's own writes. That answers the second of the three questions above and turns
+the first into the only real unknown: subordinate-issued traffic.
+
+Two cautions. The window is 0.2% of the transfer — at 4 KB it was invisible — so congestion and
+silicon timing will change its size, and a clean result from a smaller test means nothing. And the
+first version of this harness reported clean on both arms because it had work between the write and
+the signal on one side and between the signal and the read on the other; a negative result here is
+only as good as those gaps.
+
+**FDS removes a safety net, but does not add a cost.** The control arm repeats the unbarriered case
+with completion announced by `noc_semaphore_inc` on `NOC_UNICAST_WRITE_VC`, the mechanism and channel
+the current path uses:
+
+```
+barrier=false signal=fds:         tail word=0xbaadf00d  mismatched 16 of 8192
+barrier=false signal=noc-atomic:  tail word=0xdef1fff   mismatched  0 of 8192
+```
+
+The atomic is ordered behind the payload write; the sideband is not. **Both arms are
+contract-violating cases, though, so read this narrowly.** Real kernels drain before returning —
+`noc.async_write_barrier()` at the end of a writer is the norm, as in
+`test_kernels/dataflow/l1_to_dram.cpp` and `writer_unary.cpp` — and `wait_subordinates()` means DM0
+signals only after every subordinate kernel, and hence every subordinate's own barrier, has finished.
+For conforming kernels the drain is therefore already paid today, and FDS adds no new cost. The
+benefit case in "Context" stands: one atomic saved per worker per launch, against a barrier that is
+already there.
+
+What the comparison does show is that FDS removes a safety net. A kernel that fails to drain is
+currently rescued by NOC ordering, because the atomic cannot overtake data it shares a road with. Over
+the sideband the same omission becomes reliable corruption. That is a robustness requirement, not a
+latency one, and it is sharpened by the firmware checks at `dmk.cc:113-123` being commented out, so
+nothing catches a non-draining kernel today.
+
+Where barriers actually live is asymmetric, which is worth recording. The **go** direction is covered
+on the dispatcher side — `cq_dispatch.cpp:1094` under the wait command's `barrier` flag, and the
+barrier before multicasting the launch message noted at `dm.cc:289`. The **done** direction has no
+firmware barrier at all: `dm.cc:410` signals straight after `wait_subordinates()`. It rests entirely on
+the kernel contract composing across harts, which is now the narrow question change 3 has to answer.
+
+Two things this does not establish. Whether the NOC ordering is architectural or an artifact of this
+model's timing — if the latter, today's path is equally exposed to a non-draining kernel. And whether
+the atomic arm's clean result is ordering rather than the arm noticing its signal later, since it polls
+an uncached L1 word where the FDS arm reads a coprocessor register. Recording each arm's poll-iteration
+count would separate those.
 
 Gate 0b must identify a hardware-supported remote-completion fence and prove whether its scope is
 hart-wide or tile-wide. If the scope is per-hart, every enabled data-movement kernel hart drains
@@ -493,32 +721,71 @@ shared Wormhole/Blackhole host code. It buys 256 bytes of L1. Not worth it.
 
 ## Testing strategy
 
-**Gate 0 — FDS semantics and topology. Run, and not passed.** Nothing beyond the shim and additive
-bring-up test lands until:
+**Gate 0 — FDS semantics and topology. Transport passes; the gate does not, yet.** Nothing beyond the
+shim and additive bring-up tests lands until:
 
-- every physical worker bit is mapped, including harvested layouts — *blocked, no assertion ever
-  arrives*;
+- the sideband carries a signal at all — **done**, on the 2026-08-20 simulator build, in both
+  directions, with dones aggregating across two tiles;
 - dispatch-side configuration is proven and read back — **done**;
-- status/inbox liveness, deassertion, and same-ID re-arm are repeatable — *blocked*;
 - processor-window configuration and clear isolation are known — **done**, and the answer is that
   there is nothing to isolate: one block per tile, shared by every data-movement core on it;
-- exclusive routing or the tile-wide-owner visibility model is established — *blocked*.
+- a go for one group does not release another group's workers — **done**:
+  `DispatchEngineSubDeviceGroupIsolation` shows the unsignalled group's tile seeing the signalled
+  value on a shared wire without latching it. Note what this means for the test: before the lanes
+  carried anything, its two negative assertions passed vacuously, so a green result from it is only
+  meaningful alongside a passing `DispatchEngineAllWorkers`;
+- a done credits only its own group — *not tested*: an unsignalled group's workers never see a go, so
+  they never drive done. Needs a worker driving done unprompted;
+- every physical worker bit is mapped, including harvested layouts — *not done, now possible*. The
+  next piece of work; see change 1 for the method and its two prerequisites;
+- status/inbox deassertion and same-ID re-arm are repeatable — *not done, now possible*. Liveness is
+  settled: status asserts, is live, and names its source instance;
+- exclusive routing or the tile-wide-owner visibility model is established — *not done*. Routing
+  across dispatch instances needs a descriptor with more than one dispatch tile.
 
-The prerequisite for the blocked items is a hardware or simulator configuration in which the lanes
-carry a signal at all. See "Gate 0 result" above.
+The items marked done for the register interface were established by instrumentation that has since
+been removed from the tests, as change 1 describes. The findings stand — they were measurements — but
+the next experiments need that instrumentation restored.
 
-**Gate 0b — completion ordering.** Under heavy NOC congestion, make a subordinate DM issue the
-last data write, delay its delivery, then signal completion. Validate the destination
-immediately when the owner publishes done. Sweep issuing harts and transaction types. This gate
-must run on silicon or a model explicitly certified for NOC/FDS ordering.
+**Gate 0b — completion ordering. Hazard demonstrated; scope open.**
+`DispatchEngineWriteOrdering` covers the single-hart case and shows the race is real on this build and
+that the issuing hart's barrier closes it. Still to add: heavy NOC congestion, a *subordinate* DM
+issuing the last write, delayed delivery, a sweep of transaction types, and the NOC-atomic control arm
+that says whether today's path is safe by contract or by accident.
 
-**Gate 1 — two workers, one dispatch engine.** The shipped
-`quasar_simulation_2x3_arch_fast_dispatch.yaml` has one usable worker, so wrong masks and epoch
-logic degenerate into success. The slow-dispatch descriptor is better than assumed: the simulator
-soc descriptor lists `functional_workers: [0-1, 1-1]` and `dispatch: [1-2]`, and the bring-up test
-now runs kernels on both worker tiles. A two-worker *fast-dispatch* descriptor is still needed.
-Cover staggered arrival in both orders, many pipelined epochs with no intervening `Finish`,
-reset/replay acknowledgements, and owner clear generations.
+Silicon or a certified model is still required before the fence's scope and cost become a contract.
+What no longer needs silicon is the necessity: a fence is required, measured.
+
+**Gate 1 — two workers, one dispatch engine. Partly done.** An earlier revision of this section cited
+`quasar_simulation_2x3_arch_fast_dispatch.yaml` as having one usable worker. **No such file exists.**
+The two shipped 2x3 core descriptors are `quasar_simulation_2x3_arch.yaml`, with two worker tiles and
+no tensix dispatch cores, and `quasar_simulation_2x3_arch_tensix_dispatch.yaml`, with one worker tile
+because a tile is given over to dispatch. The one-usable-worker property belongs to the second, which
+is the interim `TT_METAL_TENSIX_DISPATCH_CORES` path that keeps NOC atomics and that FDS does not
+target. So the original caveat pointed at a file that does not exist and, as far as can be told from
+the descriptors, at a constraint that does not apply to the FDS path. Worth re-checking against
+whoever wrote it before relying on either reading.
+
+What has been run is `emu-quasar-2x3_DISPATCH` under slow dispatch, whose soc descriptor lists
+`functional_workers: [0-1, 1-1]` and `dispatch: [1-2]`.
+
+The multi-worker case now exists under slow dispatch as `DispatchEngineAllWorkers` in
+`test_quasar_dispatch_engines.cpp`. It fans the handshake out to every worker tile the device
+offers, one data-movement core per tile, and requires the dispatch engine to accumulate one done
+per tile before its wait is satisfied. This is the configuration in which a wrong mask, a go aimed
+at the wrong lane, or a done count that stops at the first arrival can fail rather than pass. Both
+tests share one launch path, so they differ only in how many worker tiles take part. It skips itself
+on a single-tile descriptor, where it would add nothing, and asserts rather than silently truncating
+if a grid ever exceeds the 32 available done lanes.
+
+It passed on the 2026-08-20 build with a done count of two, which is the measurement that put
+transport beyond doubt — see "Gate 0 result".
+
+Fast dispatch is still uncovered: every FDS test so far requires `TT_METAL_SLOW_DISPATCH_MODE`,
+because kernels on dispatch-engine cores need it. Still to cover: staggered arrival in both orders,
+many pipelined epochs with no intervening `Finish`, reset/replay acknowledgements, and owner clear
+generations. Re-arm now passes for a single pair of epochs, so the pipelined cases are the next
+escalation of it rather than blocked behind it.
 
 **Gate 2 — two CQs on one dispatch-engine tile.** Enable the actual dispatch-engine two-CQ
 fixture. Keep the inactive CQ's command stream idle so its kernel remains in the page-acquire
@@ -560,78 +827,108 @@ swap.
 
 Confirm before writing dispatch code:
 
-0. **Does the sideband carry a signal at all?** *New, and now the first question.* On the
-   available simulator configuration it does not, in either direction, from any reachable
-   processor. Every question below that needs an assertion to arrive is blocked behind this one.
-1. **Status semantics.** *Partly answered.* `GROUPID_STATUS` is a live per-lane mask, read-only,
-   not latched, not gated by `GROUPID_ENABLE`, with no read side effects observed. Only idle lanes
-   have ever been seen, so behaviour under a real assertion is still unknown, and the choice
-   between status-mask and raw inbox polling remains open.
-2. **P1 repeatability.** Unanswered — requires an assertion.
+0. **Does the sideband carry a signal at all?** *Answered: yes*, on the 2026-08-20 simulator build,
+   in both directions, with dones aggregating across two tiles. It did not on the previous build,
+   which is what had blocked every question below that needs an assertion to arrive.
+1. **Status semantics.** *Answered for assertion, open for deassertion.* `GROUPID_STATUS` is a live
+   per-lane mask, read-only, not latched, not gated by `GROUPID_ENABLE`, with no read side effects
+   observed, and it asserts under a real go and names the source dispatch instance. The status-mask
+   model in the publish loop therefore stands. Deassertion has not been watched, and the raw inbox
+   remains useful alongside status because a foreign group's value appears there without latching.
+2. **P1 repeatability.** *Answered: yes*, on this build. A sink-side inbox clear holds against a live
+   source, the go de-asserts and the group latch follows, and a second done for the same group
+   produces exactly one new credit. The design's held-level assumptions and its `CLEARING` state are
+   therefore implementable as written.
 3. **Register topology.** *Answered.* Per **tile**, not per processor. One block serves every
    data-movement core on a tile, the decode is nine bits, and there is no banking. Independent
    enables per processor are therefore impossible, and cross-processor clears are unavoidable
    rather than something to test for — which is why the tile-wide owner is mandatory.
-4. **Worker wire mapping.** Unanswered — requires an assertion. Do not infer from descriptor list
-   order.
-5. **Completion fence.** Unanswered; belongs to Gate 0b.
-6. **Routing.** Unanswered — requires an assertion. Note only one dispatch tile exists in the
-   simulator descriptor, so the three-instance question cannot be exercised there.
+4. **Worker wire mapping.** *Partly answered.* Two tiles sit on lanes 0 and 4, one lane per tile,
+   measured twice over by independent registers. The assignment *rule* is not established and
+   harvested layouts are untried, so the HAL function must still reject topologies it has not been
+   measured on. Do not infer from descriptor list order. If the stride of four reflects a per-engine
+   lane space, a dispatch tile addresses at most eight workers.
+5. **Completion fence.** Unanswered; belongs to Gate 0b. Narrowed by reading the current path — see
+   change 3 — to three questions rather than one, with a harness now written for the first two.
+6. **Routing.** Partly answered: dispatch instance 0 drove every go observed, read off the
+   engine-side status field. The three-instance question still cannot be exercised, because only one
+   dispatch tile exists in the simulator descriptor.
 7. **ROCC availability.** *Answered.* Data-movement cores only. The Tensix engine processors
    cannot reach the interface, which is why "a raw `.word` compiling proves nothing" was the right
    caution: it compiles and executes on an engine processor and does nothing at all.
 8. **Deglitch and reset defaults.** *Partly answered.* Reset values are zero for the filter, the
    auto-dispatch enable and the interrupt enable, and explicit disable and readback both work. The
-   filter has no observable effect anywhere between 0 and 64, though with no assertion to filter
-   that is weak evidence. Persistence across device reset is untested.
+   working handshake runs with the filter at zero; other settings are untested against a real
+   assertion. Persistence across device reset is untested, and matters more now that held levels can
+   actually be asserted across one.
 9. **Owner placement.** Unanswered, but now constrained: the owner must be a data-movement core.
 10. **Unsupported producers.** Decide whether active Ethernet and virtual-worker credits are
     routed through the owner or force device-wide NOC-atomic mode.
 
-No authoritative FDS hardware documentation was available during review. Simulator behavior
-must be checked against RTL/silicon ownership, ordering, and clear semantics before it becomes a
-contract — and on the current configuration the simulator provides no lane behaviour to check.
+No authoritative FDS hardware documentation was available during review. Simulator behaviour must be
+checked against RTL/silicon ownership, ordering, and clear semantics before it becomes a contract. The
+lanes carrying on one simulator build is a starting point for that check, not a substitute for it.
 
 ### Go/no-go conditions
 
 Do not proceed with FDS completion if any of these remains true:
 
-- the sideband carries no signal between dispatch-engine and Tensix tiles on any available
-  hardware or simulator configuration — *currently true, and it subsumes every condition below
-  that depends on an assertion arriving*;
-- same-ID P1 cannot complete repeatedly without ambiguity;
-- no fence orders every issuer's remote writes before sideband done;
+- the sideband carries no signal between dispatch-engine and Tensix tiles on any available hardware
+  or simulator configuration — *no longer true as of the 2026-08-20 build*;
+- same-ID P1 cannot complete repeatedly without ambiguity — *cleared on this build*;
+- no fence orders every issuer's remote writes before sideband done — *partly cleared*: the issuing
+  hart's own barrier is proven sufficient for its own writes; subordinate-issued traffic is untested;
 - two CQs cannot share one tile-wide owner or obtain proven exclusive routing;
-- the worker-bit mapping is unknown for supported harvested layouts;
+- the worker-bit mapping is unknown for supported harvested layouts — *still true*: two tiles are
+  mapped, no rule is established, and harvested layouts are untried;
 - unsupported completion producers can still write the public L1 word concurrently;
-- the required fence and owner polling erase the expected latency benefit.
+- the required fence and owner polling erase the expected latency benefit — the fence is not itself a
+  new cost, since conforming kernels already drain, so this rests on owner polling and on whatever the
+  scope question in change 3 forces.
 
 ## Overall confidence
 
 - **The register interface itself — high, and now measured rather than assumed.** Address decode,
   field widths, per-processor topology, read-only status, reset defaults, and which processors can
   reach it are all established.
-- **FDS lane transport — currently absent.** Nothing crosses between tiles on the available
-  configuration. Until that changes, the physical premise of this design is unverified, and no
-  amount of software work advances it.
+- **FDS lane transport — high, on one simulator build.** Both directions carry and dones aggregate
+  across tiles. The physical premise of the design is verified where it was previously unverified.
+  What is not established is that silicon behaves the same way, and one build is one data point.
 - **Persistent L1 interface and retaining the region — high.** Existing consumers still need it.
-- **FDS as the physical rendezvous — medium as a design, unproven as a mechanism.** The workload
-  shape fits, but status behaviour under assertion, clear semantics, and ordering are all still
-  unestablished, and now demonstrably cannot be established on this build.
+- **FDS as the physical rendezvous — medium-high as a design, partly proven as a mechanism.** The
+  workload shape fits, status behaviour under assertion is now measured, and go-direction group
+  isolation holds. Clear semantics, re-arm and ordering remain unestablished.
 - **Tile-wide owner architecture — medium-high conceptually, medium for integration.** It closes
   the duplicate-reader race but requires new placement, ownership, clear, and lifetime plumbing.
-- **P1 register protocol — low, and no longer "until Gate 0".** Gate 0 has run without producing
-  any evidence either way, because the protocol needs an assertion to exercise. The available
-  helper contract points to mandatory worker-side clear, and sink-side re-arm remains unknown.
-- **Completion ordering — low until Gate 0b.** Silent stale-data corruption is the dominant risk.
+- **P1 register protocol — medium-high on this build, from a passing two-epoch test.** Sink-side clear
+  holds against a live source, the go de-asserts, and a second same-group done yields exactly one
+  credit. What is not established is that this survives more workers, more groups, pipelined epochs
+  without an intervening drain, or silicon.
+- **Completion ordering — the risk is now measured rather than suspected.** Without a barrier a
+  worker's last 64 bytes were demonstrably unwritten when its done was observed; with one they were
+  not. High confidence that a fence is required and that the issuing hart's barrier suffices for its
+  own traffic. Low confidence on scope: subordinate-issued writes, congestion, and cost are untested,
+  and silent stale data remains the dominant failure mode if any of those is wrong.
 - **Two-CQ and reconfiguration correctness — medium-low until device ownership generations and
   staged masks pass Gate 2.**
-- **Performance benefit — unknown.** Measure after the required fence and owner polling exist.
+- **Performance benefit — unknown, and no worse than first thought.** Conforming kernels already
+  barrier before returning, so FDS does not add a drain; the trade is one atomic saved against owner
+  polling replacing an atomic's instantaneous visibility. Measure it on a rough prototype rather than
+  after the full protocol exists.
 
-The plan is ready for hardware bring-up work, not dispatch implementation. Promotion to
-implementation requires explicit evidence for every go/no-go condition above.
+Promotion to implementation requires explicit evidence for every go/no-go condition above. Three are
+still open: the completion fence, the worker-bit mapping rule, and the two-CQ ownership model.
 
-The bring-up work has now been done as far as software can take it. The next step is not a code
-change: it is establishing with the hardware configuration owners whether these lanes are
-connected at all, and on which configuration. Until that returns an answer, this plan is parked
-rather than merely conditional.
+The physical premise is now established rather than assumed. Transport works in both directions,
+dones aggregate, groups are isolated in both directions, and consecutive epochs of one group are
+distinguishable — which together mean the owner state machine and the group-per-sub-device mapping
+can be written as designed rather than redesigned around a hardware limitation.
+
+The next steps split three ways. The lane-assignment rule needs a descriptor with more worker tiles,
+or the specification; the test that measures it needs no changes. Gate 0b's central answer is in: ordering
+matters, and it is the kernel drain contract — already honoured by conforming kernels — that satisfies
+it, not anything new. What FDS changes is that a violation of that contract stops being hidden. So the
+remaining work there is narrow: confirm the per-hart barriers compose to cover every hart before DM0
+signals, and re-enable the assertions at `dmk.cc:113-123` so a violation fails loudly. Everything else — the transport-mode plumbing in change 4, the owner's placement and
+lifetime in changes 5 and 6, the staged command protocol in change 7 — is ordinary implementation work
+whose design questions are settled.

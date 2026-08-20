@@ -8,6 +8,11 @@
 //
 // Which dispatch instance drives this NEO is not established, so every inbox register is watched
 // rather than a chosen one.
+//
+// A go naming a group other than this worker's is recorded rather than ignored. The go wire may be
+// shared across groups, in which case seeing another group's value is expected and only the group
+// status register says whether it was accepted. Reporting both keeps a shared wire distinguishable
+// from a group filter that does not filter.
 
 #include "risc_attribs.h"
 #include "risc_common.h"
@@ -50,13 +55,16 @@ void kernel_main() {
 
     // Bounded instead of fds_poll(), for the same reason as the dispatch-engine side. The go value
     // is held, so it is still observable if the dispatch engine signalled first.
-    uint32_t go_value = 0;
-    uint32_t go_instance = kNumDispatchInstances;  // sentinel: no instance delivered a go
+    uint32_t observed_go = 0;                      // last non-zero value seen, whatever group it names
+    uint32_t go_instance = kNumDispatchInstances;  // sentinel: no instance delivered this group's go
     for (uint32_t i = 0; i < poll_iterations && go_instance == kNumDispatchInstances; i++) {
         for (uint32_t inst = 0; inst < kNumDispatchInstances; inst++) {
             const uint32_t value = overlay::FdsNeo::fds_read_de_status(inst);
+            if (value == 0) {
+                continue;
+            }
+            observed_go = value;
             if (value == group_id) {
-                go_value = value;
                 go_instance = inst;
                 break;
             }
@@ -64,10 +72,13 @@ void kernel_main() {
     }
 
     const bool go_received = (go_instance < kNumDispatchInstances);
-    status[quasar_fds_test::kSlotObserved] = go_value;
+    status[quasar_fds_test::kSlotObserved] = observed_go;
+    status[quasar_fds_test::kSlotGroupStatus] = overlay::FdsNeo::fds_read_group_status(group_id);
     status[quasar_fds_test::kSlotResult] = go_received ? quasar_fds_test::kComplete : quasar_fds_test::kTimeout;
-    // Commit this core's work before announcing it, which is the ordering the completion path this
-    // handshake is meant to serve requires.
+    // Make the status words visible to the host, which reads them after the program completes. The
+    // real completion path does need its data ordered before the done, but this is not a test of
+    // that: these are local stores that no reader consumes on seeing the done. See
+    // quasar_fds_worker_ordered_write.cpp for the test that does exercise it.
     flush_l2_cache_range(l1_address, quasar_fds_test::kNumSlots * sizeof(uint32_t));
 
     if (go_received) {

@@ -34,11 +34,9 @@ inline void fds_config_groupid(uint32_t group_id, uint32_t mask, uint32_t thresh
 // Configure interrupts for groupIDs: set bit for the groupIDs to generate interrupts
 inline void fds_config_interrupt_en(uint32_t mask) { FDS_INTF_WRITE(TT_FDS_DISPATCH_INTERRUPT_ENABLE_REG_ADDR, mask); }
 
-// Configure auto dispatch: enable feature, set cycle count and outbox address
+// Configure auto dispatch: enable or disable the feature, set cycle count and outbox address
 inline void fds_config_auto_dispatch(bool enable, uint32_t cycle_count, uint32_t address) {
-    if (enable) {
-        FDS_INTF_WRITE(TT_FDS_DISPATCH_AUTO_DISPATCH_EN_REG_ADDR, 0x1);
-    }
+    FDS_INTF_WRITE(TT_FDS_DISPATCH_AUTO_DISPATCH_EN_REG_ADDR, enable ? 0x1 : 0x0);
     FDS_INTF_WRITE(TT_FDS_DISPATCH_AUTO_DISPATCH_CYCLE_COUNT_REG_ADDR, cycle_count);
     FDS_INTF_WRITE(TT_FDS_DISPATCH_AUTO_DISPATCH_OUTBOX_ADDRESS_REG_ADDR, address);
 }
@@ -51,15 +49,23 @@ inline void fds_go(bool ad_enable, uint16_t group_id) {
     FDS_INTF_WRITE(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR, group_id);
 }
 
-// When AD is enabled: send go signal from Dispatch to NEO Tiles; if fifo is full, will automatically block until space
-// is available
-inline void fds_go_blocking(uint16_t group_id) {
-    FDS_INTF_WRITE(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR, group_id);
+// Read the raw done value a NEO is driving into this dispatch instance's input bus register. This
+// sits before all aggregation, so it identifies the lane a done arrived on rather than only its
+// group's total.
+inline uint32_t fds_read_neo_status(uint32_t neo_inst) {
+    return FDS_INTF_READ(TT_FDS_DISPATCH_TENSIX_TO_DISPATCH_0__REG_ADDR + (neo_inst * sizeof(uint32_t)));
 }
 
 // Clear interrupt on FDS interface side by writing a 0 to specified input bus register
 inline void fds_clear_neo_status(uint32_t neo_inst) {
     FDS_INTF_WRITE(TT_FDS_DISPATCH_TENSIX_TO_DISPATCH_0__REG_ADDR + (neo_inst * sizeof(uint32_t)), 0x0);
+}
+
+// Read the done status for the specified group ID: a live per-lane mask, not a latch, and not gated
+// by the enable register. Group 0 is the idle value on the wire, so group 0's status is the map of
+// lanes currently carrying nothing.
+inline uint32_t fds_read_group_status(uint32_t group_id) {
+    return FDS_INTF_READ(TT_FDS_DISPATCH_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)));
 }
 
 // Read how many enabled NEOs have signalled done for the specified group ID
@@ -85,16 +91,14 @@ inline void fds_config_groupid(uint32_t group_id, uint32_t mask, uint32_t thresh
     FDS_INTF_WRITE((TT_FDS_TENSIXNEO_GROUPID_COUNT_THRESHOLD_0__REG_ADDR + (group_id * sizeof(uint32_t))), threshold);
 }
 
-// Configure auto dispatch: enable feature, set cycle count and outbox address
+// Configure auto dispatch: enable or disable the feature, set cycle count and outbox address
 inline void fds_config_auto_dispatch(bool enable, uint32_t cycle_count, uint32_t address) {
-    if (enable) {
-        FDS_INTF_WRITE(TT_FDS_TENSIXNEO_AUTO_DISPATCH_EN_REG_ADDR, 0x1);
-    }
+    FDS_INTF_WRITE(TT_FDS_TENSIXNEO_AUTO_DISPATCH_EN_REG_ADDR, enable ? 0x1 : 0x0);
     FDS_INTF_WRITE(TT_FDS_TENSIXNEO_AUTO_DISPATCH_CYCLE_COUNT_REG_ADDR, cycle_count);
     FDS_INTF_WRITE(TT_FDS_TENSIXNEO_AUTO_DISPATCH_OUTBOX_ADDRESS_REG_ADDR, address);
 }
 
-// Read the latched go status for the specified group ID
+// Read the go status for the specified group ID: a live per-lane mask, not a latch
 inline uint32_t fds_read_group_status(uint32_t group_id) {
     return FDS_INTF_READ(TT_FDS_TENSIXNEO_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)));
 }
@@ -115,12 +119,6 @@ inline void fds_done(bool ad_enable, uint32_t group_id) {
     if (ad_enable) {
         while (FDS_INTF_READ(TT_FDS_TENSIXNEO_AUTO_DISPATCH_FIFO_FULL_REG_ADDR));
     }
-    FDS_INTF_WRITE(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR, group_id);
-}
-
-// When AD is enabled: send done signal from NEO Tiles to Dispatch; if fifo is full, will automatically block until
-// space is available
-inline void fds_done_blocking(uint16_t group_id) {
     FDS_INTF_WRITE(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR, group_id);
 }
 
