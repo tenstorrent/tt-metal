@@ -287,6 +287,56 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerManagerRemovalClearsGl
     global->deallocate();
 }
 
+// Runs in both tracking modes: registration lifecycle bookkeeping must tolerate
+// unknown and repeated releases, while the same numeric trace id remains
+// independent across sub-device managers.
+TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerLifecycleToleratesImbalance) {
+    constexpr uint32_t page_size = 32;
+    constexpr uint32_t local_l1_size = 3200;
+    constexpr distributed::MeshTraceId never_registered{0x2345};
+    constexpr distributed::MeshTraceId shared_trace_id{0x2346};
+    auto mesh_device = devices_[0];
+
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), never_registered);
+
+    CoreRangeSet shard_cores = CoreRange({0, 0}, {0, 0});
+    SubDevice sub_device(std::array{shard_cores});
+    auto manager_a = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
+    auto manager_b = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
+
+    mesh_device->load_sub_device_manager(manager_a);
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), shared_trace_id);
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), shared_trace_id);
+    mesh_device->clear_loaded_sub_device_manager();
+
+    mesh_device->load_sub_device_manager(manager_b);
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), shared_trace_id);
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), shared_trace_id);
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), shared_trace_id);
+    mesh_device->clear_loaded_sub_device_manager();
+
+    // Releasing manager B's trace must not release manager A's trace with the same numeric id.
+    mesh_device->load_sub_device_manager(manager_a);
+    distributed::ReplicatedBufferConfig replicated_config = {.size = page_size};
+    distributed::DeviceLocalBufferConfig global_config = {
+        .page_size = page_size,
+        .buffer_type = BufferType::DRAM,
+    };
+    auto tracked = distributed::MeshBuffer::create(replicated_config, global_config, mesh_device.get());
+    if (trace_allocation_tracking_enabled()) {
+        EXPECT_TRUE(
+            mesh_device->impl().get_unsafe_tracked_ids(manager_a, shared_trace_id)
+                .contains(tracked->get_backing_buffer()->unique_id()));
+    }
+
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), shared_trace_id);
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), shared_trace_id);
+    tracked->deallocate();
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(manager_a);
+    mesh_device->remove_sub_device_manager(manager_b);
+}
+
 TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerRoutesGlobalAndManagerLocalAllocations) {
     if (!trace_allocation_tracking_enabled()) {
         GTEST_SKIP() << "requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup";
