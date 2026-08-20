@@ -98,20 +98,47 @@ inline void reduce_uninit(uint32_t icb = 0) { T("  reduce_uninit(cb" + n(icb) + 
 inline void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1) {
     T("  add_bcast_rows_init(cb" + n(icb0) + ",cb" + n(icb1) + ")");
 }
+// metal's own enums, under its names, since the FPU binary calls are templated on them.
+enum class EltwiseBinaryType { ELWMUL, ELWDIV, ELWADD, ELWSUB };
+enum class EltwiseBinaryReuseDestType { NONE = 0, DEST_TO_SRCA = 1, DEST_TO_SRCB = 2 };
+
+inline std::string op_name(EltwiseBinaryType t) {
+    return t == EltwiseBinaryType::ELWADD   ? "add"
+           : t == EltwiseBinaryType::ELWSUB ? "sub"
+           : t == EltwiseBinaryType::ELWMUL ? "mul"
+                                            : "div";
+}
+
+// The reuse forms: one operand from a circular buffer, the other already in DST. The
+// trace spells out which side DST is on, because a chain that got that backwards would
+// compute buffer - dst where it meant dst - buffer and still look plausible.
+template <EltwiseBinaryType Type, EltwiseBinaryReuseDestType Dir>
+inline void binary_dest_reuse_tiles_init(uint32_t cb) {
+    T("      " + op_name(Type) + "_reuse_init(cb" + n(cb) +
+      (Dir == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? ",dst=lhs)" : ",dst=rhs)"));
+}
+
+template <EltwiseBinaryType Type, EltwiseBinaryReuseDestType Dir>
+inline void binary_dest_reuse_tiles(uint32_t cb, uint32_t tile, uint32_t dst) {
+    const bool dst_lhs = Dir == EltwiseBinaryReuseDestType::DEST_TO_SRCA;
+    T("    " + op_name(Type) + "_reuse(" + (dst_lhs ? "dst" + n(dst) + " " : "cb" + n(cb) + "[" + n(tile) + "] ") +
+      (dst_lhs ? "cb" + n(cb) + "[" + n(tile) + "]" : "dst" + n(dst)) + " -> dst" + n(dst) + ")");
+}
+
 // FPU elementwise binaries: two circular buffers in, DST out, no copy_tile in sight.
 // The trace shows the CBs rather than DST slots for the operands, which is the whole
 // difference from the SFPU forms above.
-inline void add_tiles_init(uint32_t cb0, uint32_t cb1) { T("    add_tiles_init(cb" + n(cb0) + ",cb" + n(cb1) + ")"); }
-inline void sub_tiles_init(uint32_t cb0, uint32_t cb1) { T("    sub_tiles_init(cb" + n(cb0) + ",cb" + n(cb1) + ")"); }
-inline void mul_tiles_init(uint32_t cb0, uint32_t cb1) { T("    mul_tiles_init(cb" + n(cb0) + ",cb" + n(cb1) + ")"); }
+inline void add_tiles_init(uint32_t cb0, uint32_t cb1) { T("      add_tiles_init(cb" + n(cb0) + ",cb" + n(cb1) + ")"); }
+inline void sub_tiles_init(uint32_t cb0, uint32_t cb1) { T("      sub_tiles_init(cb" + n(cb0) + ",cb" + n(cb1) + ")"); }
+inline void mul_tiles_init(uint32_t cb0, uint32_t cb1) { T("      mul_tiles_init(cb" + n(cb0) + ",cb" + n(cb1) + ")"); }
 inline void add_tiles(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t d) {
-    T("      add_tiles(cb" + n(cb0) + "[" + n(t0) + "],cb" + n(cb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
+    T("    add_tiles(cb" + n(cb0) + "[" + n(t0) + "],cb" + n(cb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
 }
 inline void sub_tiles(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t d) {
-    T("      sub_tiles(cb" + n(cb0) + "[" + n(t0) + "],cb" + n(cb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
+    T("    sub_tiles(cb" + n(cb0) + "[" + n(t0) + "],cb" + n(cb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
 }
 inline void mul_tiles(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t d) {
-    T("      mul_tiles(cb" + n(cb0) + "[" + n(t0) + "],cb" + n(cb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
+    T("    mul_tiles(cb" + n(cb0) + "[" + n(t0) + "],cb" + n(cb1) + "[" + n(t1) + "] -> dst" + n(d) + ")");
 }
 
 inline void add_tiles_bcast_rows(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
@@ -217,6 +244,7 @@ inline void reconfig_data_format_srca(uint32_t old_cb, uint32_t new_cb) {
     T("  reconfig_data_format_srca(cb" + n(old_cb) + " -> cb" + n(new_cb) + ")");
 }
 // One-argument form: unconditional, needs no previous operand. What an SFPU leaf uses.
+inline void reconfig_data_format_srcb(uint32_t new_cb) { T("        reconfig_srcb(cb" + n(new_cb) + ")"); }
 inline void reconfig_data_format_srca(uint32_t new_cb) { T("      reconfig_srca(cb" + n(new_cb) + ")"); }
 inline void copy_tile_to_dst_init_short(uint32_t cb) { T("      copy_init(cb" + n(cb) + ")"); }
 inline void init_sfpu(uint32_t icb, uint32_t ocb) { T("  init_sfpu(cb" + n(icb) + " -> cb" + n(ocb) + ")"); }
@@ -402,6 +430,65 @@ void example_eltwise() {
         Block result = out_storage.store(tmp + lhs);
         noc_store<0>(std::move(result), t2, i);
     }
+}
+
+// Every branch of the FPU eltwise predicate, with one shape per rule so a failure says
+// which rule broke. The trace is the verification: each lands on different calls.
+//
+//   a + b - c        seed, then a chain link with DST on the LEFT
+//   a - (b + c)      seed, then a chain link with DST on the RIGHT -- the direction
+//                    that decides whether a subtraction comes out backwards
+//   (a - b).exp()    FPU seed with an SFPU unary applied in place on top
+//   max_(a, b)       no FPU form for max: the OP rule sends the tree to the SFPU
+//   (a + b) - (c+a)  two non-leaf children: the SHAPE rule does, even though every op
+//                    here has an FPU form
+//   a * b            mul is opt-out, so SFPU by default and FPU under
+//                    -DTT_UNIFIED_FPU_MUL -- the one op where that is a real trade
+//
+// Deliberately built from add and sub: with mul opt-out by default, a chain written with
+// it would exercise the fallback rather than the chaining it is here to cover.
+void example_fpu_eltwise() {
+    auto t0 = TensorAccessor(FakeArgs{0}, 0);
+    auto t3 = TensorAccessor(FakeArgs{3}, 0);
+    using Row2 = Shape<1, 2>;
+    Storage<Row2> a_storage(0);
+    Storage<Row2> b_storage(1);
+    Storage<Row2> c_storage(2);
+    Storage<Row2> out_storage(3);
+    Storage<Row2> scratch(4);
+    // The store-out buffer is its own, not scratch: a block handed to noc_store is
+    // consumed by the writer thread, so on this projection it is pushed and never
+    // waited on. Mixing that with blocks this thread does read would leave the buffer
+    // with more pushes than waits, which is exactly what the balance check objects to.
+    Storage<Row2> sink(5);
+
+    ComputeBlock a = noc_load<1>(a_storage, t0, 0).wait();
+    ComputeBlock b = noc_load<1>(b_storage, t0, 1).wait();
+    ComputeBlock c = noc_load<1>(c_storage, t0, 2).wait();
+
+    T("-- a + b - c: seed, then reuse with dst on the left");
+    ComputeBlock chain = scratch.store(a + b - c);
+
+    T("-- a - (b + c): seed, then reuse with dst on the RIGHT");
+    ComputeBlock flipped = out_storage.store(a - (b + c));
+
+    T("-- (a - b).exp(): FPU seed, SFPU unary on top");
+    ComputeBlock fused = scratch.store((a - b).exp());
+
+    T("-- max_(a, b): no FPU max, so this falls back to the SFPU tree");
+    ComputeBlock fell_back = out_storage.store(max_(a, b));
+
+    T("-- (a + b) - (c + a): two non-leaf children, so the shape rule falls back");
+    ComputeBlock both_sides = scratch.store((a + b) - (c + a));
+
+    T("-- a * b: mul is opt-out, so SFPU unless TT_UNIFIED_FPU_MUL is set");
+    Block both = sink.store(a * b);
+    noc_store<0>(std::move(both), t3, 0);
+    (void)sizeof(chain);
+    (void)sizeof(flipped);
+    (void)sizeof(fused);
+    (void)sizeof(fell_back);
+    (void)sizeof(both_sides);
 }
 
 // A unary chain: out = exp(in). Exercises Un<> and the in-place SFPU path.
@@ -750,6 +837,8 @@ int main() {
     bool ok = true;
     tt::unified::example_eltwise();
     ok &= report("eltwise");
+    tt::unified::example_fpu_eltwise();
+    ok &= report("fpu_eltwise");
     tt::unified::example_unary();
     ok &= report("unary");
     tt::unified::example_matmul_single();

@@ -642,15 +642,17 @@ rather than comparing our defaults against its cheaper ones:
 
 | | device time |
 |---|---|
-| ours: flash, 2 chunks, HiFi4 exact (metal defaults) | 60.4 us |
-| ours: flash, 2 chunks, HiFi2 approx | 46.6 us |
-| ours: flash, 4 chunks, HiFi4 exact | 98.2 us |
-| ours: flash, 4 chunks, HiFi2 approx | 80.3 us |
+| ours: flash, 2 chunks, HiFi4 exact (metal defaults) | 53.4 us |
+| ours: flash, 2 chunks, HiFi2 approx | 41.8 us |
+| ours: flash, 2 chunks, HiFi2 approx, `TT_UNIFIED_FPU_MUL` | 36.4 us |
+| ours: flash, 4 chunks, HiFi4 exact | 83.2 us |
+| ours: flash, 4 chunks, HiFi2 approx | 64.7 us |
+| ours: flash, 4 chunks, HiFi2 approx, `TT_UNIFIED_FPU_MUL` | 53.2 us |
 | ttnn SDPA, q32/k128, HiFi2 approx | 21.0 us |
 | ttnn SDPA, q128/k128, HiFi2 approx | 19.9 us |
 
-**ttnn is about 2.3x faster on one core at the same shape and the same fidelity.** That is down
-from 3.9x, and the way it came down is worth more than the number.
+**ttnn is about 2.1x faster on one core at the same shape and the same fidelity, or 1.8x with
+FPU multiply enabled.** That is down from 3.9x, and the way it came down is worth more than the number.
 
 ### Where the time actually goes
 
@@ -1165,6 +1167,59 @@ about 20%** -- the largest single item identified anywhere in this file.
 Also worth recording: `eltwise_binary.h` was simply never included by
 `adaptor_v1.hpp`, which had only the `_sfpu` variant. The FPU forms of the three ops the
 model already supports were not reachable at all.
+
+### Trees choose their own unit
+
+Implemented. `expr::kind_of` inspects an expression tree at store() and sends it to the
+FPU when it can, the SFPU otherwise, so a kernel writing `a + b` gets whichever unit can
+do it and nothing in any kernel changed.
+
+| config | 2 chunks | 4 chunks | flash error |
+|---|---|---|---|
+| SFPU only (`TT_UNIFIED_NO_FPU_ELTWISE`) | 46.55 us | 80.16 us | 0.0312 / 0.0271 |
+| **FPU add/sub (default)** | **41.81** (-10%) | **64.75** (-19%) | 0.0312 / 0.0271 |
+| plus `TT_UNIFIED_FPU_MUL` | **36.43** (-22%) | **53.21** (-34%) | 0.0312 / 0.0271 |
+
+The predicate: every binary op must have an FPU form, AND every binary node must have at
+least one LEAF child. Two non-leaf children would put two operands in DST and no
+instruction takes that, so left-deep chains qualify and `(a+b)-(c+a)` does not. A unary
+must wrap a non-leaf -- on a bare leaf it would need a copy_tile, the thing being
+avoided. Emission is OP-OUTER over the group, one init per op rather than per tile, the
+same lesson leaf-outer already taught on the SFPU side. DST holds one slot per output
+tile whatever the tree's size, since operands never occupy it.
+
+**Two things this turned up that measurement alone would not have.**
+
+A short init is not enough. `add_tiles_init` programs the math unit and the unpackers for
+an operand pair but NOT the hardware data formats, which came from `compute_init` at
+kernel entry for one specific pair. A mixed-format pair therefore read garbage --
+`test_unified_mixed_format` went to **inf** error, not to a slightly worse number. The
+fix is `reconfig_data_format(cb0, cb1)` before the seed and the single-sided form before
+a chain link, which is what `bias_finish` already does for the same reason. The full init
+that would have covered it, `binary_op_init_common`, carries hw_configure and
+pack_sync_init and must not run twice -- the same split matmul needs.
+
+And the FPU is not uniformly better. Per-op max relative error, measured:
+
+| op | FPU | SFPU | |
+|---|---|---|---|
+| add | 0.00389 | 0.00583 | FPU more accurate AND faster |
+| sub | 0.00389 | 0.00389 | equal, and faster |
+| **mul** | **0.01023** | **0.00380** | **2.7x worse**, 3.4x faster |
+
+add and sub are free wins and need no knob. mul is a real accuracy-for-speed trade and
+fails `test_unified_binary`'s 0.01 gate, so it is **opt-in**: `-DTT_UNIFIED_FPU_MUL`.
+Worth knowing before deciding: flash's own error is **unchanged to four decimals** with
+it on, because that kernel's error is dominated by approx exp and the bfloat16 chain, not
+by one multiply. So the op-level regression is real and does not propagate here -- which
+is an argument for flipping the default, made from data rather than from taste.
+
+Coverage came with it. The harness had only two-leaf adds and unaries on bare leaves, so
+the predicate and the chaining would have shipped untested; `example_fpu_eltwise` now
+walks one shape per rule -- chain with DST left, chain with DST right (the direction that
+decides whether a subtraction comes out backwards), FPU seed with an SFPU epilogue, the
+op rule falling back on `max_`, and the SHAPE rule falling back on `(a+b)-(c+a)` where
+every op does have an FPU form.
 
 ### What to test next
 

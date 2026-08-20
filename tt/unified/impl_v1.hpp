@@ -478,21 +478,6 @@ auto matmul(const ComputeBlock<SA>& a, const ComputeBlock<SB>& b) {
     return matmul<Tr>(as_node(a), as_node(b));
 }
 
-template <typename S>
-auto fpu_add(const ComputeBlock<S>& a, const ComputeBlock<S>& b) {
-    return FpuBinNode<AddOp, S>{{}, a.get_cb_id(), b.get_cb_id()};
-}
-
-template <typename S>
-auto fpu_sub(const ComputeBlock<S>& a, const ComputeBlock<S>& b) {
-    return FpuBinNode<SubOp, S>{{}, a.get_cb_id(), b.get_cb_id()};
-}
-
-template <typename S>
-auto fpu_mul(const ComputeBlock<S>& a, const ComputeBlock<S>& b) {
-    return FpuBinNode<MulOp, S>{{}, a.get_cb_id(), b.get_cb_id()};
-}
-
 template <Axis A, typename S>
 Broadcast<A, S> bcast(const ComputeBlock<S>& v) {
     return Broadcast<A, S>{v.get_cb_id()};
