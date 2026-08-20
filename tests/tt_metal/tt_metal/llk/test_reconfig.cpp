@@ -101,7 +101,7 @@ bool single_core_reconfig(
     float in2_val = 0.0078125;
     uint32_t single_tile_size_fp32 = 4 * tt::constants::TILE_HW;
     uint32_t single_tile_size_bfp16b = 2 * tt::constants::TILE_HW;
-    uint32_t single_tile_size_bfp8b = tt::constants::BFLOAT8_B_TILE_HW;
+    uint32_t single_tile_size_bfp8b = tt::tile_size(tt::DataFormat::Bfp8_b);
     uint32_t single_tile_size_out0 = test_config.fp32_dest_acc_en ? single_tile_size_fp32 : single_tile_size_bfp16b;
     const size_t dram_buffer_size_bfp16b = test_config.num_tiles * single_tile_size_bfp16b;
     const size_t dram_buffer_size_bfp8b = test_config.num_tiles * single_tile_size_bfp8b;

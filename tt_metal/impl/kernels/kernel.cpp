@@ -179,12 +179,6 @@ Kernel::Kernel(
     }
     this->core_to_runtime_args_ = {max_x + 1, std::vector<std::vector<uint32_t>>(max_y + 1, std::vector<uint32_t>())};
     this->core_to_runtime_args_data_ = {max_x + 1, std::vector<RuntimeArgsData>(max_y + 1, RuntimeArgsData{})};
-    for (auto& runtime_args_data_x : this->core_to_runtime_args_data_) {
-        for (auto& runtime_args_data : runtime_args_data_x) {
-            runtime_args_data.rt_args_data = nullptr;
-            runtime_args_data.rt_args_count = 0;
-        }
-    }
 }
 
 void Kernel::register_kernel_with_watcher() {
@@ -784,7 +778,7 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
             user_arg_count,
             runtime_args.size());
         std::memcpy(
-            this->core_to_runtime_args_data_[logical_core.x][logical_core.y].rt_args_data,
+            this->core_to_runtime_args_data_[logical_core.x][logical_core.y].data(),
             runtime_args.data(),
             runtime_args.size() * sizeof(uint32_t));
     }
@@ -826,8 +820,9 @@ void Kernel::set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count) {
                     continue;
                 }
 
-                TT_ASSERT(count >= core_to_runtime_args_data_[x][y].size());
-                core_to_runtime_args_data_[x][y].rt_args_count = count - watcher_count_word_offset_;
+                auto& rta = core_to_runtime_args_data_[x][y];
+                TT_ASSERT(count >= rta.size());
+                rta = RuntimeArgsData{rta.data(), count - watcher_count_word_offset_};
             }
         }
     }
@@ -837,7 +832,8 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
     TT_ASSERT(count >= this->common_runtime_args_.size());
 
     this->common_runtime_args_count_ = count;
-    this->common_runtime_args_data_.rt_args_count = count - watcher_count_word_offset_;
+    this->common_runtime_args_data_ =
+        RuntimeArgsData{this->common_runtime_args_data_.data(), count - watcher_count_word_offset_};
 }
 
 bool Kernel::is_idle_eth() const { return this->programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH; }

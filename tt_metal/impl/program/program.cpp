@@ -1633,7 +1633,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                 //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
                 if (!kernel->common_runtime_args().empty()) {
                     RuntimeArgsData& crta = kernel->common_runtime_args_data();
-                    crta.data()[handle.addr_crta_word] = handle.allocated_address;
+                    crta[handle.addr_crta_word] = handle.allocated_address;
                 }
             }
         }

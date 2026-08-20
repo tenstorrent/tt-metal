@@ -26,6 +26,7 @@
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/sub_device/sub_device_impl.hpp"
 #include "mesh_device.hpp"
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
@@ -70,8 +71,8 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
         const auto sub_device_id = SubDeviceId{i};
         const auto& sub_device = sub_device_manager->sub_device(sub_device_id);
         workers_per_sub_device.push_back(
-            sub_device.cores(HalProgrammableCoreType::TENSIX).num_cores() +
-            sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH).num_cores());
+            sub_device.impl()->cores(HalProgrammableCoreType::TENSIX).num_cores() +
+            sub_device.impl()->cores(HalProgrammableCoreType::ACTIVE_ETH).num_cores());
     }
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
     // when MeshCommandQueue + HWCommandQueue are unified under the same API
@@ -184,8 +185,10 @@ std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_ad
         const auto& allocator = this->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
         if (allocator) {
             // Having an allocator means there are Tensix cores in this sub-device
-            const auto& cores =
-                this->get_active_sub_device_manager()->sub_device(sub_device_id).cores(HalProgrammableCoreType::TENSIX);
+            const auto& cores = this->get_active_sub_device_manager()
+                                    ->sub_device(sub_device_id)
+                                    .impl()
+                                    ->cores(HalProgrammableCoreType::TENSIX);
             auto bank_id = allocator->get_bank_ids_from_logical_core(BufferType::L1, cores.ranges()[0].start_coord)[0];
             found_addr = allocator->get_lowest_occupied_l1_address(bank_id);
             if (found_addr.has_value()) {

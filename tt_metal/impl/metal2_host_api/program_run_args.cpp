@@ -636,7 +636,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                         "kernel reports prior runtime args. Internal invariant violation.",
                         kernel_name,
                         node.str());
-                    rta.data()[s->second] = value;
+                    rta[s->second] = value;
                 }
             }
             for (const auto& [node, vals] : kernel_runtime_varargs(kernel_params)) {
@@ -1138,7 +1138,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                         kernel_name,
                         node.str());
                     RuntimeArgsData& rta = kernel->runtime_args_data(node);
-                    rta.data()[it->second] = value;
+                    rta[it->second] = value;
                 }
             }
         }
@@ -1156,7 +1156,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                 node.str());
             RuntimeArgsData& rta = kernel->runtime_args_data(node);
             for (size_t j = 0; j < vals.size(); ++j) {
-                rta.data()[num_named_rtas + j] = vals[j];
+                rta[num_named_rtas + j] = vals[j];
             }
         }
 
@@ -1180,7 +1180,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                         "Internal error: named CRTA '{}' not in schema for kernel '{}'.",
                         name,
                         kernel_name);
-                    crta.data()[it->second] = value;
+                    crta[it->second] = value;
                 }
             }
             if (!cvarargs.empty()) {
@@ -1195,7 +1195,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                 const size_t crta_vararg_base =
                     schema->common_runtime_arg_names.size() + binding_section_words + scratchpad_section_words;
                 for (size_t j = 0; j < cvarargs.size(); ++j) {
-                    crta.data()[crta_vararg_base + j] = cvarargs[j];
+                    crta[crta_vararg_base + j] = cvarargs[j];
                 }
             }
         }

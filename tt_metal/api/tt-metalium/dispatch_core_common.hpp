@@ -31,11 +31,7 @@ public:
 
     DispatchCoreType get_dispatch_core_type() const { return type_; }
 
-    void set_dispatch_core_type(DispatchCoreType new_type) { type_ = new_type; }
-
     DispatchCoreAxis get_dispatch_core_axis() const { return axis_.value_or(get_default_axis()); }
-
-    void set_dispatch_core_axis(DispatchCoreAxis new_axis) { axis_ = new_axis; }
 
     bool operator==(const DispatchCoreConfig& other) const = default;
 };

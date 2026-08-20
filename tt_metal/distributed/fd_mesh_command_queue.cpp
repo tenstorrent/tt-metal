@@ -36,6 +36,7 @@
 #include "hal_types.hpp"
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
+#include "mesh_coord_utils.hpp"
 #include "mesh_workload.hpp"
 #include "mesh_workload_impl.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"

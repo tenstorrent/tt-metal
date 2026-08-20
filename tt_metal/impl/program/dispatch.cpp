@@ -611,16 +611,16 @@ void repoint_rta_data_into_command_stream(
         auto& data = kernel_rta_pairs[j];
         uint32_t* data_in_sequence = reinterpret_cast<uint32_t*>(base + offset) + count_word_offset;
         // rt_args_data points to args; data.second.get().data() points to count when watcher enabled.
-        if (data.first.get().rt_args_data == (data.second.get().data() + count_word_offset)) {
-            data.first.get().rt_args_data = data_in_sequence;
+        auto& rta = data.first.get();
+        if (rta.data() == (data.second.get().data() + count_word_offset)) {
+            rta = RuntimeArgsData{data_in_sequence, rta.size()};
         } else {
             TT_ASSERT(
-                data.first.get().rt_args_data ==
+                rta.data() ==
                 (reinterpret_cast<const uint32_t*>(std::get<0>(kernel_data_and_sizes[j])) + count_word_offset));
-            rta_updates.emplace_back(
-                data.first.get().rt_args_data, data_in_sequence, data.first.get().rt_args_count * sizeof(uint32_t));
+            rta_updates.emplace_back(rta.data(), data_in_sequence, rta.size() * sizeof(uint32_t));
         }
-        offset += (data.first.get().rt_args_count + count_word_offset) * sizeof(uint32_t);
+        offset += (rta.size() + count_word_offset) * sizeof(uint32_t);
     }
 }
 
@@ -1062,7 +1062,7 @@ BatchedTransfers assemble_runtime_args_commands(
                                     // Back up pointer to include count word for dispatch
                                     // Device expects [count | args...] layout for watcher bounds checking
                                     unique_rt_data_and_sizes.back().emplace_back(
-                                        kernel->runtime_args_data(core_coord).rt_args_data - count_word_offset,
+                                        kernel->runtime_args_data(core_coord).data() - count_word_offset,
                                         runtime_args_data.size() * sizeof(uint32_t),
                                         kg->rta_sizes[idx]);
                                 }
@@ -2100,16 +2100,17 @@ public:
                     // When watcher enabled, transfer.data contains [count | args...]
                     // rt_args_data points to args location (data + offset)
                     // rta_updates only copy args (count already written during initial copy)
-                    if (reinterpret_cast<uint8_t*>(transfer.rta_data->rt_args_data) ==
+                    if (reinterpret_cast<uint8_t*>(transfer.rta_data->data()) ==
                         (transfer.data.data() + count_word_byte_offset)) {
-                        // rt_args_data points to the original vector. Update it so later modifications directly modify
-                        // the command stream.
-                        transfer.rta_data->rt_args_data =
-                            reinterpret_cast<uint32_t*>(data_collection_location[j] + count_word_byte_offset);
+                        // View still aliases the original vector. Retarget it so later modifications write the
+                        // command stream.
+                        *transfer.rta_data = RuntimeArgsData{
+                            reinterpret_cast<uint32_t*>(data_collection_location[j] + count_word_byte_offset),
+                            transfer.rta_data->size()};
                     } else {
-                        // rt_args_data points into the command stream. Setup a copy from that other location.
+                        // View already points into a command stream. Copy from that location.
                         program_command_sequence.rta_updates.push_back(ProgramCommandSequence::RtaUpdate{
-                            transfer.rta_data->rt_args_data,
+                            transfer.rta_data->data(),
                             data_collection_location[j] + count_word_byte_offset,
                             static_cast<uint32_t>(transfer.data.size() - count_word_byte_offset)});
                     }

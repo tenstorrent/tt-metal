@@ -173,8 +173,8 @@ void MetalContext::initialize(
     // which will cause implicit initialization of a MetalContext if one doesn't exist yet.
     // Workaround that by setting the dispatch core axis here and storing a resolved config.
     // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
-    DispatchCoreConfig resolved_config = dispatch_core_config;
-    resolved_config.set_dispatch_core_axis(
+    DispatchCoreConfig resolved_config(
+        dispatch_core_config.get_dispatch_core_type(),
         resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config()));
 
     if (initialized_) {

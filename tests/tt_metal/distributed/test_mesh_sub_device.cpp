@@ -35,6 +35,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
+#include "impl/sub_device/sub_device_impl.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt::tt_metal::distributed::test {
@@ -100,10 +101,10 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     auto sub_device_manager = mesh_device_->create_sub_device_manager({sub_device_1, sub_device_2, sub_device_3}, 3200);
     mesh_device_->load_sub_device_manager(sub_device_manager);
 
-    auto syncer_coord = sub_device_1.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
+    auto syncer_coord = sub_device_1.impl()->cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto syncer_core = CoreRangeSet(CoreRange(syncer_coord, syncer_coord));
     auto syncer_core_phys = mesh_device_->worker_core_from_logical_core(syncer_coord);
-    auto datacopy_coord = sub_device_2.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
+    auto datacopy_coord = sub_device_2.impl()->cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto datacopy_core = CoreRangeSet(CoreRange(datacopy_coord, datacopy_coord));
     auto datacopy_core_phys = mesh_device_->worker_core_from_logical_core(datacopy_coord);
 

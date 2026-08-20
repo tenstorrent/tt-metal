@@ -623,7 +623,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
         } else {
             for (KernelHandle k : kernels) {
                 memcpy(
-                    GetCommonRuntimeArgs(program_, k).rt_args_data,
+                    GetCommonRuntimeArgs(program_, k).data(),
                     common_args.data(),
                     common_args.size() * sizeof(uint32_t));
             }
