@@ -119,7 +119,7 @@ class VisionTransformer(LightweightModule):
         """
         patch_seq_len, _ = patch_input.shape
         x = patch_input
-        seq_len = ((patch_seq_len // 128) + 1) * 128 if seq_len is None else seq_len
+        seq_len = -(-patch_seq_len // 128) * 128 if seq_len is None else seq_len  # ceil, not +1
         x = torch.nn.functional.pad(x, (0, 0, 0, seq_len - patch_seq_len)).unsqueeze(0)
         x = self.args.prepare_residual_tensor_prefill(x)
         return x
@@ -270,8 +270,19 @@ class DropInVisionTransformer(torch.nn.Module):
             # 1. Calculate total unpadded sequence length
             grid_thw = grid_thw.unsqueeze(0)
             unpadded_seq_len = grid_thw.prod(dim=1).sum().item()
-            # Calculate padded sequence length (divisible by 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
-            seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
+            # Pad the row count up to what this tower actually requires, which is 128:
+            # `VisionAttention.forward_prefill` asserts `seq_len % 128 == 0`, and every matmul
+            # `chunk` is derived as a DIVISOR of the row count, so nothing here needs more.
+            #
+            # This used to round to 2048, citing `tt_transformers.tt.attention::forward_prefill` --
+            # a file this tower never calls, it has its own attention. The cost was not just wasted
+            # rows: SDPA runs `is_causal=False` with NO attn_mask, so the pad rows are unmasked keys
+            # and every real query summed `exp(0)` over each of them, inflating its softmax
+            # denominator. Tightening this removes work AND moves the tower closer to the reference.
+            #
+            # `-(-n // m) * m` is ceil-align. The old `(n // m) + 1` form over-padded exact
+            # multiples -- 4096 -> 6144, i.e. 1.5x the rows and 2.25x the SDPA, for nothing.
+            seq_len = -(-unpadded_seq_len // 128) * 128
 
             # 2. Use preprocessing function from reference/functional to get indices and embeddings
             cu_seqlens, position_embeddings = qwen3_5_vision_transformer_preprocess(
@@ -291,27 +302,33 @@ class DropInVisionTransformer(torch.nn.Module):
                 pos_embeds = self.reference_model.fast_pos_embed_interpolate(grid_thw)
                 patch_input = patch_input + pos_embeds
 
-            # 4. Prepare rotational embeddings (cos, sin) -> upload -> pad to seq_len on device.
-            # The pad is the identity rotation (cos=1, sin=0), and it is by far the larger part of
-            # the tensor when an image's token count sits just above a 2048 boundary — padding on
-            # device means only the real rows cross PCIe.
+            # 4. Prepare rotational embeddings (cos, sin) and upload them ONCE, already in the shape
+            # `rotary_embedding_llama` wants: bf16, rows padded to seq_len and the head dim padded to
+            # `padded_head_dim`, both with the identity rotation (cos=1, sin=0).
+            #
+            # All three of those used to happen on device, and the head-dim pad happened inside
+            # `VisionAttention.forward_prefill` -- i.e. 27 times per image on identical tensors. Doing
+            # it here costs nothing extra on the wire: bf16 at the padded extent (12288x96 = 2.36 MB)
+            # is SMALLER than fp32 at the real one (11008x72 = 3.17 MB), and it removes, per image,
+            # 2 TilizeWithValPadding + 2 Typecast + 2 Pad, plus 2 FillPad per block.
             cos_orig, sin_orig = position_embeddings
             cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
             mesh = self.model_args.mesh_device
+            pad_rows = seq_len - unpadded_seq_len
+            pad_cols = self.model_args.padded_head_dim - cos_orig.shape[-1]
 
             def _upload_padded(t, pad_value):
-                tt = ttnn.from_torch(
+                t = t.to(torch.bfloat16)
+                if pad_rows or pad_cols:
+                    # F.pad's last-dim-first order: (left, right, top, bottom).
+                    t = torch.nn.functional.pad(t, (0, pad_cols, 0, pad_rows), value=pad_value)
+                return ttnn.from_torch(
                     t.unsqueeze(0).unsqueeze(0).contiguous(),
-                    dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
+                    dtype=ttnn.bfloat16,  # rotary_embedding_llama hard-asserts bfloat16
                     layout=ttnn.TILE_LAYOUT,
                     device=mesh,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
                 )
-                if seq_len == unpadded_seq_len:
-                    return tt
-                padded = ttnn.pad(tt, [(0, 0), (0, 0), (0, seq_len - unpadded_seq_len), (0, 0)], value=pad_value)
-                ttnn.deallocate(tt)
-                return padded
 
             cos = _upload_padded(cos_orig, 1.0)
             sin = _upload_padded(sin_orig, 0.0)
@@ -328,12 +345,11 @@ class DropInVisionTransformer(torch.nn.Module):
                 rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
             )
 
-            # deallocate device tensors that are not needed by decode
+            # deallocate device tensors that are not needed by decode. `rot_mats` IS `[cos, sin]`,
+            # so freeing both by name and by index was a double free.
             ttnn.deallocate(tt_input)
             ttnn.deallocate(cos)
             ttnn.deallocate(sin)
-            ttnn.deallocate(rot_mats[0])
-            ttnn.deallocate(rot_mats[1])
 
             # --- Postprocessing ---
             # 1. Extract the relevant output part and adjust shape (matching test logic).
