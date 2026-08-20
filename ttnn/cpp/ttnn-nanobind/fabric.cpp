@@ -440,7 +440,7 @@ void bind_fabric_api(nb::module_& mod) {
         nb::arg("receiver_coord"),
         nb::arg("topology"),
         "Compute {num_hops, is_forward, neighbor_id} for a 1-D unicast (owns the fabric fwd/bwd sign reversal + ring "
-        "shorter-way).");
+        "shorter-way, wrap-branch fixed).");
     mod.def(
         "make_ccl_semaphore",
         [](tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t initial_value) {

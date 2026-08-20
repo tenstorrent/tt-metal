@@ -168,8 +168,15 @@ inline DmRoute ccl_dm_route(
     };
 
     if (topology == ttnn::ccl::Topology::Ring) {
-        int ring_hops = line_hops + ((line_hops < 0 ? -1 : 1) * mesh_shape[dim]);
-        if (std::abs(ring_hops) < std::abs(line_hops)) {
+        // fabric_1d_routing_vector returns |hops| + a direction flag; reconstruct the SIGNED line
+        // distance, then the other way round the ring is `signed - sign(signed) * ring_size`.
+        // (Pre-fix this computed `line_hops + sign(line_hops) * ring_size` over the already-ABSOLUTE
+        // line_hops, which is always longer — the wrap branch was unreachable and a Ring route
+        // silently degraded to the line route, with the wrong hop count AND direction for wrap
+        // pairs. Caught by reduce_scatter's Refinement-1 fabric probe on a (1, 4) ring.)
+        const int signed_line_hops = line_is_forward ? line_hops : -line_hops;
+        const int ring_hops = signed_line_hops + ((signed_line_hops > 0 ? -1 : 1) * static_cast<int>(mesh_shape[dim]));
+        if (std::abs(ring_hops) < std::abs(signed_line_hops)) {
             bool ring_is_forward = (ring_hops > 0);
             const auto next_fabric_id = get_neighbor_id(ring_is_forward, MeshCoordinate::BoundaryMode::WRAP);
             return {static_cast<uint32_t>(std::abs(ring_hops)), !ring_is_forward, next_fabric_id};
