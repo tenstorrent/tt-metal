@@ -9,7 +9,12 @@
 // Semantic definition = the row's golden = the HARDWARE cast semantics of
 // SFP_STOCH_RND mod1=FP32_TO_FP16A rnd_mode=0, machine-checked by lane CT's
 // exhaustive 2^32 proof against the pinned craq oracle (sfpi-gcc
-// agent/cast-peephole-harvest: gcc/config/riscv/tt/proofs/cast-fp16a-rne/):
+// agent/cast-peephole-harvest: gcc/config/riscv/tt/proofs/cast-fp16a-rne/)
+// and independently documented by the ISA reference (tt-isa-documentation
+// BlackholeA0/TensixTile/TensixCoprocessor/SFPSTOCHRND_FloatFloat.md —
+// "Round to nearest with ties away from zero", denormals/-0.0 -> +0.0,
+// +/-NaN -> +/-Infinity; its SFPSTORE table also confirms the fp32 store of
+// the rounded value is exact):
 // half-AWAY rounding on the 13 discarded mantissa bits (>= midpoint rounds
 // up, despite the rnd encoding being NAMED RND_EVEN), exponent-0 inputs
 // (zeros and denormals) flushed to +0.0, every NaN payload collapsed to

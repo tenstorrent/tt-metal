@@ -2552,7 +2552,14 @@ class UnarySFPUGolden:
         # semantics, machine-checked by lane CT's exhaustive 2^32 sweep against
         # the pinned craq oracle (sfpi-gcc agent/cast-peephole-harvest
         # fc70df6a87b4a: gcc/config/riscv/tt/proofs/cast-fp16a-rne/, lifting
-        # tensix.cpp:9524-9541 + the :2772-2816 srnd helpers "matching RTL"):
+        # tensix.cpp:9524-9541 + the :2772-2816 srnd helpers "matching RTL")
+        # and INDEPENDENTLY documented by the ISA reference (tt-isa-documentation
+        # BlackholeA0/TensixTile/TensixCoprocessor/SFPSTOCHRND_FloatFloat.md:
+        # "Round to nearest with ties away from zero"; denormals and -0.0 ->
+        # +0.0; +/-NaN -> +/-Infinity; functional model: RND_NEAREST pins
+        # PRNGBits=0x400000 and rounds up on DiscardedBits >= 0x1000 -- the
+        # doc's bug note explains the naming trap: corrected logic would
+        # compare with '>', the shipped '>=' makes the midpoint round away):
         #   * finite normals: drop the 13 low mantissa bits and round
         #     HALF-AWAY -- the kept part rounds up exactly when the discarded
         #     remainder is >= the midpoint 0x1000.  (The rnd encoding is NAMED
