@@ -23,6 +23,9 @@ SEM_PROGRESS = 0
 SEM_MCAST_READY = 1
 SEM_MCAST_CONSUMED = 2
 SEM_STAGE2 = 3
+# Shares id 3 with SEM_STAGE2: the tree reducer and the push reduce-scatter are
+# different programs and neither declares the other's semaphore.
+SEM_GATHER = 3
 
 # Ordered BEST-FIRST. The first four are the ones worth running; the trailing three are
 # MEASURED NULLS kept for the record (see README) and excluded from the default sweep, so a
@@ -30,6 +33,7 @@ SEM_STAGE2 = 3
 VARIANTS = (
     "reduce_root_mcast",
     "reduce_scatter_mcast",
+    "reduce_scatter_push",
     "tree_reduce_mcast",
     "unicast_all_gather",
     # --- measured nulls, opt in with `--variant all` -------------------------
@@ -700,6 +704,133 @@ void kernel_main() {
 """
 
 
+# Same algorithm and same gather layout as _REDUCE_SCATTER_KERNEL, with the data
+# moved in the opposite direction: contributors PUSH their tiles into the owning
+# worker's gather buffer instead of each worker PULLING from every contributor.
+#
+# Two consequences worth measuring, both structural rather than incidental:
+#
+#  * Addressing. A pusher needs the DESTINATION's gather address, and it gets one
+#    by using its own `get_write_ptr()` - which only resolves correctly if the CB
+#    is allocated identically on every core that participates. So both CBs are
+#    declared group-wide here, where the pull variant declares them on the worker
+#    cores alone. When `num_workers == group_size` (any `num_tiles >= group_size`,
+#    i.e. the whole regime where reduce-scatter is the fastest reducer) that is
+#    the same set of cores and the L1 cost is IDENTICAL; only a short group with
+#    idle non-workers pays extra.
+#  * Handshake. The pull variant reads out of the input tensor, which nobody
+#    writes, so a worker needs no notification that a contributor is ready. A push
+#    has to tell the worker its data landed: every contributor bumps every
+#    worker's gather semaphore after its write barrier, so the gather phase costs
+#    `group_size * num_workers` extra semaphore increments per all-reduce.
+_REDUCE_SCATTER_PUSH_KERNEL = r"""
+#include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/tensor/noc_traits.h"
+#include "hostdevcommon/common_values.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+
+using namespace dataflow_kernel_lib;
+
+void kernel_main() {
+    constexpr uint32_t cb_gather = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_partial = get_compile_time_arg_val(1);
+    constexpr uint32_t scalars = McastArgs<2, 5>::next_compile_time_args_offset();
+    constexpr uint32_t num_tiles = get_compile_time_arg_val(scalars + 0);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(scalars + 1);
+    constexpr uint32_t group_size = get_compile_time_arg_val(scalars + 2);
+    constexpr uint32_t num_workers = get_compile_time_arg_val(scalars + 3);
+    constexpr uint32_t kernel_iters = get_compile_time_arg_val(scalars + 4);
+    constexpr uint32_t progress_sem_id = get_compile_time_arg_val(scalars + 5);
+    constexpr uint32_t gather_sem_id = get_compile_time_arg_val(scalars + 6);
+    constexpr uint32_t coords_base = 5;
+    constexpr uint32_t mcast_rt_base = coords_base + 2 * group_size;
+    constexpr auto mc = McastArgs<2, mcast_rt_base>();
+
+    const uint32_t input_addr = get_arg_val<uint32_t>(0);
+    const uint32_t output_addr = get_arg_val<uint32_t>(1);
+    const uint32_t my_index = get_arg_val<uint32_t>(2);
+    const uint32_t root_x = get_arg_val<uint32_t>(3);
+    const uint32_t root_y = get_arg_val<uint32_t>(4);
+    constexpr uint32_t payload_bytes = num_tiles * page_bytes;
+    constexpr uint32_t max_assigned = (num_tiles + num_workers - 1) / num_workers;
+
+    Semaphore<> progress(progress_sem_id);
+    Semaphore<> gathered(gather_sem_id);
+    Noc noc;
+
+    CircularBuffer gather(cb_gather);
+    CircularBuffer partial(cb_partial);
+    // The gather CB holds exactly one round (group_size * max_assigned pages), so
+    // its write pointer is a fixed address - which is what lets a remote pusher
+    // target it, and what makes this local read of it a valid stand-in for every
+    // worker's copy.
+    const uint32_t gather_base = gather.get_write_ptr();
+    const uint32_t assigned = (num_tiles + num_workers - 1 - my_index) / num_workers;
+
+    for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
+        // PUSH phase - every core is a contributor. Walk the workers rather than
+        // the tiles so each destination's pages are issued back to back.
+        for (uint32_t worker = 0; worker < num_workers; ++worker) {
+            const uint32_t wx = get_arg_val<uint32_t>(coords_base + 2 * worker);
+            const uint32_t wy = get_arg_val<uint32_t>(coords_base + 2 * worker + 1);
+            const uint32_t worker_assigned = (num_tiles + num_workers - 1 - worker) / num_workers;
+            for (uint32_t local = 0; local < worker_assigned; ++local) {
+                const uint32_t tile = worker + local * num_workers;
+                noc_async_write(
+                    input_addr + tile * page_bytes,
+                    get_noc_addr(wx, wy, gather_base + (my_index * max_assigned + local) * page_bytes),
+                    page_bytes);
+            }
+        }
+        noc_async_write_barrier();
+        for (uint32_t worker = 0; worker < num_workers; ++worker) {
+            const uint32_t wx = get_arg_val<uint32_t>(coords_base + 2 * worker);
+            const uint32_t wy = get_arg_val<uint32_t>(coords_base + 2 * worker + 1);
+            gathered.up(noc, wx, wy, 1);
+        }
+
+        // REDUCE phase - only the workers have compute to hand off to.
+        if (my_index < num_workers) {
+            gather.reserve_back(group_size * max_assigned);
+            gathered.wait_min((iter + 1) * group_size);
+            gather.push_back(group_size * max_assigned);
+
+            partial.wait_front(max_assigned);
+            const uint32_t partial_addr = partial.get_read_ptr();
+            for (uint32_t local = 0; local < assigned; ++local) {
+                const uint32_t tile = my_index + local * num_workers;
+                noc_async_write(
+                    partial_addr + local * page_bytes,
+                    get_noc_addr(root_x, root_y, output_addr + tile * page_bytes),
+                    page_bytes);
+            }
+            noc_async_write_barrier();
+            progress.up(noc, root_x, root_y, 1);
+            partial.pop_front(max_assigned);
+        }
+    }
+
+    if (my_index == group_size - 1) {
+        auto sender = mc.sender(noc);
+        for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
+            progress.wait_min((iter + 1) * num_workers);
+            sender.send(output_addr, output_addr, payload_bytes);
+        }
+    } else {
+        auto receiver = mc.receiver(noc);
+        for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
+            receiver.receive();
+        }
+    }
+}
+"""
+
+
 _TREE_REDUCE_KERNEL = r"""
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -1100,6 +1231,68 @@ def _create_reduce_scatter_descriptor(input_tensor, output_tensor, layout, num_t
     return ttnn.ProgramDescriptor(kernels=[dataflow, compute], semaphores=semaphores, cbs=cbs)
 
 
+def _create_reduce_scatter_push_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
+    group_size = layout.group_size
+    num_workers = min(num_tiles, group_size)
+    max_assigned = (num_tiles + num_workers - 1) // num_workers
+    helpers = _mcast_helpers(
+        input_tensor.device(),
+        layout,
+        rotating=False,
+        sem_ids=(SEM_MCAST_READY, SEM_MCAST_CONSUMED),
+    )
+    mcast_ct = list(helpers[0].compile_time_args())
+    dataflow_rt = ttnn.RuntimeArgs()
+    compute_rt = {}
+    worker_cores = []
+    for group, helper in zip(layout.groups, helpers):
+        virtual = _virtual_coords(input_tensor.device(), group.cores)
+        root_virtual = input_tensor.device().worker_core_from_logical_core(group.root)
+        for index, (x, y) in enumerate(group.cores):
+            core = ttnn.CoreCoord(x, y)
+            dataflow_rt[x][y] = (
+                [
+                    input_tensor.buffer_address(),
+                    output_tensor.buffer_address(),
+                    index,
+                    root_virtual.x,
+                    root_virtual.y,
+                ]
+                + virtual
+                + list(helper.runtime_args(core))
+            )
+            if index < num_workers:
+                worker_cores.append((x, y))
+                compute_rt[(x, y)] = [group_size, max_assigned, kernel_iters]
+
+    worker_ranges = _core_range_set(worker_cores)
+    # Group-wide, not worker-only: a pusher derives the destination gather address
+    # from its OWN get_write_ptr(), which requires an identical CB layout on every
+    # participating core. Identical to the pull variant's footprint whenever
+    # num_workers == group_size.
+    cbs = [
+        _normal_cb(CB_GATHER, layout.core_ranges, group_size * max_assigned, page_bytes, input_tensor.dtype),
+        _normal_cb(CB_PARTIAL, layout.core_ranges, max_assigned, page_bytes, output_tensor.dtype),
+    ]
+    semaphores = [
+        ttnn.SemaphoreDescriptor(id=SEM_PROGRESS, core_ranges=layout.core_ranges, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=layout.core_ranges, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=SEM_MCAST_READY, core_ranges=layout.core_ranges, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=SEM_MCAST_CONSUMED, core_ranges=layout.core_ranges, initial_value=0),
+    ]
+    dataflow = _inline_kernel(
+        _REDUCE_SCATTER_PUSH_KERNEL,
+        layout.core_ranges,
+        [CB_GATHER, CB_PARTIAL]
+        + mcast_ct
+        + [num_tiles, page_bytes, group_size, num_workers, kernel_iters, SEM_PROGRESS, SEM_GATHER],
+        dataflow_rt,
+        ttnn.ReaderConfigDescriptor(),
+    )
+    compute = _compute_kernel(worker_ranges, compute_rt, output_cb=CB_PARTIAL)
+    return ttnn.ProgramDescriptor(kernels=[dataflow, compute], semaphores=semaphores, cbs=cbs)
+
+
 def _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
     rows, cols = layout.group_shape
     # A 1-D group has only one grid axis to reduce along, so the hierarchy collapses to a single
@@ -1220,6 +1413,10 @@ def create_program_descriptor(
         return _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
     if variant == "reduce_scatter_mcast":
         return _create_reduce_scatter_descriptor(
+            input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters
+        )
+    if variant == "reduce_scatter_push":
+        return _create_reduce_scatter_push_descriptor(
             input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters
         )
     return _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
