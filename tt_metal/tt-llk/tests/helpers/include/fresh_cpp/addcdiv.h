@@ -11,8 +11,9 @@
 // evaluated in fp32 (the golden's statement), with the scalar `value`
 // arriving as raw fp32 bits exactly as the production dispatch sends it.
 // The division is stated as multiplication by the divisor's reciprocal
-// (fresh_common.h shared statement), sign-split so the seed's positive
-// domain assumption holds; the suite's stimuli hold c away from zero.
+// (fresh_common.h shared hardware-seed statement, sign-agnostic — the
+// Newton identity holds for either sign, so no sign split is needed); the
+// suite's stimuli hold c away from zero, the statement's only exclusion.
 #include <cstdint>
 
 #include "fresh_cpp/fresh_common.h"
@@ -39,7 +40,7 @@ inline void calculate_addcdiv_fresh_cpp(
         const sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * tile_rows];
         const sfpi::vFloat c = sfpi::dst_reg[dst_index_in2 * tile_rows];
 
-        const sfpi::vFloat c_recip = sfpi::copysgn(fresh_recip_positive(sfpi::abs(c)), c);
+        const sfpi::vFloat c_recip = fresh_recip_hwseed(c);
         sfpi::vFloat result        = (scale * b) * c_recip + a;
         if constexpr (!DST_ACCUM_MODE)
         {
