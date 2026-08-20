@@ -137,8 +137,8 @@ inline __attribute__((always_inline)) void summary_step(
     multiply_by_decay(
         current_state.get_id(), dfb::final_decay, dfb::state_temporary, state_temporary, key_tiles, value_tiles);
     state_temporary.wait_front(kv);
-    current_state.pop_front(kv);
     elementwise(dfb::state_temporary, dfb::state_update, destination.get_id(), destination, kv, 0);
+    current_state.pop_front(kv);
     state_temporary.pop_front(kv);
     state_update.pop_front(kv);
 }
@@ -151,7 +151,7 @@ TT_KERNEL void compute(uint32_t num_chunks) {
     DataflowBuffer kd(dfb::kd);
     DataflowBuffer q_decay(dfb::q_decay);
     DataflowBuffer intra(dfb::intra);
-    DataflowBuffer state_two(dfb::state_two);
+    DataflowBuffer state_ring(dfb::state_ring);
     DataflowBuffer value_new(dfb::value_new);
     DataflowBuffer final_decay(dfb::final_decay);
     DataflowBuffer output(dfb::output);
@@ -162,7 +162,8 @@ TT_KERNEL void compute(uint32_t num_chunks) {
     DataflowBuffer final_state(dfb::final_state);
     DataflowBuffer scratch(dfb::scratch);
     DataflowBuffer summary_raw(dfb::summary_raw);
-    DataflowBuffer state_three(dfb::state_three);
+    DataflowBuffer summary_seed(dfb::summary_seed);
+    DataflowBuffer summary_ring(dfb::summary_ring);
 
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
@@ -174,10 +175,8 @@ TT_KERNEL void compute(uint32_t num_chunks) {
 
     if constexpr (summary_pair) {
         for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
-            DataflowBuffer* current_b = chunk == 0 ? &state : ((chunk & 1U) ? &state_two : &state_three);
-            DataflowBuffer* next_b = (chunk & 1U) ? &state_three : &state_two;
-            DataflowBuffer* current_ab = chunk == 0 ? &q_decay : ((chunk & 1U) ? &intra : &output_intermediate);
-            DataflowBuffer* next_ab = (chunk & 1U) ? &output_intermediate : &intra;
+            DataflowBuffer& current_b = chunk == 0 ? state : state_ring;
+            DataflowBuffer& current_ab = chunk == 0 ? summary_seed : summary_ring;
             const bool last = chunk == num_chunks - 1;
 
             kd.wait_front(ck);
@@ -186,8 +185,8 @@ TT_KERNEL void compute(uint32_t num_chunks) {
             k_decay_transposed.wait_front(kc);
             final_decay.wait_front(Kt);
             summary_step(
-                *current_b,
-                last ? final_state : *next_b,
+                current_b,
+                last ? final_state : state_ring,
                 kd,
                 v_beta,
                 t_inv,
@@ -201,8 +200,8 @@ TT_KERNEL void compute(uint32_t num_chunks) {
                 Kt,
                 Vt);
             summary_step(
-                *current_ab,
-                last ? summary_raw : *next_ab,
+                current_ab,
+                last ? summary_raw : summary_ring,
                 kd,
                 v_beta,
                 t_inv,
@@ -227,13 +226,12 @@ TT_KERNEL void compute(uint32_t num_chunks) {
         summary_raw.pop_front(kv);
     } else {
         for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
-            DataflowBuffer* current_state = chunk == 0 ? &state : ((chunk & 1U) ? &state_two : &state_three);
-            DataflowBuffer* next_state = (chunk & 1U) ? &state_three : &state_two;
-            DataflowBuffer& destination = chunk == num_chunks - 1 ? final_state : *next_state;
+            DataflowBuffer& current_state = chunk == 0 ? state : state_ring;
+            DataflowBuffer& destination = chunk == num_chunks - 1 ? final_state : state_ring;
 
             kd.wait_front(ck);
-            current_state->wait_front(kv);
-            matrix_multiply(dfb::kd, current_state->get_id(), dfb::scratch, scratch, Ct, Kt, Vt, false);
+            current_state.wait_front(kv);
+            matrix_multiply(dfb::kd, current_state.get_id(), dfb::scratch, scratch, Ct, Kt, Vt, false);
             scratch.wait_front(cv);
             kd.pop_front(ck);
             v_beta.wait_front(cv);
@@ -249,14 +247,7 @@ TT_KERNEL void compute(uint32_t num_chunks) {
 
             q_decay.wait_front(ck);
             matrix_multiply(
-                dfb::q_decay,
-                current_state->get_id(),
-                dfb::output_intermediate,
-                output_intermediate,
-                Ct,
-                Kt,
-                Vt,
-                false);
+                dfb::q_decay, current_state.get_id(), dfb::output_intermediate, output_intermediate, Ct, Kt, Vt, false);
             output_intermediate.wait_front(cv);
             q_decay.pop_front(ck);
             intra.wait_front(cc);
@@ -275,11 +266,11 @@ TT_KERNEL void compute(uint32_t num_chunks) {
             value_new.pop_front(cv);
 
             final_decay.wait_front(Kt);
-            multiply_by_decay(current_state->get_id(), dfb::final_decay, dfb::state_temporary, state_temporary, Kt, Vt);
+            multiply_by_decay(current_state.get_id(), dfb::final_decay, dfb::state_temporary, state_temporary, Kt, Vt);
             state_temporary.wait_front(kv);
             final_decay.pop_front(Kt);
-            current_state->pop_front(kv);
             elementwise(dfb::state_temporary, dfb::state_update, destination.get_id(), destination, kv, 0);
+            current_state.pop_front(kv);
             state_temporary.pop_front(kv);
             state_update.pop_front(kv);
         }
