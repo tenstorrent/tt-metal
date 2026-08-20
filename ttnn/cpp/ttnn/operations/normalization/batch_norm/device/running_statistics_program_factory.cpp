@@ -36,9 +36,6 @@ const DFBSpecName MOMENTUM_DFB{"momentum"};
 const DFBSpecName ONE_DFB{"one"};                                  // one tile filled with 1.0
 const DFBSpecName UPDATED_MEAN_DFB{"updated_mean"};                // FP32 staging when typecasting
 const DFBSpecName UPDATED_VAR_DFB{"updated_var"};                  // FP32 staging when typecasting
-const DFBSpecName TMP1_DFB{"tmp1"};                                // 1 - momentum
-const DFBSpecName TMP2_DFB{"tmp2"};                                // momentum * batch stat
-const DFBSpecName TMP3_DFB{"tmp3"};                                // (1 - momentum) * running stat
 const DFBSpecName WRITER_UPDATED_MEAN_DFB{"writer_updated_mean"};  // only when typecasting the mean
 const DFBSpecName WRITER_UPDATED_VAR_DFB{"writer_updated_var"};    // only when typecasting the var
 
@@ -251,11 +248,6 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
             needs_var_typecast ? interm_data_format : e_data_format,
             needs_var_typecast ? interm_single_tile_size : e_single_tile_size,
             b_num_tiles_per_cb),
-        // Intermediates required for updating the running stats; produced and consumed entirely
-        // inside the compute kernel.
-        make_dfb(TMP1_DFB, interm_data_format, interm_single_tile_size, b_num_tiles_per_cb),
-        make_dfb(TMP2_DFB, interm_data_format, interm_single_tile_size, b_num_tiles_per_cb),
-        make_dfb(TMP3_DFB, interm_data_format, interm_single_tile_size, b_num_tiles_per_cb),
     };
     if (needs_mean_typecast) {
         dataflow_buffers.push_back(
@@ -438,38 +430,6 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
             .accessor_name = "updated_var",
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
-        // tmp1..tmp3 never leave the compute kernel: it packs a partial result and reads it straight
-        // back, so it holds both ends of each FIFO.
-        DFBBinding{
-            .dfb_spec_name = TMP1_DFB,
-            .accessor_name = "tmp1",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        },
-        DFBBinding{
-            .dfb_spec_name = TMP1_DFB,
-            .accessor_name = "tmp1",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        },
-        DFBBinding{
-            .dfb_spec_name = TMP2_DFB,
-            .accessor_name = "tmp2",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        },
-        DFBBinding{
-            .dfb_spec_name = TMP2_DFB,
-            .accessor_name = "tmp2",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        },
-        DFBBinding{
-            .dfb_spec_name = TMP3_DFB,
-            .accessor_name = "tmp3",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        },
-        DFBBinding{
-            .dfb_spec_name = TMP3_DFB,
-            .accessor_name = "tmp3",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        },
     };
 
     KernelSpec::CompileTimeArgs compute_compile_time_args{
@@ -531,10 +491,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
               UPDATED_MEAN_DFB,
               UPDATED_VAR_DFB,
               MOMENTUM_DFB,
-              ONE_DFB,
-              TMP1_DFB,
-              TMP2_DFB,
-              TMP3_DFB}) {
+              ONE_DFB}) {
             unpack_modes[dfb_name] = UnpackMode::UnpackToDest;
         }
     }

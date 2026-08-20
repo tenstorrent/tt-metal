@@ -8,37 +8,26 @@
 // this file is retired, changes here likely belong in the fork too.
 
 #include <cstdint>
-
-#include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 
 void kernel_main() {
-    uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
-    constexpr uint32_t onetile = 1;
+    constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    constexpr auto dfb_in_id = tt::CBIndex::c_0;
+    constexpr auto dfb_out_id = tt::CBIndex::c_16;
 
-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    copy_init(tt::CBIndex::c_0);
+    compute_kernel_hw_startup(dfb_in_id, dfb_out_id);
 
-    CircularBuffer cb_in(tt::CBIndex::c_0);
-    CircularBuffer cb_out(tt::CBIndex::c_16);
-
-    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        tile_regs_acquire();
-
-        // Pop tile after tile, copy to DST and pack
-        cb_in.wait_front(onetile);
-        cb_out.reserve_back(onetile);
-        copy_tile(tt::CBIndex::c_0, 0, 0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, tt::CBIndex::c_16);
-
-        cb_in.pop_front(onetile);
-        cb_out.push_back(onetile);
-
-        tile_regs_release();
-    }
+    compute_kernel_lib::eltwise_chain(
+        compute_kernel_lib::IterationShape::tiles(per_core_tile_cnt),
+        compute_kernel_lib::CopyTile<compute_kernel_lib::input(
+            dfb_in_id,
+            compute_kernel_lib::WaitPolicy::PerTile,
+            compute_kernel_lib::PopPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled)>{},
+        compute_kernel_lib::PackTile<compute_kernel_lib::output(
+            dfb_out_id,
+            compute_kernel_lib::ReservePolicy::PerTile,
+            compute_kernel_lib::PushPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled)>{});
 }

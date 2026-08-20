@@ -3,61 +3,48 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/fill.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/special.hpp"    // Where
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"  // FillBitcast / FillInt
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"    // Optional
+
+namespace ckl = compute_kernel_lib;
+
+constexpr auto kWhereDF = static_cast<DataFormat>(get_compile_time_arg_val(0));
+constexpr bool kIsInt = kWhereDF == DataFormat::Int32 || kWhereDF == DataFormat::UInt32;
+constexpr bool kIsFloat = kWhereDF == DataFormat::Float32 || kWhereDF == DataFormat::Float16_b;
+static_assert(kIsInt || kIsFloat, "where_tss supports only Int32, UInt32, Float32, and Float16_b");
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t packed_scalar1 = get_arg_val<uint32_t>(1);
     const uint32_t packed_scalar2 = get_arg_val<uint32_t>(2);
-    const auto true_value = reinterpret_cast<const float*>(&packed_scalar1);
-    const auto false_value = reinterpret_cast<const float*>(&packed_scalar2);
 
-    constexpr auto cb_input = tt::CBIndex::c_0;
-    constexpr auto cb_output = tt::CBIndex::c_2;
+    constexpr auto dfb_input_id = tt::CBIndex::c_0;
+    constexpr auto dfb_output_id = tt::CBIndex::c_2;
 
-    DataflowBuffer dfb_in(cb_input);
-    DataflowBuffer dfb_out(cb_output);
+    compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
 
-    compute_kernel_hw_startup(cb_input, cb_output);
-    copy_init(cb_input);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        dfb_in.wait_front(1);
-        dfb_out.reserve_back(1);
-        tile_regs_acquire();
-        copy_init(cb_input);
-        copy_tile(cb_input, 0, 0);
-
-        fill_tile_init();
-#if defined(INP_INT32)
-        fill_tile_int<DataFormat::Int32>(1, packed_scalar1);
-        fill_tile_int<DataFormat::Int32>(2, packed_scalar2);
-#endif
-#if defined(INP_UINT32)
-        fill_tile_int<DataFormat::UInt32>(1, packed_scalar1);
-        fill_tile_int<DataFormat::UInt32>(2, packed_scalar2);
-#endif
-#if defined(INP_FLOAT) || defined(INP_FLOAT32)
-        fill_tile(1, *true_value);
-        fill_tile(2, *false_value);
-#endif
-#ifndef SFPU_OP_CHAIN_0
-#error "where_tss_kernel requires SFPU_OP_CHAIN_0 to be defined via get_block_defines"
-#endif
-        SFPU_OP_CHAIN_0
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-        tile_regs_release();
-
-        dfb_in.pop_front(1);
-        dfb_out.push_back(1);
-    }
+    ckl::eltwise_chain(
+        ckl::IterationShape::tiles(num_tiles),
+        // cond -> D0. Single DFB read: Streaming (wait 1 / pop 1 per iter), Scalar index.
+        ckl::CopyTile<
+            ckl::input(
+                dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{},
+        // true_value -> D1 (inactive flavor folds to a FillTileTag no-op).
+        // kWhereDF carries main's #48602 fix: Int32 for int32 inputs, UInt32 for uint32 inputs.
+        ckl::Optional<kIsInt, ckl::FillInt<kWhereDF, ckl::Dst::D1>>{packed_scalar1},
+        ckl::Optional<kIsFloat, ckl::FillBitcast<ckl::Dst::D1>>{packed_scalar1},
+        // false_value -> D2.
+        ckl::Optional<kIsInt, ckl::FillInt<kWhereDF, ckl::Dst::D2>>{packed_scalar2},
+        ckl::Optional<kIsFloat, ckl::FillBitcast<ckl::Dst::D2>>{packed_scalar2},
+        // where(D0, D1, D2) -> D0.
+        ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
+        ckl::PackTile<ckl::output(
+            dfb_output_id,
+            ckl::ReservePolicy::PerTile,
+            ckl::PushPolicy::PerTile,
+            ckl::DataFormatReconfig::Disabled)>{});
 }

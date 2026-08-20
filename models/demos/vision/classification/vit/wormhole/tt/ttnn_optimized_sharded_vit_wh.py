@@ -434,7 +434,7 @@ def vit_layer(
 
     # transformers 5.x nests the FFN linears under `mlp` (ViTMLP); 4.x exposed them at the layer level
     # (intermediate/output). custom_preprocessor emits {intermediate, output} under that `mlp` key.
-    ffn_parameters = parameters.mlp if hasattr(parameters, "mlp") else parameters
+    ffn_parameters = parameters.mlp if "mlp" in parameters else parameters
     feedforward_output = vit_feedforward(
         config,
         layernorm_after_output,

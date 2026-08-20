@@ -2,11 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-/*
- * This kernel computes rmsnorm statistics.
- * For rmsnorm we compute E(x**2) and return it as a one tile wide output
- * tensor containing E(x**2) in the left most column per tile.
- */
+// Produces one E[x^2] tile per row; the scalar statistic occupies the leftmost column.
 
 #include <cstdint>
 
@@ -16,19 +12,23 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/compute_kernel_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
-namespace pre_add = norm::kernel_util::compute::pre_add;
+namespace ckl = compute_kernel_lib;
 
 // The statistics pass reads either the raw input or the fused a + b result, depending on whether a
 // residual was supplied. Only the buffer selected here is bound on this build, so the alias is gated
 // at the preprocessor: naming an unbound handle would not compile even on a discarded branch.
 #ifdef FUSE_PRE_ADD
-constexpr auto dfb_inp_id = dfb::fused;  // fused a + b
+constexpr auto dfb_inp_id = dfb::fused;
 #else
-constexpr auto dfb_inp_id = dfb::in0;  // just a
+constexpr auto dfb_inp_id = dfb::in0;
 #endif
 
 void kernel_main() {
@@ -39,8 +39,7 @@ void kernel_main() {
     // Accurate mode only supports SUM; with the reader's scaler of 1.0, SUM and AVG are equivalent.
     constexpr auto reduce_type = unpack_fp32_active ? PoolType::SUM : PoolType::AVG;
     constexpr auto reduce_fp32_mode = unpack_fp32_active ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
-
-    constexpr uint32_t onetile = 1;
+    DataflowBuffer dfb_reduce(dfb::reduce);
 
 #ifdef FUSE_PRE_ADD
     compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
@@ -48,63 +47,38 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_inp_id, dfb::reduce, dfb::x2);
 #endif
 
-    DataflowBuffer dfb_inp(dfb_inp_id);
-    DataflowBuffer dfb_x2(dfb::x2);
-    DataflowBuffer dfb_reduce(dfb::reduce);
-#ifdef FUSE_PRE_ADD
-    DataflowBuffer dfb_in0(dfb::in0);
-    DataflowBuffer dfb_res(dfb::res);  // residual b
-#endif
+    constexpr auto squaring_shape = ckl::IterationShape::grid(Wt / blk, blk);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Fuse pre-add: dfb_inp = dfb::in0 + dfb::res (absent entirely when there is no residual)
 #ifdef FUSE_PRE_ADD
-        pre_add::one_row<true, unpack_fp32_active>(dfb_in0, dfb_res, dfb_inp, Wt, blk);
+        if constexpr (unpack_fp32_active) {
+            ckl::binary_sfpu<
+                ckl::AddBinary<>,
+                ckl::input(dfb::in0, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::input(dfb::res, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::output(dfb_inp_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(squaring_shape);
+        } else {
+            ckl::add<
+                ckl::input(dfb::in0, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::input(dfb::res, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::output(dfb_inp_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(squaring_shape);
+        }
 #endif
 
-        /*
-         * x**2
-         */
-        reconfig_data_format(dfb_inp_id, dfb_inp_id);
-        pack_reconfig_data_format(dfb::x2);
         if constexpr (unpack_fp32_active) {
-            copy_init(dfb_inp_id);
-            square_tile_init();
+            ckl::unary<
+                ckl::Square<>,
+                ckl::input(
+                    dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::output(dfb::x2, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(squaring_shape);
         } else {
-            mul_init(dfb_inp_id, dfb_inp_id);
-        }
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            dfb_inp.wait_front(wt + blk);  // cumulative wait
-            dfb_x2.reserve_back(blk);
-
-            if constexpr (unpack_fp32_active) {
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    tile_regs_acquire();
-                    copy_tile(dfb_inp_id, wt + wtr, 0);
-                    square_tile(0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(0, dfb::x2, wt + wtr);
-                    tile_regs_release();
-                }
-            } else {
-                tile_regs_acquire();
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    mul_tiles(dfb_inp_id, dfb_inp_id, wt + wtr, wt + wtr, wtr);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    pack_tile(wtr, dfb::x2, wt + wtr);
-                }
-                tile_regs_release();
-            }
-            dfb_x2.push_back(blk);
+            ckl::square<
+                ckl::input(
+                    dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
+                ckl::output(dfb::x2, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(squaring_shape);
         }
 
-        /*
-         * sum(x**2)
-         */
         // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
         compute_kernel_lib::reduce<
             reduce_type,
@@ -115,7 +89,6 @@ void kernel_main() {
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop,
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
             reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
-        dfb_inp.pop_front(Wt);
     }
     dfb_reduce.pop_front(1);
 }
