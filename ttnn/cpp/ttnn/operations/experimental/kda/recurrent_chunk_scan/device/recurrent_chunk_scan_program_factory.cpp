@@ -176,15 +176,24 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
                 m2::TensorBinding{FINAL_DECAY_TENSOR, "final_decay"},
                 m2::TensorBinding{T_INV_TENSOR, "t_inv"},
             },
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"Vt_full", Vt_full}},
+        .compile_time_args =
+            {{"Ct", Ct},
+             {"Kt", Kt},
+             {"Vt", Vt},
+             {"Vt_full", Vt_full},
+             {"summary_pair", static_cast<uint32_t>(summary)}},
         .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
-    reader.compiler_options.defines["SUMMARY_PAIR"] = summary ? "1" : "0";
     if (!summary) {
         reader.tensor_bindings.push_back(m2::TensorBinding{Q_DECAY_TENSOR, "q_decay"});
         reader.tensor_bindings.push_back(m2::TensorBinding{INTRA_TENSOR, "intra"});
         reader.tensor_bindings.push_back(m2::TensorBinding{INITIAL_STATE_TENSOR, "initial_state"});
+    } else {
+        // The discarded recurrence branch is still parsed; aliases provide its binding names without extra parameters.
+        reader.tensor_bindings.push_back(m2::TensorBinding{V_BETA_TENSOR, "q_decay"});
+        reader.tensor_bindings.push_back(m2::TensorBinding{T_INV_TENSOR, "intra"});
+        reader.tensor_bindings.push_back(m2::TensorBinding{V_BETA_TENSOR, "initial_state"});
     }
 
     m2::KernelSpec writer{
@@ -195,11 +204,15 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         .dfb_bindings = {m2::ConsumerOf(OUTPUT, "output"), m2::ConsumerOf(FINAL_STATE, "final_state")},
         .tensor_bindings =
             {m2::TensorBinding{OUTPUT_TENSOR, "output"}, m2::TensorBinding{FINAL_STATE_TENSOR, "final_state"}},
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"Vt_full", Vt_full}},
+        .compile_time_args =
+            {{"Ct", Ct},
+             {"Kt", Kt},
+             {"Vt", Vt},
+             {"Vt_full", Vt_full},
+             {"summary_pair", static_cast<uint32_t>(summary)}},
         .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
-    writer.compiler_options.defines["SUMMARY_PAIR"] = summary ? "1" : "0";
 
     auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
     auto& unpack_modes = m2::unpack_modes(compute_hw);
@@ -258,11 +271,10 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
                 m2::ProducerOf(STATE_THREE, "state_three"),
                 m2::ConsumerOf(STATE_THREE, "state_three"),
             },
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
+        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"summary_pair", static_cast<uint32_t>(summary)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_chunks"}},
         .hw_config = std::move(compute_hw),
     };
-    compute.compiler_options.defines["SUMMARY_PAIR"] = summary ? "1" : "0";
 
     m2::KernelRunArgs reader_run{.kernel = READER};
     m2::KernelRunArgs writer_run{.kernel = WRITER};
