@@ -500,7 +500,12 @@ sfpi_inline sfpi::vFloat sfpu_asin_range_reduced_bf16(sfpi::vFloat val) {
     // asin(x) = sign(x) * [pi/2 - 2*asin(sqrt((1-|x|)/2))].
     sfpi::vFloat abs_v = sfpi::abs(val);
     sfpi::vFloat endpoint = abs_v - 0.625f;
-    sfpi::vFloat z = sfpu_sqrt_custom<APPROXIMATION_MODE>((1.0f - abs_v) * 0.5f);
+    // GUARD_NON_FINITE=false: sfpu_asin_range_reduced_bf16 is reached only from
+    // sfpu_asin_bf16/sfpu_acos_bf16 under v_if(abs(val) <= 1.0f), so every lane whose result is
+    // committed hands sqrt_custom an argument in [0, 0.5] -- the exponent can never be 255. Lanes
+    // with |v| > 1 or a non-finite v do execute this, but they keep the quiet_NaN() seed and
+    // their result is discarded, so the guard would be dead here and still cost +96 cycles/tile.
+    sfpi::vFloat z = sfpu_sqrt_custom<APPROXIMATION_MODE, 2, false>((1.0f - abs_v) * 0.5f);
 
     v_if(endpoint < 0.0f) { z = abs_v; }
     v_endif;
