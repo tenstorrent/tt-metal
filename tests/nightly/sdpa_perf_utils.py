@@ -68,8 +68,11 @@ class MeshConfig:
     GALAXY_SP_SIZE: ClassVar[int] = 8
 
     # Non-Galaxy hardware constants
-    # 11x10 full grid -> 10x10 (100 cores) for SDPA after reserving the last column for CCL.
-    NON_GALAXY_GRID: ClassVar[Tuple[int, int]] = (11, 10)  # (cols, rows)
+    # 12x10 full grid -> 11x10 (110 cores) for SDPA after reserving the last column for CCL.
+    # LOCAL, UNCOMMITTED: bh-lb-33's p150b boards were re-flashed to tensix_col_disable_count=1
+    # (130 tensix, 12x10 program grid) so the ring-8 SDPA split matches galaxy's 110 cores. Stock
+    # p150 ships with disable_count=2 -> an 11x10 program grid, for which this must read (11, 10).
+    NON_GALAXY_GRID: ClassVar[Tuple[int, int]] = (12, 10)  # (cols, rows)
 
     # Instance fields (set by detect())
     is_galaxy: bool
