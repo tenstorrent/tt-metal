@@ -399,7 +399,19 @@ uint32_t noc_footprint() {
 uint32_t drisc_zone_detail() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRISC_ZONE_DETAIL");
-        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 0u;
+        uint32_t d = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 0u;
+        // Detail-1 phases plus the read-split read path overflow the 11,264 B DRISC code region by
+        // ~300 B (measured; every other knob combination fits). Degrade loudly rather than let the
+        // filler fail to load and produce an empty capture.
+        if (d != 0 && env_flag("TT_METAL_PERF_DEBUG_READ_SPLIT")) {
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] DRISC_ZONE_DETAIL={} with READ_SPLIT does not fit the DRISC code "
+                "region; forcing detail 0 (SWEEP/PACE zones only)",
+                d);
+            d = 0;
+        }
+        return d;
     }();
     return v;
 }
