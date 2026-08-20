@@ -207,7 +207,6 @@ def eltwise_erf(
 def eltwise_erfc(
     x,
     *args,
-    fast_and_approx,
     device,
     dtype,
     layout,
@@ -2025,7 +2024,6 @@ eltwise_isneginf = make_unary_op_optional_output(ttnn.isneginf)
 eltwise_isnan = make_unary_op_optional_output(ttnn.isnan)
 eltwise_erfinv = make_unary_op_optional_output(ttnn.erfinv)
 eltwise_erf = make_unary_op_optional_output_with_fast_approx(ttnn.erf)
-eltwise_erfc = make_unary_op_optional_output_with_fast_approx(ttnn.erfc)
 eltwise_gelu = make_unary_op_optional_output_with_fast_approx(ttnn.gelu)
 eltwise_exp = make_unary_op_optional_output_with_fast_approx(ttnn.exp)
 eltwise_softplus = make_unary_op_optional_output(ttnn.softplus)

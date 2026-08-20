@@ -954,12 +954,10 @@ class TestEltwiseUnary:
             device,
         )
 
-    @pytest.mark.parametrize("fn_kind", ["erf", "erfc"])
     @pytest.mark.parametrize("fast_and_approx", [True, False])
     def test_run_eltwise_erf_ops(
         self,
         input_shapes,
-        fn_kind,
         fast_and_approx,
         device,
         function_level_defaults,
@@ -979,7 +977,35 @@ class TestEltwiseUnary:
         )
         comparison_func = comparison_funcs.comp_pcc
         run_single_pytorch_test(
-            f"eltwise-{fn_kind}",
+            "eltwise-erf",
+            input_shapes,
+            datagen_func,
+            comparison_func,
+            device,
+            test_args,
+        )
+
+    def test_run_eltwise_erfc_op(
+        self,
+        input_shapes,
+        device,
+        function_level_defaults,
+        input_mem_config,
+        output_mem_config,
+    ):
+        datagen_func = [
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
+        ]
+        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
+        test_args.update(
+            {
+                "input_mem_config": [input_mem_config],
+                "output_mem_config": output_mem_config,
+            }
+        )
+        comparison_func = comparison_funcs.comp_pcc
+        run_single_pytorch_test(
+            "eltwise-erfc",
             input_shapes,
             datagen_func,
             comparison_func,
