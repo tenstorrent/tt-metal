@@ -40,7 +40,7 @@
 |---|---|
 | Verification tier (V1-V4) | 4 of 4, all green |
 | New test items landed | **12** — the original 5 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard, rmsnorm bcast-scalar dest-reuse), 3 from 2026-08-18 (`set_dst_write_addr_offset` behaviour, compressed metadata-word boundary, `mul_reduce_scalar` re-entry), the uninit parity guard and plain `custom_mm` from 2026-08-19, and the **`top32_rm` sort family** from 2026-08-20 — the last two widened the same day to close A1 and A2' |
-| Test results | **348 new variants passing / 14 xfailed** (42 + 15 + 2 + 12 + 114 + 14 + 6 + 36 + 2 + **88** + **15**; xfails are 1 W-stride + 12 re-entry + 1 stale-Dest) |
+| Test results | **355 new variants passing / 14 xfailed** (42 + 15 + 2 + 12 + 114 + 14 + 6 + 36 + 2 + 88 + **22**; xfails are 1 W-stride + 12 re-entry + 1 stale-Dest) |
 | Files | 14 added (7 `tests/sources/*.cpp`, 7 `tests/python_tests/test_*.py`) + 3 extended (`sfpu_sampling_test.cpp`, `test_sfpu_sampling.py`, `test_matmul_custom_compressed.py`) + **3** LLK headers fixed to compile + 4 template params added |
 | Product findings | **4 defects** (all need an owner) + 1 pre-existing reconfig escape + 12 behavioural constraints |
 
@@ -58,7 +58,7 @@
 | **`mul_reduce_scalar` re-entry (#52709)** — 2026-08-18 | `tests/sources/mul_reduce_scalar_reenter_test.cpp`, `tests/python_tests/test_mul_reduce_scalar_reenter.py` | **36 passed, 12 xfailed** (Finding 9) |
 | **custom_mm uninit parity guard (#52727)** — 2026-08-18 | `tests/python_tests/test_custom_mm_uninit_parity.py` | **2 passed** — static, device-free; B1's interim guard |
 | **plain `custom_mm` matmul (#52727)** — 2026-08-19, widened twice on 2026-08-20 | `tests/sources/matmul_custom_mm_test.cpp`, `tests/python_tests/test_matmul_custom_mm.py` | **88 passed** — 32 plain + 16 `transpose` + 16 `split_acc`/`finalize` + 16 `read_transposed` + 8 deep-kt; closes A1 and A1', i.e. every flag this family forwards |
-| **`top32_rm` sort family (#52713)** — 2026-08-20 | `tests/sources/top32_rm_test.cpp`, `tests/python_tests/test_top32_rm.py` | **15 passed, 1 xfailed, 5 skipped** — both widths of the plain mode, pre-sorted at 1024/2048/1088/1152; closes A2 and A2' item 1, and pins C6 |
+| **`top32_rm` sort family (#52713)** — 2026-08-20 | `tests/sources/top32_rm_test.cpp`, `tests/python_tests/test_top32_rm.py` | **22 passed, 1 xfailed, 8 skipped** — both widths of the plain mode, pre-sorted at 1024/2048/1088/1152, and the 7 Metal wrappers; closes A2, A2' and A2'', and pins C6 |
 
 ### Verification tier — all green on the merged branch
 
@@ -977,9 +977,37 @@ region, not the op: `kt*ct` tiles at 2 KB each have to fit alongside the ct bloc
 
 Nothing is left uncovered on this family's flags.
 
+### And the Metal wrapper layer, after the rebase onto main
+
+`experimental/llk_sfpu/llk_math_deepseek_top32_rm.h` publishes 7 entry points and, until this,
+**nothing in the tree called any of them** — the in-tree consumers drive the `ckernel::sfpu::`
+primitives directly, which is why #53130's review dropped the file from the branch. It is on main
+regardless (it arrived with #52713), so the missing piece was never the promotion, only coverage.
+
+A2'' had assumed this needed a metal-side test. It does not: the tt-llk test build already has the
+Metal `llk_api` directory on its include path — the same reason `deepseek_moe_gate_test.cpp` can
+include `llk_sfpu/` headers — so `TOP32_VIA_WRAPPERS` simply routes every SFPU call in the driver
+through the wrappers instead of the primitives. The wrappers are thin, so the value is not new
+arithmetic: it is that the layer compiles, is code-generated, and computes what the primitives
+compute. A wrapper forwarding the wrong argument or instantiating the wrong template is otherwise
+invisible.
+
+Discrimination mattered unusually much here, because a `#if` that quietly evaluated false would
+make every wrapper variant pass by silently running the primitive path. Breaking **only** the
+wrapper branch — `!direction` into `llk_math_deepseek_top32_rm_rebuild` — fails exactly the 6
+wrapper variants while the 16 primitive-path ones stay green.
+
+**Note for anyone who reads B1 and wonders why that is different.** The include path was never
+B1's obstacle either; CB metadata is. The Compute API resolves operands through
+`get_operand_id` / `get_operand_dst_format`, which the JIT build emits from the circular-buffer
+config, and the tt-llk harness provides none of it — which is why `mul_reduce_scalar_test.cpp`
+names the Compute API in a comment and then expands its sequence at the LLK level. `llk_api`
+headers are reachable; `api/compute` ones are not, and the difference is CB state, not include
+directories.
+
 ### Regression run for the 2026-08-20 change set
 
-Serially through `run_test.sh` on BH p100a, all PASS: `test_top32_rm.py` **15 + 1 xfail**;
+Serially through `run_test.sh` on BH p100a, all PASS: `test_top32_rm.py` **22 + 1 xfail**;
 `test_rmsnorm_bcast_scalar_dest_reuse.py` 114 (+114 skipped);
 `test_sfpu_sampling.py` 63 (+97 skipped); `test_custom_mm_uninit_restore.py` 7 (+8 skipped,
 **1 xfailed** — C1, expected); `test_custom_mm_uninit_parity.py` 2;

@@ -21,52 +21,29 @@ references the symbol. State verified against the tree on 2026-08-20.
 
 | # | Item | Type | Size | Blocked on |
 |---|------|------|------|-----------|
-| **A2''** | `top32_rm` — the metal wrapper layer (its other half is now C6) | test | B1-shaped | needs an owner in the metal tree |
 | **A5** | `eltwise_mul_scalar` HiFi init — untested, rationale disproved | test | unknown | C2 |
 | **B1** | `custom_mm` vs `compressed_custom_mm` divergence guard | test, **outside tt-llk** | ~1 d | needs an owner (interim static guard landed) |
 | **C1** | `dense_packing` W-stride not format-aware | **defect** | ~0.5 d once decided | owner decision |
 | **C2** | `eltwise_mul_scalar` HiFi workaround rationale does not hold | **question** | — | #52709 author |
 | **C3** | `topk_xl` → `eltwise_binary` reconfig escape | **defect**, pre-existing | unknown | needs an owner |
 | **C4** | `mul_reduce_scalar` re-entry needs a DEST-section boundary | **defect** | unknown | needs an owner |
-| **C5** | OOB metadata read shipped to main with #52727 | **defect** | minutes | branch ready, needs pushing + a PR |
+| **C5** | OOB metadata read shipped to main with #52727 | **defect** | minutes | branch **pushed**, needs a PR |
 | **C6** | `top32_rm` 32-bit unpack: partial chunk sorts against stale Dest | **defect** | ~0.5 d | needs an owner (xfail pins it) |
 | **D1** | `mul_reduce_scalar_chunked_tile` ships with no caller | cleanup | — | C4 decides it |
 | **E** | PR mechanics — title and body | chore | minutes | — |
 | **F** | `test_matmul_custom_compressed` intermittent — host/BRISC desync | **defect**, nightly-only | unknown | needs an owner |
 
-Nothing here is blocked on a promotion PR, and **nothing left is tt-llk test work that a test
-PR can do on its own**. The three test items (A2'', A5, B1) each need something else first: an
-owner in the metal test tree for two of them, and C2's answer for the third. Six are product
-decisions or defects needing an owner (C1–C6) — three of those are defects in shipping ops with a
-reproducer already attached (C1, C4, C6), and C5 has a verified branch waiting to be pushed. The
-rest are one cleanup (D1), the PR's own metadata (E), and one intermittent-failure investigation
-(F).
+**Nothing left is tt-llk test work.** The two remaining test items cannot be done in this repo
+as it stands: A5 needs C2's answer first (and may end in deleting the code rather than testing
+it), and B1 needs CB metadata the tt-llk harness does not have — verified, see B1. Six are
+product decisions or defects needing an owner (C1–C6), three of them defects in shipping ops with
+a reproducer already attached (C1, C4, C6); C5's fix is written, pushed and verified and needs
+only a PR. The rest are one cleanup (D1), the PR's own metadata (E), and one intermittent-failure
+investigation (F).
 
 ---
 
 ## A. Functional test gaps
-
-### A2''. `top32_rm` — the metal wrapper layer, and one shape the hardware cannot do
-
-Two things, the second of which is a hardware limit rather than missing work:
-
-**1. The metal wrapper layer (B1-shaped, needs an owner).** The 7
-`llk_math_deepseek_top32_rm_*` wrappers are on main with no caller — they arrived with #52713,
-not with this branch. A tt-llk test cannot reach the metal API layer; covering them needs a
-metal-side test, exactly like B1.
-
-**2. The Metal dev test's own `row=3232` shape is not reachable — see C6.** That row ends in a
-32-element chunk, and a partially-filled chunk on the 32-bit branch of this family's unpack
-sorts against stale Dest. The two halves either side of it are covered; the middle is pinned by
-an xfail and tracked as C6.
-
-**Not planned:** the 8-datum `bitonic_top32_load8`/`store8` helpers, which the header records as
-referenced by no kernel.
-
-**Still true before touching this area:** `_top32_rm_init_()` and `_topk_xl_init_<K, fused>()`
-**cannot both be called in one kernel** — they overlap in the ADDR_MODs, the MOP and the REPLAY
-buffer, and the math thread hangs (Finding 3). And see C3: a pre-existing reconfig escape lives
-here, so bisect single-file-then-target before blaming your own driver.
 
 ### A5. `eltwise_mul_scalar` HiFi init — untested, and its rationale does not hold
 
@@ -92,6 +69,17 @@ diverge, every existing test keeps passing. Copilot raised the same point indepe
 
 **Plan.** A compute-kernel test under `tests/tt_metal/` that calls the real entry points. ~1 d,
 but it needs an owner who works in that tree.
+
+**Why it cannot be done from tt-llk — checked on 2026-08-20, not assumed.** The include path is
+*not* the obstacle: the tt-llk test build has the Metal `llk_api` directory on it, which is how
+`top32_rm_test.cpp` now drives the `llk_math_deepseek_top32_rm_*` wrappers and how
+`deepseek_moe_gate_test.cpp` includes `llk_sfpu/` headers. The obstacle is one layer up: the
+Compute API resolves its operands through CB metadata (`get_operand_id`,
+`get_operand_dst_format`, …) that the JIT build emits from the circular-buffer config, and the
+tt-llk harness has no CB emulation at all — nothing under `tests/helpers/include/` provides
+those symbols. That is why `mul_reduce_scalar_test.cpp` *names* the Compute API in a comment and
+then expands its sequence at the LLK level instead of including it. Anyone tempted to retry this
+in tt-llk needs to add CB metadata to the harness first, which is a bigger job than the test.
 
 **What exists already, and why it does not close this.** `test_custom_mm_uninit_parity.py` is a
 device-free static gate that fails loudly if the two uninit bodies diverge or if the driver's
@@ -209,7 +197,7 @@ see it — confirmed by running the boundary test against the unguarded kernel, 
 It is a memory-safety defect, not a wrong-answer defect: an L1 read of whatever follows the
 metadata buffer.
 
-**A ready branch exists — what is left is pushing it and opening the PR.**
+**The branch is pushed; what is left is opening the PR.**
 `ldjurovic/compressed-mm-oob-guard`, cut from `main`, carries both guards cherry-picked (unpack
 side and math side) and nothing else: 2 files, +30/-12, no compute-API change. Verified on BH
 p100a from that worktree — `test_matmul_custom_compressed.py` **582 passed** (main's count; the
@@ -240,9 +228,13 @@ tile is bf16, so its padding is -infinity and never wins. The defect is invisibl
 puts *values* through the 32-bit branch, which the family's doc tables permit.
 
 **Pinned, not just described:** `test_top32_rm_32bit_partial_chunk` is a non-strict `xfail`, so
-it flips to XPASS the moment the branch starts clearing its tile. It also means the sweep has a
-hole with a name: the Metal dev test's `row=3232` shape ends in a 32-element chunk and is the
-one shape this family cannot currently do correctly on 32-bit data.
+it flips to XPASS the moment the branch starts clearing its tile.
+
+**It is also the last thing standing between the `top32_rm` sweep and complete coverage of the
+family.** Everything else is done — both modes, both widths, the mixed 1024+tail shape, and the
+7 Metal wrappers — and the one shape left out is the Metal dev test's own `row=3232`, which ends
+in a 32-element chunk. Fix this and that shape becomes a one-line addition to
+`PRE_SORTED_ROW_ELEMENTS`.
 
 **Fix shape, for whoever owns it:** either clear the whole tile on the 32-bit path (the ZEROACC
 loop already exists — it just needs to run over all 4 faces, or the unpacker needs a -infinity
@@ -271,13 +263,10 @@ partial chunk is 16-bit only.
 - **21 review threads have no reply.** Drafts for all of them are in that same file, grouped by
   fixed / already-fixed / deliberate-won't-fix. Nothing has been posted: the sessions that wrote
   them had no GitHub write access (`gh` absent, outbound `curl` blocked).
-- **The branch wants one more rebase.** #52713 has merged, so the five commits carrying the
-  `top32_rm` promotion payload should drop the way #52727's did — the branch is ~81 commits
-  behind main, and after the rebase the diff should be test files plus the LLK-side cleanups
-  only. Expect `helpers/test_variant_parameters.py` to be the one file both sides touch; it has
-  merged cleanly twice.
-- `backup/llk-tests-pre-rebase` is a local-only safety ref from the first rebase; delete it once
-  you are satisfied.
+- **`ldjurovic/compressed-mm-oob-guard` is pushed and needs a PR against main** — that is C5,
+  and opening the PR is the only step left on it.
+- Safety refs, local-only, delete once you are satisfied: `backup/llk-tests-pre-rebase` (first
+  rebase) and `backup/pre-rebase-20260820` (the 2026-08-20 one).
 
 ---
 
@@ -382,11 +371,10 @@ pairing, which reports real pairs as unmatched.
 3. **C4** — route to an owner. A located defect in a shipping op with a minimal reproducer, which
    makes it the cheapest real fix on the list, and it decides D1.
 4. **C1 / C2 / C3** — route to owners too; they are decisions rather than work, and C2 gates A5.
-5. **C6** — route to an owner with the xfail; it is the only thing standing between the
-   `top32_rm` sweep and the Metal dev test's own row=3232 shape, and the fix is half a day once
-   someone picks between clearing the tile and rejecting `num_faces < 4`.
-6. **B1** and **A2''**, once an owner in the metal test tree exists. Note **A2'' also needs the
-   branch rebased onto main first**: the 7 wrappers it is about are on main, not on this branch,
-   so nothing here can even include them yet.
+5. **C6** — route to an owner with the xfail. It is the last gap in the `top32_rm` family's
+   coverage, and the fix is half a day once someone picks between clearing the tile and rejecting
+   `num_faces < 4`.
+6. **B1**, once an owner in the metal test tree exists — and note it needs CB metadata, not just
+   a willing owner in tt-llk.
 8. **F** — route to an owner with the triage output; no further reproduction needed, and
    repeating it costs a device reset.

@@ -39,13 +39,13 @@ plus extensions to `sfpu_sampling_test.cpp` / `test_sfpu_sampling.py` and
 compile under tt-llk at all (Findings 5 and 17).
 
 **All three promotion PRs have now merged** — #52709 on 2026-08-14, #52727 on 2026-08-18,
-#52713 by 2026-08-20 — and the branch has been rebased onto main, so their payloads no longer
-appear in the diff and the PR is test files plus LLK-side cleanups.
+#52713 by 2026-08-20 — and the branch was rebased onto main on 2026-08-20 (53 commits, six
+promotion-payload commits dropped), so the PR diff is test files plus LLK-side cleanups only.
 
 ## Status at time of writing
 
 - Verification tier V1–V4: **4 of 4 green**
-- New test items: **12 landed** (348 new variants passing, 14 xfailed), **1 attempted and
+- New test items: **12 landed** (355 new variants passing, 14 xfailed), **1 attempted and
   reverted** (now diagnosed as Finding 9), **1 not started** (A5, gated on C2)
 - **Five things need an owner:**
   - the `dense_packing` W-stride constants in `custom_mm.h` / `compressed_custom_mm.h` are
