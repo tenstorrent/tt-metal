@@ -96,7 +96,7 @@ safe-outputs:
     labels: [automation, silencer]
     # Scope patches to source-like files only: a mistaken or manipulated agent response
     # cannot touch unrelated files outside Silencer's noise-fix scope.
-    allowed-files: ["**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.h", "**/*.hpp", "**/*.py", "**/*.pyi", "**/*.cmake", "**/CMakeLists.txt"]
+    allowed-files: ["**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.h", "**/*.hpp", "**/*.inl", "**/*.py", "**/*.pyi", "**/*.cmake", "**/CMakeLists.txt"]
     # One target per run (see *Scan procedure* step 5): Silencer fixes a single noise
     # source per turn, so it opens at most one PR. Also gh-aw's default, but stated
     # explicitly here because it is a deliberate scope decision, not an accident.
@@ -154,7 +154,6 @@ safe-outputs:
       - models-t3-unit-tests
 
       - perf-device-models
-      - single-card-ttnn-models-frequent-tests
       - tt-metal-l2-nightly
       - vllm-model-tests
       - sanity-tests-debug
