@@ -5,13 +5,20 @@
 # "<this host>:4" (four slots on one machine) instead of one slot per galaxy, because all four
 # pipeline stages live on the same 32-chip galaxy.
 #
-# Usage: run_probe_pp4.sh [mesh|d2d] [tcp_iface]
-#   mesh — just open the four 8-chip meshes (fast; isolates the carve + fabric)
-#   d2d  — additionally build the D2D endpoints and walk a tensor 0->1->2->3
+# Usage: run_probe_pp4.sh [mesh|d2d|model] [tcp_iface]
+#   mesh  — just open the four 8-chip meshes (fast; isolates the carve + fabric)
+#   d2d   — additionally build the D2D endpoints and walk a tensor 0->1->2->3
+#   model — build the real Mistral transformer per stage with random weights and run a chunk
 set -euo pipefail
 
 STAGE="${1:-mesh}"
 TCP_IFACE="${2:-ens5f0np0}"
+
+case "$STAGE" in
+  mesh|d2d) TARGET="mistral4_bringup/pp4/probe_pp4.py" ;;
+  model)    TARGET="mistral4_bringup/pp4/probe_pp4_model.py" ;;
+  *) echo "unknown stage '$STAGE' (want mesh|d2d|model)" >&2; exit 2 ;;
+esac
 
 TT_METAL_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export TT_METAL_HOME PYTHONPATH="$TT_METAL_HOME"
@@ -31,5 +38,5 @@ echo "[run_probe_pp4] stage=$STAGE hosts=$HOSTS iface=$TCP_IFACE"
 exec python3 ttnn/ttnn/distributed/ttrun.py \
   --tcp-interface "$TCP_IFACE" \
   --rank-binding mistral4_bringup/pp4/pp4_single_galaxy_rank_bindings.yaml \
-  --mpi-args "--host ${HOSTS} --map-by slot --bind-to none --tag-output --allow-run-as-root -x PATH -x LD_LIBRARY_PATH -x PROBE_STAGE" \
-  -- python3 mistral4_bringup/pp4/probe_pp4.py
+  --mpi-args "--host ${HOSTS} --map-by slot --bind-to none --tag-output --allow-run-as-root -x PATH -x LD_LIBRARY_PATH -x PROBE_STAGE -x PROBE_NUM_LAYERS -x PROBE_N_EXPERTS" \
+  -- python3 "$TARGET"

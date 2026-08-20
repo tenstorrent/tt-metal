@@ -260,19 +260,28 @@ class TtDistributedRmsNorm(LightweightModule):
         )
         logger.debug(f"Pre-all-gather stats shape: {tt_stats.shape}")
 
-        # Step 2: All-gather stats across cluster_axis
-        all_gather_kwargs = {
-            "input_tensor": tt_stats,
-            "dim": 3,
-            "cluster_axis": self.cluster_axis,
-            "num_links": self.num_links,
-            "topology": self.topology,
-        }
-        if self.stats_memcfg is not None:
-            all_gather_kwargs["memory_config"] = self.stats_memcfg
+        # Step 2: All-gather stats across cluster_axis. With a single device on that axis the emb dim
+        # is not actually sharded, so the local sum(x^2) is already the global one and ttnn.all_gather
+        # would hard-assert (num_devices > 1). Skipping keeps a TP=1 mesh — e.g. the (8,1) per-stage
+        # mesh of a single-galaxy 4-stage pipeline — on the same code path as a sharded one.
+        if self.mesh_device.shape[self.cluster_axis] == 1:
+            tt_gathered_stats = tt_stats
+            if self.stats_memcfg is not None:
+                tt_gathered_stats = ttnn.to_memory_config(tt_stats, memory_config=self.stats_memcfg)
+                ttnn.deallocate(tt_stats)
+        else:
+            all_gather_kwargs = {
+                "input_tensor": tt_stats,
+                "dim": 3,
+                "cluster_axis": self.cluster_axis,
+                "num_links": self.num_links,
+                "topology": self.topology,
+            }
+            if self.stats_memcfg is not None:
+                all_gather_kwargs["memory_config"] = self.stats_memcfg
 
-        tt_gathered_stats = ttnn.all_gather(**all_gather_kwargs)
-        ttnn.deallocate(tt_stats)
+            tt_gathered_stats = ttnn.all_gather(**all_gather_kwargs)
+            ttnn.deallocate(tt_stats)
         logger.debug(f"Gathered stats shape: {tt_gathered_stats.shape}")
 
         # Step 3: Post-all-gather - normalize using gathered global stats
