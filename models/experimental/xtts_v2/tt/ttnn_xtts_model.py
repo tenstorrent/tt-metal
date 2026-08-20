@@ -425,15 +425,9 @@ class XttsV2:
         ids = self.tokenizer.encode(text, language)
         prefix = assemble_prompt(ids, voice.gpt_cond_latent, self.tables)  # [1,P,1024]
         P = prefix.shape[1]
-        # Right-pad the prompt to a tile multiple: prefill compiles programs per distinct
-        # sequence length, so bucketing P to 32s bounds the variants to ~14 (first hit per
-        # bucket costs a ~5 s compile; warm hits ~35 ms). Padding is safe by design — decode
-        # starts at the TRUE P and sdpa_decode only attends 0..cur_pos, so the pad rows'
-        # K/V are never read and are overwritten as decode advances (see
-        # TTNNGPTTracedDecoder.prefill's data-parallel note).
-        P_pad = ((P + 31) // 32) * 32
-        if P_pad != P:
-            prefix = F.pad(prefix, (0, 0, 0, P_pad - P))
+        # prefill right-pads P to a tile count it can seed correctly, which also buckets its
+        # program variants. Decode keeps the TRUE P and sdpa_decode only attends 0..cur_pos, so
+        # the pad rows' K/V are never read (see TTNNGPTTracedDecoder.prefill).
         dec.reset_caches()
         dec.prefill(prefix.contiguous())
         t_prefill = time.time() - t0

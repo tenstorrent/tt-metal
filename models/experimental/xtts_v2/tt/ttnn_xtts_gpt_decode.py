@@ -23,6 +23,7 @@ Tensor layouts (verified on device):
 Decode uses bf16 (flash-decode SDPA is bf16-only) — the native fast path.
 """
 
+import torch
 import ttnn
 
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import TTNNGPTConfig, TTNNGPTCore
@@ -62,6 +63,21 @@ def _decode_matmul_cfg(device, K, N, fused_activation=None):
     )
 
 
+def _prefill_tiles(P, n_head, n_cores):
+    """Smallest 32-row tile count covering P that ttnn.fill_cache seeds correctly.
+
+    fill_cache splits n_head*tiles blocks over the cores as consecutive runs, but hands each core
+    only its FIRST cache address and then walks forward. A run that crosses a head boundary writes
+    the remainder into the previous head instead, leaving those positions zero -- and it does so
+    identically on every repeat, so nothing downstream flags it. No run can straddle when every
+    core gets at most one block, or when the blocks divide evenly over the cores (equal runs,
+    each starting on a head boundary)."""
+    t = (P + 31) // 32
+    while n_head * t > n_cores and (n_head * t) % n_cores:
+        t += 1
+    return t
+
+
 class TTNNGPTDecoder(TTNNGPTCore):
     def __init__(
         self,
@@ -90,8 +106,6 @@ class TTNNGPTDecoder(TTNNGPTCore):
         self.k_cache = []
         self.v_cache = []
         cfg = self.config
-        import torch
-
         zeros = torch.zeros(1, cfg.n_head, self.max_seq, cfg.head_dim)
         for _ in range(cfg.n_layer):
             self.k_cache.append(
@@ -181,8 +195,6 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         super().__init__(
             device, parameters, config, math_fidelity=math_fidelity, activation_dtype=ttnn.bfloat16, attention="sdpa"
         )
-        import torch
-
         cfg = self.config
         # Data-parallel serving: `batch` is the number of requests carried in the tensor's
         # leading dim and `data_mapper` is how they are distributed (e.g.
@@ -278,7 +290,9 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         (ttnn.fill_cache), instead of P single-token decode steps -- each layer's K/V weights are read
         once, not P times. Latents are discarded (only the caches seed decode). Eager (not traced); run
         after reset_caches() and BEFORE capture() (allocating buffers under a live trace corrupts it).
-        prefix_emb: torch [batch, P, 1024] (batch=1 for the single-request path).
+        prefix_emb: torch [batch, P, 1024] (batch=1 for the single-request path). P is right-padded
+        to a tile count fill_cache seeds correctly (_prefill_tiles), which also buckets the prefill
+        program variants; callers keep their TRUE P for decode.
 
         Data-parallel note: when requests have different prompt lengths, right-pad them to a
         common P with zeros. Padded positions do get K/V written, but each request's decode starts
@@ -287,9 +301,10 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         prefill attention is causal."""
         cfg = self.config
         E, nh = cfg.n_embd, cfg.n_head
-        P = prefix_emb.shape[1]
+        g = self.device.compute_with_storage_grid_size()
+        P = 32 * _prefill_tiles(prefix_emb.shape[1], nh, g.x * g.y)
         x = ttnn.from_torch(
-            prefix_emb.contiguous(),
+            torch.nn.functional.pad(prefix_emb, (0, 0, 0, P - prefix_emb.shape[1])).contiguous(),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
@@ -326,8 +341,6 @@ class TTNNGPTTracedDecoder(TTNNGPTCore):
         `pos` is either one int (applied to every request) or a per-request sequence of length
         `batch` — data-parallel requests run at independent positions because their prompts have
         different lengths and they stop at different steps."""
-        import torch
-
         if isinstance(pos, int):
             t = torch.full((self.batch,), pos, dtype=torch.int32)
         else:
