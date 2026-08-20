@@ -1224,7 +1224,7 @@
   model_family: EfficientDet
   skus:
     wh_n150:
-      timeout: 12
+      timeout: 6
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
@@ -1236,7 +1236,7 @@
   model_family: MobileNet
   skus:
     wh_n150:
-      timeout: 12
+      timeout: 4
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
@@ -1248,7 +1248,7 @@
   model_family: SSD
   skus:
     wh_n150:
-      timeout: 12
+      timeout: 4
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
@@ -1261,7 +1261,7 @@
   model_family: YuNet
   skus:
     wh_n150:
-      timeout: 12
+      timeout: 3
       tier: 3
   owner_id: U0978501V8B # CODEOWNERS @tvardhineniTT
   team: models
