@@ -37,6 +37,8 @@ import pathlib
 import shutil
 import sys
 import tempfile
+import threading
+import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("sweep_2x2", HERE / "sweep_2x2.py")
@@ -622,7 +624,15 @@ with tempfile.TemporaryDirectory() as td:
 
     sw._classify_chunk_session = fake_chunk
     pending = [(rows[op], "sem-perf", None) for op in rows]
-    sw._batched_classify(pending)
+    unproven = sw._batched_classify(pending)
+    check(
+        "classify batch: unprovable legs are RETURNED as solo specs "
+        "(row, sel, legs, tag) for the concurrent solo pool",
+        sorted(s[0]["op"] for s in unproven) == ["cls-absent", "cls-dropped"]
+        and all(s[1] == "sem-perf" and s[3] == "classify" for s in unproven)
+        and all(s[2] and s[2][0][0] == "off" for s in unproven),
+        unproven,
+    )
 
     v_changed = json.loads(
         (sw.ev / "cls-changed/classify/sem-perf/verdict.json").read_text()
@@ -770,6 +780,199 @@ with tempfile.TemporaryDirectory() as td:
 for k, v in _saved.items():
     setattr(sweep, k, v)
 
+# ---------------- 7. concurrent solo classify (laneDB) ----------------
+# Knob-attribution legs and chunk-unprovable fallbacks keep ONE isolated
+# pytest session per leg (CH's refusal: those legs never SHARE a session)
+# but the sessions now run CONCURRENTLY through the worker pool.  Drive
+# the REAL classify() + _solo_classify_pool with a stubbed _pytest that
+# fabricates a deterministic per-(node, flags) build under the session's
+# own RUNNER_TEMP: the same spec set run with workers=1 (pool no-ops; the
+# sequential replay compiles inline, the legacy path) and workers=8 must
+# produce CONTENT-IDENTICAL evidence trees and verdicts; the stub proves
+# sessions really overlapped (workers=8) and never shared a RUNNER_TEMP;
+# cached and duplicate specs never re-enter a session.
+FAKE_KNOBS = {
+    "k-changed1": "-fselftest-a",
+    "k-changed2": "-fselftest-b",
+    "k-ident": "-fselftest-ident",
+    "k-fail": "-fselftest-compile-fail",
+}
+
+
+def mk_cls_pool_sweep(td, ev, workers):
+    sw = mk_sweep(td / ev, "batched", dry_run=False)
+    sw.a.classify_workers = workers
+    sw.verify_toolchain = lambda phase: None
+    sw.info = {"cc1plus_sha256": "cc", "tt_metal_head": "head"}
+    sw._macro_scan = lambda work, legnames: {"classification": "SELFTEST_STUB"}
+    objcopy = td / "objcopy.sh"
+    if not objcopy.exists():
+        objcopy.write_text('#!/bin/sh\ncat "$4"\n')
+        objcopy.chmod(0o755)
+    sw.objcopy = objcopy
+    lock = threading.Lock()
+    stats = {
+        "active": 0,
+        "max_active": 0,
+        "sessions": 0,
+        "rts": [],
+        "rt_overlap": False,
+        "extras": set(),
+    }
+    sw._selftest_stats = stats
+
+    def fake_pytest(node, extra, env, log, timeout=1800):
+        rt = pathlib.Path(env["RUNNER_TEMP"])
+        flags = env["TT_LLK_EXTRA_COMPILER_OPTIONS"]
+        with lock:
+            stats["sessions"] += 1
+            stats["active"] += 1
+            stats["max_active"] = max(stats["max_active"], stats["active"])
+            stats["extras"].update(extra)
+            if str(rt) in stats["rts"]:
+                stats["rt_overlap"] = True  # two live sessions, one RUNNER_TEMP
+            stats["rts"].append(str(rt))
+        try:
+            time.sleep(0.05)
+            if "-fselftest-compile-fail" in flags:
+                pathlib.Path(log).write_text("1 failed\n")
+                return 1
+            # the ident knob's flag changes nothing (byte-identical legs)
+            content_flags = flags.replace(" -fselftest-ident", "")
+            elf = rt / "tt-llk-build/test_c/v0/elf/math.elf"
+            elf.parent.mkdir(parents=True, exist_ok=True)
+            elf.write_bytes(f"{node}|{content_flags}".encode())
+            (elf.parent.parent / "build.h").write_text("// selftest build\n")
+            pathlib.Path(log).write_text("1 passed\n")
+            return 0
+        finally:
+            with lock:
+                stats["active"] -= 1
+                stats["rts"].remove(str(rt))
+
+    sw._pytest = fake_pytest
+    return sw
+
+
+with tempfile.TemporaryDirectory() as td:
+    td = pathlib.Path(td)
+    row = mk_row("kop", "semantic", {"sem-perf": "perf_c.py::test_c[mathop:Kop]"})
+
+    def kspecs(row):
+        return [
+            (
+                row,
+                "sem-perf",
+                (("off", sweep.OFF_FLAGS), ("knob", f"{sweep.OFF_FLAGS} {flag}")),
+                f"knobs/{knob}",
+            )
+            for knob, flag in FAKE_KNOBS.items()
+        ]
+
+    verdicts = {}
+    for arm, workers in (("serial", 1), ("conc", 8)):
+        sw = mk_cls_pool_sweep(td, arm, workers)
+        # pre-cached verdict + duplicate spec: neither may cost a session
+        cw = sw.ev / "kop/knobs/k-cached/sem-perf"
+        cw.mkdir(parents=True)
+        (cw / "verdict.json").write_text(
+            json.dumps(
+                {
+                    "selector": "sem-perf",
+                    "status": "COMPILE_FAIL",
+                    "leg": "off",
+                    "cc1plus_sha256": "cc",
+                    "tt_metal_head": "head",
+                }
+            )
+        )
+        specs = kspecs(row) + [
+            (
+                row,
+                "sem-perf",
+                (("off", sweep.OFF_FLAGS), ("knob", f"{sweep.OFF_FLAGS} -fx")),
+                "knobs/k-cached",
+            ),
+            kspecs(row)[0],  # duplicate of k-changed1
+        ]
+        sw._solo_classify_pool(specs, f"selftest-{arm}")
+        pool_sessions = sw._selftest_stats["sessions"]
+        # the sequential row-loop replay (attribute_knobs' exact calls):
+        # with workers=1 this IS the legacy inline compile; with workers=8
+        # every verdict must resume from cache (zero extra sessions)
+        verdicts[arm] = {
+            knob: sw.classify(
+                row,
+                "sem-perf",
+                legs=(("off", sweep.OFF_FLAGS), ("knob", f"{sweep.OFF_FLAGS} {flag}")),
+                tag=f"knobs/{knob}",
+            )
+            for knob, flag in FAKE_KNOBS.items()
+        }
+        sw._selftest_stats["pool_sessions"] = pool_sessions
+        if arm == "serial":
+            check(
+                "solo pool: workers=1 is a no-op (legacy inline compiles, "
+                "strictly one session at a time)",
+                pool_sessions == 0
+                and sw._selftest_stats["sessions"] == 8
+                and sw._selftest_stats["max_active"] == 1,
+                sw._selftest_stats,
+            )
+            st_serial = sw
+        else:
+            check(
+                "solo pool: workers=8 compiles every pending verdict "
+                "concurrently (sessions overlapped), replay is 100% cached "
+                "(zero extra sessions), cached/duplicate specs never enter",
+                pool_sessions == 8
+                and sw._selftest_stats["sessions"] == 8
+                and sw._selftest_stats["max_active"] > 1,
+                sw._selftest_stats,
+            )
+            st_conc = sw
+        check(
+            f"solo pool ({arm}): every session is an isolated "
+            "--compile-producer with its own live RUNNER_TEMP",
+            sw._selftest_stats["extras"] == {"--compile-producer"}
+            and not sw._selftest_stats["rt_overlap"],
+            sw._selftest_stats,
+        )
+    check(
+        "solo pool: verdict CONTENT identical serial vs concurrent "
+        "(CHANGED/IDENTICAL/COMPILE_FAIL all covered)",
+        verdicts["serial"] == verdicts["conc"]
+        and verdicts["serial"]["k-changed1"]["all"] == "CHANGED"
+        and verdicts["serial"]["k-ident"]["all"] == "IDENTICAL"
+        and verdicts["serial"]["k-fail"]["status"] == "COMPILE_FAIL"
+        and verdicts["serial"]["k-fail"]["leg"] == "knob",
+        verdicts,
+    )
+    t_serial = tree_of(td / "serial")
+    t_conc = tree_of(td / "conc")
+    check(
+        "solo pool: evidence trees BYTE-IDENTICAL serial vs concurrent "
+        "(every verdict.json/node.txt/flags/hashes/log/ELF archive)",
+        t_serial == t_conc and len(t_serial) > 20,
+        (set(t_serial) ^ set(t_conc)) or "content diff",
+    )
+    check(
+        "solo pool: COMPILE_FAIL stops the verdict's later legs in both "
+        "arms (no knob-leg evidence after the off leg... i.e. failing "
+        "knob leg leaves no hashes/elf archive)",
+        not any(
+            "k-fail" in k and ("hashes-knob" in k or "elf-knob" in k) for k in t_serial
+        ),
+        [k for k in t_serial if "k-fail" in k],
+    )
+    check(
+        "solo pool: RED events identical as a set (thread completion "
+        "order must not change what is reported)",
+        sorted(st_serial.reds) == sorted(st_conc.reds)
+        and any("kop/sem-perf: compile knob failed" in r for r in st_conc.reds),
+        (st_serial.reds, st_conc.reds),
+    )
+
 if FAILS:
     print(f"batched-silicon self-test: FAILED ({len(FAILS)}: {', '.join(FAILS)})")
     sys.exit(1)
@@ -781,5 +984,6 @@ print(
     "poisons the group; batched classify verdicts match the solo layout "
     "with per-node attribution and solo fallback; node ids survive every "
     "shell layer via the nodes.txt argfile — quotes/spaces/parens proven, "
-    "newline refused by name)"
+    "newline refused by name; concurrent solo classify byte-identical to "
+    "the sequential legacy path with isolated overlapping sessions)"
 )

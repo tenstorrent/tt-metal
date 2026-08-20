@@ -156,7 +156,13 @@ Batch robustness (laneCH, storm-first-silicon lesson):
     attribution from the in-tree pytest plugin; per-leg evidence is
     byte-compatible with the solo path, unprovable legs fall back to solo
     compiles, and SWEEP_CLASSIFY_WORKERS=1 keeps the legacy sequential
-    per-leg path.
+    per-leg path;
+  * solo classify verdicts that must NOT share a session (knob-attribution
+    legs, chunk-unprovable fallbacks) still each get their own isolated
+    pytest session — but the sessions run CONCURRENTLY through the same
+    worker pool (laneDB): work dirs and per-leg RUNNER_TEMPs are disjoint
+    per (row, selector, tag), verdict content is identical serial vs
+    concurrent, and SWEEP_CLASSIFY_WORKERS=1 keeps them fully sequential.
 
 Typical one-command full sweep:
   python3 tt_metal/tt-llk/tests/corpus/sweep_2x2.py \
@@ -1370,7 +1376,11 @@ class Sweep:
         pending: [(row, sel, legs_spec_or_None)].  Verdict-cached selectors
         are skipped (the row loop replays them); the rest compile in
         chunked sessions and their verdicts are written here, so the
-        sequential row loop resumes every one hash-matched from cache."""
+        sequential row loop resumes every one hash-matched from cache.
+        Returns the specs the chunks could NOT prove — [(row, sel, legs,
+        tag)] — for the caller to dispatch through _solo_classify_pool
+        (concurrent legacy-solo compiles) instead of paying them one at a
+        time inside the sequential row loop."""
         jobs_by_rowsel = {}
         legjobs = []
         for row, sel, p_legs in pending:
@@ -1398,7 +1408,7 @@ class Sweep:
                 )
         if not legjobs:
             print("batched classify: every pending verdict already cached")
-            return
+            return []
         groups = {}
         for j in legjobs:
             key = (j["flags"], tuple(sorted(j["extra_env"].items())))
@@ -1463,7 +1473,8 @@ class Sweep:
             jobs_by_rowsel[(job["row"]["op"], job["sel"])]["status"][
                 job["leg"]
             ] = status
-        done = fell_back = failed = 0
+        done = failed = 0
+        fell_back = []
         for entry in jobs_by_rowsel.values():
             row, sel = entry["row"], entry["sel"]
             work = self.ev / row["op"] / "classify" / sel
@@ -1484,7 +1495,9 @@ class Sweep:
             if verdict_done:
                 continue
             if fallback is not None:
-                fell_back += 1
+                fell_back.append(
+                    (entry["row"], entry["sel"], entry["legs"], "classify")
+                )
                 print(
                     f"batched classify: {row['op']}/{sel} -> legacy solo ({fallback})"
                 )
@@ -1493,8 +1506,72 @@ class Sweep:
             done += 1
         print(
             f"batched classify: {done} verdict(s) assembled, {failed} "
-            f"COMPILE_FAIL, {fell_back} deferred to the legacy solo path"
+            f"COMPILE_FAIL, {len(fell_back)} deferred to the legacy solo path"
         )
+        return fell_back
+
+    def _solo_classify_pool(self, specs, what):
+        """Run LEGACY SOLO classify() verdicts CONCURRENTLY (owner order
+        2026-08-20, laneDB): attribution requires each leg to compile in
+        its OWN isolated pytest session — it never required those sessions
+        to run one after another.
+
+        specs: [(row, sel, legs_spec_or_None, tag)].  Every dispatched
+        call is self.classify() itself — byte-for-byte the sequential
+        path: one --compile-producer pytest session per leg, each with
+        its own RUNNER_TEMP (work/rt-<leg>, so the harness ARTEFACTS_DIR
+        rmtree-at-session-start and every RUNNER_TEMP-derived dir touch
+        only that session's tree) and its own byte-exact flag set; legs
+        stay strictly ordered inside a verdict, later legs withheld after
+        a COMPILE_FAIL exactly as before.  Only the SCHEDULING across
+        independent (row, sel, tag) verdicts changes — their work dirs
+        (ev/<op>/<tag>/<sel>) are disjoint, so concurrent verdicts share
+        no files.  CH's batching refusal (knob/CRAQ classify legs never
+        SHARE a session) is untouched: nothing here co-schedules two legs
+        into one session.
+
+        Fail-open: a spec that raises is only logged — the sequential
+        caller re-runs that classify() inline, serial-legacy style.  With
+        classify_workers <= 1 (SWEEP_CLASSIFY_WORKERS=1) this is a no-op
+        and the sequential loop compiles everything, as documented."""
+        if getattr(self.a, "classify_workers", 1) <= 1:
+            return
+        pending, seen = [], set()
+        for row, sel, legs, tag in specs:
+            work = self.ev / row["op"] / tag / sel
+            if work in seen or self._classify_cached(work) is not None:
+                continue
+            seen.add(work)
+            pending.append((row, sel, legs, tag))
+        if not pending:
+            return
+        print(
+            f"solo classify pool ({what}): {len(pending)} verdict(s) x "
+            f"{self.a.classify_workers} worker(s), one isolated pytest "
+            "session per leg"
+        )
+
+        def one(spec):
+            row, sel, legs, tag = spec
+            # same mid-run toolchain-swap guard the batched chunks carry
+            self.verify_toolchain("classify")
+            if legs is None:
+                return self.classify(row, sel, tag=tag)
+            return self.classify(row, sel, legs=legs, tag=tag)
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.a.classify_workers
+        ) as pool:
+            futs = {pool.submit(one, s): s for s in pending}
+            for fut in concurrent.futures.as_completed(futs):
+                try:
+                    fut.result()
+                except Exception as exc:  # deferred: the row loop compiles solo
+                    row, sel, _legs, tag = futs[fut]
+                    print(
+                        f"solo classify {row['op']}/{tag}/{sel} exception "
+                        f"(deferred to the sequential loop): {exc}"
+                    )
 
     def _scan_leg_disasm(self, work, leg):
         """Sum the macro-launch census over every archived math.elf of a
@@ -3461,7 +3538,45 @@ exit $RC
                 for sel in SELECTORS:
                     if row["nodes"][sel]:
                         prewarm.append((row, sel, p_legs))
-            self._batched_classify(prewarm)
+            unproven = self._batched_classify(prewarm)
+            # Legs the chunks could not prove used to compile one at a
+            # time inside the row loop; dispatch them through the pool as
+            # CONCURRENT legacy-solo sessions instead (identical sessions,
+            # identical verdicts — only the scheduling changes).
+            self._solo_classify_pool(unproven, "batched-classify fallback")
+            if self.a.knob_attribution:
+                # Knob-attribution prewarm (owner order 2026-08-20,
+                # laneDB): attribute_knobs runs len(KNOBS) solo classify
+                # verdicts per CHANGED row inside the sequential row loop
+                # — the serialized stretch that dominated weekly classify
+                # wall-clock.  Mirror its gating EXACTLY (non-pinpair,
+                # perf-else-corr selector, main verdict CHANGED) and
+                # compile the same verdict set concurrently; the row loop
+                # then resumes every one hash-matched from cache.  Rows
+                # whose main verdict is still unwritten (solo-pool spec
+                # raised) simply stay serial-legacy in the loop.
+                knob_specs = []
+                for row in self.rows:
+                    if row["kind"] in ("skip", "pinpair"):
+                        continue
+                    sel = "sem-perf" if row["nodes"]["sem-perf"] else "sem-corr"
+                    if not row["nodes"][sel]:
+                        continue
+                    cached = self._classify_cached(
+                        self.ev / row["op"] / "classify" / sel
+                    )
+                    if cached is None or cached.get("all") != "CHANGED":
+                        continue
+                    for knob, flag in KNOBS.items():
+                        knob_specs.append(
+                            (
+                                row,
+                                sel,
+                                (("off", OFF_FLAGS), ("knob", f"{OFF_FLAGS} {flag}")),
+                                f"knobs/{knob}",
+                            )
+                        )
+                self._solo_classify_pool(knob_specs, "knob attribution")
         for row in self.rows:
             if row["kind"] == "skip":
                 skips.append(
@@ -3706,8 +3821,10 @@ def main():
         "producer sessions with per-node outcome/ELF attribution; work "
         "dirs are disjoint per (row,selector) and verdicts are hash-keyed "
         "so the sequential loop replays them from cache; unprovable legs "
-        "fall back to solo compiles there). 1 disables the prewarm "
-        "(legacy sequential per-leg classify).",
+        "and knob-attribution legs keep one isolated pytest session per "
+        "leg but those solo sessions run CONCURRENTLY through the same "
+        "pool). 1 disables the prewarm (legacy sequential per-leg "
+        "classify).",
     )
     ap.add_argument(
         "--force",
