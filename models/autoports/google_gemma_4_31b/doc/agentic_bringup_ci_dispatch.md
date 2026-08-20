@@ -425,6 +425,78 @@ means accepting sequences. The adapter also still advertises
 `sample_on_device_policy: "greedy_only"`, now imprecise, left alone because the
 plugin hook it names does not exist.
 
+## Run 32271862302: bring-up exceeded the health budget
+
+Refs: tt-metal `mvasiljevic/gemma4-31b-nongreedy-sampling` @
+`589f30d44c291a92556f198a7960f6a36ac6183a`, tt-inference-server
+`mvasiljevic/gemma4-31b-autoport-on-release-flow` @
+`5352535a9a28b40fa96248976c3dc088804e8200`, vllm-tt-plugin `main` @
+`bd150c7e9d7526e181bfc25dc4379c65f2ba5371`. Hardware job on `120-qb2-p03t02`.
+
+Resolution, image build (~60 min, full rebuild), mesh open, fabric init and
+autoport registration all succeeded. The server never became healthy.
+
+### The clock
+
+`llm_module/runner.py:64` sets `wait_healthy_timeout_s = 1200.0`.
+
+| Run | Health wait starts | Healthy | Elapsed |
+| --- | --- | --- | --- |
+| 32245795692 | 12:35:16 | 12:52:16 | **17m 00s** (3 min spare) |
+| 32271862302 | 16:47:18 | never | timed out at **20m 00s** |
+
+The difference is where in-container setup falls relative to the clock. In the
+healthy run the container started at 12:26:46 and the health wait only began at
+12:35:16 -- setup happened before the clock. In the failed run the wait began
+16:47:18, five seconds after container start, and the engine's first log line was
+16:55:25, so **8m 12s of in-container setup was inside the budget**, leaving
+~11m 45s for model load against the ~17 min it needs.
+
+The engine reached `TTModelRunner: trace_mode=all, sample_on_device_mode=all,
+enable_model_warmup=True` at 16:55:32 and logged nothing further until
+`Got Keyboard Interrupt` at 17:07:18. No traceback, no `TT_THROW`, no watchdog
+trip, no OOM in the full server log.
+
+### The applied config was as intended
+
+From the run's `runtime_model_specs/*.json` artifact, not inferred: `impl
+gemma4_31b_autoport`, ctx 113280, conc 32, env `MESH_DEVICE=P150x4`,
+`GEMMA4_PAGE_BLOCK_SIZE=64`, `GEMMA4_31B_AUTOPORT_DIR`, `EXTRA_MODELS_DIR`;
+`override_tt_config` = fabric_config/trace_region_size/sample_on_device_mode only;
+`vllm_args` carrying `chat-template` and no `override_generation_config`. So the
+stripped entry behaved exactly as designed, and the sampling change cannot be
+implicated: the engine went quiet during model load, before any request.
+
+### Where to look next time
+
+`gh api repos/.../actions/runs/<id>/artifacts` -> the
+`workflow_logs_benchmarks_*` zip holds what the job log does not:
+
+- `docker_server/vllm_*.log` -- the engine's own output, 35 KB
+- `run_logs/run_*.log` -- the harness side, with health-wait timestamps
+- `runtime_model_specs/*.json` -- the config actually applied
+
+The job log is an extract ("Extracted 43/556 lines"), so diagnosing from it alone
+is unreliable. Both earlier diagnoses in this document were made without opening
+these artifacts.
+
+### Mistakes
+
+| Mistake | Consequence | Correction |
+| --- | --- | --- |
+| Quoted "~16 min bring-up" from one run and treated it as headroom | It was 17 min against a 20 min cap, a 15% margin; the next run lost the margin to container setup and timed out | Measure the health-wait window explicitly (`Waiting for inference server` -> `is healthy`) before predicting a run |
+| Bundled a documentation commit into the tt-metal branch used for CI | Changed the SHA, forced a 60 min rebuild, and produced a fresh container whose setup fell inside the health window. The only functional change (sampling) cannot affect bring-up | Keep the CI-dispatched ref stable; land docs separately, or dispatch the pre-existing SHA |
+| Diagnosed two runs from the truncated job log without downloading artifacts | Floated a cold-tensor-cache theory the evidence did not support | Download `workflow_logs` first; the server log and runtime spec answer most questions directly |
+
+### Consequence for the harness
+
+Bring-up for this model is ~17 min of model load on top of ~8 min of container
+setup. Whether it fits depends on which side of the health clock the setup lands,
+which is not something the model controls. That is a fourth finding of the same
+kind as the chat-endpoint default: `wait_healthy_timeout_s = 1200` is marginal for
+a 31B model with a cold cache, and a run can fail for reasons unrelated to the
+model under test.
+
 ## Run history from this host
 
 | Run | Lane | Refs (tt-metal / TTI) | Outcome |
@@ -433,3 +505,4 @@ plugin hook it names does not exist.
 | [32242168349](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/32242168349) | release | branch / `...-on-release-flow` (prod-only entry) | **failed** `determine-server-type`: `No default impl` — the `MODEL_SPECS_ENV=dev` discovery above |
 | [32245014913](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/32245014913) | benchmarks | branch / `...-on-release-flow` @ `0474b2c8` | **failed** `determine-server-type` in 20 s: the commit was missing the spec entry (see mistakes above). No build, no hardware |
 | [32245795692](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/32245795692) | benchmarks | branch / `...-on-release-flow` @ `09fc4fd6` | resolution + build + serving all **passed**; benchmark sweep 0/17 measured (chat-template), 15 points failed identically before the run was cancelled. See outcome above |
+| [32271862302](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/32271862302) | benchmarks | `...nongreedy-sampling` @ `589f30d` / `...-on-release-flow` @ `5352535a` | **failed**: server not healthy within 1200 s. Registration and mesh init fine; 8m12s of container setup inside the budget left too little for model load. See above |
