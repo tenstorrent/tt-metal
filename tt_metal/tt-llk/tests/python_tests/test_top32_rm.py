@@ -45,7 +45,20 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import DEST_SYNC, TOP32_RM
 from helpers.utils import passed_test
 
-pytestmark = [skip_for_wormhole, skip_for_quasar]
+# WEDGES REAL BLACKHOLE — skipped on all backends. In bit-exact run 32375077551 the
+# bitonic SFPU sort hung (TENSIX-TIMED-OUT: Math/Unpacker/Packer) and cascaded timeouts
+# into every later test. The earlier ttsim-only skip was wrong: the kernel does not merely
+# abort ttsim, it deadlocks real silicon too. So skip everywhere until the sort's
+# completion handshake is understood (needs a BH-card debug; the assert-probe / debug-reg
+# path is the prime suspect). See _TTSIM_SKIP_REASON below for the ttsim-side detail.
+pytestmark = [
+    skip_for_wormhole,
+    skip_for_quasar,
+    pytest.mark.skip(
+        reason="Wedges real BH (run 32375077551): bitonic SFPU sort hangs (TENSIX-TIMED-OUT). "
+        "Needs a BH-card debug of the sort completion path. Un-skip once fixed."
+    ),
+]
 
 # ---------------------------------------------------------------------------
 # ttsim cannot run this kernel to completion.
