@@ -425,8 +425,8 @@ def test_copy_rm_interleaved_to_nd_sharded(device, tensor_shape, shard_shape, gr
                 }
             ),
         ),
-        # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards (8 banks)
-        ([5, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})),
+        # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards (7 banks)
+        ([5, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 0))})),
     ],
 )
 @pytest.mark.parametrize(
