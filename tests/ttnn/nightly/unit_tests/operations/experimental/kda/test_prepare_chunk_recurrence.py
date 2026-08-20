@@ -17,6 +17,7 @@ from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_progra
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
+    collect_accuracy_and_determinism_results,
     assert_equal,
 )
 
@@ -232,32 +233,20 @@ def test_prepare_chunk_recurrence_is_device_deterministic(device: ttnn.Device) -
     case = _PRODUCTION_CASE
     host_inputs = _production_host_inputs(seed=1441)
     inputs = _device_inputs(host_inputs, device)
-    reference = _run(inputs, case.num_heads)
 
-    for repeat in range(2):
-        current = _run(inputs, case.num_heads)
-        for name, reference_tt, current_tt in zip(OUTPUT_NAMES, reference, current, strict=True):
-            mismatch_scratch = ttnn.empty(
-                reference_tt.shape,
-                dtype=ttnn.bfloat16,
-                layout=reference_tt.layout,
-                device=device,
-                memory_config=reference_tt.memory_config(),
-            )
-            ttnn.ne(reference_tt, current_tt, dtype=ttnn.bfloat16, output_tensor=mismatch_scratch)
-            mismatch_marker = ttnn.max(mismatch_scratch)
-            mismatch_marker_host = ttnn.to_torch(mismatch_marker).clone()
-            assert_equal(
-                torch.zeros_like(mismatch_marker_host),
-                mismatch_marker_host,
-                name=f"{name} device-side exact-value determinism repeat {repeat + 1}",
-            )
-            ttnn.deallocate(mismatch_scratch)
-            ttnn.deallocate(mismatch_marker)
-        for output in current:
-            ttnn.deallocate(output)
+    def run() -> tuple[ttnn.Tensor, ...]:
+        return tuple(_run(inputs, case.num_heads))
 
-    _assert_outputs_accurate(_oracle(host_inputs, case.num_heads, 0), reference, context="deterministic reference")
+    reference, outputs, mismatch_marker = collect_accuracy_and_determinism_results(device, run)
+    assert_equal(
+        torch.zeros_like(mismatch_marker),
+        mismatch_marker,
+        name="prepared outputs device-side exact-value determinism marker",
+    )
+    for name, expected, output in zip(OUTPUT_NAMES, _oracle(host_inputs, case.num_heads, 0), outputs, strict=True):
+        assert_accurate(expected, output, name=f"deterministic reference {name}", pcc_threshold=0.999)
+    for output in reference:
+        ttnn.deallocate(output)
 
 
 def test_prepare_chunk_recurrence_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
