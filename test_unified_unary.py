@@ -45,7 +45,7 @@ OPS = {
 }
 
 
-def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, fidelity=None):
+def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, fidelity=None, buffering=2):
     num_tiles = num_blocks * tiles_per_block
     shape = [1, num_tiles, 32, 32]
 
@@ -67,8 +67,8 @@ def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, fidelity=None):
     rt_args = [ta.buffer_address(), tout.buffer_address()]
 
     cbs = [
-        make_cb(CB_IN, core_ranges, num_pages=2 * tiles_per_block),
-        make_cb(CB_OUT, core_ranges, num_pages=2 * tiles_per_block),
+        make_cb(CB_IN, core_ranges, num_pages=buffering * tiles_per_block),
+        make_cb(CB_OUT, core_ranges, num_pages=buffering * tiles_per_block),
     ]
 
     define, reference = OPS[op]
