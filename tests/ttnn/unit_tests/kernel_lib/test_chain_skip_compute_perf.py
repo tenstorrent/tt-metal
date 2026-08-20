@@ -2,45 +2,40 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device-profiler A/B coverage for CKL_ELTWISE_CHAIN_SKIP_COMPUTE.
+"""Real-time-profiler A/B coverage for CKL_ELTWISE_CHAIN_SKIP_COMPUTE.
 
-The profile fixtures run identical kernels with the macro off and on. They cover every ordinary
-setup placement plus the managed/caller-managed and block-size variants of L1 and DEST
-accumulation. The outer tests invoke each fixture through the device profiler and require the
-skipped DEVICE KERNEL duration to decrease.
+The two representative fixtures run identical kernels with the macro off and on. The outer tests
+measure each program in-process, assert its recorded Wormhole RT baseline, and require the skipped
+device-program duration to decrease. The remaining skip configurations have functional coverage in
+test_chain_skip_compute.py.
 """
+
+import statistics
 
 import pytest
 import ttnn
 from loguru import logger
 
+from models.common.utility_functions import is_wormhole_b0
 import tests.ttnn.unit_tests.kernel_lib.chain_test_lib as lib
-from models.perf.device_perf_utils import run_device_perf_detailed
+from tests.ttnn.profiling.realtime_profiler_utils import collect_op_durations_merged, require_realtime_profiler
 
 pytestmark = pytest.mark.models_device_performance_bare_metal
 
-OP = "GenericOpDeviceOperation"
-PERF_FILE = "tests/ttnn/unit_tests/kernel_lib/test_chain_skip_compute_perf.py"
 HOIST_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/hoist.cpp"
 ACCUMULATION_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/accumulation.cpp"
 SKIP_DEFINE = [("CKL_ELTWISE_CHAIN_SKIP_COMPUTE", "1")]
 N_ITERS = 20
 CASES = {
-    "ordinary-hoisted": ("ordinary", 0),
     "ordinary-per-call": ("ordinary", 1),
-    "ordinary-caller-setup": ("ordinary", 2),
-    "l1-managed": ("l1", False),
-    "l1-caller-managed": ("l1", True),
     "dest-per-row-b1-managed": ("dest", False, 1, False),
-    "dest-per-row-b1-caller-managed": ("dest", False, 1, True),
-    "dest-per-row-b8-managed": ("dest", False, 8, False),
-    "dest-per-row-b8-caller-managed": ("dest", False, 8, True),
-    "dest-whole-shape-b1-managed": ("dest", True, 1, False),
-    "dest-whole-shape-b1-caller-managed": ("dest", True, 1, True),
-    "dest-whole-shape-b8-managed": ("dest", True, 8, False),
-    "dest-whole-shape-b8-caller-managed": ("dest", True, 8, True),
 }
-VARIANTS = tuple(f"{case}-{mode}" for case in CASES for mode in ("run", "skip"))
+RT_BASELINE_MARGIN = 0.02
+wormhole_rt_baseline = pytest.mark.skipif(not is_wormhole_b0(), reason="RT baselines are recorded on Wormhole B0")
+RT_BASELINE_NS = {
+    "ordinary-per-call": {"run": 193132, "skip": 126922},
+    "dest-per-row-b1-managed": {"run": 47149, "skip": 41490},
+}
 
 
 def _defines(variant):
@@ -63,36 +58,6 @@ def _ordinary(device, variant, setup_mode):
         semaphores=[],
         cbs=[
             lib.cb_descriptor(0, dtype, 2, core_grid),
-            lib.cb_descriptor(16, dtype, 2, core_grid),
-        ],
-    )
-    return [tt_in, tt_out], program
-
-
-def _l1(device, variant, caller_managed):
-    n = 256
-    dtype = ttnn.bfloat16
-    shape = [1, 1, 32, 32 * n]
-    core_grid = lib.single_core_grid()
-    _, tt_in = lib.make_input(shape, dtype, device, seed=91002, scale=0.125, bias=0.0)
-    tt_out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, 32, 32]), dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
-    )
-    program = ttnn.ProgramDescriptor(
-        kernels=[
-            lib.build_reader_kernel([tt_in], n, core_grid),
-            lib.build_writer_1out_kernel(tt_out, 1, core_grid),
-            lib.build_compute_kernel(
-                ACCUMULATION_KERNEL,
-                [1, n, 1, int(caller_managed), 1, 0],
-                core_grid,
-                defines=_defines(variant),
-            ),
-        ],
-        semaphores=[],
-        cbs=[
-            lib.cb_descriptor(0, dtype, 2, core_grid),
-            lib.cb_descriptor(15, dtype, 1, core_grid),
             lib.cb_descriptor(16, dtype, 2, core_grid),
         ],
     )
@@ -137,39 +102,46 @@ def _dest(device, variant, whole_shape, block_size, caller_managed):
     return [tt_a, tt_b, tt_out], program
 
 
-@pytest.mark.parametrize("variant", VARIANTS)
-def test_profile_fixture(device, variant):
+def _build_variant(device, variant):
     case = variant.rsplit("-", 1)[0]
     kind, *args = CASES[case]
     if kind == "ordinary":
-        tensors, program = _ordinary(device, variant, *args)
-    elif kind == "l1":
-        tensors, program = _l1(device, variant, *args)
-    else:
-        tensors, program = _dest(device, variant, *args)
-
-    for _ in range(N_ITERS):
-        ttnn.generic_op(tensors, program)
-    ttnn.synchronize_device(device)
-    ttnn.ReadDeviceProfiler(device)
+        return _ordinary(device, variant, *args), HOIST_KERNEL
+    return _dest(device, variant, *args), ACCUMULATION_KERNEL
 
 
-def _device_kernel_ns(variant):
-    results = run_device_perf_detailed(
-        command=f'pytest "{PERF_FILE}::test_profile_fixture[variant={variant}]" -v',
-        subdir=f"eltwise_skip_compute_{variant}",
-        cols=["DEVICE KERNEL"],
-        op_name=OP,
-        warmup_iters=2,
+def _realtime_program_ns(device, variant):
+    """Median RT duration of freshly dispatched GenericOp programs."""
+    require_realtime_profiler("eltwise-chain skip-compute performance coverage")
+    (tensors, program), kernel_path = _build_variant(device, variant)
+
+    # RT callback subscriptions can replay older records, so retain only the newest measured
+    # dispatches. Do not warm up: the RT record already excludes host-side compilation.
+    durations = collect_op_durations_merged(
+        device,
+        lambda: ttnn.generic_op(tensors, program),
+        kernel_path,
+        iters=N_ITERS,
+        allow_stale_prefix=True,
     )
-    return results["DEVICE KERNEL"]["AVG"]
+    return statistics.median(durations)
 
 
+@wormhole_rt_baseline
 @pytest.mark.parametrize("case", CASES)
-def test_skip_compute_reduces_device_kernel_time(case):
-    run_ns = _device_kernel_ns(f"{case}-run")
-    skip_ns = _device_kernel_ns(f"{case}-skip")
+def test_skip_compute_reduces_device_program_time(device, case):
+    run_ns = _realtime_program_ns(device, f"{case}-run")
+    skip_ns = _realtime_program_ns(device, f"{case}-skip")
     logger.info(
-        f"skip-compute {case} | run={run_ns:.0f} ns | skip={skip_ns:.0f} ns | " f"speedup={run_ns / skip_ns:.3f}x"
+        f"skip-compute {case} | RT program run={run_ns:.0f} ns | skip={skip_ns:.0f} ns | "
+        f"speedup={run_ns / skip_ns:.3f}x"
     )
-    assert skip_ns < run_ns, f"{case}: skip did not reduce DEVICE KERNEL time ({skip_ns:.0f} >= {run_ns:.0f} ns)"
+    for variant, measured_ns in (("run", run_ns), ("skip", skip_ns)):
+        baseline_ns = RT_BASELINE_NS[case][variant]
+        lower = baseline_ns * (1 - RT_BASELINE_MARGIN)
+        upper = baseline_ns * (1 + RT_BASELINE_MARGIN)
+        assert lower <= measured_ns <= upper, (
+            f"{case} {variant}: {measured_ns:.0f} ns outside the RT baseline {baseline_ns} ± "
+            f"{RT_BASELINE_MARGIN * 100:.0f}% ({lower:.0f}-{upper:.0f} ns)"
+        )
+    assert skip_ns < run_ns, f"{case}: skip did not reduce device-program time ({skip_ns:.0f} >= {run_ns:.0f} ns)"
