@@ -1,0 +1,28 @@
+{
+  "schema": "exabox.cluster_health.v1",
+  "ts": "2026-08-19T03:12:00Z",
+  "test_type": "physical",
+  "status": "failed",
+  "analyzer_code": 1,
+  "hosts": [
+    "bh-glx-110-c01u02",
+    "bh-glx-110-c01u08",
+    "bh-glx-110-c02u02",
+    "bh-glx-110-c02u08"
+  ],
+  "topology": {
+    "instance_paths": ["bh_galaxy_sp_0/node_0"]
+  },
+  "cluster": "exabox",
+  "artifact_uri": "/data/stackstorm/nightly-health-check/SC36_3/physical_validation/example",
+  "record_uri": "/tmp/cluster-health/2026-08-19/example-record-id.json",
+  "record_id": "example-record-id",
+  "source": "stackstorm",
+  "triggered_by": "mnijjar",
+  "trigger_kind": "user",
+  "orchestrator_id": "696e1a2b3c4d5e6f7a8b9c0d",
+  "labels": {
+    "quad": "110-C-Q1",
+    "superpod": "SC36_3"
+  }
+}

@@ -130,6 +130,34 @@ The script returns exit codes enabling automated troubleshooting (e.g., Ansible 
 - `50` - Inconclusive (manual review required)
 - `66` - Input error (file/directory not found)
 
+**Cluster health record:** after analyze, emit a portable JSON line (does not change analyze pass/fail):
+
+```bash
+python3 tools/scaleout/exabox/report_cluster_health.py \
+  --test-type physical \
+  --hosts <hosts> \
+  --analyzer-code "$ANALYSIS_RC" \
+  --artifact-dir validation_output/ \
+  --dry-run
+```
+
+Stdout is always one compact JSON object. Pass `--store-root DIR` (or set `CLUSTER_HEALTH_STORE_ROOT`) if your site persists files; there is no default directory. Layout is `DIR/<YYYY-MM-DD>/<record_id>.json` (one compact JSON line per file). Writes use a dotted temp in that same directory then rename; scrapers should glob `*.json` and ignore `*.tmp`. Optional `--cabling` / `--deployment` / `--fsd` / `--gsd` / `--rankfile` / `--rank-bindings` fill portable `topology` from native artifacts. Optional `--label key=value` stores opaque site aliases under `labels`.
+
+Replay leftover dumps without re-running validation:
+
+```bash
+python3 tools/scaleout/exabox/report_cluster_health.py \
+  --from-artifact-dir /path/to/physical_or_nightly_tree \
+  --store-root DIR \
+  --triggered-by "$USER"
+```
+
+`--source` and `--trigger-kind` default to `backfill`. `--from` / `--to` (`YYYY-MM-DD`) filter on leftover **mtime**, not the record timestamp. There is no default window (the store is posterity). If a log shipper only keeps about ten days of data, pass a matching `--from` so you do not publish files that ingest will ignore.
+
+`--recursive` discovers wrapper logs under every nested `logs/` directory (for a tree of StackStorm executions). Truncated wrappers that still have `HOSTS=` emit `status=degraded` with `labels.incomplete=true` instead of inventing an analyzer code. Recover outcomes use the last `Recovery succeeded on attempt` / `Recovery attempt … failed` line; `Recovery completed at` alone is not success.
+
+`--dry-run` prints one JSON line per leftover and never writes.
+
 ### Dispatch Tests
 
 Ensures all chips in the cluster are stable. Stress tests the Compute, Memory, and Data-Movement blocks on each chip.
@@ -351,6 +379,7 @@ A missing cable or bad port/connection will show up as a **consistently missing 
 | `analyze_validation_results.py` | Parse validation logs |
 | `analyze_dispatch_results.py` | Parse dispatch test logs |
 | `analyze_fabric_results.py` | Parse fabric test logs |
+| `report_cluster_health.py` | Emit cluster health JSON after analyze |
 | `mpi-docker` | MPI+Docker wrapper (`--help` for usage) |
 
 ## Config Files

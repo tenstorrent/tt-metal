@@ -1,0 +1,6 @@
+=== Physical Validation - 20260819T050000Z ===
+HOSTS=bh-glx-110-c01u02,bh-glx-110-c01u08
+OUTPUT_DIR=physical_validation/truncated/run
+ITERATIONS=1
+
+MPI body still running; wrapper never wrote Analysis exit code.

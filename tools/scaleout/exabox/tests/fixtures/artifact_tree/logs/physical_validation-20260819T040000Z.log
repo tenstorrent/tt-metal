@@ -1,0 +1,4 @@
+=== Physical Validation - 20260819T040000Z ===
+OUTPUT_DIR=physical_validation/orphan/missing_hosts
+
+Analysis exit code: 2

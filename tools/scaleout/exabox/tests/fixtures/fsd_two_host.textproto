@@ -1,0 +1,2 @@
+hosts { hostname: "bh-glx-110-c01u02" aisle: "C" rack: 1 shelf_u: 2 }
+hosts { hostname: "bh-glx-110-c01u08" aisle: "C" rack: 1 shelf_u: 8 }

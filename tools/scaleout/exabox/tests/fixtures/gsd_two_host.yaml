@@ -1,0 +1,7 @@
+compute_node_specs:
+  bh-glx-110-c01u02:
+    motherboard: TEST
+  bh-glx-110-c01u08:
+    motherboard: TEST
+ethernet_connections:
+  - ignored: true
