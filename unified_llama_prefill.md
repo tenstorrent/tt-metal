@@ -997,6 +997,48 @@ MOP init is the larger part and has no conditional form. Metal's two-argument co
 reconfig (option 1 in the earlier proposal) is still available for what is left of the
 cheaper half.
 
+### Conditional reconfiguration (option 1): tried, does not pay, reverted
+
+The other half of the plan was metal's comparing form, `reconfig_data_format_srca(old,
+new)`, which re-points srcA only if the two formats actually differ. That needs the leaf
+to know what the hardware is currently pointed at, so `bool reconfigure` became a
+threaded `uint32_t& prev_cb` carrying three cases: unknown (re-point outright), our own
+buffer (do nothing at all), or another buffer (compare and skip if they match). `prev_cb`
+resets once per PASS, never per group, since srcA survives a tile_regs cycle and only
+another strategy having run makes the state opaque.
+
+It works and it is slower where it matters:
+
+| | leaf-outer only | + conditional | + conditional, decision hoisted |
+|---|---|---|---|
+| flash, 2 chunks | **46.57 us** | 48.79 us | 49.75 us |
+| flash, 4 chunks | **80.16 us** | 79.52 us | 85.24 us |
+| binary chain, 5 leaves | 27.85 us | 27.20 us | **26.93 us** |
+
+The split is consistent and explains itself. Leaf-outer has already cut the
+reconfiguration count to once per leaf per group, so there are only a handful of calls
+left to make conditional -- and the comparing form is not free: it reads four entries out
+of the unpack format tables before deciding. Paying that to skip a few re-points is a net
+loss. The interleaved path still reconfigures once per leaf per TILE, forty times in a
+five-leaf eight-tile pass, and there the same trade wins 2-3%.
+
+Hoisting the decision out of the tile loop -- splitting the leaf into `prepare` and
+`load` so the check runs once per leaf rather than once per leaf-tile -- was the obvious
+repair and made flash worse still, 49.75us. That result is not explained, and rather than
+narrate a theory the honest summary is: the mechanism was measured three ways, two of
+them regress the target kernel, and it is reverted.
+
+What would make it worth revisiting is the shape it helps: many leaves over many tiles,
+where the interleaved fallback runs. No kernel in llama prefill has that shape, so
+carrying two leaf protocols to win 3% on an expression we do not ship is not a trade
+worth making today.
+
+The remaining ~5.9us of reconfiguration on the math TRISC is now mostly the MOP init,
+which has no comparing form at all. That leaves option 2 -- skipping the init when the
+format is unchanged -- as the only route further, and it still rests on an unproven claim
+about MOP equivalence. It should be attacked, if at all, with the mixed-format sabotage
+already shown to catch exactly this class of bug.
+
 ### What to test next
 
 Ordered by expected value, with what each result would actually mean. Six candidates are
