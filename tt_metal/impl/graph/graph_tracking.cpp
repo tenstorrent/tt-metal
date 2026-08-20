@@ -34,6 +34,18 @@ void GraphTracker::push_processor(const std::shared_ptr<IGraphProcessor>& new_pr
     processors.push_back(new_processor);
 }
 
+void GraphTracker::push_background_processor(const std::shared_ptr<IGraphProcessor>& new_processor) {
+    std::unique_lock lock(background_processors_mutex);
+    background_processors.push_back(new_processor);
+}
+
+bool GraphTracker::has_background_processor_of_type(const std::type_info& type) const {
+    std::shared_lock lock(background_processors_mutex);
+    return std::any_of(background_processors.begin(), background_processors.end(), [&](const auto& processor) {
+        return processor != nullptr && typeid(*processor) == type;
+    });
+}
+
 void GraphTracker::pop_processor() {
     TT_ASSERT(not processors.empty(), "No processor to pop");
     processors.pop_back();
@@ -48,19 +60,22 @@ bool GraphTracker::add_hook(const std::shared_ptr<IGraphHooks>& new_hook) {
 }
 
 void GraphTracker::track_allocate(const Buffer* buffer) {
-    if (processors.empty()) {
-        return;
-    }
     for (auto& it : processors) {
+        it->track_allocate(buffer);
+    }
+    // Background processors observe every thread, not just the one that registered them.
+    std::shared_lock lock(background_processors_mutex);
+    for (auto& it : background_processors) {
         it->track_allocate(buffer);
     }
 }
 
 void GraphTracker::track_deallocate(Buffer* buffer) {
-    if (processors.empty()) {
-        return;
-    }
     for (auto& it : processors) {
+        it->track_deallocate(buffer);
+    }
+    std::shared_lock lock(background_processors_mutex);
+    for (auto& it : background_processors) {
         it->track_deallocate(buffer);
     }
 }

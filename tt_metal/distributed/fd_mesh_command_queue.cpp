@@ -451,6 +451,16 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
                 device_range,
                 program_dispatch::create_trace_node(program.impl(), mesh_device_, num_workers, use_prefetcher_cache)));
+            // Telemetry: accumulate this trace's per-core CB peak, keyed by the range the
+            // program runs on. Capture dispatches nothing, so it is applied on replay.
+            auto& by_range = trace_ctx_->cb_bytes_per_core_by_range;
+            auto entry =
+                std::find_if(by_range.begin(), by_range.end(), [&](const auto& e) { return e.first == device_range; });
+            if (entry == by_range.end()) {
+                by_range.emplace_back(device_range, std::map<CoreCoord, uint64_t>{});
+                entry = std::prev(by_range.end());
+            }
+            Device::accumulate_trace_cb_peak_per_core(program.impl(), entry->second);
         }
         trace_node.multicast_go_signals = mcast_go_signals;
         trace_node.unicast_go_signals = unicast_go_signals;
@@ -581,11 +591,17 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             use_prefetcher_cache,
             entry.cmd_seq->prefetcher_cache_used);
 
+        // Telemetry: this program's CB config is about to be written to L1, so record its
+        // footprint as resident. At dispatch, not registration, so the figure is what is in use
+        // rather than a high-water mark over the program cache. No-op when tracking is off.
         const size_t tasks_before_program = program_tasks.size();
         for_each_local(mesh_device_, device_range, [&](const auto& coord) {
             auto* device = mesh_device_->impl().get_device(coord);
             program_tasks.push_back(DeviceDispatchTask{device, &entry});
             chip_ids_in_workload.insert(device->id());
+            if (auto* concrete_device = dynamic_cast<Device*>(device)) {
+                concrete_device->record_dispatched_program_cbs(program.impl());
+            }
         });
         if (program_tasks.size() == tasks_before_program) {
             // The program runs entirely on devices owned by another host, so no task will claim it.
@@ -1356,6 +1372,19 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
     auto descriptor = trace_inst->desc;
     auto buffer = trace_inst->mesh_buffer;
+
+    // Telemetry: replay rewrites the captured CB configs into L1. There is no per-program
+    // host pass here to hook, which is why the footprint is carried on the trace.
+    for (const auto& [range, per_core] : descriptor->cb_bytes_per_core_by_range) {
+        if (per_core.empty()) {
+            continue;
+        }
+        for_each_local(mesh_device_, range, [&](const MeshCoordinate& coord) {
+            if (auto* device = dynamic_cast<Device*>(mesh_device_->impl().get_device(coord))) {
+                device->apply_cb_residency(per_core);
+            }
+        });
+    }
     uint32_t num_sub_devices = descriptor->sub_device_ids.size();
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto sub_device_id : descriptor->sub_device_ids) {

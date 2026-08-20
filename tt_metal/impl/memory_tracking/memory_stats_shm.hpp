@@ -30,23 +30,59 @@ constexpr uint32_t CHIP_STATS_UNUSED = UINT32_MAX;
 // v2: asic_id now stores UMD chip_unique_id directly (matches SHM filename)
 //     chip_stats sentinel is CHIP_STATS_UNUSED (UINT32_MAX), not 0
 // v3: last_update_timestamp, ChipStats::chip_id and ChipStats::is_remote are atomic
-constexpr uint32_t DEVICE_MEMORY_REGION_VERSION = 3;
+// v4: init_state publishes readiness so attaching processes cannot observe a
+//     half-initialized (zero-filled) region; num_active_processes is atomic;
+//     a process claims its ProcessStats slot at attach time rather than on its
+//     first allocation; every aggregated total and reference_count is moved by
+//     DELTA (add on allocate, saturating subtract on free and on slot release),
+//     so a process that dies without running its destructor has its bytes
+//     subtracted by whoever reaps its slot instead of leaving ghost allocations.
+//     Deltas rather than a recomputed sum-then-store: the latter drops any
+//     allocation another writer records between the sum and the store.
+//     Field offsets 0..(processes end) are unchanged from v3 so that a reader
+//     which only understands v3 still parses the fields it knows.
+constexpr uint32_t DEVICE_MEMORY_REGION_VERSION = 4;
+
+// A region of an older layout is taken over only when no owning process is still alive.
+// reference_count cannot decide it: an older writer leaks it permanently when killed, which
+// would make the upgrade one-way. Requires knowing where `processes` is; see
+// process_table_layout_is_known().
+
+// Values for DeviceMemoryRegion::init_state. A freshly created SHM region is
+// zero-filled, so UNINITIALIZED must be 0.
+constexpr uint32_t SHM_INIT_UNINITIALIZED = 0u;
+constexpr uint32_t SHM_INIT_IN_PROGRESS = 1u;
+constexpr uint32_t SHM_INIT_READY = 0x52454459u;  // 'REDY'
+
+// A ProcessStats slot whose pid reads this is mid-release: its owner is gone but its counters
+// have not been cleared yet. Not claimable (claim_own_pid_entry only takes a slot whose pid is
+// 0) and not a live pid (process_is_alive rejects <= 0), so it is invisible to everything but
+// the releaser that put it there. Whoever wins the CAS to it owns the release, which is what
+// keeps two reapers from clearing one slot twice.
+constexpr pid_t SHM_SLOT_RELEASING = -1;
 
 // Shared memory region layout for per-device memory statistics
 // This structure is mapped into shared memory at /dev/shm/tt_device_*_memory
 // SHM files persist across runs (like UMD locks) - manual cleanup: rm /dev/shm/tt_device_*
 struct DeviceMemoryRegion {
     // Header information
-    uint32_t version;                       // Structure version (for compatibility)
-    uint32_t num_active_processes;          // Number of processes currently tracked (in per-PID array)
+    // Atomic: read by attaching processes concurrently with the initializing process's
+    // write, and by external readers at any time (tt-mgmt). Layout matches uint32_t.
+    std::atomic<uint32_t> version;
+    // Number of live entries in `processes`. Derived, not independently counted.
+    std::atomic<uint32_t> num_active_processes;
     std::atomic<uint64_t> last_update_timestamp;  // Last update time (nanoseconds since epoch)
-    std::atomic<uint32_t> reference_count;  // Number of processes currently attached (always tracked)
+    // Number of processes currently attached. Derived from the live `processes` entries, so a
+    // SIGKILLed process is reclaimed by the next attacher instead of pinning this above zero.
+    std::atomic<uint32_t> reference_count;
 
     // Physical chip identification (for proper device correlation)
     // SHM filename uses chip_unique_id: /dev/shm/tt_device_<chip_unique_id>_memory
-    uint64_t board_serial;  // Reserved (0), use UMD board_id APIs for board correlation
-    uint64_t asic_id;       // UMD chip_unique_id - globally unique, matches SHM filename
-    uint32_t device_id;     // Logical Metal device ID (stored as unsigned; Metal ChipId validated >= 0 before storing)
+    // Atomic: every attaching process rewrites these, so concurrent attaches would
+    // otherwise be plain concurrent writes to the same words. Layout is unchanged.
+    std::atomic<uint64_t> board_serial;  // Reserved (0), use UMD board_id APIs for board correlation
+    std::atomic<uint64_t> asic_id;       // UMD chip_unique_id - globally unique, matches SHM filename
+    std::atomic<uint32_t> device_id;     // Logical Metal device ID (unsigned; ChipId validated >= 0)
 
     // Aggregated device-wide statistics (updated atomically on every allocation)
     // These counters track total memory usage across ALL processes and ALL chips
@@ -80,6 +116,11 @@ struct DeviceMemoryRegion {
         std::atomic<uint64_t> last_update_timestamp;  // Last update from this process
         char process_name[64];                        // Optional: process name for debugging
     } processes[MAX_PROCESSES];
+
+    // Publishes whether the fields above are valid; last, so every v3 field keeps its offset.
+    // Without it an attacher can observe a zero-filled region, where chip_id reads 0 -- a
+    // valid chip ID, defeating the CHIP_STATS_UNUSED sentinel. Release on write, acquire on read.
+    std::atomic<uint32_t> init_state;
 } __attribute__((aligned(64)));
 
 // Buffer types (matching tt_metal::BufferType)
@@ -208,6 +249,42 @@ private:
 
     // Helper: Get process name from PID
     static std::string get_process_name(pid_t pid);
+
+    // Helper: is this PID still alive? Used to reclaim slots left behind by
+    // processes that died without running their destructor.
+    static bool process_is_alive(pid_t pid);
+
+    // May `processes` be read in a region written by this version? Gates inspecting a
+    // foreign-layout region rather than trusting its leak-prone reference_count.
+    static bool process_table_layout_is_known(uint32_t version);
+
+    // Read-only; valid only when process_table_layout_is_known() for the region's version.
+    bool region_has_live_process() const;
+
+    // Helper: wait (bounded) for another process to finish initializing the region.
+    // Returns false on timeout, in which case this provider disables itself rather
+    // than operate on a region whose contents it cannot trust.
+    bool wait_for_region_ready();
+
+    // Helper: claim this process's ProcessStats slot. Called once at attach time
+    // (not lazily on first allocation) so that attachment is discoverable by other
+    // processes and reclaimable if we die.
+    DeviceMemoryRegion::ProcessStats* claim_own_pid_entry(pid_t pid);
+
+    // Helper: subtract a slot's bytes from the device-wide totals, then zero the slot and
+    // drop the attached count. Every aggregate mutation in this class is a delta like this
+    // one; see saturating_sub.
+    void release_process_slot(DeviceMemoryRegion::ProcessStats& slot);
+
+    // Helper: subtract without wrapping, for the unsigned shared counters.
+    static void saturating_sub(std::atomic<uint64_t>& counter, uint64_t amount);
+    static void saturating_sub(std::atomic<uint32_t>& counter, uint32_t amount);
+
+    // Helper: reclaim slots whose owning process no longer exists. Their memory was
+    // never released, so this is what stops a SIGKILLed run from leaving permanently
+    // inflated totals behind (tt-mgmt's `smi cleanup` does not fix that case).
+    // Returns the number of slots reclaimed.
+    size_t reap_dead_processes();
 };
 
 }  // namespace tt::tt_metal

@@ -1542,8 +1542,11 @@ std::vector<CoreRange> detail::ProgramImpl::circular_buffers_unique_coreranges()
 }
 
 void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
-    // Set unconditionally, before the early return below, so compile_and_allocate re-runs.
+    // Both unconditional, before the early return below. The cached CB footprint was computed
+    // from addresses about to be reassigned, and compile_and_allocate has to re-run.
+    this->cb_bytes_per_core_.reset();
     this->compile_and_allocate_needed_ = true;
+
     if (this->local_circular_buffer_allocation_needed_) {
         return;
     }
@@ -1551,6 +1554,64 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
         cb_allocator.reset_available_addresses();
     }
     this->local_circular_buffer_allocation_needed_ = true;
+}
+
+std::shared_ptr<const std::map<CoreCoord, uint64_t>> detail::ProgramImpl::cb_bytes_per_core() const {
+    if (this->cb_bytes_per_core_ != nullptr) {
+        return this->cb_bytes_per_core_;
+    }
+
+    auto per_core = std::make_shared<std::map<CoreCoord, uint64_t>>();
+    for (const CoreRange& core_range : this->circular_buffers_unique_coreranges()) {
+        // Only locally-allocated CBs are counted here. Globally-allocated CBs are backed by
+        // real L1 Buffers and are already tracked through the buffer path (the L1 column).
+        std::vector<std::pair<uint64_t, uint64_t>> regions;
+        for (const auto& cb : this->circular_buffers_on_corerange(core_range)) {
+            if (cb->globally_allocated()) {
+                continue;
+            }
+            const uint64_t start = cb->address();
+            regions.emplace_back(start, start + cb->size());
+        }
+        if (regions.empty()) {
+            continue;
+        }
+
+        // Merge overlapping ranges: CBs sharing a core may reuse addresses, and we want
+        // physical bytes occupied, not the sum of CB sizes.
+        std::sort(regions.begin(), regions.end());
+        std::vector<std::pair<uint64_t, uint64_t>> merged{regions.front()};
+        for (size_t i = 1; i < regions.size(); i++) {
+            auto& last = merged.back();
+            if (regions[i].first <= last.second) {
+                last.second = std::max(last.second, regions[i].second);
+            } else {
+                merged.push_back(regions[i]);
+            }
+        }
+        uint64_t bytes = 0;
+        for (const auto& [start, end] : merged) {
+            bytes += end - start;
+        }
+
+        // Every core in this range holds this program's CB config once it is dispatched.
+        // circular_buffers_unique_coreranges() returns non-overlapping ranges, so no core is
+        // written twice here.
+        for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                (*per_core)[CoreCoord(x, y)] = bytes;
+            }
+        }
+    }
+
+    if (per_core->empty()) {
+        // No locally-allocated CBs. Left uncached: it is cheap to redo, and caching it would
+        // hand out an identity that claims this program is what is resident on the cores it
+        // covers, which it is not -- dispatching it overwrites nothing.
+        return nullptr;
+    }
+    this->cb_bytes_per_core_ = std::move(per_core);
+    return this->cb_bytes_per_core_;
 }
 
 // Scratchpad is a Metal 2.0-only construct.
@@ -1686,15 +1747,6 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
                             dev);
                     }
                 }
-
-                // Also register program with the NEW device
-                auto* device_obj = dynamic_cast<Device*>(const_cast<IDevice*>(dev));
-                if (device_obj) {
-                    device_obj->register_program(this);
-                    if (device_obj->get_shm_stats_provider()) {
-                        device_obj->get_shm_stats_provider()->update_from_allocator(device_obj, getpid());
-                    }
-                }
             }
         }
         return;
@@ -1751,42 +1803,11 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         circular_buffer->set_locally_allocated_address(computed_addr);
     }
 
-    // Register program ONLY with NEW devices (prevents duplicate registration)
-    for (const IDevice* dev : new_devices) {
-        auto* device_obj = dynamic_cast<Device*>(const_cast<IDevice*>(dev));
-        if (device_obj) {
-            device_obj->register_program(this);
-            // Update locally-allocated CB stats via query (accurate even for cached programs)
-            if (device_obj->get_shm_stats_provider()) {
-                device_obj->get_shm_stats_provider()->update_from_allocator(device_obj, getpid());
-            }
-        }
-    }
+    // NOTE: CB memory tracking is no longer driven from program registration. A registered
+    // program occupies no CB space until it is dispatched, so tracking is recorded at
+    // dispatch instead (Device::record_dispatched_program_cbs). That is both correct and
+    // O(CBs in the program) rather than O(every live program) on each registration.
     this->local_circular_buffer_allocation_needed_ = false;
-}
-
-std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> detail::ProgramImpl::get_cb_l1_regions_per_core(
-    int device_id, size_t num_devices) const {
-    (void)device_id;    // TODO: Use device_id once per-device or heterogeneous mesh CB layouts are supported
-    (void)num_devices;  // TODO: Use num_devices for multi-device filtering or layout partitioning when implemented
-
-    std::map<CoreCoord, std::vector<std::pair<uint64_t, uint64_t>>> regions_per_core;
-
-    // For each allocator, iterate through all cores in its CoreRange
-    for (const auto& cb_allocator : cb_allocators_) {
-        const auto& l1_regions = cb_allocator.l1_regions;
-
-        // Add these regions to every core in the CoreRange
-        for (uint32_t x = cb_allocator.core_range.start_coord.x; x <= cb_allocator.core_range.end_coord.x; x++) {
-            for (uint32_t y = cb_allocator.core_range.start_coord.y; y <= cb_allocator.core_range.end_coord.y; y++) {
-                CoreCoord core(x, y);
-                auto& core_regions = regions_per_core[core];
-                core_regions.insert(core_regions.end(), l1_regions.begin(), l1_regions.end());
-            }
-        }
-    }
-
-    return regions_per_core;
 }
 
 void detail::ProgramImpl::deallocate_circular_buffers() {
@@ -1795,18 +1816,6 @@ void detail::ProgramImpl::deallocate_circular_buffers() {
     if (!this->cb_devices_.empty() && !this->circular_buffers_.empty()) {
         for (const IDevice* idevice : this->cb_devices_) {
             tt::tt_metal::GraphTracker::instance().track_deallocate_cb(idevice);
-        }
-
-        // Unregister program from ALL devices (matches registration)
-        for (const IDevice* idevice : this->cb_devices_) {
-            auto* device = dynamic_cast<Device*>(const_cast<IDevice*>(idevice));
-            if (device) {
-                device->unregister_program(this);
-                // Update locally-allocated CB stats via query (accurate after deallocation)
-                if (device->get_shm_stats_provider()) {
-                    device->get_shm_stats_provider()->update_from_allocator(device, getpid());
-                }
-            }
         }
 
         this->cb_devices_.clear();  // Clear device set after deallocation
