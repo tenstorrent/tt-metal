@@ -1,4 +1,6 @@
-# REVIEW_RECORD — pin-15 UNION CANDIDATE (DRAFT skeleton, lane DY 2026-08-20)
+# REVIEW_RECORD — pin-15 UNION CANDIDATE (pin cut 2026-08-20)
+
+Reviewer: orchestrator session (Claude, operated by nkapre@tenstorrent.com) — independent of lanes DP/DQ/DR/DV (authors); union gates executed by lane DY and re-verified by the orchestrator (this session)
 
 Candidate: sfpi-gcc `staging/pin15` @
 `f5aa5bbf676b90ca4f2045edf6613658b76fd0db`
