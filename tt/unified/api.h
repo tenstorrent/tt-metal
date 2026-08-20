@@ -450,6 +450,15 @@ struct is_operand<ComputeBlock<S>> : std::true_type {};
 template <typename S>
 TileSource<S> as_node(const ComputeBlock<S>& b);
 
+// The identity expression: materialise a block into another buffer. `store` takes an
+// expression, and sometimes the expression is just "this block" -- seeding a running value, or
+// copying a scratch result into the buffer that will carry it to the next iteration.
+//
+// as_node does the same thing, but it is the hook the math layer reaches through rather than
+// something a kernel should name.
+template <typename S>
+TileSource<S> copy(const ComputeBlock<S>& b);
+
 template <typename S>
 auto relu(const ComputeBlock<S>& b);
 template <typename S>
