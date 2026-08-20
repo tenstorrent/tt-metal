@@ -9,19 +9,6 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/exp.h"
 
-// FP32 bits → BF16 bits with round-to-nearest-even. A plain `>> 16` truncation
-// can be off by a full BF16 ulp (~2^-8 relative), which matters here because the
-// WH exp path applies the BF16 scale to P while the LSE and the backward pass use
-// the full FP32 scale — the rounding error would become a systematic fw/bw
-// mismatch instead of noise. RTN halves the worst-case error; carrying full FP32
-// through the WH SFPU scale multiply would remove it entirely but needs LLK work.
-// Unlike the host-side bfloat16 conversion this has no NaN guard: the bias carry
-// would turn a NaN into Inf, but the only input is 1/sqrt(head_dim), always finite.
-inline constexpr uint16_t sdpa_fp32_bits_to_bf16_rne(uint32_t fp32_bits) {
-    const uint32_t rounding_bias = 0x7FFFU + ((fp32_bits >> 16) & 1U);
-    return static_cast<uint16_t>((fp32_bits + rounding_bias) >> 16);
-}
-
 #ifdef TRISC_MATH
 #ifdef ARCH_BLACKHOLE
 
@@ -179,15 +166,17 @@ inline void sdpa_exp_tile_init() {
 }
 
 // Arch-dispatched scaled exp: exp(scale * x) over 8 face groups.
-//   WH: pre-multiplies by scale via sfpi then calls accurate exp directly.
-//   BH: folds scale into LREG12 at init time — one SFPU op fewer per element.
-template <uint32_t scaler_fp32>
+//   WH: pre-multiplies by the BF16 scale via sfpi then calls accurate exp directly.
+//       `scaler_bf16` carries the host-side RNE conversion of `scaler_fp32` (low 16 bits).
+//   BH: folds the full FP32 scale into LREG12 at init time — one SFPU op fewer per element.
+template <uint32_t scaler_fp32, uint32_t scaler_bf16>
 inline void sdpa_exp_tile_scaled(uint32_t idst) {
 #ifdef ARCH_WORMHOLE
-    constexpr uint16_t scaler_bf16 = sdpa_fp32_bits_to_bf16_rne(scaler_fp32);
 #ifdef TRISC_MATH
     _llk_math_eltwise_unary_sfpu_params_(
-        _sdpa_detail::mul_then_sfpi_exp</*ITERATIONS*/ 8, DST_ACCUM_MODE, scaler_bf16>, idst, VectorMode::RC);
+        _sdpa_detail::mul_then_sfpi_exp</*ITERATIONS*/ 8, DST_ACCUM_MODE, static_cast<uint16_t>(scaler_bf16)>,
+        idst,
+        VectorMode::RC);
 #endif
 #elif defined(ARCH_BLACKHOLE)
     sdpa_exp_tile_init</*approx*/ false, /*SCALE_EN*/ true, scaler_fp32>();
@@ -196,15 +185,15 @@ inline void sdpa_exp_tile_scaled(uint32_t idst) {
 }
 
 // Arch-dispatched scaled first-column exp: exp(scale * x) over column 0 only (4 iterations).
-template <uint32_t scaler_fp32>
+template <uint32_t scaler_fp32, uint32_t scaler_bf16>
 inline void sdpa_exp_tile_first_column_scaled(uint32_t idst) {
 #ifdef ARCH_WORMHOLE
-    constexpr uint16_t scaler_bf16 = sdpa_fp32_bits_to_bf16_rne(scaler_fp32);
 #ifdef TRISC_MATH
     constexpr int ITERATIONS_HALF_FACE = 4;
     constexpr int DST_STRIDE = 2;
     _llk_math_eltwise_unary_sfpu_params_(
-        _sdpa_detail::mul_then_sfpi_exp<ITERATIONS_HALF_FACE, DST_ACCUM_MODE, scaler_bf16, DST_STRIDE>,
+        _sdpa_detail::
+            mul_then_sfpi_exp<ITERATIONS_HALF_FACE, DST_ACCUM_MODE, static_cast<uint16_t>(scaler_bf16), DST_STRIDE>,
         idst,
         VectorMode::C);
 #endif
