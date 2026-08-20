@@ -549,16 +549,22 @@ def test_topk_multicore_values_beyond_first_tile_row(num_rows, largest, device):
 
 
 # ---------------------------------------------------------------------------
-# Large-k Blackhole routing: ttnn.topk with bf16, dim=-1, largest=True,
-# stable=False and 64 < k <= 2048 is routed at the composite level through
-# ttnn.experimental.topk_large_indices (fused untilize+clamp to lowest-finite
-# bf16 — the private topk_route_prep device op, exercised by EVERY routed
-# call below -> op -> fused gather of the ORIGINAL values straight from the
-# TILE source + TILE assembly of both outputs + index dtype emit — the
-# private topk_route_finish device op, also exercised by EVERY routed call;
-# a slice pair only when k is not a multiple of 16), bypassing the
-# single-core cliff (the device op's own multi-core path is gated at
-# k <= 64 + pow2 width + width < 65536).
+# Blackhole routing suite: ttnn.topk with bf16, dim=-1, largest=True,
+# stable=False is routed at the composite level through
+# ttnn.experimental.topk_large_indices for two k regions:
+#   * large-k: 64 < k <= 2048, bypassing the single-core cliff (the device
+#     op's own multi-core path is gated at k <= 64 + pow2 width +
+#     width < 65536);
+#   * small-k (k <= 64): widths structurally ineligible for the multi-core
+#     bitonic (>= 65535, non-pow2, or pow2 below 8192, at padded width
+#     >= 4096) PLUS the bitonic-eligible pow2 [8192, 65535) band, where the
+#     routed composite measured faster than the bitonic (see topk.cpp).
+# The routed chain is the same in both regions: fused untilize+clamp to
+# lowest-finite bf16 — the private topk_route_prep device op, exercised by
+# EVERY routed call below -> op -> fused gather of the ORIGINAL values
+# straight from the TILE source + TILE assembly of both outputs + index
+# dtype emit — the private topk_route_finish device op, also exercised by
+# EVERY routed call; a slice pair only when k is not a multiple of 16.
 #
 # Tie semantics on the routed path: the returned index SET is a correct top-k
 # set with deterministic-but-unspecified tie order, so these tests assert
