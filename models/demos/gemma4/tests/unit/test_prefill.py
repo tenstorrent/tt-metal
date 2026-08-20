@@ -17,19 +17,24 @@ Why a sweep and not a single length: the prefill path changes shape with the ISL
   the ``_sliding_prefill_tail`` carried from the previous chunk. ``6144`` is the
   non-power-of-two case (3 x 2048, not 4096 + partial).
 
-``--max-prefill`` (default 8192) gates the long tail: lengths above it are skipped
-by the ``_enforce_max_prefill`` fixture, so the routine run is short and 16K …
-256K are opt-in. The sweep reaches the checkpoints' ``max_position_embeddings``
-(256K); the long rows are bounded by the *HF reference*, not by TT — see
-``PREFILL_ISL_SWEEP`` below for the measured cost and for the two things those rows
-do not cover (bounded sliding KV, and the WH T3K ISL ceiling).
+**This file opts out of ``--max-prefill``.** The shared ``_enforce_max_prefill``
+fixture (``tests/conftest.py``) skips any node whose ``seq_len`` exceeds the flag,
+default 8192; the module-local override below disables that here, so the sweep
+always runs its declared range up to the checkpoints' ``max_position_embeddings``
+(256K) no matter what the flag says. The long rows are bounded by the *HF
+reference*, not by TT — see ``PREFILL_ISL_SWEEP`` below for the measured cost and
+for the two things those rows do not cover (bounded sliding KV, and the WH T3K ISL
+ceiling).
 
-Run (T3K / 1x8, the production mesh for 31B and 12B)::
+The full range is hours per model (~5 h on 31B, most of it 256K), so select
+explicitly for a short run — ``-k`` is the only gate now::
 
     HF_MODEL=google/gemma-4-31B-it MESH_DEVICE=1x8 \\
-      pytest models/demos/gemma4/tests/unit/test_prefill.py -k "1x8" -v
-    # long tail — minutes per node at 64K, tens of minutes at 256K
-    ... -k "1x8" --max-prefill 262144
+      pytest models/demos/gemma4/tests/unit/test_prefill.py -k "1x8" -v   # ALL 15 lengths
+    # short run: name the lengths you want
+    ... -k "1x8 and (isl128 or isl1024 or isl4096)"
+    # or the sanity test, which is two lengths by construction
+    ... ::test_prefill_isl_sanity -k "1x8"
 """
 
 from __future__ import annotations
@@ -77,9 +82,9 @@ HF_PREFILL_CHUNK = int(os.environ.get("GEMMA4_DECODER_PCC_HF_CHUNK", "512"))
 # window (32 … 1024 fit inside it, 2048+ do not); 6144 is the non-power-of-two
 # multi-chunk case (chunk 2048 x 3, not 4096).
 #
-# Lengths above ``--max-prefill`` (default 8192) are auto-skipped by the
-# ``_enforce_max_prefill`` fixture in conftest.py, so the routine run is short and
-# the long tail is opt-in: ``--max-prefill 262144``.
+# Every length here runs: the module-local ``_enforce_max_prefill`` override below
+# disables the shared ``--max-prefill`` auto-skip for this file, so adding a length
+# to this list adds it to the default run.
 #
 # **The long rows are bounded by the HF reference, not by TT.** Eager attention
 # materializes a ``[heads, rows, keys]`` score tensor, so the reference forward
@@ -120,6 +125,23 @@ PREFILL_ISL_SANITY = [128, 1024]
 
 # KV readback threshold — bf16 cache vs fp32 HF reference (see test_decode.py).
 KV_PCC_REQUIRED = 0.99
+
+
+@pytest.fixture(autouse=True)
+def _enforce_max_prefill():
+    """Disable the shared ``--max-prefill`` auto-skip for this module.
+
+    ``tests/conftest.py`` defines an autouse fixture of this name that skips any
+    node whose ``seq_len`` param exceeds ``--max-prefill`` (default 8192). A
+    same-named fixture defined in the module shadows it, so declaring this no-op
+    opts the whole file out: the ISL sweep always runs its full declared range,
+    32 … 262144, whatever the flag is set to.
+
+    The point is that an ISL sweep's *coverage* should be a property of the list
+    it declares, not of a flag someone forgot to pass — a silently skipped 256K
+    row reads exactly like a passing one in a summary.
+    """
+    return
 
 
 def tt_prefill_chunk_size(seq_len: int) -> int:
@@ -219,5 +241,5 @@ def test_prefill_isl_sanity(layer_type, seq_len, mesh_device, reset_seeds, reque
 @pytest.mark.parametrize("seq_len", PREFILL_ISL_SWEEP, ids=lambda n: f"isl{n}")
 @pytest.mark.timeout(0)
 def test_prefill_isl_sweep(layer_type, seq_len, mesh_device, reset_seeds, request):
-    """Full ISL sweep (32 … 262144, ``--max-prefill``-gated), single- and multi-chunk."""
+    """Full ISL sweep (32 … 262144, never ``--max-prefill``-gated), single- and multi-chunk."""
     _run_prefill_isl(mesh_device, request, layer_type=layer_type, seq_len=seq_len)

@@ -38,7 +38,9 @@ def pytest_addoption(parser):
             "Maximum prefill seq_len for unit-test PREFILL_BUCKETS and short "
             f"demo buckets (test_demo / batch_prefill). Default: {_DEFAULT_MAX_PREFILL}. "
             "Does not apply to test_demo_long_context / text_demo_v2 long-context-* "
-            "rows — select those with ``-k long-context-*``."
+            "rows (select those with ``-k long-context-*``), nor to "
+            "tests/unit/test_prefill.py, which overrides the auto-skip so its ISL "
+            "sweep always runs its full declared range."
         ),
     )
 
