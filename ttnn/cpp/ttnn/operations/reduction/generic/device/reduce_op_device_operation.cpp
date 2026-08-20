@@ -44,6 +44,17 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         operation_attributes.num_h_slices == 1 || operation_attributes.row_major_h_dense_path,
         "num_h_slices > 1 (H-axis split) is only supported on the row-major H dense path");
+    TT_FATAL(operation_attributes.reduce_batch_size >= 1, "reduce_batch_size must be >= 1");
+    TT_FATAL(
+        operation_attributes.reduce_batch_size == 1 || operation_attributes.row_major_h_dense_path,
+        "reduce_batch_size > 1 (NC grouping) is only supported on the row-major H dense path");
+    // The split emits one partial row per slice, which a grouped reduce has nowhere to put: its
+    // output row already stands for reduce_batch_size slices.
+    TT_FATAL(
+        operation_attributes.reduce_batch_size == 1 || operation_attributes.num_h_slices == 1,
+        "reduce_batch_size {} (NC grouping) cannot be combined with an H-axis split (num_h_slices {})",
+        operation_attributes.reduce_batch_size,
+        operation_attributes.num_h_slices);
     if (operation_attributes.row_major_w_dense_path || operation_attributes.row_major_h_dense_path) {
         const auto expected_dim =
             operation_attributes.row_major_w_dense_path ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
@@ -61,6 +72,12 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             "{} requires 4D input, got rank {}",
             path_name,
             tensor_args.logical_shape().rank());
+        TT_FATAL(
+            tensor_args.logical_shape()[1] % operation_attributes.reduce_batch_size == 0,
+            "{}: reduce_batch_size {} must divide dim 1 ({}) so each output row covers a whole group",
+            path_name,
+            operation_attributes.reduce_batch_size,
+            tensor_args.logical_shape()[1]);
         TT_FATAL(!operation_attributes.negate, "{} does not support negate (min-reduce) yet", path_name);
         TT_FATAL(
             tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32,
@@ -200,7 +217,11 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
     auto output_shape = tensor_args.logical_shape();
     switch (operation_attributes.dim) {
         // H-axis split emits one partial row per slice: output H = num_h_slices (1 = normal reduce).
-        case tt::tt_metal::ReduceOpDim::H: output_shape[2] = operation_attributes.num_h_slices; break;
+        // NC grouping folds reduce_batch_size dim-1 slices into each output row (1 = no folding).
+        case tt::tt_metal::ReduceOpDim::H:
+            output_shape[2] = operation_attributes.num_h_slices;
+            output_shape[1] /= operation_attributes.reduce_batch_size;
+            break;
         case tt::tt_metal::ReduceOpDim::W: output_shape[3] = 1; break;
         case tt::tt_metal::ReduceOpDim::HW:
             output_shape[2] = 1;
@@ -237,7 +258,8 @@ ttnn::Tensor reduce(
     bool row_major_h_dense_path,
     bool use_sfpu_reduce,
     uint32_t num_h_slices,
-    tt::tt_metal::Layout output_layout) {
+    tt::tt_metal::Layout output_layout,
+    uint32_t reduce_batch_size) {
     return ttnn::device_operation::launch<ReduceDeviceOperation>(
         ReduceParams{
             reduce_math,
@@ -253,6 +275,7 @@ ttnn::Tensor reduce(
             row_major_h_dense_path,
             use_sfpu_reduce,
             num_h_slices,
+            reduce_batch_size,
             output_layout},
         input_tensor);
 }
