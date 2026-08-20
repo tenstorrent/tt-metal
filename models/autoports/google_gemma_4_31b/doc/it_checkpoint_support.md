@@ -243,15 +243,87 @@ the first time a non-default impl has been selected on this path. Note the plugi
 SHA moved from `bd150c7e` (the green base-model run) to `fc07f3dd`, so this is a
 two-variable run on that axis as well.
 
+## CI result: run 32355285037, `--workflow release`
+
+`completed/success`, acceptance `PASS`. Report id
+`id_gemma4-31b-autoport_gemma-4-31B-it_p300x2_2026-08-20_11-30-57`,
+`model_impl: gemma4-31b-autoport`, `tt_metal_commit 7a3c6e16109`,
+`vllm_commit fc07f3d`.
+
+Confirmed from the log: `Registered TT model TTGemma4ForConditionalGeneration ->
+models.autoports.google_gemma_4_31b.tt.generator_vllm:Gemma4ForCausalLM`, so the
+autoport served, not `models/demos/gemma4`. `GPU KV cache size: 49,152`, the
+inherited `max_context` -- which only worked because of the relaxed context
+assert. `Waiting for inference server ... (timeout 2400s)`, so the raised health
+budget was in force and the server came up.
+
+### What the green PASS hides
+
+| Item | Reality |
+| --- | --- |
+| `r1_gpqa_diamond` | **90** against an H100 `-it` reference of 80, ratio 1.125, PASS. First graded accuracy number for this autoport |
+| `terminal_bench_2` | **0** (`n_trials: 0, pass_at_1: 0.0`), FAIL |
+| `swe_bench_verified` | **0**, FAIL |
+| Benchmark point 1, the only one with targets | **FAIL**: TTFT 581.8 ms against a `functional` target of 460 ms (ratio 1.265), and 6.324x the `complete` target of 92 ms |
+| Throughput checks on that point | PASS: 28.0 t/s/u against a 3.70 target |
+| Other 7 sweep points | NA, no targets exist for them |
+| Spec tests | NA, no Gemma suites |
+
+Acceptance is `PASS` only because `status: EXPERIMENTAL` waives the failures:
+`Evals: PASS (1/3 passed, 2 waived)`, `Benchmarks: PASS (0/8 passed, 1 waived,
+7 NA)`. That status is inherited from the `tt_transformers` entry, so it is
+platform behaviour rather than anything this branch introduced -- the same fact
+`local_release_flow_p300x2.md` records for the base model.
+
+### Attribution of each failure
+
+- **The two agentic zeros are ours.** The log carries 45 instances of `tool choice
+  requires --enable-auto-tool-choice and --tool-call-parser to be set` with
+  `BadRequestError`: the agentic harness sent tool-calling requests and the server
+  rejected every one, because this entry omits those `vllm_args`.
+
+  But the alternative is not better. Carrying them over is what killed the
+  `tt_transformers` entry's own release run 32132213868
+  (`Gemma4ToolParser.__init__() takes 2 positional arguments but 3 were given`).
+  So on this stack **neither choice passes those two tasks**: omitting the args
+  yields two soft zeros, including them yields a hard crash. The root cause is the
+  upstream parser bug, and the deviation only chose which failure mode to take.
+  If those blocks matter, fix the parser first.
+
+- **The TTFT target miss is the implementation's**, and it echoes the base-model
+  finding: 581.8 ms here, 592.99 ms for the base model on the chat endpoint, and
+  100.91 ms locally on `/v1/completions`. The ~480 ms gap tracks the chat path
+  rather than the checkpoint. For `-it` the chat endpoint is the *correct* one, so
+  this is not something the driver fix would remove -- it is real overhead on the
+  path this model must use, and it is what pushes TTFT past the 460 ms target.
+  Unexplained; candidates are per-request template rendering and trace capture
+  inside the measured window.
+
+- **The misattributed reference is upstream.** `Published Score Ref` reads
+  `https://huggingface.co/Qwen/Qwen3.6-27B` for all three Gemma tasks, inherited
+  from TTI's eval config. Already recorded as a correction in
+  `problems_and_fixes_log.md`; still wrong upstream.
+
+### Does the run deserve to be green?
+
+By the platform's rules, yes: every criterion is either passed or waived. On the
+evidence, a reader should take from it that the autoport **serves `-it` correctly
+and scores 90 on GPQA diamond against an H100 reference of 80**, and should not
+take from it that latency targets were met or that the agentic tasks work. A
+`PASS` on an `EXPERIMENTAL` model asserts that the workflow executed, which is
+exactly what the base-model documentation already warns.
+
 ## Open risks
 
-- **Accuracy on `-it` is unmeasured** (datatype policy above). Eval numbers from
-  this run are a first data point, not a validation.
-- **The eval config's tasks may not fit.** `EVAL_CONFIGS` for `-it` carries
-  `r1_gpqa_diamond`, `terminal_bench_2` and `swe_bench_verified`; the latter two
-  are agentic and need tool calling, which the omitted `vllm_args` would have
-  provided -- and including them reproduces a known crash. Expect
-  `r1_gpqa_diamond` to be the usable block.
-- **`trace_region_size` is inherited at 200000000**, against the 268435456 the
-  local runs validated for this implementation. Left inherited deliberately; if
-  trace capture fails, that is the finding.
+- ~~**Accuracy on `-it` is unmeasured.**~~ Partly resolved: `r1_gpqa_diamond`
+  scored 90 against an H100 reference of 80, and local generation is coherent. No
+  PCC or top-1 number exists yet, so numerical equivalence is still unmeasured.
+- ~~**The eval config's tasks may not fit.**~~ Confirmed: `r1_gpqa_diamond` is
+  the usable block; the two agentic tasks scored 0 because tool-calling requests
+  were rejected. See the attribution section above -- the upstream parser bug means
+  neither including nor omitting the args makes them pass.
+- ~~**`trace_region_size` inherited at 200000000**~~ -- it held; trace capture
+  succeeded and the sweep completed, so the 268435456 override the base entry
+  carried is not required on this path.
+- **TTFT is ~5x the completions-endpoint figure and misses the functional
+  target.** Open, and the most substantive unexplained result.

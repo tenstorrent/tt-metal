@@ -121,7 +121,33 @@ would have passed a raw temperature. Placement matters too: that helper is calle
 it testable without vLLM installed (9 tests, 2.6 s, versus a contract file that
 cannot even be collected without it).
 
-## 6. Index of model defects
+## 6. The -it checkpoint route
+
+Full detail in `it_checkpoint_support.md`. Summary of what running the autoport
+against `google/gemma-4-31B-it` cost and found.
+
+| Finding | Whose | Status |
+| --- | --- | --- |
+| `_resolve_checkpoint` hardwired to the base repo id | ours | Fixed |
+| Decode loop compared a single `eos_token_id`; `-it` declares `[1, 106, 50]`, so end-of-turn never stopped generation | ours, latent | Fixed |
+| Context contract required `max_model_len` equality, forcing every spec entry to override it | ours | Relaxed to `<=` |
+| Qualitative harness refused any checkpoint with a chat template | ours | Fixed by rendering through the template |
+| Qualitative harness passed `--hf-model` to the HF reference only, so TT ran base weights against an `-it` reference | ours, latent | Fixed at all three call sites. Silent wherever the base checkpoint is cached |
+| Agentic eval tasks score 0 without `--tool-call-parser`, and crash with it | upstream (`Gemma4ToolParser`) | Open; neither choice passes |
+| TTFT 581.8 ms misses the 460 ms functional target; ~5x the completions-endpoint figure | unexplained | Open |
+
+Result: `--workflow release` returned `PASS` with `r1_gpqa_diamond` at **90**
+against an H100 reference of 80 -- the first graded accuracy number for this
+autoport -- while two evals scored 0 and the one benchmark point with targets
+failed on TTFT. Both are waived by `EXPERIMENTAL`, so read the green with care.
+
+Method note worth keeping: the coherence question was first attacked with the full
+qualitative harness, which loads a 31B HF reference into ~62 GB and decodes on
+CPU. Two ten-minute loads passed before the cheaper experiment was written -- a
+TT-only script at 13 GB with no CPU decode. Where the question is "is the output
+coherent", the base-weight run is already the reference.
+
+## 7. Index of model defects
 
 See `defects_found_by_release_flow.md` for the four defects the local release flow
 exposed: the greedy-only adapter versus the upstream bench client's changed
