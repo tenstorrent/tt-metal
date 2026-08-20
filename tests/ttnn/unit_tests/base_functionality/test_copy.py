@@ -2644,12 +2644,13 @@ def test_copy_tilized_override_runtime_arguments(
 
 def test_copy_tile_interleaved_to_width_sharded_bf8(device):
     torch.manual_seed(0)
-    shape = [1, 1, 8192, 2048]
+    num_dram_banks = device.dram_grid_size().x
+    shape = [1, 1, 8192, 256 * num_dram_banks]
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    shard_grid = _make_full_dram_core_range_set(device)
     shard_shape = (8192, 256)
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
