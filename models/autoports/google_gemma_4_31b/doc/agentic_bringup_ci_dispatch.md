@@ -457,14 +457,35 @@ enable_model_warmup=True` at 16:55:32 and logged nothing further until
 `Got Keyboard Interrupt` at 17:07:18. No traceback, no `TT_THROW`, no watchdog
 trip, no OOM in the full server log.
 
-**That silence is the model load, not a hang.** The healthy run behaves
-identically: its engine logged at 12:35:34, then nothing until 12:52:04 -- a
-16m 30s gap -- and became healthy 12 s later. So the failed run was doing the same
-work and was interrupted 11m 46s in, roughly 71% through a ~16m 30s load, about
-4m 45s short. Nothing was wedged and nothing needs fixing in the model; the load
-phase simply emits no progress output, which is why one run in isolation cannot be
-told apart from a hang. A progress log in `build_generator` would remove that
-ambiguity.
+**On whether it was loading or blocked -- the logs cannot settle it.** State the
+evidence precisely:
+
+- *No positive evidence of progress.* After `model_runner.py:164` at 16:55:32 the
+  failed run logs nothing at all until `Got Keyboard Interrupt`. Zero lines.
+- *Silence is consistent with a normal load.* The healthy run behaves identically:
+  engine logs at 12:35:34, nothing until 12:52:04 (16m 30s), healthy 12 s later.
+  So a silent gap of this length is what a successful load looks like. That makes
+  an incomplete-but-progressing load plausible -- interrupted 11m 46s into a
+  ~16m 30s job, roughly 71% through, about 4m 45s short -- but plausible is not
+  proven.
+- *A device-side hang is unlikely.* The failed run ran with
+  `TT_METAL_OPERATION_TIMEOUT_SECONDS=5.0` (TTI's default, since the spec override
+  was removed) and `TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE` wired. Any
+  single device operation blocking for more than 5 s should have aborted with a
+  `TIMEOUT` and run the triage hook. It never fired.
+- *A host-side block is not excluded.* That watchdog only covers device
+  operations. CPU-bound weight conversion, file I/O, an HF fetch or a lock would
+  be invisible to it and would look exactly like this.
+
+So: consistent with a load that needed ~5 more minutes, unlikely to be a stuck
+device op, and a host-side block cannot be ruled out from these logs. The root
+cause of the *failure* is still the time budget, but "it was fine, just slow" is
+an inference, not a finding.
+
+The reason this is undecidable is itself the defect: the load phase emits no
+progress output for ~16 minutes, so a single run cannot be told apart from a hang.
+A progress log in `build_generator` -- even one line per N layers or per cache
+write -- would make the next occurrence diagnosable from one run.
 
 ### The applied config was as intended
 
