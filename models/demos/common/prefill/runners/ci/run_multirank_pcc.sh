@@ -2,18 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
-# Multi-galaxy disaggregated prefill KV-accuracy leg: a background N-rank runner opens the mesh, loads the
-# model, warmup-compiles and publishes the merged KV chunk table to shared NFS; a device-less producer then
-# feeds it, reads the device caches back over UMD and PCCs them against the golden trace. The producer's
+# Multi-galaxy disaggregated prefill cache-accuracy leg: a background N-rank runner opens the mesh, loads
+# the model, warmup-compiles and publishes the merged KV chunk table to shared NFS; a device-less producer
+# then feeds it, reads EVERY device cache the model published back over UMD (a sparse model's indexer key
+# cache as well as its KVPE cache) and PCCs each against the golden trace. The producer's
 # exit code is the verdict, so this script's exit code is the producer's.
 #
-# Usage: run_multirank_kv_pcc.sh <model-key>       # model-key selects a block in the case below
+# Usage: run_multirank_pcc.sh <model-key>       # model-key selects a block in the case below
 #
 # Everything outside that case block is model-independent launcher plumbing (host-order derivation, table
 # poll, runner reaping, durable-verdict dump), so a new model is a case entry, not another copy.
 set -euo pipefail
 
-MODEL="${1:?usage: run_multirank_kv_pcc.sh <model-key>}"
+MODEL="${1:?usage: run_multirank_pcc.sh <model-key>}"
 
 : "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
 : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
@@ -77,7 +78,7 @@ MR_DIR=$(mktemp -d "${PIPELINE_DIR}/${MODEL}_prefill_ci_mr.XXXXXX")
 export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
 # Each producer rank drops its PCC verdict here before the shutdown sentinel; mpirun drops buffered stdout
 # when the runner tears down, so this file is the only durable record of the measured per-cache PCC.
-PCC_DIR="${MR_DIR}/kv_pcc_verdict"
+PCC_DIR="${MR_DIR}/pcc_verdict"
 # Per-rank stdout/stderr files (mpirun --output-filename). These survive the teardown race that truncates
 # forwarded stdout, so their tails are the authoritative debug log.
 RANKLOGS="${MR_DIR}/ranklogs"
@@ -93,7 +94,7 @@ cleanup() {
   # Dump diagnostics before rm: on every exit path (success, producer failure, table timeout, step-timeout
   # kill) the live mpirun stdout may be truncated at teardown, so the durable verdict JSON and per-rank
   # ranklog tails are the authoritative record.
-  echo "==================== KV PCC verdicts (PROD_RC=${PROD_RC:-<unset>}) ===================="
+  echo "==================== per-cache PCC verdicts (PROD_RC=${PROD_RC:-<unset>}) ===================="
   for f in "${PCC_DIR}"/rank*.json; do
     [ -e "$f" ] || { echo "no PCC verdict files under ${PCC_DIR}"; break; }
     echo "$(basename "$f"): $(cat "$f")"

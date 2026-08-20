@@ -729,7 +729,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_kv_pcc.sh kimi27
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27
   test_type: prefill_runner_kv_pcc
   test_group: module
   skus:
@@ -757,7 +757,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_kv_pcc.sh glm52
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52
   test_type: prefill_runner_kv_pcc
   test_group: module
   skus:
