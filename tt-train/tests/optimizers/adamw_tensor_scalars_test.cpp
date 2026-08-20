@@ -87,7 +87,13 @@ void run_parity_step(ttnn::DataType param_dtype, bool amsgrad, uint32_t step) {
             beta2_pow,
             hp.epsilon,
             hp.weight_decay);
-        return std::make_tuple(param_out.to_vector<float>(), exp_avg.to_vector<float>(), exp_avg_sq.to_vector<float>());
+        auto max_exp_avg_sq_out =
+            amsgrad ? max_exp_avg_sq->to_vector<float>() : std::vector<float>{};
+        return std::make_tuple(
+            param_out.to_vector<float>(),
+            exp_avg.to_vector<float>(),
+            exp_avg_sq.to_vector<float>(),
+            std::move(max_exp_avg_sq_out));
     };
 
     auto run_tensor_path = [&]() {
@@ -113,16 +119,23 @@ void run_parity_step(ttnn::DataType param_dtype, bool amsgrad, uint32_t step) {
             hp.beta1,
             hp.beta2,
             hp.epsilon);
-        return std::make_tuple(param_out.to_vector<float>(), exp_avg.to_vector<float>(), exp_avg_sq.to_vector<float>());
+        auto max_exp_avg_sq_out =
+            amsgrad ? max_exp_avg_sq->to_vector<float>() : std::vector<float>{};
+        return std::make_tuple(
+            param_out.to_vector<float>(),
+            exp_avg.to_vector<float>(),
+            exp_avg_sq.to_vector<float>(),
+            std::move(max_exp_avg_sq_out));
     };
 
-    const auto [param_ref, exp_avg_ref, exp_avg_sq_ref] = run_float_path();
-    const auto [param_out, exp_avg_out, exp_avg_sq_out] = run_tensor_path();
+    const auto [param_ref, exp_avg_ref, exp_avg_sq_ref, max_exp_avg_sq_ref] = run_float_path();
+    const auto [param_out, exp_avg_out, exp_avg_sq_out, max_exp_avg_sq_out] = run_tensor_path();
 
     // The tensor-scalar path feeds the kernel the same three immediates, so results are bit-identical.
     EXPECT_EQ(param_ref, param_out);
     EXPECT_EQ(exp_avg_ref, exp_avg_out);
     EXPECT_EQ(exp_avg_sq_ref, exp_avg_sq_out);
+    EXPECT_EQ(max_exp_avg_sq_ref, max_exp_avg_sq_out);
 }
 
 void run_parity_check(ttnn::DataType param_dtype, bool amsgrad) {
