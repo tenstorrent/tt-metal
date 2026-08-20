@@ -380,8 +380,9 @@ void kernel_main() {
 
             // x - E[x]
             // fp32: reset both srcs so fp32 x/mean aren't read through the partial-E[x] bf16 dfb_ones format.
-            // The reconfig has to precede the init: the init programs the unpacker MOP against the
-            // formats already in the config registers.
+            // The reconfig has to precede the init: the init's LLK assert checks that the unpack config
+            // registers already describe these operands. (The MOP is built from the init's static
+            // arguments; the registers themselves are consumed later, by UNPACR.)
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_x_id);
                 reconfig_data_format_srcb(dfb_ex_global_id);

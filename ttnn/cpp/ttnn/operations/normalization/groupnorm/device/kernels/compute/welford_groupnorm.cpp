@@ -252,7 +252,7 @@ void kernel_main() {
     for (uint32_t b = 0; b < num_batches; ++b) {
         // Aim the unpacker at the welford intake CB; the tail stage leaves SrcA on dfb_x, so this
         // repeats every batch. Only the fp32 path needs the reconfig, and it must precede the init:
-        // transpose_init programs the MOP from whatever formats already sit in the config registers.
+        // transpose_init's LLK assert checks the unpack config registers against the operand it is given.
         if constexpr (welford_unpack_fp32_active) {
 #ifdef TILIZE_IN
             reconfig_data_format_srca(dfb_in_id);
@@ -479,8 +479,8 @@ void kernel_main() {
                         // // b. (x - u) * 1/[sqrt(Var + eps)]
                         dfb_xmm.wait_front(1);
                         // fp32: reset SrcA to dfb_xmm (fp32); stage a left SrcA on dfb_in0. The reconfig has to
-                        // precede the init: the init programs the unpacker MOP against the formats already in the
-                        // config registers.
+                        // precede the init: the init's LLK assert checks that the unpack config registers already
+                        // describe these operands.
                         if constexpr (enable_fp32_reconfig) {
                             reconfig_data_format_srca(dfb_in0_id, dfb_xmm_id);
                         }
@@ -501,8 +501,8 @@ void kernel_main() {
                         const uint32_t mask_index = mask_offset + block_w_index;
 
                         dfb_xmm.wait_front(1);
-                        mul_bcast_rows_init(dfb_xmm_id, dfb_input_mask_id);
                         reconfig_data_format_srcb(dfb_ex2pe_id, dfb_input_mask_id);
+                        mul_bcast_rows_init(dfb_xmm_id, dfb_input_mask_id);
                         tile_regs_acquire();
                         mul_tiles_bcast_rows(dfb_xmm_id, dfb_input_mask_id, 0, mask_index, dst0);
                         dfb_xmm.pop_front(1);
