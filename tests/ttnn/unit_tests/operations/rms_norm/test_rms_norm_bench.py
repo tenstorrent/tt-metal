@@ -70,6 +70,10 @@ def test_rms_norm_bench(device):
         for name in _shapes("RMS_BENCH_GROUP_SHAPES", ["focus", "prefill_7168"]):
             manifest += bench.run_group_sweep(device, name)
 
+    if mode in ("combine_floor",):
+        for name in _shapes("RMS_BENCH_CF_SHAPES", ["focus"]):
+            manifest += bench.run_combine_floor(device, name)
+
     if mode in ("gateset", "both"):
         manifest += bench.run_gateset(device)
 
