@@ -14,10 +14,9 @@
 
 namespace ttnn::prim {
 
-uint32_t GroupNormPadCorrection::scaler_bits(uint32_t reduce_factor_w) const {
-    const float sc = 1.0f / std::sqrt(
-                                static_cast<float>(reduce_factor_w) * static_cast<float>(logical_hw) /
-                                static_cast<float>(padded_hw));
+uint32_t GroupNormPadCorrection::recip_bits(uint32_t reduce_factor_w) const {
+    const float sc =
+        1.0f / (static_cast<float>(reduce_factor_w) * static_cast<float>(logical_hw) / static_cast<float>(padded_hw));
     return std::bit_cast<uint32_t>(sc);
 }
 
