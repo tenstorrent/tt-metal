@@ -73,6 +73,11 @@ _NO_POP = ("wait_upfront", "no_wait")
 _RELOAD_ID = {"fold": 0, "copy_pairs": 1, "copy_uniform": 2, "copy_sfpu": 3, "copy_zero": 4}
 RELOADS = tuple(_RELOAD_ID)
 
+# ReduceWithinTile selector (AccumulateViaAdd only). collapse = the normal two-step reduce (cross-tile add,
+# then the SFPU folds the 32 lanes inside the tile); skip = drop that second step, for inputs already
+# collapsed on the reduce axis (a cross-core combine of per-core partials).
+WITHIN_TILE = ("collapse", "skip")
+
 # Fewest REDUCED tiles per output at which the fast path beats the library, per dim (from the 1-D sweep:
 # the REDUCE_COL datapath is cheaper than REDUCE_ROW, so col needs more tiles before fast pulls ahead).
 _DISPATCH_MIN = {"row": 4, "col": 8, "scalar": 8}
@@ -269,7 +274,7 @@ void kernel_main() {
 # static_asserts, breaking the reduce_tile kernel compile. In a template, the discarded branch is not
 # instantiated, so each build compiles only its own algo's reduce().
 # CT args: [Ht, Wt, NC, dim, kernel_iters, out_tiles, algo, partial_elems, policy_id, recfg, row_stride,
-#           n_reduced, avg_direct]
+#           n_reduced, avg_direct, skip_within]
 # =============================================================================
 _HELPER_BLOCK_KERNEL = r"""
 #include <cstdint>
@@ -284,7 +289,7 @@ constexpr uint32_t cb_in = 0, cb_scaler = 1, cb_out = 16;
 
 // Templated so `if constexpr (algo)` discards the dead branch (see the header note). Each build instantiates
 // exactly one algo's reduce(), so a policy/dim invalid for the OTHER algo never trips its static_asserts.
-template <uint32_t algo, uint32_t dim, uint32_t policy_id, uint32_t avg_direct>
+template <uint32_t algo, uint32_t dim, uint32_t policy_id, uint32_t avg_direct, uint32_t skip_within>
 ALWI void do_reduce_block(
     [[maybe_unused]] uint32_t iter,
     compute_kernel_lib::ReduceInputBlockShape shape,
@@ -304,6 +309,10 @@ ALWI void do_reduce_block(
                                : (dim == 1u) ? ReduceDim::REDUCE_COL
                                              : ReduceDim::REDUCE_SCALAR;
     using RECFG = ReduceDataFormatReconfigMode;
+    // skip_within==1 -> ReduceWithinTile::Skip: the input tiles are ALREADY collapsed on the reduce axis
+    // (a cross-core combine of per-core partials), so the finalize's sfpu_reduce is dropped. Skip is
+    // AccumulateViaAdd + SUM only, so it rides the reduce_mean form (SUM + caller 1/N), never reduce<AVG>.
+    constexpr ReduceWithinTile WT = (skip_within == 1u) ? ReduceWithinTile::Skip : ReduceWithinTile::Collapse;
     if constexpr (algo == 1u) {
         // AccumulateViaAdd. recfg==1 exercises RECFG::NONE after the first call (reusing the first call's
         // config). avg_direct==1: reduce<AVG> derives 1/N from geometry; else reduce_mean applies the explicit
@@ -318,10 +327,10 @@ ALWI void do_reduce_block(
                     shape, ml, NoAccumulation{}, NoOp{}, ps);
         } else {
             if (none_now)
-                reduce_mean<RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::NONE, ReduceFp32Mode::Fast, ALG>(
+                reduce_mean<RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::NONE, ReduceFp32Mode::Fast, ALG, WT>(
                     shape, n_reduced, ml, NoAccumulation{}, ps);
             else
-                reduce_mean<RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::INPUT_AND_OUTPUT, ReduceFp32Mode::Fast, ALG>(
+                reduce_mean<RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::INPUT_AND_OUTPUT, ReduceFp32Mode::Fast, ALG, WT>(
                     shape, n_reduced, ml, NoAccumulation{}, ps);
         }
     } else {
@@ -346,6 +355,7 @@ void kernel_main() {
     constexpr uint32_t row_stride = get_compile_time_arg_val(10);  // tile pitch per row (0=contiguous=Wt)
     constexpr uint32_t n_reduced = get_compile_time_arg_val(11);  // real elems/output = the AccumulateViaAdd mean 1/N
     constexpr uint32_t avg_direct = get_compile_time_arg_val(12);  // 1 = AccumulateViaAdd uses reduce<AVG> direct
+    constexpr uint32_t skip_within = get_compile_time_arg_val(13);  // 1 = ReduceWithinTile::Skip (inputs pre-collapsed)
     constexpr uint32_t row_pitch = (row_stride > 0u) ? row_stride : Wt;
     constexpr uint32_t in_tiles = Ht * row_pitch * NC;  // resident block incl. padded rows
     constexpr bool pops_input = (policy_id <= 1u);  // Bulk + WaitAndPop pop the input; no-pop policies do not
@@ -379,7 +389,7 @@ void kernel_main() {
             cb_reserve_back(cb_in, in_tiles);
             cb_push_back(cb_in, in_tiles);  // resident sharded input -> re-arm each iter
         }
-        do_reduce_block<algo, dim, policy_id, avg_direct>(iter, SHAPE, ML, PS, n_reduced, recfg);
+        do_reduce_block<algo, dim, policy_id, avg_direct, skip_within>(iter, SHAPE, ML, PS, n_reduced, recfg);
         if (iter + 1 < kernel_iters) {
             cb_wait_front(cb_out, out_tiles);
             cb_pop_front(cb_out, out_tiles);
@@ -634,6 +644,7 @@ def create_program_descriptor(
     avg_direct=False,
     reconfig=None,
     row_stride=0,
+    within_tile="collapse",
 ):
     if variant not in VARIANTS:
         raise ValueError(f"variant must be one of {VARIANTS}, got {variant!r}")
@@ -676,6 +687,20 @@ def create_program_descriptor(
         raise ValueError(f"reconfig must be None or 'none_after_first', got {reconfig!r}")
     if reconfig and variant != "accumulate_via_add":
         raise ValueError("reconfig (NONE-after-first) needs variant=accumulate_via_add")
+    if within_tile not in WITHIN_TILE:
+        raise ValueError(f"within_tile must be one of {WITHIN_TILE}, got {within_tile!r}")
+    if within_tile == "skip":
+        # ReduceWithinTile::Skip: the input tiles are already collapsed on the reduce axis, so the reduce is a
+        # pure cross-tile sum (the SFPU finalize is dropped). AccumulateViaAdd + SUM only -> the reduce_mean
+        # form (SUM + caller 1/N), so avg_direct is out; partial is rejected by the library (nothing to mask).
+        if variant != "accumulate_via_add":
+            raise ValueError("within_tile='skip' is an accumulate_via_add lever")
+        if avg_direct:
+            raise ValueError("within_tile='skip' is SUM-only; reduce<AVG> geometry 1/N needs the collapse")
+        if partial_elems:
+            raise ValueError("within_tile='skip' rejects partial (a lane mask has nothing to mask)")
+        if dim not in ("row", "col"):
+            raise ValueError("within_tile='skip' is exercised on row/col in this example")
     if row_stride:
         # row_stride (a wider resident block, padded rows) is a library AccumulateViaAdd feature: reduce the
         # first Wt columns of each row_stride-wide row. ROW/COL only, indexed (not streaming), no partial.
@@ -753,8 +778,11 @@ def create_program_descriptor(
             _POLICY_ID[policy],
             int(reconfig == "none_after_first"),
             row_stride,
-            _mean_n(dim, Ht, Wt, partial_elems),
+            # Skip's inputs are pre-collapsed partials, so the mean divides by the number of CONTRIBUTORS
+            # (one per reduce-dim tile), not by the element count along the axis.
+            reduced_count(dim, Ht, Wt) if within_tile == "skip" else _mean_n(dim, Ht, Wt, partial_elems),
             int(avg_direct),
+            int(within_tile == "skip"),
         ],
         config=ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
     )
@@ -786,6 +814,7 @@ def run_op(
     avg_direct=False,
     reconfig=None,
     row_stride=0,
+    within_tile="collapse",
 ):
     out_hw = output_shape(dim, Ht, Wt, NC)
     output = ttnn.allocate_tensor_on_device(
@@ -812,6 +841,7 @@ def run_op(
         avg_direct=avg_direct,
         reconfig=reconfig,
         row_stride=row_stride,
+        within_tile=within_tile,
     )
     return ttnn.generic_op([input_tensor, output], descriptor)
 
