@@ -54,7 +54,11 @@ _exalens_server: Optional[ExalensServer] = None
 # This is a workaround for this issue: https://github.com/tenstorrent/tt-exalens/issues/958
 # In a nutshell, everything except Tensix GPRs is accessible over NoC, thus ignoring that allows us to dump
 # most of the Tensix state, without causing any runtime issues.
+# Quasar is a no-op: ttexalens has no Tensix register description yet
+# (hardware/quasar/device.py raises NotImplementedError).
 def override_gprs_used_by_tensix_dump():
+    if get_chip_architecture() == ChipArchitecture.QUASAR:
+        return
     context = check_context()
     for device_id in context.devices.keys():
         context.devices[
@@ -455,11 +459,9 @@ def pytest_configure(config):
             TestConfig.resolve_worker_tensix_location()
 
         is_ttsim = _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
-        if (
-            is_ttsim
-            or not TestConfig.TEST_TARGET.run_simulator
-            and TestConfig.ARCH != ChipArchitecture.QUASAR
-        ):
+        # WH/BH only: ttsim or silicon. Quasar is skipped inside the helper
+        # because ttexalens has no Tensix register description yet.
+        if is_ttsim or not TestConfig.TEST_TARGET.run_simulator:
             override_gprs_used_by_tensix_dump()
 
 

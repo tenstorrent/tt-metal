@@ -1600,7 +1600,7 @@ RealtimeProfilerManager* MeshDeviceImpl::get_realtime_profiler() const { return 
     TT_FATAL(
         drisc_l1_arena_ != nullptr,
         "DriscL1Arena not constructed; programmable DRAM cores auto-enable on Blackhole with firmware "
-        ">= 19.12.0.0 and either no harvested DRAM channels or a single device");
+        ">= 19.12.0.0");
     return *drisc_l1_arena_;
 }
 
@@ -1612,10 +1612,12 @@ TensorPrefetcherManager& MeshDeviceImpl::tensor_prefetcher(MeshDevice* mesh_devi
     return *tensor_prefetcher_;
 }
 
-CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const {
-    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
+CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
+    TT_FATAL(device != nullptr, "Cannot select a DRAM sender core for a null device");
+    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(device->id());
     const uint32_t num_banks = soc_desc.get_num_dram_views();
-    TT_FATAL(bank_id < num_banks, "bank_id={} out of range (num_banks={})", bank_id, num_banks);
+    TT_FATAL(
+        bank_id < num_banks, "bank_id={} out of range for device {} (num_banks={})", bank_id, device->id(), num_banks);
 
     std::set<std::pair<size_t, size_t>> reserved;
     for (const auto& c : soc_desc.dram_view_worker_cores.at(bank_id)) {
@@ -1635,16 +1637,19 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const 
         }
     }
     TT_THROW(
-        "No unused DRAM subchannel found for bank_id={}; all {} subchannels are reserved as worker/eth endpoints",
+        "No unused DRAM subchannel found for bank_id={} on device {}; all {} subchannels are reserved as "
+        "worker/eth endpoints",
         bank_id,
+        device->id(),
         num_subchannels);
 }
 
-std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(uint32_t bank_id) const {
-    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(reference_device()->id());
+std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const {
+    TT_FATAL(device != nullptr, "Cannot enumerate DRAM sender cores for a null device");
+    const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(device->id());
 
     // Sender 0: the free non-endpoint subchannel.
-    const CoreCoord free_core = pick_unused_dram_logical_core(bank_id);
+    const CoreCoord free_core = pick_unused_dram_logical_core(device, bank_id);
 
     // Sender 1: the NOC1 worker-endpoint subchannel. Resolve its subchannel index by
     // matching the endpoint's physical (TRANSLATED) coord against this bank's
@@ -1659,16 +1664,35 @@ std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(uint32_t bank_i
         if (coord.x == noc1_endpoint_phys.x && coord.y == noc1_endpoint_phys.y) {
             const CoreCoord noc1_core =
                 soc_desc.get_logical_dram_core_for_subchannel(static_cast<int>(bank_id), static_cast<int>(sub));
+            // A sender mapping resolves logical DRAM coords against one reference device and is then
+            // reused mesh-wide (see build_dram_sender_mapping), so a role must land on the same
+            // logical y on every device. dram_bank_endpoint_coords orders a bank as [NOC0 endpoint,
+            // NOC1 endpoint, remaining subchannels ascending], which pins the NOC1 endpoint to y == 1
+            // and every free subchannel above it -- but only while the bank's two worker endpoints are
+            // distinct subchannels. A descriptor that names one subchannel for both NOCs (Wormhole
+            // does) collapses that ordering and would let the free and NOC1 roles swap logical y
+            // between devices, which the per-device membership check cannot see. Wormhole has no DRAM
+            // senders, so require the split here rather than in the descriptor.
             TT_FATAL(
-                noc1_core != free_core,
-                "DRAM bank {}: NOC1-endpoint subchannel collides with the free subchannel ({}, {})",
+                noc1_core.y == 1 && free_core.y > noc1_core.y,
+                "DRAM bank {} on device {}: expected the NOC1 worker endpoint at logical y=1 with the free "
+                "subchannel above it, but found NOC1 at ({}, {}) and free at ({}, {}). A bank's NOC0 and NOC1 "
+                "worker endpoints must be distinct subchannels so that a sender's logical coord names the same "
+                "endpoint role on every device in the mesh; check this view's worker_endpoint pair in the SoC "
+                "descriptor.",
                 bank_id,
+                device->id(),
+                noc1_core.x,
+                noc1_core.y,
                 free_core.x,
                 free_core.y);
             return {free_core, noc1_core};
         }
     }
-    TT_THROW("Could not resolve the NOC1 worker-endpoint subchannel for DRAM bank_id={}", bank_id);
+    TT_THROW(
+        "Could not resolve the NOC1 worker-endpoint subchannel for DRAM bank_id={} on device {}",
+        bank_id,
+        device->id());
 }
 
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }

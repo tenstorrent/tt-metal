@@ -335,6 +335,7 @@ void fill_pad_tile_blockfloat(uint32_t l1_tile_ptr) {
  */
 template <DataFormat data_format>
 constexpr uint32_t blockfloat_mantissa_bits() {
+#ifndef ARCH_QUASAR
     if constexpr (data_format == DataFormat::Bfp8 || data_format == DataFormat::Bfp8_b) {
         return 8;
     } else if constexpr (data_format == DataFormat::Bfp4 || data_format == DataFormat::Bfp4_b) {
@@ -344,6 +345,18 @@ constexpr uint32_t blockfloat_mantissa_bits() {
     } else {
         return 0;
     }
+#else
+    // Quasar's DataFormat enum has NO WH-style block-float formats: the codes WH/BH use for Bfp8/Bfp4/Bfp2
+    // (2/3/11) are reused on Quasar for the microscaling MxInt8/MxInt4/MxInt2, and there is no Bfp8_b/Bfp4_b/
+    // Bfp2_b at all. So this WH-Bfp mantissa accounting does not apply on Quasar; report 0 (same as the
+    // non-block-float branch on WH/BH). The one block-float DataType a caller could otherwise pass, BFLOAT8_B,
+    // is rejected up front by the quasar matmul op (experimental/quasar/matmul/matmul.cpp) -- the only Quasar
+    // caller of pad_last_ktile* -- so a block-float format never reaches here on Quasar (no silent mis-pad).
+    // A value-based assert is deliberately NOT added: the codes 2/3/11 are legitimate Quasar MxInt formats,
+    // so asserting on them would false-fire; the op-level dtype reject is the correct guard. (Padding for
+    // Quasar's Mx microscaling formats, if ever needed, is a separate Mx-specific path -- not this.)
+    return 0;
+#endif
 }
 
 /**

@@ -284,7 +284,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::LOG2:  // log2[x] = log[x]*1.4426950408889634f; FP32@U32 0x3fb8aa3b; FP16@U16 0x3dc5;
             return {
                 fmt::format("log_with_base_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("log_with_base_tile<{1}u>({0}, 0x3fb8aa3bu);", idst, (uint32_t)param0)};
+                fmt::format("log_with_base_tile<{1}u, true>({0}, 0x3fb8aa3bu);", idst, (uint32_t)param0)};
         case UnaryOpType::LOG1P:
             return {
                 fmt::format("log1p_tile_init<{}u>();", (uint32_t)param0),
@@ -381,9 +381,18 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("erf_tile<{1}u>({0});", idst, (uint32_t)param0)};
         case UnaryOpType::ERFC: return {"erfc_tile_init();", fmt::format("erfc_tile({0});", idst)};
         case UnaryOpType::RDIV: {
-            uint32_t rounding_mode_value = params[1];
+            TT_FATAL(params.size() == 2, "Expected rdiv to take 2 parameters (divisor, rounding mode)");
             static constexpr const char* rounding_mode_strs[] = {
                 "ckernel::RoundingMode::None", "ckernel::RoundingMode::Trunc", "ckernel::RoundingMode::Floor"};
+            // RoundingMode None / Trunc / Floor. The mode shares the params vector with the
+            // float divisor, so it arrives as T; comparing before converting also rejects NaN
+            // and out-of-range values, which a check on the converted value cannot.
+            const T rounding_mode_raw = params[1];
+            TT_FATAL(
+                rounding_mode_raw == T{0} || rounding_mode_raw == T{1} || rounding_mode_raw == T{2},
+                "Invalid rdiv rounding mode {} (expected 0, 1 or 2)",
+                rounding_mode_raw);
+            const auto rounding_mode_value = static_cast<uint32_t>(rounding_mode_raw);
             return {
                 "rdiv_tile_init();",
                 fmt::format(
@@ -797,7 +806,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             // log10[x] = log[x]/log[10] = log[x]*0.4342944819032518; FP32@U32 0x3ede5bd9; FP16@U16 0x36f3;
             return {"log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x3ede5bd9u);", idst)};
         case UnaryOpType::LOG2:  // log2[x] = log[x]*1.4426950408889634f; FP32@U32 0x3fb8aa3b; FP16@U16 0x3dc5;
-            return {"log_with_base_tile_init();", fmt::format("log_with_base_tile({}, 0x3fb8aa3bu);", idst)};
+            return {
+                "log_with_base_tile_init();", fmt::format("log_with_base_tile<false, true>({}, 0x3fb8aa3bu);", idst)};
         case UnaryOpType::ABS: return {"abs_tile_init();", fmt::format("abs_tile({});", idst)};
         case UnaryOpType::ABS_INT32: return {"abs_tile_init();", fmt::format("abs_tile_int32({});", idst)};
         case UnaryOpType::SIGN: return {"sign_tile_init();", fmt::format("sign_tile({});", idst)};

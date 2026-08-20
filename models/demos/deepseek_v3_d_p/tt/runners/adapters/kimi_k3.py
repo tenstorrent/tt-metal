@@ -53,14 +53,19 @@ class KimiK3Adapter(MLAPrefillAdapter):
     hf_repo_id = "moonshotai/Kimi-K3"
     env_var = "KIMI_K3_HF_MODEL"
     default_local_path = Path("models/demos/deepseek_v3_d_p/reference/kimi_k3")
-    num_layers_to_download = 1
+    # The download fallback fetches layers 0..N-1, and pretrained_mla_layer is 3.
+    num_layers_to_download = 4
     ref_cache_env = "TT_KIMI_K3_PREFILL_HOST_REF_CACHE"
     mla_ref_cache_env = "KIMI_K3_MLA_REF_CACHE"
     ttnn_cache_env = "TT_KIMI_K3_PREFILL_TTNN_CACHE"
     # Loading the staged checkpoint wholesale needs an MXFP4 -> bf16 dequantizer that does not exist
-    # yet, so the pretrained fixtures stay skipped. The MoE gate is exempt: it is unquantized and read
+    # yet, so the full-transformer fixtures stay skipped. The MoE gate is exempt: it is unquantized and read
     # through a prefix-filtered safe_open.
     supports_pretrained = False
+    # MLA alone is loadable: quantization_config.ignore covers self_attn, so those weights are bf16.
+    # The first full-attention layer, not 0 -- layers 0-2 are KDA and hold no MLA tensors.
+    pretrained_mla_layer = KimiK3Config.mla_layer_ids()[0]
+    mla_trace_defaults = ("/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_k3_100k_vllm",)
     # Left as None: shared_path feeds conftest's state_dict fixture, which pytest would resolve --
     # loading all 1.5 TB -- before the supports_pretrained skip in the fixture body runs.
     shared_path = None
