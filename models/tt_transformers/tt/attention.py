@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 import torch
 
@@ -759,8 +760,22 @@ class Attention(LightweightModule):
         else:
             # bfloat16 is required by nlp_create_qkv_heads_decode
             if self.prefetcher is None:
-                xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
-                ttnn.deallocate(xqkv_fused_sharded)
+                # Llama 8B PR #50666: sharded_to_interleaved collapsed fused-QKV to
+                # interleaved L1, so nlp_create_qkv_heads_decode ran on 1 core.
+                # Keep width-sharded (QKV matmul output) so create-heads can
+                # parallelize. Pure data-shuffle -> lossless when the op accepts it.
+                # Default-on after n150 A/B 2026-08-20: +0.9 tok/s, EN/JA gates PASS.
+                # Set TT_QKV_WIDTH_SHARDED_CREATE_HEADS=0 to restore interleaved S2I.
+                keep_width_sharded = os.environ.get("TT_QKV_WIDTH_SHARDED_CREATE_HEADS", "1") == "1"
+                if keep_width_sharded:
+                    if xqkv_fused_sharded.dtype != ttnn.bfloat16:
+                        xqkv_fused = ttnn.typecast(xqkv_fused_sharded, ttnn.bfloat16)
+                        ttnn.deallocate(xqkv_fused_sharded)
+                    else:
+                        xqkv_fused = xqkv_fused_sharded
+                else:
+                    xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
+                    ttnn.deallocate(xqkv_fused_sharded)
             else:
                 xqkv_fused = xqkv_fused_sharded
         # Reshape such that true unpadded batch is tracked in shape
