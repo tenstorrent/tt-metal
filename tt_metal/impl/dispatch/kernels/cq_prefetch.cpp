@@ -1005,9 +1005,12 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
 #if FD_BENCH_PF_TIMELINE
     fd_copy_bench::pf_mark(fd_copy_bench::kPfHeaderEnter, fd_copy_bench::bench_cycle());
 #endif
-    volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
+    // Aligned overlay instead of the packed struct -- same bytes, but word loads rather than
+    // byte-at-a-time reassembly. See cq_commands.hpp.
+    ASSERT((cmd_ptr & 7) == 0);  // the overlay's alignment requirement; see cq_commands.hpp
+    volatile CQPrefetchRelayInlineCmdAligned tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchRelayInlineCmdAligned>(cmd_ptr);
 
-    uint32_t length = cmd->relay_inline.length;
+    uint32_t length = cmd->length;
     uintptr_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
 #if FD_BENCH_PF_CHUNK_WAYPOINTS
@@ -1059,7 +1062,7 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
 #if FD_BENCH_PF_TIMELINE
     fd_copy_bench::pf_mark(fd_copy_bench::kPfHeaderExit, fd_copy_bench::bench_cycle());
 #endif
-    return cmd->relay_inline.stride;
+    return cmd->stride;
 }
 
 // The hard problem here is: when an xfer lands exactly at a page boundary, who is responsible for getting the next
@@ -1938,10 +1941,13 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
 #endif
     // #endif
 
-    volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmdLarge>(cmd_ptr);
-    uint32_t noc_xy_addr = cmd->relay_linear.noc_xy_addr;
-    uint64_t read_addr = cmd->relay_linear.addr;
-    uint64_t wlength = cmd->relay_linear.length;
+    // Read through the aligned overlay (cq_commands.hpp) rather than the packed struct: identical
+    // bytes, but the compiler can use lw/ld instead of reassembling each field from byte loads.
+    ASSERT((cmd_ptr & 7) == 0);  // the overlay's 8-byte alignment requirement; see cq_commands.hpp
+    volatile CQPrefetchRelayLinearCmdAligned tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchRelayLinearCmdAligned>(cmd_ptr);
+    uint32_t noc_xy_addr = cmd->noc_xy_addr;
+    uint64_t read_addr = cmd->addr;
+    uint64_t wlength = cmd->length;
     // DPRINT("relay_linear: cmd_ptr={} length={} read_addr={} noc_xy_addr={}\n", cmd_ptr, wlength, read_addr,
     // noc_xy_addr);
 

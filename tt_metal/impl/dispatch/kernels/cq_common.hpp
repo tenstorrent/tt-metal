@@ -338,8 +338,8 @@ template <
 class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>((get_semaphore<programmable_core_type>(my_sem_id)));
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
 
         // Ensure last sem_inc has landed
         noc_async_atomic_barrier();
@@ -359,8 +359,8 @@ public:
     // Wait for all n pages to be available. If the consumer is using blocks, it may never return all pages at once
     // unless it calls release_all_pages to return partially-consumed blocks.
     FORCE_INLINE void wait_all_pages(uint32_t n) {
-        volatile tt_l1_ptr uint32_t* sem_addr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>((get_semaphore<programmable_core_type>(my_sem_id)));
+        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
 
         // Downstream component sets the MSB as a terminate bit
         // Mask that off to avoid a race between the sem count and terminate
