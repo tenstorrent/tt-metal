@@ -2,7 +2,7 @@
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 #
-# sim_wormhole_b0 / sim_blackhole SKUs run the same cmd under the ttsim simulator
+# sim_wh_n150 / sim_bh_p150 SKUs run the same cmd under the ttsim simulator
 # on ubuntu-latest; ttnn-smoke-tests-impl.yaml invokes setup-ttsim for these.
 # See .github/actions/setup-ttsim/action.yml.
 # Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
@@ -12,9 +12,9 @@
   skus:
     wh_n300_civ2:
       timeout: 15
-    sim_wormhole_b0:
+    sim_wh_n150:
       timeout: 15
-    sim_blackhole:
+    sim_bh_p150:
       timeout: 15
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev

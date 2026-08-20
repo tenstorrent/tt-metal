@@ -2685,11 +2685,12 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_WithManyToManyPinn
 
     const auto& pinning_groups = mgd.get_pinnings();
     ASSERT_EQ(pinning_groups.size(), 1u);
-    ASSERT_EQ(pinning_groups[0].fabric_nodes.size(), 4u);
-    ASSERT_GE(pinning_groups[0].asic_positions.size(), 4u);
+    ASSERT_EQ(pinning_groups.at(MeshId{0}).size(), 1u);
+    ASSERT_EQ(pinning_groups.at(MeshId{0})[0].fabric_nodes.size(), 4u);
+    ASSERT_GE(pinning_groups.at(MeshId{0})[0].asic_positions.size(), 4u);
 
     auto without_pinnings = pgd.get_valid_groupings_for_mgd(mgd, psd);
-    auto with_pinnings = pgd.get_valid_groupings_for_mgd(mgd, psd, pinning_groups);
+    auto with_pinnings = pgd.get_valid_groupings_for_mgd(mgd, psd, mgd.get_pinnings());
 
     ASSERT_TRUE(without_pinnings.contains("MESH"));
     ASSERT_TRUE(with_pinnings.contains("MESH"));

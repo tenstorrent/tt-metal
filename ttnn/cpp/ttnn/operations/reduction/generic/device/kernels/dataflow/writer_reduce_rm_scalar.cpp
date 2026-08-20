@@ -60,11 +60,12 @@ void reduce_rm_writer() {
     constexpr uint32_t dfb_id_tile = tt::CBIndex::c_3;
     constexpr uint32_t onetile = 1;
 
-    const uint32_t tile_size_bytes = get_tile_size(dfb_id_tile);
     const auto dst_accessor = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
     DataflowBuffer dfb_tile(dfb_id_tile);
+
+    const uint32_t tile_size_bytes = dfb_tile.get_tile_size();
 
     if constexpr (DIM == ckernel::ReduceDim::REDUCE_ROW) {
         //

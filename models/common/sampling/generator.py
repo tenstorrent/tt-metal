@@ -36,7 +36,7 @@ def _mark_trace_buffers_corruptible(bucket, value):
         mark_corruptible(value)
 
 
-def _hash_request_seed_to_device_seed(seed: int, counter: int) -> int:
+def _hash_request_seed_to_device_seed(seed: int, counter: int, salt: int = 0) -> int:
     """Derive a stable per-token device seed from a request seed.
 
     The device sampling op accepts bounded positive seeds, while vLLM
@@ -44,8 +44,15 @@ def _hash_request_seed_to_device_seed(seed: int, counter: int) -> int:
     of batch slot. Hashing (request seed, token counter) gives each token
     a deterministic but well-mixed device seed without relying on mutable
     per-slot RNG state. The constants below are the SplitMix64 finalizer.
+
+    ``salt`` separates concurrent requests that carry the same request seed
+    (e.g. n>1 completions of one prompt with a fixed seed): without it every
+    such request derives the identical device seed at the identical token
+    position and the completions come out byte-identical (#53077). A request
+    with a unique seed always has salt 0, so its stream is unchanged.
     """
     value = (int(seed) & _UINT64_MASK) ^ ((int(counter) + 0x9E3779B97F4A7C15) & _UINT64_MASK)
+    value ^= (int(salt) * 0xD1B54A32D192ED03) & _UINT64_MASK
     value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & _UINT64_MASK
     value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & _UINT64_MASK
     value = (value ^ (value >> 31)) & _UINT64_MASK
@@ -424,8 +431,25 @@ def format_sampling_params(sampling_params, max_batch_size):
     """
     Format sampling parameters for on-device use.
 
-    Converts scalar fields to lists, pads all lists to ``max_batch_size``,
-    inverts temperature, clamps top-p/top-k, and normalises penalties.
+    Converts scalar fields to lists, pads all lists to ``max_batch_size``, inverts
+    temperature, clamps top-p/top-k, and normalises penalties.
+
+    ``temperature`` defines the ACTIVE lane count: ``active_len = len(temperature)`` after
+    the scalar->list normalisation below. Three field groups, each with its own rule:
+
+    * **Per-user fields** — ``temperature``, ``top_p``, ``top_k``, and the three penalties.
+      A scalar broadcasts across the active lanes; a list is used as given. Inactive lanes
+      (``active_len..max_batch_size``) are padded with the field default. A list that is
+      neither length 1 nor long enough to cover the active lanes is rejected: silently
+      padding it with defaults would turn real lanes greedy (``top_k`` -> 1) or drop their
+      penalties, which is invisible at the call site.
+    * **Log-probs fields** — ``enable_log_probs`` / ``num_logprobs``. A scalar or a
+      single-element list broadcasts to ``max_batch_size``, not to ``active_len``: these
+      select an output format rather than shaping a lane's distribution, so an inactive
+      lane carrying the flag is harmless.
+    * **``seed``** — lane-scoped, deliberately NOT broadcast. A scalar seed lands on lane 0
+      and every other lane stays unseeded, because broadcasting one seed to every lane
+      means "all lanes draw the same token", which a caller must ask for explicitly.
 
     Returns a **new** SamplingParams — the input is never mutated.
     """
@@ -455,10 +479,35 @@ def format_sampling_params(sampling_params, max_batch_size):
             return list(lst)
         return list(lst) + [defaults[name]] * (target_len - len(lst))
 
-    # Pad core sampling fields (scalar→list already done above)
-    temperature = _pad(sampling_params.temperature, "temperature")
-    top_p = _pad(sampling_params.top_p, "top_p")
-    top_k = _pad(sampling_params.top_k, "top_k")
+    # Number of lanes the caller is actually describing. temperature is the reference
+    # because it is the field that decides whether a lane samples at all.
+    active_len = len(sampling_params.temperature)
+
+    def _pad_per_user(value, name):
+        """Normalise one per-user field to a target_len list. See the docstring."""
+        if value is None:
+            # Only reachable for the penalties, whose defaults are no-ops.
+            return _pad([defaults[name]], name)
+        if not isinstance(value, List):
+            # Scalar: the caller means "this value, for every lane I am describing".
+            return _pad([value] * active_len, name)
+        lst = list(value)
+        # A single-element list stays lane-scoped: callers that pass [x] for a one-user
+        # batch have always meant lane 0, and reinterpreting it as a broadcast would
+        # silently change sampling for their other lanes. (#45400 / Copilot review)
+        if len(lst) != 1 and len(lst) < active_len:
+            raise ValueError(
+                f"sampling_params.{name} has {len(lst)} entries but temperature describes "
+                f"{active_len} active lanes. Pass one value per active lane, a single scalar to "
+                f"apply one value to all of them, or a 1-element list to target lane 0 only. "
+                f"Padding the gap with the {name} default ({defaults[name]!r}) would silently "
+                f"change how lanes {len(lst)}..{active_len - 1} sample."
+            )
+        return _pad(lst, name)
+
+    temperature = _pad_per_user(sampling_params.temperature, "temperature")
+    top_p = _pad_per_user(sampling_params.top_p, "top_p")
+    top_k = _pad_per_user(sampling_params.top_k, "top_k")
 
     # enable_log_probs / num_logprobs: scalar → broadcast to all users.
     # Multi-element list → pad with default (False/0) for inactive slots.
@@ -476,21 +525,24 @@ def format_sampling_params(sampling_params, max_batch_size):
     else:
         num_logprobs = None
 
-    # Normalise and pad penalty / seed fields (may still be None/scalar)
-    def _normalise_and_pad(name):
-        value = getattr(sampling_params, name, None)
-        if value is None:
-            lst = [defaults[name]]
-        elif isinstance(value, List):
-            lst = list(value)
-        else:
-            lst = [value]
-        return _pad(lst, name)
+    # Penalties follow the same per-user rule as temperature/top_p/top_k. They used to be
+    # lane-scoped, so a scalar penalty alongside a per-user temperature landed on lane 0 and
+    # left every other lane on the no-op default (0.0 / 0.0 / 1.0) with no diagnostic -- the
+    # same silent-wrong-lane bug that scalar top_k had. Note the SamplingParams defaults for
+    # these three ARE the padding defaults, so a caller who never sets them is unaffected.
+    presence_penalty = _pad_per_user(getattr(sampling_params, "presence_penalty", None), "presence_penalty")
+    frequency_penalty = _pad_per_user(getattr(sampling_params, "frequency_penalty", None), "frequency_penalty")
+    repetition_penalty = _pad_per_user(getattr(sampling_params, "repetition_penalty", None), "repetition_penalty")
 
-    presence_penalty = _normalise_and_pad("presence_penalty")
-    frequency_penalty = _normalise_and_pad("frequency_penalty")
-    repetition_penalty = _normalise_and_pad("repetition_penalty")
-    seed = _normalise_and_pad("seed")
+    # seed stays lane-scoped on purpose: broadcasting one seed across the batch means every
+    # lane draws the same token, which is a different request than "seed this request".
+    seed_value = getattr(sampling_params, "seed", None)
+    if seed_value is None:
+        seed = _pad([defaults["seed"]], "seed")
+    elif isinstance(seed_value, List):
+        seed = _pad(list(seed_value), "seed")
+    else:
+        seed = _pad([seed_value], "seed")
 
     # Clamp / transform values in the new lists (no mutation of the input)
     TOP_P_MIN = 0.0
@@ -670,16 +722,29 @@ def chunk_sampling_params(sampling_params, sampling_dp: int) -> list:
 
 
 class SeedManager:
-    """Manages per-user RNG seeds for on-device sampling.
+    """Manage per-user RNG state and writes to the on-device seed tensor.
 
     Tracks which users have explicit seeds set (``_seed_active``) and avoids
     unnecessary host-to-device copies during decode when no seeds are active.
+
+    On the first call after a reset with no active seeds, pushes varied
+    per-user entropy-derived seed values; the next call pushes MAX_UINT32
+    (SKIP) so the device advances via ``rand_tile`` on its own, then skips all
+    subsequent decode pushes until the next ``reset_seed``.
+
+    `reset_seed` updates host RNGs only. `get_new_values` advances RNGs and
+    writes to device. `write_device_seed_values` writes explicit seeds only.
     """
 
     def __init__(self, tt_sampling, max_batch_size=32):
         self.max_batch_size = max_batch_size
         self.seeds = [None for _ in range(max_batch_size)]
         self.seed_counters = [0 for _ in range(max_batch_size)]
+        # Disambiguates concurrent slots that carry the SAME explicit request
+        # seed (n>1 completions of one prompt with a fixed seed). A slot whose
+        # seed is unique among active slots always has salt 0, preserving the
+        # slot-independent reproducibility of single-sample seeded requests.
+        self.seed_salts = [0 for _ in range(max_batch_size)]
         # Pre-allocate RNG objects; actual request seeds are set via reset_seed().
         self.rngs = [random.Random(secrets.randbits(64)) for _ in range(max_batch_size)]
         self.tt_sampling = tt_sampling
@@ -717,9 +782,78 @@ class SeedManager:
         request_seed = self.seeds[slot]
         if request_seed is None:
             return self._next_device_seed_from_rng(self.rngs[slot])
-        device_seed = _hash_request_seed_to_device_seed(int(request_seed), self.seed_counters[slot])
+        device_seed = _hash_request_seed_to_device_seed(
+            int(request_seed), self.seed_counters[slot], self.seed_salts[slot]
+        )
         self.seed_counters[slot] += 1
         return device_seed
+
+    def _next_free_salt(self, slot: int, seed: int) -> int:
+        """Smallest salt not used by another active slot holding the same request seed.
+
+        The first slot to carry a given seed gets salt 0 (identical stream to
+        today), the second gets 1, and so on. Using the smallest free value --
+        rather than a running count -- avoids re-colliding with a surviving
+        duplicate after an earlier one finished and vacated its slot.
+        """
+        taken = {
+            self.seed_salts[other]
+            for other in range(self.max_batch_size)
+            if other != slot and self.seeds[other] == seed
+        }
+        salt = 0
+        while salt in taken:
+            salt += 1
+        return salt
+
+    def _set_slot_seed(self, slot: int, seed, *, keep_existing_salt: bool):
+        """Single writer for a slot's (seed, counter, salt, rng) state.
+
+        With ``keep_existing_salt`` (decode-path re-registration of a running
+        request), a slot that already holds the same request seed is left
+        untouched: salts are collision-free among live same-seed slots by
+        construction, and recomputing one mid-generation (the unconditional
+        re-registration on the first decode after any admission) would splice
+        the request onto a finished sibling's RNG stream. Without it (prefill
+        admission of a new request) the slot is fully reset, including a fresh
+        smallest-free salt, so a unique-seed request always lands on salt 0.
+        """
+        if keep_existing_salt and seed is not None and self.seeds[slot] == seed:
+            return
+        self.seeds[slot] = seed
+        self.seed_counters[slot] = 0
+        if seed is None:
+            self.seed_salts[slot] = 0
+            self.rngs[slot].seed(self._next_unseeded_rng_seed())
+        else:
+            self.seed_salts[slot] = self._next_free_salt(slot, seed)
+            self.rngs[slot].seed(int(seed))
+
+    def deactivate_slots_except(self, live_slots) -> None:
+        """Drop seed state of slots that are no longer live.
+
+        Nothing else clears a finished request's slot when condense has no
+        move to make (a request finishing at the tail of the batch leaves its
+        seed behind), so the ghost would keep counting toward _next_free_salt
+        and hand a later unique-seed request a salt > 0, breaking seeded
+        reproducibility. Callers pass the current live-slot set (decode
+        positions >= 0).
+        """
+        if not self._seed_active:
+            return
+        live = {int(slot) for slot in live_slots}
+        for slot in range(self.max_batch_size):
+            if slot not in live and self.seeds[slot] is not None:
+                self.seeds[slot] = None
+                self.seed_counters[slot] = 0
+                self.seed_salts[slot] = 0
+        self._seed_active = any(s is not None for s in self.seeds)
+        if not self._seed_active:
+            # Re-enter the unseeded three-state machine. The device still holds
+            # the seeded path's non-SKIP reinit values; without a fresh init+SKIP
+            # push, get_new_values early-returns and the device reinitializes
+            # every user's PRNG to the same stale seed on every token.
+            self._reseted = True
 
     def _seed_from_slot_params(self, seeds, slot: int):
         if seeds is None:
@@ -751,12 +885,7 @@ class SeedManager:
         for user in user_ids:
             slot = int(user)
             seed = self._seed_from_slot_params(seeds, slot)
-            self.seeds[slot] = seed
-            self.seed_counters[slot] = 0
-            if seed is None:
-                self.rngs[slot].seed(self._next_unseeded_rng_seed())
-            else:
-                self.rngs[slot].seed(int(seed))
+            self._set_slot_seed(slot, seed, keep_existing_salt=True)
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
 
@@ -836,12 +965,15 @@ class SeedManager:
         # Snapshot the state we're about to overwrite.
         old_seeds = list(self.seeds)
         old_counters = list(self.seed_counters)
+        old_salts = list(self.seed_salts)
         old_rngs = list(self.rngs)
         moved_sources = {old_slot for old_slot, _ in moves}
         moved_destinations = {new_slot for _, new_slot in moves}
         for old_slot, new_slot in moves:
             self.seeds[new_slot] = old_seeds[old_slot]
             self.seed_counters[new_slot] = old_counters[old_slot]
+            # The salt travels with the request so its stream survives the move.
+            self.seed_salts[new_slot] = old_salts[old_slot]
             # copy.copy preserves internal RNG state but creates an
             # independent object so the old slot reference does not alias
             # the new one.
@@ -851,7 +983,12 @@ class SeedManager:
         for old_slot in moved_sources - moved_destinations:
             self.seeds[old_slot] = None
             self.seed_counters[old_slot] = 0
+            self.seed_salts[old_slot] = 0
         self._seed_active = any(s is not None for s in self.seeds)
+        if not self._seed_active:
+            # Same re-arm as deactivate_slots_except: a remap that overwrites the
+            # last seeded slot must push init+SKIP or the device PRNG freezes.
+            self._reseted = True
 
     def reset_seed(self, seeds, user_ids):
         """Update RNG state for the given user slots after a prefill.
@@ -865,14 +1002,25 @@ class SeedManager:
         for i, user in enumerate(user_ids):
             slot = int(user)
             seed = self._seed_from_slot_params(seeds, i)
-            self.seeds[slot] = seed
-            self.seed_counters[slot] = 0
-            if seed is None:
-                self.rngs[slot].seed(self._next_unseeded_rng_seed())
-            else:
-                self.rngs[slot].seed(int(seed))
+            self._set_slot_seed(slot, seed, keep_existing_salt=False)
         self._seed_active = any(s is not None for s in self.seeds)
         self._reseted = True
+
+    def write_device_seed_values(self, seed_values):
+        if len(seed_values) != self.max_batch_size:
+            raise ValueError(f"Expected {self.max_batch_size} seed values, got {len(seed_values)}")
+        try:
+            wrapped = [int(seed) & 0xFFFFFFFF for seed in seed_values]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("seed_values must contain integer-like values") from exc
+
+        seed_tt = ttnn.from_torch(
+            torch.tensor(wrapped, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._seed_mapper,
+        )
+        ttnn.copy_host_to_device_tensor(seed_tt, self.tt_sampling.seeds_tt_tensor)
 
     def get_new_values(self, empty_slots=None, replicate_seeds=False):
         """Generate and push new seed values to the device.
@@ -926,8 +1074,5 @@ class SeedManager:
                 assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
                 new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
 
-        new_seed_tt = ttnn.from_torch(
-            torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
-        )
-        ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
+        self.write_device_seed_values(new_seeds)
         self._reseted = False

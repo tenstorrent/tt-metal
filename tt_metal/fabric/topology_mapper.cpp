@@ -458,11 +458,17 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
 
         config.pinnings = pinning_groups_;
 
-        // Append MGD pinnings when available (same many-to-many group shape).
+        // PGD<->MGD matching wants pins already keyed by mesh. Start from the MGD map and merge galaxy
+        // corner pins (pinning_groups_) into the same buckets. CSP still uses the flat config.pinnings list.
+        ::tt::tt_metal::experimental::tt_fabric::PinningsByMesh pinnings_by_mesh;
         if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
-            const auto& mgd_pinnings = mesh_graph_.get_mesh_graph_descriptor().get_pinnings();
-            config.pinnings.insert(config.pinnings.end(), mgd_pinnings.begin(), mgd_pinnings.end());
+            const auto& mgd = mesh_graph_.get_mesh_graph_descriptor();
+            pinnings_by_mesh = mgd.get_pinnings();
+            for (const auto& [_, groups] : mgd.get_pinnings()) {
+                config.pinnings.insert(config.pinnings.end(), groups.begin(), groups.end());
+            }
         }
+        ::tt::tt_metal::experimental::tt_fabric::merge_pinnings_by_mesh(pinnings_by_mesh, pinning_groups_);
 
         ::tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph adjacency_map_physical_multi_mesh;
         // If using an MGD, try and match with PGD to consume preferred pinnings from the PGD for better mapping
@@ -476,7 +482,7 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
                         asic_id_to_mesh_rank,
                         *pgd,
                         mesh_graph_.get_mesh_graph_descriptor(),
-                        std::optional{config.pinnings});
+                        pinnings_by_mesh);
             } else {
                 log_debug(
                     tt::LogFabric,

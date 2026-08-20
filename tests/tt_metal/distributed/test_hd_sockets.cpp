@@ -8,7 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/internal/cluster_noc_helpers.hpp>
+#include <internal/cluster_noc_helpers.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>

@@ -18,8 +18,8 @@ commit, and the exact command that produced it. Record all four.
 ## Related skills
 
 - `quasar-perf-test` — create or repair the perf test and its `PerfRunType`
-  paths. Use it first when the test does not exist, hangs, or reports
-  implausible metrics.
+  paths, and choose tile/dimension coverage. Use it first when the test does
+  not exist, hangs, reports implausible metrics, or needs sweep-axis changes.
 - `perf-parameter-impact` — analyze a finished `.post.csv`.
 - `run-test` — the repository test-runner workflow.
 
@@ -33,6 +33,11 @@ Read the perf test — `tests/python_tests/perf_[op].py` or
 - how many variants `@parametrize` produces;
 - the architecture: the `quasar/` directory or a `*_[arch].py` suffix implies
   it, otherwise ask.
+
+For Quasar, `compare_test_and_perf.py --dir quasar --arch quasar` is the
+sweep-audit against the functional counterpart (composite `list` = matrix,
+`tuple` = tile shape). Flag stale-report risk when current test axes are absent
+from the CSV.
 
 Decide scope before running. A narrowed sweep (`-k`, `--op`) is right for
 debugging; a report meant for analysis must cover the full intended sweep.

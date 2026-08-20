@@ -15,7 +15,6 @@ import ttnn
 
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     PagedAttentionConfig,
@@ -210,6 +209,7 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         dummy_weights=dummy_weights,
+        cache_hf=False,  # Demo never builds a torch reference; keep the lighter weight loader.
     )
     # When running running prefill-only profile, run just 1 layer
     tt_model_args.n_layers = num_layers if not prefill_profile else 1
@@ -921,7 +921,11 @@ def test_demo_text(
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
-    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    cli_sampling_params = request.config.getoption("--sampling_params")
+    if cli_sampling_params:
+        # Merge onto the parametrized defaults so a partial override (e.g. only
+        # temperature) keeps the remaining keys the demo indexes unconditionally.
+        sampling_params = {**sampling_params, **cli_sampling_params}
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,
@@ -1080,7 +1084,7 @@ def test_demo_text(
         prefill_profile=prefill_profile,
     )
 
-    model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
+    model_args.tokenizer = model_args.create_tokenizer()
     tokenizer = model_args.tokenizer
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
@@ -1722,8 +1726,10 @@ def test_demo_text(
     )
 
     # The ci-eval-1 prompt file pairs its prompts ([A, A, B, B, ...]), so consecutive repeat batches
-    # run identical inputs and must produce identical outputs. A mismatch means state is leaking
-    # across repeat batches (or decode is non-deterministic), which the accuracy checks cannot catch.
+    # run identical inputs. ci-eval-1 runs temperature=0 argmax, so any divergence between paired
+    # batches indicates a real defect (e.g. trace/fabric-CCL buffer corruption), which can first
+    # diverge late in generation. This exact-match gate was purpose-built for that (PR #30739,
+    # issue #27242), so require byte-identical full outputs rather than a token prefix.
     if "ci-eval-1" in test_id:
         # Fail loudly rather than skipping the comparison if any batch failed to record its output
         assert (
@@ -1733,10 +1739,21 @@ def test_demo_text(
         all_matches = True
         for first_idx in range(0, repeat_batches - 1, 2):
             second_idx = first_idx + 1
+            first_tokens = repeat_batch_outputs[first_idx].split()
+            second_tokens = repeat_batch_outputs[second_idx].split()
+            compared = min(len(first_tokens), len(second_tokens))
+            matched = sum(1 for a, b in zip(first_tokens, second_tokens) if a == b)
+            overlap = matched / compared if compared else 1.0
             if repeat_batch_outputs[first_idx] == repeat_batch_outputs[second_idx]:
-                logger.info(f"Batches {first_idx} and {second_idx} comparison PASSED: outputs match")
+                logger.info(
+                    f"Batches {first_idx} and {second_idx} comparison PASSED: "
+                    f"outputs are byte-identical (token overlap {overlap:.1%})"
+                )
             else:
-                logger.warning(f"Batches {first_idx} and {second_idx} comparison FAILED: outputs differ")
+                logger.warning(
+                    f"Batches {first_idx} and {second_idx} comparison FAILED: "
+                    f"outputs differ (token overlap {overlap:.1%})"
+                )
                 logger.info(f"  Batch {first_idx} output: {repeat_batch_outputs[first_idx][:100]}...")
                 logger.info(f"  Batch {second_idx} output: {repeat_batch_outputs[second_idx][:100]}...")
                 all_matches = False

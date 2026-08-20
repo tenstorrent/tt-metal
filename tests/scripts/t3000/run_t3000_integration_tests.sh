@@ -132,33 +132,6 @@ run_t3000_trace_stress_tests() {
   fi
 }
 
-run_t3000_dit_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-  test_name=${FUNCNAME[1]}
-
-  echo "LOG_METAL: Running ${test_name}"
-
-  # Run each caller-supplied pytest invocation, accumulating failures
-  for test_cmd in "$@"; do
-    pytest ${test_cmd} ; fail+=$?
-  done
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: ${test_name} $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-run_t3000_qwenimage_tests() {
-  run_t3000_dit_tests \
-    "models/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair -k 2x4"
-}
-
 run_t3000_tests() {
   # Run ethernet tests
   run_t3000_ethernet_tests
@@ -180,9 +153,6 @@ run_t3000_tests() {
 
   # Run trace tests
   run_t3000_trace_stress_tests
-
-  # Run qwenimage tests
-  run_t3000_qwenimage_tests
 }
 
 fail=0

@@ -1759,6 +1759,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 sm_bs = sampling_module.seed_manager.max_batch_size
                 rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
                 sampling_module.seed_manager.apply_slot_remap(rank_remap)
+            # Drop seed state of slots no longer live (a request finishing at
+            # the batch tail is never vacated by condense), so its ghost seed
+            # cannot inflate a later request's salt.
+            if active_seed_slots is not None:
+                sampling_module.seed_manager.deactivate_slots_except(active_seed_slots)
             # Register each request's explicit seed into the seed manager and
             # tie its RNG counter to the absolute decode position before
             # advancing. Without registration the per-request seed never reaches

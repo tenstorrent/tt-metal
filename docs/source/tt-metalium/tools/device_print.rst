@@ -88,6 +88,20 @@ so the host can resolve it:
     DPRINT("Pointer: {}\n", s);               // prints: Pointer: 0x12345678
     DPRINT("String: {}\n", CTSTR("Hello!"));  // prints: String: Hello!
 
+Type names
+^^^^^^^^^^
+
+``dp_type_name_t<T>()`` prints the fully-qualified name of ``T``. The name is resolved at compile time
+and stored in the ELF like ``CTSTR()``, so the argument costs one pointer in the print buffer:
+
+.. code-block:: c++
+
+    namespace ns { struct MyStruct {}; }
+
+    ns::MyStruct x;
+    DPRINT("type: {}\n", dp_type_name_t<int>());          // prints: type: int
+    DPRINT("type: {}\n", dp_type_name_t<decltype(x)>());  // prints: type: ns::MyStruct
+
 Enums
 ^^^^^
 
