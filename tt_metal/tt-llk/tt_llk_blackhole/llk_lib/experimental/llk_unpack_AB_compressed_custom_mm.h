@@ -176,10 +176,15 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
 
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
+    // One 3-bit format meta per tile, ten per 32-bit word: the packing the caller sizes the metadata
+    // buffer with (ceil(kt_dim * ct_dim / tiles_per_meta_word) words), and the width the whole-word
+    // loop body below is unrolled to.
+    constexpr std::uint32_t tiles_per_meta_word = 10;
+
     const std::uint32_t address_a  = base_address_a;
     const std::uint32_t address_b  = base_address_b;
-    const std::uint32_t full_iters = (kt_dim * ct_dim) / 10;
-    const std::uint32_t rem_iters  = (kt_dim * ct_dim) % 10;
+    const std::uint32_t full_iters = (kt_dim * ct_dim) / tiles_per_meta_word;
+    const std::uint32_t rem_iters  = (kt_dim * ct_dim) % tiles_per_meta_word;
     const std::uint32_t* meta_ptr  = reinterpret_cast<const std::uint32_t*>(base_address_meta);
 
     wait_for_next_context(1);
@@ -240,8 +245,8 @@ inline void _llk_unpack_AB_compressed_custom_mm_(
         ckernel::instrn_buffer[0] = data8;
         ckernel::instrn_buffer[0] = data9;
     }
-    // Guarded: when (kt_dim * ct_dim) is a multiple of 10 the metadata buffer holds exactly
-    // full_iters words, so meta_ptr[full_iters] would read one word past it.
+    // Guarded: when (kt_dim * ct_dim) is an exact multiple of tiles_per_meta_word the metadata buffer
+    // holds exactly full_iters words, so meta_ptr[full_iters] would read one word past it.
     if (rem_iters != 0)
     {
         std::uint32_t meta = meta_ptr[full_iters];

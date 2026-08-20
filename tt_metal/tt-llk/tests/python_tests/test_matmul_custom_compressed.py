@@ -128,7 +128,19 @@ EXT_MULTI_FORMATS = [
     ("bfp8", "bfp4", "bfp2", "bfp0"),
 ]
 
-SHAPES = BASE_SHAPES + DEEPSEEK_SHAPES + EXT_SHAPES
+# kt_dim * ct_dim an exact multiple of the kernel's 10-tiles-per-metadata-word packing, so the
+# metadata buffer ends exactly on a word boundary. That is the case both walkers' end-of-buffer
+# guards exist for, and no shape above has it: every product there is 2, 4, 6 or 8 mod 10. Kept as
+# its own list because BASE/DEEPSEEK/EXT_SHAPES are shared verbatim with test_matmul_face_compressed,
+# whose packing density is a different one (5 metas per word).
+META_WORD_BOUNDARY_SHAPES = [
+    (1, 320, 32),  # 10x1 -- the smallest such shape
+    # 10x4: the same boundary at ct_dim > 1, where two of the intermediate word boundaries
+    # (tiles 10 and 30) fall mid-row rather than on a row tail.
+    (1, 320, 128),
+]
+
+SHAPES = BASE_SHAPES + DEEPSEEK_SHAPES + EXT_SHAPES + META_WORD_BOUNDARY_SHAPES
 MULTI_FORMATS = BASE_MULTI_FORMATS  # EXT_MULTI_FORMATS is not supported in face version
 
 
