@@ -40,6 +40,11 @@ struct ReduceParams {
     // Number of contiguous H segments to reduce independently (RM-H dense path; 1 = no split).
     // Spreads a tall-H reduce over more cores, yielding a (N, C, num_h_slices, W) partial.
     uint32_t num_h_slices{1};
+    // Adjacent dim-1 slices folded into one output row (RM-H dense path; 1 = no folding), giving a
+    // (N, C / reduce_batch_size, num_h_slices, W) result. Collapses the reduce axis together with the
+    // dim above it in a single launch, which is what a reduce over a padded NHWC buffer needs: pad
+    // rows sit between the H rows, so no reshape can present both axes as one.
+    uint32_t reduce_batch_size{1};
     // Physical layout the op must produce: TILE on the tilized paths, ROW_MAJOR on the dense RM
     // ones, or TILE from RM-H when num_h_slices == 1.
     tt::tt_metal::Layout output_layout{tt::tt_metal::Layout::TILE};
