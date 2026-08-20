@@ -260,6 +260,7 @@ def test_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weigh
     "shape",
     [
         [2, 3],
+        [2, 3, 4],
         [2, 3, 5, 4],
     ],
 )

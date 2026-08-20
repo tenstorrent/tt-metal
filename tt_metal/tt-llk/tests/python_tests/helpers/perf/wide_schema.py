@@ -54,8 +54,9 @@ _TIMING_COLUMNS = [
 # ── The one published table: every column, headers + provenance ─────────────
 # This IS the table handed to the data team; the Parquet is written with it. Each
 # column's `origin` says who fills it — "test" (default) or "ci".
-# TODO(counters/Quasar, deferred — see #51249): counter/metric and Quasar columns
-# join here as nullable once a counter/Quasar run captures their exact names.
+# TODO(counters, deferred — see #51249): counter/metric columns join here as
+# nullable once a counter run captures their exact names. Quasar has its own
+# published table in wide_schema_quasar.py — do not mix Quasar columns in here.
 DB_SCHEMA = [
     Column("marker", "string", False, "identity"),
     # formats
