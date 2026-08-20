@@ -1305,6 +1305,13 @@ _FITTED_CPP_OPS = [
     MathOperation.Celu,
     MathOperation.Elu,
     MathOperation.Selu,
+    # Lane CW wave 3 (rlibm rounding-interval refits of the CR wave-2
+    # honest-outs: threshold at the contract params 5.0/10.0, expm1 over the
+    # contract domain U[-5,5], acosh with the x=1 branch point exact;
+    # provenance in fresh_cpp/*_fitted.h).
+    MathOperation.Threshold,
+    MathOperation.Expm1,
+    MathOperation.Acosh,
 ]
 
 
