@@ -691,10 +691,6 @@ bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, con
 
 namespace {
 
-// LLK operand metadata (SPEC §14). Same FaceGeometry predicates as
-// CircularBufferConfig::set_unpack_face_geometry; same face-grid overflow as
-// compute_num_faces_rc_dims. Slice B will share a helper with JIT; keep the
-// checks local here so host rejection does not wait on filegen plumbing.
 template <typename Id>
 void ValidateUnpackFaceGeometry(std::string_view kind, const Id& unique_id, const FaceGeometry& geom) {
     TT_FATAL(
@@ -1761,9 +1757,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             "DFB", dfb.unique_id, dfb.tile_format_metadata, dfb.unpack_face_geometry_metadata);
     }
 
-    // Scratchpad LLK operand metadata (SPEC §3.2 / §14).
-    // Do not require a format merely because a compute kernel binds the scratchpad
-    // (binding ≠ LLK operand). Geometry without a format cannot build LLKOperand.
     for (const auto& scratchpad : spec.scratchpads) {
         const bool has_format = scratchpad.data_format_metadata.has_value();
         const bool has_geometry =
