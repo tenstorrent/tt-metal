@@ -805,10 +805,11 @@ class ModelArgs:
                 else self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices, self.dim)
             )
 
-            # n150 1.7B decode: 16-core MLP L1 grid (RMSNorm + DRAM-sharded FF share it).
+            # n150 1.7B decode: 16-core MLP and attn L1 grids (RMSNorm + DRAM-sharded matmuls share them).
             # Isolated RMSNorm 64c was 3.4x slower than 8c; fused FF 16c ranked faster than 64c.
-            # A/B 2026-08-20: 57.8 -> 59.4 tok/s, EN byte-id, JA Japanese+CJK.
+            # A/B 2026-08-20: MLP 57.8 -> 59.4 tok/s; attn 59.4 -> 59.9 tok/s. EN byte-id, JA Japanese+CJK.
             if self.num_devices == 1 and not self.is_galaxy and self.dim == 2048 and self.hidden_dim == 6144:
+                self.attn_input_grid = self.core_grid_for_count(16)
                 self.mlp_core_grid = self.core_grid_for_count(16)
                 self.mlp2_core_grid = self.core_grid_for_count(16)
 
