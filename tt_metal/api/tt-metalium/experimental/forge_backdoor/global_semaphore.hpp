@@ -34,7 +34,7 @@ GlobalSemaphore CreateGlobalSemaphore(
 
 [[deprecated(
     "Use CreateGlobalSemaphore(distributed::MeshDevice&, ...) instead. "
-    "CreateGlobalSemaphore(IDevice*, ...) will be removed after 2026-09-17.")]]
+    "CreateGlobalSemaphore(IDevice*, ...) will be removed after 2026-09-20.")]]
 GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device,
     const CoreRangeSet& cores,

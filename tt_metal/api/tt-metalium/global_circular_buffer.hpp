@@ -50,7 +50,7 @@ public:
 
     [[deprecated(
         "Use GlobalCircularBuffer(distributed::MeshDevice&, ...) instead. "
-        "GlobalCircularBuffer(IDevice*, ...) will be removed after 2026-09-17.")]]
+        "GlobalCircularBuffer(IDevice*, ...) will be removed after 2026-09-20.")]]
     GlobalCircularBuffer(
         IDevice* device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
@@ -161,7 +161,7 @@ GlobalCircularBuffer CreateGlobalCircularBuffer(
  */
 [[deprecated(
     "Use CreateGlobalCircularBuffer(distributed::MeshDevice&, ...) instead. "
-    "CreateGlobalCircularBuffer(IDevice*, ...) will be removed after 2026-09-17.")]]
+    "CreateGlobalCircularBuffer(IDevice*, ...) will be removed after 2026-09-20.")]]
 GlobalCircularBuffer CreateGlobalCircularBuffer(
     IDevice* device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,

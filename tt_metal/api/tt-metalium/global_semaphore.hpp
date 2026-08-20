@@ -43,13 +43,13 @@ public:
 
     [[deprecated(
         "Use GlobalSemaphore(distributed::MeshDevice&, ...) instead. "
-        "GlobalSemaphore(IDevice*, ...) will be removed after 2026-09-17.")]]
+        "GlobalSemaphore(IDevice*, ...) will be removed after 2026-09-20.")]]
     GlobalSemaphore(
         IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
     [[deprecated(
         "Use GlobalSemaphore(distributed::MeshDevice&, ...) instead. "
-        "GlobalSemaphore(IDevice*, ...) will be removed after 2026-09-17.")]]
+        "GlobalSemaphore(IDevice*, ...) will be removed after 2026-09-20.")]]
     GlobalSemaphore(
         IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
