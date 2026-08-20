@@ -251,6 +251,8 @@ def test_capture_failure_rolls_back_traces_and_uncaptured_inputs(monkeypatch, ex
         trace.capture_all()
 
     assert caught.value is primary
+    assert [event for event in events if event[0] == "end"] == [("end", 100, 0), ("end", 101, 0)]
+    assert events.index(("end", 101, 0)) < events.index(("release", 101))
     assert released.count(first_input) == 1
     assert released.count(first_output) == 1
     assert released.count(second_input) == 1

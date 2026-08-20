@@ -40,7 +40,6 @@ def _lazy_buffer(name):
 def _sampler_config(index_offsets, owned_specs):
     return SimpleNamespace(
         index_offsets=index_offsets,
-        local_indices=owned_specs["local_indices"],
         invalid_vocab_mask=owned_specs.get("invalid_vocab_mask"),
         invalid_vocab_tail_mask=owned_specs.get("invalid_vocab_tail_mask"),
         invalid_vocab_tail_width=32,
@@ -76,7 +75,6 @@ def test_sampling_release_is_idempotent_preserves_borrowed_and_allows_reload(mon
 
     borrowed_index_offsets = FakeTensor("borrowed-index-offsets")
     owned_specs = {
-        "local_indices": _lazy_buffer("local-indices"),
         "invalid_vocab_mask": _lazy_buffer("invalid-vocab-mask"),
         "invalid_vocab_tail_mask": _lazy_buffer("invalid-vocab-tail-mask"),
         "seeds": _lazy_buffer("seeds"),
@@ -116,7 +114,7 @@ def test_partial_load_failure_preserves_primary_and_releases_before_reload(monke
     allocations = []
     deallocated = []
     allocation_error = RuntimeError("seed allocation failed")
-    cleanup_error = RuntimeError("local cleanup failed once")
+    cleanup_error = RuntimeError("mask cleanup failed once")
     fail_allocation = True
     fail_cleanup = True
 
@@ -130,7 +128,7 @@ def test_partial_load_failure_preserves_primary_and_releases_before_reload(monke
     def deallocate(value):
         nonlocal fail_cleanup
         deallocated.append(value)
-        if value.name.startswith("local-indices") and fail_cleanup:
+        if value.name.startswith("invalid-vocab-mask") and fail_cleanup:
             fail_cleanup = False
             raise cleanup_error
 
@@ -145,7 +143,7 @@ def test_partial_load_failure_preserves_primary_and_releases_before_reload(monke
 
     borrowed_index_offsets = FakeTensor("borrowed-index-offsets")
     owned_specs = {
-        "local_indices": _lazy_buffer("local-indices"),
+        "invalid_vocab_mask": _lazy_buffer("invalid-vocab-mask"),
         "seeds": _lazy_buffer("seeds"),
         "user_ids": _lazy_buffer("user-ids"),
     }
@@ -158,12 +156,12 @@ def test_partial_load_failure_preserves_primary_and_releases_before_reload(monke
 
     assert caught.value is allocation_error
     assert cleanup_error in caught.value.cleanup_failures
-    assert owned_specs["local_indices"]._value is not None
+    assert owned_specs["invalid_vocab_mask"]._value is not None
     assert not sampler._device_buffers_loaded
     assert borrowed_index_offsets not in deallocated
 
     sampler.release()
-    assert owned_specs["local_indices"]._value is None
+    assert owned_specs["invalid_vocab_mask"]._value is None
 
     fail_allocation = False
     sampler.load_device_buffers()
@@ -189,7 +187,6 @@ def test_sampling_release_is_best_effort_and_retries_only_failed_buffer(monkeypa
 
     borrowed_index_offsets = FakeTensor("borrowed-index-offsets")
     owned_specs = {
-        "local_indices": _lazy_buffer("local-indices"),
         "seeds": _lazy_buffer("seeds"),
         "user_ids": _lazy_buffer("user-ids"),
     }
@@ -212,7 +209,6 @@ def test_sampling_release_is_best_effort_and_retries_only_failed_buffer(monkeypa
     assert caught.value is cleanup_error
     assert sampler._seeds is failed
     assert owned_specs["seeds"]._value is failed
-    assert owned_specs["local_indices"]._value is None
     assert owned_specs["user_ids"]._value is None
 
     sampler.release()
