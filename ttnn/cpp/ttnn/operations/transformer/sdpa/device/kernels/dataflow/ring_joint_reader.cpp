@@ -295,6 +295,9 @@ void kernel_main() {
     // Slot 39: true (unpadded) joint length in tiles (twins spatial logical_nt). Joint K chunks whose
     // global start tile is at/after logical_lt are pure padding and are skipped.
     constexpr uint32_t logical_lt = get_compile_time_arg_val(39);
+    // Slot 40: bounded circular sliding KV slab count (0 = unbounded). Wraps the sliding work plan's
+    // local slab addressing (sliding_window_work_plan.hpp) — must match host halo layout and compute.
+    constexpr uint32_t bounded_kv_slab_count = get_compile_time_arg_val(40);
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and joint generator uses.
@@ -304,9 +307,9 @@ void kernel_main() {
     // Sharded joint requires the gathered joint K/V buffers (only meaningful when joint K is present).
     constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
 
-    // Slots 37-39 are the sharded-joint scalars (Lt_local, joint_is_sharded, logical_lt) declared
-    // above, so the tensor accessors start at compile-arg slot 40.
-    constexpr auto q_args = TensorAccessorArgs<40>();
+    // Slots 37-39 are the sharded-joint scalars (Lt_local, joint_is_sharded, logical_lt) and slot 40
+    // the bounded sliding KV slab count, so the tensor accessors start at compile-arg slot 41.
+    constexpr auto q_args = TensorAccessorArgs<41>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -318,10 +321,10 @@ void kernel_main() {
     constexpr uint32_t post_tensor_args_offset = attention_sink_args.next_compile_time_args_offset();
     // The metadata accessor (metadata path only) follows the tensor accessors and precedes the chain
     // semaphore compile args. Gate its offset on slot_from_metadata: when absent, fall back to a VALID
-    // (unused) accessor offset (q_args' slot 40) so TensorAccessorArgs<> -- instantiated unconditionally
+    // (unused) accessor offset (q_args' slot 41) so TensorAccessorArgs<> -- instantiated unconditionally
     // here -- never names a non-accessor compile arg (which would fail its internal static_assert).
     // The chain/CB compile args then start after the metadata accessor when present.
-    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 40;
+    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 41;
     constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();  // slot_id accessor
     // kv_actual_isl gets its OWN accessor (a separately-allocated single-page DRAM tensor can land in a
     // different DRAM bank than slot_id, so the slot accessor's dspec reads the wrong bank for it -- the kv
@@ -825,7 +828,8 @@ void kernel_main() {
                     tt::constants::TILE_HEIGHT,
                     kv_local_padded_Nt,
                     Sk_chunk_t,
-                    logical_nt);
+                    logical_nt,
+                    bounded_kv_slab_count);
                 ASSERT(sliding_q_plan.is_valid);
                 ASSERT(sliding_q_plan.total_k_chunk_count > 0);
             }

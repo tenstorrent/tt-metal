@@ -247,12 +247,33 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             "logical_n={}",
             kv_actual_isl,
             args.logical_n);
-        TT_FATAL(
-            args.logical_n <= cache_capacity,
-            "KV-pad-aware rotation logical_n exceeds physical K/V cache capacity. Got logical_n={}, "
-            "cache capacity={}",
-            args.logical_n,
-            cache_capacity);
+        if (args.has_bounded_kv()) {
+            // Bounded circular sliding KV: logical_n legitimately exceeds the physical capacity —
+            // the cache keeps only the newest bounded_kv_slab_count chunk-group slabs (chunk group
+            // g in local slab g % n_slabs). Instead require the declared slab count to match the
+            // physical cache exactly; the per-dispatch alignment (logical_n on a ring-group
+            // boundary, the new chunk filling exactly one group) is enforced by the chunked
+            // sliding block below, which always runs for this configuration.
+            const auto n_slabs = args.bounded_kv_slab_count.value();
+            TT_FATAL(
+                n_slabs >= 2,
+                "bounded_kv_slab_count must be >= 2 (current chunk + predecessor window slab). Got {}",
+                n_slabs);
+            TT_FATAL(
+                cache_capacity == static_cast<std::size_t>(n_slabs) * chunk_capacity,
+                "Bounded sliding KV cache must be exactly bounded_kv_slab_count Q-sized slabs. Got "
+                "cache capacity={}, n_slabs={}, chunk capacity={}",
+                cache_capacity,
+                n_slabs,
+                chunk_capacity);
+        } else {
+            TT_FATAL(
+                args.logical_n <= cache_capacity,
+                "KV-pad-aware rotation logical_n exceeds physical K/V cache capacity. Got logical_n={}, "
+                "cache capacity={}",
+                args.logical_n,
+                cache_capacity);
+        }
         TT_FATAL(
             new_actual_isl <= chunk_capacity,
             "KV-pad-aware rotation expects current valid Q to fit in one fixed chunk. Got new_actual_isl={}, "
@@ -509,6 +530,24 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             N_local_q);
     }
 
+    if (args.has_bounded_kv()) {
+        // Bounded circular sliding KV cache: only the chunked sliding-window read path knows how to
+        // wrap local slab addressing (sliding_window_work_plan.hpp). Everything else keeps absolute
+        // slab-major addressing and would read garbage from a wrapped cache.
+        TT_FATAL(
+            args.has_sliding_window() && is_chunked,
+            "bounded_kv_slab_count requires chunked sliding-window attention");
+        TT_FATAL(
+            has_kv_pad_rotation,
+            "bounded_kv_slab_count requires kv_actual_isl (KV-pad rotation): the wrap position is "
+            "derived from the true absolute logical_n/kv_actual_isl");
+        TT_FATAL(
+            !tensor_args.has_metadata(),
+            "bounded_kv_slab_count does not support the trace-safe metadata path");
+        // Slab-count/geometry value checks live in validate_runtime_patched_scalars (hash-invariant
+        // shapes, but kept beside the capacity check they replace).
+    }
+
     TT_FATAL(!(L != 0 && args.is_causal), "Causality is enabled only for ring attention");
 
     TT_FATAL(
@@ -665,8 +704,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         }
     }
 
+    // Bounded circular sliding KV keeps only the newest slabs, so logical_n legitimately exceeds
+    // the physical global extent; its geometry is checked in validate_runtime_patched_scalars.
     TT_FATAL(
-        args.logical_n <= N_global,
+        args.has_bounded_kv() || args.logical_n <= N_global,
         "Logical sequence length must be less than or equal to global sequence length. Got logical sequence length: "
         "{}, global sequence length: {}",
         args.logical_n,
@@ -919,6 +960,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.has_metadata(),
         args.kv_cache_num_layers,
         args.kv_cache_layer_idx,
+        args.bounded_kv_slab_count,
         tensor_args.has_latent_v(),
         tensor_args.v_num_heads(),
         tensor_args.v_head_dim(args.latent_v_head_dim),
@@ -1053,7 +1095,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     const uint32_t kv_cache_num_layers,
     const uint32_t kv_cache_layer_idx,
-    const std::optional<uint32_t> sliding_window_size) {
+    const std::optional<uint32_t> sliding_window_size,
+    const std::optional<uint32_t> bounded_kv_slab_count) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1183,7 +1226,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         latent_v_head_dim.value_or(0),
         kv_cache_num_layers,
         kv_cache_layer_idx,
-        sliding_window_size);
+        sliding_window_size,
+        bounded_kv_slab_count);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

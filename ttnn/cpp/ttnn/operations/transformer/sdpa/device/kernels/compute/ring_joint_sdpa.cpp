@@ -89,6 +89,9 @@ void kernel_main() {
     // Slot 53: true (unpadded) joint length in tiles (similar to spatial logical_nt). Drives the
     // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
     constexpr uint32_t logical_lt = get_compile_time_arg_val(53);
+    // Slot 54: bounded circular sliding KV slab count (0 = unbounded). Wraps the sliding work plan's
+    // local slab addressing (sliding_window_work_plan.hpp) — must match the reader and host layout.
+    constexpr uint32_t bounded_kv_slab_count = get_compile_time_arg_val(54);
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
@@ -156,10 +159,10 @@ void kernel_main() {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     // Compute fixed slot 51: trace-safe KV-pad derivation flag. Slots 52/53 are the sharded-joint
-    // scalars (joint_is_sharded, logical_lt) declared near the top of the kernel, so the CB block
-    // starts at 54.
+    // scalars (joint_is_sharded, logical_lt) and slot 54 the bounded sliding KV slab count, all
+    // declared near the top of the kernel, so the CB block starts at 55.
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(51) == 1;
-    constexpr uint32_t cb_arg_offset = 54;
+    constexpr uint32_t cb_arg_offset = 55;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -421,6 +424,7 @@ void kernel_main() {
                 v_shares_k_buffer,
                 kt_inplace_v,
                 sliding_window_size,
+                bounded_kv_slab_count,
                 ring_size,
                 use_attention_sink,
                 cb_attention_sink,

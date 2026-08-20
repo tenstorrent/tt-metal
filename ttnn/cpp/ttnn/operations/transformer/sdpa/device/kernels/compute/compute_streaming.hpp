@@ -1030,9 +1030,19 @@ static void apply_lightweight_mask_streaming(
                             l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
                             continue;
                         }
-                        const uint32_t k_pos_u32 =
-                            chunked_kv_global_tile_for_local<kv_pad_chunk_size_t, kv_pad_q_local_padded_Nt>(
-                                kv_pad_rotation.ring_id, local_k_tile);
+                        const uint32_t k_pos_u32 = [&]() {
+                            if constexpr (has_sliding_window) {
+                                // Sliding: k_start_tile is the plan's absolute K origin and sliding K
+                                // chunks never straddle a slab boundary (q_local % k_chunk == 0), so
+                                // the chunk is globally contiguous. The local->global inversion below
+                                // is ambiguous once a bounded circular cache aliases multiple chunk
+                                // groups onto one local slab; identical to it when unbounded.
+                                return k_start_tile + col;
+                            } else {
+                                return chunked_kv_global_tile_for_local<kv_pad_chunk_size_t, kv_pad_q_local_padded_Nt>(
+                                    kv_pad_rotation.ring_id, local_k_tile);
+                            }
+                        }();
                         if (k_pos_u32 >= kv_pad_rotation.logical_tile_count) {
                             l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
                             continue;
@@ -2289,6 +2299,9 @@ template <
     bool v_shares_k_buffer = false,
     bool kt_inplace_v = false,
     uint32_t sliding_window_size = 0,
+    // Bounded circular sliding KV cache slab count (0/1 = unbounded); wraps the sliding work
+    // plan's local slab addressing. See sliding_window_work_plan.hpp.
+    uint32_t bounded_kv_slab_count = 0,
     uint32_t ring_size = 1,
     bool use_attention_sink = false,
     uint32_t cb_attention_sink = INVALID_CB,
@@ -2501,7 +2514,8 @@ void sdpa_ring_v2(
                 TILE_HEIGHT,
                 local_padded_Nt,
                 Sk_chunk_t,
-                logical_nt);
+                logical_nt,
+                bounded_kv_slab_count);
             ASSERT(sliding_q_plan.is_valid);
             ASSERT(sliding_q_plan.total_k_chunk_count > 0);
         }
@@ -2667,9 +2681,10 @@ void sdpa_ring_v2(
             // Composes with any prior padding narrowing via min().
             if constexpr (is_causal_sdpa && !kv_pad_rotation_enabled) {
                 if constexpr (has_sliding_window) {
-                    const uint32_t k_global_start =
-                        kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
-                            source_ring_id, source_k_chunk * Sk_chunk_t);
+                    // Sliding plans carry the absolute K origin: inverting local cache rows back to
+                    // global positions is ambiguous once a bounded circular cache aliases multiple
+                    // chunk groups onto one local slab. Identical to the inversion when unbounded.
+                    const uint32_t k_global_start = sliding_k_chunk.global_k_chunk * Sk_chunk_t;
                     const uint32_t q_global_end = q_start_tile + Sq_chunk_t;
                     if (k_global_start < q_global_end && q_global_end - k_global_start < active_Sk_param) {
                         active_Sk_param = q_global_end - k_global_start;
@@ -2703,8 +2718,8 @@ void sdpa_ring_v2(
             // K start tile fed to diag stamp must share Q's coord frame (local for is_causal, global for chunked).
             const uint32_t step_k_start_tile = [&]() {
                 if constexpr (has_sliding_window) {
-                    return kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
-                        source_ring_id, source_k_chunk * Sk_chunk_t);
+                    // Absolute K origin from the plan (bounded caches make local->global ambiguous).
+                    return sliding_k_chunk.global_k_chunk * Sk_chunk_t;
                 } else if constexpr (chunked_enabled) {
                     return kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
                         ring_id, k_chunk * Sk_chunk_t);
