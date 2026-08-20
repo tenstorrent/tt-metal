@@ -91,8 +91,17 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
 
     const ttnn::Shape input_shape = input_tensor.padded_shape();
 
-    // Check requirement #1: Minimum dimension size for multi-core efficiency
-    bool multicore_supported = (input_tensor.padded_shape()[args.dim] >= ttnn::prim::constants::multi_core_min_width);
+    // Check requirement #1: Minimum dimension size for multi-core efficiency.
+    // The single-core factory parallelizes across tile ROWS, so when the input has
+    // few tile rows most of the grid idles and the column-split multi-core path wins
+    // even below multi_core_min_width: at 1-2 tile rows a width-1024+ row splits
+    // across 8+ otherwise-idle cores (min 64 elements per core), measured ~4x on
+    // 32x2048 k=32. Wide-and-tall inputs keep the row-parallel single-core path.
+    const uint32_t reduced_width = input_tensor.padded_shape()[args.dim];
+    const uint32_t num_tile_rows =
+        (input_tensor.padded_shape().volume() / std::max<uint32_t>(reduced_width, 1)) / tt::constants::TILE_HEIGHT;
+    bool multicore_supported =
+        (reduced_width >= ttnn::prim::constants::multi_core_min_width) || (num_tile_rows <= 2 && reduced_width >= 1024);
 
     // Apply requirement #2: reduced dimension must fit the multi-core bitonic sort network (< 65536).
     // The index output may still be 16- or 32-bit; the width flows into index_cb_data_format_for() below.
