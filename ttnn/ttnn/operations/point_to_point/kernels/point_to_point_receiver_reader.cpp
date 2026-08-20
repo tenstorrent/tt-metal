@@ -44,9 +44,10 @@ void kernel_main() {
     FabricStreamSender<> ack_sender(conn_arg_idx, sender_is_forward, alignment);
 
     // Signal the sender we are "ready" to receive: one fabric atomic-inc, then tear down. signal()
-    // collapses open() -> arm_inc() -> inc() -> close() for this one-shot handshake.
+    // collapses open() -> arm_inc() -> inc() -> close() for this one-shot handshake. (Route-info
+    // form: the hop-count convenience overload was removed in the helper consolidation.)
     const uint64_t sender_sem_noc_addr = get_noc_addr(sender_semaphore_addr);
-    ack_sender.signal(sender_num_hops, sender_sem_noc_addr);
+    ack_sender.signal(unicast_route(sender_num_hops), sender_sem_noc_addr);
 
     // Intermediate is addressed PER-PACKET: page size override = packet_size_bytes,
     // page index = packet_idx.
