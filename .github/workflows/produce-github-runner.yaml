@@ -3,12 +3,6 @@ name: "[internal] Produce GitHub Runner data"
 on:
   workflow_dispatch:
 
-  # TEMPORARY (remove before merge): workflow_dispatch and schedule only run from
-  # the default branch, so this push trigger lets us test on the feature branch.
-  push:
-    branches:
-      - arshah/github-runner-producer
-
   schedule:
     - cron: "*/10 * * * *"
 
