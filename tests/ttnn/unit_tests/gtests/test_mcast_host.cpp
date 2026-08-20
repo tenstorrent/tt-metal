@@ -56,7 +56,17 @@ std::vector<uint32_t> expected_bbox(tt::tt_metal::IDevice* dev, const std::vecto
         const auto worker = dev->worker_core_from_logical_core(core);
         virtual_cores.emplace_back(static_cast<uint32_t>(worker.x), static_cast<uint32_t>(worker.y));
     }
-    return detail::noc_ordered_bbox(noc, virtual_cores);
+    uint32_t xlo = virtual_cores[0].first;
+    uint32_t xhi = virtual_cores[0].first;
+    uint32_t ylo = virtual_cores[0].second;
+    uint32_t yhi = virtual_cores[0].second;
+    for (const auto& [x, y] : virtual_cores) {
+        xlo = std::min(xlo, x);
+        xhi = std::max(xhi, x);
+        ylo = std::min(ylo, y);
+        yhi = std::max(yhi, y);
+    }
+    return noc == NOC::NOC_1 ? std::vector<uint32_t>{xhi, yhi, xlo, ylo} : std::vector<uint32_t>{xlo, ylo, xhi, yhi};
 }
 
 }  // namespace
