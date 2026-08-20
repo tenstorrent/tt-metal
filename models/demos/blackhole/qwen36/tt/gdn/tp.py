@@ -1956,6 +1956,20 @@ class TPGatedDeltaNet:
         # recurrent_decode_wh.py) -- rms_norm reduces the last dim (V==Dv) regardless of where the
         # singleton sits, so the [B,1,H,V]-crossing reshape is dead weight. Every other config gets
         # [B,1,H,V] as before, where the reshape to [B,Nv,Dv] is a cheap view (tiled pair stays H,V).
+        #
+        # TRIED AND REVERTED (2026-08-19): the [...,1,V] tiling of [B,H,1,V] pads each (B,H) row to a
+        # full 32-row tile, and an ISOLATED probe (test_gdn_outnorm_probe.py, single-device, B=32
+        # H=16 V=128) showed reshaping to (B,Nv,Dv) before the norm netting -21% (44.4us -> 35.1us,
+        # reshape included) by escaping that padding. Reproduced the profiled 86us (2-device merged
+        # report) being far above a weighted norm's ~12us floor. Applied here, then checked against a
+        # real single-layer decode capture (test_profile_single_layer_gdn_decode.py, batch32,
+        # TT_METAL_DEVICE_PROFILER Tracy) -- and REGRESSED: the norm did drop 46us -> 9us as predicted,
+        # but the added reshape cost 40us in this TP=2 context (not the ~27us the single-device probe
+        # implied), for a net +3us on this pair and +12us on the whole captured window (2,925 ->
+        # 2,937us, 111 -> 112 device ops). Same class of trap as the ROPE Q+K merge and the q_norm/
+        # k_norm flattening elsewhere in this codebase: an isolated op's reshape cost does not
+        # transfer to the real TP layer. Left as upstream had it; do not re-apply without re-checking
+        # a full-layer capture, not just the isolated probe.
         if self._decode_tile_opt:
             out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)  # gated norm (no +1)
             ttnn.deallocate(o)
