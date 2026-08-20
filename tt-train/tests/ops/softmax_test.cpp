@@ -50,10 +50,6 @@ TEST_F(SoftmaxTest, DISABLED_SoftmaxTest_Batch) {
 
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    // Input must stay bit-identical across runs so any flake here is attributable
-    // to the device: make_uniform_xarray seeds per fixed-size chunk, making the
-    // data independent of thread count. Bit-identity holds only for a fixed RNG
-    // backend — TT_TRAIN_ENABLE_SIMD_RNG selects a different generator.
     xt::xarray<float> input_tensor =
         ttml::test_utils::make_uniform_xarray<float, shape_type>(shape, -10.0F, 10.0F, seed);
 
