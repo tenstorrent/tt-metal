@@ -117,7 +117,7 @@ constexpr uint32_t RM_MAX_NW = REGIME_A ? Wt_core : WT_SCALE_BLOCK;
 constexpr uint32_t RM_PADDED_MAX = RM_MAX_NW * TILE_DIM * ELEM_SIZE;
 constexpr uint32_t RM_CHUNK_MAX_BYTES = RM_PADDED_MAX < ROW_BYTES ? RM_PADDED_MAX : ROW_BYTES;
 
-constexpr auto output_args = TensorAccessorArgs<30>();
+constexpr auto output_args = TensorAccessorArgs<33>();
 
 FORCE_INLINE uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
 

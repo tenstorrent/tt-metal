@@ -92,6 +92,8 @@ constexpr uint32_t cb_sumsq_acc = 10;
 constexpr uint32_t cb_gamma_rm = 11;
 constexpr uint32_t cb_partial_gather = 12;
 constexpr uint32_t cb_sumsq_bcast = 13;
+constexpr uint32_t cb_l1_sum = 14;   // tree combine: the level-1 partial (row leader)
+constexpr uint32_t cb_gather2 = 15;  // tree combine: the level-2 landing buffer (root)
 
 constexpr uint32_t IS_ROW_MAJOR = get_compile_time_arg_val(0);
 constexpr uint32_t REGIME_A = get_compile_time_arg_val(1);
@@ -124,6 +126,11 @@ constexpr uint32_t REDUCE_VIA_ADD = get_compile_time_arg_val(22);
 // W_SPLIT == 0 is the row-parallel plan and every branch below compiles out.
 constexpr uint32_t W_SPLIT = get_compile_time_arg_val(23);
 constexpr uint32_t GROUP_SIZE = get_compile_time_arg_val(24);
+// Hierarchical combine (blocking_plan._tree_gy).  0 = the FLAT root of Perf 1 and
+// every tree branch compiles out; otherwise the group rectangle is
+// GX x COMBINE_GY and the root folds COMBINE_GY tiles instead of GROUP_SIZE.
+constexpr uint32_t COMBINE_GY = get_compile_time_arg_val(30);
+constexpr uint32_t GX = get_compile_time_arg_val(31);
 
 constexpr uint32_t NUM_REDUCE_CHUNKS = Wt_core / WT_REDUCE_BLOCK;
 constexpr uint32_t NUM_SCALE_CHUNKS = Wt_core / WT_SCALE_BLOCK;
@@ -472,6 +479,7 @@ void kernel_main() {
     const uint32_t eps_bits = get_arg_val<uint32_t>(1);
     const uint32_t num_row_blocks_here = get_arg_val<uint32_t>(3);
     const uint32_t IS_ROOT = get_arg_val<uint32_t>(4);  // W-split: this core is its group's combine root
+    const uint32_t IS_LEADER = get_arg_val<uint32_t>(5);  // tree combine: this core leads its group ROW
 
     if constexpr (IS_ROW_MAJOR) {
         compute_kernel_hw_startup(cb_rm_in, cb_rm_in, cb_input_tiles);
@@ -517,12 +525,59 @@ void kernel_main() {
                     cb_sumsq_acc,
                     cb_reduce_scaler,
                     cb_sumsq>(ckl::ReduceInputBlockShape::of(BLOCK_HT, 1, 1));
+            } else if constexpr (COMBINE_GY) {
+                // ---- HIERARCHICAL combine ----------------------------------
+                // Level 1: the row LEADER folds its row's GX partials WITHOUT the
+                // within-tile collapse, so what it forwards is still a pre-collapse
+                // accumulator and level 2 can be the SAME call the flat root ran.
+                //
+                // The exact primitive for "sum tiles, do not collapse" is
+                // `ReduceWithinTile::Skip`, and it DOES NOT COMPILE: the guarding
+                // `static_assert(within_tile == Collapse, ...)` at
+                // reduce_helpers_compute.inl:887 sits AFTER the AccumulateViaAdd
+                // branch's `return`, at function scope, so it is instantiated for
+                // every `Skip` call regardless of algorithm.  Worked around WITHOUT
+                // raw LLK by asking for a NON-finalizing accumulate chunk instead -
+                // `Accumulate::at(cb, 0)`, which the helper documents as leaving the
+                // RAW partial sum in DST and packing it out.  Identical semantics,
+                // reachable today.  Fix the helper and this becomes `Skip`.
+                if (IS_LEADER) {
+                    MaybeDeviceZoneScope("cp_l1_sum");
+                    ckl::reduce<
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_partial_gather,
+                        cb_reduce_scaler,
+                        cb_l1_sum,
+                        ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ReduceFp32Mode::Fast,
+                        ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                        ckl::ReduceInputBlockShape::of(BLOCK_HT, GX, 1),
+                        ckl::ReduceInputMemoryLayout::contiguous(),
+                        ckl::Accumulate::at(cb_l1_sum, 0).with_reload(ckl::AccumulateReloadMode::FoldViaAdd));
+                }
+                // Level 2: exactly the flat root's call, COMBINE_GY wide.
+                if (IS_ROOT) {
+                    MaybeDeviceZoneScope("cp_combine");
+                    ckl::reduce<
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_gather2,
+                        cb_reduce_scaler,
+                        cb_sumsq_bcast,
+                        ckl::ReduceInputPolicy::BulkWaitBulkPop,
+                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        ReduceFp32Mode::Fast,
+                        ckl::ReduceAlgorithm::AccumulateViaAdd>(
+                        ckl::ReduceInputBlockShape::of(BLOCK_HT, COMBINE_GY, 1));
+                }
             } else if (IS_ROOT) {
-                // The reader has landed slot i of every group member at tile
-                // (r * GROUP_SIZE + i) - a contiguous (BLOCK_HT x GROUP_SIZE) block -
-                // and pushed it.  cb_sumsq itself is filled by the reader's broadcast
-                // on EVERY core of the group, root included, so the rms chain below
-                // is identical on all of them.
+                // FLAT root: the reader has landed slot i of every group member at
+                // tile (r * GROUP_SIZE + i) - a contiguous (BLOCK_HT x GROUP_SIZE)
+                // block - and pushed it.  cb_sumsq itself is filled by the reader's
+                // broadcast on EVERY core of the group, root included, so the rms
+                // chain below is identical on all of them.
                 MaybeDeviceZoneScope("cp_combine");
                 ckl::reduce<
                     ckernel::PoolType::SUM,

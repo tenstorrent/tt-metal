@@ -157,6 +157,8 @@ constexpr uint32_t cb_sumsq_acc = 10;
 constexpr uint32_t cb_gamma_rm = 11;
 constexpr uint32_t cb_partial_gather = 12;
 constexpr uint32_t cb_sumsq_bcast = 13;
+constexpr uint32_t cb_l1_sum = 14;   // tree combine: the level-1 partial (row leader)
+constexpr uint32_t cb_gather2 = 15;  // tree combine: the level-2 landing buffer (root)
 
 // --- shared geometry compile-time args (identical prefix in all 3 kernels) ---
 constexpr uint32_t IS_ROW_MAJOR = get_compile_time_arg_val(0);
@@ -193,6 +195,15 @@ constexpr uint32_t REDUCE_VIA_ADD = get_compile_time_arg_val(22);
 // kernel is byte-identical to the pre-split one.
 constexpr uint32_t W_SPLIT = get_compile_time_arg_val(23);
 constexpr uint32_t GROUP_SIZE = get_compile_time_arg_val(24);
+// --- hierarchical combine (blocking_plan._tree_gy) --------------------------
+// COMBINE_GY == 0 is the FLAT root of Perf 1 and every tree branch below compiles
+// out.  Otherwise the group rectangle is GX x COMBINE_GY: the level-1 fan-in is a
+// group ROW (GX cores -> its leader) and the level-2 fan-in is the column of
+// COMBINE_GY leaders -> the root.  Root tile-adds drop from GROUP_SIZE to
+// COMBINE_GY.  The host owns the GY >= TREE_MIN_GY threshold that earns it.
+constexpr uint32_t COMBINE_GY = get_compile_time_arg_val(30);
+constexpr uint32_t GX = get_compile_time_arg_val(31);
+constexpr uint32_t SEM_GATHER2 = get_compile_time_arg_val(32);
 constexpr uint32_t WT_TOTAL = get_compile_time_arg_val(25);
 constexpr uint32_t ACC_TILE_BYTES = get_compile_time_arg_val(26);
 constexpr uint32_t SEM_DATA_READY = get_compile_time_arg_val(27);
@@ -296,7 +307,7 @@ constexpr uint32_t RM_MAX_NW =
 constexpr uint32_t RM_PADDED_MAX = RM_MAX_NW * TILE_DIM * ELEM_SIZE;
 constexpr uint32_t RM_CHUNK_MAX_BYTES = RM_PADDED_MAX < ROW_BYTES ? RM_PADDED_MAX : ROW_BYTES;
 
-constexpr auto input_args = TensorAccessorArgs<30>();
+constexpr auto input_args = TensorAccessorArgs<33>();
 [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
 FORCE_INLINE uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
@@ -623,6 +634,15 @@ void kernel_main() {
         const uint32_t w_index = W_OFFSET / Wt_core;
 
         Semaphore<> gather_sem(SEM_GATHER);
+        // --- hierarchical combine: this core's place in the GX x COMBINE_GY
+        // rectangle and its level-1 peer.  All five are 0 on the flat arm.
+        const uint32_t leader_vx = get_arg_val<uint32_t>(12);
+        const uint32_t leader_vy = get_arg_val<uint32_t>(13);
+        const uint32_t x_index = get_arg_val<uint32_t>(14);
+        const uint32_t is_leader = get_arg_val<uint32_t>(15);
+        const uint32_t y_index = get_arg_val<uint32_t>(16);
+        const uint32_t gather2_base = COMBINE_GY ? get_write_ptr(cb_gather2) : 0;
+        Semaphore<> gather2_sem(SEM_GATHER2);
         SenderPipe<noc_index, SEM_DATA_READY, true, SEM_CONSUMER_READY> root_pipe(
             noc,
             McastRect<>{
@@ -641,10 +661,22 @@ void kernel_main() {
                 read_input_chunk(rt0, 0, Wt_core);
             }
 
-            // ---- step 2: N->1 gather (raw NoC; header justification #3) -------
+            // ---- step 2: the N->1 gather (raw NoC; header justification #3) --
             // `cb_gather_partial_wait` is this core STARVED on its own compute
             // thread; `cb_gather_write` is the RISC-serial issue + the real NoC
             // barrier.  Split because a hot wait and a hot write want opposite fixes.
+            //
+            // Both topologies write the SAME thing (this core's pre-collapse
+            // accumulator tiles) with the SAME handshake; they differ only in WHERE
+            // and in how many levels there are.  The tree's second level is the
+            // identical shape one level up, so it inherits header justification #3
+            // verbatim: `SenderPipe::send` is multicast-only and `ReceiverPipe`'s
+            // NUM_SENDERS does not express an N->1 fan-in, at either level.
+            const uint32_t peer_vx = COMBINE_GY ? leader_vx : root_vx;
+            const uint32_t peer_vy = COMBINE_GY ? leader_vy : root_vy;
+            const uint32_t fanin = COMBINE_GY ? GX : GROUP_SIZE;
+            const uint32_t my_slot = COMBINE_GY ? x_index : w_index;
+            const bool recv_l1 = COMBINE_GY ? (is_leader != 0) : (IS_ROOT != 0);
             {
                 MaybeDeviceZoneScope("cb_gather_partial_wait");
                 cb_wait_front(cb_sumsq_acc, BLOCK_HT);
@@ -653,27 +685,58 @@ void kernel_main() {
                 MaybeDeviceZoneScope("cb_gather_write");
                 const uint32_t src = get_read_ptr(cb_sumsq_acc);
                 for (uint32_t r = 0; r < BLOCK_HT; ++r) {
-                    // Interleaved slot layout [ht][core] so the root's combine reduce
-                    // reads a contiguous (BLOCK_HT x GROUP_SIZE) tile block.
-                    const uint32_t slot = r * GROUP_SIZE + w_index;
+                    // Interleaved slot layout [ht][core] so the receiving reduce
+                    // reads a contiguous (BLOCK_HT x fanin) tile block.
+                    const uint32_t slot = r * fanin + my_slot;
                     noc_async_write(
                         src + r * ACC_TILE_BYTES,
-                        get_noc_addr(root_vx, root_vy, gather_base + slot * ACC_TILE_BYTES),
+                        get_noc_addr(peer_vx, peer_vy, gather_base + slot * ACC_TILE_BYTES),
                         ACC_TILE_BYTES);
                 }
                 noc_async_write_barrier();  // the DATA must be visible before the COUNT
-                gather_sem.up(noc, root_vx, root_vy, 1);
+                gather_sem.up(noc, peer_vx, peer_vy, 1);
                 cb_pop_front(cb_sumsq_acc, BLOCK_HT);
             }
 
-            if (IS_ROOT) {
-                {
-                    MaybeDeviceZoneScope("cb_gather_wait");
-                    cb_reserve_back(cb_partial_gather, GROUP_SIZE * BLOCK_HT);
-                    gather_sem.wait(GROUP_SIZE);
-                    gather_sem.set(0);  // reset BEFORE the broadcast releases the leaves
-                    cb_push_back(cb_partial_gather, GROUP_SIZE * BLOCK_HT);
+            if (recv_l1) {
+                MaybeDeviceZoneScope("cb_gather_wait");
+                cb_reserve_back(cb_partial_gather, fanin * BLOCK_HT);
+                gather_sem.wait(fanin);
+                gather_sem.set(0);  // reset BEFORE the broadcast releases the senders
+                cb_push_back(cb_partial_gather, fanin * BLOCK_HT);
+            }
+
+            // ---- step 2b: LEVEL 2, tree only.  The COMBINE_GY row leaders write
+            // their level-1 sum into slot y_index of the ROOT, which then runs the
+            // same collapse reduce the flat root ran - COMBINE_GY wide instead of
+            // GROUP_SIZE wide.
+            if constexpr (COMBINE_GY) {
+                if (is_leader) {
+                    MaybeDeviceZoneScope("tree_l2_write");
+                    cb_wait_front(cb_l1_sum, BLOCK_HT);
+                    const uint32_t src2 = get_read_ptr(cb_l1_sum);
+                    for (uint32_t r = 0; r < BLOCK_HT; ++r) {
+                        const uint32_t slot = r * COMBINE_GY + y_index;
+                        noc_async_write(
+                            src2 + r * ACC_TILE_BYTES,
+                            get_noc_addr(root_vx, root_vy, gather2_base + slot * ACC_TILE_BYTES),
+                            ACC_TILE_BYTES);
+                    }
+                    noc_async_write_barrier();
+                    gather2_sem.up(noc, root_vx, root_vy, 1);
+                    cb_pop_front(cb_l1_sum, BLOCK_HT);
                 }
+                if (IS_ROOT) {
+                    MaybeDeviceZoneScope("tree_l2_wait");
+                    cb_reserve_back(cb_gather2, COMBINE_GY * BLOCK_HT);
+                    gather2_sem.wait(COMBINE_GY);
+                    gather2_sem.set(0);  // reset BEFORE the broadcast releases the leaves
+                    cb_push_back(cb_gather2, COMBINE_GY * BLOCK_HT);
+                }
+            }
+
+            // ---- step 4: the 1->N return leg, IDENTICAL on both topologies ----
+            if (IS_ROOT) {
                 {
                     MaybeDeviceZoneScope("mcast_src_wait");
                     cb_wait_front(cb_sumsq_bcast, BLOCK_HT);

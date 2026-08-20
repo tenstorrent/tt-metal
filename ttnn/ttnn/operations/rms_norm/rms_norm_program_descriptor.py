@@ -94,6 +94,10 @@ LEVER_DEFAULTS = {
     # byte-model claim.  Measured 1.32x on (1,1,8192,1024) and 1.47x on its
     # ROW_MAJOR twin.
     "force_regime": 0,
+    # 1 (applied) = the combine gathers HIERARCHICALLY (x axis to the group row's
+    # leader, then y axis to the root) wherever the group rectangle earns it;
+    # 0 = the flat root of Perf 1, all G cores unicasting into one core.
+    "combine_tree": 1,
     # 0 = let the policy choose; N = pin G = N.  This is what makes the group-size
     # calibration in `_choose_group_size` re-MEASURABLE instead of asserted: a new
     # box or a new shape can be swept without editing the policy.
@@ -130,6 +134,9 @@ CB_GAMMA_RM = 11
 # --- W-split combine (only created when the plan picks G > 1) -----------------
 CB_PARTIAL_GATHER = 12  # reader (remote NoC writes) -> compute, group root only
 CB_SUMSQ_BCAST = 13  # compute (root) -> reader, the multicast source
+# --- hierarchical combine (created only when the group rectangle earns it) ----
+CB_L1_SUM = 14  # compute (row leader) -> reader, the level-1 partial sum
+CB_GATHER2 = 15  # reader (remote NoC writes) -> compute, the level-2 landing buffer
 
 # Semaphores the W-split combine owns.  `mcast_pipe.hpp` requires `consumer_ready`
 # to be host-initialised to 0 (remote receivers increment it with no
@@ -137,6 +144,7 @@ CB_SUMSQ_BCAST = 13  # compute (root) -> reader, the multicast source
 SEM_DATA_READY = 0
 SEM_CONSUMER_READY = 1
 SEM_GATHER = 2
+SEM_GATHER2 = 3  # the level-2 (row-leader -> root) gather count, tree combine only
 
 
 def _div_up(a: int, b: int) -> int:
@@ -353,6 +361,8 @@ class BlockingPlan:
     group_size: int
     group_x: int
     group_y: int
+    # Level-2 fan-in of the hierarchical combine; 0 == the flat root (TREE_MIN_GY).
+    combine_gy: int
     num_groups: int  # groups the gx*gy tiling yields on this grid
     groups_used: int  # groups that actually get row-blocks (<= num_groups)
     l1_cb_budget: int
@@ -406,6 +416,7 @@ def _cb_layout(
     T_acc: int,
     T_bf16: int,
     w_split_group: int = 0,
+    w_split_gy: int = 0,
 ):
     """Return [(cb_index, num_pages, page_bytes, kind)] for this knob assignment."""
     wmax = max(wr, ws)
@@ -454,11 +465,19 @@ def _cb_layout(
         # just the root) so `get_write_ptr(cb_partial_gather)` resolves to the SAME
         # L1 address on every core.  That address identity is what lets a non-root
         # core compute the root's landing slot with no runtime address table.
-        # Sized to EXACTLY one generation (group_size * BLOCK_HT pages) so the fifo
-        # pointer wraps back to the CB base after every push/pop pair - if it did
-        # not, the identity above would break after the first row-block.
-        layout.append((CB_PARTIAL_GATHER, w_split_group * block_ht, T_acc, "acc"))
+        # Sized to EXACTLY one generation so the fifo pointer wraps back to the CB
+        # base after every push/pop pair - if it did not, the identity above would
+        # break after the first row-block.  One generation is GROUP_SIZE tile-rows
+        # for the flat root and only GX for the tree, whose level-1 fan-in is a
+        # group ROW.  The tree is therefore CHEAPER in L1, not dearer: it trades
+        # (G - GX) * BLOCK_HT landing pages for (1 + GY) * BLOCK_HT staging ones,
+        # i.e. -19 tiles at the focus shape's 8x4 rectangle.
+        l1_fanin = (w_split_group // w_split_gy) if w_split_gy else w_split_group
+        layout.append((CB_PARTIAL_GATHER, l1_fanin * block_ht, T_acc, "acc"))
         layout.append((CB_SUMSQ_BCAST, block_ht, T_acc, "acc"))
+        if w_split_gy:
+            layout.append((CB_L1_SUM, block_ht, T_acc, "acc"))
+            layout.append((CB_GATHER2, w_split_gy * block_ht, T_acc, "acc"))
     return layout
 
 
@@ -497,6 +516,7 @@ def _solve(
     *,
     Wt_core: int,
     w_split_group: int,
+    w_split_gy: int,
     row_parallel_units: int,
     Rt: int,
     maskless_w: bool,
@@ -507,7 +527,7 @@ def _solve(
     levers,
 ) -> _Solved:
     """Regime + every block factor / buffer depth for ONE per-core width."""
-    common = dict(layout_common, Wt_core=Wt_core, w_split_group=w_split_group)
+    common = dict(layout_common, Wt_core=Wt_core, w_split_group=w_split_group, w_split_gy=w_split_gy)
 
     def ws_bytes(regime, block_ht, in_depth, out_depth, rm_depth, wr, wsc, gamma_depth):
         # The gamma staging chunk must divide every ingest count the kernel uses,
@@ -763,6 +783,28 @@ _SCORE_TIE_BAND = 0.03
 RM_MIN_CORE_STICK_BYTES = 1024
 
 
+# The hierarchical combine removes `G - (GX + GY)` tile-adds from the root and
+# pays ONE extra semaphore + NoC hop (~500-600 ns) for the second level.  The
+# trade crosses zero around 18 removed adds, which on this grid's rectangles is
+# GY >= 4.  MEASURED regressions below it, which is what earns the carve-out:
+# decode_1024 G=8 (8x1) 5,584 -> 6,067 (+8.6%), decode_2304 G=12 (12x1)
+# 6,436 -> 6,938 (+7.8%), decode_5120 G=20 (10x2) 8,151 -> 8,422 (+3.3%),
+# ROW_MAJOR-input G=4 (4x1) +0.8-1.2%.  At GY == 1 the second level is a
+# self-write with fan-in 1 - structurally all cost and no fold.
+# WINS at or above it: focus G=32 (8x4) 9,077 -> 8,793 (-3.1%), G=56 (8x7)
+# 9,810 -> 8,728 (-11.0%), prefill_1024 forced to G=32 383,007 -> 268,221 (1.43x).
+# G=28 (7x4) is a null (+0.4%) and stays IN the domain - flat is not an exception.
+# See perf_experiments/tree_combine/.
+TREE_MIN_GY = 4
+
+
+def _tree_gy(group_size: int, gy: int, levers) -> int:
+    """The level-2 fan-in, or 0 when this rectangle keeps the flat root."""
+    if group_size <= 1 or not _lever(levers, "combine_tree"):
+        return 0
+    return gy if gy >= TREE_MIN_GY else 0
+
+
 def group_rect(group_size: int, grid):
     """The (gx, gy) core rectangle one combine group occupies, or None.
 
@@ -876,6 +918,7 @@ def _choose_group_size(
         solved = _solve(
             Wt_core=Wt_core,
             w_split_group=0 if g == 1 else g,
+            w_split_gy=_tree_gy(g, gy, levers),
             row_parallel_units=num_groups,
             Rt=Rt,
             maskless_w=maskless_w,
@@ -1024,10 +1067,15 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
     )
     Wt_core = Wt // group_size
     w_split_group = 0 if group_size == 1 else group_size
+    # The level-2 fan-in of the hierarchical combine, 0 when this rectangle keeps
+    # the flat root (see TREE_MIN_GY).  It is part of the PLAN, not a kernel-side
+    # choice, because it changes the CB set the L1 budget is solved against.
+    w_split_gy = _tree_gy(group_size, gy, levers)
 
     solved = _solve(
         Wt_core=Wt_core,
         w_split_group=w_split_group,
+        w_split_gy=w_split_gy,
         row_parallel_units=num_groups,
         Rt=Rt,
         maskless_w=maskless_w,
@@ -1045,7 +1093,7 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
     if regime == "A":
         assert solved.WT_SCALE_BLOCK == Wt_core, "Regime A requires WT_SCALE_BLOCK == Wt_core (gamma is never popped)"
 
-    common = dict(layout_common, Wt_core=Wt_core, w_split_group=w_split_group)
+    common = dict(layout_common, Wt_core=Wt_core, w_split_group=w_split_group, w_split_gy=w_split_gy)
     cb_layout = tuple(
         _cb_layout(
             regime=regime,
@@ -1109,6 +1157,7 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         group_size=group_size,
         group_x=gx,
         group_y=gy,
+        combine_gy=w_split_gy,
         num_groups=num_groups,
         groups_used=groups_used,
         l1_cb_budget=l1_cb_budget,
@@ -1119,7 +1168,7 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
 # The shared geometry compile-time prefix is CT_ACCESSOR_BASE args wide; every
 # kernel spells its TensorAccessorArgs<CT_ACCESSOR_BASE>, so the two cannot drift
 # (create_program_descriptor asserts the prefix length).
-CT_ACCESSOR_BASE = 30
+CT_ACCESSOR_BASE = 33
 
 
 def _even_split(total, buckets):
@@ -1205,7 +1254,7 @@ def create_program_descriptor(
         for g in range(groups_used):
             logical_rect, root_v, rect_v, members = tiling[g]
             core_ranges_used.append(logical_rect)
-            group = {"root": root_v, "rect": rect_v}
+            group = {"root": root_v, "rect": rect_v, "members_v": [_virt(device, m.x, m.y) for m in members]}
             for w_index, core in enumerate(members):
                 assignment.append((core, start, per_group[g], w_index, group))
             start += per_group[g]
@@ -1218,6 +1267,7 @@ def create_program_descriptor(
             # no happens-before to the sender's ctor, so its initial 0 MUST be host-owned.
             ttnn.SemaphoreDescriptor(id=SEM_CONSUMER_READY, core_ranges=all_cores, initial_value=0),
             ttnn.SemaphoreDescriptor(id=SEM_GATHER, core_ranges=all_cores, initial_value=0),
+            ttnn.SemaphoreDescriptor(id=SEM_GATHER2, core_ranges=all_cores, initial_value=0),
         ]
 
     # ---------------- circular buffers ---------------------------------------
@@ -1271,6 +1321,10 @@ def create_program_descriptor(
         SEM_DATA_READY,  # 27
         SEM_CONSUMER_READY,  # 28
         SEM_GATHER,  # 29
+        # --- hierarchical combine (all inert at combine_gy == 0) ---
+        plan.combine_gy,  # 30 level-2 fan-in; 0 = the flat root
+        plan.group_x if plan.group_size > 1 else 1,  # 31 GX = the level-1 fan-in
+        SEM_GATHER2,  # 32
     ]
     assert len(geometry_ct_args) == CT_ACCESSOR_BASE, "geometry prefix must match TensorAccessorArgs<CT_ACCESSOR_BASE>"
 
@@ -1307,8 +1361,17 @@ def create_program_descriptor(
     for core, start, blocks_here, w_index, group in assignment:
         w_offset = w_index * plan.Wt_core
         if group is None:
-            reader_rt[core.x][core.y] = [in_addr, gamma_addr, start, blocks_here, 0, 0, 0, 0, 0, 0, 0, 0]
+            reader_rt[core.x][core.y] = [in_addr, gamma_addr, start, blocks_here] + [0] * 13
+            compute_rt[core.x][core.y] = [inv_w_bits, eps_bits, start, blocks_here, 0, 0]
         else:
+            # The group rectangle is GX x GY laid out row-major in `members`, so
+            # member w_index sits at column i = w_index % GX of row j = w_index // GX,
+            # and that row's LEADER is member j * GX (the i == 0 core).  The ROOT is
+            # member 0, i.e. row 0's leader.  All five are zero on the flat arm, where
+            # the kernel's tree branch is compiled out.
+            gx = plan.group_x
+            i_idx, j_idx = w_index % gx, w_index // gx
+            leader_v = group["members_v"][j_idx * gx] if plan.combine_gy else (0, 0)
             reader_rt[core.x][core.y] = [
                 in_addr,
                 gamma_addr,
@@ -1319,9 +1382,21 @@ def create_program_descriptor(
                 group["root"][0],
                 group["root"][1],
                 *group["rect"],
+                leader_v[0],
+                leader_v[1],
+                i_idx,
+                1 if i_idx == 0 else 0,
+                j_idx,
+            ]
+            compute_rt[core.x][core.y] = [
+                inv_w_bits,
+                eps_bits,
+                start,
+                blocks_here,
+                1 if w_index == 0 else 0,
+                1 if i_idx == 0 else 0,
             ]
         writer_rt[core.x][core.y] = [out_addr, start, blocks_here, w_offset]
-        compute_rt[core.x][core.y] = [inv_w_bits, eps_bits, start, blocks_here, 1 if w_index == 0 else 0]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
