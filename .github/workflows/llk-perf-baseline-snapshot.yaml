@@ -12,6 +12,9 @@ on:
 permissions:
   contents: read
 
+env:
+  LLK_PATH: tt_metal/tt-llk
+
 jobs:
   upload-baseline:
     name: "Upload baseline to Snowflake"
@@ -58,61 +61,25 @@ jobs:
           echo "✓ Retrieved perf_data from staging"
           find perf_data -name "*.csv" | wc -l | xargs echo "CSV files:"
 
-      # Convert CSVs to Parquet using existing perf infrastructure
+      # Convert CSVs to Parquet using publish_run (existing perf infrastructure)
       - name: Convert perf_data to Parquet
         env:
           COMMIT_SHA: ${{ github.sha }}
           ARCH: ${{ matrix.arch || 'wormhole' }}
+          PIPELINE: post_merge
+        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
         run: |
           set -e
-          cd tt_metal/tt-llk/tests
 
-          python3 - <<'PYTHON'
-          import sys
-          import glob
-          from pathlib import Path
-          from datetime import datetime
+          # Use the canonical publish_run command to convert CSVs to Parquet
+          # Handles schema validation, provenance stamping, and metadata
+          python3 -m helpers.perf.publish_run \
+            --csv-dir ../../perf_data \
+            --out ../../baseline_${ARCH}_${COMMIT_SHA}.parquet \
+            --arch ${ARCH}
 
-          sys.path.insert(0, 'python_tests')
-          from helpers.perf.parquet import convert_csvs_to_parquet, stamp_provenance, write_parquet
-          from helpers.perf.wide_schema import DB_SCHEMA
-          import pandas as pd
-          import pyarrow as pa
-
-          # Collect all CSVs from staging
-          csv_files = glob.glob('../../../perf_data/**/*.csv', recursive=True)
-          csv_files = [f for f in csv_files if not f.endswith('.post.csv')]
-
-          if not csv_files:
-            print("⚠️  No CSVs found to convert")
-            sys.exit(0)
-
-          print(f"Converting {len(csv_files)} CSV(s) to Parquet")
-
-          # Read all CSVs and concatenate
-          frames = []
-          for csv_file in csv_files:
-            df = pd.read_csv(csv_file, low_memory=False)
-            frames.append(df)
-
-          combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-
-          # Stamp provenance metadata
-          combined = stamp_provenance(
-            combined,
-            commit_sha='${{ env.COMMIT_SHA }}',
-            arch='${{ env.ARCH }}',
-            run_id='${{ github.run_id }}',
-            timestamp=datetime.utcnow().isoformat() + 'Z',
-            pipeline='post_merge'
-          )
-
-          # Write Parquet with schema validation
-          output_path = f'../../../baseline_${{ env.ARCH }}_${{ env.COMMIT_SHA }}.parquet'
-          write_parquet(combined, output_path)
-
-          print(f"✓ Wrote {len(combined)} rows to {output_path}")
-          PYTHON
+          echo "✓ Parquet baseline ready"
+          ls -lh ../../baseline_${ARCH}_${COMMIT_SHA}.parquet
 
       # Upload baseline to SFTP for data team ingestion
       - name: Upload baseline to SFTP
