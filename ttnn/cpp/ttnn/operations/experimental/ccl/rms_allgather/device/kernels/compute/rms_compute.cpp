@@ -180,6 +180,7 @@ void kernel_main() {
         const bool enable_sqrt = get_arg_val<uint32_t>(4) == 1;
         if (enable_sqrt) {
             uint32_t num_distributed_blocks = get_arg_val<uint32_t>(5);
+            CircularBuffer cb_stats_obj(cb_stats);
 
             ckl::reduce<
                 PoolType::AVG,
