@@ -37,7 +37,7 @@ class _ProductionCase:
     num_chunks: int
     key_dim: int
     value_dim: int
-    expected_duration_ns: int | None
+    expected_duration_ns: int
 
 
 _PRODUCTION_PERF_MARGIN = 0.05
@@ -346,13 +346,12 @@ def test_prepare_chunk_recurrence_production_performance(device: ttnn.Device) ->
         f"chunk-recurrence preparation {case.case_id}: duration={duration_ns:.0f} ns, "
         f"profiler_runtime_id={perf_record['runtime_id']}"
     )
-    if case.expected_duration_ns is not None:
-        lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
-        upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
-        assert lower <= duration_ns <= upper, (
-            f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
-            f"(reference {case.expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
-        )
+    lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
+    upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
+    assert lower <= duration_ns <= upper, (
+        f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
+        f"(reference {case.expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+    )
 
 
 @pytest.mark.parametrize("host_index", range(8))
