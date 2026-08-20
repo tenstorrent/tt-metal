@@ -352,6 +352,21 @@ class TTSampling(LightweightModule):
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self.apply_seeds()
+
+    def apply_seeds(self):
+        """Load seeds_tt_tensor into the per-core PRNG that ttnn.sampling draws from.
+
+        Called once at construction and by seed writers (SeedManager) right after each
+        host->device push of seeds_tt_tensor. A lane holding UINT32_MAX (SKIP) leaves
+        that core's PRNG state unchanged; the state persists across programs, so the
+        decode step itself never needs to reseed.
+        """
+        ttnn.manual_seed(
+            seeds=self.seeds_tt_tensor,
+            user_ids=self.user_ids_tt_tensor,
+            sub_core_grids=self._sampling_sub_core_grids,
+        )
 
     def _get_num_sampling_shards(self):
         if self.multi_step_reduction:
@@ -836,8 +851,11 @@ class TTSampling(LightweightModule):
             self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs
 
-        # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
-        x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
+        # Decode logits normally arrive in bfloat16 already; a bf16->bf16 ttnn.typecast is
+        # semantically a no-op but still dispatches a full copy program, so skip it.
+        x_bf16 = (
+            x if x.dtype == ttnn.bfloat16 else ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
+        )
         x_bf16 = self._mask_invalid_vocab_logits(x_bf16)
 
         # The single-device split below exists only because the stock top-k factories cap
@@ -1031,12 +1049,11 @@ class TTSampling(LightweightModule):
         topk_global_indices_interleaved_untilised = ttnn.untilize(
             topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
         )
-        ttnn.manual_seed(
-            seeds=self.seeds_tt_tensor,
-            user_ids=self.user_ids_tt_tensor,
-            sub_core_grids=self._sampling_sub_core_grids,
-        )
-        # Perform the actual sampling with top-k, top-p, and temperature.
+        # Perform the actual sampling with top-k, top-p, and temperature. The per-core PRNG
+        # state ttnn.sampling draws from persists across programs; it is loaded by
+        # apply_seeds() at construction and after every host seed push (SeedManager), so no
+        # per-step ManualSeed dispatch is needed -- in steady state it only re-sent SKIP
+        # sentinels (UINT32_MAX leaves the PRNG untouched).
         # WORKAROUND for tenstorrent/tt-metal#33492 (stable top-k unreliable), to be removed with it:
         # for argmax users (k==1) only, boost the single lowest-GLOBAL-INDEX tied maximum in the
         # sampling INPUT so ttnn.sampling's argmax picks it regardless of how the top-k network

@@ -1065,6 +1065,9 @@ class SeedManager:
             mesh_mapper=self._seed_mapper,
         )
         ttnn.copy_host_to_device_tensor(seed_tt, self.tt_sampling.seeds_tt_tensor)
+        # The decode step no longer runs ManualSeed (TTSampling.apply_seeds docstring);
+        # a push only reaches the device PRNG if we load it here.
+        self.tt_sampling.apply_seeds()
 
     def get_new_values(self, empty_slots=None, replicate_seeds=False):
         """Generate and push new seed values to the device.
