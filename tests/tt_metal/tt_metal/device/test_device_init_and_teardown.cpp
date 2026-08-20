@@ -110,8 +110,6 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
     }
 }
 
-namespace {
-
 constexpr const char* kTdpLimitEnvVar = "TT_METAL_TDP_LIMIT_WATTS";
 
 // Restores TT_METAL_TDP_LIMIT_WATTS, so the tests that follow in this binary start from the
@@ -135,8 +133,6 @@ protected:
 private:
     std::optional<std::string> prev_;
 };
-
-}  // namespace
 
 TEST_F(TdpLimitEnvFixture, ParsesEnvVar) {
     unsetenv(kTdpLimitEnvVar);
