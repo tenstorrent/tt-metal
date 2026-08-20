@@ -87,7 +87,6 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer initial_state(dfb::initial_state);
     DataflowBuffer final(dfb::final);
     DataflowBuffer scratch(dfb::scratch);
-    DataflowBuffer stage_token(dfb::stage_token);
 
     compute_kernel_hw_startup(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
     initial_a.wait_front(kk);
@@ -101,7 +100,6 @@ TT_KERNEL void compute(uint32_t group) {
         if (group < distance) {
             continue;
         }
-        stage_token.wait_front(1);
         local_a.wait_front(kk);
         local_b.wait_front(kv);
         from_remote_a.wait_front(kk);
@@ -110,7 +108,6 @@ TT_KERNEL void compute(uint32_t group) {
         matmul(local_a, from_remote_b, scratch, Kt, Kt, Vt);
         scratch.wait_front(kv);
         add(scratch, local_b, to_remote_b, kv);
-        stage_token.pop_front(1);
         local_a.pop_front(kk);
         local_b.pop_front(kv);
         from_remote_a.pop_front(kk);
@@ -118,7 +115,6 @@ TT_KERNEL void compute(uint32_t group) {
         scratch.pop_front(kv);
     }
 
-    stage_token.wait_front(1);
     initial_state.wait_front(kv);
     if (group == 0) {
         copy(initial_state, final, kv);
@@ -133,5 +129,4 @@ TT_KERNEL void compute(uint32_t group) {
         scratch.pop_front(kv);
     }
     initial_state.pop_front(kv);
-    stage_token.pop_front(1);
 }

@@ -65,7 +65,6 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
     const m2::DFBSpecName INITIAL_STATE{"initial_state"};
     const m2::DFBSpecName FINAL{"final"};
     const m2::DFBSpecName SCRATCH{"scratch"};
-    const m2::DFBSpecName STAGE_TOKEN{"stage_token"};
 
     const m2::SemaphoreSpecName READY{"ready"};
     const m2::SemaphoreSpecName ARRIVAL{"arrival"};
@@ -97,7 +96,6 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
         make_dfb(INITIAL_STATE, kv, tt::DataFormat::Float32),
         make_dfb(FINAL, kv, tt::DataFormat::Float32),
         make_dfb(SCRATCH, kv, tt::DataFormat::Float32),
-        make_dfb(STAGE_TOKEN, 1, tt::DataFormat::Float32),
     };
     // The sender addresses a peer's inbound mailbox with its own local write pointer, which is only
     // valid while these buffers hold one phase-independent slot. Any additional depth lets sender and
@@ -128,7 +126,6 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
                 m2::DFBBinding{FROM_REMOTE_B, "from_remote_b", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{INITIAL_STATE, "initial_state", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{FINAL, "final", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STAGE_TOKEN, "stage_token", m2::DFBEndpointType::PRODUCER},
             },
         .semaphore_bindings =
             {
@@ -153,7 +150,7 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
 
     auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
     auto& unpack_modes = m2::unpack_modes(compute_hw);
-    for (const auto& name : {LOCAL_A, LOCAL_B, FROM_REMOTE_A, FROM_REMOTE_B, INITIAL_STATE, SCRATCH, STAGE_TOKEN}) {
+    for (const auto& name : {LOCAL_A, LOCAL_B, FROM_REMOTE_A, FROM_REMOTE_B, INITIAL_STATE, SCRATCH}) {
         unpack_modes[name] = UnpackMode::UnpackToSrc;
     }
     if (summary_format == tt::DataFormat::Float32) {
@@ -181,7 +178,6 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
                 m2::DFBBinding{FINAL, "final", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{SCRATCH, "scratch", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{SCRATCH, "scratch", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STAGE_TOKEN, "stage_token", m2::DFBEndpointType::CONSUMER},
             },
         .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"G", G}},
         .runtime_arg_schema = {.runtime_arg_names = {"group"}},

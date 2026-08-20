@@ -31,7 +31,6 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordina
     DataflowBuffer from_remote_b(dfb::from_remote_b);
     DataflowBuffer initial_state(dfb::initial_state);
     DataflowBuffer final(dfb::final);
-    DataflowBuffer stage_token(dfb::stage_token);
     Noc noc;
     Semaphore<> ready(sem::ready);
     Semaphore<> arrival(sem::arrival);
@@ -85,12 +84,6 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordina
             {},
             {.noc_x = target_x, .noc_y = target_y, .addr = from_remote_b.get_write_ptr()});
     };
-    auto receive_pair = [&] {
-        from_remote_a.reserve_back(kk);
-        from_remote_b.reserve_back(kv);
-        from_remote_a.push_back(kk);
-        from_remote_b.push_back(kv);
-    };
     auto loopback_pair = [&] {
         local_a.reserve_back(kk);
         local_b.reserve_back(kv);
@@ -132,15 +125,16 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordina
             ready.up(noc, worker_x(worker_index + distance), worker_y(worker_index + distance), 1);
         }
         if (receives) {
+            from_remote_a.reserve_back(kk);
+            from_remote_b.reserve_back(kv);
             // All NoC writes complete before this receiver frees the old outbound block.
             to_remote_a.pop_front(kk);
             to_remote_b.pop_front(kv);
 
             ready_target++;
             ready.wait_min(ready_target);
-            receive_pair();
-            stage_token.reserve_back(1);
-            stage_token.push_back(1);
+            from_remote_a.push_back(kk);
+            from_remote_b.push_back(kv);
 
             // Compute must publish the replacement before any worker starts the next distance.
             to_remote_a.wait_front(kk);
@@ -163,12 +157,13 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordina
     to_remote_a.pop_front(kk);
     to_remote_b.pop_front(kv);
     if (group > 0) {
+        from_remote_a.reserve_back(kk);
+        from_remote_b.reserve_back(kv);
         ready_target++;
         ready.wait_min(ready_target);
-        receive_pair();
+        from_remote_a.push_back(kk);
+        from_remote_b.push_back(kv);
     }
-    stage_token.reserve_back(1);
-    stage_token.push_back(1);
 
     final.wait_front(kv);
     for (uint32_t tile = 0; tile < kv; tile++) {
