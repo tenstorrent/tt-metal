@@ -6,8 +6,9 @@
 
 Per clip: resample to 32 kHz, take one production window (207 latents = 5.17 s), encode with the
 torch/diffusers reference, decode on CPU (ground truth) and on device, score device against CPU. WAVs
-are written so the difference can be heard. Batch 2 throughout, matching the shipping working point,
-so times are comparable to `decode_bench.py`. The decoder is built once, so times are steady-state.
+are written so the difference can be heard. Batch defaults to 2 for comparability with numbers quoted
+before `CVD_BATCH` existed; the real per-clip cost is `CVD_BATCH=1`, since latency scales ~linearly
+with batch and one request is one clip. The decoder is built once, so times are steady-state.
 
 Usage -- single device, shipping defaults:
 
@@ -19,8 +20,9 @@ Usage -- single device, shipping defaults:
     env CVD_MESH=4x8 CVD_T_FACTOR=8 CVD_MESH_AXIS=1 CVD_TRACED=1 \
         CVD_SPLIT_MODE=off CVD_TAP_MATMUL=0 CVD_PREFER_MAC=0 python .../cpu_vs_device.py
 
-Env: CVD_MESH (default 1x1), CVD_T_FACTOR, CVD_MESH_AXIS, CVD_TRACED, CVD_SPLIT_MODE (off|weight|full),
-CVD_TAP_MATMUL, CVD_PREFER_MAC, CVD_MAX_C_IN_BLOCK, CVD_OUT_DIR, CVD_BASELINE_PSNR.
+Env: CVD_MESH (default 1x1), CVD_T_FACTOR, CVD_MESH_AXIS, CVD_TRACED, CVD_BATCH (default 2, 1 for the
+real per-clip cost), CVD_SPLIT_MODE (off|weight|full), CVD_TAP_MATMUL, CVD_PREFER_MAC,
+CVD_MAX_C_IN_BLOCK, CVD_OUT_DIR, CVD_BASELINE_PSNR.
 
 Accuracy is scored against the CPU reference, i.e. an absolute number; the T-parallel test only scores
 sharded against unsharded, which is a looser bar. Unset levers keep the constructor default (accurate
@@ -56,6 +58,10 @@ MESH = tuple(int(v) for v in os.environ.get("CVD_MESH", "1x1").split("x"))
 T_FACTOR = int(os.environ.get("CVD_T_FACTOR", "1"))
 MESH_AXIS = int(os.environ.get("CVD_MESH_AXIS", "1"))
 TRACED = os.environ.get("CVD_TRACED", "0") == "1"
+# 2 matches decode_bench.py and every number quoted before this was added: the real deployment case
+# is one clip per request, so CVD_BATCH=1 is the honest per-clip cost. Default stays 2 so existing
+# invocations and saved numbers don't silently change underneath anyone.
+BATCH = int(os.environ.get("CVD_BATCH", "2"))
 
 
 # The precision levers select a different operator set, not just a different speed: all-fast
@@ -103,15 +109,15 @@ CLIPS = [
 ]
 
 
-def load_clip(key: str, offset: float, num_samples: int) -> torch.Tensor:
-    """-> (2, 1, num_samples) at SR, peak-normalised, mono duplicated across the batch slots."""
+def load_clip(key: str, offset: float, num_samples: int, batch: int = BATCH) -> torch.Tensor:
+    """-> (batch, 1, num_samples) at SR, peak-normalised, mono duplicated across the batch slots."""
     y, _ = librosa.load(librosa.ex(key), sr=SR, mono=True, offset=offset, duration=num_samples / SR + 1.0)
     if len(y) < num_samples:
         y = np.pad(y, (0, num_samples - len(y)))
     y = y[:num_samples]
     peak = float(np.abs(y).max()) or 1.0
     mono = torch.from_numpy(0.85 * y / peak).float()
-    return mono.unsqueeze(0).unsqueeze(0).repeat(2, 1, 1)
+    return mono.unsqueeze(0).unsqueeze(0).repeat(batch, 1, 1)
 
 
 def write_wav(path: str, wav: torch.Tensor) -> None:
@@ -244,7 +250,7 @@ def main():
             # Leaving fabric enabled after close can wedge the next job's init.
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
-    print(f"\n=== fp32 decode, {num_samples / SR:.2f} s of 32 kHz audio per clip, batch 2 ===")
+    print(f"\n=== fp32 decode, {num_samples / SR:.2f} s of 32 kHz audio per clip, batch {BATCH} ===")
     print(f"config: mesh {MESH[0]}x{MESH[1]}, t_factor={T_FACTOR} axis={MESH_AXIS}, traced={TRACED}")
     print(f"{'clip':<15} {'CPU s':>7} {'device s':>9} {'speedup':>8} {'PSNR dB':>9} {'rel_rmse':>11} {'log-spec':>9}")
     print("-" * 74)
