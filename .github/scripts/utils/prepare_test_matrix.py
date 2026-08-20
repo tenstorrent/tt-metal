@@ -149,7 +149,9 @@ def collect_known_tags(tests):
 def validate_requested_tags(requested, known_tags, flag_name):
     unknown = sorted(set(requested) - known_tags)
     if unknown:
-        print(f"::error::{flag_name} references unknown tag(s) {unknown}; tags present in this file: {sorted(known_tags)}")
+        print(
+            f"::error::{flag_name} references unknown tag(s) {unknown}; tags present in this file: {sorted(known_tags)}"
+        )
         sys.exit(1)
 
 
@@ -190,7 +192,9 @@ def apply_tag_filters(tests, include_tags, exclude_tags):
             if tags & include_set:
                 next_kept.append(test)
             else:
-                print(f"Not including test '{test.get('name', 'Unnamed Test')}' (tags {sorted(tags)} not in --include-tag set)")
+                print(
+                    f"Not including test '{test.get('name', 'Unnamed Test')}' (tags {sorted(tags)} not in --include-tag set)"
+                )
         kept = next_kept
 
     if exclude_tags:

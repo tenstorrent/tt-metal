@@ -758,7 +758,6 @@ def test_tests_present_but_no_enabled_sku_is_fatal(tests_yaml: Path):
     assert "No tests selected for enabled SKUs" in result.stdout
 
 
-
 # ---------------------------------------------------------------------------
 # Tag filtering: --include-tag (allowlist) / --exclude-tag (denylist)
 #
@@ -952,7 +951,9 @@ def test_ops_unit_tests_yaml_uses_tags_not_category():
     with open(PIPELINE / "ops_unit_tests.yaml") as f:
         tests = yaml.safe_load(f)
 
-    assert not any("category" in t for t in tests), "ops_unit_tests.yaml still has a `category` field; use `tags` instead"
+    assert not any(
+        "category" in t for t in tests
+    ), "ops_unit_tests.yaml still has a `category` field; use `tags` instead"
 
     known_tags = set()
     for t in tests:
@@ -978,7 +979,9 @@ def test_ops_unit_tests_yaml_uses_tags_not_category():
         "cpp_lab_examples",
     }
     missing = scheduled_categories - known_tags
-    assert not missing, f"tt-metal-l2-nightly.yaml schedules categories with no matching tag in ops_unit_tests.yaml: {missing}"
+    assert (
+        not missing
+    ), f"tt-metal-l2-nightly.yaml schedules categories with no matching tag in ops_unit_tests.yaml: {missing}"
 
 
 @pytest.mark.parametrize("body", ["", "# placeholder, no tests yet\n"])
