@@ -48,6 +48,10 @@
 
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
 #include "api/compute/common.h"
+// Both binary headers, because add/sub/mul exist on both units: _sfpu.h has the
+// forms that take two DST slots, eltwise_binary.h the ones that read two circular
+// buffers. Which is cheaper is what FpuEltwiseFusion is for.
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
