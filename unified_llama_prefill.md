@@ -783,6 +783,54 @@ broadcast and copy, both SFPU-side, and found it free. It never tests matmul aga
 SFPU, which is a change of compute unit and carries a `matmul_block_init`. That is the
 next measurement, and on current evidence it is the last cheap explanation left.
 
+### Does the wrapper generate worse code?
+
+Static analysis of the built ELFs, ours against ttnn's SDPA, both on the math thread
+(trisc1) at matched HiFi2 + approx -- the config is recorded in each variant's generated
+`chlkc_descriptors.h`, so the pair is matched rather than assumed. The TRISC firmware
+contributes almost nothing to `.text` (a trivial passcost kernel is 812 bytes), so
+these numbers are essentially kernel code.
+
+| | ours (flash) | ttnn (sdpa) |
+|---|---|---|
+| `.text`, math thread | 13560 B | 5460 B |
+| largest function | `kernel_main` 8688 B | `normalize_row_streaming` 2140 B |
+| instructions (static) | 3390 | 1365 |
+| Tensix + SFPU ops | 1510 | 655 |
+| scalar | 1756 | 670 |
+| **scalar per work op** | **1.16** | **1.02** |
+| stack spills | 96 | 48 |
+| non-inlined calls | 31 | 3 |
+
+**More code, but not materially worse code.** 2.4x the text, and the answer to why is
+structural rather than a codegen failure: our `kernel_main` is ONE 8688-byte inlined
+function because every pass is written out and every tile loop unrolls -- the trip count
+is a compile-time `Shape` constant -- while ttnn outlines its work into
+`normalize_row_streaming` and two clones of `blocked_matmul_and_pack` and loops over
+them. The quality number is the scalar-instructions-per-Tensix-op ratio, and at 1.16
+against 1.02 the wrapper costs about 14% more scalar work per unit of real work. Spills
+scale with size rather than outpacing it (96 against 48, for 2.3x the code).
+
+**Code size is not the missing time.** passcost spans 812 to 5568 bytes of `.text` across
+its variants, a 6.9x range, and its pass sweep is dead linear over exactly that range --
+if instruction fetch cost anything material at these sizes, the 8-pass point would bend
+upward. It does not, and the kernel size limit is 1432KB, so 8.7KB is not near any wall.
+
+Two real findings, both small:
+
+- `TileSource<Shape<4,1>>::emit` is a 640-byte function that did NOT inline, and is
+  called 6 times. It is the leaf of the expression machinery, so it sits in the hot
+  path; worth an `always_inline` and a re-measure.
+- `Strategy<FPUFusion>::bias_finish` is emitted at 900 bytes with **zero call sites** in
+  a kernel that uses no bias. Dead text rather than dead time, but it should not be
+  there.
+
+The caveat that keeps this from being a verdict on dynamic cost: static counts weight
+every instruction once. Our straight-line body makes static ~ dynamic per chunk, while
+ttnn's loops mean its static count understates what it actually issues. So the 2.4x size
+gap emphatically does NOT mean we execute 2.4x the instructions -- if anything the
+comparison flatters ttnn's dynamic count. **The wrapper is not where the missing 2x is.**
+
 ### The full grid was never the interesting number
 
 ttnn on 64 cores is 13.8 us against 21 us on one, because at S=128 with a single head there are
