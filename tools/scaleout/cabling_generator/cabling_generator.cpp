@@ -489,8 +489,10 @@ Node build_node(
             Node::BoardEndpoint endpoint_b = std::make_pair(board_b_id, port_b_id);
 
             // Check for conflicts: same endpoint connected to different destinations (within this port type)
-            validate_endpoint_conflict(endpoint_a, endpoint_b, endpoint_to_dest, "node descriptor '" + node_descriptor_name + "'");
-            validate_endpoint_conflict(endpoint_b, endpoint_a, endpoint_to_dest, "node descriptor '" + node_descriptor_name + "'");
+            validate_endpoint_conflict(
+                endpoint_a, endpoint_b, endpoint_to_dest, "node descriptor '" + node_descriptor_name + "'");
+            validate_endpoint_conflict(
+                endpoint_b, endpoint_a, endpoint_to_dest, "node descriptor '" + node_descriptor_name + "'");
 
             endpoint_to_dest[endpoint_a] = endpoint_b;
             endpoint_to_dest[endpoint_b] = endpoint_a;
@@ -736,13 +738,11 @@ void collect_host_id_to_hostname(
         }
         const auto& mapping = mapping_it->second;
         if (child_def.has_node_ref()) {
-            if (mapping.mapping_case() ==
-                tt::scaleout_tools::cabling_generator::proto::ChildMapping::kHostId) {
+            if (mapping.mapping_case() == tt::scaleout_tools::cabling_generator::proto::ChildMapping::kHostId) {
                 out[HostId(mapping.host_id())] = child_name;
             }
         } else if (child_def.has_graph_ref()) {
-            if (mapping.mapping_case() ==
-                tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
+            if (mapping.mapping_case() == tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
                 collect_host_id_to_hostname(mapping.sub_instance(), cluster_descriptor, out);
             }
         }
@@ -1080,8 +1080,7 @@ CablingGenerator::CablingGenerator(
         chip_connections_ = std::move(merged.chip_connections_);
         deployment_hosts_ = std::move(merged.deployment_hosts_);
     } else {
-        initialize_from_single_file(
-            cluster_descriptor_path, load_deployment_descriptor(deployment_descriptor_path));
+        initialize_from_single_file(cluster_descriptor_path, load_deployment_descriptor(deployment_descriptor_path));
     }
 }
 
@@ -1249,8 +1248,7 @@ static void merge_resolved_graph_instances(
                 // Same instance name, different node type across files (e.g. host declared as
                 // WH_GALAXY in one and BH_GALAXY in another) - real conflict; fail with a clear
                 // message instead of a downstream inter_board_connections mismatch.
-                if (target_template_key && source_template_key &&
-                    *target_template_key != *source_template_key &&
+                if (target_template_key && source_template_key && *target_template_key != *source_template_key &&
                     !are_torus_compatible_for_merge(*target_template_key, *source_template_key)) {
                     throw std::runtime_error(fmt::format(
                         "Node '{}' has conflicting node types across cabling descriptors: "
@@ -1404,8 +1402,8 @@ void CablingGenerator::merge_other(
     std::unordered_map<HostId, HostId> temp_remap;
     {
         HostId next_id = HostId(host_id_to_node_.size());
-        auto remap_level = [&](auto& self, const ResolvedGraphInstance& target_graph,
-                               ResolvedGraphInstance& source_graph) -> void {
+        auto remap_level =
+            [&](auto& self, const ResolvedGraphInstance& target_graph, ResolvedGraphInstance& source_graph) -> void {
             // At this level, build name->host_id map only for THIS level's target nodes
             for (auto& [name, node] : source_graph.nodes) {
                 HostId mapped;
@@ -1448,8 +1446,12 @@ void CablingGenerator::merge_other(
                 for (auto& conn : connections) {
                     auto& [host_a, tray_a, port_a] = conn.first;
                     auto& [host_b, tray_b, port_b] = conn.second;
-                    if (temp_remap.contains(host_a)) { host_a = temp_remap[host_a]; }
-                    if (temp_remap.contains(host_b)) { host_b = temp_remap[host_b]; }
+                    if (temp_remap.contains(host_a)) {
+                        host_a = temp_remap[host_a];
+                    }
+                    if (temp_remap.contains(host_b)) {
+                        host_b = temp_remap[host_b];
+                    }
                 }
             }
             // Rebuild derived lookups after remapping.
@@ -1793,6 +1795,66 @@ const std::vector<Host>& CablingGenerator::get_deployment_hosts() const { return
 const std::vector<LogicalChannelConnection>& CablingGenerator::get_chip_connections() const {
     return chip_connections_;
 }
+
+std::vector<ResolvedCable> CablingGenerator::get_cables() const {
+    std::vector<ResolvedCable> cables;
+    if (!root_instance_) {
+        return cables;
+    }
+
+    auto add = [&cables](
+                   const CableEndpoint& a, const CableEndpoint& b, uint32_t depth, const std::string& declared_at) {
+        cables.push_back(ResolvedCable{
+            .endpoint_a = std::min(a, b), .endpoint_b = std::max(a, b), .depth = depth, .declared_at = declared_at});
+    };
+
+    auto join = [](const std::string& prefix, const std::string& name) {
+        return prefix.empty() ? name : prefix + "/" + name;
+    };
+
+    auto walk = [&](auto& self, const ResolvedGraphInstance& graph, const std::string& path, uint32_t depth) -> void {
+        for (const auto& [port_type, connections] : graph.internal_connections) {
+            for (const auto& conn : connections) {
+                const auto& [host_a, tray_a, port_a] = conn.first;
+                const auto& [host_b, tray_b, port_b] = conn.second;
+                add(CableEndpoint{host_a, tray_a, port_type, port_a},
+                    CableEndpoint{host_b, tray_b, port_type, port_b},
+                    depth,
+                    path);
+            }
+        }
+        for (const auto& [node_name, node] : graph.nodes) {
+            for (const auto& [port_type, connections] : node.inter_board_connections) {
+                for (const auto& [board_a, board_b] : connections) {
+                    add(CableEndpoint{node.host_id, board_a.first, port_type, board_a.second},
+                        CableEndpoint{node.host_id, board_b.first, port_type, board_b.second},
+                        depth + 1,
+                        join(path, node_name));
+                }
+            }
+        }
+        for (const auto& [subgraph_name, subgraph] : graph.subgraphs) {
+            self(self, *subgraph, join(path, subgraph_name), depth + 1);
+        }
+    };
+    walk(walk, *root_instance_, "", 0);
+
+    std::sort(cables.begin(), cables.end(), [](const ResolvedCable& lhs, const ResolvedCable& rhs) {
+        return std::tie(lhs.endpoint_a, lhs.endpoint_b, lhs.depth, lhs.declared_at) <
+               std::tie(rhs.endpoint_a, rhs.endpoint_b, rhs.depth, rhs.declared_at);
+    });
+    return cables;
+}
+
+const Node& CablingGenerator::get_node(HostId host_id) const {
+    auto it = host_id_to_node_.find(host_id);
+    if (it == host_id_to_node_.end()) {
+        throw std::runtime_error(fmt::format("Host ID {} is not part of this cluster", *host_id));
+    }
+    return *it->second;
+}
+
+size_t CablingGenerator::get_num_hosts() const { return host_id_to_node_.size(); }
 
 // Collect host_id -> instance path segments (root..host) by walking the resolved graph.
 static void collect_instance_paths(
@@ -3312,8 +3374,12 @@ void CablingGenerator::reassign_host_ids_dfs() {
             for (auto& conn : connections) {
                 auto& [host_a, tray_a, port_a] = conn.first;
                 auto& [host_b, tray_b, port_b] = conn.second;
-                if (id_remap.contains(host_a)) { host_a = id_remap[host_a]; }
-                if (id_remap.contains(host_b)) { host_b = id_remap[host_b]; }
+                if (id_remap.contains(host_a)) {
+                    host_a = id_remap[host_a];
+                }
+                if (id_remap.contains(host_b)) {
+                    host_b = id_remap[host_b];
+                }
             }
         }
 
@@ -3340,8 +3406,7 @@ void CablingGenerator::reassign_host_ids_dfs() {
     populate_host_id_to_node();
 }
 
-void CablingGenerator::rebuild_deployment_hosts_in_dfs_order(
-    const std::unordered_map<std::string, Host>& all_hosts) {
+void CablingGenerator::rebuild_deployment_hosts_in_dfs_order(const std::unordered_map<std::string, Host>& all_hosts) {
     if (!root_instance_) {
         return;
     }
@@ -3460,6 +3525,12 @@ CableLength calc_cable_length(
 std::ostream& operator<<(std::ostream& os, const PhysicalChannelEndpoint& conn) {
     os << "PhysicalChannelEndpoint{hostname='" << conn.hostname << "', tray_id=" << *conn.tray_id
        << ", asic_channel=" << conn.asic_channel << "}";
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const CableEndpoint& endpoint) {
+    os << "host " << *endpoint.host_id << " tray " << *endpoint.tray_id << " "
+       << enchantum::to_string(endpoint.port_type) << " port " << *endpoint.port_id;
     return os;
 }
 

@@ -176,6 +176,28 @@ target_link_libraries(
         cxxopts::cxxopts
 )
 
+add_executable(run_cabling_matcher)
+target_sources(run_cabling_matcher PRIVATE ${RUN_CABLING_MATCHER_SRCS})
+
+set_target_properties(
+    run_cabling_matcher
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${Metalium_BINARY_DIR}/tools/scaleout
+)
+
+add_dependencies(run_cabling_matcher scaleout_generated_protos)
+
+target_include_directories(run_cabling_matcher SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(
+    run_cabling_matcher
+    PRIVATE
+        scaleout_tools
+        protobuf::libprotobuf
+        cxxopts::cxxopts
+)
+
 add_executable(run_regen_descriptors)
 target_sources(run_regen_descriptors PRIVATE ${RUN_REGEN_DESCRIPTORS_SRCS})
 
