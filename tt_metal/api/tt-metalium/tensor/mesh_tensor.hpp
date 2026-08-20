@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include <tt-metalium/hal_types.hpp>
 
 #include <tt-metalium/tensor/tensor_types.hpp>

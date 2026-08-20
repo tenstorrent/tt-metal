@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
 #include <tt_stl/small_vector.hpp>
 
+#include <cstdint>
 #include <functional>
 
 // UMD: re-exports CoreType (used in SemaphoreDescriptor::core_type member).

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/buffer.hpp>
 

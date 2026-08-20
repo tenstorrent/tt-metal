@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <cstdint>
 #include <functional>
 #include <ostream>
 #include <optional>

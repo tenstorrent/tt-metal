@@ -16,6 +16,7 @@
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/distributed_context.hpp>
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
