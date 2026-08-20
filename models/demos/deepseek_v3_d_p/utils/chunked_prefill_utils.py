@@ -62,46 +62,30 @@ def _ref_cache_key(config, weights, hidden_2d) -> str:
     return h.hexdigest()[:16]
 
 
-def discover_traces(root, num_users, variant_name=None):
-    """Immediate subdirs of `root`, one per user (cycled if fewer than num_users). Assert mla_io/ + kv_cache/.
-
-    `root` may hold both kimi and deepseek traces as sibling subdirs (e.g. kimi_*_sdpa_mla next to
-    deepseek_*_sdpa_mla). When `variant_name` is given, select by whether the dir name contains 'kimi':
-    a kimi variant keeps the kimi_* dirs, any other variant keeps the rest.
-
-    NOTE the filter is a substring test and so cannot separate two variants of the same family: every
-    kimi_* variant selects the same dirs. It is therefore only safe for variants that actually have
-    recorded traces. Callers must reject the others *before* getting here -- test_mla.py's
-    _run_chunked_prefill asserts on ``variant.supports_pretrained``, since a trace is recorded from a
-    real checkpoint and a variant without one (kimi_k3, sparse_mla) would otherwise be handed
-    Kimi-K2.6's traces and silently compared across architectures.
-    """
-    dirs = sorted(d for d in Path(root).iterdir() if d.is_dir())
-    assert dirs, f"no trace subdirs under {root}"
-    if variant_name is not None:
-        want_kimi = "kimi" in variant_name.lower()
-        dirs = [d for d in dirs if ("kimi" in d.name.lower()) == want_kimi]
-        assert dirs, f"no {'kimi' if want_kimi else 'non-kimi'} trace subdirs under {root} (variant={variant_name})"
+def resolve_traces(paths, num_users):
+    """One trace dir per user, cycled if there are fewer dirs than users. `paths` is either the
+    variant's own mla_trace_defaults or a single explicit override."""
+    assert paths, "no trace dirs given"
+    dirs = [Path(p) for p in paths]
     for d in dirs:
+        assert d.is_dir(), f"trace dir {d} does not exist"
         assert (d / "mla_io").is_dir(), f"trace dir {d} is missing mla_io/"
         assert (d / "kv_cache").is_dir(), f"trace dir {d} is missing kv_cache/"
     return [dirs[u % len(dirs)] for u in range(num_users)]
 
 
-def single_trace(path, num_users):
-    """Use `path` directly as ONE trace dir (the leaf holding mla_io/ + kv_cache/), shared across all
-    users. For MLA_CHUNKED_TRACE_PATH, which points at a specific trace rather than the root of many."""
-    d = Path(path)
-    assert (d / "mla_io").is_dir(), f"trace dir {d} is missing mla_io/"
-    assert (d / "kv_cache").is_dir(), f"trace dir {d} is missing kv_cache/"
-    return [d for _ in range(num_users)]
-
-
 def load_trace(d):
-    """Return (mla_input [S,H], mla_output [S,H], kv_post [S,kvpe]) for layer 0, all bf16."""
-    mi = load_file(d / "mla_io" / "mla_input_layer_0.safetensors")["mla_input_layer_0"]
-    mo = load_file(d / "mla_io" / "mla_output_layer_0.safetensors")["mla_output_layer_0"]
-    kv = load_file(d / "kv_cache" / "layer_0.safetensors")["kv_post_transform_layer_0"]
+    """Return (mla_input [S,H], mla_output [S,H], kv_post [S,kvpe]) for the traced layer, all bf16.
+
+    The layer index comes off the filenames rather than being assumed 0: on a hybrid model it cannot
+    be 0 (Kimi-K3 traces layer 3, its first full-attention layer).
+    """
+    inputs = sorted((d / "mla_io").glob("mla_input_layer_*.safetensors"))
+    assert len(inputs) == 1, f"trace dir {d}: expected exactly one traced MLA layer, found {len(inputs)}"
+    layer = inputs[0].stem[len("mla_input_layer_") :]
+    mi = load_file(inputs[0])[f"mla_input_layer_{layer}"]
+    mo = load_file(d / "mla_io" / f"mla_output_layer_{layer}.safetensors")[f"mla_output_layer_{layer}"]
+    kv = load_file(d / "kv_cache" / f"layer_{layer}.safetensors")[f"kv_post_transform_layer_{layer}"]
     return mi.to(torch.bfloat16), mo.to(torch.bfloat16), kv.to(torch.bfloat16)
 
 

@@ -31,15 +31,19 @@ from helpers.param_config import (
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     _SFPU_BINARY_OPS,
+    BINARY_SPECIALS_READY_OPS,
+    SHIFT_EDGE_AMOUNTS,
     edge_pair_values,
     exclude_undefined_pair,
     for_op,
+    generated_nan_sign_is_asserted,
     integer_specials,
     ops_with_singularity,
+    specials_safe,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     BROADCAST_TYPE,
@@ -90,6 +94,102 @@ def _skip_bh_float16_no_dest_acc(formats, dest_acc):
 # (a 32x32 tile is 4 faces of 16x16, and input_dimensions=[64, 32] is 8 faces).
 _FACES_PER_TILE = 4
 _ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
+
+
+# Per-op (atol, rtol) overrides for the binary suite, mirroring CUSTOM_TOLERANCES in
+# test_sfpu_unary.py. `None` keeps the format default (0.05 / 0.05 for the float formats).
+#
+# Only two ops belong here: their error is a property of the op's own *composition* rather than
+# of the stimuli, so it grows with the operands however the domain is drawn. Both were previously
+# kept accurate by capping the registry domain instead -- pow at 3, xlogy's x at 4 -- which never
+# evaluated the op where it is interesting. Every number below is measured on a Blackhole p150b
+# over the widened domains, max across Float16_b and Float32 at dest_acc=Yes, ~32k elements per
+# cell. Re-measure before widening either domain further.
+#
+#   pow -- a**b is exp(b * ln a), so relative error tracks the product handed to the shared
+#   exp approximation:
+#     A<=3  B<=3  (b*ln a = 3.30)   max_rel  10.00%
+#     A<=8  B<=3  (6.24)            max_rel  10.24%
+#     A<=8  B<=4  (8.32)            max_rel  13.35%   <- the domain now registered
+#     A<=16 B<=4  (11.09)           max_rel  10.34%
+#   ~Flat in the operands rather than growing, so the fixed 5% rtol had been capping the domain,
+#   not the op; rtol=0.15 clears 13.35% with margin. A<=16 was rejected separately: it drives
+#   |golden| to 6.2e4, within 1.06x of Float16's ceiling.
+#
+#   xlogy -- x * log(y), so *absolute* error scales with x while a fixed atol does not
+#   (relative is meaningless: xlogy(0, y) = 0, making any error there infinitely relative):
+#     x<=4   max_abs 0.25 (Float16_b) / 0.058 (Float32)
+#     x<=8   max_abs 0.50            / 0.116            <- the domain now registered
+#     x<=16  max_abs 1.00            / 0.232
+#     x<=32  max_abs 2.00            / 0.464
+#   Linear in x, matching error ~ x * abs_err(ln y), which is why no fixed atol could hold.
+#   Float16_b dominates because at |golden| ~ 72 a bfloat16 ULP is already 0.5 -- mostly output
+#   quantization, not the kernel. atol=0.6 covers x<=8 with 20% margin.
+BINARY_CUSTOM_TOLERANCES = {
+    # Listed per output format only to keep Bfp8_b out of it. pow's error is *relative* -- the
+    # measurement above is ~flat in the operands -- so unlike xlogy's absolute error it does not
+    # scale with the output format's precision, and the same rtol is the right shape for every
+    # float column. Measured: reverting ->Float16 to the 0.05 default fails all 15 of its pow
+    # variants on a Wormhole n300, so 0.15 is the op's requirement there too, not a loosening.
+    #
+    # Bfp8_b is the exception and is deliberately absent: its default rtol is 0.2, so an override
+    # of 0.15 would *tighten* it, and at 0.2 a lane that misses the tolerance can still be caught
+    # by the block-lattice fallback in passed_test. Falling through keeps both.
+    MathOperation.SfpuElwpow: {
+        DataFormat.Float32: (None, 0.15),
+        DataFormat.Float16_b: (None, 0.15),
+        DataFormat.Float16: (None, 0.15),
+    },
+    # Keyed by *output format*, because the measurement above splits by nearly 5x: applying
+    # Float16_b's atol to Float32 would accept five times the error that format was measured to
+    # produce. Float16 is measured separately on a Wormhole n300 over x <= 8 and requires 0.0989
+    # against a 0.05 format default; 0.12 is that with the same ~20% margin as the other two.
+    MathOperation.SfpuXlogy: {
+        DataFormat.Float32: (0.14, None),  # 0.116 measured, same ~20% margin as bf16
+        DataFormat.Float16_b: (0.6, None),
+        DataFormat.Float16: (0.12, None),  # 0.0989 measured
+    },
+}
+
+# Fallback for an output format the per-format table does not list: no override at all, so
+# `helpers/utils.py`'s per-format tolerance applies. Bfp8_b is the only such format left, and
+# it does not need one -- its verdict comes from _bfp_block_aware_compare's lattice check
+# rather than from a flat atol, and it passes on the default.
+#
+# Not the widest measured value: an unlisted format sits on its format default (0.05 for Float16,
+# 0.1 for Bfp8_b), and handing those 0.6 would loosen them 12x and 6x on columns the measurement
+# never covered.
+#
+# Reading the measurement: passed_test judges with torch.isclose(golden, res, rtol, atol), so the
+# bound is atol + rtol * |res| and the atol a format actually needs is max(|g - r| - rtol * |r|),
+# not max|g - r| -- which is why the raw figures above sit well above the atols they justify.
+_UNLISTED_FORMAT_TOLERANCE = (None, None)
+
+
+def _custom_tolerances(mathop, output_format):
+    """The (atol, rtol) override for *mathop*, per output format where it has one."""
+    entry = BINARY_CUSTOM_TOLERANCES.get(mathop)
+    if entry is None:
+        return (None, None)
+    if isinstance(entry, dict):
+        return entry.get(output_format, _UNLISTED_FORMAT_TOLERANCE)
+    return entry
+
+
+def _build_paired_tile_override(pairs, dtype):
+    """Two-tile raw override from a list of (A, B) pairs: tile 0 holds every A, tile 1
+    every B, paired by index (tilize pairs them that way).
+
+    *pairs* is cycled to fill a whole tile rather than zero-padded, so the override
+    divides evenly into whatever buffer the driver picks and every element is a pair the
+    caller meant to drive. The three edge builders below all need exactly this — an
+    interesting pair list is always far shorter than a tile — and differ only in *dtype*.
+    """
+    if not pairs:
+        raise ValueError("_build_paired_tile_override() needs at least one pair")
+    a = [pairs[i % len(pairs)][0] for i in range(_ELEMENTS_PER_TILE)]
+    b = [pairs[i % len(pairs)][1] for i in range(_ELEMENTS_PER_TILE)]
+    return torch.tensor(a + b, dtype=dtype)
 
 
 def _pair_operand_specs(spec_A, spec_B, input_dimensions):
@@ -410,7 +510,21 @@ def sfpu_binary(
     spec_B=None,
     twos_complement=False,
     input_dimensions=None,
+    unspecified_nonfinite_sign=False,
 ):
+    """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
+
+    For the one case where the sign genuinely is not specified: a NaN the kernel *generated*,
+    packed as a signed infinity through a pipeline too narrow to hold it, on Wormhole, where
+    `SFPMAD.md` says that NaN's sign "might or might not be set". Better than withdrawing the
+    variant -- the magnitude, the finiteness and every finite lane stay checked, so a kernel
+    returning a finite value, a zero or a NaN where an infinity is due still fails.
+
+    Scoped per lane, from the mask the golden records while the NaN is still a NaN, because a
+    tensor holds both kinds of non-finite at once: `specials_in` drives `inf - inf`, whose sign
+    the ISA leaves open, alongside `0 - (-inf)`, whose `+inf` IEEE fully specifies. Same per-lane
+    scoping test_sfpu_reduce uses.
+    """
 
     # Seed the draw so the stimuli are identical run to run. Nothing below sets a seed,
     # and an unseeded redraw makes a variant sitting near its tolerance pass or fail
@@ -487,6 +601,18 @@ def sfpu_binary(
             tile_cnt=tile_cnt_A,
         )
 
+    # ONLY Blackhole needs this for some reason
+    #
+    # Hoisted above the golden call, which now models the Dest width from the *effective*
+    # dest_acc -- computing the golden first would model a 16-bit Dest for a variant that runs
+    # with a 32-bit one here. Nothing in between reads dest_acc, so the move is behaviour-
+    # preserving for every existing caller.
+    if (
+        formats.input_format in [DataFormat.Float16, DataFormat.Float32]
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    ):
+        dest_acc = DestAccumulation.Yes
+
     generate_golden = get_golden_generator(BinarySFPUGolden)
     golden_format = (
         DataFormat.Float16_b
@@ -494,28 +620,30 @@ def sfpu_binary(
         else formats.input_format
     )
     elements_per_pair = 2 * 32 * 32
-    golden_tensor = torch.cat(
-        [
-            generate_golden(
-                mathop,
-                golden_src[offset : offset + elements_per_pair],
-                0,
-                1,
-                0,
-                32,
-                [64, 32],
-                golden_format,
-            ).flatten()
-            for offset in range(0, golden_src.numel(), elements_per_pair)
-        ]
-    )
-
-    # ONLY Blackhole needs this for some reason
-    if (
-        formats.input_format in [DataFormat.Float16, DataFormat.Float32]
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    ):
-        dest_acc = DestAccumulation.Yes
+    golden_chunks = []
+    generated_nan_chunks = []
+    for offset in range(0, golden_src.numel(), elements_per_pair):
+        chunk = generate_golden(
+            mathop,
+            golden_src[offset : offset + elements_per_pair],
+            0,
+            1,
+            0,
+            32,
+            [64, 32],
+            golden_format,
+            dest_acc=dest_acc,
+            output_format=formats.output_format,
+            collect_generated_nan=unspecified_nonfinite_sign,
+        )
+        # Asked of the return value rather than of the build mode: DummyGoldenGenerator stands in
+        # for the golden during --compile-producer and returns a bare tensor whatever it is asked
+        # for, and that phase skips before the comparison below anyway.
+        if isinstance(chunk, tuple):
+            chunk, generated_nan = chunk
+            generated_nan_chunks.append(generated_nan)
+        golden_chunks.append(chunk.flatten())
+    golden_tensor = torch.cat(golden_chunks)
 
     bcast = broadcast_type if broadcast_type else LlkBroadcastType.None_
 
@@ -561,8 +689,31 @@ def sfpu_binary(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
+    # Per-op tolerances, for the two ops whose error is a property of the op's own
+    # composition rather than of the stimuli, and per output format where the error splits by
+    # format. See BINARY_CUSTOM_TOLERANCES.
+    custom_atol, custom_rtol = _custom_tolerances(mathop, formats.output_format)
+
+    if unspecified_nonfinite_sign and generated_nan_chunks:
+        # Clear the sign only on the lanes that held a generated NaN *and* where both sides are
+        # non-finite. A golden +inf against a hardware 5.0 still compares +inf vs 5.0 and still
+        # fails; a golden +inf against a hardware NaN likewise, because abs() leaves a NaN a NaN
+        # and passed_test's both-NaN clause needs both. So this excuses one bit on the lanes the
+        # ISA declines to pin, and nothing else anywhere.
+        unspecified = (
+            torch.cat(generated_nan_chunks)
+            & ~torch.isfinite(golden_tensor)
+            & ~torch.isfinite(res_tensor)
+        )
+        golden_tensor = torch.where(unspecified, golden_tensor.abs(), golden_tensor)
+        res_tensor = torch.where(unspecified, res_tensor.abs(), res_tensor)
+
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
     ), "Assert against golden failed"
 
 
@@ -850,10 +1001,100 @@ def test_sfpu_binary_int(
     dest_acc,
     mathop,
 ):
+    # The random half of the Int32 coverage. This variant takes generate_stimuli's integer
+    # default, uniform(0, INT32_MAX // 2 - 1) -- positive-only and tie-free, so it cannot tell
+    # SfpuElwLe from SfpuElwLt. See the two tests below for the rest.
     sfpu_binary(
         formats,
         dest_acc,
         mathop,
+    )
+
+
+# The four ordered Int32 comparisons, which are the same MathOperation members the float
+# comparison sweep drives. sfpu_operations.h routes them to calculate_binary_comp_int32 when
+# MATH_FORMAT is Int32 -- subtract, fold the sign -- so this is a different kernel from the fp32
+# two-vector compare, reached through the same enum entry.
+#
+# These are also the kernel the five Quasar-only `*Int` members reach; see the alias guard in
+# test_sfpu_domains (test_quasar_int_binary_members_alias_covered_kernels) for why coverage audit
+# section 4.5 lists them as untested and the kernels are not.
+_INT_COMPARISON_OPS = [
+    MathOperation.SfpuElwLt,
+    MathOperation.SfpuElwGt,
+    MathOperation.SfpuElwLe,
+    MathOperation.SfpuElwGe,
+]
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=_INT_COMPARISON_OPS,
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_int_comparison_ties(formats, dest_acc, mathop):
+    """The exact-equality input, which the random Int32 sweep never produces.
+
+    `a == b` is the *only* input on which lt/gt disagree with le/ge, so without it a comparator
+    with its tie inverted passes the whole integer sweep. Measured on the default integer spec,
+    uniform(0, INT32_MAX // 2 - 1), a 1024-element draw contained 0 ties and 0 negatives.
+
+    Reuses the float sweep's three-way builder: a third of the elements are exactly equal and the
+    rest differ by +/-1, an exact gap on an integer axis. Same shape as
+    test_sfpu_binary_eq_ne_int, which had this for eq/ne already.
+    """
+    spec_A, spec_B = _comparison_stimuli_specs()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
+def _int_comparison_negative_spec():
+    """Paired Int32 stimuli that straddle zero, including a tie at zero.
+
+    The kernel normalises to LT(a, b) by computing `a - b` and reading the sign, so operands of
+    opposite sign are the case the fold exists for, and the random draw never produces one.
+    Values stay small (|v| <= 8) so `a - b` cannot overflow -- overflow is what
+    test_sfpu_binary_int_extremes drives deliberately, and mixing the two would leave a failure
+    with two candidate causes.
+
+    twos_complement=True is required, not incidental: sign-magnitude L1 encoding cannot round-trip
+    a negative through Dst -- the same delivery limitation that made the unary RightShift sweep
+    positive-only. test_sfpu_binary_rsub_int32 takes the same route.
+    """
+
+    def a_face(size, dtype, generator):
+        positions = torch.arange(size, dtype=torch.float32)
+        # -4..3, so both signs and zero appear.
+        return ((positions % 8) - 4.0).to(dtype)
+
+    def b_face(size, dtype, generator):
+        positions = torch.arange(size, dtype=torch.float32)
+        # Mirror of a_face: pairs run (-4, 4), (-3, 3), ... including (0, 0) as an exact tie
+        # at zero, where a sign-magnitude comparator is most likely to disagree.
+        return (4.0 - (positions % 8)).to(dtype)
+
+    return _face_spec(a_face), _face_spec(b_face)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=_INT_COMPARISON_OPS,
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_sfpu_binary_int_comparison_across_zero(formats, dest_acc, mathop):
+    """Negative and mixed-sign Int32 operands, which the positive-only default never reaches.
+
+    The float sweep was fixed to draw from the op's signed domain; the integer default was left at
+    uniform(0, INT32_MAX // 2 - 1), so a comparator that mishandled operand sign entirely would
+    pass every other Int32 test in this file.
+    """
+    spec_A, spec_B = _int_comparison_negative_spec()
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=spec_A,
+        spec_B=spec_B,
+        twos_complement=True,
     )
 
 
@@ -983,29 +1224,10 @@ _SHIFT_EDGE_VALUES = [
     -0x80000000,  # INT32_MIN (filtered out per-op; see _build_shift_edge_case_src)
 ]
 
-# Shift amounts spanning in-range values (0..31), the first out-of-range value (32),
-# larger out-of-range values, and negative amounts. Everything outside [0, 31] must
-# yield 0 to match the kernel.
-_SHIFT_EDGE_AMOUNTS = [
-    0,
-    1,
-    2,
-    7,
-    15,
-    16,
-    30,
-    31,  # in-range
-    32,
-    33,
-    40,
-    63,
-    100,
-    1000,  # >= 32 -> 0
-    -1,
-    -5,
-    -32,
-    -1000,  # < 0 -> 0
-]
+# Shift amounts now live in sfpu_domains.SHIFT_EDGE_AMOUNTS, because the unary shift sweep
+# drives the same list through a compile-time immediate and a second copy would let
+# "interesting shift" mean two different things.
+_SHIFT_EDGE_AMOUNTS = list(SHIFT_EDGE_AMOUNTS)
 
 
 def _shift_reference(mathop, value, shift):
@@ -1036,10 +1258,7 @@ def _build_shift_edge_case_src(mathop):
         for v, s in itertools.product(_SHIFT_EDGE_VALUES, _SHIFT_EDGE_AMOUNTS)
         if v != _INT32_MIN and _shift_reference(mathop, v, s) != _INT32_MIN
     ]
-    num_elements = 32 * 32
-    value_grid = [pairs[i % len(pairs)][0] for i in range(num_elements)]
-    shift_grid = [pairs[i % len(pairs)][1] for i in range(num_elements)]
-    return torch.tensor(value_grid + shift_grid, dtype=torch.int32)
+    return _build_paired_tile_override(pairs, torch.int32)
 
 
 @parametrize(
@@ -1111,24 +1330,43 @@ _EDGE_CLASS_NAN = "nan_golden"
 _EDGE_CLASS_NEGATIVE_ZERO = "negative_zero_golden"
 _EDGE_CLASS_ORDINARY = "ordinary"
 
-# both_zero first: 0/0, xlogy(0, 0) and 0**0 are indeterminate forms produced by the
-# kernel's own composition (a reciprocal, an exp(b·ln a)), which is a different cause from
-# x % 0 even where both goldens are NaN.
+# Cat B: a non-finite *operand*, as opposed to a non-finite answer. Its own class because the
+# existing four classify by what the golden *answers*, and on that axis a NaN input and `x % 0`
+# land in the same bucket despite being IEEE propagation and the kernel's own composition
+# respectively -- one xfail over two causes.
+_EDGE_CLASS_SPECIALS_IN = "specials_in"
+
+# Order is documentation, not mechanism: whichever class comes first builds the shared ELF for the
+# compile-producer pass (conftest._collapse_runtime_only_variants keeps one item per compile key),
+# and the test body guards against an empty or gated representative starving the others of a
+# binary. No class is non-empty for every op, which is what that guard is for.
+#
+# 0/0, xlogy(0, 0) and 0**0 are indeterminate forms produced by the kernel's own composition (a
+# reciprocal, an exp(b·ln a)), a different cause from x % 0 even where both goldens are NaN.
 _EDGE_CLASSES = (
+    _EDGE_CLASS_ORDINARY,
     _EDGE_CLASS_BOTH_ZERO,
     _EDGE_CLASS_NAN,
     _EDGE_CLASS_NEGATIVE_ZERO,
-    _EDGE_CLASS_ORDINARY,
+    _EDGE_CLASS_SPECIALS_IN,
 )
 
 
 def _classify_edge_pair(mathop, a, b):
     """Which failure class the pair (*a*, *b*) belongs to for *mathop*."""
+    # Tested before the others because it is a property of the *input*, and the remaining classes
+    # are properties of the output. A NaN operand produces a NaN answer, so without this first
+    # every cat-B pair would be filed as nan_golden alongside `x % 0`.
+    if not (math.isfinite(a) and math.isfinite(b)):
+        return _EDGE_CLASS_SPECIALS_IN
     if a == 0.0 and b == 0.0:
         return _EDGE_CLASS_BOTH_ZERO
 
-    golden = get_golden_generator(BinarySFPUGolden)
-    result = float(golden.ops[mathop](torch.tensor(a), torch.tensor(b)))
+    # Instantiate BinarySFPUGolden directly rather than through get_golden_generator: the harness
+    # swaps in a DummyGoldenGenerator during --compile-producer, and that stub has no `ops`
+    # mapping. This runs at *stimulus-build* time, which happens in both phases, so it cannot use
+    # the proxy. Same fix as helpers/compressed_utils.py's matmul golden.
+    result = float(BinarySFPUGolden().ops[mathop](torch.tensor(a), torch.tensor(b)))
     if math.isnan(result):
         return _EDGE_CLASS_NAN
     if result == 0.0 and math.copysign(1.0, result) < 0.0:
@@ -1136,29 +1374,28 @@ def _classify_edge_pair(mathop, a, b):
     return _EDGE_CLASS_ORDINARY
 
 
-def _build_edge_pair_src(mathop, formats, edge_class):
-    """Two-tile override: tile 0 holds operand A, tile 1 holds operand B, paired by index.
+def _edge_pairs_for_class(mathop, formats, edge_class, dest_acc, specials=False):
+    """The operand pairs of *edge_class* for this op and pipeline.
 
-    Only the pairs in *edge_class* are driven, so each class fails or passes on its own
-    evidence. Returns None when neither operand has an edge worth probing, or when this
-    class is empty for this op — both are the caller's cue to skip. Cycles the pair list to
-    fill a full tile the way the shift builder does, so the override divides evenly into
-    whatever buffer sfpu_binary picks.
+    Extracted so the override builder and the generated-NaN predicate below select from the same
+    list -- a second copy of this filter is how the gate and the stimulus would come to disagree
+    about which pairs a class contains.
+
+    *dest_acc* sizes the ULP steps around each pole: at dest_acc=No the DEST is 16-bit, so
+    a probe stepped by an fp32 ULP lands back on the pole it was straddling. See
+    sfpu_domains.probe_spacing_format().
     """
-    pairs = [
+    return [
         pair
         for pair in edge_pair_values(
-            mathop, formats.input_format, formats.output_format
+            mathop,
+            formats.input_format,
+            formats.output_format,
+            specials=specials,
+            dest_acc=dest_acc,
         )
         if _classify_edge_pair(mathop, *pair) == edge_class
     ]
-    if not pairs:
-        return None
-    num_elements = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
-    a = [pairs[i % len(pairs)][0] for i in range(num_elements)]
-    b = [pairs[i % len(pairs)][1] for i in range(num_elements)]
-    dtype = torch.int32 if formats.input_format.is_integer() else torch.float32
-    return torch.tensor(a + b, dtype=dtype)
 
 
 # The ops this suite drives on an integer format. This sweep is float — its format axis is
@@ -1186,14 +1423,23 @@ _INT_DRIVEN_BINARY_OPS = frozenset(
 # two intersections are what this sweep can actually drive — the same table holds the unary
 # poles (Reciprocal, Log, Asin, ...), and _CLASSIFIED_STIMULI_OPS is the declared set of ops
 # reaching sfpu_binary().
+# An op joins by gaining *either* a registered singularity or a cat-B entry, which keeps this a
+# derivation rather than a list. The cat-B half matters for the 16 float ops with no pole: `add`,
+# `sub`, `mul`, `max`, `min` and the six comparisons are smooth everywhere, so
+# ops_with_singularity() alone can never collect them.
 _BINARY_EDGE_OPS = sorted(
-    (ops_with_singularity() & _CLASSIFIED_STIMULI_OPS) - _INT_DRIVEN_BINARY_OPS,
+    (
+        (ops_with_singularity() | set(BINARY_SPECIALS_READY_OPS))
+        & _CLASSIFIED_STIMULI_OPS
+    )
+    - _INT_DRIVEN_BINARY_OPS,
     key=lambda op: op.name,
 )
 
 assert _BINARY_EDGE_OPS, (
     "no float binary op reaching sfpu_binary() has an entry in "
-    "sfpu_domains._OP_SINGULARITIES, so test_sfpu_binary_edges would collect nothing"
+    "sfpu_domains._OP_SINGULARITIES or in BINARY_SPECIALS_READY_OPS, so "
+    "test_sfpu_binary_edges would collect nothing"
 )
 
 
@@ -1202,49 +1448,47 @@ assert _BINARY_EDGE_OPS, (
 #
 # DOCUMENTED, and expected to XPASS on Blackhole:
 #
-#   The sign of a zero result is lost. div(0, -x) returns +0.0 where IEEE gives -0.0, and
-#   fmod/remainder do the same for a negative divisor, as does xlogy(0, tiny).
-#
-#   This is SFPMAD, which every one of these ops is built on:
+#   The sign of a zero result is lost -- div(0, -x) returns +0.0 where IEEE gives -0.0,
+#   fmod/remainder likewise for a negative divisor, as does xlogy(0, tiny). This is SFPMAD,
+#   which all of these ops are built on:
 #     Wormhole  — "If the output (before rounding) is denormal or negative zero, it'll be
 #                  flushed to positive zero."          (WormholeB0/.../SFPMAD.md)
 #     Blackhole — "If the output (after rounding) is denormal, it'll be flushed to
 #                  sign-preserved zero."               (BlackholeA0/.../SFPMAD.md)
 #   and Blackhole's page lists "improved edge-case handling of NaNs and of negative zero"
-#   among its upgrades over Wormhole. So this is a documented Wormhole limitation that
-#   Blackhole is documented to fix — the xfails below are non-strict precisely so they
-#   report XPASS there rather than failing the suite.
+#   among its upgrades over Wormhole. A documented Wormhole limitation that Blackhole is
+#   documented to fix, so the xfails below are non-strict precisely to report XPASS there.
+#
+# RETRACTED — "0/0 and x%0 return inf where IEEE says nan" was the pack path, not a kernel:
+#
+#   The kernels return a genuine NaN. BinarySFPUGolden did not model the store to Dest or the pack
+#   out of it, so on a pipeline too narrow to hold a NaN the packer's substituted infinity
+#   (SFPSTORE: "NaN is also converted to infinity") read as the kernel having produced one.
+#   Measured on a Wormhole n150 once the golden modelled both steps: div(0, 0), xlogy(0, 0),
+#   fmod(x, 0) and remainder(x, 0) all PASS wherever a NaN reaches L1 and diverge only where
+#   nan_survives_to_l1() is False -- a statement about the pipeline, not the arithmetic.
+#
+#   What is left on the narrowing cells is the *sign* of the substituted infinity: canonical-
+#   positive on Blackhole by specification, explicitly unspecified on Wormhole. So these classes
+#   are asserted on Blackhole and gated off on Wormhole by generated_nan_sign_is_asserted().
+#
+#   The finite poles agreed all along (div(-2, ±1/64) = ∓128, every ±inf lines up).
 #
 # STILL OPEN — not explained by the ISA:
 #
-#   0/0 and x%0 return inf where IEEE says nan. div(0, 0) -> inf against a nan golden,
-#   fmod(x, 0) and remainder(x, 0) -> inf, xlogy(0, 0) -> -inf. SFPMAD says "if any input
-#   is NaN or ±Infinity, then the result will be NaN or ±Infinity, following the usual
-#   IEEE754 rules", which makes 0 x inf a NaN — so this is the kernels' own reciprocal
-#   composition, not the multiply. The finite poles agree exactly (div(-2, ±1/64) = ∓128,
-#   every ±inf lines up), so it is specifically the indeterminate form.
+#   0**0 returns 0 where C, torch and the golden give 1. pow evaluates exp(b·ln a), so a
+#   composition artifact rather than anything the ISA prescribes.
 #
-#   0**0 returns 0 where C, torch and the golden give 1. pow evaluates exp(b·ln a), so this
-#   is a composition artifact rather than anything the ISA prescribes.
+# Those groups are the classes the probe partitions into: documented is
+# _EDGE_CLASS_NEGATIVE_ZERO; open are _EDGE_CLASS_BOTH_ZERO (indeterminate forms, and 0**0)
+# and _EDGE_CLASS_NAN (x % 0). _EDGE_CLASS_ORDINARY holds everything that agreed -- ±inf
+# poles, finite quotients, exact remainders -- asserted rather than tolerated, which is only
+# possible now it does not share a tensor with the others.
 #
-# Those two groups are exactly the classes the probe is partitioned into: the documented
-# one is _EDGE_CLASS_NEGATIVE_ZERO, and the open ones are _EDGE_CLASS_BOTH_ZERO (the
-# indeterminate forms, and 0**0) and _EDGE_CLASS_NAN (x % 0). _EDGE_CLASS_ORDINARY holds
-# everything that agreed — the ±inf poles, the finite quotients, the exact remainders — and
-# is asserted rather than tolerated, which is only possible now that it is not sharing a
-# tensor with the others.
-#
-# Recorded as non-strict xfails per Phase 0's precedent for approximate exp: the case still
-# executes and reports XPASS if the behaviour changes. Enumerated per (input, output,
-# dest_acc) rather than by predicate so a combination drifting in or out shows up here.
-#
-# Keyed by (op, edge class): the combination lists below started as one list per op, and
-# every class of an op inherits it. That is the honest starting point rather than a
-# measurement — the old bundled variant could only report "something in this tensor
-# diverges", so which class drove which combination into the list is not recoverable from
-# it. The first per-class run on each arch tightens them: a class that XPASSes across the
-# board loses its entry, and one that XPASSes on Blackhole alone becomes arch-gated the way
-# the reduce xfail is.
+# Non-strict xfails per Phase 0's approximate-exp precedent, so a case still executes and reports
+# XPASS if behaviour changes; enumerated per (input, output, dest_acc) rather than by predicate so
+# a combination drifting in or out shows up here. Keyed by (op, edge class): a class XPASSing
+# across the board loses its entry, one XPASSing on Blackhole alone becomes arch-gated.
 _BINARY_EDGE_COMBINATIONS = {
     MathOperation.SfpuElwdiv: (
         (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
@@ -1290,35 +1534,35 @@ _ZERO_SIGN_ISA_NOTE = (
 # the ±inf poles, the finite quotients and the exact remainders all agreed on Wormhole.
 _BINARY_EDGE_REASON = {
     MathOperation.SfpuElwdiv: {
-        _EDGE_CLASS_BOTH_ZERO: "div(0, 0) returns inf, not nan. SFPMAD follows IEEE for "
-        "0 x inf, so this is the kernel's own reciprocal composition rather than the "
-        "multiply — not explained by the ISA, and not expected to change on Blackhole.",
         _EDGE_CLASS_NEGATIVE_ZERO: f"div(0, -x) returns +0.0, not -0.0 "
         f"({_ZERO_SIGN_ISA_NOTE}).",
     },
     MathOperation.SfpuXlogy: {
-        _EDGE_CLASS_BOTH_ZERO: "xlogy(0, 0) returns -inf, not nan — the same "
-        "indeterminate 0 x inf as div, and equally unexplained by the ISA.",
         _EDGE_CLASS_NEGATIVE_ZERO: f"xlogy(0, tiny) returns +0.0, not -0.0 "
         f"({_ZERO_SIGN_ISA_NOTE}).",
     },
     MathOperation.SfpuElwpow: {
+        # Survives the retraction above: 0**0 returns 0 against a golden 1, both finite, no NaN
+        # in it, so the per-lane generated-NaN mask is empty here and the sign gate excuses
+        # nothing -- this stays a plain 0-vs-1 divergence on both arches.
         _EDGE_CLASS_BOTH_ZERO: "0**0 returns 0; C, torch and the golden all give 1. Not "
         "explained by the ISA — pow evaluates exp(b·ln a), so this is composition.",
     },
     MathOperation.SfpuBinaryFmod: {
-        _EDGE_CLASS_BOTH_ZERO: "fmod(0, 0) returns inf, not nan.",
-        _EDGE_CLASS_NAN: "fmod(x, 0) returns inf, not nan. Not explained by the ISA.",
         _EDGE_CLASS_NEGATIVE_ZERO: f"fmod loses the sign of a zero result "
         f"({_ZERO_SIGN_ISA_NOTE}).",
     },
     MathOperation.SfpuBinaryRemainder: {
-        _EDGE_CLASS_BOTH_ZERO: "remainder(0, 0) returns inf, not nan.",
-        _EDGE_CLASS_NAN: "remainder(x, 0) returns inf, not nan. Not explained by the ISA.",
         _EDGE_CLASS_NEGATIVE_ZERO: f"remainder loses the sign of a zero result "
         f"({_ZERO_SIGN_ISA_NOTE}).",
     },
 }
+
+# Deleted rather than kept: the _EDGE_CLASS_BOTH_ZERO entries for SfpuElwdiv, SfpuXlogy,
+# SfpuBinaryFmod and SfpuBinaryRemainder, and the _EDGE_CLASS_NAN entries for the latter two. All
+# six recorded "returns inf where IEEE says nan", which the retraction above shows to be the pack
+# substitution rather than the arithmetic. They are not replaced by xfails on the narrowing cells
+# either -- generated_nan_sign_is_asserted() gates those off on Wormhole.
 
 # No op may claim a divergence without a combination list to apply it to, and none may
 # list combinations with nothing to apply them to.
@@ -1329,6 +1573,18 @@ assert set(_BINARY_EDGE_REASON) == set(_BINARY_EDGE_COMBINATIONS), (
 assert all(
     cls in _EDGE_CLASSES for classes in _BINARY_EDGE_REASON.values() for cls in classes
 ), "_BINARY_EDGE_REASON names an edge class that _classify_edge_pair never returns"
+
+# Edge classes whose divergence is a *Wormhole* limitation, so on Blackhole the case is
+# asserted rather than tolerated.
+#
+# The SFPMAD negative-zero split quoted above, confirmed: measured on a Blackhole p150b, the
+# negative-zero class XPASSed on all 16 cells it is claimed for (div, xlogy, fmod and remainder,
+# at both dest_acc values) and nothing else XPASSed. So a zero result's sign is *checked* there
+# and a regression fails rather than returning to XFAIL. The indeterminate-form classes
+# (both_zero, nan_golden) are not gated here -- see the retraction above
+# _BINARY_EDGE_COMBINATIONS; what remains of them on Wormhole is handled per lane by
+# generated_nan_sign_is_asserted().
+_WORMHOLE_ONLY_EDGE_CLASSES = frozenset({_EDGE_CLASS_NEGATIVE_ZERO})
 
 
 @pytest.mark.nightly
@@ -1349,21 +1605,86 @@ def test_sfpu_binary_edges(request, formats, dest_acc, mathop, edge_class):
     _skip_fp32_no_dest_acc(formats, dest_acc)
     _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
+    # A Wormhole-only class is asserted on Blackhole, not tolerated — see
+    # _WORMHOLE_ONLY_EDGE_CLASSES for the measurement that established which those are.
+    arch_fixed = (
+        edge_class in _WORMHOLE_ONLY_EDGE_CLASSES
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    )
+
     reason = _BINARY_EDGE_REASON.get(mathop, {}).get(edge_class)
-    if reason is not None and (
-        (formats.input_format, formats.output_format, dest_acc)
-        in _BINARY_EDGE_COMBINATIONS[mathop]
+    if (
+        reason is not None
+        and not arch_fixed
+        and (
+            (formats.input_format, formats.output_format, dest_acc)
+            in _BINARY_EDGE_COMBINATIONS[mathop]
+        )
     ):
         request.node.add_marker(pytest.mark.xfail(reason=reason, strict=False))
 
-    src = _build_edge_pair_src(mathop, formats, edge_class)
-    if src is None:
+    # Cat B. Two independent gates, both must pass: BINARY_SPECIALS_READY_OPS says this op's
+    # *golden* defines an answer for a non-finite operand, specials_safe() says this *pipeline*
+    # delivers one intact. Neither implies the other.
+    #
+    # dest_acc as passed, which is right on Wormhole and conservative on Blackhole: sfpu_binary()
+    # promotes it to Yes there, and promotion only ever *widens* Dest.
+    specials = mathop in BINARY_SPECIALS_READY_OPS and specials_safe(
+        formats.input_format, formats.output_format, dest_acc
+    )
+
+    pairs = _edge_pairs_for_class(
+        mathop, formats, edge_class, dest_acc, specials=specials
+    )
+
+    if not pairs and TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        # The compile-producer pass must not skip on a runtime-only axis. `edge_class` is a
+        # runtime() axis, so conftest._collapse_runtime_only_variants keeps one item per compile
+        # key and *that* item builds the ELF all classes share; a skip here leaves the others
+        # running against a binary that was never built, which presents as TENSIX TIMED OUT rather
+        # than as a skip.
+        #
+        # The ELF depends only on the compile-time axes (op, formats, dest_acc), never on which
+        # values go in the tensor, so any non-empty pair list compiles the right kernel. Take the
+        # unfiltered list; the consumer still applies the class filter and still skips.
+        pairs = edge_pair_values(
+            mathop,
+            formats.input_format,
+            formats.output_format,
+            specials=specials,
+            dest_acc=dest_acc,
+        )
+
+    if not pairs:
         pytest.skip(
             reason=f"{mathop.name} has no {edge_class} pair among its registered "
             "per-operand edges"
+            + ("" if specials else " (cat B is off for this op or this pipeline)")
         )
 
-    sfpu_binary(formats, dest_acc, mathop, src_A_override=src)
+    # Where the golden's answer is a NaN the op *invented*, a narrowing pipeline turns its sign
+    # into the observable result, and Wormhole's SFPMAD leaves that sign unspecified -- so assert
+    # the magnitude there rather than withdrawing the variant. Blackhole specifies the canonical
+    # NaN and keeps the full assertion.
+    #
+    # Pipeline and arch only: which *lanes* carry an invented NaN is the golden's own mask, since
+    # `specials_in` is classified by an operand being non-finite and so mixes `inf - inf` with
+    # `0 - (-inf)`. sfpu_binary() applies it per lane.
+    unspecified_sign = generated_nan_sign_is_asserted(
+        formats.input_format,
+        formats.output_format,
+        dest_acc,
+        on_wormhole=TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE,
+    )
+
+    dtype = torch.int32 if formats.input_format.is_integer() else torch.float32
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_paired_tile_override(pairs, dtype),
+        unspecified_nonfinite_sign=unspecified_sign,
+    )
 
 
 # Integer extremes (cat C). Delivered as a raw override rather than a StimuliSpec because
@@ -1382,12 +1703,19 @@ def test_sfpu_binary_edges(request, formats, dest_acc, mathop, edge_class):
 # INT32_MIN itself is excluded: sign-magnitude Dst reads 0x80000000 as "negative zero" and
 # cannot round-trip it. That is hardware, not a gap, and it already has a dedicated xfail
 # (test_sfpu_binary_int_shift_int32_min_unsupported). INT32_MIN + 1 stands in for it.
+#
+# The four *ordered* comparisons join the exact eq/ne pair on the same reasoning:
+# calculate_binary_comp_int32 documents no sub-range, so the extremes are inside what the kernel
+# promises and a divergence there is a finding. They also have the most to prove at these values
+# -- the kernel normalises by computing `a - b` and folding the sign, and
+# `INT32_MAX - (INT32_MIN + 1)` does not fit in int32.
 _INT_EXTREME_OPS = [
     MathOperation.SfpuBitwiseAnd,
     MathOperation.SfpuBitwiseOr,
     MathOperation.SfpuBitwiseXor,
     MathOperation.SfpuEqInt,
     MathOperation.SfpuNeInt,
+    *_INT_COMPARISON_OPS,
 ]
 
 
@@ -1395,10 +1723,7 @@ def _build_int_extremes_src():
     """Two-tile Int32 override walking the product of the int32 extremes, minus INT32_MIN."""
     vals = [v for v in integer_specials(DataFormat.Int32) if v != _INT32_MIN]
     pairs = [(a, b) for a in vals for b in vals]
-    num_elements = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
-    a = [pairs[i % len(pairs)][0] for i in range(num_elements)]
-    b = [pairs[i % len(pairs)][1] for i in range(num_elements)]
-    return torch.tensor(a + b, dtype=torch.int32)
+    return _build_paired_tile_override(pairs, torch.int32)
 
 
 @pytest.mark.nightly

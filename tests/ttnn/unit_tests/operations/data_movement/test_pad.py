@@ -380,6 +380,61 @@ def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard
         device.set_program_cache_misses_allowed(False)
 
 
+def test_pad_rm_sharded_height_only_override_addr_change(device):
+    """Cache-hit hook (override_runtime_arguments) for the CB-bound height-sharded RM factory: buffer
+    addresses are excluded from the pad hash, so a second identical pad at DIFFERENT input AND output
+    addresses must hit the cache and still re-point both sharded CB bases instead of reading/writing
+    the first dispatch's L1 shards."""
+    torch.manual_seed(48928)
+
+    n, c, h, w = 1, 3, 224, 256
+    padded_shape = [n, c, 256, w]
+    input_tensor_start = [0, 0, 0, 0]
+    pad_value = 8.0
+
+    num_cores_x, num_cores_y = 8, 7
+    ncores = num_cores_x * num_cores_y
+    shard_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+    )
+    in_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (ttnn.core.divup(n * c * h, ncores), w), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    out_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            shard_grid,
+            (ttnn.core.divup(n * c * padded_shape[2], ncores), w),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    def _make():
+        t = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+        return t, ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg
+        )
+
+    def _run(tt_in):
+        return ttnn.pad(tt_in, padded_shape, input_tensor_start, pad_value, memory_config=out_cfg)
+
+    torch_a, tt_a = _make()
+    tt_out_a = _run(tt_a)
+    assert_equal(pad_reference(torch_a, padded_shape, input_tensor_start, pad_value), ttnn.to_torch(tt_out_a))
+    entries_after_first = device.num_program_cache_entries()
+
+    # Keep A alive so B's input and output both land at different L1 addresses.
+    torch_b, tt_b = _make()
+    assert tt_b.buffer_address() != tt_a.buffer_address(), "second input must land at a different address"
+    tt_out_b = _run(tt_b)
+    assert tt_out_b.buffer_address() != tt_out_a.buffer_address(), "second output must land at a different address"
+    assert device.num_program_cache_entries() == entries_after_first, "identical pad must be a cache hit"
+    assert_equal(pad_reference(torch_b, padded_shape, input_tensor_start, pad_value), ttnn.to_torch(tt_out_b))
+
+
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 64),), (0, 64)), (((16, 16), (0, 32)), (0, 32, 0, 32))])
@@ -403,15 +458,14 @@ def test_pad(device, h, w, padding, torch_padding, value):
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((32, 32),), (32, 32))])
 @pytest.mark.parametrize("value", [0])
-def test_pad_padding_validation_front_pad_not_supported(device, h, w, padding, torch_padding, value):
+def test_pad_padding_validation_front_pad_not_supported(device, h, w, padding, torch_padding, value, expect_error):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    with pytest.raises(RuntimeError) as e:
+    with expect_error(RuntimeError, "ttnn.pad: on device tile padding does not support front padding"):
         ttnn.pad(input_tensor, padding=padding, value=value)
-    assert "ttnn.pad: on device tile padding does not support front padding" in str(e.value)
     return
 
 
@@ -419,15 +473,14 @@ def test_pad_padding_validation_front_pad_not_supported(device, h, w, padding, t
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 32), (0, 32), (0, 32)), (0, 32, 0, 32, 0, 32))])
 @pytest.mark.parametrize("value", [0])
-def test_pad_padding_validation_length(device, h, w, padding, torch_padding, value):
+def test_pad_padding_validation_length(device, h, w, padding, torch_padding, value, expect_error):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    with pytest.raises(RuntimeError) as e:
+    with expect_error(RuntimeError, "ttnn.pad: padding len can't be larger than input tensor rank"):
         ttnn.pad(input_tensor, padding=padding, value=value)
-    assert "ttnn.pad: padding len can't be larger than input tensor rank" in str(e.value)
     return
 
 
@@ -487,7 +540,7 @@ def test_pad_back_to_back(device, h, w, padding, torch_padding, value):
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding", [((0, 32), (0, 32)), ((1, 64), (0, 96)), ((0, 64), (0, 43)), ((32, 64), (64, 96))])
 @pytest.mark.parametrize("value", [0])
-def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
+def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value, expect_error):
     torch.manual_seed(0)
     torch_padding = (padding[1][0], padding[1][1], padding[0][0], padding[0][1])
 
@@ -502,9 +555,8 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
         or padding[1][0] % ttnn.TILE_SIZE != 0
         or padding[1][1] % ttnn.TILE_SIZE != 0
     ):
-        with pytest.raises(RuntimeError) as e:
-            output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
-        assert "must be a multiple of the tile size on height and width" in str(e.value)
+        with expect_error(RuntimeError, "must be a multiple of the tile size on height and width"):
+            ttnn.pad(input_tensor, padding=padding, value=value)
         return
     else:
         output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
@@ -1251,7 +1303,7 @@ def test_pad_nd_sharded_to_nd_sharded_front_padding_row_major(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, dtype):
+def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, dtype, expect_error):
     torch.manual_seed(42)
 
     tensor_shape = [1, 1, 32, 32]
@@ -1275,7 +1327,7 @@ def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, dtype):
         memory_config=input_memory_config,
     )
 
-    with pytest.raises(RuntimeError, match="ttnn.pad: on device tile padding does not support front padding"):
+    with expect_error(RuntimeError, "ttnn.pad: on device tile padding does not support front padding"):
         ttnn.pad(
             input_ttnn_tensor,
             padded_shape,
