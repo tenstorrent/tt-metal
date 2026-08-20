@@ -1,0 +1,302 @@
+[
+  {
+    "label": "w_nonalign/OLD",
+    "shape": "w_nonalign",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign/NEW",
+    "shape": "w_nonalign",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_1024/OLD",
+    "shape": "w_nonalign_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_1024/NEW",
+    "shape": "w_nonalign_1024",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_3071/OLD",
+    "shape": "w_nonalign_3071",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_3071/NEW",
+    "shape": "w_nonalign_3071",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_2047/OLD",
+    "shape": "w_nonalign_2047",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_2047/NEW",
+    "shape": "w_nonalign_2047",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "wide_prime_8224/OLD",
+    "shape": "wide_prime_8224",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "wide_prime_8224/NEW",
+    "shape": "wide_prime_8224",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_no_gamma/OLD",
+    "shape": "w_nonalign_no_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": false,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_no_gamma/NEW",
+    "shape": "w_nonalign_no_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": false,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_fp32/OLD",
+    "shape": "w_nonalign_fp32",
+    "config": "default",
+    "dtype": "DataType.FLOAT32",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_fp32/NEW",
+    "shape": "w_nonalign_fp32",
+    "config": "default",
+    "dtype": "DataType.FLOAT32",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_bf8b/OLD",
+    "shape": "w_nonalign_bf8b",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT8_B",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_bf8b/NEW",
+    "shape": "w_nonalign_bf8b",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT8_B",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_gamma/OLD",
+    "shape": "w_nonalign_rm_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_gamma/NEW",
+    "shape": "w_nonalign_rm_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_in/OLD",
+    "shape": "w_nonalign_rm_in",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_nonalign_rm_in/NEW",
+    "shape": "w_nonalign_rm_in",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_3071_rm_gamma/OLD",
+    "shape": "w_3071_rm_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_3071_rm_gamma/NEW",
+    "shape": "w_3071_rm_gamma",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_3071_1024rows/OLD",
+    "shape": "w_3071_1024rows",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_3071_1024rows/NEW",
+    "shape": "w_3071_1024rows",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_8191/OLD",
+    "shape": "w_8191",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_8191/NEW",
+    "shape": "w_8191",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_8191_bf8b/OLD",
+    "shape": "w_8191_bf8b",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT8_B",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "w_8191_bf8b/NEW",
+    "shape": "w_8191_bf8b",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT8_B",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "focus_regime_a/OLD",
+    "shape": "focus_regime_a",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  },
+  {
+    "label": "focus_regime_a/NEW",
+    "shape": "focus_regime_a",
+    "config": "loose",
+    "dtype": "DataType.BFLOAT16",
+    "gamma": true,
+    "levers": {},
+    "calls": 5,
+    "profiled": 3
+  }
+]

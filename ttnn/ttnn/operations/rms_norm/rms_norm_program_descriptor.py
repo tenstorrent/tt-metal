@@ -323,6 +323,7 @@ class BlockingPlan:
     IN_BUF_DEPTH: int
     OUT_BUF_DEPTH: int
     RM_BUF_DEPTH: int
+    GAMMA_DEPTH: int
     # --- derived ------------------------------------------------------------
     regime: str
     reduce_via_add: int
@@ -368,6 +369,7 @@ def _cb_layout(
     in_depth: int,
     out_depth: int,
     rm_depth: int,
+    gamma_depth: int,
     wr: int,
     ws: int,
     Wt_core: int,
@@ -410,7 +412,13 @@ def _cb_layout(
         # Sequential-helper intermediate: must hold the FULL block per call.
         layout.append((CB_SQUARED, block_ht * wr, T_interm, "interm"))
     if has_gamma:
-        layout.append((CB_GAMMA_TILES, ws, T_g, "gamma"))
+        # `gamma_depth` generations of the scale pass' gamma chunk.  In Regime B
+        # this CB is STREAMED (one chunk pushed and popped per W-chunk), so a
+        # second generation lets the reader fetch chunk k+1 while the compute is
+        # still scaling chunk k; in Regime A gamma is RESIDENT (pushed once, never
+        # popped), so there is only ever one generation to hold and `_solve`
+        # leaves the depth at 1.
+        layout.append((CB_GAMMA_TILES, gamma_depth * ws, T_g, "gamma"))
         if gamma_is_row_major:
             layout.append((CB_GAMMA_RM, gamma_ingest_block, T_g, "gamma"))
         layout.append((CB_NORMED, block_ht * ws, T_interm, "interm"))
@@ -459,6 +467,7 @@ class _Solved:
     IN_BUF_DEPTH: int
     OUT_BUF_DEPTH: int
     RM_BUF_DEPTH: int
+    GAMMA_DEPTH: int
     GAMMA_INGEST_BLOCK: int
     num_row_blocks: int
 
@@ -479,7 +488,7 @@ def _solve(
     """Regime + every block factor / buffer depth for ONE per-core width."""
     common = dict(layout_common, Wt_core=Wt_core, w_split_group=w_split_group)
 
-    def ws_bytes(regime, block_ht, in_depth, out_depth, rm_depth, wr, wsc):
+    def ws_bytes(regime, block_ht, in_depth, out_depth, rm_depth, wr, wsc, gamma_depth):
         # The gamma staging chunk must divide every ingest count the kernel uses,
         # so tilize<GAMMA_INGEST_BLOCK> never over-produces gamma tiles.
         return _working_set_bytes(
@@ -488,6 +497,7 @@ def _solve(
             in_depth=in_depth,
             out_depth=out_depth,
             rm_depth=rm_depth,
+            gamma_depth=gamma_depth,
             wr=wr,
             ws=wsc,
             gamma_ingest_block=_largest_divisor_at_most(wsc, gamma_cap_tiles),
@@ -498,8 +508,13 @@ def _solve(
     #  (1) can the reduce see the padded columns without a mask?
     #      RM   -> the reader zero-fills every stick's pad tail: pad is exactly 0.
     #      TILE -> the pad lives in DRAM and may be poisoned: mask mandatory.
-    #  (2) does the MINIMAL resident working set fit the CB budget?
-    fits = ws_bytes("A", 1, 1, 1, 1, Wt_core, Wt_core) <= l1_cb_budget
+    #  (2) does the MINIMAL resident working set fit the CB budget?  MINIMAL is
+    #      deliberate: depth 1 on everything, gamma included.  It keeps the A/B
+    #      boundary — and with it the W-split policy's P2 property, which rejects
+    #      any group size whose slice does not solve to Regime A — invariant under
+    #      the depth/chunk allocation below, so a change to how L1 is SPENT can
+    #      never move which regime (or which G) is CHOSEN.
+    fits = ws_bytes("A", 1, 1, 1, 1, Wt_core, Wt_core, 1) <= l1_cb_budget
     regime = "A" if (maskless_w and fits) else "B"
 
     # Coarsest useful row-block: any coarser and some row-parallel unit (a core
@@ -510,11 +525,30 @@ def _solve(
     block_ht = 1
     in_depth = out_depth = rm_depth = 1
 
+    # DEPTH OF cb_gamma_tiles.  A CB only has anything to gain from a second
+    # generation if it is REFILLED while the kernel runs: in Regime B the scale
+    # pass pushes and pops one gamma CHUNK per W-chunk, so generation k+1 can be
+    # fetched while the compute still holds k; in Regime A gamma is RESIDENT
+    # (pushed once, never popped — see the WT_SCALE_BLOCK assert in
+    # blocking_plan), so there is only ever one generation and a second would be
+    # dead L1.  That is a property of the CB's lifecycle, not of the shape.
+    gamma_streamed = layout_common["has_gamma"] and regime == "B"
+    gamma_depth = 2 if (gamma_streamed and _lever(levers, "double_buffer")) else 1
+    # Same question for the input CB, and it is answered the same way in both
+    # regimes: cb_input_tiles always streams.
+    stream_depth = 2 if _lever(levers, "double_buffer") else 1
+
     if regime == "A":
         wr = wsc = Wt_core
     else:
-        # Coarsest chunk of the dependent axis that still fits L1.  Never 1 by
-        # default — 1 is only ever the *output* of this search.
+        # Coarsest chunk of the dependent axis at which the STREAMING CBs still
+        # reach depth 2 — i.e. the W-chunk is the variable that BUYS the overlap,
+        # not a target the overlap has to fit inside.  A coarser chunk that can
+        # only be single-buffered serialises the reader against the compute
+        # (measured: the reader's gamma reserve alone was 6.4us of a 43us wall on
+        # (1,1,32,7168), and going one divisor finer for depth 2 was 1.36x AND
+        # used 344 KB less L1).  c = 1 always fits, so the search cannot fail; the
+        # depth ladder below then spends whatever is left over.
         #
         # CB-WRAP CONSTRAINT (load-bearing): a multi-page cb_reserve_back /
         # cb_wait_front followed by a contiguous N-page access is only legal when
@@ -536,20 +570,23 @@ def _solve(
             for cand in range(chunk_cap, 0, -1):
                 if Wt_core % cand != 0:
                     continue
-                if ws_bytes("B", 1, 1, 1, 1, cand, cand) <= l1_cb_budget:
+                if ws_bytes("B", 1, stream_depth, 1, stream_depth, cand, cand, gamma_depth) <= l1_cb_budget:
                     wr = wsc = cand
                     break
 
     # Allocation priority (movement-dominated op: overlap beats amortization):
-    #   1. double-buffer the streaming CBs (lever C16, measured 2.78x)
+    #   1. double-buffer the streaming CBs (lever C16, measured 2.78x) — in
+    #      Regime B the (in, gamma) rung is affordable BY CONSTRUCTION, because
+    #      the chunk above was chosen for it; the out/rm rung is what the ladder
+    #      still decides.
     #   2. grow BLOCK_HT (per-block-overhead amortization)
     #   3. grow IN_BUF_DEPTH further
     if _lever(levers, "double_buffer"):
-        if ws_bytes(regime, block_ht, 2, 2, 2, wr, wsc) <= l1_cb_budget:
+        if ws_bytes(regime, block_ht, 2, 2, 2, wr, wsc, gamma_depth) <= l1_cb_budget:
             in_depth = out_depth = rm_depth = 2
-        elif ws_bytes(regime, block_ht, 2, 1, 2, wr, wsc) <= l1_cb_budget:
+        elif ws_bytes(regime, block_ht, 2, 1, 2, wr, wsc, gamma_depth) <= l1_cb_budget:
             in_depth = rm_depth = 2
-        elif ws_bytes(regime, block_ht, 1, 1, 2, wr, wsc) <= l1_cb_budget:
+        elif ws_bytes(regime, block_ht, 1, 1, 2, wr, wsc, gamma_depth) <= l1_cb_budget:
             rm_depth = 2
 
     forced_block_ht = _lever(levers, "block_ht")
@@ -558,12 +595,15 @@ def _solve(
 
     while (
         block_ht < max_block_ht
-        and ws_bytes(regime, block_ht + 1, in_depth, out_depth, rm_depth, wr, wsc) <= l1_cb_budget
+        and ws_bytes(regime, block_ht + 1, in_depth, out_depth, rm_depth, wr, wsc, gamma_depth) <= l1_cb_budget
     ):
         block_ht += 1
 
     if _lever(levers, "double_buffer"):
-        while in_depth < 4 and ws_bytes(regime, block_ht, in_depth + 1, out_depth, rm_depth, wr, wsc) <= l1_cb_budget:
+        while (
+            in_depth < 4
+            and ws_bytes(regime, block_ht, in_depth + 1, out_depth, rm_depth, wr, wsc, gamma_depth) <= l1_cb_budget
+        ):
             in_depth += 1
 
     assert Wt_core % wr == 0 and Wt_core % wsc == 0, "W-chunk must divide Wt_core (CB-wrap constraint)"
@@ -576,6 +616,7 @@ def _solve(
         IN_BUF_DEPTH=in_depth,
         OUT_BUF_DEPTH=out_depth,
         RM_BUF_DEPTH=rm_depth,
+        GAMMA_DEPTH=gamma_depth,
         GAMMA_INGEST_BLOCK=_largest_divisor_at_most(wsc, gamma_cap_tiles),
         num_row_blocks=_div_up(Rt, block_ht),
     )
@@ -966,6 +1007,7 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
             in_depth=solved.IN_BUF_DEPTH,
             out_depth=solved.OUT_BUF_DEPTH,
             rm_depth=solved.RM_BUF_DEPTH,
+            gamma_depth=solved.GAMMA_DEPTH,
             wr=solved.WT_REDUCE_BLOCK,
             ws=solved.WT_SCALE_BLOCK,
             gamma_ingest_block=solved.GAMMA_INGEST_BLOCK,
@@ -1012,6 +1054,7 @@ def blocking_plan(input_tensor, gamma, output_tensor, device, compute_kernel_con
         IN_BUF_DEPTH=solved.IN_BUF_DEPTH,
         OUT_BUF_DEPTH=solved.OUT_BUF_DEPTH,
         RM_BUF_DEPTH=solved.RM_BUF_DEPTH,
+        GAMMA_DEPTH=solved.GAMMA_DEPTH,
         regime=regime,
         reduce_via_add=_reduce_via_add(
             regime, compute_kernel_config, interm_dtype, W_partial, bool(_lever(levers, "reduce_via_add"))
