@@ -1085,6 +1085,48 @@ That last one is the heaviest single item on the list and is the same fusion ttn
 to do -- its `normalize_row_streaming` name suggests the softmax normalisation happens in
 one streaming pass over DST rather than the six this kernel spends.
 
+### Why #2 and #1 both need a decision first
+
+**#2, removing `m_state = copy(m_now)`, needs a new ownership state.** `ComputeBlock` is
+constructed from a `Block`, has every copy and move deleted, and pops in its destructor, so
+a block is either read this iteration or retained for the next -- never both. `m_now` needs
+both: it is read twice (by `c_old` and by `p`) and must survive as next chunk's `m_prev`.
+Alternating two state CBs does not help, because the pop is what loses it, not the aliasing.
+Restructuring the algebra to avoid reading `m_now` is worse, not better: `c_old` can be had
+from `m_prev` and `rm` alone as `exp(-relu(rm - m_prev))`, but `p` then needs
+`exp(sm - bcast(m_prev)) * bcast(c_old)`, which is two broadcast passes where there was one.
+So #2 costs a "read but not consumed" operation in the core API -- the same class of
+decision `RetainedBlock` was -- to save one 4-tile single-leaf pass per chunk, about 1.0us
+or 2%.
+
+**#1, folding `sm = s + mask` into the matmul, does not work the way the list assumed.**
+`bias_finish` is not a DST epilogue. It packs the matmul total to `acc_cb`, then takes a
+fresh `tile_regs_acquire` and reads it back out of L1 to add the bias. Routing the mask
+through it would buy exactly nothing -- it is the same L1 round trip the separate SFPU pass
+already pays.
+
+A true DST epilogue, adding the mask while the product is still in DST, is blocked by
+capacity: flash's scores block is 4x2 = 8 tiles, which is the entire half-sync DST budget,
+so there is no slot left to unpack a mask tile into. Subblocking the matmul to 4 tiles would
+free room at the cost of doubling matmul invocations and their `matmul_block_init`s.
+
+The route that does work is the **packer's L1 accumulate**, which is already live and tested
+(`MM_ACC_L1` in `test_unified_matmul.py`, used by `matmul.cpp` and `matmul_mcast.cpp` for
+partials). `pack_reconfig_l1_acc(1)` makes `pack_block` ADD into the destination rather than
+overwrite it. So if the reader seeds the scores CB with the mask instead of a CB of its own,
+the matmul's own pack lands on top of it and `s + mask` costs nothing at all: no extra pass,
+no extra DST pressure, and one fewer L1 round trip for `s`.
+
+Measured payoff: `sm = s + mask` is 16 of the ~64 `copy_tile`s per chunk, so roughly 5us of
+the 25.79us SFPU budget -- about 11% of the kernel, the largest single item left.
+
+Two things to settle before building it. The push/pop dance the L1 path already documents
+is load-bearing -- `pack_block` advances `fifo_wr_tile_ptr` and only `cb_push_back` resets
+it -- so seeding means the reader pushes the mask and the compute side pops it, without
+reading, purely to wind the pointers back. And the numerics move: today `s + mask` is summed
+in DST and packed once, where L1 accumulate packs `s` to bfloat16 first and adds it to a
+bfloat16 mask, so the error gate has to be re-checked rather than assumed.
+
 ### What to test next
 
 Ordered by expected value, with what each result would actually mean. Six candidates are
