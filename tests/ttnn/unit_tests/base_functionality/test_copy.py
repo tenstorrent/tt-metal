@@ -414,19 +414,19 @@ def test_copy_rm_interleaved_to_nd_sharded(device, tensor_shape, shard_shape, gr
             [1, 1, 32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ),
-        # 4-D tensor → 6 shards on disjoint DRAM banks (banks 0-2 and 4-6)
+        # 4-D tensor → 6 shards on disjoint DRAM banks (banks 0-1 and 4-7)
         (
             [4, 3, 16, 32],
             [2, 1, 16, 32],
             ttnn.CoreRangeSet(
                 {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(6, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0)),
                 }
             ),
         ),
-        # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards (7 banks)
-        ([5, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 0))})),
+        # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards (8 banks)
+        ([5, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})),
     ],
 )
 @pytest.mark.parametrize(
@@ -1144,6 +1144,22 @@ def test_copy_tilized_interleaved_to_nd_sharded_dtype_conversion(
 # ---------------------------------------------------------------------------
 # Tilized interleaved → ND sharded DRAM (tile layout)
 # ---------------------------------------------------------------------------
+def _make_disjoint_dram_core_range_set(device):
+    num_dram_banks = device.dram_grid_size().x
+    first_range_end = 2 if num_dram_banks == 7 else 1
+    return ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(first_range_end, 0)),
+            ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(num_dram_banks - 1, 0)),
+        }
+    )
+
+
+def _make_full_dram_core_range_set(device):
+    num_dram_banks = device.dram_grid_size().x
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))})
+
+
 @pytest.mark.parametrize(
     "tensor_shape, shard_shape, grid",
     [
@@ -1159,21 +1175,16 @@ def test_copy_tilized_interleaved_to_nd_sharded_dtype_conversion(
             [1, 1, 32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ),
-        # 4-D tensor → 6 shards on disjoint DRAM banks (banks 0-1 and 4-7)
+        # 4-D tensor → 6 shards on disjoint DRAM banks
         (
             [4, 3, 32, 64],
             [2, 1, 32, 64],
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(6, 0)),
-                }
-            ),
+            _make_disjoint_dram_core_range_set,
         ),
         # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards (8 banks)
         ([5, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})),
-        # 3-D tensor sharded across all dims → 8 shards on 8 DRAM banks
-        ([4, 64, 64], [2, 32, 32], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})),
+        # 3-D tensor sharded across all dims → 8 shards on the full DRAM bank grid
+        ([4, 64, 64], [2, 32, 32], _make_full_dram_core_range_set),
     ],
 )
 @pytest.mark.parametrize(
@@ -1182,6 +1193,9 @@ def test_copy_tilized_interleaved_to_nd_sharded_dtype_conversion(
 )
 def test_copy_tilized_interleaved_to_nd_sharded_dram(device, tensor_shape, shard_shape, grid, shard_orientation):
     torch.manual_seed(0)
+
+    if callable(grid):
+        grid = grid(device)
 
     num_dram_banks = device.dram_grid_size().x
     num_cores_in_grid = grid.num_cores()
@@ -1220,16 +1234,16 @@ def test_copy_tilized_interleaved_to_nd_sharded_dram(device, tensor_shape, shard
             [1, 1, 32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ),
-        # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards (8 banks)
-        ([5, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})),
+        # 3-D tensor with uneven shards → 3 shards, more DRAM banks than shards (7 banks)
+        ([5, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 0))})),
         # 3-D tensor sharded across all dims → disjoint DRAM banks
         (
             [3, 160, 160],
             [2, 64, 64],
             ttnn.CoreRangeSet(
                 {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
-                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(6, 0)),
                 }
             ),
         ),
