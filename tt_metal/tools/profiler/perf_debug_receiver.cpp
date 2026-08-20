@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 
 #include "tt_metal/common/broadcast_ring.hpp"
+#include "llrt/zone_meta.hpp"
 #include "tools/profiler/perf_debug_env.hpp"
 #include "tools/profiler/spsc_packet.h"
 

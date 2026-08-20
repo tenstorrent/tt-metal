@@ -103,10 +103,6 @@ struct ReceiverDeviceConfig {
 };
 
 struct ReceiverConfig {
-    // Fills PerfDebugCaptureContext::zone_names; invoked once, on a consumer thread, before
-    // the first batch is delivered (zone source locations only exist after the workload's
-    // kernels JIT-compile, so this cannot run at construction).
-    std::function<void(std::unordered_map<uint16_t, std::string>&)> load_zone_names;
     // Optional: called once per stream if it starves for the watchdog window mid-run while
     // its producers are not done (control plane can dump drainer state; receiver has no MMIO).
     std::function<void(uint32_t device_index, uint32_t socket_index)> starvation_diagnostic;
@@ -183,6 +179,7 @@ private:
         uint32_t sock_idx = 0;
         std::unique_ptr<BroadcastRing<PerfDebugRawRec>> ring;
         profiler::SpanDecodeState decode;
+        StallIdMirror stall_ids;
         std::vector<uint64_t> last_zone_ts;  // per lane, order invariant (must never regress)
         std::atomic<bool> producers_done{false};
         bool retired = false;
@@ -225,7 +222,6 @@ private:
     std::vector<std::unique_ptr<Consumer>> consumers_;
     std::vector<std::unique_ptr<Consumer>> consumers_report_;
     uint64_t next_handle_ = 1;
-    std::once_flag names_once_;
 
     bool no_decode_ = false;
     bool read_only_ = false;  // peek + line-stride read + pop: isolates pinned-FIFO read bandwidth

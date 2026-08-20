@@ -14,23 +14,27 @@ PerfDebugTracyConsumer::PerfDebugTracyConsumer(PerfDebugTracyHandler* handler) :
     // The SWEEP/PACE alternation is what a drainer row is read by, so those two must contrast; PACE is
     // deliberate idleness and gets a recessive grey. Mover rows use their own hues because the two roles'
     // same-named phases have different meanings and scales (a filler's CREDIT-WAIT is DRAM ring room, a
-    // mover's is host FIFO credit).
-    zone_colors_[kernel_profiler::DRISC_ZONE_SWEEP] = 0x2E86C1;
-    zone_colors_[kernel_profiler::DRISC_ZONE_PACE] = 0x707B7C;
-    zone_colors_[kernel_profiler::DRISC_ZONE_READ] = 0x27AE60;
-    zone_colors_[kernel_profiler::DRISC_ZONE_READ_WAIT] = 0x196F3D;
-    zone_colors_[kernel_profiler::DRISC_ZONE_PROC] = 0x8E44AD;
-    zone_colors_[kernel_profiler::DRISC_ZONE_CREDIT_WAIT] = 0xC0392B;
-    zone_colors_[kernel_profiler::DRISC_ZONE_WRITE] = 0xD35400;
-    zone_colors_[kernel_profiler::DRISC_ZONE_WR_BARRIER] = 0xF1C40F;
-    zone_colors_[kernel_profiler::DRISC_ZONE_SYNC] = 0xFFFFFF;
-    zone_colors_mover_[kernel_profiler::DRISC_ZONE_SYNC] = 0xFFFFFF;
-    zone_colors_mover_[kernel_profiler::DRISC_ZONE_SWEEP] = 0x16A085;
-    zone_colors_mover_[kernel_profiler::DRISC_ZONE_READ] = 0x52BE80;
-    zone_colors_mover_[kernel_profiler::DRISC_ZONE_CREDIT_WAIT] = 0xE74C3C;
-    zone_colors_mover_[kernel_profiler::DRISC_ZONE_WRITE] = 0xE67E22;
-    zone_colors_mover_[kernel_profiler::DRISC_ZONE_WR_BARRIER] = 0xF7DC6F;
+    // mover's is host FIFO credit). Keys are the zone NAMES the drain kernel declares (TT_ZONE_DEFINE_ID
+    // in drisc_profiler_drain.cpp) -- names are the only stable handle on a structural zone id.
+    zone_colors_["DRISC-SWEEP"] = 0x2E86C1;
+    zone_colors_["DRISC-PACE"] = 0x707B7C;
+    zone_colors_["DRISC-READ"] = 0x27AE60;
+    zone_colors_["DRISC-READ-WAIT"] = 0x196F3D;
+    zone_colors_["DRISC-PROC"] = 0x8E44AD;
+    zone_colors_["DRISC-CREDIT-WAIT"] = 0xC0392B;
+    zone_colors_["DRISC-WRITE"] = 0xD35400;
+    zone_colors_["DRISC-WR-BARRIER"] = 0xF1C40F;
+    // White, and the same on both roles: the sync marker is a fiducial, not a phase.
+    zone_colors_["DRISC-SYNC"] = 0xFFFFFF;
+    zone_colors_mover_["DRISC-SYNC"] = 0xFFFFFF;
+    zone_colors_mover_["DRISC-SWEEP"] = 0x16A085;
+    zone_colors_mover_["DRISC-READ"] = 0x52BE80;
+    zone_colors_mover_["DRISC-CREDIT-WAIT"] = 0xE74C3C;
+    zone_colors_mover_["DRISC-WRITE"] = 0xE67E22;
+    zone_colors_mover_["DRISC-WR-BARRIER"] = 0xF7DC6F;
 }
+
+PerfDebugTracyConsumer::~PerfDebugTracyConsumer() { log_unnamed_ids("tracy", names_); }
 
 void PerfDebugTracyConsumer::flush_event(const PerfDebugCaptureContext& ctx) {
     if (!pend_.active) {
@@ -47,10 +51,10 @@ void PerfDebugTracyConsumer::flush_event(const PerfDebugCaptureContext& ctx) {
     pkt.core_noc0_y = li.noc0_y;
     pkt.risc = li.risc;
     pkt.id = pend_.id;
-    pkt.runtime_id = pend_.runtime_id;
-    if (!pkt.runtime_id) {
-        pkt.name = ctx.zone_name(static_cast<uint16_t>(pend_.id));
-    }
+    // BOTH point-marker types carry a compile-time structural id, so both resolve exactly like a zone.
+    // (PP_EVENT used to carry a RUNTIME value here, which was the one id on this wire that could not be
+    // named; DeviceRuntimeEvent now ships that value as PP_DATA payload instead.)
+    pkt.name = names_.lookup(pend_.id);
     const uint64_t base = dev.clock_synced ? 0 : ts_base_[pend_.dev];
     pkt.timestamp = pend_.ts >= base ? pend_.ts - base : 0;
     pkt.runtime_host_id = pend_.prog;
@@ -81,7 +85,6 @@ void PerfDebugTracyConsumer::operator()(const PerfDebugRawRecordBatch& batch) {
         }
         if (type == PerfDebugRawRecType::Ext) {
             if (pend_.active) {
-                pend_.id = static_cast<uint32_t>(r.ts >> 32);
                 pend_.want = (static_cast<uint32_t>(r.ts) + 1) / 2;
                 if (pend_.want == 0) {
                     flush_event(ctx);
@@ -102,8 +105,7 @@ void PerfDebugTracyConsumer::operator()(const PerfDebugRawRecordBatch& batch) {
             pend_.dev = r.meta.dev;
             pend_.lane = r.meta.lane;
             pend_.ts = r.ts;
-            pend_.id = r.meta.id;
-            pend_.runtime_id = type == PerfDebugRecType::Event;
+            pend_.id = r.id;
             pend_.prog = r.prog;
             continue;
         }
@@ -116,14 +118,15 @@ void PerfDebugTracyConsumer::operator()(const PerfDebugRawRecordBatch& batch) {
         pkt.core_noc0_x = li.noc0_x;
         pkt.core_noc0_y = li.noc0_y;
         pkt.risc = li.risc;
-        pkt.timer_id = r.meta.id;
-        pkt.name = ctx.zone_name(static_cast<uint16_t>(r.meta.id));
+        pkt.timer_id = r.id;
+        pkt.name = names_.lookup(r.id);
         {
+            // Colour by zone NAME and by role -- see zone_colors_ in the header.
             const auto& tbl = li.role == PerfDebugLaneRole::Mover ? zone_colors_mover_ : zone_colors_;
-            if (auto it = tbl.find(static_cast<uint16_t>(r.meta.id)); it != tbl.end()) {
+            if (auto it = tbl.find(pkt.name); it != tbl.end()) {
                 pkt.color = it->second;
-            } else if (auto it2 = zone_colors_.find(static_cast<uint16_t>(r.meta.id)); it2 != zone_colors_.end()) {
-                pkt.color = it2->second;
+            } else if (auto it2 = zone_colors_.find(pkt.name); it2 != zone_colors_.end()) {
+                pkt.color = it2->second;  // mover table has no override for this zone
             }
         }
         const uint64_t base = dev.clock_synced ? 0 : ts_base_[r.meta.dev];

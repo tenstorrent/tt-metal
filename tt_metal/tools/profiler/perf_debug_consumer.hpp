@@ -29,6 +29,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -87,8 +88,9 @@ struct PerfDebugLaneInfo {
     PerfDebugLaneRole role = PerfDebugLaneRole::Worker;
 };
 
-// Immutable once the receiver starts, except zone_names, which the receiver fills exactly
-// once before the first batch is delivered to any consumer.
+// Immutable once the receiver starts. Zone NAMES are deliberately not here: they arrive per-ELF as
+// binaries JIT-load (llrt::ZoneMetaRegistry), so the table GROWS throughout a model run and each
+// consumer keeps its own lazily-refreshed ZoneNameMirror instead of sharing a fill-once snapshot.
 struct PerfDebugCaptureContext {
     struct Device {
         uint32_t chip_id = 0;
@@ -97,13 +99,44 @@ struct PerfDebugCaptureContext {
         std::vector<PerfDebugLaneInfo> lanes;  // index by PerfDebugRecMeta::lane
     };
     std::vector<Device> devices;
-    std::unordered_map<uint16_t, std::string> zone_names;
-
-    std::string_view zone_name(uint16_t hash) const {
-        auto it = zone_names.find(hash);
-        return it == zone_names.end() ? std::string_view{} : std::string_view{it->second};
-    }
 };
+
+// Per-consumer mirror of the process-wide per-ELF zone-name registry (llrt::ZoneMetaRegistry).
+// Each consumer runs on its own delivery thread, so a member mirror needs no lock on the per-record
+// lookup; refresh() copies only the registry's append-only delta and is cheap (an empty delta) except
+// when an ELF just loaded. Call refresh() once per batch, lookup() per record.
+//
+// `unnamed` MUST end at 0: a binary's names are registered when it is LOADED, strictly before it can
+// emit, so a miss means a binary without .tt_zone_meta or a tu_id collision -- exactly the failure the
+// per-ELF registry replaced, counted so it cannot come back silently. The distinct offending ids are
+// kept (capped) so the count decomposes into tu/local and says WHICH.
+class ZoneNameMirror {
+public:
+    static constexpr size_t kMaxUnnamedIds = 16;
+
+    void refresh();
+    std::string_view lookup(uint32_t id) {
+        if (auto it = names_.find(id); it != names_.end()) {
+            return it->second;
+        }
+        unnamed_++;
+        if (unnamed_ids_.size() < kMaxUnnamedIds) {
+            unnamed_ids_.insert(id);
+        }
+        return {};
+    }
+    uint64_t unnamed() const { return unnamed_; }
+    const std::set<uint32_t>& unnamed_ids() const { return unnamed_ids_; }
+
+private:
+    std::unordered_map<uint32_t, std::string> names_;
+    uint32_t cursor_ = 0;
+    uint64_t unnamed_ = 0;
+    std::set<uint32_t> unnamed_ids_;
+};
+
+// Log a consumer's unnamed-id tally (no-op when it is 0, the invariant). Call at consumer teardown.
+void log_unnamed_ids(std::string_view consumer_name, const ZoneNameMirror& mirror);
 
 struct PerfDebugRecordBatch {
     std::span<const PerfDebugRec> records;  // oldest first; valid only for the duration of the call

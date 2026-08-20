@@ -53,7 +53,7 @@
 #include "tools/profiler/perf_debug_profiler_tracy_handler.hpp"
 #include "tools/profiler/perf_debug_receiver.hpp"
 #include "tools/profiler/perf_debug_tracy_consumer.hpp"
-#include "impl/profiler/profiler.hpp"  // generateZoneSourceLocationsHashes (zone hash -> name)
+#include "llrt/zone_meta.hpp"  // per-ELF (zone id -> source location), the streaming name source
 #include "tools/profiler/spsc_packet.h"
 
 namespace tt::tt_metal {
@@ -666,64 +666,11 @@ PerfDebugSync sync_device_clock(
 // that way. This records the last step ENTERED so the next hang reports its own stall site.
 thread_local std::string g_bringup_step = "(not started)";
 
-// Mirror every id whose ELF-resolved name is "PRODUCER-STALL" out of the registry's append-only log.
-// BY NAME, never by id value: a structural id legitimately moves whenever kernel_profiler.hpp does, and the
-// stall zone has one id PER KERNEL TU (it is declared at namespace scope in that header), so there is no
-// single value to compare against even in principle. Refreshed by cursor once per decode pass -- names
-// arrive per-ELF as binaries load -- so the per-marker cost stays a binary search over a few dozen words.
-void PerfDebugProfiler::DeviceCtx::SockState::StallIdMirror::refresh() {
-    std::vector<llrt::ZoneMetaEntry> delta;
-    cursor = llrt::ZoneMetaRegistry::instance().additions_since(cursor, delta);
-    bool grew = false;
-    for (const auto& e : delta) {
-        if (e.name == "PRODUCER-STALL") {
-            ids.push_back(e.zone_id);
-            grew = true;
-        }
-    }
-    if (grew) {
-        std::sort(ids.begin(), ids.end());
-    }
-}
-
 PerfDebugProfiler::DeviceCtx::DeviceCtx() = default;
 PerfDebugProfiler::DeviceCtx::~DeviceCtx() = default;
 PerfDebugProfiler::DeviceCtx::DeviceCtx(DeviceCtx&&) noexcept = default;
 
-// The drainer zone COLOURS, keyed BY NAME. Names are the only stable handle on a zone: a structural id
-// legitimately moves whenever a source line does, so a table keyed on id value would silently stop
-// matching after any edit to the drain kernel -- and would be exactly the id-value special-casing this
-// design removed everywhere else. Filled in the constructor and never mutated, so the drain threads read
-// it concurrently without a lock.
-void PerfDebugProfiler::init_zone_tables() {
-    // The pair that matters is SWEEP vs PACE: they alternate continuously on a filler row, so "the drainer
-    // is working" vs "the controller is holding it off" has to be readable without reading labels. SWEEP is
-    // a saturated blue; PACE is a recessive grey, because it is deliberate idleness and should not compete
-    // for attention with real work.
-    zone_colors_["DRISC-SWEEP"] = 0x2E86C1;        // blue: a sweep of the grid
-    zone_colors_["DRISC-PACE"] = 0x707B7C;         // grey: paced idle, on purpose
-    zone_colors_["DRISC-READ"] = 0x27AE60;         // green: NoC reads
-    zone_colors_["DRISC-READ-WAIT"] = 0x196F3D;    // dark green: read barrier
-    zone_colors_["DRISC-PROC"] = 0x8E44AD;         // purple: scan + head write-back
-    zone_colors_["DRISC-CREDIT-WAIT"] = 0xC0392B;  // red: the phase that sets the knee
-    zone_colors_["DRISC-WRITE"] = 0xD35400;        // orange: egress
-    zone_colors_["DRISC-WR-BARRIER"] = 0xF1C40F;   // yellow: waiting for write acks
-    // White, and the same on both roles: the sync marker is a fiducial, not a phase. It should be findable
-    // at a glance on any row and should not read as belonging to the work palette.
-    zone_colors_["DRISC-SYNC"] = 0xFFFFFF;
-    zone_colors_mover_["DRISC-SYNC"] = 0xFFFFFF;
-    // MOVER palette. Same zone names, different hues, because the two roles are different machines: a
-    // filler scans worker L1 and stages to DRAM, a mover reads DRAM and pushes PCIe. Reading a mover row
-    // with a filler's colour scale in your head is the mistake this prevents.
-    zone_colors_mover_["DRISC-SWEEP"] = 0x16A085;        // teal: a mover's visit
-    zone_colors_mover_["DRISC-READ"] = 0x52BE80;         // light green: DRAM read
-    zone_colors_mover_["DRISC-CREDIT-WAIT"] = 0xE74C3C;  // bright red: THE knee phase
-    zone_colors_mover_["DRISC-WRITE"] = 0xE67E22;        // light orange: PCIe push
-    zone_colors_mover_["DRISC-WR-BARRIER"] = 0xF7DC6F;   // light yellow: write acks
-}
-
 PerfDebugProfiler::PerfDebugProfiler(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    init_zone_tables();
     try {
         start(mesh_device);
     } catch (const std::exception& e) {
@@ -975,27 +922,10 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
             }
         }
         perf_debug::ReceiverConfig rcfg;
-        rcfg.load_zone_names = [](std::unordered_map<uint16_t, std::string>& names) {
-            try {
-                for (auto& [h, md] : generateZoneSourceLocationsHashes()) {
-                    names[h] = md.marker_name;
-                }
-            } catch (const std::exception& e) {
-                log_warning(tt::LogMetal, "[perf-debug profiler] zone-name load failed ({})", e.what());
-            }
-            names[0x7FFFu] = "PRODUCER-STALL";  // PROFILER_STALL_ZONE_ID
-            // DRISC self-profiling ids are FIXED rather than source-location hashes, so the JIT log can
-            // never supply their names.
-            names[kernel_profiler::DRISC_ZONE_SWEEP] = "DRISC-SWEEP";
-            names[kernel_profiler::DRISC_ZONE_READ] = "DRISC-READ";
-            names[kernel_profiler::DRISC_ZONE_READ_WAIT] = "DRISC-READ-WAIT";
-            names[kernel_profiler::DRISC_ZONE_PROC] = "DRISC-PROC";
-            names[kernel_profiler::DRISC_ZONE_CREDIT_WAIT] = "DRISC-CREDIT-WAIT";
-            names[kernel_profiler::DRISC_ZONE_WRITE] = "DRISC-WRITE";
-            names[kernel_profiler::DRISC_ZONE_WR_BARRIER] = "DRISC-WR-BARRIER";
-            names[kernel_profiler::DRISC_ZONE_PACE] = "DRISC-PACE";
-            names[kernel_profiler::DRISC_ZONE_SYNC] = "DRISC-SYNC";
-        };
+        // No load_zone_names hook: names come per-ELF from llrt::ZoneMetaRegistry, which each consumer
+        // mirrors lazily (the table GROWS as binaries JIT-load, so a one-shot snapshot would be taken when
+        // it holds a fraction of its final size). PRODUCER-STALL and the DRISC self-zones are ordinary
+        // zones with ordinary ELF records now -- nothing is registered by hand.
         rcfg.starvation_diagnostic = [this](uint32_t dev, uint32_t sock) {
             DeviceCtx& ctx = devices_[dev];
             for (uint32_t d = 0; d < ctx.n_drisc; d++) {
@@ -3081,6 +3011,19 @@ void PerfDebugProfiler::stop() {
     }
     if (receiver_ != nullptr) {
         receiver_->log_report();
+        // Zone naming, from the per-ELF metadata sections. `id collisions 0` is one half of the naming
+        // invariant; the other half (unnamed marker rows, MUST also be 0) is reported per consumer as each
+        // one tears down, since the name mirrors live there now.
+        const auto zm = llrt::ZoneMetaRegistry::instance().stats();
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] zone names: {} records from {} ELFs | id collisions {} | foreign/stale "
+            "metadata sections ignored {} [collisions MUST be 0; a non-zero foreign count means the JIT cache "
+            "holds ELFs from a different .tt_zone_meta layout]",
+            zm.records,
+            zm.elfs,
+            llrt::ZoneMetaRegistry::instance().collisions(),
+            zm.foreign_sections);
     }
     receiver_.reset();
     tracy_consumer_.reset();

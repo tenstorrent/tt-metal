@@ -13,9 +13,9 @@
 // cost write issues to save almost nothing. Inside each window is a packet run (spsc_packet.h):
 // ZONE_START/END/TOTAL markers
 // (2 words), STICKY_TIMER (1 word, per-lane wall-clock high half), STICKY_PROG (1 word, per-lane
-// runtime host-id in low27; 2-word PROG_EXT escape past 2^27), and DATA/EVENT (2 + size words,
-// self-describing). The producer publishes its tail only on packet boundaries, so a window never ends
-// mid-packet.
+// runtime host-id in low27; 2-word PROG_EXT escape past 2^27), EVENT (2 words, a payload-less flag)
+// and DATA (3 + size words, self-describing -- the length lives in its word2). The producer publishes
+// its tail only on packet boundaries, so a window never ends mid-packet.
 #pragma once
 
 #include <algorithm>
@@ -111,7 +111,10 @@ inline void spsc_prefetch(const void* p) {
 }
 
 // Decode ONE whole packed BULK_SPAN frame in place. For each marker calls
-//   emit(lane, wire_type, hash16, full_ts, prog)     (ZONE_START/END; ZONE_TOTAL with full_ts = the sum)
+//   emit(lane, wire_type, zone_id27, full_ts, prog)  (ZONE_START/END; ZONE_TOTAL with full_ts = the sum)
+// where zone_id27 is the FULL 27-bit structural zone id (tu_id << TT_ZONE_LOCAL_BITS | local --
+// hostdevcommon/profiler_zone_id.h; it was a 16-bit source-location hash before, and the mask that
+// truncated it here is gone),
 // and for each PP_DATA/PP_EVENT
 //   emit_data(lane, wire_type, id, full_ts, prog, payload_words, n)   (payload in place, hi-word first)
 // and emit_prog(lane, prog) whenever a lane's sticky host-id changes.
@@ -230,7 +233,7 @@ inline uint32_t spsc_decode_frame(
                     }
                     const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
                     const uint64_t ts = (t == PP_ZONE_TOTAL) ? w1 : pp_full_ts(th, w1);
-                    emit(lane, t, pp_low27(w0) & 0xFFFFu, ts, pg);
+                    emit(lane, t, pp_low27(w0), ts, pg);  // full 27-bit structural id
                     i += 2;
                 } else if (t == PP_STICKY_TIMER) {
                     th = pp_timer_hi(w0);
@@ -252,19 +255,35 @@ inline uint32_t spsc_decode_frame(
                         emit_prog(lane, pg);
                     }
                     i += 2;
-                } else if (t == PP_DATA || t == PP_EVENT) {
-                    const uint32_t n = pp_data_size(w0);
-                    if (i + 2 + n > run) {
+                } else if (t == PP_EVENT) {
+                    // PP_EVENT: exactly 2 words -- a flag with a compile-time structural id, no payload.
+                    if (i + 2 > run) {
                         st.anomalies++;
                         break;
                     }
                     const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    emit_data(lane, PP_EVENT, pp_point_id(w0), pp_full_ts(th, w1), pg, nullptr, 0);
+                    i += 2;
+                } else if (t == PP_DATA) {
+                    // PP_DATA is 3 + size words and the length lives in word2, so the whole header must
+                    // be inside the run before the packet can be sized at all.
+                    if (i + 3 > run) {
+                        st.anomalies++;
+                        break;
+                    }
+                    const uint32_t n = pp_data_size(ring[(hm + i + 2) & kSpscRingMask]);
+                    if (i + 3 + n > run) {
+                        st.anomalies++;
+                        break;
+                    }
+                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    // The payload can wrap the circular ring, so unwrap it into a flat scratch first.
                     uint32_t payload[kSpscMaxDataWords];
                     for (uint32_t k = 0; k < n; k++) {
-                        payload[k] = ring[(hm + i + 2 + k) & kSpscRingMask];
+                        payload[k] = ring[(hm + i + 3 + k) & kSpscRingMask];
                     }
-                    emit_data(lane, t, pp_data_id(w0), pp_full_ts(th, w1), pg, payload, n);
-                    i += 2 + n;
+                    emit_data(lane, PP_DATA, pp_point_id(w0), pp_full_ts(th, w1), pg, payload, n);
+                    i += 3 + n;
                 } else {
                     st.anomalies++;
                     break;
@@ -312,7 +331,7 @@ inline uint32_t spsc_decode_frame(
                 }
                 const uint32_t w1 = p[i + 1];
                 const uint64_t ts = (t == PP_ZONE_TOTAL) ? w1 : pp_full_ts(th, w1);
-                emit(lane, t, pp_low27(w0) & 0xFFFFu, ts, pg);
+                emit(lane, t, pp_low27(w0), ts, pg);  // full 27-bit structural id
                 i += 2;
             } else if (t == PP_STICKY_TIMER) {
                 th = pp_timer_hi(w0);
@@ -334,14 +353,28 @@ inline uint32_t spsc_decode_frame(
                     emit_prog(lane, pg);
                 }
                 i += 2;
-            } else if (t == PP_DATA || t == PP_EVENT) {
-                const uint32_t n = pp_data_size(w0);
-                if (i + 2 + n > run) {
+            } else if (t == PP_EVENT) {
+                // PP_EVENT: exactly 2 words -- a flag with a compile-time structural id, no payload.
+                if (i + 2 > run) {
                     st.anomalies++;
                     break;
                 }
-                emit_data(lane, t, pp_data_id(w0), pp_full_ts(th, p[i + 1]), pg, p + i + 2, n);
-                i += 2 + n;
+                emit_data(lane, PP_EVENT, pp_point_id(w0), pp_full_ts(th, p[i + 1]), pg, nullptr, 0);
+                i += 2;
+            } else if (t == PP_DATA) {
+                // PP_DATA is 3 + size words with the length in word2; the packed window is flat, so the
+                // payload is handed to the sink in place.
+                if (i + 3 > run) {
+                    st.anomalies++;
+                    break;
+                }
+                const uint32_t n = pp_data_size(p[i + 2]);
+                if (i + 3 + n > run) {
+                    st.anomalies++;
+                    break;
+                }
+                emit_data(lane, PP_DATA, pp_point_id(w0), pp_full_ts(th, p[i + 1]), pg, p + i + 3, n);
+                i += 3 + n;
             } else {
                 st.anomalies++;
                 break;

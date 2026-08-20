@@ -59,7 +59,11 @@ private:
 
     std::map<std::tuple<uint32_t, uint32_t, uint32_t>, OpAgg> ops_;  // (dev, runtime host-id, execution)
     std::unordered_map<uint64_t, uint32_t> pair_count_;              // (dev, lane, prog) -> completed pairs
-    std::array<ZoneClass, 1 << 16> class_of_hash_{};
+    // Classification cache over the 27-bit structural id space (a flat array would be 2^27 entries).
+    // An id is cached only once its name resolves; names arrive per-ELF strictly before the binary can
+    // emit, so a miss is transient at worst and the retry is one map probe.
+    std::unordered_map<uint32_t, ZoneClass> class_of_id_;
+    ZoneNameMirror names_;  // id -> name, mirrored per-ELF from llrt::ZoneMetaRegistry
     // Snapshot of the capture context's device table: the context lives on the receiver and is gone
     // by the time the exit-path write_csv runs.
     std::vector<DeviceMeta> devices_;

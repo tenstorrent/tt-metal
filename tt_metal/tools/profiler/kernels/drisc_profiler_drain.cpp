@@ -106,6 +106,29 @@
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 #endif
 
+// ---- The drainer's own zone ids ---------------------------------------------------------------------
+//
+// ORDINARY structural zone ids with ORDINARY .tt_zone_meta records, declared here in the drain kernel's
+// own translation unit exactly the way a worker kernel declares its zones. The host resolves these names
+// out of THIS ELF as it loads, like any other kernel's -- there is no reserved band, no fixed id and no
+// hardcoded host name table any more. (They used to be fixed values 0x7FF0..0x7FF8 in a reserved band,
+// with their names registered by hand next to PRODUCER-STALL in perf_debug_profiler.cpp.)
+//
+// Declared inside `namespace kernel_profiler` under their original spellings so the ~20 emission sites
+// below are unchanged. The names are the strings a human reads in Tracy, so they keep their old text.
+namespace kernel_profiler {
+TT_ZONE_DEFINE_ID(DRISC_ZONE_SWEEP, "DRISC-SWEEP");              // one whole poll sweep (the parent)
+TT_ZONE_DEFINE_ID(DRISC_ZONE_READ, "DRISC-READ");                // filler: span-read ISSUE. mover: the DRAM read
+TT_ZONE_DEFINE_ID(DRISC_ZONE_READ_WAIT, "DRISC-READ-WAIT");      // filler: read-barrier wait left after proc
+TT_ZONE_DEFINE_ID(DRISC_ZONE_PROC, "DRISC-PROC");                // control-vector scan + head write-back
+TT_ZONE_DEFINE_ID(DRISC_ZONE_CREDIT_WAIT, "DRISC-CREDIT-WAIT");  // filler: DRAM ring room. mover: socket credit
+TT_ZONE_DEFINE_ID(DRISC_ZONE_WRITE, "DRISC-WRITE");              // the egress write itself
+TT_ZONE_DEFINE_ID(DRISC_ZONE_WR_BARRIER, "DRISC-WR-BARRIER");    // write barrier before staging is reused
+TT_ZONE_DEFINE_ID(DRISC_ZONE_PACE, "DRISC-PACE");                // the inter-sweep pacing gap
+TT_ZONE_DEFINE_ID(DRISC_ZONE_SYNC, "DRISC-SYNC");                // common-trigger sync fiducial
+TT_ZONE_DEFINE_ID(SPSC_DATA_ID_NOCFP, "DRISC-NOC-FOOTPRINT");    // the per-sweep NoC-counter PP_DATA sample
+}  // namespace kernel_profiler
+
 // D2H: write L1 to PCIe host RAM in NOC_MAX_BURST_SIZE chunks. The caller runs
 // noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC) once per push -- the packed
 // gather calls this ~11 times per frame, so a per-call init would repeat command-buffer setup that
@@ -1010,6 +1033,8 @@ void kernel_main() {
         if (static_cast<uint32_t>(t1 - t0) > max_reserve) {
             max_reserve = static_cast<uint32_t>(t1 - t0);
         }
+        // The egress write (gather + push + notify), as one zone; the t1..t4 reads stay for the counters.
+        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WRITE, SelfMarkPhase> z_write(self_mark_phase);
         *phase = kPhWrChunk;
         noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
         const uint32_t fifo_size = sender.downstream_fifo_curr_size;
@@ -1216,67 +1241,6 @@ void kernel_main() {
             ship_run(start, count);
         }
     };
-
-    // ---- DRISC SELF-PROFILING: state, one ring, and the two operations on it --------------------------
-    //
-    // The self frame is a WORKER SPAN, so this is a producer of exactly the shape kernel_profiler.hpp is:
-    // 2-word markers (type|zone-id , timer_low) preceded by a 1-word STICKY_TIMER whenever the wall clock's
-    // high half ticks, appended into a 512-word circular ring, with monotonic head/tail word counters in the
-    // control vector. The clock is the SAME register the workers use (RISCV_DEBUG_REG_WALL_CLOCK_L, read here
-    // through get_timestamp()), which is why no anchor, graft or calibration is needed anywhere.
-    //
-    // Markers are stamped from timestamps the drain loop HAS ALREADY READ (t_batch0/t_issue, the t0/t1/t2 of
-    // stage_run, the barrier's t_b0, ...) rather than by reading the clock again. That is deliberate twice
-    // over: it adds no clock reads to the hot path, and it makes a zone's duration the SAME quantity the
-    // out[] phase counter accumulates -- so the zones and the counters agree by construction and any
-    // disagreement is a framing or decode bug, which is the only thing worth cross-checking.
-    volatile tt_l1_ptr uint32_t* self_ctrl =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase + kSelfSlot * kSlotBytes + kPrefix * 4u);
-    volatile tt_l1_ptr uint32_t* self_ring = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        kStageBase + kSelfSlot * kSlotBytes + (kPrefix + kCtrlWords) * 4u);
-    uint32_t self_head = 0;           // words the host has been shown (consumer side, kept by us)
-    uint32_t self_tail = 0;           // words written (producer side)
-    uint32_t self_hi = 0xFFFFFFFFu;   // last wall-clock high half emitted; ~0 forces a first sticky
-    uint32_t self_frames = 0;         // self frames shipped
-    uint32_t self_markers = 0;        // markers written into the ring
-    uint32_t self_dropped = 0;        // markers refused because a publish could not free the ring
-    uint32_t self_sweeps = 0;         // sweeps instrumented -- every sweep inside an active window
-    uint32_t self_sweeps_work = 0;    // of those, the ones that did real work
-    uint32_t self_windows = 0;        // times the window was armed from cold
-    uint32_t self_words_shipped = 0;  // words actually SHIPPED; must end equal to self_tail
-    uint32_t self_over = 0;           // sweeps left uninstrumented because the frame budget was spent
-    uint64_t c_self = 0;              // cycles spent publishing self frames (the perturbation)
-    uint64_t self_t_sweep0 = 0;       // this sweep's start, so a mid-sweep arm can still open SWEEP
-    uint64_t self_armed_until = 0;    // wall clock: instrument every sweep that STARTS before this
-    bool self_on = false;             // this sweep is being instrumented
-    bool self_busy = false;           // inside self_publish: suppress marker emission (re-entrancy)
-    bool self_work = false;           // THIS sweep did work (set by self_arm / the end-of-sweep check)
-    bool self_from_start = false;     // instrumented from the top of the sweep, not armed part-way in
-    // PHASE TOTALS OVER THE INSTRUMENTED-FROM-THE-START SWEEPS ONLY -- the cross-check the zones are worth
-    // nothing without. The out[10..19] lifetime totals cannot verify a sampled instrument: they cover the whole
-    // run while the zones cover ~0.5% of it. These cover exactly the sweeps the zones do, so the host can
-    // assert an EQUALITY against zone durations summed out of the Tracy capture:
-    //   sum(READ) + sum(READ-WAIT) == c_read delta      sum(CREDIT-WAIT) == c_reserve delta
-    //   sum(PROC) - sum(CREDIT-WAIT) - sum(WRITE) == c_proc delta      sum(WR-BARRIER) == c_barrier delta
-    // Restricted to from-the-start sweeps because a sweep ARMED part-way through has zones for only part of it,
-    // and comparing those against a whole-sweep counter delta would fail for a reason that is not a bug.
-    uint32_t self_ck_sweeps = 0;
-    uint64_t self_ck_read = 0, self_ck_proc = 0, self_ck_rsv = 0, self_ck_write = 0, self_ck_bar = 0;
-    if constexpr (kSelfZones != 0) {
-        volatile tt_l1_ptr uint32_t* pfx =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase + kSelfSlot * kSlotBytes);
-        pfx[0] = kernel_profiler::spsc_span_w0();
-        for (uint32_t k = 1; k < kPrefix; k++) {
-            pfx[k] = 0;
-        }
-        // The whole control vector, not just the words we use: it ships verbatim and the host reads a head
-        // and a tail for all five RISCs. Rings 1-4 must read tail == head == 0 forever or the gather would
-        // ship uninitialised L1 for the decoder to walk as markers.
-        for (uint32_t k = 0; k < kCtrlWords; k++) {
-            self_ctrl[k] = 0;
-        }
-        self_ctrl[kernel_profiler::SPSC_CORE_XY] = kSelfXY;
-    }
 
     // Publish the ring's live window as one self frame, then wait for it to land.
     //

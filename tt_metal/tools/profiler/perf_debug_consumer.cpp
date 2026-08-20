@@ -7,12 +7,43 @@
 #include <algorithm>
 #include <mutex>
 
+#include <fmt/format.h>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/indestructible.hpp>
 
+#include "hostdevcommon/profiler_zone_id.h"
+#include "llrt/zone_meta.hpp"
 #include "tools/profiler/perf_debug_receiver.hpp"
 
 namespace tt::tt_metal::perf_debug {
+
+void ZoneNameMirror::refresh() {
+    std::vector<llrt::ZoneMetaEntry> delta;
+    cursor_ = llrt::ZoneMetaRegistry::instance().additions_since(cursor_, delta);
+    for (auto& e : delta) {
+        names_.emplace(e.zone_id, std::move(e.name));
+    }
+}
+
+void log_unnamed_ids(std::string_view consumer_name, const ZoneNameMirror& mirror) {
+    if (mirror.unnamed() == 0) {
+        return;
+    }
+    std::string ids;
+    for (uint32_t id : mirror.unnamed_ids()) {
+        ids +=
+            fmt::format("{}{} (tu {} local {})", ids.empty() ? "" : ", ", id, TT_ZONE_TU_OF(id), TT_ZONE_LOCAL_OF(id));
+    }
+    log_warning(
+        tt::LogMetal,
+        "[perf-debug receiver] consumer \"{}\": {} unnamed marker rows [MUST be 0 -- a binary loaded without "
+        ".tt_zone_meta, or two TUs share a tu_id]; ids (up to {} distinct): {}",
+        consumer_name,
+        mirror.unnamed(),
+        ZoneNameMirror::kMaxUnnamedIds,
+        ids);
+}
 
 namespace {
 

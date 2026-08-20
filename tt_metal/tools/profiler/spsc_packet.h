@@ -62,7 +62,7 @@
  *                  payload word).
  *   STICKY_SRC   : (core,risc) lane identity -- injected by the drainer reader hart. 1 WORD: low27 = lane.
  *
- * The real linearized stream is therefore VARIABLE-LENGTH: SRC/TIMER are 1 word, markers + PROG are 2.
+ * The real linearized stream is therefore VARIABLE-LENGTH: SRC/TIMER/PROG are 1 word, markers + PROG_EXT are 2.
  * The decoder advances by pp_packet_words(); SENT is always published on a packet boundary. (The frozen
  * synthetic bench predates this and uses a fixed 2-word SRC -- it never calls pp_packet_words.)
  *
@@ -141,9 +141,11 @@ static inline uint32_t pp_word0(uint32_t type, uint32_t low27) {
 static inline uint32_t pp_sticky_w0(uint32_t timer_hi) { return pp_word0(PP_STICKY_META, timer_hi & PP_TIMER_HI_MASK); }
 static inline uint32_t pp_sticky_w1(uint32_t prog_id) { return prog_id; }
 
-/* real-path split stickies */
-static inline uint32_t pp_prog_w0(void) { return pp_word0(PP_STICKY_PROG, 0u); }
-static inline uint32_t pp_prog_w1(uint32_t prog_id) { return prog_id; }
+/* real-path split stickies. STICKY_PROG is 1 word (host-id rides low27); ids past 2^27 go out as the
+ * 2-word PP_STICKY_PROG_EXT with the full id in word1. */
+static inline uint32_t pp_prog_w0(uint32_t prog_id) { return pp_word0(PP_STICKY_PROG, prog_id); }
+static inline uint32_t pp_prog_ext_w0(void) { return pp_word0(PP_STICKY_PROG_EXT, 0u); }
+static inline uint32_t pp_prog_ext_w1(uint32_t prog_id) { return prog_id; }
 static inline uint32_t pp_timer_w0(uint32_t timer_hi) { return pp_word0(PP_STICKY_TIMER, timer_hi & PP_TIMER_HI_MASK); }
 static inline uint32_t pp_timer_w1(void) { return 0u; }
 
@@ -180,20 +182,20 @@ static inline uint32_t pp_point_id(uint32_t w0) { return pp_low27(w0); }
 static inline uint32_t pp_data_size(uint32_t w2) { return (w2 >> PP_DATA_SIZE_SHIFT) & PP_DATA_SIZE_MASK; }
 static inline int pp_is_zone_total(uint32_t w0) { return pp_type(w0) == PP_ZONE_TOTAL; }
 
-/* Wire length (32-bit words) of a real-path packet: SRC/TIMER are 1 word (identity/timer_hi fit in low27,
- * no payload); zone markers, EVENT, PROG and META are 2; DATA is 3 + payload, and its length lives in
+/* Wire length (32-bit words) of a real-path packet: SRC/TIMER/PROG are 1 word (identity/timer_hi/host-id
+ * fit in low27, no payload); zone markers, EVENT, PROG_EXT and META are 2; DATA is 3 + payload, and its length lives in
  * word2 -- which is why this takes w2 as well. Pass 0 for w2 when the type is known not to be DATA.
  * BULK_CORE has its own framing -- do NOT pass it here (the decoder special-cases it first). SENT is
  * always published on a packet boundary, so a decoder that advances by this length stays in sync. */
 static inline uint32_t pp_packet_words(uint32_t w0, uint32_t w2) {
     uint32_t t = pp_type(w0);
-    if (t == PP_STICKY_SRC || t == PP_STICKY_TIMER) {
+    if (t == PP_STICKY_SRC || t == PP_STICKY_TIMER || t == PP_STICKY_PROG) {
         return 1u;
     }
     if (t == PP_DATA) {
         return 3u + pp_data_size(w2);  // word0 + timer_low + size word + payload (self-describing)
     }
-    return 2u;  // zone markers, PP_EVENT, STICKY_PROG, STICKY_META
+    return 2u;  // zone markers, PP_EVENT, STICKY_PROG_EXT, STICKY_META
 }
 
 /* reader-injected source sticky: lane_id = core*NRISC + risc, carried in both words. */

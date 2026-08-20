@@ -20,15 +20,19 @@ void PerfDebugOpsCsvConsumer::operator()(const PerfDebugRecordBatch& batch) {
             devices_.push_back({d.chip_id, d.frequency_ghz});
         }
     }
+    names_.refresh();
     for (const PerfDebugRec& rec : batch.records) {
         if (rec.meta.type != PerfDebugRecType::Zone || rec.prog == 0) {
             continue;
         }
-        ZoneClass& cls = class_of_hash_[rec.meta.id];
-        if (cls == ZoneClass::Unseen) {
-            cls = ctx->zone_name(rec.meta.id).ends_with("-KERNEL") ? ZoneClass::Kernel : ZoneClass::Other;
+        ZoneClass cls = ZoneClass::Unseen;
+        if (auto it = class_of_id_.find(rec.id); it != class_of_id_.end()) {
+            cls = it->second;
+        } else if (const std::string_view name = names_.lookup(rec.id); !name.empty()) {
+            cls = name.ends_with("-KERNEL") ? ZoneClass::Kernel : ZoneClass::Other;
+            class_of_id_.emplace(rec.id, cls);
         }
-        if (cls == ZoneClass::Other) {
+        if (cls != ZoneClass::Kernel) {
             continue;
         }
         const auto& lanes = ctx->devices[rec.meta.dev].lanes;
