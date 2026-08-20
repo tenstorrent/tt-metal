@@ -352,10 +352,8 @@ def _dequantize_pack_quantized_state_dict(
 def is_per_tensor_fp8(quantization_config: Any) -> bool:
     """True for fp8 quantization with no weight block shape, i.e. one scale per weight tensor.
 
-    DeepSeek/GLM state ``weight_block_size: [128, 128]`` and carry a 2-D grid of scales; Mistral-Small-4
-    states ``weight_block_size: null`` and carries a single scalar per tensor. The two need different
-    dequantizers, and the block one hard-fails on a scalar scale (it requires equal ndim), so the
-    absence of a block size is the discriminator.
+    DeepSeek/GLM state ``weight_block_size: [128, 128]`` and carry a 2-D grid of scales. The block
+    dequantizer hard-fails on a scalar scale, so the absence of a block size is the discriminator.
     """
     if not isinstance(quantization_config, dict):
         return False
@@ -371,14 +369,10 @@ def _dequantize_per_tensor_fp8_state_dict(
 ) -> dict[str, torch.Tensor]:
     """Dequantize a (sub-)state_dict whose fp8 scales broadcast against their weights.
 
-    ``X_scale_inv`` anchors emit ``X``; the scale is applied by plain broadcasting, which covers both
-    shapes Mistral-Small-4 uses: a scalar ``()`` for the attention/dense projections and a per-expert
-    ``[n_experts, 1, 1]`` for the stacked ``mlp.experts.gate_up_proj`` / ``down_proj``. That is the whole
-    difference from the block scheme -- there are no partial blocks, so no padding or reshaping.
-
-    ``*_activation_scale`` companions are dropped: they describe a static *activation* quantization we
-    never perform (weights land in ``dtype`` and activations stay there), so nothing downstream consumes
-    them and passing them through would put unexpected keys in the module state dicts.
+    Plain broadcasting covers both shapes in use: a scalar for the projections and a per-expert
+    ``[n_experts, 1, 1]`` for stacked experts. Unlike the block scheme there are no partial blocks,
+    so no padding or reshaping. ``*_activation_scale`` companions are dropped — they describe a
+    static activation quantization we never perform, and nothing downstream consumes them.
     """
     out: dict[str, torch.Tensor] = {}
     n_dequantized = 0

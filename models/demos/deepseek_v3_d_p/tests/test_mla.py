@@ -496,20 +496,14 @@ def test_kimi_mla(
     )
 
 
-# Mistral-Small-4-119B: dense MLA, config hand-built from config.json (see
-# reference/mistral_small_4_119b_config.py). Random weights only — the checkpoint's fp8 scheme and
-# packed expert layout are not yet handled by the shared loader, so the adapter leaves
-# supports_pretrained off. seq5k stays under the model's 8192 original_max_position_embeddings, where
-# Mistral's position-dependent query scale (get_llama_4_attn_scale) is exactly 1.0 and therefore costs
-# nothing; seq25k crosses it and is the case that exposes ttMLA having no equivalent.
-# Mesh is (sp, tp), since run_model pins sp_axis=0 / tp_axis=1. 8x1 is the SP=8/TP=1 pipeline-stage
-# geometry; 8x4 is the whole-galaxy shape the long-seq matmul configs were tuned on.
+# Mistral-Small-4-119B: dense MLA, config hand-built (see reference/mistral_small_4_119b_config.py).
+# seq5k stays under the model's 8192 original_max_position_embeddings, where Mistral's
+# position-dependent query scale (get_llama_4_attn_scale) is exactly 1.0; seq25k crosses it and is the
+# case that exposes ttMLA having no equivalent.
 #
-# 8x1 must be run with an 8-chip carve, i.e. TT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7. Fabric only comes up
-# on the FULL system mesh: with all 32 chips visible, every proper submesh -- (8,1), (1,8), (4,4),
-# (1,4) -- fails fabric router sync under STRICT_INIT, RELAXED_INIT and DYNAMIC_RECONFIG alike, while
-# (8,4) opens. Restricting the visible set makes those 8 chips the full mesh and (8,1) opens.
-# See mistral4_bringup/probe_mesh_shapes.py.
+# Mesh is (sp, tp), since run_model pins sp_axis=0 / tp_axis=1. 8x4 is the whole-galaxy shape the
+# long-seq matmul configs were tuned on. 8x1 needs an 8-chip carve (TT_VISIBLE_DEVICES): fabric only
+# comes up on the full visible mesh, so a proper submesh of a 32-chip system fails router sync.
 @pytest.mark.parametrize("mesh_device", [(8, 1), (8, 4)], ids=["8x1", "8x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
