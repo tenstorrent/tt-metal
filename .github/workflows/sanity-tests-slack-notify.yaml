@@ -90,17 +90,36 @@ jobs:
               per_page: 100,
             });
 
-            const prevGood = runsResp.workflow_runs
-              .filter(r => r.run_number < currentRunNumber && r.conclusion === 'success')
+            // The run immediately before this one in the push-run sequence (not
+            // necessarily run_number - 1, since schedule/dispatch runs of the same
+            // workflow interleave and also consume run_numbers).
+            const immediatelyPrior = runsResp.workflow_runs
+              .filter(r => r.run_number < currentRunNumber && r.conclusion !== null)
               .sort((a, b) => b.run_number - a.run_number)[0];
 
-            if (!prevGood) {
-              core.warning('No previous successful "Sanity tests" push run found on main within the last 100 runs; skipping.');
-              core.setOutput('found_baseline', 'false');
+            if (!immediatelyPrior) {
+              core.warning('No previous completed "Sanity tests" push run found on main within the last 100 runs; skipping.');
+              core.setOutput('should_notify', 'false');
               return;
             }
 
-            core.setOutput('found_baseline', 'true');
+            if (immediatelyPrior.conclusion !== 'success') {
+              // main is still red from an earlier, already-reported break: diffing from
+              // the last GREEN run here would re-list the original culprit every time,
+              // plus every author who has merged on top of the still-broken main since --
+              // none of whom asked to be blamed for someone else's unresolved failure.
+              // Stay silent until a run actually goes green -> red again.
+              core.info(`Previous push run (#${immediatelyPrior.run_number}) also did not succeed (${immediatelyPrior.conclusion}); ` +
+                `main is still red from an earlier break. Not re-notifying to avoid repeat/duplicate pings.`);
+              core.setOutput('should_notify', 'false');
+              return;
+            }
+
+            // immediatelyPrior succeeded, so this is a fresh green->red transition:
+            // it doubles as both the "is this new" signal and the diff baseline.
+            const prevGood = immediatelyPrior;
+
+            core.setOutput('should_notify', 'true');
             core.setOutput('prev_run_url', prevGood.html_url);
             core.setOutput('prev_run_number', String(prevGood.run_number));
 
@@ -151,7 +170,7 @@ jobs:
 
       - name: Resolve Slack mentions for culprits
         id: mentions
-        if: steps.culprits.outputs.found_baseline == 'true'
+        if: steps.culprits.outputs.should_notify == 'true'
         env:
           SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
           GH_TOKEN: ${{ github.token }}
@@ -285,7 +304,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Compose and send Slack message
-        if: steps.culprits.outputs.found_baseline == 'true'
+        if: steps.culprits.outputs.should_notify == 'true'
         env:
           SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
           SLACK_CHANNEL_ID: "C05GRJC4J4A" # #tt-metal-pipelines
@@ -341,6 +360,6 @@ jobs:
             exit 1
           fi
 
-      - name: No baseline found
-        if: steps.culprits.outputs.found_baseline != 'true'
-        run: echo "No previous successful run to diff against -- nothing to notify."
+      - name: Skip notification
+        if: steps.culprits.outputs.should_notify != 'true'
+        run: echo "Not a fresh green->red transition (or no baseline run found) -- nothing to notify. See the 'Find culprit PRs' step log for why."
