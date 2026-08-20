@@ -22,11 +22,13 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from create_jira import parse_failed  # noqa: E402
 from release_test_report import (  # noqa: E402
     FAILED,
+    HORIZON_REQUIREMENT,
     INCONCLUSIVE,
     PASSED,
     build,
     classify,
     load_expected,
+    parse_horizon,
     parse_junit_dir,
     parse_results_block,
     render_markdown,
@@ -315,14 +317,93 @@ def test_results_block_wins_even_when_the_summary_is_truncated(expected):
     assert [r["filter"] for r in passed] == ["*Alpha*"] and len(failed) == 1
 
 
+# --- Horizon (AIIPSW-15) evidence, pulled from the tt-umd-horizon repo ---------
+
+
+def _horizon(tmp_path, tests, ts=None, schema="horizon-test-results/v1"):
+    from datetime import datetime, timezone
+
+    ts = ts or datetime.now(timezone.utc).isoformat()
+    p = tmp_path / "horizon-results.json"
+    p.write_text(
+        json.dumps(
+            {
+                "schema": schema,
+                "tested_sha": "abc123def456",
+                "timestamp": ts,
+                "run_url": "http://horizon/run",
+                "tests": tests,
+            }
+        )
+    )
+    return str(p)
+
+
+def test_horizon_fresh_green_becomes_evidence(tmp_path):
+    path = _horizon(tmp_path, [{"name": "test_horizon_cluster", "result": "passed"}])
+    status, evidence = parse_horizon(path)
+    assert status == PASSED
+    rows = evidence[HORIZON_REQUIREMENT][PASSED]
+    assert [r["filter"] for r in rows] == ["test_horizon_cluster"]
+    assert rows[0]["config"] == "horizon" and rows[0]["runner"] == "gtest"
+
+
+def test_horizon_failure_is_reported(tmp_path):
+    path = _horizon(
+        tmp_path,
+        [{"name": "test_axi_device", "result": "passed"}, {"name": "test_horizon_dma", "result": "failed"}],
+    )
+    status, evidence = parse_horizon(path)
+    assert status == FAILED
+    hits = evidence[HORIZON_REQUIREMENT]
+    assert [r["filter"] for r in hits[PASSED]] == ["test_axi_device"]
+    assert [r["filter"] for r in hits[FAILED]] == ["test_horizon_dma"]
+
+
+def test_horizon_missing_file_is_inconclusive():
+    assert parse_horizon("") == (INCONCLUSIVE, {})
+    assert parse_horizon("/nonexistent/horizon.json") == (INCONCLUSIVE, {})
+
+
+def test_horizon_stale_is_inconclusive(tmp_path):
+    path = _horizon(tmp_path, [{"name": "t", "result": "passed"}], ts="2020-01-01T00:00:00Z")
+    assert parse_horizon(path, max_age_days=7) == (INCONCLUSIVE, {})
+
+
+def test_horizon_wrong_schema_is_inconclusive(tmp_path):
+    path = _horizon(tmp_path, [{"name": "t", "result": "passed"}], schema="something-else/v1")
+    assert parse_horizon(path) == (INCONCLUSIVE, {})
+
+
+def test_horizon_evidence_flows_into_the_requirement(mapping, tmp_path):
+    """A green Horizon result makes AIIPSW-15 render with passing evidence."""
+    path = _horizon(tmp_path, [{"name": "test_horizon_cluster", "result": "passed"}])
+    _status, evidence = parse_horizon(path)
+    rows = load_expected(SIM_YAML, "1x3")
+    report = build(mapping, rows, rows, [], PASSED, extra_evidence=evidence)
+
+    covered = {r["key"] for r in report["requirements"] if r["passed"]}
+    assert HORIZON_REQUIREMENT in covered
+    md = render_markdown(report, META)
+    assert "AIIPSW-15" in md and "test_horizon_cluster" in md
+
+
+def test_no_horizon_evidence_leaves_the_requirement_uncovered(mapping):
+    """Without Horizon input, AIIPSW-15 stays in the no-evidence section."""
+    rows = load_expected(SIM_YAML, "1x3")
+    report = build(mapping, rows, rows, [], PASSED)  # no extra_evidence
+    covered = {r["key"] for r in report["requirements"] if r["passed"]}
+    assert HORIZON_REQUIREMENT not in covered
+
+
 def test_evidence_carries_no_test_counts(mapping):
     """Counts drift whenever a test lands; the map must not assert them.
 
     Inverted on purpose: strip the numeric forms that are immutable (PR refs,
-    release versions, PR tallies for a closed window) and flag anything left,
+    release versions, ticket keys, PR tallies for a closed window) and flag what is left,
     rather than trying to enumerate every way a count can be phrased.
     """
-    allowed = re.compile(r"(?:PR\s*)?#\d+|\bPR\s+\d+|\bv\d+(?:\.\d+)+|\b\d+\s+PRs\b", re.IGNORECASE)
+    allowed = re.compile(r"(?:PR\s*)?#\d+|\bPR\s+\d+|\bv\d+(?:\.\d+)+|\b\d+\s+PRs\b|\bAIIPSW-\d+\b", re.IGNORECASE)
     offenders = []
     for r in mapping["requirements"]:
         residue = allowed.sub("", r.get("_evidence", ""))
