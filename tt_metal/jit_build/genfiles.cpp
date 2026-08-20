@@ -358,8 +358,17 @@ FORCE_INLINE constexpr uint32_t get_compile_time_vararg() {{
     static_assert(idx < get_num_compile_time_varargs(), "Compile-time vararg index out of range");
     return kernel_compile_time_args[idx];
 }}
+// Called when an OOB access to vararg CTA is attempted. Meant to trigger the assertion
+// failure as an indirection: the ASSERT macro may expand to inline asm, which cannot be
+// present in a C++17 constexpr function. This is a workaround and can be inlined once we
+// migrate to C++20.
+inline void assert_compile_time_vararg_index_out_of_range() {{
+    ASSERT(false);  // Attempt to access out of bound vararg CTA.
+}}
 FORCE_INLINE constexpr uint32_t get_compile_time_vararg(uint32_t idx) {{
-    ASSERT(idx < get_num_compile_time_varargs());  // Attempt to access out of bound vararg CTA.
+    if (idx >= get_num_compile_time_varargs()) {{
+        assert_compile_time_vararg_index_out_of_range();
+    }}
     return kernel_compile_time_args[idx];
 }}
 )",
