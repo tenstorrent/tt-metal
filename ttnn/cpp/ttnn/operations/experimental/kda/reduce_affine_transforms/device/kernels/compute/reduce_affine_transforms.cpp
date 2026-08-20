@@ -99,53 +99,41 @@ TT_KERNEL void compute(uint32_t group) {
     constexpr uint32_t kv = Kt * Vt;
     DataflowBuffer initial_a(dfb::initial_a);
     DataflowBuffer initial_b(dfb::initial_b);
-    DataflowBuffer stage_a_ping(dfb::stage_a_ping);
-    DataflowBuffer stage_b_ping(dfb::stage_b_ping);
-    DataflowBuffer stage_a_pong(dfb::stage_a_pong);
-    DataflowBuffer stage_b_pong(dfb::stage_b_pong);
-    DataflowBuffer send_a_ping(dfb::send_a_ping);
-    DataflowBuffer send_b_ping(dfb::send_b_ping);
-    DataflowBuffer send_a_pong(dfb::send_a_pong);
-    DataflowBuffer send_b_pong(dfb::send_b_pong);
+    DataflowBuffer stage_a(dfb::stage_a);
+    DataflowBuffer stage_b(dfb::stage_b);
+    DataflowBuffer send_a(dfb::send_a);
+    DataflowBuffer send_b(dfb::send_b);
     DataflowBuffer remote_a(dfb::remote_a);
     DataflowBuffer remote_b(dfb::remote_b);
     DataflowBuffer scratch(dfb::scratch);
 
-    compute_kernel_hw_startup(dfb::initial_a, dfb::initial_b, dfb::stage_a_ping);
+    compute_kernel_hw_startup(dfb::initial_a, dfb::initial_b, dfb::stage_a);
     initial_a.wait_front(kk);
     initial_b.wait_front(kv);
-    copy(initial_a, stage_a_ping, send_a_ping, kk);
-    copy(initial_b, stage_b_ping, send_b_ping, kv);
+    copy(initial_a, stage_a, send_a, kk);
+    copy(initial_b, stage_b, send_b, kv);
     initial_a.pop_front(kk);
     initial_b.pop_front(kv);
 
-    bool ping = false;
     for (uint32_t distance = 1; distance < G; distance *= 2) {
         if (group < distance) {
             continue;
         }
-        DataflowBuffer& current_a = ping ? stage_a_pong : stage_a_ping;
-        DataflowBuffer& current_b = ping ? stage_b_pong : stage_b_ping;
-        DataflowBuffer& next_a = ping ? stage_a_ping : stage_a_pong;
-        DataflowBuffer& next_b = ping ? stage_b_ping : stage_b_pong;
-        DataflowBuffer& next_send_a = ping ? send_a_ping : send_a_pong;
-        DataflowBuffer& next_send_b = ping ? send_b_ping : send_b_pong;
-        current_a.wait_front(kk);
-        current_b.wait_front(kv);
+        stage_a.wait_front(kk);
+        stage_b.wait_front(kv);
         remote_a.wait_front(kk);
         remote_b.wait_front(kv);
-        pack_reconfig_data_format(next_a.get_id());
-        reconfig_data_format(remote_a.get_id(), current_a.get_id());
-        matmul_init(current_a.get_id(), remote_a.get_id());
-        matmul(current_a, remote_a, next_a, &next_send_a, Kt, Kt, Kt);
-        matmul(current_a, remote_b, scratch, nullptr, Kt, Kt, Vt);
+        pack_reconfig_data_format(stage_a.get_id());
+        reconfig_data_format(remote_a.get_id(), stage_a.get_id());
+        matmul_init(stage_a.get_id(), remote_a.get_id());
+        matmul(stage_a, remote_a, stage_a, &send_a, Kt, Kt, Kt);
+        matmul(stage_a, remote_b, scratch, nullptr, Kt, Kt, Vt);
         scratch.wait_front(kv);
-        add(scratch, current_b, next_b, next_send_b, kv);
-        current_a.pop_front(kk);
-        current_b.pop_front(kv);
+        add(scratch, stage_b, stage_b, send_b, kv);
+        stage_a.pop_front(kk);
+        stage_b.pop_front(kv);
         remote_a.pop_front(kk);
         remote_b.pop_front(kv);
         scratch.pop_front(kv);
-        ping = !ping;
     }
 }
