@@ -45,11 +45,11 @@ uint32_t prepare_chunk_recurrence_cb_size_bytes(
         bytes += tiles * buffers * tt::tile_size(data_format);
     };
     constexpr auto bf16 = tt::DataFormat::Float16_b;
-    add(ck, 1, bf16);
-    add(ck, 1, bf16);
-    add(cv, 1, bf16);
-    add(ck, 1, tt::tt_metal::datatype_to_dataformat_converter(gate_dtype));
-    add(Ct);
+    add(ck, 2, bf16);
+    add(ck, 2, bf16);
+    add(cv, 2, bf16);
+    add(ck, 2, tt::tt_metal::datatype_to_dataformat_converter(gate_dtype));
+    add(Ct, 2);
     add(cc);
     add(cc);
     add(cc);
@@ -58,16 +58,16 @@ uint32_t prepare_chunk_recurrence_cb_size_bytes(
     add(ck);
     add(ck);
     add(cc);
-    add(cc, 1, format(6));
-    add(cv, 1, format(0));
+    add(cc, 2, format(6));
+    add(cv, 2, format(0));
     add(ck);
-    add(ck, 1, format(1));
-    add(ck, 1, format(2));
-    add(cc, 1, format(3));
+    add(ck, 2, format(1));
+    add(ck, 2, format(2));
+    add(cc, 2, format(3));
     add(kv, 2);
-    add(std::max(cv, Kt), 1, format(5));
+    add(Kt, 2, format(5));
     add(std::max(cv, ck));
-    add(kc, 1, format(4));
+    add(kc, 2, format(4));
     add(kv);
     add(kv);
     add(kv);
@@ -172,11 +172,11 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
             .data_format_metadata = format};
     };
     m2::Group<m2::DataflowBufferSpec> dfb_specs = {
-        make_dfb(Q, ck, bf16),
-        make_dfb(K, ck, bf16),
-        make_dfb(V, cv, bf16),
-        make_dfb(GATE, ck, gate_format),
-        make_dfb(BETA, Ct, fp32),
+        make_dfb(Q, 2 * ck, bf16),
+        make_dfb(K, 2 * ck, bf16),
+        make_dfb(V, 2 * cv, bf16),
+        make_dfb(GATE, 2 * ck, gate_format),
+        make_dfb(BETA, 2 * Ct, fp32),
         make_dfb(EYE, cc, fp32),
         make_dfb(TRIL, cc, fp32),
         make_dfb(ONES, cc, fp32),
@@ -185,16 +185,16 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         make_dfb(DECAY_EXP, ck, fp32),
         make_dfb(DECAY_FACTOR, ck, fp32),
         make_dfb(LOWER_MASK, cc, fp32),
-        make_dfb(T_INV, cc, output_formats[6]),
-        make_dfb(V_BETA, cv, output_formats[0]),
+        make_dfb(T_INV, 2 * cc, output_formats[6]),
+        make_dfb(V_BETA, 2 * cv, output_formats[0]),
         make_dfb(K_BETA, ck, fp32),
-        make_dfb(W, ck, output_formats[1]),
-        make_dfb(Q_DECAY, ck, output_formats[2]),
-        make_dfb(INTRA, cc, output_formats[3]),
+        make_dfb(W, 2 * ck, output_formats[1]),
+        make_dfb(Q_DECAY, 2 * ck, output_formats[2]),
+        make_dfb(INTRA, 2 * cc, output_formats[3]),
         make_dfb(STATE_TWO, kv * 2, fp32),
-        make_dfb(V_NEW, std::max(cv, Kt), output_formats[5]),
+        make_dfb(V_NEW, 2 * Kt, output_formats[5]),
         make_dfb(OUTPUT_INTERMEDIATE, std::max(cv, ck), fp32),
-        make_dfb(K_DECAY_TRANSPOSED, kc, output_formats[4]),
+        make_dfb(K_DECAY_TRANSPOSED, 2 * kc, output_formats[4]),
         make_dfb(STATE_UPDATE, kv, fp32),
         make_dfb(STATE_TEMPORARY, kv, fp32),
         make_dfb(FINAL_STATE, kv, fp32),
