@@ -68,44 +68,13 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
     // The very last PACR of the tile is NOT in the replay — it goes in the
     // MOP template as last_inner / last_outer.
     //
-    // We use instrn_buffer writes (runtime values) instead of TTI (which
-    // requires compile-time immediates) so that face_r_dim / num_faces can
-    // be runtime parameters.
+    // PACK_INTF_SEL follows the runtime face_r_dim, so these PACRs have no
+    // immediate form and TT_PACR is the only way to issue them.
     if (replay_len > 0)
     {
-        // Pre-compute the two PACR instruction words we'll need
-        const std::uint32_t pacr_mod0 = TT_OP_PACR(
-            p_pacr::CFG_CTXT_0,
-            p_pacr::NO_ROW_PAD_ZERO,
-            p_pacr::DST_ACCESS_NORMAL_MODE,
-            ADDR_MOD_0,
-            p_pacr::ADDR_CNT_CTXT_0,
-            ZERO_OUTPUT_FLAG,
-            PACK_INTF_SEL,
-            0,
-            0,
-            0,
-            0,
-            0);
-
-        const std::uint32_t pacr_mod2 = TT_OP_PACR(
-            p_pacr::CFG_CTXT_0,
-            p_pacr::NO_ROW_PAD_ZERO,
-            p_pacr::DST_ACCESS_NORMAL_MODE,
-            ADDR_MOD_2,
-            p_pacr::ADDR_CNT_CTXT_0,
-            ZERO_OUTPUT_FLAG,
-            PACK_INTF_SEL,
-            0,
-            0,
-            0,
-            0,
-            0);
-
         // Enter recording mode: capture next replay_len instructions
         lltt::record<lltt::NoExec>(0, replay_len);
 
-        // Emit instructions into replay buffer via instrn_buffer (runtime-safe)
         for (std::uint32_t face = 0; face < num_faces; face++)
         {
             const bool is_last_face          = (face == num_faces - 1);
@@ -113,8 +82,22 @@ inline void _llk_pack_block_contiguous_mop_config_(const std::uint32_t face_r_di
 
             for (std::uint32_t p = 0; p < replay_pacrs; p++)
             {
-                const bool is_last_pacr_of_face = (p == pacrs_per_face - 1);
-                ckernel::instrn_buffer[0]       = is_last_pacr_of_face ? pacr_mod2 : pacr_mod0;
+                // ADDR_MOD_2 on the last PACR of a face clears Y and steps Z. One PACR either
+                // way, so the recorded length does not depend on the arm.
+                const std::uint32_t addr_mod = (p == pacrs_per_face - 1) ? ADDR_MOD_2 : ADDR_MOD_0;
+                TT_PACR(
+                    p_pacr::CFG_CTXT_0,
+                    p_pacr::NO_ROW_PAD_ZERO,
+                    p_pacr::DST_ACCESS_NORMAL_MODE,
+                    addr_mod,
+                    p_pacr::ADDR_CNT_CTXT_0,
+                    ZERO_OUTPUT_FLAG,
+                    PACK_INTF_SEL,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0);
             }
         }
     }

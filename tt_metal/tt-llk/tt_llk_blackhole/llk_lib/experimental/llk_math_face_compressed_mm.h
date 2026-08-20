@@ -408,6 +408,8 @@ inline void _llk_math_face_compressed_mm_(
     const std::uint32_t rem_iters  = iters % metas_per_word; // metas in the trailing word
     const std::uint32_t* meta_ptr  = reinterpret_cast<const std::uint32_t*>(base_address_meta);
 
+    // A table entry is a whole instruction word and the entries are not all the same instruction (MOP,
+    // REPLAY, ZEROACC, SETRWC, NOP), so these have no intrinsic form: the opcode is data here.
     constexpr auto tables                   = _llk_math_face_compressed_mm_tables_<ct_dim>();
     constexpr const std::uint32_t* l1_table = tables[0];
     constexpr const std::uint32_t* l2_table = tables[1];

@@ -1705,7 +1705,7 @@ extern volatile std::uint32_t __instrn_buffer[];
 
 #undef TT_PACR_SETREG
 #define TT_PACR_SETREG(Push, ModeSel, Unused, DisableStall, AddrSel, StreamId, Flush, Last) \
-    __builtin_rvtt_bh_pacrsetreg(                                                           \
+    __instrn_buffer[0] = __builtin_rvtt_bh_pacrsetreg_word(                                 \
         (unsigned)(Push),                                                                   \
         (unsigned)(ModeSel),                                                                \
         (unsigned)(Unused),                                                                 \
