@@ -6157,6 +6157,31 @@ else:
         ("kimi_k3", 32, 640, 4, 67.07),
     ]
 
+# Local measurement entry (no committed CI baseline): an 8-chip non-galaxy Blackhole box runs a
+# single 8-device ring with TP=1, so kimi_k3 keeps its production 24 Q heads per device while the
+# ring length matches galaxy's sp=8. Neither branch above covers sp_size=8 off galaxy, so the
+# ring-4 ids skip and the ring-8 ids do not exist there. expected_util is the galaxy projection;
+# run with RING_MLA_SDPA_GRID_OVERRIDE=10x10 (the default non-galaxy SDPA grid) to measure without
+# asserting the band.
+if not MESH_CONFIG.is_galaxy and MESH_CONFIG.sp_size == 8:
+    RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 32, 640, 8, 67.0))
+    # q64 K-chunk sweep on the 8-device ring. The per-device K prefix at the final chunk is 7040
+    # rows, so k in (128, 160, 320, 352, 640) divides it exactly and the rest straddle. k512 and up
+    # overflow L1 (1575936 B vs the 1572864 B max at k512).
+    for _k in (128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 480, 512):
+        RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 64, _k, 8, 67.0))
+    # Predictive test of the Sk_chunk_t-factorization model: Skt=19 (k608) is prime, so
+    # determine_largest_subblock_size collapses to (1,1)/(3,1) and find_valid_granularity to 1,
+    # while its neighbours Skt=18 (k576) and Skt=20 (k640) factor well. All three sit at 11-13
+    # chunks, so chunk-count overhead is near-constant across them. q32 keeps them inside L1.
+    for _k in (576, 608, 640):
+        RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 32, _k, 8, 67.0))
+    # q32 at the k values that topped the q64 sweep: q32 doubles the work-unit count (480 vs 240
+    # over 110 cores) so its occupancy quantization is finer, and Skt=14/10 keep the good
+    # subblock/granularity factorization at Sq_chunk_t=1 too.
+    for _k in (448, 320):
+        RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 32, _k, 8, 67.0))
+
 
 if MESH_CONFIG.is_galaxy:
     MINIMAX3_GQA_CHUNKED_PERF_CHECK_CONFIGS = [
