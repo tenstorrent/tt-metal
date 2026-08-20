@@ -8,8 +8,10 @@
 #include "tt-metalium/shape.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 
 #include <map>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -106,14 +108,19 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         "Input tensor A shard width must be divisible by the tile width");
     const uint32_t inA_K_tiles_per_core = inputA_shard_shape[1] / tt::constants::TILE_WIDTH;
 
-    const std::array<uint32_t, 2> inputB_shard_shape = input_tensor_b.memory_config().shard_spec().value().shape;
-    const uint32_t Kc = inputB_shard_shape[0];
-    const uint32_t Nc = inputB_shard_shape[1];
-    const uint32_t Kc_tiles = Kc / tt::constants::TILE_WIDTH;
+    const bool use_global_cb = operation_attributes.global_cb.has_value();
+    // A prefetcher-fed weight is ND-sharded in DRAM: it has no legacy shard spec, so both the
+    // [Kc, Nc] slab shape and the receiver grid come from the ND shard spec and the GCB.
+    const uint32_t Kc = use_global_cb ? static_cast<uint32_t>(input_tensor_b.nd_shard_spec()->shard_shape[-2])
+                                      : input_tensor_b.memory_config().shard_spec().value().shape[0];
+    const uint32_t Nc = use_global_cb ? static_cast<uint32_t>(input_tensor_b.nd_shard_spec()->shard_shape[-1])
+                                      : input_tensor_b.memory_config().shard_spec().value().shape[1];
+    const uint32_t Kc_tiles = Kc / tt::constants::TILE_HEIGHT;
     const uint32_t Nc_tiles = Nc / tt::constants::TILE_WIDTH;
 
     const auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
-    const auto inputB_core_range_set = input_tensor_b.memory_config().shard_spec().value().grid;
+    const auto inputB_core_range_set = use_global_cb ? operation_attributes.global_cb->receiver_cores()
+                                                     : input_tensor_b.memory_config().shard_spec().value().grid;
     const auto output_core_range_set = output_tensor.memory_config().shard_spec().value().grid;
 
     const uint32_t num_B_cores = inputB_core_range_set.num_cores();
@@ -166,12 +173,19 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
 
     ProgramDescriptor desc;
 
-    constexpr uint32_t in0_cb_index = CBIndex::c_0;       // this core's A slice (gather source)
-    constexpr uint32_t in1_cb_index = CBIndex::c_1;       // this core's B block (resident)
-    constexpr uint32_t out_cb_index = CBIndex::c_2;       // final output shard (base cores)
-    constexpr uint32_t full_in0_cb_index = CBIndex::c_3;  // gathered full A
-    constexpr uint32_t partial_cb_index = CBIndex::c_4;   // this core's partial product
-    constexpr uint32_t reduce_cb_index = CBIndex::c_5;    // gathered K_blocks partials (base cores)
+    // These are this op's own CB indices; every kernel receives them as named "cb_*" compile-time
+    // args, so op fusion can pool-allocate different hardware slots for two instances sharing a
+    // core without either factory having to know about the other.
+    const uint32_t in0_cb_index = CBIndex::c_0;       // this core's A slice (gather source)
+    const uint32_t in1_cb_index = CBIndex::c_1;       // this core's B block (resident)
+    const uint32_t out_cb_index = CBIndex::c_2;       // final output shard (base cores)
+    const uint32_t full_in0_cb_index = CBIndex::c_3;  // gathered full A
+    const uint32_t partial_cb_index = CBIndex::c_4;   // this core's partial product
+    const uint32_t reduce_cb_index = CBIndex::c_5;    // gathered K_blocks partials (base cores)
+    // GCB path only: sync_cb carries "compute is done reading in1" back to the reader so it can
+    // release the GCB page; remote_cb is the remote (GCB) index aliased onto the local in1 CB.
+    const uint32_t sync_cb_index = CBIndex::c_6;
+    const uint32_t remote_cb_index = CBIndex::c_31;
 
     const uint32_t block_num_tiles = M_tiles * Nc_tiles;  // tiles in one (partial / output) shard
 
@@ -186,17 +200,94 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         }}},
         .buffer = input_tensor_a.buffer(),
     });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = Kc_tiles * Nc_tiles * in1_tile_size,
-        .core_ranges = all_compute_cores_with_bbox,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = in1_cb_index,
-            .data_format = in1_data_format,
-            .page_size = in1_tile_size,
-            .tile = in1_tile_desc,
-        }}},
-        .buffer = input_tensor_b.buffer(),
-    });
+    // A GCB page is `num_k_blocks`-th of a receiver's [Kc, Nc] weight slab: a whole number of
+    // K-rows, contiguous in the slab. num_k_blocks == 1 makes the page the whole slab (one credit
+    // per invocation, the GCB must hold a slab); higher values stream the slab in and let the GCB
+    // be smaller than it. The local alias (in1_cb_index) stays tile-paged so the compute kernel
+    // indexes tiles within the page it is holding; the remote index is page-paged so one
+    // page-credit == one K-block.
+    const uint32_t num_k_blocks = operation_attributes.global_cb_k_blocks;
+    TT_FATAL(
+        Kc_tiles % num_k_blocks == 0,
+        "partial_width_sharded matmul_decode with global_cb_k_blocks={} requires the per-core Kc in tiles ({}) to be "
+        "divisible by it, because a GCB page is a whole number of K-rows of the weight slab",
+        num_k_blocks,
+        Kc_tiles);
+    // Streaming completes each partial tile across several pages, and the running sum lives in the
+    // partial CB because the packer accumulates into it. A block-float format cannot be read back
+    // and added to, so it has to be rejected rather than quietly dropping partial sums.
+    TT_FATAL(
+        num_k_blocks == 1 || out_data_format == tt::DataFormat::Float32 ||
+            out_data_format == tt::DataFormat::Float16_b || out_data_format == tt::DataFormat::Float16,
+        "partial_width_sharded matmul_decode with global_cb_k_blocks={} accumulates partial sums in the partial CB, "
+        "so the output dtype must be float32/bfloat16/float16, but it is {}",
+        num_k_blocks,
+        out_data_format);
+    const uint32_t in1_k_block_tiles = Kc_tiles / num_k_blocks;
+    const uint32_t in1_slab_num_tiles = Kc_tiles * Nc_tiles;
+    const uint32_t in1_slab_bytes = in1_slab_num_tiles * in1_tile_size;
+    const uint32_t in1_page_num_tiles = in1_k_block_tiles * Nc_tiles;
+    const uint32_t in1_page_bytes = in1_page_num_tiles * in1_tile_size;
+    if (use_global_cb) {
+        const auto& gcb = *operation_attributes.global_cb;
+        // Round the window down to a whole number of pages; the remote CB requires its total
+        // size to be a multiple of its page size, and the local alias only wraps in step with
+        // the remote ring if it spans whole pages too.
+        const uint32_t gcb_window_bytes = (gcb.size() / in1_page_bytes) * in1_page_bytes;
+        // Streaming keeps one page un-acked while the next is published, so the ring has to hold
+        // two. With one page it would deadlock: the reader waits for a page the sender cannot
+        // write until the reader returns the credit it is still holding.
+        const uint32_t min_pages = num_k_blocks > 1 ? 2 : 1;
+        TT_FATAL(
+            gcb_window_bytes >= min_pages * in1_page_bytes,
+            "partial_width_sharded matmul_decode with global_cb_k_blocks={} needs a GCB of at least {} page(s) per "
+            "receiver ({} B), but the GCB holds {} B",
+            num_k_blocks,
+            min_pages,
+            min_pages * in1_page_bytes,
+            gcb.size());
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = gcb_window_bytes,
+            .core_ranges = inputB_core_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = in1_cb_index,
+                .data_format = in1_data_format,
+                .page_size = in1_tile_size,
+                .tile = in1_tile_desc,
+            }}},
+            .remote_format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = remote_cb_index,
+                .data_format = in1_data_format,
+                .page_size = in1_page_bytes,
+            }}},
+            .global_circular_buffer = std::addressof(gcb),
+        });
+        // Compute -> reader release signal: one 16 B page (one credit) per in1 page. Deliberately
+        // one page deep -- it is what bounds compute to a single un-acked GCB page, which is the
+        // invariant the two-page ring minimum above is derived from.
+        constexpr uint32_t sync_cb_page_bytes = 16;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = sync_cb_page_bytes,
+            .core_ranges = inputB_core_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = sync_cb_index,
+                .data_format = tt::DataFormat::UInt16,
+                .page_size = sync_cb_page_bytes,
+            }}},
+        });
+    } else {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in1_slab_bytes,
+            .core_ranges = all_compute_cores_with_bbox,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = in1_cb_index,
+                .data_format = in1_data_format,
+                .page_size = in1_tile_size,
+                .tile = in1_tile_desc,
+            }}},
+            .buffer = input_tensor_b.buffer(),
+        });
+    }
     desc.cbs.push_back(CBDescriptor{
         .total_size = block_num_tiles * out_tile_size,
         .core_ranges = output_core_range_set,
@@ -266,8 +357,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         "partial_width_sharded matmul_decode two-hub broadcast requires a compute rectangle of at least 2 cores");
 
     const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
-        in0_cb_index,
-        full_in0_cb_index,
         shard_num_tiles,
         in0_tile_size,
         num_senders,
@@ -283,8 +372,19 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         static_cast<uint32_t>(mcast_end_phys.x),
         static_cast<uint32_t>(mcast_end_phys.y),
         split_H,
-        in1_cb_index,
-        Kc_tiles * Nc_tiles,
+        in1_page_num_tiles,
+        num_k_blocks,
+    };
+
+    // Every CB index travels as a named "cb_*" arg: op fusion pool-allocates hardware CB slots
+    // across the phases it merges and rewrites exactly these args, so positional or hard-coded
+    // indices would leave the kernels pointing at pre-remap slots.
+    const KernelDescriptor::NamedCompileTimeArgs reader_named_args = {
+        {"cb_in0", in0_cb_index},
+        {"cb_full_in0", full_in0_cb_index},
+        {"cb_in1", in1_cb_index},
+        {"cb_in1_remote", remote_cb_index},
+        {"cb_sync", sync_cb_index},
     };
 
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);
@@ -304,6 +404,13 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         return HubRole::Plain;
     };
 
+    // The GCB path pins every reader to NOC 0. remote_cb_pop_front acks the page with a
+    // non-posted atomic increment into the DRISC sender's L1, and that ack only comes back on
+    // NOC 0 -- on NOC 1 the following atomic barrier never drains and the core hangs after the
+    // matmul has otherwise finished. This costs the two-hub gather its NOC split in the GCB
+    // path only.
+    auto reader_noc_of = [&](NOC noc) { return use_global_cb ? NOC::NOC_0 : noc; };
+
     auto build_reader_kernel = [&](const std::vector<CoreCoord>& cores, NOC noc) {
         std::vector<CoreRange> ranges;
         ranges.reserve(cores.size());
@@ -317,19 +424,29 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_kernel_desc.core_ranges = CoreRangeSet(ranges);
         reader_kernel_desc.compile_time_args = reader_compile_time_args;
+        reader_kernel_desc.named_compile_time_args = reader_named_args;
         reader_kernel_desc.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = noc,
+            .noc = reader_noc_of(noc),
         };
+        if (use_global_cb) {
+            reader_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
+        }
         reader_kernel_desc.runtime_args.reserve(cores.size());
         for (const auto& core : cores) {
             const auto it = sender_id_by_core.find(core);
             const bool is_sender = it != sender_id_by_core.end();
             const uint32_t sender_id = is_sender ? it->second : 0;
+            // The reader runs on the merged A/B/output bounding box, but only B cores are GCB
+            // receivers and only they have the in1 / sync CBs configured.
+            const bool is_in1_receiver = inputB_core_range_set.contains(core);
             reader_kernel_desc.runtime_args.emplace_back(
                 core,
                 KernelDescriptor::CoreRuntimeArgs{
-                    static_cast<uint32_t>(is_sender), sender_id, static_cast<uint32_t>(role_of(core))});
+                    static_cast<uint32_t>(is_sender),
+                    sender_id,
+                    static_cast<uint32_t>(role_of(core)),
+                    static_cast<uint32_t>(is_in1_receiver)});
         }
         return reader_kernel_desc;
     };
@@ -370,13 +487,13 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     // Writer uses the NOC opposite the reader on the same core.
     std::map<CoreCoord, NOC> reader_noc_by_core;
     for (const auto& core : noc0_cores) {
-        reader_noc_by_core[core] = NOC::NOC_0;
+        reader_noc_by_core[core] = reader_noc_of(NOC::NOC_0);
     }
     for (const auto& core : noc1_cores) {
-        reader_noc_by_core[core] = NOC::NOC_1;
+        reader_noc_by_core[core] = reader_noc_of(NOC::NOC_1);
     }
     for (const auto& core : default_noc_cores) {
-        reader_noc_by_core[core] = NOC::RISCV_1_default;
+        reader_noc_by_core[core] = reader_noc_of(NOC::RISCV_1_default);
     }
 
     const std::vector<CoreCoord> b_cores = corerange_to_cores(inputB_core_range_set, std::nullopt, true);
@@ -403,12 +520,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         writer_kernel_desc.core_ranges = CoreRangeSet(ranges);
         writer_kernel_desc.compile_time_args = {
-            partial_cb_index,
-            reduce_cb_index,
             block_num_tiles,
             out_tile_size,
             K_blocks,
             reduce_sem_id,
+        };
+        writer_kernel_desc.named_compile_time_args = {
+            {"cb_partial", partial_cb_index},
+            {"cb_reduce", reduce_cb_index},
         };
         writer_kernel_desc.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_0,
@@ -476,7 +595,19 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         Nc_tiles,
         K_blocks,
         inA_K_tiles_per_core,
+        num_k_blocks,
     };
+    compute_kernel_desc.named_compile_time_args = {
+        {"cb_full_in0", full_in0_cb_index},
+        {"cb_in1", in1_cb_index},
+        {"cb_out", out_cb_index},
+        {"cb_partial", partial_cb_index},
+        {"cb_reduce", reduce_cb_index},
+        {"cb_sync", sync_cb_index},
+    };
+    if (use_global_cb) {
+        compute_kernel_desc.defines.emplace_back("ENABLE_GLOBAL_CB", "1");
+    }
     log_debug(
         tt::LogOp,
         "M_tiles: {}, K_tiles: {}, Kc_tiles: {}, Nc_tiles: {}, K_blocks: {}",
