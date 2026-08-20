@@ -37,24 +37,109 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pandas
+          pip install pandas snowflake-connector-python
+          # sshpass is available in most CI environments; if not: apt-get install sshpass
 
-      # Placeholder: Query Snowflake for the latest main baseline
-      # TODO: Replace with actual Snowflake query once credentials are available
-      #
-      # Schema:
-      #   SELECT perf_data
-      #   FROM baselines
-      #   WHERE arch = 'wormhole' | 'blackhole'
-      #     AND commit_sha = (latest main)
-      #   ORDER BY timestamp DESC LIMIT 1
-      #
-      # For now, we assume baseline CSVs are available from the previous nightly run
-      # in a well-known location or downloaded from GCS/SFTP.
-      - name: Download baseline from artifacts
+      # Query Snowflake for the latest main baseline
+      - name: Get branch point commit
+        id: branch_point
         run: |
-          echo "TODO: Download baseline perf_data CSVs from Snowflake or previous nightly"
-          echo "Baseline should be the latest measurement for the current commit's branch point on main"
+          git fetch origin main --quiet
+          BRANCH_POINT=$(git merge-base origin/main HEAD)
+          echo "branch_point=$BRANCH_POINT" >> $GITHUB_OUTPUT
+          echo "Comparing against branch point: $BRANCH_POINT"
+
+      - name: Query Snowflake for baseline
+        id: baseline
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+          SNOWFLAKE_WAREHOUSE: ${{ secrets.SNOWFLAKE_WAREHOUSE }}
+          SNOWFLAKE_DATABASE: ${{ secrets.SNOWFLAKE_DATABASE }}
+          BASELINE_COMMIT: ${{ steps.branch_point.outputs.branch_point }}
+          ARCH: wormhole
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          import json
+          from snowflake.connector import connect
+
+          # Snowflake credentials from GitHub secrets
+          conn = connect(
+            account=os.environ['SNOWFLAKE_ACCOUNT'],
+            user=os.environ['SNOWFLAKE_USER'],
+            password=os.environ['SNOWFLAKE_PASSWORD'],
+            warehouse=os.environ['SNOWFLAKE_WAREHOUSE'],
+            database=os.environ['SNOWFLAKE_DATABASE']
+          )
+
+          cursor = conn.cursor()
+
+          # Query: Get the latest baseline for this architecture at the branch point
+          # If exact commit exists, use it; otherwise use the latest before it
+          query = """
+          SELECT commit_sha, timestamp, run_id
+          FROM llk_baselines
+          WHERE arch = %s
+            AND timestamp = (
+              SELECT MAX(timestamp)
+              FROM llk_baselines
+              WHERE arch = %s
+                AND commit_sha <= %s
+            )
+          LIMIT 1
+          """
+
+          cursor.execute(query, (os.environ['ARCH'], os.environ['ARCH'], os.environ['BASELINE_COMMIT']))
+          result = cursor.fetchone()
+          cursor.close()
+          conn.close()
+
+          if result:
+            commit_sha, timestamp, run_id = result
+            print(f"✓ Found baseline: {commit_sha} ({timestamp})")
+            with open('baseline_metadata.json', 'w') as f:
+              json.dump({
+                'commit_sha': commit_sha,
+                'timestamp': timestamp,
+                'run_id': run_id
+              }, f)
+          else:
+            print("⚠️  No baseline found; this may be the first run")
+            # Store empty metadata; gate will skip comparison
+            with open('baseline_metadata.json', 'w') as f:
+              json.dump({}, f)
+          PYTHON
+
+      - name: Download baseline perf_data from SFTP
+        env:
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_USER: ${{ secrets.SFTP_USER }}
+          SFTP_PASS: ${{ secrets.SFTP_PASSWORD }}
+        run: |
+          set +e  # Don't fail if baseline doesn't exist (first run)
+
+          # Read baseline commit from metadata
+          BASELINE_COMMIT=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', ''))")
+
+          if [ -z "$BASELINE_COMMIT" ]; then
+            echo "⚠️  No baseline commit found; skipping baseline download"
+            exit 0
+          fi
+
+          mkdir -p baseline_perf
+
+          echo "Downloading baseline from SFTP: perf_${BASELINE_COMMIT}/"
+          sshpass -p "${SFTP_PASS}" sftp -o StrictHostKeyChecking=no \
+            "${SFTP_USER}@${SFTP_HOST}:/baselines/llk/perf_${BASELINE_COMMIT}/" \
+            baseline_perf/ || {
+            echo "⚠️  Could not download baseline (may be staging -> baselines delay)"
+            exit 0
+          }
+
+          echo "✓ Baseline downloaded"
+          find baseline_perf -name "*.csv" | wc -l | xargs echo "CSV files:"
 
       # Download current run artifacts (perf_data CSVs from the build job)
       - name: Download current run artifacts
@@ -129,24 +214,37 @@ jobs:
           name: perf_data
           path: perf_data
 
-      # Placeholder: Upload perf_data to SFTP staging
+      # Upload perf_data to SFTP staging
       # The post-merge workflow will retrieve it from here and upload as baseline
       - name: Upload perf_data to SFTP staging
         env:
           COMMIT_SHA: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_USER: ${{ secrets.SFTP_USER }}
+          SFTP_PASS: ${{ secrets.SFTP_PASSWORD }}
         run: |
-          echo "TODO: Upload perf_data to SFTP staging area"
+          set -e
+          STAGING_DIR="perf_${COMMIT_SHA}"
+          SFTP_STAGING="/staging/llk-baselines/"
+
+          echo "Uploading perf_data to SFTP staging: ${STAGING_DIR}/"
+
+          # Create remote directory and upload all CSVs
+          sshpass -p "${SFTP_PASS}" sftp -o StrictHostKeyChecking=no \
+            "${SFTP_USER}@${SFTP_HOST}" <<EOF
+          mkdir -p ${SFTP_STAGING}${STAGING_DIR}
+          lcd current_perf
+          cd ${SFTP_STAGING}${STAGING_DIR}
+          mput *.csv
+          ls -lh
+          bye
+          EOF
+
+          echo "✓ Perf data uploaded to staging"
           echo ""
-          echo "SFTP server: (from data team)"
-          echo "Staging path: /staging/llk-baselines/perf_${COMMIT_SHA}/"
-          echo "Contents: All perf_data CSVs from current_perf/"
-          echo ""
-          echo "After merge to main, post-merge workflow will:"
-          echo "1. Fetch from staging/perf_${COMMIT_SHA}/"
-          echo "2. Convert to Parquet"
-          echo "3. Upload to /baselines/llk/ in Snowflake"
-          echo ""
-          echo "Credentials needed:"
-          echo "  - SFTP_HOST, SFTP_USER, SFTP_PASSWORD"
-          echo "  - Or SFTP_KEY if using key-based auth"
+          echo "Workflow: After PR merges to main:"
+          echo "  1. llk-perf-baseline-snapshot.yaml triggers"
+          echo "  2. Retrieves from ${SFTP_STAGING}${STAGING_DIR}/"
+          echo "  3. Converts to Parquet"
+          echo "  4. Uploads to /baselines/llk/ for next PR's gate"
