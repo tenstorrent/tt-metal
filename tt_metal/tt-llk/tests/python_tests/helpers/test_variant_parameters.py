@@ -1046,11 +1046,18 @@ class TOP32_RM(TemplateParameter):
                       (``top32_rm_dev_compute_v2.cpp``), then finishes any remainder in
                       64-element chunks the way that kernel does. Mode 1 requires the input to
                       be pre-sorted into descending runs of 32.
+    ``via_wrappers``  route every SFPU call through the Metal wrapper layer
+                      (``experimental/llk_sfpu/llk_math_deepseek_top32_rm.h``) instead of
+                      calling the ``ckernel::sfpu::`` primitives directly. The wrappers are
+                      thin -- each is the same ``_llk_math_eltwise_unary_sfpu_params_`` call --
+                      so this is the same computation through one more layer, and the only thing
+                      in the tree that calls those 7 entry points at all.
     """
 
     row_elements: int = 64
     datum_bytes: int = 2
     top_min: bool = False
+    via_wrappers: bool = False
     # Named for the constant it emits rather than bare `mode`: field names have to be unique
     # across every parameter class, or two params in one test produce duplicate perf-CSV
     # columns (test_perf_header_gate.py). `mode` is already taken by GENERALIZED_MOE_GATE.
@@ -1076,6 +1083,7 @@ class TOP32_RM(TemplateParameter):
                 f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.datum_bytes}u;",
                 f"constexpr bool TOP32_TOP_MIN = {str(self.top_min).lower()};",
                 f"constexpr std::uint32_t TOP32_MODE = {self.top32_mode}u;",
+                f"#define TOP32_VIA_WRAPPERS {int(self.via_wrappers)}",
             ]
         )
 

@@ -245,6 +245,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h"
 
+#if TOP32_VIA_WRAPPERS
+// The Metal-side wrapper layer for this family: 7 entry points that had no caller anywhere in
+// the tree. They are thin -- each is the same `_llk_math_eltwise_unary_sfpu_params_` call this
+// driver makes directly -- so routing through them costs nothing and is the only way anything
+// calls them. Reachable from here for the same reason deepseek_moe_gate_test.cpp can include
+// llk_sfpu/ headers: the tt-llk test build has the Metal llk_api directory on its include path.
+#include "experimental/llk_sfpu/llk_math_deepseek_top32_rm.h"
+#endif
+
 using namespace ckernel;
 
 // The consumer's sort directions, named rather than passed as 0/1 like the kernel does.
@@ -259,26 +268,38 @@ static constexpr bool ASCENDING  = true;
 // does; the expansion is the same call.
 inline void top32_phases_steps(std::uint32_t dst_tile, bool direction)
 {
+#if TOP32_VIA_WRAPPERS
+    llk_math_deepseek_top32_rm_local_sort<false /* APPROXIMATE */, is_fp32_dest_acc_en>(dst_tile, static_cast<int>(direction));
+#else
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_bitonic_top32_phases_steps_<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>,
         dst_tile,
         VectorMode::RC_custom,
         static_cast<int>(direction));
+#endif
 }
 
 inline void top32_merge(std::uint32_t dst_tile, bool across_tiles)
 {
+#if TOP32_VIA_WRAPPERS
+    llk_math_deepseek_top32_rm_merge<false /* APPROXIMATE */, is_fp32_dest_acc_en, TOP32_TOP_MIN>(dst_tile, across_tiles);
+#else
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_bitonic_top32_merge_<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en, TOP32_TOP_MIN>,
         dst_tile,
         VectorMode::RC_custom,
         across_tiles);
+#endif
 }
 
 inline void top32_rebuild(std::uint32_t dst_tile, bool direction, bool skip_second)
 {
+#if TOP32_VIA_WRAPPERS
+    llk_math_deepseek_top32_rm_rebuild<false /* APPROXIMATE */, is_fp32_dest_acc_en>(dst_tile, direction, skip_second);
+#else
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_bitonic_top32_rebuild_<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>, dst_tile, VectorMode::RC_custom, direction, skip_second);
+#endif
 }
 
 // Mode 1's three entry points. prep's third template argument is the direction its rebuild
@@ -288,29 +309,41 @@ inline void top32_rebuild(std::uint32_t dst_tile, bool direction, bool skip_seco
 template <bool top_min>
 inline void top32_pre_sorted_prep(std::uint32_t dst_tile)
 {
+#if TOP32_VIA_WRAPPERS
+    llk_math_deepseek_top32_of_1024_rm_pre_sorted_prep<false /* APPROXIMATE */, is_fp32_dest_acc_en, top_min>(dst_tile);
+#else
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_bitonic_top32_of_1024_rm_pre_sorted_prep_<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en, top_min>,
         dst_tile,
         VectorMode::RC_custom,
         dst_tile);
+#endif
 }
 
 inline void top32_pre_sorted_combine(std::uint32_t dst_tile)
 {
+#if TOP32_VIA_WRAPPERS
+    llk_math_deepseek_top32_of_1024_rm_pre_sorted_combine<false /* APPROXIMATE */, is_fp32_dest_acc_en>(dst_tile);
+#else
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_bitonic_top32_of_1024_rm_pre_sorted_combine_<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>,
         dst_tile,
         VectorMode::RC_custom,
         dst_tile);
+#endif
 }
 
 inline void top32_pre_sorted_final(std::uint32_t dst_tile)
 {
+#if TOP32_VIA_WRAPPERS
+    llk_math_deepseek_top32_of_1024_rm_pre_sorted_final<false /* APPROXIMATE */, is_fp32_dest_acc_en>(dst_tile);
+#else
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::_bitonic_top32_of_1024_rm_pre_sorted_final_<false /* APPROXIMATION_MODE */, is_fp32_dest_acc_en>,
         dst_tile,
         VectorMode::RC_custom,
         dst_tile);
+#endif
 }
 
 // Mode 1: transpose_init's math half.
@@ -393,8 +426,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         math_transpose_tile(VALUE_TILE, math_format);
         math_transpose_tile(INDEX_TILE, math_format);
 
+#if TOP32_VIA_WRAPPERS
+        llk_math_deepseek_top32_rm_init<false /* APPROXIMATE */>();
+#else
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
         ckernel::sfpu::_top32_rm_init_();
+#endif
 
         top32_pre_sorted_prep<false /* top_min: descending */>(VALUE_TILE);
 
@@ -439,8 +476,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         return;
     }
 
+#if TOP32_VIA_WRAPPERS
+    llk_math_deepseek_top32_rm_init<false /* APPROXIMATE */>();
+#else
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
     ckernel::sfpu::_top32_rm_init_();
+#endif
 
     for (std::uint32_t first = 0; first < TOP32_ROW_ELEMENTS; first += ELEMENTS_PER_CHUNK)
     {

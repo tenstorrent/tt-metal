@@ -139,7 +139,7 @@ def _pad_to_tile(flat):
     row_elements=ROW_ELEMENTS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_top32_rm(formats, row_elements, dest_acc):
+def test_top32_rm(formats, row_elements, dest_acc, via_wrappers=False):
     is_32bit = formats.input_format.is_32_bit()
     if is_32bit and dest_acc == DestAccumulation.No:
         pytest.skip("32-bit datums need fp32 Dest")
@@ -173,6 +173,7 @@ def test_top32_rm(formats, row_elements, dest_acc):
                 datum_bytes=4 if is_32bit else 2,
                 top_min=False,
                 top32_mode=0,
+                via_wrappers=via_wrappers,
             )
         ],
         runtimes=[],
@@ -281,7 +282,7 @@ def _pre_sorted_stimuli(row_elements):
     formats=PRE_SORTED_FORMATS,
     row_elements=PRE_SORTED_ROW_ELEMENTS,
 )
-def test_top32_rm_pre_sorted(formats, row_elements):
+def test_top32_rm_pre_sorted(formats, row_elements, via_wrappers=False):
     """The >= 1024-element path: transpose whole tiles, then prep / combine / final."""
     values, indices = _pre_sorted_stimuli(row_elements)
 
@@ -311,6 +312,7 @@ def test_top32_rm_pre_sorted(formats, row_elements):
                 datum_bytes=4,  # Float32
                 top_min=False,
                 top32_mode=1,
+                via_wrappers=via_wrappers,
             )
         ],
         runtimes=[],
@@ -436,3 +438,43 @@ def test_top32_rm_32bit_partial_chunk(formats, row_elements, request):
         f"  device: {device_values.tolist()}\n"
         f"  golden: {golden_values.tolist()}"
     )
+
+
+# --- the Metal wrapper layer ---------------------------------------------------------------
+
+# `experimental/llk_sfpu/llk_math_deepseek_top32_rm.h` publishes 7 entry points for this family
+# and, before these two tests, **nothing in the tree called any of them** -- the in-tree
+# consumers drive the `ckernel::sfpu::` primitives directly through SFPU_UNARY_CALL. The
+# wrappers are thin (each is the same `_llk_math_eltwise_unary_sfpu_params_` call the driver
+# makes itself), so the point is not new arithmetic: it is that the wrapper layer compiles, is
+# code-generated, and computes what the primitives compute. A signature drift or a wrong
+# template argument inside a wrapper is invisible without this.
+
+
+@parametrize(
+    formats=FORMATS,
+    row_elements=[64, 160],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_top32_rm_via_metal_wrappers(formats, row_elements, dest_acc):
+    """The plain mode, driven entirely through the Metal wrapper layer.
+
+    Same assertions as ``test_top32_rm`` -- values and indices, exactly -- so a wrapper that
+    forwards the wrong argument or instantiates the wrong template shows up as a wrong answer
+    rather than as nothing at all. Covers `llk_math_deepseek_top32_rm_init`, `_local_sort`,
+    `_merge` and `_rebuild`; the pre-sorted test below covers the other three.
+    """
+    test_top32_rm(formats, row_elements, dest_acc, via_wrappers=True)
+
+
+@parametrize(
+    formats=PRE_SORTED_FORMATS,
+    row_elements=[1024, 1088],
+)
+def test_top32_rm_pre_sorted_via_metal_wrappers(formats, row_elements):
+    """The pre-sorted mode through the wrappers: `_prep`, `_combine`, `_final`.
+
+    1088 rather than only 1024 so the tail path runs too, which is what puts `_rebuild` and
+    `_merge` through the wrapper layer in this mode as well.
+    """
+    test_top32_rm_pre_sorted(formats, row_elements, via_wrappers=True)
