@@ -325,6 +325,26 @@ jobs:
             google/gemma-4-*)
               export TT_LEAN_DECODE_WARMUP=1
               export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
+              # Wormhole: force the async-decode capability OFF.
+              #
+              # Dropping --async-scheduling from additional-server-args is NOT
+              # enough. Gemma4 advertises supports_async_decode from
+              # GEMMA4_SUPPORTS_ASYNC_DECODE, which defaults to "1", and the TT
+              # platform then turns async scheduling on by itself — run
+              # 32375657713 removed the flag and the server still logged
+              # "Asynchronous scheduling is enabled". Unlike the
+              # tt-inference-server model specs, this pipeline launches
+              # server_example_tt.py directly and never picks up the spec env,
+              # so the kill-switch has to be set here.
+              #
+              # Async decode is implicated in the WH-T3K-only decode hang
+              # (#49494) and measures no throughput benefit on WH at
+              # concurrency 32, so WH legs run without it. Blackhole legs keep
+              # async on and are unaffected by this branch.
+              if [ "${{ matrix.test-group.arch }}" = "arch-wormhole_b0" ]; then
+                export GEMMA4_SUPPORTS_ASYNC_DECODE=0
+                echo "Gemma4 WH: GEMMA4_SUPPORTS_ASYNC_DECODE=0 (async decode disabled on Wormhole)"
+              fi
               # 31B/12B: hybrid-OFF allocates a full-length KV buffer per layer, so
               # the all-user pool must match the served max_model_len (BH 256k /
               # WH-T3K 16k). Blindly pinning 262144 OOMs Wormhole T3K (run
