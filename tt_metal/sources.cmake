@@ -155,6 +155,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/shape.hpp
     api/tt-metalium/shape2d.hpp
     api/tt-metalium/shape_base.hpp
+    api/tt-metalium/shard_data_transfer.hpp
     api/tt-metalium/sub_device.hpp
     api/tt-metalium/sub_device_types.hpp
     api/tt-metalium/system_mesh.hpp

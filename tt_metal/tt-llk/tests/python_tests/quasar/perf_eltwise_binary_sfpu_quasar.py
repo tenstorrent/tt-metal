@@ -93,13 +93,14 @@ def test_perf_eltwise_binary_sfpu_float_quasar(
     tile_indices,
     binary_op_mathop,
 ):
-    binary_op, mathop = binary_op_mathop
+    binary_op, mathop, approx_mode = binary_op_mathop
     run_eltwise_binary_sfpu_float_quasar(
         formats_dest_acc,
         implied_math_format,
         tile_indices,
         binary_op,
         mathop,
+        approx_mode,
         **_perf_kwargs(perf_report),
     )
 

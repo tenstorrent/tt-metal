@@ -1,13 +1,13 @@
 name: 🗓️ LLK ttsim Weekly
 
 # Standalone scheduler for the LLK ttsim regression suite. Runs the full
-# regression against both architectures (blackhole + wormhole) on a
-# hardware-less runner. ttsim is still under active development so the
-# expectation is that many tests will fail — this workflow is strictly
-# *informational*: the job status stays neutral, no pass/fail checks are
-# published, and the Slack digest uses neutral language ("N/M passing")
-# rather than success/failure banners. The deliverable is the HTML report
-# uploaded as a per-arch artifact.
+# regression against blackhole, wormhole, and quasar on a hardware-less
+# runner. ttsim is still under active development so the expectation is
+# that many tests will fail — this workflow is strictly *informational*:
+# the job status stays neutral, no pass/fail checks are published, and
+# the Slack digest uses neutral language ("N/M passing") rather than
+# success/failure banners. The deliverable is the HTML report uploaded
+# as a per-arch artifact.
 #
 # Triggers:
 #   - on-demand via the Actions tab (workflow_dispatch)
@@ -28,7 +28,7 @@ on:
       timeout_minutes:
         description: "Per-architecture job timeout in minutes"
         required: false
-        default: "120"
+        default: "180"
         type: string
   schedule:
     # Fridays at 02:00 UTC. GitHub evaluates cron in UTC (note: scheduled
@@ -61,7 +61,7 @@ jobs:
       # empty and the `|| 'N'` fallback kicks in.
       workers: ${{ fromJSON(inputs.workers || '10') }}
       per_test_timeout_seconds: ${{ fromJSON(inputs.per_test_timeout_seconds || '300') }}
-      timeout_minutes: ${{ fromJSON(inputs.timeout_minutes || '120') }}
+      timeout_minutes: ${{ fromJSON(inputs.timeout_minutes || '180') }}
 
   ttsim-digest:
     name: "📊 Weekly ttsim digest"
@@ -88,7 +88,15 @@ jobs:
           path: reports/wormhole
         continue-on-error: true
 
-      # Parse both arch XMLs with Python stdlib (no extra dependency) and
+      - name: Download quasar report
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ttsim-report-quasar
+          path: reports/quasar
+        continue-on-error: true
+
+      # Parse per-arch XMLs with Python stdlib (no extra dependency) and
       # emit the rendered Slack message body as a step output. The channel
       # id and token are intentionally kept on the `Send Slack digest`
       # step (matching .github/actions/report-failure's pattern) so it's
@@ -116,10 +124,11 @@ jobs:
 
           RUN_URL = f"{SERVER}/{REPO}/actions/runs/{RUN_ID}"
 
-          # Read ttsim version from the pin file bundled in either artifact.
+          # Read ttsim version from the pin file bundled in any artifact.
           TTSIM_VERSION = "unknown"
           for candidate in (Path("reports/blackhole/ttsim-version"),
-                            Path("reports/wormhole/ttsim-version")):
+                            Path("reports/wormhole/ttsim-version"),
+                            Path("reports/quasar/ttsim-version")):
               if candidate.is_file():
                   for line in candidate.read_text().splitlines():
                       m = re.match(r"ttsim_version=['\"]?([\w.-]+)['\"]?", line.strip())
@@ -169,6 +178,8 @@ jobs:
                             Path("reports/blackhole/ttsim-blackhole.enumerated")),
               ("Wormhole",  Path("reports/wormhole/ttsim-wormhole.xml"),
                             Path("reports/wormhole/ttsim-wormhole.enumerated")),
+              ("Quasar",    Path("reports/quasar/ttsim-quasar.xml"),
+                            Path("reports/quasar/ttsim-quasar.enumerated")),
           ]
 
           lines = []
