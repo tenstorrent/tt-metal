@@ -399,14 +399,32 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
                 {CBFormatDescriptor{.buffer_index = static_cast<uint8_t>(idx), .data_format = fmt, .page_size = ts}}}});
     };
 
-    // Per-chunk inputs (streamed from DRAM). u-slot holds v_beta, w-slot holds kd. nbuf=1.
-    add_cb(pcb::u, cv, 1);  // v_beta
-    add_cb(pcb::w, ck, 1);  // kd
-    add_cb(pcb::qdecay, ck, 1);
-    add_cb(pcb::intra, cc, 1);
-    add_cb(pcb::kdec_t, kc, 1);
-    add_cb(pcb::dl, 1, 1);
-    add_cb(pcb::Tinv, cc, 1);  // t_inv (WY inverse)
+    // Per-chunk inputs (streamed from DRAM). Double-buffered ONLY in the deep-fan-out multicast
+    // regime (NV >= 4): there the reader's chunk-c+1 prefetch (receivers reserve+ready early,
+    // the sender stages ahead) overlaps the multicast convoy and measures +17% on the scan op
+    // (BH=12/NV=4, T=4096: 708 -> 604 us). At NV=2 with twice the active cores (BH=48: 96 cores)
+    // the same prefetch ADDS 6% — DRAM is already saturated and the extra outstanding reads only
+    // queue — and on the plain (no-mcast) path it measures dead neutral at every shape, so both
+    // keep nbuf=1. Costs (cv + 2ck + 2cc + kc + 1) extra fp32 tiles (~64KB at Ct=1/Kt=4/Vtl=1)
+    // when enabled. The multicast lockstep argument survives nbuf=2: both roles reserve+push
+    // exactly one slot per chunk per CB, so write pointers ping-pong in unison and the sender's
+    // reserve-time address still names the receivers' reserved slot; the alternating ready/valid
+    // handshake keeps at most one multicast outstanding, which nbuf=2 fully absorbs.
+    // Per-head multicast of the shared V-independent inputs (kd, q_decay, intra, k_dec_t, dl,
+    // t_inv): the head's v-block-0 core (leftmost of its 1xNV row rectangle) reads them from DRAM
+    // once and multicasts into the sibling cores' CBs — the siblings would otherwise re-read
+    // identical DRAM pages (NV-fold read amplification). Needs NV >= 2 to have anyone to share
+    // with; NV == 1 keeps the plain reader on every core (today's behavior, bit-exact either way).
+    const bool do_mcast = attrs.use_mcast && sdist.NV > 1;
+
+    const uint32_t nbuf_in = (do_mcast && sdist.NV >= 4) ? 2u : 1u;
+    add_cb(pcb::u, cv, nbuf_in);  // v_beta
+    add_cb(pcb::w, ck, nbuf_in);  // kd
+    add_cb(pcb::qdecay, ck, nbuf_in);
+    add_cb(pcb::intra, cc, nbuf_in);
+    add_cb(pcb::kdec_t, kc, nbuf_in);
+    add_cb(pcb::dl, 1, nbuf_in);
+    add_cb(pcb::Tinv, cc, nbuf_in);  // t_inv (WY inverse)
     // State: cb_S is reader-produced (chunk 0 only); s2/s3 are compute-only ping-pong.
     add_cb(pcb::S, kv);
     add_cb(pcb::s2, kv);
@@ -420,13 +438,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     add_cb(pcb::supd, kv);
     add_cb(pcb::stmp, kv);
     add_cb(pcb::scr1, scr);
-
-    // Per-head multicast of the shared V-independent inputs (kd, q_decay, intra, k_dec_t, dl,
-    // t_inv): the head's v-block-0 core (leftmost of its 1xNV row rectangle) reads them from DRAM
-    // once and multicasts into the sibling cores' CBs — the siblings would otherwise re-read
-    // identical DRAM pages (NV-fold read amplification). Needs NV >= 2 to have anyone to share
-    // with; NV == 1 keeps the plain reader on every core (today's behavior, bit-exact either way).
-    const bool do_mcast = attrs.use_mcast && sdist.NV > 1;
 
     CoreRangeSet sender_set, receiver_set;
     if (do_mcast) {
