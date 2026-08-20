@@ -829,6 +829,7 @@ inline void call_left_shift_fresh_cpp(
 #include "fresh_cpp/fill.h"
 #include "fresh_cpp/fmod.h"
 #include "fresh_cpp/gcd.h"
+#include "fresh_cpp/gcd_legacy.h"
 #include "fresh_cpp/gelu.h"
 #include "fresh_cpp/hardmish.h"
 #include "fresh_cpp/hardshrink.h"

@@ -897,10 +897,12 @@ def test_fresh_cpp_left_shift(formats, dest_acc, mathop, fresh_cpp_impl):
 )
 def test_fresh_cpp_gcd(formats, dest_acc, mathop, fresh_cpp_impl):
     """Handwritten (metal ckernel_sfpu_gcd.h hand-issued REPLAY-loop kernel) vs
-    fresh typed-C++ binary GCD (fresh_cpp/gcd.h, Stein's algorithm) A/B over
-    identical Int32 stimuli/golden; exact integer contract. Stimuli mirror
-    test_sfpu_binary_int_uniform's SfpuGcd range (positive 17-bit operands —
-    the fresh body's fixed 34-round bound is derived from that width)."""
+    fresh typed-C++ binary GCD (fresh_cpp/gcd.h, Stein's algorithm as
+    unpredicated fixed-point strip-sort-subtract rounds) A/B over identical
+    Int32 stimuli/golden; exact integer contract. Stimuli mirror
+    test_sfpu_binary_int_uniform's SfpuGcd range (positive operands in
+    [1, 1e5] — the fresh body's 17-round bound is exhaustively certified
+    over exactly this domain, laneCS-evidence-20260820/gcd_round_cert.c)."""
     low, high = _INT_BINARY_STIMULI[MathOperation.SfpuGcd]
     sfpu_binary(
         formats,
