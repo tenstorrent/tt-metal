@@ -1071,6 +1071,23 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── Qwen-Image (TT-DiT) ────────────────────────────────────────────
+- name: TT-DiT Qwen-Image e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    pytest --timeout 1200 models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py
+    pytest --timeout 720 models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py
+  model: qwenimage
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 20
+      tier: 2
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 - name: TT-DiT Motif-Image-6B e2e tests
   cmd: |
     unset HF_HUB_OFFLINE

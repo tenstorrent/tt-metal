@@ -196,7 +196,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // ADDR_MOD_0/1 or bank-0 programming, so both initializers can remain in
         // the INIT zone before the measured TILE_LOOP.
         _llk_math_eltwise_sfpu_init_();
-        test_utils::init_binary_sfpu_operation_quasar<SFPU_BINARY_OP, SFPU_SIGN_MAGNITUDE>(params.ZERO_POINT);
+        test_utils::init_binary_sfpu_operation_quasar<SFPU_BINARY_OP, is_fp32_dest_acc_en, SFPU_SIGN_MAGNITUDE, APPROX_MODE>(params.ZERO_POINT);
         PROFILER_SYNC();
     }
     {
@@ -229,7 +229,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     is_fp32_dest_acc_en,
                     SFPU_DST_ROUNDING_MODE,
                     SFPU_ITERATIONS,
-                    SFPU_SIGN_MAGNITUDE>(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX, math_format);
+                    SFPU_SIGN_MAGNITUDE,
+                    APPROX_MODE>(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX, math_format);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
