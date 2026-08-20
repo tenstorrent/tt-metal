@@ -59,10 +59,12 @@ foreach(PROTO_FILE ${FABRIC_PROTO_SCHEMAS})
 endforeach()
 
 # ---------------------------------------------------------------------------
-# TT::ScaleoutTopology — lean, runtime-free static library: MGD + PSD + PGD (proto + class), the topology solver,
-# the topology mapper UTILS, and the offline FSD->PSD builder. mesh_graph + the runtime TopologyMapper class stay
-# in fabric. Pulls tt-metalium headers via include-dirs only (no libtt_metal link), so FM/offline tools can link
-# just this lib without the metal runtime.
+# TT::ScaleoutTopology — the topology sources grouped into their own library: MGD + PSD + PGD (proto + class),
+# the topology solver, the topology mapper UTILS, and the offline FSD->PSD builder. mesh_graph + the runtime
+# TopologyMapper class stay in fabric. fabric links this lib so its objects land in libtt_metal.so and its
+# symbols are exported from there (default visibility) exactly as before the split — in-tree consumers keep
+# reaching these symbols via tt_metal, unchanged. Linking this lib standalone (Fabric Manager without the metal
+# runtime) is a follow-up once it is fully runtime-free; see TOPOLOGY_LIB_PLAN.md.
 # ---------------------------------------------------------------------------
 add_library(
     scaleout_topology
@@ -119,23 +121,12 @@ target_compile_features(scaleout_topology PUBLIC cxx_std_20)
 # already excluded from unity above via SKIP_UNITY_BUILD_INCLUSION.
 TT_ENABLE_UNITY_BUILD(scaleout_topology)
 tt_reuse_precompile_headers(scaleout_topology TT::CommonPCH)
-# Hidden visibility (same as TT::ScaleoutTools): this lib carries protobuf message classes, so its descriptor
-# symbols must be hidden to avoid cross-module "File already exists in database" aborts. Consumers reaching these
-# symbols only transitively through libtt_metal.so must therefore link TT::ScaleoutTopology explicitly.
-set_target_properties(
-    scaleout_topology
-    PROPERTIES
-        CXX_VISIBILITY_PRESET
-            "hidden"
-        VISIBILITY_INLINES_HIDDEN
-            TRUE
-)
-
-# Install the archive so external consumers (e.g. Fabric Manager) can link it. Not added to the "Metalium"
-# EXPORT set: as a STATIC lib its private deps (protobuf/cadical/yaml-cpp) become link-interface requirements,
-# and install(EXPORT) would need each of those in an export set too. Wiring find_package(Metalium) to
-# re-find_dependency() them is a follow-up; for now consumers link the installed archive directly.
-install(TARGETS scaleout_topology ARCHIVE COMPONENT metalium-dev)
+# Default visibility (NOT hidden): fabric links this lib into libtt_metal.so, so its symbols are exported from
+# the .so exactly as they were before the topology sources were split out of fabric. In-tree consumers keep
+# resolving MGD/PSD/PGD/solver symbols through libtt_metal.so (linking tt_metal) and must NOT also link this
+# archive directly, or the descriptor protos would register twice ("File already exists in database"). Linking
+# the archive standalone (e.g. Fabric Manager without libtt_metal) is a follow-up once the lib is fully
+# runtime-free (see TOPOLOGY_LIB_PLAN.md); until then it is consumed only via libtt_metal.so.
 
 # --- fabric: remaining runtime protos + link the topology lib -------
 add_custom_target(fabric_generated_protos DEPENDS ${FABRIC_GENERATED_PROTO_SRCS})
