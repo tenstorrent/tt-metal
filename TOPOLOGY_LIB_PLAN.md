@@ -2,28 +2,29 @@
 
 ## Problem
 
-**High-level.** The topology logic that consumers need — the topology **solver**, the
-**PhysicalSystemDescriptor (PSD)**, the descriptors it depends on (**MGD**, **PGD**), and the offline
-**FSD→PSD** conversion — lives today inside tt-metal's `fabric` code, which is compiled into
-**`libtt_metal.so`**: the full Metalium runtime. That topology logic is pure host-side data-structure / graph
-work and touches no hardware, yet it is entangled with the runtime it happens to be built alongside.
+The topology **solver + PSD + descriptors (MGD/PGD) + FSD→PSD conversion** are pure host-side graph work, but they
+live in tt-metal's `fabric` → compiled into **`libtt_metal.so`** (the full Metalium runtime). There is no lean way
+to reuse just this logic. Fabric Manager shows both symptoms today:
 
-**Why that hurts — the Fabric Manager example.** Fabric Manager (FM) is a lightweight, host-side control-plane
-service. To map a cluster's *ideal* topology (a Factory System Descriptor) onto its physical devices, FM wants to
-reuse tt-metal's solver + PSD + FSD→PSD conversion instead of re-implementing them. But because that code is baked
-into `libtt_metal.so`, FM's only two options today are both bad:
+**1. It imports the whole runtime** — `tt-fabric-manager/controller/CMakeLists.txt`:
+```cmake
+target_link_libraries(
+    fabric_manager_controller_lib
+    PUBLIC
+        fabric_manager_common
+        TT::Metalium   # the entire libtt_metal: device mgmt · HAL · dispatch · JIT · LLRT · UMD driver
+        ...
+)
+```
 
-1. **Import the whole `libtt_metal`.** To call a handful of topology functions, FM would have to link the *entire*
-   Metalium runtime — device management, HAL, command-queue / dispatch, JIT kernel build, LLRT, the UMD device
-   driver runtime — **none of which FM uses**. That bloats FM's binary, pulls in dependencies and build/deploy
-   complexity it does not want, and couples a control-plane service to the full device runtime just to reach some
-   graph code.
+**2. And it forks the FSD→PSD conversion** to avoid re-implementing it — a hand-maintained copy of tt-metal's
+builder in `tt-fabric-manager/controller/physical_system_descriptor_builder.cpp`:
+```cpp
+::tt::fabric::proto::PhysicalSystemDescriptor build_physical_system_descriptor(
+    const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd) { /* ~200 lines, drifts from tt-metal */ }
+```
 
-2. **Fork the code.** To avoid (1), FM currently keeps its **own copy** of the FSD→PSD conversion. That duplicate
-   drifts from tt-metal's implementation over time and doubles the maintenance surface.
-
-Neither is acceptable long-term: the topology logic is runtime-free *in principle*, but its packaging forces every
-out-of-runtime consumer to either swallow the whole runtime or fork the code.
+FM uses none of the device runtime it drags in, and the fork doubles the maintenance surface.
 
 ---
 
@@ -51,6 +52,34 @@ TT::ScaleoutTools  (OBJECT, exists today)          TT::ScaleoutTopology  (new)
 ```
 
 They meet at the **FSD proto**: `CablingGenerator` produces it; `build_physical_descriptor()` consumes it. No cycles.
+
+**`TT::ScaleoutTools`** — `tools/scaleout/` (exists today):
+```
+tools/scaleout/
+  board/board.hpp                              board types
+  connector/connector.hpp   node/node.hpp
+  cabling_generator/cabling_generator.hpp
+  factory_system_descriptor/{utils,query}.hpp
+  protobuf/factory_system_descriptor.proto     ← the FSD proto
+```
+
+**`TT::ScaleoutTopology`** — headers in the tt-metalium API tree, `.cpp` compiled from `tt_metal/fabric/`:
+```
+tt_metal/api/tt-metalium/experimental/fabric/   (headers, unchanged location)
+  physical_system_descriptor.hpp     PSD (proto + C++ class)
+  mesh_graph_descriptor.hpp          MGD
+  physical_grouping_descriptor.hpp   PGD
+  topology_solver.hpp                solver (SAT + CSP)
+  topology_mapper_utils.hpp          mapper utils
+  physical_descriptor_builder.hpp    FSD → PSD
+  (mesh_graph.hpp, topology_mapper.hpp stay with fabric — the runtime side)
+
+tt_metal/fabric/   (.cpp compiled into libscaleout_topology)
+  physical_system_descriptor.cpp   mesh_graph_descriptor.cpp
+  physical_grouping_descriptor_{core,graph_building,matching}.cpp
+  topology_solver{,_sat,_sat_solver}.cpp   topology_mapper_utils.cpp
+  physical_descriptor_builder.cpp
+```
 
 ### What goes where
 
