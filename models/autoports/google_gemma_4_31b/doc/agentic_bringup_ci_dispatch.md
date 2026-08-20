@@ -482,10 +482,26 @@ device op, and a host-side block cannot be ruled out from these logs. The root
 cause of the *failure* is still the time budget, but "it was fine, just slow" is
 an inference, not a finding.
 
-The reason this is undecidable is itself the defect: the load phase emits no
-progress output for ~16 minutes, so a single run cannot be told apart from a hang.
-A progress log in `build_generator` -- even one line per N layers or per cache
-write -- would make the next occurrence diagnosable from one run.
+This is undecidable **in principle** with today's logging, not merely undecided
+here. A progressing load emits zero lines (proved by the healthy run), and a
+host-side block also emits zero lines, so the two hypotheses predict an identical
+observation. Silence carries no information either way; there is no proof to be
+found, in either direction. Note the asymmetry that makes the device-hang
+hypothesis different: it *does* predict an observable -- a `TIMEOUT` abort plus the
+triage hook -- and that observable is absent, which is why it can be weakened
+while the other two cannot be separated.
+
+So the fix is instrumentation, not more analysis:
+
+- **A progress log in `build_generator`** -- one line per N layers or per cache
+  write. Then silence becomes a real symptom instead of the default state.
+- **Out-of-band telemetry during a run** -- device utilisation or power from
+  `tt-smi`, host CPU, or growth of the tensor-cache directory. None is captured
+  today; the job's "Fetch system info" step runs only after the failure.
+
+Until one of those exists, any truncated bring-up of this model is not diagnosable
+after the fact, and the only discriminator available is to re-run and see whether
+it completes.
 
 ### The applied config was as intended
 
