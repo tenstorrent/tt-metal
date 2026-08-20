@@ -17,7 +17,6 @@ from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_progra
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     BF16_ALLOWED,
     PROTOCOL_NAMES,
-    assert_device_deterministic,
     assert_outputs_accurate,
     assert_runtime_contract,
     assert_summary_reconstructs_state,
@@ -28,7 +27,12 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     summary_oracle,
     to_device,
 )
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    assert_accurate,
+    assert_bit_identical,
+    assert_equal,
+    collect_accuracy_and_determinism_results,
+)
 
 pytestmark = [
     run_for_blackhole(),
@@ -98,18 +102,17 @@ def _production_protocol(
 
 def test_summarize_chunk_recurrence_is_device_deterministic(device: ttnn.Device) -> None:
     host_inputs, inputs = _production_protocol(device, seed=1441)
-    reference = assert_device_deterministic(
-        device,
-        lambda: run_summary(inputs),
-        names=("affine_a", "affine_b"),
+    reference, outputs, mismatch_marker = collect_accuracy_and_determinism_results(device, lambda: run_summary(inputs))
+    assert_equal(
+        torch.zeros_like(mismatch_marker),
+        mismatch_marker,
+        name="summary outputs device-side exact-value determinism marker",
     )
-    assert_outputs_accurate(
-        summary_oracle(host_inputs),
-        reference,
-        names=("affine_a", "affine_b"),
-        context="deterministic summary reference",
-    )
-    assert_summary_reconstructs_state(host_inputs, ttnn.to_torch(reference[0]), ttnn.to_torch(reference[1]))
+    for name, golden, output in zip(("affine_a", "affine_b"), summary_oracle(host_inputs), outputs, strict=True):
+        assert_accurate(golden, output, name=f"deterministic summary reference {name}", pcc_threshold=0.999)
+    assert_summary_reconstructs_state(host_inputs, outputs[0], outputs[1])
+    for output in reference:
+        ttnn.deallocate(output)
 
 
 def test_summarize_chunk_recurrence_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:

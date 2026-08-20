@@ -12,7 +12,6 @@ import ttnn
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
-    assert_equal,
 )
 
 CHUNK_SIZE = 32
@@ -198,40 +197,6 @@ def assert_outputs_accurate(
 ) -> None:
     for name, golden, actual_tt in zip(names, expected, actual, strict=True):
         assert_accurate(golden, ttnn.to_torch(actual_tt), name=f"{context} {name}", pcc_threshold=pcc_threshold)
-
-
-def assert_device_deterministic(
-    device: ttnn.Device,
-    run: Callable[[], list[ttnn.Tensor]],
-    *,
-    names: Sequence[str],
-    count: int = 3,
-) -> list[ttnn.Tensor]:
-    assert count > 1
-    reference = run()
-    for repeat in range(1, count):
-        current = run()
-        for name, reference_tt, current_tt in zip(names, reference, current, strict=True):
-            mismatch_scratch = ttnn.empty(
-                reference_tt.shape,
-                dtype=ttnn.bfloat16,
-                layout=reference_tt.layout,
-                device=device,
-                memory_config=reference_tt.memory_config(),
-            )
-            ttnn.ne(reference_tt, current_tt, dtype=ttnn.bfloat16, output_tensor=mismatch_scratch)
-            mismatch_marker = ttnn.max(mismatch_scratch)
-            mismatch_marker_host = ttnn.to_torch(mismatch_marker).clone()
-            assert_equal(
-                torch.zeros_like(mismatch_marker_host),
-                mismatch_marker_host,
-                name=f"{name} device-side exact-value determinism repeat {repeat}",
-            )
-            ttnn.deallocate(mismatch_scratch)
-            ttnn.deallocate(mismatch_marker)
-        for output in current:
-            ttnn.deallocate(output)
-    return reference
 
 
 def one_core_height_sharded(shape: tuple[int, int]) -> ttnn.MemoryConfig:
