@@ -14,7 +14,7 @@ from models.tt_cnn.tt.pipeline import (
     create_pipeline_from_config,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.utils.common_demo_utils import get_mesh_mappers
+from models.demos.utils.common_demo_utils import get_mesh_mappers, report_vision_fps
 from models.common.utility_functions import run_for_wormhole_b0
 from models.experimental.efficientdetd0.common import load_torch_model_state
 from models.experimental.efficientdetd0.tt.efficientdetd0 import TtEfficientDetBackbone
@@ -23,6 +23,10 @@ from models.experimental.efficientdetd0.tt.custom_preprocessor import (
     infer_torch_module_args,
     create_custom_mesh_preprocessor,
 )
+
+
+# Throughput must stay within this fraction below the target before the test fails.
+PERF_MARGIN = 0.10
 
 
 def create_efficientdet_d0_pipeline_model(ttnn_model):
@@ -72,7 +76,7 @@ def create_efficientdet_d0_pipeline_model(ttnn_model):
 @pytest.mark.parametrize("num_iterations", [32])
 @pytest.mark.parametrize(
     "batch_size, size, expected_compile_time, expected_throughput_fps, use_torch_maxpool",
-    [(1, 512, 25.4, 11.3, True)],
+    [(1, 512, 25.4, 7.49, True)],
 )
 @pytest.mark.models_performance_bare_metal
 def test_efficientdet_d0_e2e_performant(
@@ -158,8 +162,9 @@ def test_efficientdet_d0_e2e_performant(
     pipeline.cleanup()
 
     inference_time = (end - start) / num_iterations
+    throughput_fps = num_iterations * batch_size / (end - start)
     logger.info(f"Average model time={1000.0 * inference_time : .2f} ms")
-    logger.info(f"Average model performance={num_iterations * batch_size / (end-start) : .2f} fps")
+    logger.info(f"Average model performance={throughput_fps : .2f} fps")
 
     total_num_samples = batch_size
     prep_perf_report(
@@ -170,6 +175,15 @@ def test_efficientdet_d0_e2e_performant(
         expected_compile_time=expected_compile_time,
         expected_inference_time=total_num_samples / expected_throughput_fps,
         comments=f"batch_{batch_size}-size_{size}",
+    )
+
+    report_vision_fps("efficientdet-d0", throughput_fps, total_num_samples)
+
+    min_throughput_fps = expected_throughput_fps * (1 - PERF_MARGIN)
+    assert throughput_fps >= min_throughput_fps, (
+        f"EfficientDet-D0 throughput {throughput_fps:.2f} fps below the "
+        f"{100 * (1 - PERF_MARGIN):.0f}% floor of {min_throughput_fps:.2f} fps "
+        f"(target {expected_throughput_fps} fps)"
     )
 
     logger.info("Performance test completed!")

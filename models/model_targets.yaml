@@ -1578,3 +1578,72 @@ targets:
               top1_tolerance: 0.01
             owner_id: U085GDCAZTN # Pavle Josipovic
             team: ttnn
+
+  # Tier 3 is exempt from perf targets, but these four e2e tests measure throughput and
+  # previously gated nothing: prep_perf_report writes a CSV and asserts nothing, so an
+  # arbitrarily large regression stayed invisible. Each fps below is the first CI
+  # measurement on wh_n150 (run 32378297838), held to a 10% band. There is no accuracy
+  # block: only MobileNetV3 validates outputs on the e2e path (PCC 0.98, in-test), and
+  # none of the four emit an accuracy metric.
+  #
+  # fps resolves to the ("inference", "fps") measurement pair, emitted by
+  # report_vision_fps in models/demos/utils/common_demo_utils.py. prep_perf_report's own
+  # payload writes throughput_iter_per_s under an "end_to_end_perf" step, which no target
+  # metric maps to -- do not add its model_name strings (efficientdet_d0-notrace-1cq,
+  # ssd512-trace-2cq, ttnn_mobilenetV3_trace_2cqs_batch_size1) as aliases here, or that
+  # payload resolves to this entry and hard-fails on a missing fps measurement.
+  efficientdet-d0:
+    aliases: ["efficientdet-d0", "EfficientDet-D0", "efficientdetd0"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            perf:
+              fps: 7.49
+              fps_tolerance: 0.10
+            owner_id: U07J5E9NA9G # Dalar Vartanians
+            team: models
+
+  mobilenetv3:
+    aliases: ["mobilenetv3", "MobileNetV3", "mobileNetV3"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            perf:
+              fps: 263.29
+              fps_tolerance: 0.10
+            owner_id: U07J5E9NA9G # Dalar Vartanians
+            team: models
+
+  ssd512:
+    aliases: ["ssd512", "SSD512"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            perf:
+              fps: 40.83
+              fps_tolerance: 0.10
+            owner_id: U07J5E9NA9G # Dalar Vartanians
+            team: models
+
+  yunet:
+    aliases: ["yunet", "YuNet", "YUNet"]
+    skus:
+      wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: active
+            perf:
+              fps: 76.0
+              fps_tolerance: 0.10
+            owner_id: U0978501V8B # CODEOWNERS @tvardhineniTT
+            team: models
