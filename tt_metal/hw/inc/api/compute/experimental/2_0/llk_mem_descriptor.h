@@ -103,10 +103,7 @@ constexpr LLKMemDescriptor to_llk_mem_descriptor(Cb<CbId> /*cb*/) {
 #endif
 }
 
-// Future source accessors + overloads (additive -- no op/call-site change), once each exposes constexpr
-// format + TensorShape:
-//   constexpr LLKMemDescriptor to_llk_mem_descriptor(DFBBindingToken token);          // DFB
-//   constexpr LLKMemDescriptor to_llk_mem_descriptor(ScratchpadBindingToken token);   // Scratchpad
-
 }  // namespace experimental
 }  // namespace ckernel
+
+#include "api/compute/experimental/2_0/binding_token_llk.h"

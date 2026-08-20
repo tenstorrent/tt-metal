@@ -8,6 +8,15 @@
 
 #include "api/llk_operand_members.h"
 
+struct DFBBindingToken;
+
+namespace ckernel {
+namespace experimental {
+struct LLKMemDescriptor;
+constexpr LLKMemDescriptor to_llk_mem_descriptor(DFBBindingToken);
+}  // namespace experimental
+}  // namespace ckernel
+
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
 //
@@ -34,6 +43,9 @@ struct DFBBindingToken {
     constexpr operator uint32_t() const noexcept { return id_; }
 
 private:
+    friend constexpr ckernel::experimental::LLKMemDescriptor ckernel::experimental::to_llk_mem_descriptor(
+        DFBBindingToken);
+
     uint16_t id_;
     LlkOperandMembers llk_{};
 };
