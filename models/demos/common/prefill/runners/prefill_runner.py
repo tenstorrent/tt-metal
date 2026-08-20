@@ -455,6 +455,7 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "num_users": NUM_USERS,
         "mesh_shape": GLOBAL_MESH_SHAPE,
         "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
+        "PREFILL_BOUNDED_SLIDING_KV": os.environ.get("PREFILL_BOUNDED_SLIDING_KV", "0"),
     }
     fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
     digest = zlib.crc32(fingerprint.encode()) & 0x7FFFFFFF
@@ -516,6 +517,7 @@ def main() -> None:
         gate_mode_name=_gate_mode_name,
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
         dflash_enabled=DFLASH_ENABLED,
+        bounded_sliding_kv_cache=os.environ.get("PREFILL_BOUNDED_SLIDING_KV", "0") == "1",
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         tp_shard_kv=TP_SHARD_KV,
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,

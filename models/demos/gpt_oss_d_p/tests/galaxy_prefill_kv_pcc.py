@@ -17,6 +17,12 @@ Env:
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode only)                             [default 8192]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement                   [default 1]
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs) [default: all]
+  PREFILL_NUM_USERS   cache slots; EVERY slot prefills the same prompt and is PCC-checked
+                      independently (exercises the packed multi-user slot math)              [default 1]
+  PREFILL_BOUNDED_SLIDING_KV  "1" -> bounded circular KV cache on sliding layers (circular write +
+                      host-readback PCC; the on-device ring cache-read of a bounded layer is not
+                      supported in this build, and the ring path serves EVERY chunk, so chunked
+                      mode rejects the flag)                                                [default 0]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8"                        [default bf4]
   GPT_OSS_WEIGHTS_FROM_CACHE  "1" -> pass an empty state_dict (load tilized weights from the TTNN cache)
   HF_MODEL            real gpt-oss weights dir (read by ModelArgs)
@@ -96,11 +102,14 @@ def main():
     chunk_size = int(os.getenv("PREFILL_CHUNK_SIZE", "8192"))
     tps_iters = int(os.getenv("PREFILL_TPS_ITERS", "1"))
 
+    bounded_kv = os.getenv("PREFILL_BOUNDED_SLIDING_KV", "0") == "1"
+    num_users = int(os.getenv("PREFILL_NUM_USERS", "1"))
+
     n_chunks, chunk, total = plan(n_tokens, chunk_size, chunked, ROWS)
     print(
         f"[prefill-pcc] golden={golden_dir} n_tokens={n_tokens} "
         f"mode={'chunked' if chunked else 'one-shot'} chunk={chunk} n_chunks={n_chunks} total={total} "
-        f"tps_iters={tps_iters}",
+        f"tps_iters={tps_iters} bounded_sliding_kv={bounded_kv} num_users={num_users}",
         flush=True,
     )
     if chunked:
@@ -153,12 +162,13 @@ def main():
             max_seq_len=total,
             mesh_shape=(ROWS, COLS),
             default_chunk_size=chunk,
-            num_users=1,
+            num_users=num_users,
             expert_weight_dtype=expert_dtype,
             cache_dtype=kv_cache_dtype,
             weight_cache_path=cache_path,
             owns_kv_cache=True,  # standalone harness owns its cache (runtime.kv_cache)
             topology=ttnn.Topology.Linear if _linear else ttnn.Topology.Ring,
+            bounded_sliding_kv_cache=bounded_kv,
         )
         runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
         del state_dict
@@ -169,10 +179,13 @@ def main():
         padded = token_ids + [0] * (total - n_tokens)
 
         def run_once():
-            for c in range(n_chunks):
-                a = c * chunk
-                inp = runtime.make_chunk_input(padded[a : a + chunk])
-                runtime.prefill_chunk(inp, slot_id=0, actual_start=a, actual_end=min(a + chunk, n_tokens))
+            # Every slot prefills the same prompt: each slot's cache must independently match the
+            # golden, so cross-slot corruption in the packed batch math shows up as a PCC failure.
+            for slot in range(num_users):
+                for c in range(n_chunks):
+                    a = c * chunk
+                    inp = runtime.make_chunk_input(padded[a : a + chunk])
+                    runtime.prefill_chunk(inp, slot_id=slot, actual_start=a, actual_end=min(a + chunk, n_tokens))
             ttnn.synchronize_device(mesh)
 
         times = []
@@ -194,7 +207,12 @@ def main():
         )
 
         # --- accuracy: per-layer KV PCC vs golden (K permuted HF->Meta over head_dim; V raw) ---
-        min_pcc = runtime.kv_cache_pcc_check(slot_id=0, n_chunks=n_chunks, trace_dir=golden_dir)
+        min_pcc = 1.0
+        for slot in range(num_users):
+            slot_pcc = runtime.kv_cache_pcc_check(slot_id=slot, n_chunks=n_chunks, trace_dir=golden_dir)
+            if num_users > 1:
+                print(f"[prefill-pcc] slot {slot}: min KV PCC = {slot_pcc:.5f}", flush=True)
+            min_pcc = min(min_pcc, slot_pcc)
         print(f"[prefill-pcc] min KV PCC across {num_layers} layers = {min_pcc:.5f}", flush=True)
         # Gate on a PCC floor when GPT_OSS_KV_PCC_MIN is set (CI / regression); unset during bring-up
         # so the harness just reports the number. A failing gate exits non-zero.
