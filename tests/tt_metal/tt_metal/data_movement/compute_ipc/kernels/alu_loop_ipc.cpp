@@ -31,12 +31,40 @@
 #include "api/debug/device_print.h"
 #include "experimental/kernel_args.h"
 #include <cstdint>
+#if defined(ARCH_QUASAR)
+// L2_INVALIDATE_ADDR (via overlay_addresses.h) for the invalidate-then-cache pass. Explicit tt-2xx
+// path rather than the bare "risc_common.h" both arches resolve, so this can never pull the tt-1xx one.
+#include "internal/tt-2xx/risc_common.h"
+#endif
 
+// Iteration counts are sized for EMULATOR runtime, not statistical power. The signal here is huge
+// (cached ~5 vs uncached ~40 cyc/iter) and the emulator is deterministic, so reruns are bit-identical
+// and extra samples buy nothing. What they must stay large enough for is to swamp the one-time
+// pipeline/branch-predictor warmup, measured at 18-50 cycles per pass -- at these counts that is
+// <=1% of any pass. The uncached passes dominate wall time (~40-160 cyc per iteration vs ~1 for ALU),
+// so they get the smallest counts.
 constexpr uint32_t kOpsPerIter = 14;  // 12 ALU ops + addi (decrement) + bnez (branch)
-constexpr uint32_t kIterationsPass0 = 100000;
-constexpr uint32_t kIterationsPass1 = 200000;  // 2x pass0, for the linearity sanity check
-constexpr uint32_t kLoadUseOpsPerIter = 4;     // lw + add (use) + addi (decrement) + bnez (branch)
-constexpr uint32_t kLoadUseIterations = 100000;
+constexpr uint32_t kIterationsPass0 = 5000;
+constexpr uint32_t kIterationsPass1 = 10000;  // 2x pass0, for the linearity sanity check
+constexpr uint32_t kLoadUseOpsPerIter = 4;    // lw + add (use) + addi (decrement) + bnez (branch)
+constexpr uint32_t kLoadUseIterations = 5000;
+
+// Four load-use pairs per iteration, modelling the real command-header decode: in
+// process_relay_inline_noflush_cmd, cmd->relay_inline.length is reconstructed from 4 lbu byte-loads,
+// each consumed by a shift/or 1-2 instructions later. All four offsets sit inside ONE 64 B cache
+// line, so a cached variant takes one miss then three hits -- the pattern an invalidate-then-cache
+// strategy would produce in cq_prefetch.cpp. Requires load_src_addr to be 64 B aligned.
+constexpr uint32_t kMultiLoadOpsPerIter = 10;  // 4x(lw+add) + addi + bnez
+constexpr uint32_t kInvalLoadOpsPerIter = 13;  // fence + sd + fence + 4x(lw+add) + addi + bnez
+constexpr uint32_t kMultiLoadIterations = 2000;
+
+// Bound on the full-cache-invalidate completion poll. Large enough that a legitimately slow
+// invalidation still completes, small enough that a misprogrammed ready-bit mask cannot hang the
+// emulator run and take every other pass's results down with it.
+constexpr uint32_t kFullInvalMaxPoll = 10000;
+// The full-invalidate pass wipes the whole cache every iteration, so it is the most expensive pass
+// here; it gets its own smaller count.
+constexpr uint32_t kFullInvalIterations = 500;
 
 struct AluPassResult {
     uint32_t cycles;
@@ -100,6 +128,144 @@ FORCE_INLINE AluPassResult run_load_use_pass(uint32_t iterations, uint32_t addr)
     return {.cycles = cycle_end - cycle_start, .instret = instret_end - instret_start};
 }
 
+// Four load-use pairs against one cache line, no cache maintenance. Baseline for isolating the
+// invalidate cost below (subtract this from run_invalidate_load_use_pass) and, when handed the
+// uncached alias, the figure the invalidate-then-cache strategy has to beat.
+FORCE_INLINE AluPassResult run_multi_load_use_pass(uint32_t iterations, uintptr_t addr) {
+    uint32_t cycle_start, cycle_end, instret_start, instret_end;
+    asm volatile(
+        "rdcycle   %[c0]\n"
+        "rdinstret %[i0]\n"
+        "mv        a2, %[iters]\n"
+        "1:\n"
+        "lw   t0, 0(%[addr])\n"
+        "add  t1, t1, t0\n"
+        "lw   t0, 4(%[addr])\n"
+        "add  t1, t1, t0\n"
+        "lw   t0, 8(%[addr])\n"
+        "add  t1, t1, t0\n"
+        "lw   t0, 12(%[addr])\n"
+        "add  t1, t1, t0\n"
+        "addi a2, a2, -1\n"
+        "bnez a2, 1b\n"
+        "rdcycle   %[c1]\n"
+        "rdinstret %[i1]\n"
+        : [c0] "=&r"(cycle_start), [i0] "=&r"(instret_start), [c1] "=r"(cycle_end), [i1] "=r"(instret_end)
+        : [iters] "r"(iterations), [addr] "r"(addr)
+        : "t0", "t1", "a2", "memory");
+    return {.cycles = cycle_end - cycle_start, .instret = instret_end - instret_start};
+}
+
+#if defined(ARCH_QUASAR)
+// One L2 line invalidate, then four CACHED load-use pairs against that line. The invalidate sequence
+// is written out inline rather than calling invalidate_l2_cache_line() so the whole loop stays in one
+// asm block with a known instruction count -- it replicates that helper exactly (fence; store addr to
+// the INVALIDATE64 register; fence). This is the candidate replacement for reading command fields
+// through the uncached alias: pay one invalidate per line, then read the fields cached.
+FORCE_INLINE AluPassResult run_invalidate_load_use_pass(uint32_t iterations, uintptr_t addr, uintptr_t inv_reg) {
+    uint32_t cycle_start, cycle_end, instret_start, instret_end;
+    asm volatile(
+        "rdcycle   %[c0]\n"
+        "rdinstret %[i0]\n"
+        "mv        a2, %[iters]\n"
+        "1:\n"
+        "fence\n"
+        "sd   %[addr], 0(%[invreg])\n"
+        "fence\n"
+        "lw   t0, 0(%[addr])\n"
+        "add  t1, t1, t0\n"
+        "lw   t0, 4(%[addr])\n"
+        "add  t1, t1, t0\n"
+        "lw   t0, 8(%[addr])\n"
+        "add  t1, t1, t0\n"
+        "lw   t0, 12(%[addr])\n"
+        "add  t1, t1, t0\n"
+        "addi a2, a2, -1\n"
+        "bnez a2, 1b\n"
+        "rdcycle   %[c1]\n"
+        "rdinstret %[i1]\n"
+        : [c0] "=&r"(cycle_start), [i0] "=&r"(instret_start), [c1] "=r"(cycle_end), [i1] "=r"(instret_end)
+        : [iters] "r"(iterations), [addr] "r"(addr), [invreg] "r"(inv_reg)
+        : "t0", "t1", "a2", "memory");
+    return {.cycles = cycle_end - cycle_start, .instret = instret_end - instret_start};
+}
+
+// The line invalidate with NO loads following it, so the line is already invalid every iteration and
+// nothing is refetched. Splits the ~102 cyc measured by run_invalidate_load_use_pass into the
+// primitive's own cost (this pass) versus the cold refetch from TL1 (the remainder). The two have
+// opposite implications: a slow primitive could be replaced, a slow refetch cannot.
+FORCE_INLINE AluPassResult run_invalidate_only_pass(uint32_t iterations, uintptr_t addr, uintptr_t inv_reg) {
+    uint32_t cycle_start, cycle_end, instret_start, instret_end;
+    asm volatile(
+        "rdcycle   %[c0]\n"
+        "rdinstret %[i0]\n"
+        "mv        a2, %[iters]\n"
+        "1:\n"
+        "fence\n"
+        "sd   %[addr], 0(%[invreg])\n"
+        "fence\n"
+        "addi a2, a2, -1\n"
+        "bnez a2, 1b\n"
+        "rdcycle   %[c1]\n"
+        "rdinstret %[i1]\n"
+        : [c0] "=&r"(cycle_start), [i0] "=&r"(instret_start), [c1] "=r"(cycle_end), [i1] "=r"(instret_end)
+        : [iters] "r"(iterations), [addr] "r"(addr), [invreg] "r"(inv_reg)
+        : "a2", "memory");
+    return {.cycles = cycle_end - cycle_start, .instret = instret_end - instret_start};
+}
+
+// FULL-cache invalidate (L2 wipe + whole L1 D$ discard), then the same four cached load-use pairs, for
+// a like-for-like comparison against the per-line variant above. Replicates invalidate_cache_all()
+// minus the I$ discard (we are not reloading code), i.e. invalidate_l2_cache() + invalidate_l1_dcache(0).
+//
+// Two deliberate deviations from the helper, both necessary here:
+//  - It writes ALL EIGHT DM ready bits (0xFF) rather than just this hart's. invalidate_l2_cache()'s own
+//    comment requires either every DM core to call it or one core to write the others' bits; only one DM
+//    runs in this benchmark, so writing 0xFF is what lets the hardware proceed.
+//  - The completion poll is BOUNDED (kFullInvalMaxPoll). An unbounded poll would hang the emulator run
+//    and lose every other pass's results with it, since the host only reads them after the kernel exits.
+//    Instret is therefore NOT exactly predictable for this pass -- it varies with poll iterations, and
+//    the host reports it rather than asserting on it. A suspiciously large instret means the poll was
+//    spinning; instret at the floor means it cleared immediately.
+FORCE_INLINE AluPassResult
+run_full_invalidate_load_use_pass(uint32_t iterations, uintptr_t addr, uintptr_t full_inv_reg, uint32_t max_poll) {
+    uint32_t cycle_start, cycle_end, instret_start, instret_end;
+    asm volatile(
+        "rdcycle   %[c0]\n"
+        "rdinstret %[i0]\n"
+        "mv        a2, %[iters]\n"
+        "1:\n"
+        "fence\n"
+        "li   t2, 0xFF\n"  // all 8 DM ready bits; see comment above
+        "sd   t2, 0(%[fullinv])\n"
+        "mv   t3, %[maxpoll]\n"
+        "2:\n"
+        "ld   t2, 0(%[fullinv])\n"
+        "beqz t2, 3f\n"  // hardware cleared it: invalidation complete
+        "addi t3, t3, -1\n"
+        "bnez t3, 2b\n"
+        "3:\n"
+        "tt.cache.cdiscard.d.l1 x0\n"  // whole L1 D$ discard (L2 is inclusive, so do both)
+        "fence\n"
+        "lw   t0, 0(%[addr])\n"
+        "add  t1, t1, t0\n"
+        "lw   t0, 4(%[addr])\n"
+        "add  t1, t1, t0\n"
+        "lw   t0, 8(%[addr])\n"
+        "add  t1, t1, t0\n"
+        "lw   t0, 12(%[addr])\n"
+        "add  t1, t1, t0\n"
+        "addi a2, a2, -1\n"
+        "bnez a2, 1b\n"
+        "rdcycle   %[c1]\n"
+        "rdinstret %[i1]\n"
+        : [c0] "=&r"(cycle_start), [i0] "=&r"(instret_start), [c1] "=r"(cycle_end), [i1] "=r"(instret_end)
+        : [iters] "r"(iterations), [addr] "r"(addr), [fullinv] "r"(full_inv_reg), [maxpoll] "r"(max_poll)
+        : "t0", "t1", "t2", "t3", "a2", "memory");
+    return {.cycles = cycle_end - cycle_start, .instret = instret_end - instret_start};
+}
+#endif
+
 // Quasar overlay->NoC writes need a software flush or the uncached alias for the host's NoC read to
 // see them; tt-1xx L1 is plain NoC-visible memory, so a direct write is enough there.
 FORCE_INLINE void write_result(uint32_t result_addr, uint32_t idx, uint32_t value) {
@@ -142,6 +308,17 @@ void kernel_main() {
         cached_pass.cycles,
         cached_pass.instret);
 
+    // 4-load baseline, cached, no cache maintenance. Runs on both arches.
+    const AluPassResult multi_cached = run_multi_load_use_pass(kMultiLoadIterations, load_src_addr);
+    write_result(result_addr, 12, kMultiLoadIterations);
+    write_result(result_addr, 13, multi_cached.cycles);
+    write_result(result_addr, 14, multi_cached.instret);
+    DEVICE_PRINT(
+        "ALU_IPC multi_load_cached iters={} cycles={} instret={}\n",
+        kMultiLoadIterations,
+        multi_cached.cycles,
+        multi_cached.instret);
+
 #if defined(ARCH_QUASAR)
     const AluPassResult uncached_pass = run_load_use_pass(kLoadUseIterations, load_src_addr + MEM_L1_UNCACHED_BASE);
     write_result(result_addr, 9, kLoadUseIterations);
@@ -152,5 +329,49 @@ void kernel_main() {
         kLoadUseIterations,
         uncached_pass.cycles,
         uncached_pass.instret);
+
+    // The figure the invalidate-then-cache strategy must beat: 4 field reads done the way FD does
+    // them today, straight through the uncached alias.
+    const AluPassResult multi_uncached =
+        run_multi_load_use_pass(kMultiLoadIterations, load_src_addr + MEM_L1_UNCACHED_BASE);
+    write_result(result_addr, 15, kMultiLoadIterations);
+    write_result(result_addr, 16, multi_uncached.cycles);
+    write_result(result_addr, 17, multi_uncached.instret);
+
+    // The candidate: one L2 line invalidate, then the same 4 reads cached.
+    const AluPassResult inval_cached =
+        run_invalidate_load_use_pass(kMultiLoadIterations, load_src_addr, L2_INVALIDATE_ADDR);
+    write_result(result_addr, 18, kMultiLoadIterations);
+    write_result(result_addr, 19, inval_cached.cycles);
+    write_result(result_addr, 20, inval_cached.instret);
+
+    // Same invalidate with no loads after it, to split the above into primitive vs refetch cost.
+    const AluPassResult inval_only = run_invalidate_only_pass(kMultiLoadIterations, load_src_addr, L2_INVALIDATE_ADDR);
+    write_result(result_addr, 21, kMultiLoadIterations);
+    write_result(result_addr, 22, inval_only.cycles);
+    write_result(result_addr, 23, inval_only.instret);
+
+    // Full-cache invalidate instead of per-line, same 4 cached reads, for a like-for-like comparison.
+    const AluPassResult full_inval = run_full_invalidate_load_use_pass(
+        kFullInvalIterations, load_src_addr, L2_FULL_INVALIDATE_ADDR, kFullInvalMaxPoll);
+    write_result(result_addr, 24, kFullInvalIterations);
+    write_result(result_addr, 25, full_inval.cycles);
+    write_result(result_addr, 26, full_inval.instret);
+
+    DEVICE_PRINT(
+        "ALU_IPC multi_load_uncached iters={} cycles={} instret={} inval_then_cached iters={} cycles={} instret={} "
+        "inval_only iters={} cycles={} instret={} full_inval iters={} cycles={} instret={}\n",
+        kMultiLoadIterations,
+        multi_uncached.cycles,
+        multi_uncached.instret,
+        kMultiLoadIterations,
+        inval_cached.cycles,
+        inval_cached.instret,
+        kMultiLoadIterations,
+        inval_only.cycles,
+        inval_only.instret,
+        kFullInvalIterations,
+        full_inval.cycles,
+        full_inval.instret);
 #endif
 }
