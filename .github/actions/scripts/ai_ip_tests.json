@@ -81,7 +81,7 @@
       "summary": "UMD: \"Higher Level Layer\" support",
       "team": "UMD",
       "owner": "unassigned",
-      "_evidence": "Implemented in the private tt-umd-horizon repo (tests/axi gtest suite; PRs #14, #15, #16, #19). Pulled from that repo's stable-branch results file (schema horizon-test-results) via HORIZON_RESULTS_FILE and recorded as passing once the Horizon nightly publishes a green result"
+      "_evidence": "UMD-side; Quasar appears in tt_metal/third_party/umd/tests (soc_descs/quasar_simulation_1x1.yaml, simulation/test_simulation_device.cpp) but no test maps to the higher-level-layer requirement -- NOT fully verified, owner to confirm"
     },
     {
       "key": "AIIPSW-7",
