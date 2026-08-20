@@ -38,7 +38,7 @@ CB_SCRATCH = range(1, 8)
 DEFINE = {"copy": None, "bcast": "PC_BCAST", "matmul": "PC_MATMUL", "alt": "PC_ALT", "reduce": "PC_REDUCE"}
 
 
-def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0):
+def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0, buffering=2):
     """Returns (got, want). For reduce, `want` is the row fold and got is column 0."""
     assert mode in DEFINE
     if mode == "reduce":
@@ -82,11 +82,11 @@ def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0):
     # The vector CB holds the broadcast operand, or the 1x1 reduce scaler.
     vec_pages = rows if mode in ("bcast", "alt") else (rows * cols if mode == "matmul" else 1)
     cbs = [
-        make_cb(CB_IN, core_ranges, num_pages=2 * rows * cols),
-        make_cb(CB_VEC, core_ranges, num_pages=2 * vec_pages),
-        make_cb(CB_OUT, core_ranges, num_pages=2 * rows * out_cols),
+        make_cb(CB_IN, core_ranges, num_pages=buffering * rows * cols),
+        make_cb(CB_VEC, core_ranges, num_pages=buffering * vec_pages),
+        make_cb(CB_OUT, core_ranges, num_pages=buffering * rows * out_cols),
     ]
-    cbs += [make_cb(cb, core_ranges, num_pages=2 * rows * cols) for cb in CB_SCRATCH]
+    cbs += [make_cb(cb, core_ranges, num_pages=buffering * rows * cols) for cb in CB_SCRATCH]
 
     defines = [("PASSES", str(passes))]
     if DEFINE[mode]:
