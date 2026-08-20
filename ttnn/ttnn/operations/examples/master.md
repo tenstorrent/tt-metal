@@ -332,3 +332,13 @@ other's slots (the unread pad slots cost a little L1 and nothing else); and let 
 included (`W = min(num_tiles, group_size)`, the root taking a share and only then multicasting), since
 reserving the root idles `1/G` of the group for the whole gather/reduce phase and leaves `W` coprime with
 power-of-two tile counts — a *more* ragged split, not less.
+**L1 is the other axis, and the gap is bigger than the speed gap:** the root reducers **push** into the
+root's gather buffer, so that buffer must be allocated identically on *every* core for the contributor's
+local `get_write_ptr()` to resolve to the root's address — `G * T * P` per core, growing with group size.
+Reduce-scatter **pulls** from each contributor's (already symmetric) shard into a buffer nobody else
+addresses, so it lives only on the `W` workers and holds only that worker's `1/W` slice — `(G+1) * A * P
+~= T * P`, essentially **independent of `G`**. Measured on Blackhole (1.5 MB L1, bf16, one group): flat
+root tops out at **70** tiles/core on a `1x8` line and **36** on `4x4`, tree reduce at **64** on `4x4`,
+reduce-scatter at **224** on both — **3.2×/6.2×** more payload. Past ~200 tiles/core the binding cost is
+the `2*T*P` of the input and output shards, not the reducer. Headroom, not speed, is usually what rules
+the root reducers out first.
