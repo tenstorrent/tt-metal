@@ -1385,7 +1385,7 @@
   model_family: EfficientDet
   skus:
     wh_n150:
-      timeout: 11
+      timeout: 7
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
@@ -1396,7 +1396,7 @@
   model_family: MobileNet
   skus:
     wh_n150:
-      timeout: 7
+      timeout: 4
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
@@ -1407,7 +1407,7 @@
   model_family: RetinaNet
   skus:
     wh_n150:
-      timeout: 7
+      timeout: 4
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
@@ -1418,7 +1418,7 @@
   model_family: SSD
   skus:
     wh_n150:
-      timeout: 6
+      timeout: 4
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models
@@ -1429,7 +1429,7 @@
   model_family: VAD
   skus:
     wh_n150_civ2:
-      timeout: 11
+      timeout: 12
       tier: 3
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
@@ -1440,18 +1440,20 @@
   model_family: OpenPDN
   skus:
     wh_n150:
-      timeout: 6
+      timeout: 2
       tier: 3
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
 
 - name: YuNet unit tests
-  cmd: TT_METAL_WATCHER=30 pytest --timeout 300 tests/nightly/single_card/yunet/test_yunet_pcc.py
+  cmd: |
+    python3 -c "from models.experimental.yunet.common import setup_yunet_reference; setup_yunet_reference()"
+    TT_METAL_WATCHER=30 pytest --timeout 300 models/experimental/yunet/tests/pcc/test_pcc.py
   model: yunet
   model_family: YuNet
   skus:
     wh_n150:
-      timeout: 6
+      timeout: 3
       tier: 3
   owner_id: U0978501V8B # CODEOWNERS @tvardhineniTT
   team: models

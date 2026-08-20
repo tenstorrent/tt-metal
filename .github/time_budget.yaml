@@ -338,7 +338,7 @@ models:
   e2e_tier3:
     wh_llmbox_perf: 180
     wh_galaxy_perf: 55
-    wh_n150: 91
+    wh_n150: 136
     wh_n300: 60
     bh_p150: 33
     bh_p300: 8
@@ -367,8 +367,8 @@ models:
     wh_llmbox: 90
     wh_galaxy: 80
     wh_llmbox_perf: 58
-    wh_n150: 94
-    wh_n150_civ2: 11
+    wh_n150: 75
+    wh_n150_civ2: 12
     wh_n300: 33
     bh_p150: 30
     bh_p300: 30
