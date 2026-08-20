@@ -58,6 +58,7 @@ def dense_sp_attention(
     cluster_axis,
     attention_sink=None,
     sliding_window_size=None,
+    circular_kv_cache=False,
     slot_idx=0,
     layer_idx=0,
     num_layers=1,
@@ -72,8 +73,19 @@ def dense_sp_attention(
     kv_actual         valid prefix length already in the cache before this chunk (drives on-device rotation)
     logical_n         total valid prefix length (q attends causally over [0:logical_n])
     attention_sink    per-query-head sink (weights.sinks, bf16); sliding_window_size None on full layers
+    circular_kv_cache the sliding cache is a circular buffer of whole chunk slabs; the ring read
+                      wraps its local slab addressing (chunk group g in slab g mod n_slabs, slab count
+                      derived on-device from the cache/Q geometry). False on full layers / unbounded
+                      caches. kv_actual and logical_n stay TRUE ABSOLUTE lengths either way.
     -> out            [1, n_q_local, chunk_local, head_dim]  block-cyclic over the chunk
     """
+    assert (
+        not circular_kv_cache or sliding_window_size is not None
+    ), "circular_kv_cache is only meaningful for sliding-window layers (got sliding_window_size=None)"
+    assert not (circular_kv_cache and write_chunk), (
+        "circular caches must be written via write_kv_chunk (host-side kv_actual mod capacity); this "
+        "direct write path would use the absolute kv_actual and write past the circular buffer"
+    )
     assert cache_k.dtype == ttnn.bfloat8_b and cache_v.dtype == ttnn.bfloat8_b, (
         f"chunked ring cache-read requires a bf8 KV cache; got k={cache_k.dtype}, v={cache_v.dtype}. "
         "KV_CACHE_DTYPE=bf16 is not supported for chunked prefill (the sliding RingJointSDPA path "
@@ -143,5 +155,7 @@ def dense_sp_attention(
         # GPT-OSS additions (Pavle's sinks+sliding branch):
         attention_sink=attention_sink,
         sliding_window_size=sliding_window_size,
+        # Circular sliding KV cache. False => unbounded, byte-identical behavior.
+        circular_kv_cache=circular_kv_cache,
     )
     return out
