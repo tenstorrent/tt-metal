@@ -642,17 +642,15 @@ rather than comparing our defaults against its cheaper ones:
 
 | | device time |
 |---|---|
-| ours: flash, 2 chunks, HiFi4 exact (metal defaults) | 53.4 us |
-| ours: flash, 2 chunks, HiFi2 approx | 41.8 us |
-| ours: flash, 2 chunks, HiFi2 approx, `TT_UNIFIED_FPU_MUL` | 36.4 us |
-| ours: flash, 4 chunks, HiFi4 exact | 83.2 us |
-| ours: flash, 4 chunks, HiFi2 approx | 64.7 us |
-| ours: flash, 4 chunks, HiFi2 approx, `TT_UNIFIED_FPU_MUL` | 53.2 us |
+| ours: flash, 2 chunks, HiFi4 exact (metal defaults) | 50.9 us |
+| ours: flash, 2 chunks, HiFi2 approx | 36.5 us |
+| ours: flash, 4 chunks, HiFi4 exact | 72.0 us |
+| ours: flash, 4 chunks, HiFi2 approx | 53.2 us |
 | ttnn SDPA, q32/k128, HiFi2 approx | 21.0 us |
 | ttnn SDPA, q128/k128, HiFi2 approx | 19.9 us |
 
-**ttnn is about 2.1x faster on one core at the same shape and the same fidelity, or 1.8x with
-FPU multiply enabled.** That is down from 3.9x, and the way it came down is worth more than the number.
+**ttnn is about 1.8x faster on one core at the same shape and the same fidelity.** That is down
+from 3.9x, and the way it came down is worth more than the number.
 
 ### Where the time actually goes
 
@@ -1177,8 +1175,8 @@ do it and nothing in any kernel changed.
 | config | 2 chunks | 4 chunks | flash error |
 |---|---|---|---|
 | SFPU only (`TT_UNIFIED_NO_FPU_ELTWISE`) | 46.55 us | 80.16 us | 0.0312 / 0.0271 |
-| **FPU add/sub (default)** | **41.81** (-10%) | **64.75** (-19%) | 0.0312 / 0.0271 |
-| plus `TT_UNIFIED_FPU_MUL` | **36.43** (-22%) | **53.21** (-34%) | 0.0312 / 0.0271 |
+| FPU add/sub only | 41.81 (-10%) | 64.75 (-19%) | 0.0312 / 0.0271 |
+| **FPU add/sub/mul (default)** | **36.47** (-22%) | **53.21** (-34%) | 0.0312 / 0.0271 |
 
 The predicate: every binary op must have an FPU form, AND every binary node must have at
 least one LEAF child. Two non-leaf children would put two operands in DST and no
@@ -1207,12 +1205,19 @@ And the FPU is not uniformly better. Per-op max relative error, measured:
 | sub | 0.00389 | 0.00389 | equal, and faster |
 | **mul** | **0.01023** | **0.00380** | **2.7x worse**, 3.4x faster |
 
-add and sub are free wins and need no knob. mul is a real accuracy-for-speed trade and
-fails `test_unified_binary`'s 0.01 gate, so it is **opt-in**: `-DTT_UNIFIED_FPU_MUL`.
-Worth knowing before deciding: flash's own error is **unchanged to four decimals** with
-it on, because that kernel's error is dominated by approx exp and the bfloat16 chain, not
-by one multiply. So the op-level regression is real and does not propagate here -- which
-is an argument for flipping the default, made from data rather than from taste.
+add and sub are free wins and need no knob. mul is a real accuracy-for-speed trade, and
+the FPU is now the **default** for it too: the op-level cost does not propagate, since
+flash's error is unchanged to four decimals either way -- that kernel's error comes from
+approx exp and the bfloat16 chain, not from one multiply -- while the time is worth
+12-16% of the kernel. `-DTT_UNIFIED_SFPU_MUL` takes the accurate form back.
+
+Loosening `test_unified_binary`'s mul limit from 0.01 to 0.015 to accommodate that would
+have been the weak move on its own, so the test grew instead. It now re-runs add, sub and
+mul with the FPU **disabled** and holds that path to the original 0.01, so a regression in
+the accurate implementation cannot hide behind the FPU's allowance. And it asserts the
+ORDER -- that the FPU multiply is the less accurate of the two -- which is what notices
+dispatch silently changing rather than just drifting. Forcing mul back to the SFPU makes
+that check fail, which is how it was confirmed to bite.
 
 Coverage came with it. The harness had only two-leaf adds and unaries on bare leaves, so
 the predicate and the chaining would have shipped untested; `example_fpu_eltwise` now

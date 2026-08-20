@@ -442,11 +442,11 @@ void example_eltwise() {
 //   max_(a, b)       no FPU form for max: the OP rule sends the tree to the SFPU
 //   (a + b) - (c+a)  two non-leaf children: the SHAPE rule does, even though every op
 //                    here has an FPU form
-//   a * b            mul is opt-out, so SFPU by default and FPU under
-//                    -DTT_UNIFIED_FPU_MUL -- the one op where that is a real trade
+//   a * b            FPU like the rest, and the one op where that is a real trade:
+//                    -DTT_UNIFIED_SFPU_MUL takes the more accurate form back
 //
-// Deliberately built from add and sub: with mul opt-out by default, a chain written with
-// it would exercise the fallback rather than the chaining it is here to cover.
+// The chains are built from add and sub on purpose: those two are unconditional, so the
+// coverage does not move if the multiply's default is ever taken back.
 void example_fpu_eltwise() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t3 = TensorAccessor(FakeArgs{3}, 0);
@@ -481,7 +481,7 @@ void example_fpu_eltwise() {
     T("-- (a + b) - (c + a): two non-leaf children, so the shape rule falls back");
     ComputeBlock both_sides = scratch.store((a + b) - (c + a));
 
-    T("-- a * b: mul is opt-out, so SFPU unless TT_UNIFIED_FPU_MUL is set");
+    T("-- a * b: FPU by default; TT_UNIFIED_SFPU_MUL takes the accurate form back");
     Block both = sink.store(a * b);
     noc_store<0>(std::move(both), t3, 0);
     (void)sizeof(chain);
