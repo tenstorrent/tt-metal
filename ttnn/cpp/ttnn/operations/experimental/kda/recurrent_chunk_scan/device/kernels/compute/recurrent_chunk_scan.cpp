@@ -14,8 +14,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-namespace {
-
 inline __attribute__((always_inline)) void matrix_multiply(
     uint32_t a_id,
     uint32_t b_id,
@@ -144,8 +142,6 @@ inline __attribute__((always_inline)) void summary_step(
     state_temporary.pop_front(kv);
     state_update.pop_front(kv);
 }
-
-}  // namespace
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
 TT_KERNEL void compute(uint32_t num_chunks) {
