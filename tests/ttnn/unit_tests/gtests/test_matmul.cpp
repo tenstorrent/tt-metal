@@ -433,8 +433,8 @@ TEST_F(MatmulSmoke, TransposeB) {
         detail::to_float_vector(out), detail::cpu_matmul(a_q, b_t, 1, M, K, N), 0.05f, 1.92f, 0.999f, 0.02f);
 }
 
-// Escape class 3 (#50250, #49836): fp32 inputs across the full {fp32_dest_acc_en} x
-// {packer_l1_acc} compute-config cube on the auto 2D path (untilize_out omitted: 1D-only knob).
+// fp32 inputs across the full {fp32_dest_acc_en} x {packer_l1_acc} compute-config cube
+// on the auto 2D path (untilize_out omitted: 1D-only knob).
 // Inputs are built with cancellation across K -- row pairs (+1024, -1023) whose partial sums
 // reach ~1024 but whose true row sum is 32 -- so dest-register precision decides the result:
 //   * fp32_dest_acc_en=true : operands have <= 11-bit mantissas (exact in src regs at HiFi3) and
