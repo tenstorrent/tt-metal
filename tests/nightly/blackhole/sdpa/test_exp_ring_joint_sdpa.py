@@ -179,6 +179,10 @@ def run_exp_ring_joint_sdpa_nightly(
     num_buffers_per_channel=32,
     max_payload_size=8192,
     mesh_device=None,
+    tokens_per_frame=None,
+    num_frames_padded=None,
+    sparse_frame_mask=None,
+    sparse_allow=None,
 ):
     """
     Run exp_ring_joint_scaled_dot_product_attention and verify accuracy or determinism.
@@ -406,6 +410,16 @@ def run_exp_ring_joint_sdpa_nightly(
         seen_sem_addrs = []
         program_cache_entries_baseline = None
 
+        # Sparse frame-block attention params are only forwarded when enabled, so the dense path's
+        # op-call kwargs (and therefore its RT-arg stream) stay byte-for-byte unchanged.
+        sparse_kwargs = {}
+        if tokens_per_frame is not None:
+            sparse_kwargs = dict(
+                tokens_per_frame=tokens_per_frame,
+                num_frames_padded=num_frames_padded,
+                sparse_frame_mask=sparse_frame_mask,
+            )
+
         tt_out_list = []
 
         for i in range(num_iterations):
@@ -445,6 +459,7 @@ def run_exp_ring_joint_sdpa_nightly(
                 subdevice_id=worker_sub_device_id,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
+                **sparse_kwargs,
             )
 
             tt_out_list.append(tt_out)
@@ -566,7 +581,18 @@ def run_exp_ring_joint_sdpa_nightly(
 
         # Accuracy check against PyTorch SDPA reference.
         # joint_seq_len=0 so this is pure non-causal SDPA over the full sequence.
-        gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False)
+        if tokens_per_frame is not None:
+            # Frame-block-sparse reference: expand the [nf, nf] frame allow table to a per-token
+            # boolean mask and let softmax over disallowed (-inf) positions drop them.
+            n = Q.shape[2]
+            keep = (
+                sparse_allow.bool()
+                .repeat_interleave(tokens_per_frame, 0)
+                .repeat_interleave(tokens_per_frame, 1)[:n, :n]
+            )
+            gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, attn_mask=keep.reshape(1, 1, n, n))
+        else:
+            gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False)
         gt_out = gt[:, :, :total_seq, :]
 
         tt_out_torch = to_torch_out(tt_out_list[-1])
@@ -652,6 +678,66 @@ def test_exp_ring_joint_attention_sdpa_accuracy(
         pcc_threshold=DEFAULT_PCC_THRESHOLD,
         max_mse=DEFAULT_MAX_MSE,
         max_payload_size=max_payload_size,
+    )
+
+
+# === TEST 2b: SPARSE FRAME-BLOCK ATTENTION ACCURACY ===
+def _pack_sparse_frame_mask(allow):
+    """Bit-pack an [nf, nf] uint8 allow table into uint32 words (bit q*nf+k set iff q attends k)."""
+    nf = allow.shape[0]
+    words = [0] * (((nf * nf) + 31) // 32)
+    for q in range(nf):
+        for k in range(nf):
+            if allow[q, k]:
+                bit = q * nf + k
+                words[bit // 32] |= 1 << (bit % 32)
+    return words
+
+
+@pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize("add_last_frame", [False, True], ids=["window", "window_plus_last"])
+def test_exp_ring_joint_attention_sparse_frames_accuracy(add_last_frame, reset_seeds):
+    """Frame-block-sparse exp ring joint SDPA: one frame per SP shard, each query frame attends a
+    centered window of key frames (optionally plus the last frame). Exercises the sparse_frame_mask
+    skip path end-to-end through the fused all-gather against a masked torch reference.
+
+    Uses one frame per shard (nf == sp_size), so nf_padded == nf_real and the frame count is already
+    ring-aligned — the simplest shape that still routes every ring iteration through the mask.
+    """
+    num_devices = detect_devices_without_opening()
+    sp_size, _tp_size, _arch = calculate_mesh_config(num_devices)
+
+    nf = sp_size  # one frame per shard
+    tokens_per_frame = 64  # 2 tiles, tile-aligned; also the q/k chunk size
+    window = 3
+    b, nh, d = 1, 8, HEAD_DIM
+    total_seq = nf * tokens_per_frame
+
+    # Centered window: frame q attends [q-window//2, q+window//2] (clamped), optionally the last frame.
+    allow = torch.zeros(nf, nf, dtype=torch.uint8)
+    half = window // 2
+    for q in range(nf):
+        allow[q, max(0, q - half) : min(nf, q + half + 1)] = 1
+        if add_last_frame:
+            allow[q, nf - 1] = 1
+    sparse_frame_mask = _pack_sparse_frame_mask(allow)
+
+    logger.info(
+        f"[sparse-frames exp ring joint] nf={nf} tokens_per_frame={tokens_per_frame} "
+        f"window={window} add_last={add_last_frame}"
+    )
+    run_exp_ring_joint_sdpa_nightly(
+        b,
+        nh,
+        total_seq,
+        d,
+        tokens_per_frame,  # q_chunk_size
+        tokens_per_frame,  # k_chunk_size
+        ttnn.bfloat16,
+        tokens_per_frame=tokens_per_frame,
+        num_frames_padded=nf,
+        sparse_frame_mask=sparse_frame_mask,
+        sparse_allow=allow,
     )
 
 

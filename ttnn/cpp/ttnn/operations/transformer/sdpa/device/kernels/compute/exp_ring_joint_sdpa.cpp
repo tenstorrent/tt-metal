@@ -248,6 +248,19 @@ void kernel_main() {
                 local_n_has_padding,
                 joint_has_padding,
                 false,  // straddle_mask_enabled
+                // The following ten template params were previously left to sdpa_ring_v2's defaults.
+                // C++ can't skip middle template args to reach sparse_frames_enabled, so spell them out
+                // with those exact default values — dense behavior stays byte-identical.
+                false,       // kv_pad_rotation_enabled
+                DHt,         // v_cb_physical_width_t (= vDHt, which exp sets to DHt)
+                false,       // v_shares_k_buffer
+                false,       // kt_inplace_v
+                0,           // sliding_window_size
+                1,           // ring_size (exp drives the ring loop externally; internal semantics = 1)
+                false,       // use_attention_sink
+                INVALID_CB,  // cb_attention_sink
+                false,       // joint_n_skip_enabled
+                0,           // joint_local_padded_Nt
                 sparse_frames_enabled,
                 tiles_per_frame,
                 num_frames_padded_compile>(
@@ -273,6 +286,7 @@ void kernel_main() {
                 /*use_zigzag_balancing=*/false,
                 ChunkedContext{},
                 /*is_first_active_iter=*/(ring_iter == 0),
+                /*logical_lt=*/0,  // joint is zero-length in exp; previously the runtime default
                 sparse_frame_mask_words,
                 q_shard_start_tile,
                 q_work_bitmap);
