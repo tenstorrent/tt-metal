@@ -1,0 +1,8 @@
+{
+  "arch": "Qwen3MoeForCausalLM",
+  "main_class": "tt_qwen3_coder_30b_a3b_instruct:Qwen3CoderForCausalLM",
+  "hf_model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+  "adapter": "models/demos/blackhole/qwen3_coder_30b_a3b/tt/generator_vllm.py",
+  "registered_as": "TTQwen3MoeForCausalLM",
+  "notes": "Self-contained bundle for vllm_tt_plugin.platform.register_tt_models() -> _register_models_from_extra_dir(). Point EXTRA_MODELS_DIR at the parent vllm_bundle/ directory. 'arch' is this checkout's config.json architecture; the plugin prefixes it with TT. 'main_class' resolves through the sibling shim module, which is importable because the plugin appends this folder to sys.path."
+}
