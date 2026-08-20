@@ -6,9 +6,13 @@ sweeps, and the findings that came out of building them — lives in
 [`BLAZE_PROMOTION_TESTS_DONE.md`](BLAZE_PROMOTION_TESTS_DONE.md). Item letters are therefore not
 contiguous; the gaps are closed work, and the DONE document is where they went.
 
-- **Forensic detail** for A5 stays in
-  [`blaze_llk_promotion_test_strategy.md`](blaze_llk_promotion_test_strategy.md) §9; §3 there
-  covers the `mul_reduce_scalar` dead ends behind C4. Bare "§n" below means that document.
+- **Detail for every defect below** — mechanism, what is measured versus inferred, blast radius,
+  reproduction, fix options with trade-offs, and the tripwire that flips when it is fixed — is in
+  [`blaze_llk_promotion_test_strategy.md`](blaze_llk_promotion_test_strategy.md) **§13**, one
+  dossier per item (C1–C6, F). Read the dossier before starting on an item; two of them record
+  fixes that were tried and did not work.
+- **Forensic detail** for A5 also sits in that document at §9, and §3 covers the
+  `mul_reduce_scalar` dead ends behind C4. Bare "§n" below means that document.
 - All three promotion PRs (**#52709, #52713, #52727**) have merged, so nothing below is blocked
   on a promotion landing.
 
@@ -236,10 +240,17 @@ family.** Everything else is done — both modes, both widths, the mixed 1024+ta
 in a 32-element chunk. Fix this and that shape becomes a one-line addition to
 `PRE_SORTED_ROW_ELEMENTS`.
 
-**Fix shape, for whoever owns it:** either clear the whole tile on the 32-bit path (the ZEROACC
-loop already exists — it just needs to run over all 4 faces, or the unpacker needs a -infinity
-equivalent), or reject `num_faces < 4` on that branch at compile time and document that a
-partial chunk is 16-bit only.
+**The obvious fix was tried on 2026-08-20 and does not work — read §13.6 before repeating it.**
+Extending that `ZEROACC` loop to all 4 faces passes in isolation (`--k partial_chunk` XPASSes)
+and **still fails inside a full-suite run**, twice in a row, so a Dest clear from the math thread
+does not remove what the sort is reading. It also forces `num_faces` out of the math half and out
+of 6 call sites, for no gain. Reverted.
+
+**Fix options now**, in the order §13.6 recommends: give the 32-bit branch the 16-bit branch's
+-infinity semantics via SrcA (the only option that makes the two branches agree, but it needs
+both TRISCs to know the face count); or reject `num_faces < 4` on that branch at compile time and
+document partial chunks as 16-bit only; or, caller-side and available today with no LLK change,
+pad the chunk to a full 64 elements with -infinity in L1 and always pass `num_faces=4`.
 
 ---
 

@@ -27,6 +27,11 @@
 
 ---
 
+> **Looking for a specific bug?** §13 has a dossier per open defect (C1–C6, F): mechanism, what
+> is measured versus inferred, blast radius, reproduction, fix options with trade-offs, and the
+> tripwire test that flips when it is fixed. Two of them record fixes that were tried and did not
+> work, which is the part that saves the most time.
+
 ## Open work at a glance
 
 | # | Item | PR | Est. | Notes |
@@ -750,3 +755,334 @@ sooner:
 `5c6a605` + `744bbe2` docs · `169a504` sampling Prgm0 hazard · `931eab1` + `fc2aec7` +
 `3e42be9` doc upkeep · `566a1e5` + `d6e00d0` + `3b8903f` the chunked-reduce attempts.
 
+---
+
+## 13. Defect dossiers — every open bug, with fix options
+
+One entry per open defect in
+[`REMAINING_WORK.md`](REMAINING_WORK.md) (C1–C6 and F). `REMAINING_WORK.md` says what needs
+doing and by whom; this section is the detail an owner needs before touching any of it —
+mechanism, what is measured versus inferred, blast radius, how to reproduce, the fix options
+with their trade-offs, and which test flips when it is fixed.
+
+Two conventions used throughout. **Measured** means observed on Blackhole p100a through
+`.claude/scripts/run_test.sh`; anything not marked measured is inference from reading the code.
+And every dossier names a **tripwire** — the existing test that changes state when the defect is
+fixed — because a defect with no tripwire gets re-litigated instead of closed.
+
+---
+
+### 13.1 C1 — `dense_packing` programs a 16-bit W-stride on any pack source
+
+**Symptom.** With `dense_packing` set and a 32-bit pack source, packed output is wrong: tiles
+land at half the intended spacing. Measured at **0.25 match** against golden.
+
+**Mechanism, fully established.** `set_packer_strides` (`cpack_common.h:301-305`) derives the
+field as
+
+```
+w_stride = TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * datum_size_in_bytes(pack_src_format)
+```
+
+and `datum_size_in_bytes` (`ckernel_defs.h:274`) returns 4 for Float32. The compute API instead
+hardcodes the multiplier as `* 2` in four places — `custom_mm.h:69` and `:261`,
+`compressed_custom_mm.h:69` and `:262`. So on a Float32 pack source **both ends are 2x off**:
+init programs `2*16*16*2 = 1024` where 2048 is correct, and the uninit restores
+`4*16*16*2 = 2048` where 4096 is correct. It is not an unrestored-state bug; the op is wrong
+end to end, and the uninit merely fails to undo a value that was wrong on the way in.
+
+**Blast radius.** Every caller that sets `dense_packing` with a 32-bit output CB. All current
+in-tree callers use 16-bit output, which is why this has never been seen in production.
+
+**Reproduce.** `--test test_custom_mm_uninit_restore.py`; the Float32 cell is the xfail.
+
+**Fix options.**
+
+| | What | Cost | Leaves behind |
+|---|---|---|---|
+| 1 | `LLK_ASSERT` in `*_block_init` that `datum_size_in_bytes(pack_src_format) == 2` when `dense_packing` is set | Minutes | 32-bit dense packing unsupported, but loudly so |
+| 2 | Derive the datum size from the output CB in init, **and add an `out_cb_id` parameter to `*_block_uninit`**, which currently takes none | ~0.5 d plus a signature change | Nothing, but it touches every call site: `matmul.hpp`, `flash_mla.hpp`, `dram_streaming_matmul*.hpp`, `matmul_custom_compressed_kernel.cpp` |
+
+**Recommendation.** Option 1 now, option 2 when someone actually needs 32-bit dense packing.
+The reason to do *something* now is that option 1 is minutes of work and converts silent
+corruption into a build/runtime failure; leaving it is the only outcome with no upside.
+
+**Tripwire.** `test_custom_mm_uninit_restore.py`'s Float32 `xfail` (marker form, so the body
+really builds, runs and compares) flips to XPASS under either fix.
+
+---
+
+### 13.2 C2 — the `eltwise_mul_scalar` HiFi workaround cannot do what its comment says
+
+**Symptom.** Not a wrong answer — a workaround whose stated mechanism is disproved by the code
+it calls, which means nobody knows what fixed the measurement it claims to fix.
+
+**What the code actually does.** `deepseek_binary_dest_reuse_tiles_init`'s HiFi branch hardcodes
+`ckernel::DEFAULT_TENSOR_SHAPE` and attributes a HiFi4 accuracy fix to the shorthand init
+"mis-specialising the tile shape". Reading the three things it depends on:
+
+- `get_effective_math_fidelity<ELWMUL, f>()` is the **identity** for ELWMUL
+  (`llk_math_common_api.h:123-125`), so the fidelity gate cannot be what differs.
+- `acc_to_dest` is 0 in **both** arms.
+- The shorthand `llk_math_eltwise_binary_init` (`llk_math_binary_api.h:31-42`) resolves the shape
+  as `get_operand_tensor_shape(get_operand_id(operand_A))` *regardless of fidelity*.
+
+So tensor shape is the only difference between the two arms. And `get_operand_tensor_shape`
+reads compile-time CB metadata (`llk_operands.h:40-46`, emitted by `genfiles.cpp:880-882`), which
+for a standard 4-face 32x32 tile is exactly `DEFAULT_TENSOR_SHAPE` — making the HiFi arm
+**bit-identical to the shorthand it replaces**.
+
+**The other half, measured.** On a 2-face tile, forcing `DEFAULT_TENSOR_SHAPE` makes
+`_llk_math_eltwise_binary_` derive `num_faces`/`face_r_dim` from the shape it was handed, issue
+four faces of ops against a two-face packer, and **deadlock the MATH_PACK handshake**. It does
+not silently corrupt `silu(gate)*up` as the comment states.
+
+**So the workaround is either inert (4-face CB) or a hang (2-face CB). There is no
+configuration in which it does what it says.** Meanwhile the paired execute
+(`deepseek_binary_dest_reuse_tiles` → the 4-arg `llk_math_eltwise_binary` overload) *does* derive
+the shape from the CB, so on non-default geometry init and execute disagree with each other.
+
+**What is unexplained.** #52709 reports `gated_local_reduce` at HiFi4 going from 0.70 to 0.9996.
+That measurement is real; its cause is not the mechanism in the comment.
+
+**Fix options.**
+
+1. **Get the failing config and re-measure** (needs the #52709 author). If the 0.70 was on a
+   4-face CB, the arm is inert and something else in that PR fixed it — worth knowing which,
+   because that something is load-bearing and undocumented.
+2. **If inert: delete the arm**, keep the shorthand. Smallest honest outcome.
+3. **If the real mechanism is elsewhere** — init ordering, unpack-side fidelity phases, a
+   different overload — document that and drop the tensor-shape story. A workaround with a wrong
+   rationale is worse than none: the next person "fixes" it by generalising the wrong thing.
+
+**Tripwire.** None yet, and that is the point: **A5** is the test for this init sequence and is
+deliberately blocked on the answer, because if the arm is inert the honest outcome is deleting
+the code rather than testing it.
+
+---
+
+### 13.3 C3 — pre-existing `topk_xl` → `eltwise_binary` reconfig escape
+
+**Symptom.** A golden mismatch in `eltwise_binary` that depends on a `topk_xl` test having run
+before it in the same session — i.e. state leaking across kernels, not a bug in either op's own
+sequence.
+
+**Established.** It reproduces on **clean `main`** with every promotion change stashed, so it is
+not caused by the promotions. That is the single most useful fact about it: anyone bisecting a
+failure in this area will otherwise burn a day blaming their own driver.
+
+**Why it matters here.** The `top32_rm` work shares this area (the two sort families overlap in
+ADDR_MODs, the MOP and the REPLAY buffer — see §12.4 and Finding 3). A failure that looks like
+"my new sort driver broke `eltwise_binary`" is more likely to be this.
+
+**Reproduce.** `experimental_reconfig_escape_test.cpp` is the standing driver for this class.
+Bisect **single-file-then-target**: run the suspected test file alone, then with the suspected
+predecessor, before concluding anything.
+
+**Do not** use `tt-smi -r` to make it go away. A reset masks reconfig escapes, which is exactly
+the class of bug this is; the tt-llk notes reserve resets for runtime timeouts.
+
+**Fix options.** The fix is whichever reconfig the escaping op fails to restore, so the work is
+localisation rather than choosing a design:
+
+1. Diff the CFG state the two ops program — ALU format spec, ADDR_MODs, the pack MOP — around a
+   passing and a failing ordering, and find the field the second op assumes rather than sets.
+2. Then decide, as with C4, whether the *entering* op should set it (clean-state-on-entry) or the
+   *leaving* op should restore it (uninit). This branch's experience is that clean-state-on-entry
+   ages better: an uninit is one more thing a caller can forget.
+
+**Tripwire.** None dedicated. Whoever fixes it should add the ordering as a test, because an
+escape with no test comes back.
+
+---
+
+### 13.4 C4 — `mul_reduce_scalar` re-entry needs a DEST-section boundary
+
+**Symptom.** Running the known-good non-chunked sequence twice over the same input gives a wrong
+answer the second time — **9.27x to 9.93x golden, all 12 variants** — unless a DEST-section
+boundary separates the two passes.
+
+**Mechanism, established by the reproducer.** `tests/sources/mul_reduce_scalar_reenter_test.cpp`
+plus `test_mul_reduce_scalar_reenter.py`, ~40 lines, measured:
+
+| Configuration | Result |
+|---|---|
+| `passes=1`, either mode (control) | correct |
+| `passes=2`, DEST-section boundary between passes | correct, and **bit-identical** across passes |
+| `passes=2`, one shared DEST section | **wrong — all 12 variants** |
+
+So the family **is** re-enterable; what is broken is re-entry with no
+`dest_section_done` / `wait_for_dest_available` pair in between. That handshake restores
+something the second `_llk_math_mul_reduce_scalar_init_` does not.
+
+**Blast radius, and why this is a shipping defect rather than a test curiosity.**
+`mul_reduce_scalar_chunked_tile` (`rmsnorm.h:105`) is built exactly the broken way: it documents
+that the caller "must acquire DST before calling", then re-enters every batch inside that one
+section with `if (batch > 0) mul_reduce_scalar_init(...)` as its only restoration attempt. The
+first attempt at a chunked driver (§3) reported 5-30x golden; this reproduces 9.3-9.9x. Same
+signature, non-integer multiplier in both cases, so very likely the same defect with a much
+smaller reproducer.
+
+**Fix options.**
+
+1. **In the LLK** — make `_llk_math_mul_reduce_scalar_init_` (or `switch_to_reduce`) restore
+   whatever the section boundary restores. Right if re-entry inside a section is meant to work.
+   Needs someone to identify the state first: diff the CFG/ADDR_MOD/RWC state across a boundary
+   versus across a bare re-init.
+2. **In the compute API** — have `mul_reduce_scalar_chunked_tile` close and reacquire the DEST
+   section per batch, or document that it cannot be used as written. Right if the per-batch
+   handshake is considered the caller's job.
+
+**Recommendation.** Decide 1 vs 2 before touching D1: if the op cannot work as written and nobody
+wants the chunked form, **deleting `mul_reduce_scalar_chunked_tile` is a legitimate outcome** and
+the cheaper one — it currently ships with no caller and no test.
+
+**Do not** re-investigate the accumulator fill or a missing UNPACK/MATH barrier. §3 records both
+as tried on silicon and disproved, and this result explains why neither moved the number.
+
+**Tripwire.** The 12 `xfail`s in `test_mul_reduce_scalar_reenter.py` (marker form, so the bodies
+run) flip to XPASS the moment re-entry inside one section restores state.
+
+---
+
+### 13.5 C5 — out-of-bounds metadata read, live on `main`
+
+**Symptom.** An L1 read one word past the compressed-matmul metadata buffer whenever
+`kt_dim * ct_dim` is a multiple of 10. `kt_dim=10, ct_dim=1` is the smallest case, and it is
+inside the documented ranges.
+
+**Mechanism.** The metadata buffer holds `ceil(kt_dim * ct_dim / 10)` words. Both walkers
+reload unconditionally after consuming an item, so on the last item of an exact-multiple-of-10
+block they step one word beyond the buffer: the unpack side at `meta_ptr[full_iters]`
+(`llk_unpack_AB_compressed_custom_mm.h`), and the math side in three places
+(`llk_math_compressed_custom_mm.h`).
+
+**What it costs, stated precisely so nobody over- or under-reacts.** At `rem_iters == 0` the
+remainder loop never runs, so the word read past the buffer is **never used**, and no golden can
+observe it — confirmed by running the boundary test against the unguarded kernel, where it
+passes. This is a **memory-safety** defect, not a wrong-answer defect.
+
+**Status: fixed, pushed, needs a PR.** `ldjurovic/compressed-mm-oob-guard` is cut from `main`
+with both guards and nothing else — 2 files, +30/-12, no compute-API change — and verified from
+its own worktree at **582 passed**. The guard bounds the reload with
+`num_meta_words = (kt_dim * ct_dim + 9) / 10`, the same expression the caller sizes the buffer
+with, so the guard and the allocation cannot drift apart.
+
+**Tripwire.** The 6 metadata-word-boundary variants in `test_matmul_custom_compressed.py` reach
+the exact case; they live on the #53130 branch, so run them there rather than on the guard branch.
+
+---
+
+### 13.6 C6 — `top32_rm`'s 32-bit unpack branch sorts against stale Dest
+
+**Symptom.** On the 32-bit (unpack-to-dest) branch, a chunk that fills fewer than 4 faces
+produces a top-32 containing values **that were never in the input**. Measured: a 160-element
+Float32 row of values in [-80, 79] returned 11026.0, 10041.0, 9058.0 and more — recognisable as
+another test's stimuli, i.e. leftovers in Dest.
+
+**Mechanism, partly established.** `llk_unpack_A_top32_rm_api.h` forks on the src format:
+
+- **16-bit branch** — the unpacker clears SrcA to -infinity (`TTI_UNPACR_NOP … CLR_SRC_NEGINF`)
+  before unpacking, so faces the caller did not fill hold -infinity and lose every comparison.
+  The math half then moves all four faces into Dest.
+- **32-bit branch** — the tile goes straight to Dest via unpack-to-dest; **nothing clears
+  anything**, and the `ZEROACC` loop inside `_llk_math_top32_rm_` runs `i < num_faces`, so the
+  faces beyond `num_faces` are never touched. The sort reads all four regardless.
+
+**Latent in the consumer, and the reason is worth keeping.** `top32_rm_dev_compute.cpp` *does*
+drive this branch with `num_faces=2`, but only for its uint32 **index** tile, and an index slot
+can only be selected when the paired value slot wins — the value tile is bf16, so its padding is
+-infinity and never wins. **The 32-bit branch is safe today only because a 16-bit operand is
+supplying the -infinity next to it.** Put values through it and the defect is live.
+
+**A fix was attempted on 2026-08-20 and reverted. Read this before trying the obvious thing.**
+The obvious thing is to extend that `ZEROACC` loop from `num_faces` to `TILE_NUM_FACES`, and it
+does not work:
+
+- It compiles into a further change, because after it `num_faces` is unused in the math half —
+  both branches then process the whole tile — so the parameter has to be dropped from
+  `_llk_math_top32_rm_`, from `llk_math_top32_rm` and from 6 call sites in the two dev kernels.
+- **Measured: it passes in isolation and still fails in a session.** With the change,
+  `--test test_top32_rm.py --k partial_chunk` **XPASSes**, and the same variant inside a
+  full-suite run still **XFAILs** — twice in a row. Whatever the sort is reading, a Dest clear
+  issued from the math thread at that point does not remove it.
+- What that rules out: "the unwritten faces merely hold uninitialised content that ZEROACC
+  fixes". What it points at instead: either the `clear zero flags` form of ZEROACC used here does
+  not zero content, or the window unpack-to-dest writes and the window `_llk_math_transpose_dest_`
+  subsequently reads do not line up with the faces the clear addresses. Establishing which is the
+  next investigative step, and it wants a Dest dump (DPRINT via `debug_dest_copy.cpp`) rather
+  than more guessing.
+
+**Fix options, in the order I would try them.**
+
+1. **Give the 32-bit branch the 16-bit branch's semantics.** Have the unpacker issue
+   `CLR_SRC_NEGINF` plus a dvalid and have the math half run the MOP for faces
+   `num_faces..3`, so the padding is -infinity exactly as on the working branch. This is the only
+   option that makes the two branches agree, and agreement is what makes the family's doc tables
+   true. Cost: cross-thread choreography (both TRISCs must know the face count), which is why it
+   is not a five-line change.
+2. **Reject `num_faces < 4` on the 32-bit branch at compile time**, and document partial chunks
+   as 16-bit only. Honest, minutes of work, and it turns a silent wrong answer into a build
+   error. It also permanently forecloses fp32 values with a tail, which the doc tables currently
+   promise.
+3. **Caller-side, no LLK change:** pad the chunk in L1 to a full 64 elements with -infinity and
+   always pass `num_faces=4`. Works on both branches today, costs one memset and a little L1, and
+   is what I would tell a caller to do while 1 is unowned.
+
+**Tripwire, with a caveat that matters.** `test_top32_rm_32bit_partial_chunk` is a non-strict
+`xfail` and flips to XPASS when fixed — **but judge it from a full-suite run, not from `--k`**.
+Run alone it XPASSes even with the defect present, because nothing has polluted Dest yet. That
+sensitivity is itself evidence about the mechanism.
+
+**What it currently costs the sweep.** One shape: the Metal dev test's own `row=3232`, which ends
+in a 32-element chunk. Everything either side of it is covered, and fixing C6 makes that shape a
+one-line addition to `PRE_SORTED_ROW_ELEMENTS`.
+
+---
+
+### 13.7 F — intermittent `test_matmul_custom_compressed` failure (host/BRISC desync)
+
+**Symptom, two shapes.** Under repeated runs the suite fails roughly **2 in 6**, usually as a
+**hang**, and at least once as a **wrong answer** (`shape=(1, 64, 32), formats=('bfp4',)` at
+PCC -0.033, 587/588) that did not reproduce — that variant passes 17/17 in isolation and the
+suite then passes 588/588. An owner looking only for a hang will miss half of it.
+
+**Mechanism, as far as triage gets it.** `run_test.sh`'s triage on a hang caught:
+
+```
+Unpacker/Math/Packer mailboxes = 0x0 (KERNEL_STARTED)
+TRISC0/1/2  in_reset=True
+BRISC       pc=0x368, unchanged  (spinning)
+BriscCounter=0x118 (280)   host Python counter: 281
+```
+
+All three TRISCs sit in soft reset while BRISC spins **one command behind the host** — a
+host↔BRISC command-protocol desync, not an LLK compute bug. `get_tensix_state` then failed to
+halt BRISC, so the device was already unresponsive.
+
+**Scope.** Every failing variant reproduced (`clustered`, `interleaved`, `single`) is
+`@pytest.mark.nightly`, and the PR gate filters `not nightly`. So this affects nightly runs, not
+the gate.
+
+**Fix options.** This is harness/dispatch territory rather than LLK:
+
+1. **Instrument the command path.** The desync is one command deep, which is small enough to
+   catch: log the host counter and `BriscCounter` around every `commit_brisc_command`
+   (`helpers/device.py`) and find whether the host advances without an acknowledged commit, or
+   BRISC misses a wake.
+2. **Look for the missing barrier.** A one-behind desync under back-to-back launches is the
+   signature of a write that is visible to the host but not yet to BRISC — i.e. a flush/barrier
+   between writing the command and ringing it.
+3. **Separate the two symptoms.** Repeat a *single* variant many times rather than the suite. If
+   the hang reproduces on one variant, it is a launch-path bug; if only the suite reproduces it,
+   the trigger is state carried across variants and it belongs with C3.
+
+**Before reproducing it yourself:** back-to-back runs are not how CI runs it and may be the
+aggravating factor rather than an independent trigger, and it wedges the device
+(`PcieHangError`, all devices unhealthy) often enough that you should expect to `tt-smi -r`
+between attempts. That is the sanctioned remedy for a runtime timeout — not for a reconfig
+escape, which is why C3 must not be treated this way.
+
+**Tripwire.** None, and one is hard to write for a 2-in-6 nightly hang. The nearest thing is the
+triage output above: whoever fixes it should confirm the counters advance in lockstep under the
+same loop that produced this.
