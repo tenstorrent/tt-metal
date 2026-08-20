@@ -57,11 +57,6 @@ inline void fds_go_blocking(uint16_t group_id) {
     FDS_INTF_WRITE(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR, group_id);
 }
 
-// Read the raw done value a NEO is driving into this dispatch instance's input bus register
-inline uint32_t fds_read_neo_status(uint32_t neo_inst) {
-    return FDS_INTF_READ(TT_FDS_DISPATCH_TENSIX_TO_DISPATCH_0__REG_ADDR + (neo_inst * sizeof(uint32_t)));
-}
-
 // Clear interrupt on FDS interface side by writing a 0 to specified input bus register
 inline void fds_clear_neo_status(uint32_t neo_inst) {
     FDS_INTF_WRITE(TT_FDS_DISPATCH_TENSIX_TO_DISPATCH_0__REG_ADDR + (neo_inst * sizeof(uint32_t)), 0x0);
