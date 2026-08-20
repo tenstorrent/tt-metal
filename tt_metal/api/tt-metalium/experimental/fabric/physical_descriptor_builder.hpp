@@ -21,9 +21,17 @@
 #include <string>
 #include <vector>
 
-#include "protobuf/factory_system_descriptor.pb.h"   // tt::scaleout_tools::fsd::proto (from scaleout_tools)
-#include "protobuf/physical_system_descriptor.pb.h"  // tt::fabric::proto (compiled into this lib)
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>  // tt::tt_metal::PhysicalSystemDescriptor
+
+// The generated proto headers are private (not part of the installed public API), so they are not included here.
+// The types below are only named by reference / returned by value, so forward declarations suffice; callers that
+// consume the returned proto must include the generated headers themselves (the .cpp does).
+namespace tt::scaleout_tools::fsd::proto {
+class FactorySystemDescriptor;
+}  // namespace tt::scaleout_tools::fsd::proto
+namespace tt::fabric::proto {
+class PhysicalSystemDescriptor;
+}  // namespace tt::fabric::proto
 
 namespace tt::scaleout_tools {
 
