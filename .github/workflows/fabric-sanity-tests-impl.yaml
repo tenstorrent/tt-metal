@@ -1,13 +1,13 @@
-name: "[internal] TM Fabric tests"
+name: "[internal] Fabric sanity tests impl"
 
-# Runs the consolidated fabric hardware test matrix from
-# tests/pipeline_reorg/fabric_tests.yaml. CPU-only fabric unit tests are handled
-# by a sibling call to fabric-cpu-only-tests-impl.yaml (already testlist-driven,
-# uses cpu_medium runners and no hardware).
+# Runs the fabric sanity bucket from tests/pipeline_reorg/fabric_sanity_tests.yaml.
+# Called from sanity-tests.yaml. Single source of truth for fabric coverage in
+# the sanity pipeline: WH N300 smoke, T3K llmbox, and BH card smoke.
 #
-# SKU- and entry-conditional infra hooks live in this file (not in the entry
-# cmd) — grep the "Coverage:" comments below when adding a new SKU or entry
-# to check what already applies to your leg.
+# SKU- and entry-conditional infra hooks are documented with "Coverage:"
+# comments below; grep them when adding a new SKU or entry. Mirrors the
+# hook set in tm-fabric-tests-impl.yaml so wh_llmbox_civ2 legs get the same
+# power sidecar / kernel ccache / --memory 256g / fabric BW SFTP treatment.
 
 on:
   workflow_call:
@@ -21,55 +21,33 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enabled-skus:
+        required: true
+        type: string
+        description: "Comma-separated SKUs (see .github/sku_config.yaml)."
       enable-watcher:
         required: false
         type: boolean
         default: false
-      run-fabric-cpu-only-unit-tests:
-        required: false
-        type: boolean
-        default: false
-        description: "Run CPU-only fabric unit tests via fabric-cpu-only-tests-impl.yaml"
-      run-fabric-hw-tests:
-        required: false
-        type: boolean
-        default: true
-        description: "Run the hardware fabric matrix from fabric_tests.yaml"
-      enabled-skus:
-        required: false
-        type: string
-        default: ALL_SKUS_IN_TESTS
-        description: "Comma-separated SKUs (from sku_config.yaml), or ALL_SKUS_IN_TESTS."
-      test-names:
+      ref:
         required: false
         type: string
         default: ""
-        description: "Comma-separated entry names from fabric_tests.yaml to run (default: all)."
+        description: "Commit SHA to test (default: HEAD)"
 
 jobs:
-  # CPU-only fabric unit tests (no hardware); runs in parallel on a single CPU runner.
-  fabric-cpu-only-unit-tests:
-    if: ${{ inputs.run-fabric-cpu-only-unit-tests }}
-    secrets: inherit
-    uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
-    with:
-      runs-on-sku: cpu_medium
-      docker-image: ${{ inputs.docker-image }}
-      build-artifact-name: ${{ inputs.build-artifact-name }}
-      wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-
   load-test-matrix:
-    if: ${{ inputs.run-fabric-hw-tests }}
     runs-on: ubuntu-slim
     outputs:
-      matrix: ${{ steps.filter-matrix.outputs.matrix }}
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/fabric_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/fabric_sanity_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          ref: ${{ inputs.ref || github.sha }}
           sparse-checkout: |
             .github
             tests/pipeline_reorg
@@ -82,7 +60,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "unit"
+            "sanity"
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
         run: |
@@ -91,32 +69,11 @@ jobs:
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml \
             --event "${{ github.event_name }}"
-      - name: Restrict matrix to requested test names
-        id: filter-matrix
-        run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, sys
 
-          matrix = json.loads(r"""${{ steps.build-matrix.outputs.matrix }}""")
-          names = [n.strip() for n in r"""${{ inputs.test-names }}""".split(",") if n.strip()]
-          if names:
-              # prepare_test_matrix.py appends " [<sku>]" to each name; match on the base.
-              base = lambda entry: entry["name"].split(" [")[0]
-              unknown = sorted(set(names) - {base(t) for t in matrix})
-              if unknown:
-                  print(f"::error::test-names not present in the matrix: {', '.join(unknown)}")
-                  sys.exit(1)
-              matrix = [t for t in matrix if base(t) in names]
-              print(f"Restricted matrix to: {', '.join(t['name'] for t in matrix)}", file=sys.stderr)
-          print("matrix=" + json.dumps(matrix, separators=(",", ":")))
-          PY
-
-  fabric-tests:
+  fabric-sanity-tests:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
-      # Do not fail-fast: keep every leg running so hanging machines are not
-      # left mid-test by a peer failure.
       fail-fast: false
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
@@ -137,16 +94,15 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || (contains(matrix.test-group.sku, 'wh_') || contains(matrix.test-group.sku, 'wormhole')) && 'wormhole_b0' || '' }}
         LOGURU_LEVEL: INFO
-        TT_LOGGER_LEVEL: warn
         GTEST_OUTPUT: xml:/work/generated/test_reports/
-        # Coverage: enable TTNN program-arg validation on every fabric leg. Trivial
+        # Coverage: enable TTNN program-arg validation on every sanity leg. Trivial
         # cost on non-TTNN entries; set universally rather than per-SKU.
         TTNN_CONFIG_OVERRIDES: '{"validate_program_args": true}'
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         # Coverage: mount /dev/hugepages-1G on non-viommu runners only. Viommu SKUs
-        # (e.g. bh_p300, bh_p150b_civ2_viommu) bypass the hugepages path and must
-        # not have the mount.
+        # (e.g. bh_p150b_civ2_viommu) bypass the hugepages path and must not have
+        # the mount.
         - ${{ !contains(join(matrix.test-group.runs_on, ','), 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/no_hugepages:/no_hugepages' }}
       # Coverage: cap container memory to 256 GiB on WH-LB (wh_llmbox*) to keep
       # T3K legs from ballooning host memory. Other SKUs use the container default.
@@ -154,12 +110,13 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
+        working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
           path: docker-job
       - name: ⬇️  Setup Job
@@ -169,11 +126,6 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
-          # Coverage: pass the entry's `auto_triage` flag to setup-job. Legs that
-          # coordinate over MPI (e.g. `6U multi-process` via tt-run) must set
-          # `auto_triage: false` because MPI blocking triggers false-positive
-          # dispatcher-hang detections.
-          auto-triage: ${{ matrix.test-group.auto_triage != false }}
           # Coverage: enable runtime kernel ccache (Redis-backed) on WH-LB legs
           # where JIT compile amortizes across the run. Other SKUs skip ccache
           # setup entirely; the Redis storage string only resolves on WH-LB.
@@ -198,8 +150,6 @@ jobs:
           } 2>&1 | tee "$LOG_FILE"
           exit "${PIPESTATUS[0]}"
 
-      # Coverage: dump tt-smi state after a BH failure so triage has chip
-      # health / thermals / link status without needing a repro.
       - name: Print tt-smi data on failure
         if: ${{ failure() && startsWith(matrix.test-group.sku, 'bh_') }}
         run: |
