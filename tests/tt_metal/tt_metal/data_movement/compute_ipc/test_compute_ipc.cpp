@@ -26,7 +26,11 @@ constexpr uint32_t kOpsPerIter = 14;
 constexpr uint32_t kFixedInstretOverhead = 3;
 // lw + add (use) + addi (decrement) + bnez (branch); kept in sync with alu_loop_ipc.cpp.
 constexpr uint32_t kLoadUseOpsPerIter = 4;
-constexpr uint32_t kNumResultWords = 12;
+// 4x(lw+add) + addi + bnez, and the same plus fence/sd/fence; kept in sync with alu_loop_ipc.cpp.
+constexpr uint32_t kMultiLoadOpsPerIter = 10;
+constexpr uint32_t kInvalLoadOpsPerIter = 13;
+constexpr uint32_t kInvalOnlyOpsPerIter = 5;  // fence + sd + fence + addi + bnez
+constexpr uint32_t kNumResultWords = 27;
 constexpr uint32_t kResultBytes = kNumResultWords * sizeof(uint32_t);
 constexpr uint32_t kLoadSrcBytes = 64;  // one cache line; contents unused, only the address matters
 
@@ -103,6 +107,20 @@ bool run_alu_loop_ipc_bench(const std::shared_ptr<distributed::MeshDevice>& mesh
     auto load_src_buffer = distributed::MeshBuffer::create(load_src_config, load_src_local_config, mesh_device.get());
     const uint32_t load_src_base = load_src_buffer->address();
 
+    // The 4-load passes read offsets 0/4/8/12 and the invalidate pass invalidates the line holding
+    // the base, so all four reads must land in that same 64 B line or the measurement is meaningless
+    // (it would take extra misses the real header decode wouldn't). Any 16 B-aligned base satisfies
+    // this; check rather than assume the allocator's alignment.
+    if (load_src_base % 64 > 48) {
+        log_error(
+            tt::LogTest,
+            "load_src_base {:#x} straddles a 64B cache line across offsets 0-15 (base%64={}); the 4-load "
+            "passes would measure extra misses",
+            load_src_base,
+            load_src_base % 64);
+        return false;
+    }
+
     std::vector<uint32_t> zero_results(kNumResultWords, 0);
     tt_metal::detail::WriteToDeviceL1(device, core, result_base, zero_results);
 
@@ -116,6 +134,16 @@ bool run_alu_loop_ipc_bench(const std::shared_ptr<distributed::MeshDevice>& mesh
     const AluPassResult cached_load{.iterations = result_data[6], .cycles = result_data[7], .instret = result_data[8]};
     const AluPassResult uncached_load{
         .iterations = result_data[9], .cycles = result_data[10], .instret = result_data[11]};
+    const AluPassResult multi_cached{
+        .iterations = result_data[12], .cycles = result_data[13], .instret = result_data[14]};
+    const AluPassResult multi_uncached{
+        .iterations = result_data[15], .cycles = result_data[16], .instret = result_data[17]};
+    const AluPassResult inval_cached{
+        .iterations = result_data[18], .cycles = result_data[19], .instret = result_data[20]};
+    const AluPassResult inval_only{
+        .iterations = result_data[21], .cycles = result_data[22], .instret = result_data[23]};
+    const AluPassResult full_inval{
+        .iterations = result_data[24], .cycles = result_data[25], .instret = result_data[26]};
 
     bool pass = true;
     for (const AluPassResult& r : {pass0, pass1}) {
@@ -190,6 +218,95 @@ bool run_alu_loop_ipc_bench(const std::shared_ptr<distributed::MeshDevice>& mesh
             "ALU_IPC load_use uncached/cached cycle ratio={:.4f} (>1.0 means the uncached alias costs more per "
             "load-use)",
             uncached_vs_cached);
+    }
+
+    // 4-load passes: model one command-header field decode (4 reads inside one 64 B line). The
+    // question they answer is whether "invalidate the line once, then read cached" beats "read
+    // uncached", which is what FD does today for every cmd-> field access.
+    struct MultiPass {
+        const char* name;
+        AluPassResult r;
+        uint32_t ops_per_iter;
+    };
+    std::vector<MultiPass> multi_passes = {{"multi_cached", multi_cached, kMultiLoadOpsPerIter}};
+    if (arch == tt::ARCH::QUASAR) {
+        multi_passes.push_back({"multi_uncached", multi_uncached, kMultiLoadOpsPerIter});
+        multi_passes.push_back({"inval_then_cached", inval_cached, kInvalLoadOpsPerIter});
+        multi_passes.push_back({"inval_only", inval_only, kInvalOnlyOpsPerIter});
+    }
+    for (const MultiPass& p : multi_passes) {
+        const uint32_t expected_instret = p.ops_per_iter * p.r.iterations + kFixedInstretOverhead;
+        const double cyc_per_iter = p.r.iterations == 0 ? 0.0 : static_cast<double>(p.r.cycles) / p.r.iterations;
+        log_info(
+            tt::LogTest,
+            "ALU_IPC {} iterations={} cycles={} instret={} (expected {}) cyc/iter={:.3f}",
+            p.name,
+            p.r.iterations,
+            p.r.cycles,
+            p.r.instret,
+            expected_instret,
+            cyc_per_iter);
+        if (p.r.instret != expected_instret) {
+            log_error(
+                tt::LogTest,
+                "ALU_IPC {} instret mismatch: got {}, expected {} -- harness bug, not a hardware measurement",
+                p.name,
+                p.r.instret,
+                expected_instret);
+            pass = false;
+        }
+    }
+    if (arch == tt::ARCH::QUASAR && multi_cached.iterations != 0 && multi_uncached.iterations != 0 &&
+        inval_cached.iterations != 0) {
+        const double cached_per_iter = static_cast<double>(multi_cached.cycles) / multi_cached.iterations;
+        const double uncached_per_iter = static_cast<double>(multi_uncached.cycles) / multi_uncached.iterations;
+        const double inval_per_iter = static_cast<double>(inval_cached.cycles) / inval_cached.iterations;
+        // Isolated invalidate cost: the two passes differ only by fence/sd/fence, so the delta is the
+        // primitive's own cost (plus 3 instructions' worth of issue, ~3 cyc).
+        const double invalidate_cost = inval_per_iter - cached_per_iter;
+        log_info(
+            tt::LogTest,
+            "ALU_IPC DECISION: 4 reads uncached={:.1f} cyc vs invalidate+4-cached={:.1f} cyc -> {} "
+            "(isolated invalidate cost ~{:.1f} cyc; break-even at {:.1f})",
+            uncached_per_iter,
+            inval_per_iter,
+            inval_per_iter < uncached_per_iter ? "CACHED WINS" : "UNCACHED WINS",
+            invalidate_cost,
+            uncached_per_iter - cached_per_iter);
+
+        // Split the invalidate+refetch cost into the primitive itself vs the cold refetch. A slow
+        // primitive could be replaced with a cheaper one; a slow refetch could not.
+        if (inval_only.iterations != 0) {
+            const double inval_only_per_iter = static_cast<double>(inval_only.cycles) / inval_only.iterations;
+            // inval_only's loop is 5 instrs vs multi_cached's 10, so compare against the invalidate
+            // sequence's share rather than the raw difference.
+            log_info(
+                tt::LogTest,
+                "ALU_IPC SPLIT: invalidate primitive alone={:.1f} cyc/iter (5 instrs, no refetch); "
+                "invalidate+refetch+4-cached total={:.1f}; so the cold refetch accounts for ~{:.1f} cyc",
+                inval_only_per_iter,
+                inval_per_iter,
+                inval_per_iter - inval_only_per_iter - cached_per_iter);
+        }
+
+        // Full-cache invalidate vs per-line, same 4 cached reads. Instret is NOT checked for this pass:
+        // its completion poll makes the count vary, so it is reported as an observation instead. A count
+        // near the floor (13*iters+3) means the poll cleared immediately; much larger means it spun.
+        if (full_inval.iterations != 0) {
+            const double full_per_iter = static_cast<double>(full_inval.cycles) / full_inval.iterations;
+            const double instr_per_iter = static_cast<double>(full_inval.instret) / full_inval.iterations;
+            log_info(
+                tt::LogTest,
+                "ALU_IPC full_inval iterations={} cycles={} instret={} ({:.1f} instr/iter -- varies with the "
+                "completion poll; ~13 means it cleared immediately) cyc/iter={:.1f} vs per-line {:.1f} -> {}",
+                full_inval.iterations,
+                full_inval.cycles,
+                full_inval.instret,
+                instr_per_iter,
+                full_per_iter,
+                inval_per_iter,
+                full_per_iter < inval_per_iter ? "FULL INVALIDATE CHEAPER" : "PER-LINE CHEAPER");
+        }
     }
 
     return pass;

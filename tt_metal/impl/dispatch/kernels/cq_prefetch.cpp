@@ -1004,19 +1004,10 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
 // NOTE: this routine assumes we're sending a command header and that is LESS THAN A PAGE
 template <bool cmddat_wrap_enable>
 static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& dispatch_data_ptr) {
-<<<<<<< HEAD
-<<<<<<< HEAD
-    volatile CQPrefetchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQPrefetchCmd tt_l1_ptr*>(cmd_ptr);
-=======
-    // See fd_copy_bench.hpp kSlotRelayInlineCmdCycles.
-    const uint32_t fd_bench_relay_inline_start = rdcycle();
-=======
 #if FD_BENCH_PF_TIMELINE
     fd_copy_bench::pf_mark(fd_copy_bench::kPfHeaderEnter, fd_copy_bench::bench_cycle());
 #endif
->>>>>>> 4cb135e05e4 (fd bench: prefetcher flat-log waypoints, remove cmd-gap state machine)
-    volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
->>>>>>> 479c4766824 (noc wip)
+    volatile CQPrefetchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQPrefetchCmd tt_l1_ptr*>(cmd_ptr);
 
     uint32_t length = load_aligned<uint32_t>(&cmd->relay_inline.length);
     uintptr_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
