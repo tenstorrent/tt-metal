@@ -66,15 +66,6 @@
 
 #include "internal/ethernet/erisc.h"
 
-#define DO_PRAGMA(x) _Pragma(#x)
-
-#define Stringize(L) #L
-#define MakeString(M, L) M(L)
-#define $Line MakeString(Stringize, __LINE__)
-
-#define PROFILER_MSG __FILE__ "," $Line ",KERNEL_PROFILER"
-#define PROFILER_MSG_NAME(name) name "," PROFILER_MSG
-
 #if defined(PROFILE_KERNEL) && \
     (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES)))
 namespace kernel_profiler {
@@ -636,9 +627,8 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 // Not dispatch
 #if (!defined(DISPATCH_KERNEL))
 
-#define DeviceZoneScopedN(name)                  \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
-    TT_ZONE_DEFINE_ID(hash, name);               \
+#define DeviceZoneScopedN(name)    \
+    TT_ZONE_DEFINE_ID(hash, name); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
 // The three point markers. DeviceData/DeviceFlag take a compile-time tag (string literal) and therefore
@@ -646,16 +636,14 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 // which is why it is a distinct wire type (see PP_EVENT in spsc_packet.h).
 #define DeviceData(name, data)                        \
     {                                                 \
-        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));  \
         TT_ZONE_DEFINE_ID(hash, name);                \
         kernel_profiler::timeStampedData<hash>(data); \
     }
 
-#define DeviceFlag(name)                             \
-    {                                                \
-        DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
-        TT_ZONE_DEFINE_ID(hash, name);               \
-        kernel_profiler::recordFlag<hash>();         \
+#define DeviceFlag(name)                     \
+    {                                        \
+        TT_ZONE_DEFINE_ID(hash, name);       \
+        kernel_profiler::recordFlag<hash>(); \
     }
 
 #define DeviceRuntimeEvent(runtime_id)                            \
@@ -668,21 +656,18 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 #elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
 
 #define DeviceZoneScopedN(name)                                                          \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                         \
     TT_ZONE_DEFINE_ID(hash, name);                                                       \
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
         kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
 
 #define DeviceData(name, data)                                                                       \
     {                                                                                                \
-        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                                 \
         TT_ZONE_DEFINE_ID(hash, name);                                                               \
         kernel_profiler::timeStampedData<hash, kernel_profiler::DoingDispatch::DISPATCH_META>(data); \
     }
 
 #define DeviceFlag(name)                                                               \
     {                                                                                  \
-        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                   \
         TT_ZONE_DEFINE_ID(hash, name);                                                 \
         kernel_profiler::recordFlag<hash, kernel_profiler::DoingDispatch::DISPATCH>(); \
     }
@@ -710,7 +695,7 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 
 // FW wrapper: DISABLED as a zone -- lifecycle only, emits no markers (so no "<RISC>-FW" in the capture).
 // Keeps init_profiler()/finish_profiler(), which every kernel needs for the ring to exist at all.
-// No hash/DO_PRAGMA here on purpose: nothing is reported, so no source location needs registering.
+// No zone id here on purpose: nothing is reported, so no source location needs registering.
 #define DeviceZoneScopedMainN(name) \
     kernel_profiler::profileScopeLifecycle zone_fw_lifecycle = kernel_profiler::profileScopeLifecycle();
 
@@ -723,22 +708,19 @@ inline __attribute__((always_inline)) void increment_trace_count() { traceCount+
 // nobody drains wedges forever, so "who is emitting" is always worth being able to bisect.
 #define SPSC_KERNEL_WRAPPER_ZONE 1
 #if SPSC_KERNEL_WRAPPER_ZONE
-#define DeviceZoneScopedMainChildN(name)         \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
-    TT_ZONE_DEFINE_ID(hash, name);               \
+#define DeviceZoneScopedMainChildN(name) \
+    TT_ZONE_DEFINE_ID(hash, name);       \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 #else
 #define DeviceZoneScopedMainChildN(name) (void(sizeof(name)))
 #endif
 
-#define DeviceZoneScopedSumN1(name)              \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
-    TT_ZONE_DEFINE_ID(hash, name);               \
+#define DeviceZoneScopedSumN1(name) \
+    TT_ZONE_DEFINE_ID(hash, name);  \
     kernel_profiler::profileScopeAccumulate<hash, 0> zone = kernel_profiler::profileScopeAccumulate<hash, 0>();
 
-#define DeviceZoneScopedSumN2(name)              \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
-    TT_ZONE_DEFINE_ID(hash, name);               \
+#define DeviceZoneScopedSumN2(name) \
+    TT_ZONE_DEFINE_ID(hash, name);  \
     kernel_profiler::profileScopeAccumulate<hash, 1> zone = kernel_profiler::profileScopeAccumulate<hash, 1>();
 
 #define DeviceZoneSetCounter(counter) kernel_profiler::set_host_counter(counter);
