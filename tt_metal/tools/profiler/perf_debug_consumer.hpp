@@ -64,7 +64,7 @@ struct PerfDebugRec {
         uint64_t payload;  // Cont: one payload uint64 (hi word first on the wire)
         struct {
             uint64_t start;     // device timestamp of the zone open
-            uint32_t duration;  // device cycles; saturates at UINT32_MAX (~3 s @ 1.35 GHz, counted)
+            uint64_t duration;  // device cycles
         } zone;                 // Zone
     } data;
     uint32_t id;  // full 27-bit structural zone id (tu_id << TT_ZONE_LOCAL_BITS | local)

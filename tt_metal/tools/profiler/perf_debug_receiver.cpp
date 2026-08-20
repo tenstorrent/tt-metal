@@ -595,7 +595,6 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
     out.reserve(kConsumerScratchRecs);
     uint64_t unmatched_ends = 0;  // ZoneEnd with an empty stack (only possible after ring drops)
     uint64_t id_mismatches = 0;   // ZoneEnd whose id differs from the matching open: trust neither, drop
-    uint64_t dur_saturated = 0;   // durations clamped to UINT32_MAX (~3 s of device time)
     auto pair_batch = [&](std::span<const PerfDebugRawRec> got) {
         out.clear();
         for (const PerfDebugRawRec& r : got) {
@@ -613,14 +612,8 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
                         id_mismatches++;  // corrupt pair: emitting under either id would mislabel it
                         break;
                     }
-                    const uint64_t dur = r.ts - open.ts;
-                    uint32_t dur32 = static_cast<uint32_t>(dur);
-                    if (dur > 0xFFFFFFFFull) {
-                        dur_saturated++;
-                        dur32 = 0xFFFFFFFFu;
-                    }
                     PerfDebugRec& o = out.emplace_back();
-                    o.data.zone = {open.ts, dur32};
+                    o.data.zone = {open.ts, r.ts - open.ts};
                     o.id = open.id;
                     o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::Zone};
                     o.prog = open.prog;
@@ -701,16 +694,15 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
     for (const auto& st : stacks) {
         leftover_opens += st.size();
     }
-    if (leftover_opens != 0 || unmatched_ends != 0 || id_mismatches != 0 || dur_saturated != 0) {
+    if (leftover_opens != 0 || unmatched_ends != 0 || id_mismatches != 0) {
         log_warning(
             tt::LogMetal,
             "[perf-debug receiver] consumer \"{}\" pairing: {} zones left OPEN at shutdown, {} unmatched ends, "
-            "{} start/end id mismatches, {} saturated durations [all MUST be 0 on a lossless capture]",
+            "{} start/end id mismatches [all MUST be 0 on a lossless capture]",
             c.name,
             leftover_opens,
             unmatched_ends,
-            id_mismatches,
-            dur_saturated);
+            id_mismatches);
     }
 }
 
