@@ -232,10 +232,48 @@ def build_program(x, out, reg, rvar, wvar, rskip=0, wskip=0):
     return ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=[cb])
 
 
-def run_copy(device, x, reg, rvar, wvar, rskip=0, wskip=0):
-    out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(list(x.shape)), x.dtype, x.layout, device, x.memory_config()
+# --- Ledger-facing counterfactual arms --------------------------------------
+# Written in the same `levers=dict(<knob>=<int>)` idiom the op's own bench uses,
+# so `eval.verify_levers` can see that the B8 / B13 verdicts are RE-RUNNABLE
+# rather than one-off kernel edits.  `sn_reader_variant` / `sn_writer_variant`
+# are this bench's variant selectors (the `rvar` / `wvar` compile-time args);
+# the integers index RVAR_NAMES / WVAR_NAMES, and the VARIANT MENU at the top of
+# this file documents what each one does.
+LEVER_ARMS = {
+    # The baseline both verdicts are measured against: the op's pre-Perf-1 form
+    # (noc_async_read_tile / noc_async_write_tile, i.e. the any-length dispatch).
+    "baseline": dict(levers=dict(sn_reader_variant=0, sn_writer_variant=0)),
+    # B13 - the ACTUAL set_state/with_state mechanism.  State reuse republishes
+    # only TARG/RET_ADDR_LO, so it REQUIRES bank-major issue order, which
+    # serialises DRAM channels: measured a regression outside small pages
+    # (+17% on (1,1,8192,1024), +37% on the widest shape, +47% on fp32 writes),
+    # and an inversion at bfloat8_b's 1088 B tiles (-36% / -44%).
+    "B13": dict(levers=dict(sn_reader_variant=3, sn_writer_variant=3)),
+    # B13's ORDER-PRESERVING half, which is what graduated into the op: pass a
+    # compile-time size bound so the runtime any-length loop disappears.
+    "B13_applied": dict(levers=dict(sn_reader_variant=1, sn_writer_variant=1)),
+    # B8 - trid double-issue, on top of B13's state reuse.  Measured null: the
+    # +5.5 ns/txn surcharge exceeds the barrier it could hide.
+    "B8": dict(levers=dict(sn_reader_variant=4, sn_writer_variant=3)),
+}
+
+
+def dispatch_lever_arm(device, manifest, lever, reg_name, **kw):
+    """Dispatch one LEVER_ARMS entry by name — the re-runnable form of a verdict."""
+    arm = LEVER_ARMS[lever]["levers"]
+    return dispatch_arm(
+        device,
+        manifest,
+        f"{reg_name}/{lever}",
+        reg_name,
+        arm["sn_reader_variant"],
+        arm["sn_writer_variant"],
+        **kw,
     )
+
+
+def run_copy(device, x, reg, rvar, wvar, rskip=0, wskip=0):
+    out = ttnn.allocate_tensor_on_device(ttnn.Shape(list(x.shape)), x.dtype, x.layout, device, x.memory_config())
     pd = build_program(x, out, reg, rvar, wvar, rskip, wskip)
     return ttnn.generic_op([x, out], pd)
 

@@ -1,8 +1,9 @@
 {
   "op": "rms_norm",
   "topology": {
-    "phase": "refinement-1",
+    "phase": "Perf 1",
     "blocks_per_core": {
+      "focus": 1,
       "grid_filling": 1,
       "wide_prefill": 2,
       "grid_starved": 1,
@@ -10,12 +11,17 @@
       "row_major": 1
     },
     "plan_paths": [
+      "work-split: row-parallel (G=1) OR cross-core W split (G>1), chosen by _choose_group_size scoring every divisor of Wt with the same _solve that produces the shipped plan (Perf 1)",
+      "W-split combine: raw noc_async_write N->1 gather + semaphores, then mcast_pipe SenderPipe/ReceiverPipe 1->N broadcast (Perf 1)",
       "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
-      "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
-      "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST, added in refinement-1)",
+      "regime-B: streaming masked, now with the SAME fused sum_of_squares per W-chunk; square -> cb_squared -> reduce and CB_SQUARED are DELETED (Perf 1)",
+      "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST)",
+      "W-chunk search subordinated to CB depth: coarsest divisor of Wt_core at which the streaming profile (in=4, out=2, rm=2, gamma=2) fits; cb_gamma_tiles is depth-2 when streamed (Perf 1)",
+      "gamma TILE read: ONE partial noc_async_read of the row-0 span (544/1088/336 B) instead of a whole tile page (Perf 1)",
+      "NoC transfers: compile-time-bounded noc_async_read/write (one-packet path); noc_async_read_tile / noc_async_write_tile deleted from both kernels (Perf 1)",
       "layout-TILE: reader/writer move whole tile pages",
       "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
-      "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32), added in refinement-1"
+      "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32)"
     ],
     "dtypes": [
       "bfloat16",
@@ -288,11 +294,50 @@
       "phase": "phase-0"
     },
     "B8": {
-      "status": "deferred",
-      "reason": "Reads are already issued as a whole block before one barrier (B7), so within a block requests are in flight; trid double-issue would additionally overlap ACROSS blocks. The grid-filling shape runs 1 row-block per core, so there is no next block to overlap against - the bench cannot show it there. wide_prefill (2 blocks/core) and (99991,64) (28 blocks/core) could.",
-      "followup": "Add a trid arm (noc_async_read_tile_with_trid + barrier on the previous id) and measure on wide_prefill and (99991,64), where blocks-per-core > 1.",
-      "predicted_delta_pct": 8,
-      "phase": "phase-0"
+      "status": "measured-no-payoff",
+      "reason": "MEASURED in Perf 1 and refuted, on the bench gap phase-0 flagged (blocks-per-core > 1 now exists: the focus shape issues 4 read groups per dispatch and wide_prefill 2 row-blocks per core). `..._with_trid` costs +5.5 ns/txn over plain state reuse (22.1 vs 16.6 ns/txn of issue, from the NIU_MST_REQS_OUTSTANDING_ID poll in ncrisc_noc_fast_read_with_transaction_id) which is MORE than the barrier it could hide (3.1 ns/txn in the op's rd_in_barrier). It composes correctly with B13's state reuse and is bit-exact, but the surcharge cancels the overlap. The deeper reason it cannot pay here is the same one that killed B13: the reader is not issue-bound, it is at the per-core NoC/DRAM service ceiling of ~29 ns per 2 KB page (~70 GB/s), so there is no barrier time for a double-issue to reclaim. The cross-block pipelined form (>=2-chunk lookahead reserve) was NOT built; its ceiling on the focus shape is the 693-1446 ns of rd_in_barrier, and after the W split that is divided by the group size.",
+      "phase": "Perf 1",
+      "measured": {
+        "on_ns": 7116,
+        "off_ns": 7024,
+        "shape": [
+          1,
+          1,
+          32,
+          7168
+        ],
+        "note": "isolated reader, 224 x 2048 B interleaved tile pages, 1 core, chunk 112, one barrier per chunk. ON = noc_async_read_tile_with_trid + barrier on the previous id, OFF = the same stateful read without a trid.",
+        "topology": {
+          "phase": "Perf 1",
+          "blocks_per_core": {
+            "focus": 1,
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "work-split: row-parallel (G=1) OR cross-core W split (G>1), chosen by _choose_group_size scoring every divisor of Wt with the same _solve that produces the shipped plan (Perf 1)",
+            "W-split combine: raw noc_async_write N->1 gather + semaphores, then mcast_pipe SenderPipe/ReceiverPipe 1->N broadcast (Perf 1)",
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked, now with the SAME fused sum_of_squares per W-chunk; square -> cb_squared -> reduce and CB_SQUARED are DELETED (Perf 1)",
+            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST)",
+            "W-chunk search subordinated to CB depth: coarsest divisor of Wt_core at which the streaming profile (in=4, out=2, rm=2, gamma=2) fits; cb_gamma_tiles is depth-2 when streamed (Perf 1)",
+            "gamma TILE read: ONE partial noc_async_read of the row-0 span (544/1088/336 B) instead of a whole tile page (Perf 1)",
+            "NoC transfers: compile-time-bounded noc_async_read/write (one-packet path); noc_async_read_tile / noc_async_write_tile deleted from both kernels (Perf 1)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
+            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32)"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b"
+          ]
+        }
+      },
+      "knob": "sn_reader_variant"
     },
     "B9": {
       "status": "applied",
@@ -373,17 +418,109 @@
       }
     },
     "B12": {
-      "status": "missed",
-      "regime": "Prefill on a full grid, where rows-per-core is small: (1,1,8192,1024) puts Rt=256 row-blocks on 128 cores, so all 128 cores re-read the same Wt=32 gamma tiles from DRAM. Measured upper bound on the headroom: with gamma 93981 ns vs no gamma at all 89030 ns = 5.3%, and that difference also contains the second `mul`, so the pure re-read cost is below 5.3%. The design's byte model predicted 21% - the measurement says the replication is largely absorbed, which is why this is recorded as small-but-real rather than scheduled ahead of Lamp L1.",
-      "reason": "Lamp L2: read gamma once on an injector core and mcast it (mcast_pipe SenderPipe/ReceiverPipe) instead of num_cores DRAM re-reads. cb_gamma_tiles is already a resident, never-popped CB filled exactly once per core, so switching its fill from TensorAccessor to ReceiverPipe is a reader-local change.",
-      "phase": "phase-0"
+      "status": "applied",
+      "reason": "APPLIED in Perf 1, though not in the form phase 0 predicted. Phase 0 filed B12 as 'read gamma once on an injector core and mcast it', sized at a 5.3% upper bound. Two Perf-1 measurements moved that: (a) the whole-page gamma read that made the replication expensive is gone (the reader now fetches only the row-0 span, 544 B of a 2048 B page), which shrank the gamma-mcast ceiling to <= 8.7%; and (b) a multicast DID graduate, on a different operand - the cross-core W-split combine broadcasts the summed sum-of-squares 1->N with mcast_pipe's SenderPipe/ReceiverPipe. That leg was benched against the alternative the catalog names (N-1 unicasts + semaphore increments) and the multicast wins at every group size: 10161 vs 10730 at G=14 (-5.3%), 10368 vs 12016 at G=56 (-13.7%). The hand-rolled arm was dropped from the shipped op. The design's all-mcast variant (every core broadcasts to every other, G^2 transfers instead of 2G) stays rejected on fan-out and was not re-tested. The gamma-mcast form remains open with a measured ceiling; it also has a structural blocker worth recording - split_work_to_cores gives cores DIFFERENT row-block counts, so the per-chunk gamma round count differs per core and a naive SenderPipe/ReceiverPipe handshake deadlocks (the sender waits for a round only some receivers reach).",
+      "phase": "Perf 1",
+      "measured": {
+        "on_ns": 10161,
+        "off_ns": 10730,
+        "shape": [
+          1,
+          1,
+          32,
+          7168
+        ],
+        "note": "the W-split combine's 1->N broadcast leg at group size 14. ON = mcast_pipe SenderPipe/ReceiverPipe; OFF = a hand-rolled fan-out of group_size-1 unicast writes + semaphore increments. Whole-op device kernel duration, so the delta is the combine leg only.",
+        "g56_on_ns": 10368,
+        "g56_off_ns": 12016,
+        "gamma_mcast_ceiling_note": "the SEPARATE gamma-mcast idea (read gamma once on an injector, broadcast to the group) was BOUNDED by measurement and not built: an inject_only ceiling probe (span read on one core, all others issuing nothing, every core's CB lifecycle intact) caps it at <= +5.1% on (1,1,8192,1024) (94276 -> 89496) and <= +8.7% on (1,1,8192,7168) (1031582 -> 942181), and at 0% on the focus shape, which runs one gamma reader per group.",
+        "topology": {
+          "phase": "Perf 1",
+          "blocks_per_core": {
+            "focus": 1,
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "work-split: row-parallel (G=1) OR cross-core W split (G>1), chosen by _choose_group_size scoring every divisor of Wt with the same _solve that produces the shipped plan (Perf 1)",
+            "W-split combine: raw noc_async_write N->1 gather + semaphores, then mcast_pipe SenderPipe/ReceiverPipe 1->N broadcast (Perf 1)",
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked, now with the SAME fused sum_of_squares per W-chunk; square -> cb_squared -> reduce and CB_SQUARED are DELETED (Perf 1)",
+            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST)",
+            "W-chunk search subordinated to CB depth: coarsest divisor of Wt_core at which the streaming profile (in=4, out=2, rm=2, gamma=2) fits; cb_gamma_tiles is depth-2 when streamed (Perf 1)",
+            "gamma TILE read: ONE partial noc_async_read of the row-0 span (544/1088/336 B) instead of a whole tile page (Perf 1)",
+            "NoC transfers: compile-time-bounded noc_async_read/write (one-packet path); noc_async_read_tile / noc_async_write_tile deleted from both kernels (Perf 1)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
+            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32)"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b"
+          ]
+        }
+      },
+      "knob": "w_split"
     },
     "B13": {
-      "status": "deferred",
-      "reason": "set_state/with_state amortises command-buffer setup over many same-shape transfers to varying addresses - which is exactly this op's inner loop (nw same-size tile reads per block).",
-      "followup": "Add a `stateful` arm using noc_async_read_tile_with_state and measure on (1,1,8192,1024) and on (32,17) (B0: it adds fixed per-core setup).",
-      "predicted_delta_pct": 5,
-      "phase": "phase-0"
+      "status": "measured-no-payoff",
+      "reason": "MEASURED in Perf 1, and the phase-0 prediction of 5% was right about the mechanism and wrong about the sign. Splitting the lever into its two halves is what made it legible. (a) The ACTUAL state-reuse mechanism REGRESSES: `with_state` republishes only TARG/RET_ADDR_LO, so it requires BANK-MAJOR issue order, and bank-major serialises DRAM channels - a core fires 14-112 back-to-back requests at one bank instead of spreading them. Measured: (1,1,8192,1024) read 42420 -> 49607 (+17%), the widest shape 295887 -> 405266 (+37%), fp32 writes 12008 -> 17639 (+47%), (32,17) 724 -> 790 (+9%, the B0 regime). A per-core bank rotation recovers only part of it, so the cause is intra-core bank concentration, not cross-core phase alignment. It INVERTS at bfloat8_b's 1088 B tiles (read 7816 -> 5002, -36%; write 8419 -> 4709, -44%) where the transaction rate genuinely is the limit - a real dtype-gated dual path, recorded and NOT shipped, because a dual path is debt. (b) The ORDER-PRESERVING half of the same idea - passing a compile-time size bound so the runtime any-length dispatch loop disappears - is a clean 13-14% on the isolated reader/writer (8028 -> 6980 read, 8606 -> 7578 write) and IS APPLIED: noc_async_read_tile / noc_async_write_tile are deleted from both kernels. The corrected diagnosis is the durable finding: the reader/writer are NOT issue-bound but sit at the per-core NoC/DRAM service ceiling of ~29 ns per 2 KB page each way (~70 GB/s), and the baseline issued at 30.7 ns/txn, just above that rate - which is why the zones read 'issue hot, barrier ~ 0'. Cutting issue to 16.8 ns/txn puts it BELOW the service rate, so the saving moves ns-for-ns from rd_in_issue into rd_in_barrier (measured whole-op on (1,1,8192,1024): rd_in_issue 5763 -> 4904, rd_in_barrier 14648 -> 15233) instead of becoming throughput. It only surfaces where a core is issue-serialised rather than DRAM-serialised: (1,1,32,4095) 1.062x, (1,1,100,736) 1.028x.",
+      "phase": "Perf 1",
+      "measured": {
+        "on_ns": 49607,
+        "off_ns": 42420,
+        "shape": [
+          1,
+          1,
+          8192,
+          1024
+        ],
+        "note": "isolated reader, 8192 pages over 64 cores. ON = noc_async_read_one_packet_set_state + ..._with_state in the bank-major order state reuse REQUIRES; OFF = the op's round-robin page order. The lever COSTS 17% here.",
+        "wide_on_ns": 405266,
+        "wide_off_ns": 295887,
+        "fp32_write_on_ns": 17639,
+        "fp32_write_off_ns": 12008,
+        "bf8b_on_ns": 5002,
+        "bf8b_off_ns": 7816,
+        "smallest_on_ns": 790,
+        "smallest_off_ns": 724,
+        "one_packet_on_ns": 6980,
+        "one_packet_off_ns": 8028,
+        "topology": {
+          "phase": "Perf 1",
+          "blocks_per_core": {
+            "focus": 1,
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "work-split: row-parallel (G=1) OR cross-core W split (G>1), chosen by _choose_group_size scoring every divisor of Wt with the same _solve that produces the shipped plan (Perf 1)",
+            "W-split combine: raw noc_async_write N->1 gather + semaphores, then mcast_pipe SenderPipe/ReceiverPipe 1->N broadcast (Perf 1)",
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked, now with the SAME fused sum_of_squares per W-chunk; square -> cb_squared -> reduce and CB_SQUARED are DELETED (Perf 1)",
+            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST)",
+            "W-chunk search subordinated to CB depth: coarsest divisor of Wt_core at which the streaming profile (in=4, out=2, rm=2, gamma=2) fits; cb_gamma_tiles is depth-2 when streamed (Perf 1)",
+            "gamma TILE read: ONE partial noc_async_read of the row-0 span (544/1088/336 B) instead of a whole tile page (Perf 1)",
+            "NoC transfers: compile-time-bounded noc_async_read/write (one-packet path); noc_async_read_tile / noc_async_write_tile deleted from both kernels (Perf 1)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
+            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32)"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b"
+          ]
+        }
+      },
+      "knob": "sn_reader_variant"
     },
     "C14": {
       "status": "deferred",
@@ -400,21 +537,35 @@
       "phase": "phase-0"
     },
     "C16": {
-      "status": "measured-no-payoff",
+      "status": "applied",
       "knob": "double_buffer",
-      "reason": "Applied and live: the budget solver reaches IN_BUF_DEPTH=4, OUT/RM depth 2 on the grid-filling shape (forcing 1/1/1 is a genuinely different plan, verified). It measures flat anyway (+0.1% on grid_filling, -0.7% on the RM path, 0.0% on grid_starved) because those shapes are already DRAM-saturated at ~358 GB/s of useful traffic - deepening the CB cannot create bandwidth. KEPT at its working default: it costs nothing here and it is the lever that pays once the op stops being DM-bound (Lamp L1/L3 move the wall). RE-MEASURED under the refinement-1 topology, on both new regimes: still flat - bfloat16 loose corner 91201 ON vs 90594 OFF (-0.7%), bfloat8_b 71273 vs 71188 (-0.1%). The reason is unchanged and now double-confirmed: grid_filling is DRAM-saturated, and a deeper CB cannot create bandwidth. Note bfloat8_b does NOT unlock it even though it halves the bytes and frees L1 - the shape is still bound by DRAM, just at a smaller total. It remains the lever that pays once Lamp L1/L3/L4 move the wall; Refinement 4's regime flip is the next place to re-check.",
+      "reason": "REFUTED AND RE-CLOSED in Perf 1 with new arms, under this phase. The phase-0/refinement-1 verdict of measured-no-payoff was honest but was measured on the DRAM-saturated (1,1,8192,1024) shape, and on a wide Regime-B shape its two arms were the SAME PROGRAM: the solver already produced depth 1 there, so forcing depth 1 changed nothing and the lever was never actually tested. The cumulative ablation is what exposed it - the focus case came out ADDITIVE (full 43983 ~ stub_dm 28221 + stub_compute 24093 - floor 9230), i.e. ~0% reader/compute overlap, on a plan where every streaming CB was depth 1. The cause was the solver's step ORDER, not a missing knob: it took the coarsest W-chunk that fits at depth 1 and then tried to double-buffer inside whatever L1 was left, which on a wide shape is nothing. Subordinating the chunk search to the depth profile captures 62% of the available overlap (rd_gamma_reserve 6396 -> 146 ns, rd_in_reserve 3100 -> 306, wr_wait 34982 -> 23784) at LESS L1 (1155072 -> 811008 B). Note the win needs BOTH cb_input_tiles AND cb_gamma_tiles at depth 2 - measured in isolation at chunk 56: all-depth-1 0.94x, output-only 0.94x, input-only 1.02x, gamma-only 1.18x, input+gamma 1.36x - and cb_gamma_tiles was hard-coded to depth 1 in _cb_layout, which is why no arm of the old knob could reach it. Also measured: the search is NOT monotone in the L1 budget (freeing L1 moves 'coarsest that fits' coarser, and coarser is not always better), so the profile it asks for is the depth ladder's top rung; three profiles were compared and remain live arms.",
       "measured": {
-        "on_ns": 93535,
-        "off_ns": 93646,
+        "on_ns": 21559,
+        "off_ns": 25233,
         "shape": [
           1,
           1,
-          8192,
-          1024
+          32,
+          4095
         ],
+        "note": "ON = the W-chunk search subordinated to CB depth (coarsest divisor of Wt_core at which the streaming profile in/out/rm/gamma fits); OFF = the pre-Perf-1 ordering, coarsest chunk that fits at DEPTH 1 first, then double-buffer whatever L1 is left. A/B in one tree with the old _solve monkeypatched back, so no sibling change leaks in.",
+        "w8191_on_ns": 36135,
+        "w8191_off_ns": 48070,
+        "fp32_on_ns": 37590,
+        "fp32_off_ns": 48113,
+        "bf8b_on_ns": 37944,
+        "bf8b_off_ns": 45139,
+        "w3071_on_ns": 17438,
+        "w3071_off_ns": 20046,
+        "smallest_on_ns": 3711,
+        "smallest_off_ns": 3764,
+        "focus_geometry_on_ns": 31844,
+        "focus_geometry_off_ns": 43140,
         "topology": {
-          "phase": "refinement-1",
+          "phase": "Perf 1",
           "blocks_per_core": {
+            "focus": 1,
             "grid_filling": 1,
             "wide_prefill": 2,
             "grid_starved": 1,
@@ -422,29 +573,26 @@
             "row_major": 1
           },
           "plan_paths": [
+            "work-split: row-parallel (G=1) OR cross-core W split (G>1), chosen by _choose_group_size scoring every divisor of Wt with the same _solve that produces the shipped plan (Perf 1)",
+            "W-split combine: raw noc_async_write N->1 gather + semaphores, then mcast_pipe SenderPipe/ReceiverPipe 1->N broadcast (Perf 1)",
             "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
-            "regime-B: streaming masked 2-pass (square -> accumulating reduce, W-chunked)",
-            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST, added in refinement-1)",
+            "regime-B: streaming masked, now with the SAME fused sum_of_squares per W-chunk; square -> cb_squared -> reduce and CB_SQUARED are DELETED (Perf 1)",
+            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST)",
+            "W-chunk search subordinated to CB depth: coarsest divisor of Wt_core at which the streaming profile (in=4, out=2, rm=2, gamma=2) fits; cb_gamma_tiles is depth-2 when streamed (Perf 1)",
+            "gamma TILE read: ONE partial noc_async_read of the row-0 span (544/1088/336 B) instead of a whole tile page (Perf 1)",
+            "NoC transfers: compile-time-bounded noc_async_read/write (one-packet path); noc_async_read_tile / noc_async_write_tile deleted from both kernels (Perf 1)",
             "layout-TILE: reader/writer move whole tile pages",
             "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
-            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32), added in refinement-1"
+            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
             "bfloat8_b"
           ]
-        },
-        "row_major_on_ns": 95339,
-        "row_major_off_ns": 94642,
-        "smallest_on_ns": 3257,
-        "smallest_off_ns": 3217,
-        "bf8b_on_ns": 71273,
-        "bf8b_off_ns": 71188,
-        "loose_on_ns": 91201,
-        "loose_off_ns": 90594
+        }
       },
-      "phase": "refinement-1"
+      "phase": "Perf 1"
     },
     "C17": {
       "status": "deferred",
@@ -468,11 +616,54 @@
       "phase": "phase-0"
     },
     "D20": {
-      "status": "deferred",
-      "reason": "The op already selects between two structurally different plans by a pinned host predicate (Regime A resident vs Regime B streaming) and between the TILE and ROW_MAJOR data paths at compile time - which is layout/special-case factory selection. Not closed with a number because forcing the wrong regime is a correctness change, not just a slower arm.",
-      "followup": "Add a `force_regime` arm that runs Regime B on a shape that fits Regime A, so the single-read fast path can be priced. Predicted from the byte model: Regime B moves 1.5x the DRAM bytes.",
-      "predicted_delta_pct": 50,
-      "phase": "phase-0"
+      "status": "applied",
+      "reason": "APPLIED in Perf 1. Phase 0 recorded D20 as 'already in the applied FORM' (two structurally different plans behind a pinned host predicate, plus a compile-time TILE/ROW_MAJOR fork) with the follow-up 'add a force_regime arm so the single-read fast path can be priced'. Both halves are now done. Priced: Regime A vs a forced Regime B is 1.32x on (1,1,8192,1024) (118095 vs 155792) and 1.47x on its ROW_MAJOR twin (91492 vs 134005) - the byte model's 1.5x, confirmed. And the selection got a THIRD axis that pays far more than tuning the existing two: _choose_group_size scores every candidate combine-group size with the same solver that will produce the shipped plan, so a shape whose row-parallel plan would be Regime B on one core is re-planned as G cores each running Regime A. That is what takes the focus case from 43947 to 9010 ns (4.88x) and (1,1,8192,7168) from 1229676 to 603971 (2.04x): not only parallelism, but a narrow per-core slice that turns two DRAM reads of x into one and stops replicating gamma. A fourth level was measured and NOT graduated because the W split supersedes it on the shapes that matter: a resident-x ladder (A -> x+gamma resident with normed/out chunked -> x resident with gamma/normed/out chunked -> B) measured 1.419x on the focus case and 1.545x on (1,1,8192,7168) BEFORE the split, against the split's 4.88x and 2.04x. It stays a round-2 candidate for the shapes the split cannot take (non-tile-aligned W, where it would first need the masked variant it does not have).",
+      "phase": "Perf 1",
+      "measured": {
+        "on_ns": 118095,
+        "off_ns": 155792,
+        "shape": [
+          1,
+          1,
+          8192,
+          1024
+        ],
+        "note": "the force_regime arm phase 0 asked for: ON = the plan the op picks (Regime A, one DRAM read of x); OFF = Regime B forced on the same shape (the streaming 2-pass). This finally PRICES the single-read fast path from both sides.",
+        "row_major_on_ns": 91492,
+        "row_major_off_ns": 134005,
+        "focus_on_ns": 9010,
+        "focus_off_ns": 43947,
+        "topology": {
+          "phase": "Perf 1",
+          "blocks_per_core": {
+            "focus": 1,
+            "grid_filling": 1,
+            "wide_prefill": 2,
+            "grid_starved": 1,
+            "smallest": 1,
+            "row_major": 1
+          },
+          "plan_paths": [
+            "work-split: row-parallel (G=1) OR cross-core W split (G>1), chosen by _choose_group_size scoring every divisor of Wt with the same _solve that produces the shipped plan (Perf 1)",
+            "W-split combine: raw noc_async_write N->1 gather + semaphores, then mcast_pipe SenderPipe/ReceiverPipe 1->N broadcast (Perf 1)",
+            "regime-A: resident single-read (sum_of_squares -> reduce finalize)",
+            "regime-B: streaming masked, now with the SAME fused sum_of_squares per W-chunk; square -> cb_squared -> reduce and CB_SQUARED are DELETED (Perf 1)",
+            "regime-B reduce datapath: ReduceTile (fp32 DEST) | AccumulateViaAdd (16-bit DEST)",
+            "W-chunk search subordinated to CB depth: coarsest divisor of Wt_core at which the streaming profile (in=4, out=2, rm=2, gamma=2) fits; cb_gamma_tiles is depth-2 when streamed (Perf 1)",
+            "gamma TILE read: ONE partial noc_async_read of the row-0 span (544/1088/336 B) instead of a whole tile page (Perf 1)",
+            "NoC transfers: compile-time-bounded noc_async_read/write (one-packet path); noc_async_read_tile / noc_async_write_tile deleted from both kernels (Perf 1)",
+            "layout-TILE: reader/writer move whole tile pages",
+            "layout-ROW_MAJOR: compute-side tilize/untilize around the same tile-domain middle",
+            "CB formats: interm (never block-float) and acc (fp32 only when DEST accumulates in fp32)"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b"
+          ]
+        }
+      },
+      "knob": "force_regime"
     },
     "D21": {
       "status": "deferred",

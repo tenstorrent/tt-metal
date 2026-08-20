@@ -161,6 +161,15 @@ LEVER_ARMS = {
     # The W-split work distribution: OFF forces G = 1, the pure row-parallel plan
     # the op shipped before this round.
     "w_split": _arm(levers=dict(w_split=0)),
+    # --- Perf 1 ------------------------------------------------------------
+    # B12 (multicast instead of N unicasts): the op's multicast lives in the
+    # W-split combine's 1->N broadcast leg, so forcing G=1 removes it.  The
+    # finer-grained mcast-vs-hand-rolled-unicast arm lives in
+    # perf_experiments/w_split/ws_descriptor.py.
+    "B12": _arm(levers=dict(w_split=0)),
+    # D20 (layout/regime-specialised plan selection): force the streaming 2-pass
+    # on a shape that fits the resident single-read plan.
+    "D20": _arm(levers=dict(force_regime=1)),
 }
 
 # Levers whose ON arm is NOT the applied default.  A lever lands here only when its

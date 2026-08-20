@@ -88,6 +88,12 @@ LEVER_DEFAULTS = {
     # before.  G = 1 is a value of the same policy, not a second code path, so the
     # off-arm is a genuine counterfactual and not a different program shape.
     "w_split": 1,
+    # D20 - 0 (applied): the pinned host predicate picks Regime A (one DRAM read of
+    # x, whole per-core width resident) wherever it fits; 1: force Regime B, the
+    # streaming 2-pass, so the fast path's value is a measured number rather than a
+    # byte-model claim.  Measured 1.32x on (1,1,8192,1024) and 1.47x on its
+    # ROW_MAJOR twin.
+    "force_regime": 0,
     # 0 = let the policy choose; N = pin G = N.  This is what makes the group-size
     # calibration in `_choose_group_size` re-MEASURABLE instead of asserted: a new
     # box or a new shape can be swept without editing the policy.
@@ -530,7 +536,12 @@ def _solve(
     #      the depth/chunk allocation below, so a change to how L1 is SPENT can
     #      never move which regime (or which G) is CHOSEN.
     fits = ws_bytes("A", 1, 1, 1, 1, Wt_core, Wt_core, 1) <= l1_cb_budget
-    regime = "A" if (maskless_w and fits) else "B"
+    # Lever D20's counterfactual arm: force the STREAMING 2-pass plan on a shape
+    # that fits the resident single-read one, so the single-read fast path can be
+    # priced from both sides instead of only asserted.  Regime B is always a legal
+    # plan (it is the correctness fallback), so this arm never produces a wrong
+    # answer - it just moves 1.5x the DRAM bytes.  Default 0 = the solver decides.
+    regime = "B" if _lever(levers, "force_regime") else ("A" if (maskless_w and fits) else "B")
 
     # Coarsest useful row-block: any coarser and some row-parallel unit (a core
     # without a W split, a combine GROUP with one) gets no work at all.
