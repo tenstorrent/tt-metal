@@ -460,12 +460,13 @@ KNOBS = {
     # parent+leaf-ext; the leaf-ext-only delta reads against the plain
     # lut-select knob leg.  LICENSED-LEG-PENDING-OWNER, FAIL-CLOSED: the
     # fire additionally needs per-TU -ffinite-math-only (an UNSIGNED
-    # owner decision, HANDOFF #6) which this knob leg does NOT pass —
-    # until the owner signs, the leg is an honest no-fire A/B.
+    # owner decision, HANDOFF #6): OWNER SIGNED 2026-08-20 (session order
+    # "run with whatever passes we did not enable" + booking-pass order) —
+    # the leg passes the per-TU license and books the licensed fire.
     # Target rows: tanhderivlut-fresh (18->6 word sfplutfp32 loop,
     # +215% -> +3.6% under the licensed 2x2 in lane CY evidence).
     "lut-select-leaf-ext": "-mtt-tensix-optimize-lut-select "
-    "-mtt-tensix-optimize-lut-select-leaf-ext",
+    "-mtt-tensix-optimize-lut-select-leaf-ext -ffinite-math-only",
     # CN (representation-propagation): bit-involution pair cancellation
     # on audited choose-webs; corpus 0-changed at the CN gate (fire
     # evidence lives in the dg twins) — the knob leg surfaces any pin-14
