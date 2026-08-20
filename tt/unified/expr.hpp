@@ -13,6 +13,13 @@
 //
 // POLICIES the domain header must satisfy:
 //
+//   Binary op:     void apply(lhs, rhs, out);                  // on the SFPU, in DST
+//                  static constexpr bool fpu_capable;      // is there an FPU form?
+//                  static constexpr FpuOp fpu_op;              // which, if there is
+//                    An op with an FPU form can take its operands straight from
+//                    circular buffers, which is what FpuTreeKind below is for. An op
+//                    without one must say so, so the predicate can ask uniformly.
+//
 //   Leaf node L:   static constexpr uint32_t need = 1;            // DST slots
 //                  void emit(uint32_t dst, uint32_t tile, bool reconfigure) const;
 //                    tile -> dst. `reconfigure` asks the leaf to re-point the hardware
@@ -116,6 +123,121 @@ struct is_expr<Bin<Op, L, R>> : std::true_type {};
 template <typename Op, typename C>
 struct is_expr<Un<Op, C>> : std::true_type {};
 
+// --------------------------------------------------- FPU eltwise trees ----
+//
+// A second kind for expression trees. add, sub and mul have FPU forms that read their
+// operands out of circular buffers, where the SFPU forms need every operand copied into
+// DST first. Measured, the copies are most of what an SFPU pass costs, so a tree that
+// can run entirely on the FPU should.
+//
+// The tree does not choose when it is built. `kind_of` inspects it at the point of
+// store() and picks -- which is what makes the choice invisible to kernels: `a + b`
+// stays `a + b`.
+//
+// FUSABLE means the tree linearises into the sequence the hardware offers:
+//
+//   seed    op_tiles(cbL, cbR, t, t, dst)          both operands from buffers
+//   chain   binary_dest_reuse_tiles(cb, t, dst)    one from a buffer, one from DST
+//   unary   apply_in_place(dst)                    SFPU, on the running value
+//
+// which requires every binary op to have an FPU form AND every binary node to have at
+// least one LEAF child. Two non-leaf children would mean two operands in DST, and no
+// instruction takes that. So left-deep chains qualify, `(a+b)*(c+d)` does not.
+//
+// A unary must wrap a non-leaf: on a bare leaf it would need the leaf in DST first,
+// which is a copy_tile, which is the thing being avoided. Those trees stay on the SFPU.
+//
+// Set TT_UNIFIED_NO_FPU_ELTWISE to turn the whole thing off -- the escape hatch if the
+// FPU is ever wrong for a case, and how the SFPU side of the comparison is still
+// measurable now that trees prefer the FPU on their own.
+
+struct FpuTreeKind {};
+
+template <typename Node>
+struct IsLeaf : std::true_type {};
+template <typename Op, typename C>
+struct IsLeaf<Un<Op, C>> : std::false_type {};
+template <typename Op, typename L, typename R>
+struct IsLeaf<Bin<Op, L, R>> : std::false_type {};
+
+template <typename Node>
+inline constexpr bool is_leaf_v = IsLeaf<Node>::value;
+
+template <typename Node>
+struct FpuFusable : std::false_type {};  // a bare leaf: nothing to fuse
+
+template <typename Op, typename L, typename R>
+struct FpuFusable<Bin<Op, L, R>> {
+    static constexpr bool value =
+        Op::fpu_capable && ((is_leaf_v<L> && is_leaf_v<R>) ||                           // seed
+                            (!is_leaf_v<L> && is_leaf_v<R> && FpuFusable<L>::value) ||  // chain on the left
+                            (is_leaf_v<L> && !is_leaf_v<R> && FpuFusable<R>::value));   // chain on the right
+};
+
+template <typename Op, typename C>
+struct FpuFusable<Un<Op, C>> {
+    static constexpr bool value = !is_leaf_v<C> && FpuFusable<C>::value;
+};
+
+#if defined(TT_UNIFIED_NO_FPU_ELTWISE)
+template <typename Node>
+inline constexpr bool fpu_fusable_v = false;
+#else
+template <typename Node>
+inline constexpr bool fpu_fusable_v = FpuFusable<Node>::value;
+#endif
+
+// Emission is OP-OUTER over a group of tiles: one init for an op, then that op applied
+// to every tile in the group, then on to the next op. Per-tile inits would re-point the
+// hardware for every tile of every op, which is the mistake leaf-outer already had to
+// undo on the SFPU side.
+//
+// Slot k holds tile k's running value, start to finish. One slot per tile, whatever the
+// tree's size, because operands never occupy DST here.
+template <typename Node>
+struct FpuStages;
+
+template <typename Op, typename L, typename R>
+struct FpuStages<Bin<Op, L, R>> {
+    static void run(const Bin<Op, L, R>& n, uint32_t base_tile, uint32_t count) {
+        if constexpr (is_leaf_v<L> && is_leaf_v<R>) {
+            Op::fpu_seed_init(n.lhs.source_cb(), n.rhs.source_cb());
+            for (uint32_t k = 0; k < count; ++k) {
+                Op::fpu_seed_apply(n.lhs.source_cb(), n.rhs.source_cb(), base_tile + k, base_tile + k, k);
+            }
+        } else if constexpr (is_leaf_v<R>) {
+            FpuStages<L>::run(n.lhs, base_tile, count);  // running value now in DST
+            Op::template fpu_reuse_init<true>(n.rhs.source_cb());
+            for (uint32_t k = 0; k < count; ++k) {
+                Op::template fpu_reuse_apply<true>(n.rhs.source_cb(), base_tile + k, k);
+            }
+        } else {
+            FpuStages<R>::run(n.rhs, base_tile, count);
+            // DST holds the RIGHT operand, so it goes to srcB and the buffer to srcA --
+            // which is what keeps a subtraction the right way round.
+            Op::template fpu_reuse_init<false>(n.lhs.source_cb());
+            for (uint32_t k = 0; k < count; ++k) {
+                Op::template fpu_reuse_apply<false>(n.lhs.source_cb(), base_tile + k, k);
+            }
+        }
+    }
+};
+
+template <typename Op, typename C>
+struct FpuStages<Un<Op, C>> {
+    static void run(const Un<Op, C>& n, uint32_t base_tile, uint32_t count) {
+        FpuStages<C>::run(n.child, base_tile, count);
+        for (uint32_t k = 0; k < count; ++k) {
+            Op::apply_in_place(k);
+        }
+    }
+};
+
+template <typename Node>
+void fpu_stages(const Node& node, uint32_t base_tile, uint32_t count) {
+    FpuStages<Node>::run(node, base_tile, count);
+}
+
 // ------------------------------------------------------------- kinds ------
 //
 // A fusion "kind" selects the driver strategy: how the enclosing loop is shaped
@@ -132,6 +254,18 @@ struct kind_of {
 template <typename Node>
 struct kind_of<Node, std::void_t<typename Node::fusion_kind>> {
     using type = typename Node::fusion_kind;
+};
+
+// A tree picks its unit here, from its own shape. Nodes that declare `fusion_kind`
+// (matmul, reduce, broadcast) are unaffected.
+template <typename Op, typename L, typename R>
+struct kind_of<Bin<Op, L, R>, void> {
+    using type = std::conditional_t<fpu_fusable_v<Bin<Op, L, R>>, FpuTreeKind, TreeKind>;
+};
+
+template <typename Op, typename C>
+struct kind_of<Un<Op, C>, void> {
+    using type = std::conditional_t<fpu_fusable_v<Un<Op, C>>, FpuTreeKind, TreeKind>;
 };
 
 template <typename Node>
