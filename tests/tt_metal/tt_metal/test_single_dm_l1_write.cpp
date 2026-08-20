@@ -9,7 +9,9 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <numeric>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -26,14 +28,26 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
     auto mesh_device = devices_[0];
 
-    const uint32_t address = MetalContext::instance().hal().get_dev_addr(
-        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    // Single-core L1 MeshBuffer on node {0,0}: the kernel writes `value` to buf->address() and we
+    // read it back through the mesh command queue.
+    const CoreRangeSet shard_grid(CoreRange({0, 0}, {0, 0}));
+    const ShardSpecBuffer shard_spec(
+        shard_grid,
+        /*shard_shape=*/{1, 1},
+        ShardOrientation::ROW_MAJOR,
+        /*page_shape=*/{1, 1},
+        /*tensor2d_shape_in_pages=*/{1, 1});
+    distributed::DeviceLocalBufferConfig local_cfg{
+        .page_size = sizeof(uint32_t),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+    };
+    distributed::ReplicatedBufferConfig global_cfg{.size = sizeof(uint32_t)};
+    auto buf = distributed::MeshBuffer::create(global_cfg, local_cfg, mesh_device.get());
+    const uint32_t address = buf->address();
     const uint32_t value = 0x12345678;
-    std::vector<uint32_t> outputs(1);
-    outputs[0] = 0;
     env_var = std::getenv("TT_METAL_DPRINT_CORES");
     if (env_var == nullptr) {
         std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
@@ -44,7 +58,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     const experimental::NodeCoord node{0, 0};
-    tt_metal::detail::WriteToDeviceL1(dev, node, address, outputs);
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     // Prepare a workload and a device coordinate range that spans the mesh.
@@ -91,7 +104,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, address, 4, outputs);
+    std::vector<uint32_t> outputs;
+    distributed::EnqueueReadMeshBuffer(cq, outputs, buf, /*blocking=*/true);
 
     ASSERT_EQ(outputs[0], value) << "Got the value " << std::hex << outputs[0] << " instead of " << value;
 }
@@ -103,7 +117,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridProbeStep0) {
     if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator.";
     }
-    IDevice* dev = devices_[0]->get_devices()[0];
     auto mesh_device = devices_[0];
 
     const auto grid = mesh_device->compute_with_storage_grid_size();
@@ -115,33 +128,40 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridProbeStep0) {
         GTEST_SKIP() << "grid-test suite targets the 8x4 Quasar sim config (got " << grid.x << "x" << grid.y << ")";
     }
 
-    const uint32_t address = MetalContext::instance().hal().get_dev_addr(
-        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t num_nodes = grid.x * grid.y;
+    const CoreRangeSet shard_grid(CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+    const ShardSpecBuffer shard_spec(
+        shard_grid,
+        /*shard_shape=*/{1, 1},
+        ShardOrientation::ROW_MAJOR,
+        /*page_shape=*/{1, 1},
+        /*tensor2d_shape_in_pages=*/{num_nodes, 1});
+    distributed::DeviceLocalBufferConfig local_cfg{
+        .page_size = sizeof(uint32_t),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+    };
+    distributed::ReplicatedBufferConfig global_cfg{.size = num_nodes * sizeof(uint32_t)};
+    auto buf = distributed::MeshBuffer::create(global_cfg, local_cfg, mesh_device.get());
+
+    std::vector<uint32_t> src(num_nodes);
+    std::iota(src.begin(), src.end(), 0u);
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, buf, src);
+    std::vector<uint32_t> dst;
+    distributed::EnqueueReadMeshBuffer(cq, dst, buf, /*blocking=*/true);
 
     uint32_t ok = 0, fail = 0;
-    for (uint32_t y = 0; y < grid.y; ++y) {
-        for (uint32_t x = 0; x < grid.x; ++x) {
-            const experimental::NodeCoord node{x, y};
-            const uint32_t sig = x + y * grid.x;  // value unique to each node
-            std::vector<uint32_t> w{sig};
-            std::vector<uint32_t> r(1, 0xdeadbeefu);
-            try {
-                tt_metal::detail::WriteToDeviceL1(dev, node, address, w);
-                tt_metal::detail::ReadFromDeviceL1(dev, node, address, sizeof(uint32_t), r);
-                if (r[0] == sig) {
-                    ++ok;
-                } else {
-                    ++fail;
-                    std::cout << "[STEP0] MISMATCH node(" << x << "," << y << ") got 0x" << std::hex << r[0]
-                              << " expected 0x" << sig << std::dec << std::endl;
-                }
-            } catch (const std::exception& e) {
-                ++fail;
-                std::cout << "[STEP0] EXCEPTION node(" << x << "," << y << "): " << e.what() << std::endl;
-            }
+    for (uint32_t i = 0; i < num_nodes; ++i) {
+        if (i < dst.size() && dst[i] == src[i]) {
+            ++ok;
+        } else {
+            ++fail;
+            std::cout << "[STEP0] MISMATCH node index " << i << " got " << (i < dst.size() ? dst[i] : 0u)
+                      << " expected " << src[i] << std::endl;
         }
     }
-    std::cout << "[STEP0] per-node host L1 write/read: ok=" << ok << " fail=" << fail << " total=" << (grid.x * grid.y)
+    std::cout << "[STEP0] per-node L1 MeshBuffer write/read: ok=" << ok << " fail=" << fail << " total=" << num_nodes
               << std::endl;
     EXPECT_EQ(fail, 0u);
     EXPECT_EQ(grid.x, 8u) << "expected 8-wide grid";

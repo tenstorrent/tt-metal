@@ -8,6 +8,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "hal.hpp"
 #include "llrt/rtoptions.hpp"
@@ -42,14 +43,25 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     const uint32_t buf_a_addr = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const uint32_t buf_b_addr = buf_a_addr + num_elements * sizeof(uint32_t);
-    const uint32_t dram_src_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
-    const uint32_t dram_dst_addr = dram_src_addr + (1000 * 1024);
+
+    // Source/destination live in DRAM MeshBuffers (single contiguous page in bank 0); the kernels
+    // read/write them at {bank 0, buf->address()} and host I/O goes through the mesh command queue.
+    constexpr uint32_t dram_bytes = num_elements * sizeof(uint32_t);
+    auto make_dram_buf = [&] {
+        distributed::DeviceLocalBufferConfig lc{.page_size = dram_bytes, .buffer_type = BufferType::DRAM};
+        distributed::ReplicatedBufferConfig gc{.size = dram_bytes};
+        return distributed::MeshBuffer::create(gc, lc, mesh_device.get());
+    };
+    auto dram_src_buf = make_dram_buf();
+    auto dram_dst_buf = make_dram_buf();
+    const uint32_t dram_src_addr = dram_src_buf->address();
+    const uint32_t dram_dst_addr = dram_dst_buf->address();
 
     std::vector<uint32_t> initial_data(num_elements, 0);
     for (uint32_t i = 0; i < num_elements; i++) {
         initial_data[i] = i;
     }
-    tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_src_addr, initial_data);
+    distributed::EnqueueWriteMeshBuffer(cq, dram_src_buf, initial_data);
 
     const experimental::KernelSpecName DM_READER{"dm_reader"};
     const experimental::KernelSpecName DM_TRANSFORM{"dm_transform"};
@@ -156,9 +168,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
-    std::vector<uint32_t> actual_data(num_elements, 0);
-    tt_metal::detail::ReadFromDeviceDRAMChannel(
-        mesh_device->get_devices()[0], 0, dram_dst_addr, num_elements * sizeof(uint32_t), actual_data);
+    std::vector<uint32_t> actual_data;
+    distributed::EnqueueReadMeshBuffer(cq, actual_data, dram_dst_buf, /*blocking=*/true);
 
     const std::vector<uint32_t> expected_data = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
 
@@ -894,19 +905,34 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
         GTEST_SKIP() << "simulator/emulator only";
     }
     auto md = devices_[0];
-    IDevice* dev = md->get_devices()[0];
     const auto g = md->compute_with_storage_grid_size();
     if (g.x != 8 || g.y != 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
     const experimental::NodeCoord target{0, 0};
     const uint32_t num_signalers = g.x * g.y - 1;  // everyone except the target
-    const uint32_t result_addr = MetalContext::instance().hal().get_dev_addr(
-        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    // The target's result slot is a single-core L1 MeshBuffer on the target node, result_addr is
+    // threaded into the kernel and host I/O (seed + read-back) goes through the mesh command queue.
+    distributed::MeshCommandQueue& cq = md->mesh_command_queue();
+    const CoreRangeSet result_grid(CoreRange(target, target));
+    const ShardSpecBuffer result_shard(
+        result_grid,
+        /*shard_shape=*/{1, 1},
+        ShardOrientation::ROW_MAJOR,
+        /*page_shape=*/{1, 1},
+        /*tensor2d_shape_in_pages=*/{1, 1});
+    distributed::DeviceLocalBufferConfig result_local{
+        .page_size = sizeof(uint32_t),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(result_shard, TensorMemoryLayout::HEIGHT_SHARDED),
+    };
+    distributed::ReplicatedBufferConfig result_global{.size = sizeof(uint32_t)};
+    auto result_buf = distributed::MeshBuffer::create(result_global, result_local, md.get());
+    const uint32_t result_addr = result_buf->address();
 
     // Seed the target's result slot so an incomplete barrier is detectable.
     std::vector<uint32_t> seed{0xffffffffu};
-    tt_metal::detail::WriteToDeviceL1(dev, target, result_addr, seed);
+    distributed::EnqueueWriteMeshBuffer(cq, result_buf, seed);
 
     const experimental::SemaphoreSpecName BARRIER{"barrier_sem"};
     const experimental::KernelSpecName BK{"barrier_kernel"};
@@ -948,14 +974,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
     params.kernel_run_args = {kra};
     experimental::SetProgramRunArgs(program, params);
 
-    distributed::MeshCommandQueue& cq = md->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(md->shape());
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
-    std::vector<uint32_t> r(1, 0u);
-    tt_metal::detail::ReadFromDeviceL1(dev, target, result_addr, sizeof(uint32_t), r);
+    std::vector<uint32_t> r;
+    distributed::EnqueueReadMeshBuffer(cq, r, result_buf, /*blocking=*/true);
     constexpr uint32_t kReleased = 0xC0DEBA11u;
     std::cout << "[BARRIER] target result=0x" << std::hex << r[0] << " expected released=0x" << kReleased << std::dec
               << (r[0] == kReleased ? "  PASS" : "  FAIL") << std::endl;
