@@ -3,30 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Minimal OTLP/HTTP receiver that captures Claude Code cost telemetry.
+Tiny local server that records Claude Code's real cost.
 
-Claude Code, when launched with CLAUDE_CODE_ENABLE_TELEMETRY=1 and an OTLP HTTP
-exporter, POSTs its metrics to <endpoint>/v1/metrics. Among them is
-`claude_code.cost.usage` (USD), which the CLI derives from actual API usage — the
-same source /usage reads, and it includes the subagent + auxiliary (background)
-costs that the transcript JSONLs do not. This server listens for those exports and
-appends each cost datapoint to a sink JSONL so session_cost.py can use the
-authoritative figure instead of the token estimate.
+With telemetry enabled, Claude Code sends its usage metrics to a local endpoint.
+One of them, `claude_code.cost.usage`, is the cost in USD that Claude Code itself
+computed — the same number `/usage` shows — and it includes the subagent and
+background spend that the transcript files leave out. This server catches those
+sends and appends each cost datapoint to a sink file; session_cost.py then reads
+the sink and records that real cost instead of estimating it from token counts.
 
-It is a plain stdlib http.server — no OpenTelemetry libraries needed — parsing the
-OTLP/JSON encoding (set OTEL_EXPORTER_OTLP_PROTOCOL=http/json on the producer).
-Fail-soft everywhere: a receiver hiccup must never disturb the codegen run.
+Plain Python stdlib, no OpenTelemetry package. It reads the OTLP/JSON body, so the
+producer must set OTEL_EXPORTER_OTLP_PROTOCOL=http/json. Fail-soft: any problem
+here is swallowed so it can never disrupt a codegen run.
 
-Usage:
-    python codegen/scripts/otel_cost_receiver.py --sink <path> [--port 4318]
-    # then launch claude with:
-    #   CLAUDE_CODE_ENABLE_TELEMETRY=1
-    #   OTEL_METRICS_EXPORTER=otlp
-    #   OTEL_EXPORTER_OTLP_PROTOCOL=http/json
-    #   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:<port>
-
-Each sink line: {"ts","session_id","query_source","model","cost_usd"}.
-Cost temporality is delta, so a session's total is the SUM of its datapoints.
+Each sink line is {"ts", "session_id", "query_source", "model", "cost_usd"}. Cost
+is a delta metric, so a session's total is the sum of its lines.
 """
 
 from __future__ import annotations
@@ -106,12 +97,14 @@ class _Handler(BaseHTTPRequestHandler):
     _line_count = 0  # running total, seeded from the existing file at startup
 
     def _append(self, rows: list) -> None:
-        """Append rows under the writer lock; trim to max_lines when it grows past it.
+        """Add new cost lines to the sink, and keep the file from growing forever.
 
-        Trimming keeps the NEWEST lines. A cap large enough to hold many runs (default
-        200k) means a single run's datapoints are never trimmed before session_cost
-        reads them — only long-past runs' lines are dropped, and those were already
-        recorded into their run.json.
+        Writes under a lock, because the server is multi-threaded and two requests
+        must not interleave their lines. Once the file passes max_lines it is trimmed
+        down to the newest max_lines. That only drops old, long-finished runs (whose
+        cost was already saved to their run.json); the cap is large enough (default
+        200k) that a run still in progress is never trimmed before session_cost reads
+        its lines.
         """
         with _WRITE_LOCK:
             with open(self.sink_path, "a") as fh:

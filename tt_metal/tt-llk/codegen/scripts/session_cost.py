@@ -219,14 +219,18 @@ def _collect(
     by_req: dict,
     noreq: list,
 ) -> None:
-    """Fold one transcript's assistant turns into the shared accumulators.
+    """Read one transcript's assistant turns into the shared totals.
 
-    A response is written several times as it streams, each write with larger
-    token counts — so per requestId keep the MAX (the last, complete write).
-    This also dedups a turn that appears in more than one transcript. Turns
-    without a requestId are separate calls, kept in ``noreq``. cache_creation is
-    split into 5m/1h buckets (different prices); no split means treat it as 5m.
-    Each row is ``[model, input, output, cache_read, cache_5m, cache_1h]``.
+    Claude Code writes each response a few times as it streams, with the token
+    counts growing each time — so per requestId we keep the largest (the final,
+    complete write). Keying by requestId also avoids double-counting a turn that
+    shows up in more than one transcript. Turns with no requestId are separate
+    calls, collected in `noreq`.
+
+    cache_creation may be split into 5-minute and 1-hour buckets (priced
+    differently); when there is no split, count it all as 5-minute.
+
+    Each collected row is [model, input, output, cache_read, cache_5m, cache_1h].
     """
     if not jsonl_path.exists():
         return
@@ -281,12 +285,13 @@ def _collect(
 
 
 def _authoritative_cost(log_dir: Path) -> float | None:
-    """Return the CLI's own total_cost_usd from <log_dir>/cli_output.json.
+    """Read the exact cost from <log_dir>/cli_output.json, if a run left one.
 
-    Headless runs (claude -p --output-format json) drop that file; its
-    total_cost_usd is the authoritative cost and replaces the token estimate.
-    Interactive runs have no such file — return None and keep the estimate.
-    The value may sit at the top level or under a "result" wrapper.
+    Headless runs (claude -p --output-format json) write this file, and its
+    total_cost_usd is Claude Code's own figure — use it instead of the token
+    estimate. Interactive runs don't produce the file, so return None and the
+    caller keeps the estimate. The value may be at the top level or under a
+    "result" key.
     """
     f = log_dir / "cli_output.json"
     if not f.exists():
@@ -310,14 +315,14 @@ def _otel_cost(
     since_dt: datetime | None,
     until_dt: datetime | None,
 ) -> float | None:
-    """Sum claude_code.cost.usage for one session from the OTEL receiver's sink.
+    """Add up this session's cost from the OTEL receiver's sink file.
 
-    otel_cost_receiver.py appends {session_id, ts (unix nanos), cost_usd} per cost
-    datapoint. Cost temporality is delta, so a session's total is the sum. This is
-    the CLI's own cost — it includes the subagent + auxiliary (background) spend the
-    transcripts omit — so it supersedes the token estimate. Returns None when there
-    is no sink, no session, or no matching datapoint (keep the estimate). Datapoints
-    are bounded to [since, until] like the token path when those are given.
+    The receiver appends one line per cost datapoint ({session_id, ts, cost_usd}).
+    Each line is an increment, so the session's total is simply their sum. This is
+    Claude Code's own cost — it includes the subagent and background spend the
+    transcripts miss — so it wins over the token estimate. Returns None when there's
+    no sink, no session, or no matching line (the caller then keeps the estimate).
+    If since/until are given, only lines inside that time window are counted.
     """
     if not sink_path or not session_id:
         return None
@@ -503,11 +508,11 @@ def main(argv: list[str] | None = None) -> int:
         print(_last_model(main_jsonl) or "")
         return 0
 
-    # Fold the main jsonl + every subagent transcript into per-requestId max rows,
-    # then price once. Subagents are stored flat as subagents/agent-*.jsonl (spawn
-    # depth is recorded inside each agent-*.meta.json, not as directory nesting), so
-    # one glob covers the whole agent tree. Scope to agent-*.jsonl — matching
-    # extract_run_transcripts.py — so no unrelated .jsonl gets priced as usage.
+    # Read the main jsonl + every subagent transcript, keep the max per requestId,
+    # then price once. Subagents are flat files (subagents/agent-*.jsonl) — spawn
+    # depth is in each agent-*.meta.json, not in folders — so one glob finds them all.
+    # Match agent-*.jsonl (same as extract_run_transcripts.py) so no unrelated .jsonl
+    # is counted as usage.
     by_req: dict = {}
     noreq: list = []
     _collect(main_jsonl, since_dt, until_dt, args.model, by_req, noreq)
@@ -539,9 +544,9 @@ def main(argv: list[str] | None = None) -> int:
         cost_usd=round(cost, 6),
     )
 
-    # Prefer an authoritative cost over the token-math estimate; token counts stay
-    # as summed (informational). Priority: live OTEL cost telemetry (works for
-    # interactive runs too), then a headless run's cli_output.json.
+    # Use a real cost if we have one, otherwise fall back to the token estimate.
+    # Order: OTEL telemetry first (works for interactive runs), then a headless
+    # run's cli_output.json. The token counts stay as summed either way (info only).
     otel = _otel_cost(args.otel_sink, discovered_sid, since_dt, until_dt)
     if otel is not None:
         totals["cost_usd"] = round(otel, 6)
