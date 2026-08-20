@@ -25,6 +25,7 @@ pattern becomes the main design choice when the input and output are already sha
 |---|---|---|
 | `reduce_root_mcast` | Non-root cores unicast to one root; the root reduces all blocks and multicasts the result. | Cuts communication, but serializes all reduction work on the root. |
 | `reduce_scatter_mcast` | All `min(num_tiles, group_size)` workers - the root included - gather and reduce disjoint tile indices, write partials to the root, then the root multicasts the assembled result. The tile split need not divide the group. | Keeps the reduced communication volume while parallelizing the root's compute and reads. |
+| `reduce_scatter_push` | Same algorithm and gather layout as `reduce_scatter_mcast`, with the transfer reversed: contributors write their tiles into the owning worker's gather buffer instead of each worker reading from every contributor. | Trades the read round trip for a `group_size * num_workers` semaphore handshake that the pull side does not need at all. |
 | `tree_reduce_mcast` | Hierarchical reduce over the 2-D core grid. Stage 1: within each grid row the `cols` cores gather to their row's leader, which reduces them to a per-row partial. Stage 2: the `rows` row-leaders gather to the group root, which reduces the partials into the group sum. Stage 3: the root multicasts the sum to the whole group. | Splits the reduction across the two grid axes, so each gather stage has a small fan-in (`cols`, then `rows`) instead of one all-to-root fan-in of `rows*cols`, at the cost of one extra communication round. On a 1-D group (one row or one column) there is only one axis to reduce, so it collapses to the single gather-to-root path. |
 | `unicast_all_gather` | Every core unicasts its local block to every other core, then every core reduces the gathered blocks. | Simple but creates quadratic unicast traffic. |
 
@@ -89,6 +90,83 @@ Two properties make that hold, and both transfer to any op distributing a ragged
   sender's `wait_min` still counts one increment per worker per iteration. Reserving the root would
   idle `1/G` of the group for the whole gather/reduce phase *and* leave `W` coprime with power-of-two
   tile counts, which is the more ragged split rather than the less.
+
+## Push or pull the gather? Measured both ways
+
+`reduce_scatter_mcast` **pulls** (each worker reads from every contributor) and
+`reduce_scatter_push` **pushes** (each contributor writes into the owning worker). Same algorithm,
+same gather layout, same tile ownership - only the direction of the transfer differs, so the pair
+isolates that one choice.
+
+**L1: there is no difference, and there does not have to be.** Both allocate `CB_GATHER` at
+`group_size * max_assigned` pages and `CB_PARTIAL` at `max_assigned`, so the *peak per-core*
+footprint is `(G + 1) * A * P` either way - the gather buffer's size is set by how the *work* is
+partitioned (each worker holds `G` copies of its own `1/W` slice), which push and pull agree on.
+Measured ceiling on a `1x8` line is identical: both pass at 224 tiles/core and both fail at 232.
+
+The one asymmetry is *which* cores pay, not how much. A pusher derives the destination gather
+address from its own `get_write_ptr()`, so the CB must be declared on every participating core,
+where the pull variant declares it on the `W` workers alone. When `num_workers == group_size` - any
+`num_tiles >= group_size`, which is the whole regime where reduce-scatter is the fastest reducer -
+that is the same set of cores and even the aggregate matches. Only a short group with idle
+non-workers has push touching more cores, and that is an implementation choice rather than a
+requirement: passing the destination address as a runtime arg instead of deriving it locally would
+let push allocate worker-only too.
+
+**Perf: no universal winner - the direction that wins flips with payload and group size.**
+
+`1x8` x 8 groups (64 cores), `kernel-iters=10`, N=5:
+
+| tiles/core | `reduce_scatter_mcast` (pull) | `reduce_scatter_push` | winner |
+|---:|---:|---:|---|
+| 1 | 1331.8 | **1111.3** | push **1.20x** |
+| 2 | 1410.9 | **1360.2** | push 1.04x |
+| 4 | **1557.6** | 1697.2 | pull 1.09x |
+| 8 | **1974.1** | 2744.8 | pull **1.39x** |
+| 16 | **3606.3** | 4524.2 | pull 1.25x |
+| 20 | 5327.4 *(5.4% noisy)* | 5457.6 | tie (N=3) |
+| 24 | 7001.7 *(5.6% noisy)* | **6240.6** | push 1.12x |
+| 32 | 10797.0 *(4.0%)* | **7938.8** | push **1.36x** |
+| 48 | 16553.6 *(3.6%)* | **11467.1** | push **1.44x** |
+| 64 | 18895.5 *(3.8%)* | **14953.9** | push 1.26x |
+
+`4x4`, isolated single group (16 cores) - the crossover has moved out past the useful range:
+
+| tiles/core | pull | push | winner |
+|---:|---:|---:|---|
+| 6 | 2265.1 | **2201.8** | push 1.03x |
+| 16 | **2889.1** | 3735.9 | pull 1.29x |
+| 32 | **4768.1** | 6325.6 | pull 1.33x |
+| 64 | **9842.1** | 11477.6 | pull 1.17x |
+| 128 | **20704.4** | 21947.5 | pull 1.06x |
+
+**Reading of the result.** Three things are going on, and only the first two are firmly attributable:
+
+- **Below `num_tiles = group_size`, push wins because it spreads the *issuing*.** There `W < G`, so
+  pull has the whole gather serialized on `W` workers issuing reads, while push has all `G` cores
+  issuing writes concurrently. At 1 tile/core that is one reader versus eight writers - push 1.20x.
+- **In the mid range, pull wins because it needs no handshake at all.** Pull reads out of the input
+  tensor, which nobody writes, so a worker never has to be told a contributor is ready. Push must be
+  told: every contributor bumps every worker's gather semaphore after its write barrier, so the
+  gather phase carries `group_size * num_workers` extra atomic increments per all-reduce. That is a
+  fixed cost against a payload of `group_size * max_assigned` pages, so it hurts most when
+  `max_assigned` is small - exactly the 4-16 tiles/core band on `1x8`.
+- **At large payload the fixed handshake amortizes and push pulls ahead** (`1x8`: from ~20 tiles/core,
+  reaching 1.44x at 48). The `4x4` numbers are consistent with the same amortization running behind
+  schedule on a bigger group - push's deficit closes monotonically, 0.75x -> 0.86x -> 0.94x as the
+  payload goes 32 -> 64 -> 128 - which is what a handshake growing with `G * W` against a payload
+  growing with `T` would do. Stated as consistent-with rather than confirmed: a cross-group-size
+  comparison at matched per-core volume is confounded by the worker count changing too.
+
+Two practical notes. **Push is much steadier**: 0.0-0.7% run-to-run across almost every point above,
+against 1-8% for pull, whose reads hold outstanding-request state that contention perturbs. And
+**contention shifts the balance toward push** - at 32 tiles/core on `4x4`, an isolated group has pull
+ahead by 1.33x, but packing four groups across the grid puts push ahead by 1.12x.
+
+If you are choosing one: **pull is the better default** - it wins the band most ops land in, and it
+needs no handshake, no group-wide CB and no notification protocol. Reach for push when the payload
+per core is large relative to the group, when the group is small, or when run-to-run stability
+matters more than the median.
 
 ## L1 pressure - what each topology costs per core
 
