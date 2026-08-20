@@ -391,13 +391,6 @@ ALWI void reduce(
     if constexpr (is_sfpu) {
         ASSERT(!partial_scaler.uses_partial());
     }
-    if (partial_scaler.mode == ReducePartialScalerMode::OnlyTile) {
-        if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
-            ASSERT(Wt == 1);
-        } else if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
-            ASSERT(Ht == 1);
-        }
-    }
     scaler_dfb.wait_front(partial_scaler.scaler_tile_count());
     if constexpr (is_sfpu) {
         PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(output_dfb_id)));
