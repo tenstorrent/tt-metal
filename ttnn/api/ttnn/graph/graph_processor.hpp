@@ -161,7 +161,9 @@ private:
     template <typename T>
     void end_function_process(const std::vector<T>& tensor_vec);
 
-    void track_function_end_impl();
+    // Returns false when there is no matching function_start to close, in which case the
+    // event is dropped and the caller must not pop the op-id stack.
+    bool track_function_end_impl();
 
     void clean_hook();
 

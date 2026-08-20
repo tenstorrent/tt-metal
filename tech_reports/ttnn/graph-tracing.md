@@ -659,6 +659,8 @@ Circular buffer events for streaming/multi-buffering.
 
 The C++ graph processor does not emit error nodes directly. Instead, the Python importer detects **orphan operations** — `function_start` nodes without a matching `function_end` — and records them as `incomplete_operation` errors. Legacy JSON files with explicit error nodes are also supported.
 
+> **Multi-threaded capture**: A capture observes work that the operation offloads onto dispatch worker threads, such as the per-device program compilation performed for a multi-program `MeshWorkload`. Events from that work are recorded against the operation that scheduled it, nested at the same level as events the operation emitted directly. Their *relative order* is not stable: the workers run concurrently, so the sequence in which, say, a multi-device operation's `circular_buffer_allocate` nodes appear within that operation follows thread scheduling and can differ between runs. Consumers should treat the events recorded within an operation as a set rather than a sequence.
+
 **Database `errors` table columns:**
 - `operation_id`: The operation where the error was detected
 - `operation_name`: Name of the operation

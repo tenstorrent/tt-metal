@@ -222,6 +222,38 @@ const std::vector<std::shared_ptr<IGraphProcessor>>& GraphTracker::get_processor
 
 const std::shared_ptr<IGraphHooks>& GraphTracker::get_hook() const { return hook; }
 
+std::vector<std::shared_ptr<IGraphProcessor>> GraphTracker::exchange_processors(
+    std::vector<std::shared_ptr<IGraphProcessor>> incoming) {
+    std::vector<std::shared_ptr<IGraphProcessor>> previous = std::move(processors);
+    processors = std::move(incoming);
+    return previous;
+}
+
+std::function<void()> GraphTracker::wrap_with_current_context(std::function<void()> task) {
+    // Fast path: nothing worth observing on this thread, so hand back the task
+    // untouched. This must test `is_enabled()` rather than `processors.empty()`:
+    // background processors (e.g. ShmTrackingProcessor) are registered at device
+    // init and never removed, so `processors` is non-empty on an ordinary run and
+    // an emptiness test would put every dispatch on the copying path.
+    if (!is_enabled()) {
+        return task;
+    }
+    return [context = processors, task = std::move(task)]() mutable {
+        auto& tracker = GraphTracker::instance();
+        auto previous = tracker.exchange_processors(std::move(context));
+        // Put the worker thread's own stack back even if `task` throws. The exchange also hands
+        // `context` back, so moving out of it above costs no allocation yet leaves the wrapper
+        // callable again -- std::function does not promise single invocation.
+        struct Restore {
+            GraphTracker& tracker;
+            std::vector<std::shared_ptr<IGraphProcessor>>& previous;
+            std::vector<std::shared_ptr<IGraphProcessor>>& context;
+            ~Restore() { context = tracker.exchange_processors(std::move(previous)); }
+        } restore{tracker, previous, context};
+        task();
+    };
+}
+
 void GraphTracker::clear() {
     processors.clear();
     clear_hook();
