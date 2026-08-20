@@ -35,9 +35,20 @@ void PerfDebugReceiver::StallIdMirror::refresh() {
         }
     }
     if (grew) {
-        std::sort(ids.begin(), ids.end());
-        min_id = ids.front();
-        max_id = ids.back();
+        // Rebuild at <= 25% load so the miss path is one probe. Sized generously: a few dozen ids.
+        uint32_t cap = 64;
+        while (cap < ids.size() * 4) {
+            cap *= 2;
+        }
+        mask = cap - 1;
+        table.assign(cap, 0xFFFFFFFFu);
+        for (uint32_t id : ids) {
+            uint32_t slot = (id * 0x9E3779B9u) & mask;
+            while (table[slot] != 0xFFFFFFFFu && table[slot] != id) {
+                slot = (slot + 1) & mask;
+            }
+            table[slot] = id;
+        }
     }
 }
 
@@ -200,9 +211,34 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     const uint64_t pos0 = pos;
     const uint32_t dev = s.dev;
     const bool sink = !stall_only_;
+    const bool count_stalls = stall_only_;
     // The PRODUCER-STALL ids, by ELF-resolved NAME; cheap (an empty delta) except when an ELF just loaded.
     s.stall_ids.refresh();
-    const StallIdMirror& stall_ids = s.stall_ids;
+    // Raw locals for the per-marker probe: the emit loops store through casted pointers, so anything
+    // reached via an object or vector would be reloaded from memory after every NT store (the compiler
+    // must assume aliasing). Locals whose address never escapes stay in registers.
+    const uint32_t* const stall_tab = s.stall_ids.table.empty() ? nullptr : s.stall_ids.table.data();
+    const uint32_t stall_mask = s.stall_ids.mask;
+    auto is_stall = [stall_tab, stall_mask](uint32_t id) -> bool {
+        if (stall_tab == nullptr) {
+            return false;
+        }
+        uint32_t slot = (id * 0x9E3779B9u) & stall_mask;
+        while (true) {
+            const uint32_t v = stall_tab[slot];
+            if (v == id) {
+                return true;
+            }
+            if (v == 0xFFFFFFFFu) {
+                return false;
+            }
+            slot = (slot + 1) & stall_mask;
+        }
+    };
+    // Ring geometry as locals, same aliasing argument: one address computation per BLOCK in the
+    // vectorized sink instead of a slot_at() member-pointer chase per record.
+    const uint64_t ring_mask = s.ring->capacity() - 1;
+    char* const ring_base = reinterpret_cast<char*>(w.emit_slot_ptr(0));
     // Pass-local stats, folded into the stream once per pass: the NT ring stores go through casted
     // pointers, so per-record updates against Stream fields cannot stay in registers (the compiler must
     // assume aliasing) -- measured at ~20% of the decode profile as a load-add-store per marker.
@@ -215,9 +251,11 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         if (type != PP_ZONE_TOTAL) {
             rt = type == PP_ZONE_START ? PerfDebugRecType::ZoneStart : PerfDebugRecType::ZoneEnd;
             zone_markers++;
-            // PRODUCER-STALL, matched by ELF-resolved NAME via the sorted id mirror: a producer RISC
-            // blocked on a FULL ring. Non-zero means the capture PERTURBED the workload; still lossless.
-            stall_zones += (type == PP_ZONE_START && stall_ids.contains(zone_id)) ? 1 : 0;
+            // PRODUCER-STALL, matched by ELF-resolved NAME via the id table: a producer RISC blocked on
+            // a FULL ring. STALL_ONLY mode only -- on a normal run this per-marker probe is redundant
+            // (the control plane reads the workers' own L1 stall counters at teardown) and measures ~10%
+            // of the decode wall, so the hot path does not pay for a diagnostic the device already keeps.
+            stall_zones += (count_stalls && type == PP_ZONE_START && is_stall(zone_id)) ? 1 : 0;
             if (ts < last_ts[lane]) {
                 order_regressions++;
             } else {
@@ -256,8 +294,6 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
 #if defined(__AVX2__)
     auto emit_zones8 = [&](uint32_t lane, uint32_t th, uint32_t prog, __m256i w0s, __m256i w1s) {
         zone_markers += 8;
-        stall_zones += static_cast<uint32_t>(__builtin_popcount(static_cast<uint32_t>(
-            _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(w0s, _mm256_set1_epi32(0x7FFF)))))));
         // Order invariant at block endpoints only: the producer guarantees monotonicity inside a run, so
         // in-block inversions would need a producer bug, while the boundary compare still catches every
         // head-mirror/resync error class. th is block-constant, so comparing on it is exact.
@@ -271,32 +307,12 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
             min_ts = ts_first;
         }
         max_ts = ts_last;
-        // PRODUCER-STALL pre-screen, vectorized: the mirror's ids sit in a narrow [min,max] range, so one
-        // range compare rejects the overwhelmingly common all-miss block and the binary searches run only
-        // on candidates. (ids are 27-bit, so the unsigned compare is safe in signed epi32 space.)
-        const __m256i ids = _mm256_and_si256(w0s, _mm256_set1_epi32(0x07FFFFFF));
-        if (stall_ids.min_id <= stall_ids.max_id) {
-            const __m256i lo_ok = _mm256_cmpgt_epi32(_mm256_set1_epi32(static_cast<int>(stall_ids.min_id)), ids);
-            const __m256i hi_ok = _mm256_cmpgt_epi32(ids, _mm256_set1_epi32(static_cast<int>(stall_ids.max_id)));
-            if (_mm256_movemask_epi8(_mm256_or_si256(lo_ok, hi_ok)) != -1) {
-                alignas(32) uint32_t id_arr[8];
-                alignas(32) uint32_t w0_arr[8];
-                _mm256_store_si256(reinterpret_cast<__m256i*>(id_arr), ids);
-                _mm256_store_si256(reinterpret_cast<__m256i*>(w0_arr), w0s);
-                for (int k = 0; k < 8; k++) {
-                    if ((w0_arr[k] & 0x08000000u) == 0 && stall_ids.contains(id_arr[k])) {
-                        stall_zones++;
-                    }
-                }
-            }
-        }
-        if (!sink) {
-            return;
-        }
         // A 24 B record is three quadwords: q0 = ts (th<<32 | w1), q1 = meta<<32 | id27, q2 = prog.
         // meta = lane | dev | type, with type = ZoneStart + the wire's END bit (an ADD, not an OR -- the
         // type field is a small integer, not a bit set). 24 B slots alternate 16-byte alignment, so the
         // stores are 8-byte movnti rather than 16-byte movntdq; the id/meta math stays vectorized.
+        // PRODUCER-STALL is checked per START in the same scalar pass -- one L1 probe on the miss path.
+        const __m256i ids = _mm256_and_si256(w0s, _mm256_set1_epi32(0x07FFFFFF));
         const uint32_t meta_base = (lane << 16) | (dev << 26) | (1u << 29);  // type = ZoneStart
         const __m256i meta = _mm256_add_epi32(
             _mm256_slli_epi32(_mm256_and_si256(w0s, _mm256_set1_epi32(0x08000000)), 2),  // END: +1 in type
@@ -307,13 +323,35 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         _mm256_store_si256(reinterpret_cast<__m256i*>(w1_arr), w1s);
         _mm256_store_si256(reinterpret_cast<__m256i*>(id_arr), ids);
         _mm256_store_si256(reinterpret_cast<__m256i*>(meta_arr), meta);
+        if (count_stalls) {  // STALL_ONLY mode only -- see the scalar emit path
+            const uint32_t end_mask = static_cast<uint32_t>(
+                _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_slli_epi32(w0s, 4))));  // bit27 -> sign bit: 1 = ZONE_END
+            for (int k = 0; k < 8; k++) {
+                stall_zones += (((end_mask >> k) & 1u) == 0 && is_stall(id_arr[k])) ? 1 : 0;
+            }
+        }
+        if (!sink) {
+            return;
+        }
         const uint64_t th_hi = static_cast<uint64_t>(th) << 32;
         const uint64_t prog64 = prog;
-        for (int k = 0; k < 8; k++) {
-            auto* q = reinterpret_cast<long long*>(w.emit_slot_ptr(pos + k));
-            _mm_stream_si64(q + 0, static_cast<long long>(th_hi | w1_arr[k]));
-            _mm_stream_si64(q + 1, static_cast<long long>((static_cast<uint64_t>(meta_arr[k]) << 32) | id_arr[k]));
-            _mm_stream_si64(q + 2, static_cast<long long>(prog64));
+        const uint64_t slot0 = pos & ring_mask;
+        if (slot0 + 8 <= ring_mask + 1) {
+            // One address computation for the whole block; slots are contiguous unless it wraps the
+            // power-of-two ring (once per full ring lap -- the else path).
+            auto* q = reinterpret_cast<long long*>(ring_base + slot0 * sizeof(PerfDebugRec));
+            for (int k = 0; k < 8; k++, q += 3) {
+                _mm_stream_si64(q + 0, static_cast<long long>(th_hi | w1_arr[k]));
+                _mm_stream_si64(q + 1, static_cast<long long>((static_cast<uint64_t>(meta_arr[k]) << 32) | id_arr[k]));
+                _mm_stream_si64(q + 2, static_cast<long long>(prog64));
+            }
+        } else {
+            for (int k = 0; k < 8; k++) {
+                auto* q = reinterpret_cast<long long*>(w.emit_slot_ptr(pos + k));
+                _mm_stream_si64(q + 0, static_cast<long long>(th_hi | w1_arr[k]));
+                _mm_stream_si64(q + 1, static_cast<long long>((static_cast<uint64_t>(meta_arr[k]) << 32) | id_arr[k]));
+                _mm_stream_si64(q + 2, static_cast<long long>(prog64));
+            }
         }
         pos += 8;
     };

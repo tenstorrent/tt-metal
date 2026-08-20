@@ -138,15 +138,29 @@ public:
         /** @brief Direct emit, step 2: store one item at @p pos, which must be below the reserved bound. */
         void emit_store(uint64_t pos, const T& item) noexcept {
 #if defined(__x86_64__)
-            // Non-temporal store for 16 B slots: the ring is written far beyond cache capacity and the
-            // writer never re-reads it, so the read-for-ownership a normal store pays is pure waste.
-            // Bypassing the slot's atomic words is outside the C++ abstract machine but sound here: x86
-            // stores are not observed torn across the 16 B in practice worse than the claim-recheck
-            // already tolerates, and emit_commit's sfence orders every NT store before the head release.
+            // Non-temporal stores for small trivially-copyable slots: the ring is written far beyond cache
+            // capacity and the writer never re-reads it, so the read-for-ownership a normal store pays is
+            // pure waste. Bypassing the slot's atomic words is outside the C++ abstract machine but sound
+            // here: x86 stores are not observed torn across the slot in practice worse than the
+            // claim-recheck already tolerates, and emit_commit's sfence orders every NT store before the
+            // head release. It also matters that EVERY writer path is non-temporal: mixing cached and NT
+            // stores into the same lines forces a WC-buffer flush + RFO per collision, which measured ~4x
+            // on the perf-debug decode when the 24 B record silently missed this path.
             if constexpr (kTriviallyCopyable && sizeof(T) == 16 && sizeof(Slot) == 16) {
                 _mm_stream_si128(
                     reinterpret_cast<__m128i*>(&view_.slot_at(pos)),
                     _mm_loadu_si128(reinterpret_cast<const __m128i*>(&item)));
+                return;
+            }
+            // 8-byte-multiple slots (e.g. the 24 B perf-debug record): movnti per quadword. Slots are
+            // 8-aligned by AtomicSlot's layout, which is all movnti needs.
+            if constexpr (kTriviallyCopyable && sizeof(T) % 8 == 0 && sizeof(Slot) == sizeof(T)) {
+                auto* q = reinterpret_cast<long long*>(&view_.slot_at(pos));
+                const auto* src = reinterpret_cast<const long long*>(&item);
+#pragma GCC unroll 8
+                for (size_t k = 0; k < sizeof(T) / 8; k++) {
+                    _mm_stream_si64(q + k, src[k]);
+                }
                 return;
             }
 #endif
