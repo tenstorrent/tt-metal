@@ -5272,6 +5272,16 @@ def _generate_chunked_configs(model_configs):
 
 CHUNKED_CONFIGS, CHUNKED_CONFIG_IDS = _generate_chunked_configs(CHUNKED_PREFILL_MODEL_CONFIGS)
 RING_MLA_CHUNKED_CONFIGS, RING_MLA_CHUNKED_CONFIG_IDS = _generate_chunked_configs(RING_MLA_CHUNKED_MODEL_CONFIGS)
+if os.environ.get("RING_MLA_K_SWEEP"):
+    # Local only. Extends the base list (not the derived *_TEST_CONFIGS, whose ids list is the same
+    # object) so accuracy/determinism/perf_impl all pick these up with matching lengths.
+    # q64/k448 is the fastest shape found on this box, so give it accuracy/determinism coverage
+    # (only q32 had any). Do not add q128 here: 24 heads x (640/128) = 120 work units over 110
+    # cores puts rot_base_chunks at 1, which the rotated split must refuse -- see the hang note in
+    # ring_joint_sdpa_program_factory.cpp.
+    for _q, _k in ((64, 448),):
+        RING_MLA_CHUNKED_CONFIGS.append(("kimi_k3", _q, _k))
+        RING_MLA_CHUNKED_CONFIG_IDS.append(f"kimi_k3-q{_q}-k{_k}")
 MINIMAX3_GQA_CHUNKED_CONFIGS, MINIMAX3_GQA_CHUNKED_CONFIG_IDS = _generate_chunked_configs(
     MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS
 )
@@ -6209,6 +6219,9 @@ if os.environ.get("RING_MLA_K_SWEEP") and not MESH_CONFIG.is_galaxy and MESH_CON
         RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 64, _k, 8, 71.28))
     for _k in (320, 448, 576, 608):
         RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 32, _k, 8, 68.05))
+    # No q128 entries: rot_base_chunks would be 1 (see the hang note in the program factory), and
+    # L1 caps k there anyway -- q128 needs 1954048 B at k448 and 1686272 B at k320 against the
+    # 1572864 B max, since Sq_chunk_t=4 quadruples the mask/qk tiles.
 
 
 if MESH_CONFIG.is_galaxy:
