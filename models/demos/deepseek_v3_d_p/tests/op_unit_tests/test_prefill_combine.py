@@ -355,7 +355,7 @@ COMBINE_MODELS = [
 # Scales down model hyper-params for a given hardware to obtain good/meaningful proxy test
 # How exactly to scale it down is op-specific (more precisely - even op-implementation specific)
 # Thus it makes sense for this to be combine-specific function
-def _model_scaledown_for_combine(model, ref_mesh, target_mesh, pcc_only):
+def _model_scaledown(model, ref_mesh, target_mesh, pcc_only):
     # number of experts has to be reduced to preserve the experts per chip
     ref_num_chips = ref_mesh[0] * ref_mesh[1]
     target_num_chips = target_mesh[0] * target_mesh[1]
@@ -402,9 +402,7 @@ def _cross_product_conflated_cmb_test_dimensions():
                 ("perf_no_pcc", 640, 8, False),
             ]
             for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
-                model_config = _model_scaledown_for_combine(
-                    model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc
-                )
+                model_config = _model_scaledown(model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc)
 
                 num_experts = model_config.NUM_ROUTED_EXPERTS
                 topk = model_config.NUM_EXPERTS_PER_TOKEN
