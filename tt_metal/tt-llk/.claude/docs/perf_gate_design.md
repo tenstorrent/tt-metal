@@ -73,7 +73,7 @@ Both clauses are necessary:
 
 ### Pipeline Integration
 
-The gate is a **separate CI step** that runs **after** `pytest --compile-consumer` completes and `perf_data/` is written.
+The gate is a **separate CI step** that runs **after** `pytest --compile-consumer` completes and `perf_data/` is written. It compares against the Snowflake baseline and reports regressions.
 
 ```
 [ compile-producer ] ──> [ compile-consumer ] ──> [ perf-regression-gate ] ──> [merge decision]
@@ -81,6 +81,11 @@ The gate is a **separate CI step** that runs **after** `pytest --compile-consume
                                                      compare CSVs,            regressions)
                                                      report results)
 ```
+
+After merge to main, the **sanity workflow** re-runs perf tests and publishes the results as the new baseline to Snowflake. This ensures:
+- Baseline measurements are taken after the code is merged (not speculatively from a PR)
+- Time budget is generous enough for multiple iterations if needed
+- New baseline is ready for the next PR's gate comparison
 
 The gate uses the same perf measurement that developers and on-call already run, so there is no new hardware time — it is a post-processing step on the CSVs produced by `perf_data`.
 
