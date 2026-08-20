@@ -124,7 +124,7 @@ extended test plus a dim=2 program-cache-hit test pass on hardware; acceptance +
 + precision suites stay green; `test_typed_refusals`' dim=2/-2 cases are updated to expect
 success (they assert the refusal today).
 
-### [ ] Refinement 2 — Ring topology
+### [x] Refinement 2 — Ring topology
 
 **Goal**: add `ttnn.Topology.Ring` to `SUPPORTED["topology"]`, moving the remaining **12** golden
 `xfail_expected` cells (3 INPUTS × {bf16, f32} × dim {3, 2} × Ring) to passing. Two admissible

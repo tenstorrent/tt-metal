@@ -11,17 +11,22 @@ mean. The 1/N scaling is part of the op — the caller passes nothing but the te
     output_i[...] = ((Σ_{c=0}^{N-1} shard_c) / N)[slice i along dim]
     output.shape[dim] = input.shape[dim] / N
 
-Algorithm — line store-and-forward GATHER of whole shards fused, in the SAME
-program, with an ARRIVAL-ORDERED incremental reduce (op_design.md "Dataflow
-Strategy"): every device receives all N-1 remote shards into a local
-gather_buffer; a dedicated reduce core consumes contributions one at a time — own
-shard first, then each arrival the moment its counting semaphore lands — so the
-accumulate of contribution k overlaps the fabric flight of contribution k+1. After
-the last accumulate, a 1/N broadcast-scalar multiply streams the output slice.
-This op does NOT wrap, import, call, or dispatch to any existing CCL op.
+Algorithm — store-and-forward GATHER of whole shards fused, in the SAME program,
+with an ARRIVAL-ORDERED incremental reduce (op_design.md "Dataflow Strategy"):
+every device receives all N-1 remote shards into a local gather_buffer; a
+dedicated reduce core consumes contributions one at a time — own shard first,
+then each arrival the moment its counting semaphore lands — so the accumulate of
+contribution k overlaps the fabric flight of contribution k+1. After the last
+accumulate, a 1/N broadcast-scalar multiply streams the output slice. The
+topology (Linear or Ring) selects only the host-side block-flow table and
+neighbour wiring — Linear relays everything down the line, Ring carries each
+direction's SHORT-WAY half over the wrap link — the kernels are
+topology-agnostic (ring-modular block indices). This op does NOT wrap, import,
+call, or dispatch to any existing CCL op.
 
 Primary proven case: bfloat16, TILE_LAYOUT, dim=3, Linear topology, on a Wormhole
-``(1, 8)`` line mesh with ``FABRIC_1D``.
+``(1, 8)`` line mesh with ``FABRIC_1D``; Ring verified on a (1, 4) Blackhole ring
+under the same FABRIC_1D config (topology selected by the kwarg alone).
 """
 
 from __future__ import annotations
@@ -68,9 +73,12 @@ SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.float32],
     # The reduction and scaling are tile computes — TILE_LAYOUT only.
     "layout": [ttnn.TILE_LAYOUT],
-    # Linear line relay is Phase-0; Ring is a refinement candidate (the relay block
-    # indices are already ring-modular).
-    "topology": [_Topology.Linear],
+    # Linear line relay is Phase-0. Ring landed in Refinement 2: the kernels'
+    # block indices were already ring-modular, so Ring only swaps the host-side
+    # block-flow table (each direction carries its SHORT-WAY half of the ring —
+    # fwd depth N//2, bwd (N-1)//2) and wires the wrap link through
+    # ccl_dm_route(.., Ring) (1-hop wrap routes, probed green under FABRIC_1D).
+    "topology": [_Topology.Linear, _Topology.Ring],
     # Scatter dims, POSITIVE convention. Negative aliases are canonicalized BEFORE
     # the membership test (-1 ≡ 3, -2 ≡ 2). dim=2 landed in Refinement 1: the reduce
     # reader walks the dim=2 slice as dense per-(batch, channel) tile-row runs.
@@ -220,7 +228,8 @@ def reduce_scatter_average(
         input_tensor: sharded across a MeshDevice line; each device holds one
             SAME-shape shard (distinct values). TILE_LAYOUT, interleaved.
         dim: scatter dimension (3 or 2; negative aliases -1 / -2 accepted).
-        topology: Linear (Phase-0).
+        topology: Linear (line relay) or Ring (short-way relay over the wrap
+            link; Refinement 2).
         output_tensor: optional pre-allocated output (shape = shard with
             ``[dim] / N``); written into and the SAME handle returned when supplied.
     """

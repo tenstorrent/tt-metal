@@ -125,10 +125,19 @@ def test_typed_refusals(mesh_device, topology):
     num_devices = prod(tuple(mesh_device.shape))
     if num_devices < 2:
         pytest.skip("requires at least 2 mesh devices")
-    input_tensor, _ = _make_input(mesh_device, (1, 1, 32, 256), ttnn.bfloat16)
+    input_tensor, ring_oracle = _make_input(mesh_device, (1, 1, 32, 256), ttnn.bfloat16)
 
+    # topology=Ring entered SUPPORTED in Refinement 2 — it must NOT raise the
+    # typed refusal any more; the call runs to completion under the SAME
+    # FABRIC_1D device_params (the op selects behavior from the kwarg alone).
+    ring_out = reduce_scatter_average(input_tensor, topology=ttnn.Topology.Ring)
+    ttnn.synchronize_device(mesh_device)
+    _check(ring_out, ring_oracle, ttnn.bfloat16, mesh_device)
+
+    # dim=1 stays beyond TARGET — the typed-refusal machinery itself is still
+    # exercised (UnsupportedAxisValue is a NotImplementedError subclass).
     with pytest.raises(NotImplementedError):
-        reduce_scatter_average(input_tensor, topology=ttnn.Topology.Ring)
+        reduce_scatter_average(input_tensor, dim=1)
 
     # dim=2 (and its -2 alias) entered SUPPORTED in Refinement 1 — they must NOT
     # raise the typed refusal any more. On THIS input shape[2]=32 is not

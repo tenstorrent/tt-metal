@@ -36,7 +36,10 @@ void kernel_main() {
     constexpr uint32_t my_chip_id = get_compile_time_arg_val(2);
     constexpr uint32_t ring_size = get_compile_time_arg_val(3);
     // Blocks this direction's writer sends (seed + relays; 0 = idle line end) /
-    // blocks landing here from the upstream neighbour. Host-derived (Linear table).
+    // blocks landing here from the upstream neighbour. Host-derived block-flow
+    // table (Linear: relay-everything; Ring: short-way depth — fwd N/2, bwd
+    // (N-1)/2, where the last arrival terminates here and only the first
+    // num_sends-1 are relayed onward).
     constexpr uint32_t num_sends = get_compile_time_arg_val(4);
     constexpr uint32_t num_arrivals = get_compile_time_arg_val(5);
     constexpr auto input_args = TensorAccessorArgs<6>();
@@ -71,8 +74,8 @@ void kernel_main() {
 
     // 2. Arrival waits + store-and-forward read-backs. Arrival k carries the shard of
     //    chip (my_chip_id -/+ (1 + k)) mod N — nearest-first chain order (T1/T2). The
-    //    ring-modular form never wraps on the Linear line but keeps the indices ready
-    //    for the Ring refinement.
+    //    ring-modular form never wraps on the Linear line; on Ring it wraps at the
+    //    (N-1) <-> 0 seam (Refinement 2) — the kernel is topology-agnostic.
     for (uint32_t k = 0; k < num_arrivals; ++k) {
         noc_semaphore_wait_min(sem_ptr, k + 1);
         if (k < num_relays) {

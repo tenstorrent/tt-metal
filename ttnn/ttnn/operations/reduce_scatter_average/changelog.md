@@ -66,3 +66,45 @@
   boundary shape (2,1,256,32), dim=-2 alias, dim=2 program-cache hit, two deterministic
   hand-calculable cases, dim=3 non-regression spot check); test_reduce_scatter_average_extended.py
   test_typed_refusals updated for dim=2/-2 success semantics.
+
+## Refinement 2 — Ring topology
+- **Date**: 2026-08-20
+- **What was done**: Added `ttnn.Topology.Ring` to `SUPPORTED["topology"]` via the design's
+  primary sketch (ring-aware gather, op_design.md refinement-candidate 1). The kernels were
+  already ring-modular (T3) and needed only comment updates — the entire functional diff is
+  host-side in the program descriptor: `_linear_flow` generalized to `_block_flow(i, N,
+  topology)`, which for Ring returns the short-way split (fwd sends = arrivals = N//2, bwd =
+  (N-1)//2 — every block lands EXACTLY once per device; source sets {i-1..i-N//2} and
+  {i+1..i+(N-1)//2} are disjoint mod N) plus wrap neighbours ((i±1) % N), wired through
+  `ccl_dm_route(.., Ring)` (1-hop wrap routes; the existing `assert num_hops == 1` kept).
+  Fabric contract probed FIRST per the verifier caution: the committed 3-tier
+  `reduce_scatter/test_ring_fabric_probe.py` (route math, control-plane connection, real 1-hop
+  wrap-link data both directions) passed 4/4 on `bh_quietbox_1x4_hw` under FABRIC_1D before any
+  implementation. The exactly-once cover + relay-prefix/index agreement was also verified by a
+  host-only flow simulation for N ∈ {2,3,4,5,8} before hardware runs. Ring runs under the SAME
+  `fabric_config = FABRIC_1D` device_params as Linear — behavior selected by the kwarg alone.
+  `test_typed_refusals` updated: Ring now runs to completion (checked against the oracle); a
+  dim=1 refusal keeps the typed-refusal machinery itself exercised.
+- **Accuracy achieved**: same class as Phase 0 (the topology changes only block TRANSPORT, not
+  the arithmetic). bf16 PCC >= 0.99 and fp32 PCC >= 0.999 asserted on 7 shapes x 2 dtypes x
+  dim {3, 2} at N=4 (`assert_with_pcc`); deterministic exactly-once test (shard c = 2^c, mean
+  (2^N-1)/N exact in bf16) reproduced EXACTLY (max abs err < 1e-6 across all devices — any
+  duplicated/missed block would shift by the unique 2^c/N signature); Ring output matches
+  Linear on identical input at PCC 0.999 (arrival-order rounding only).
+- **Golden test progress**: 24 / 24 in-SUPPORTED cells passing (was 12 / 12 + 12 xfail_expected),
+  `xfail_expected = 0`, all loud categories 0 (regenerated verifier report:
+  `generated/reduce_scatter_average_verify_r2/verifier_report.json` — supported_pass = 24). Full
+  golden dir: 29 passed, 0 xfailed (the translated Ring refinement cell flipped to a hard pass
+  with NO test edit, as designed). Unit dir on `bh_quietbox_1x4_hw`: 61 passed, 11 skipped (the
+  (1,8)-pinned acceptance file self-skips on a 4-chip box).
+- **Issues encountered**: None. All 20 ring tests passed on hardware first try — the fabric
+  probe + flow simulation caught the risk surface before any device run (the ccl_dm_route Ring
+  wrap-branch bug that would have bitten was already fixed in-tree, caught by reduce_scatter's
+  earlier Refinement-1 probe on this same box lineage).
+- **Tests added**: test_reduce_scatter_average_ring.py (20 hardware cases: 4 dim=3 shapes x
+  2 dtypes, 3 dim=2 x Ring shapes x 2 dtypes incl. the multibatch cursor trap (2,1,256,256) and
+  the granule-straddles-channel-run shape (2,1,256,32), dim=-1/-2 aliases under Ring, the
+  exactly-once deterministic cover, Ring program-cache hit (R1 re-arm doubly load-bearing on a
+  ring), fp32 output_tensor path, Ring-vs-Linear consistency);
+  test_reduce_scatter_average_extended.py test_typed_refusals updated for Ring success + dim=1
+  refusal.

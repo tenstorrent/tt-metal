@@ -6,12 +6,27 @@ ONE generic_op dispatch per invocation).
 
 Per device i, one ProgramDescriptor over three fixed logical cores:
 
-  * (0,0) forward relay:  reader (NCRISC) + fabric writer (BRISC) — line
-    store-and-forward gather flowing rightward (fabric connection -> chip i+1).
-  * (0,1) backward relay: mirror, flowing leftward (-> chip i-1).
+  * (0,0) forward relay:  reader (NCRISC) + fabric writer (BRISC) —
+    store-and-forward gather flowing rightward (fabric connection -> chip
+    (i+1) % N; the wrap hop exists only on Ring).
+  * (0,1) backward relay: mirror, flowing leftward (-> chip (i-1) % N).
   * (0,2) reduce:         reader + compute + writer — arrival-ordered incremental
     N-way sum of this device's S-tile slice, then a 1/N broadcast-scalar multiply,
     written to the dense output.
+
+The topology selects ONLY the per-direction block-flow table and the neighbour
+wiring (host-derived num_sends / num_arrivals + wrap links); the kernels are
+topology-agnostic — their block indices are ring-modular (op_design.md T3):
+
+  Linear: forward relays EVERYTHING through (device i sends 1+i blocks,
+          receives i); backward mirrored; line ends send 0.
+  Ring (Refinement 2): each direction carries only its SHORT-WAY half of the
+          ring — forward depth N//2, backward depth (N-1)//2 — so every block
+          lands EXACTLY once per device (the two directions' source sets
+          {i-1..i-N//2} and {i+1..i+(N-1)//2} are disjoint mod N and cover the
+          N-1 remotes). Every device is interior; the (N-1)->0 / 0->(N-1) hops
+          cross the wrap link (1-hop routes from ccl_dm_route(.., Ring),
+          probed green on this box: reduce_scatter/test_ring_fabric_probe.py).
 
 The overlap mechanism (op_design.md T4/T7): after each block's last fabric page the
 sending relay writer issues TWO counting atomic-incs on the same connection — the
@@ -32,6 +47,10 @@ import struct
 from pathlib import Path
 
 import ttnn
+
+# Topology lives on the C++ module; the top-level ttnn.Topology alias only binds
+# AFTER ttnn.operations is auto-imported (same import note as the entry point).
+from ttnn._ttnn.operations.ccl import Topology as _Topology
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
@@ -96,20 +115,41 @@ def _granule(s: int) -> int:
     return 1  # unreachable (1 divides everything)
 
 
-def _linear_flow(i: int, num_devices: int):
-    """Per-direction (sends, arrivals) for device i on the LINE (op_design.md T1/T2).
+def _block_flow(i: int, num_devices: int, topology):
+    """Per-direction block-flow table + neighbour wiring for device ``i``
+    (op_design.md T1/T2; Ring split per Refinement 2).
 
-    Forward carries left->right traffic: device i fwd-sends 1 + i blocks (own shard
-    first, then relays of its i fwd arrivals) iff it has a right neighbour; fwd
-    arrivals = i. Backward is the mirror. Line ends send 0 in the dead direction.
+    Returns (fwd_sends, fwd_arrivals, bwd_sends, bwd_arrivals,
+             fwd_neighbor, bwd_neighbor) — a neighbour is None iff that
+    direction is idle (sends == 0).
+
+    Linear — forward carries left->right traffic: device i fwd-sends 1 + i
+    blocks (own shard first, then relays of its i fwd arrivals) iff it has a
+    right neighbour; fwd arrivals = i. Backward is the mirror. Line ends send 0
+    in the dead direction.
+
+    Ring — short-way split (even every-block-lands-once cover of the N-1
+    distances): forward carries forward-distances 1..N//2, backward the rest
+    (backward-distances 1..(N-1)//2). A direction of depth D sends D blocks
+    (seed + D-1 relays) and receives D blocks (relays the first D-1, terminates
+    the last). Every device is interior; neighbours wrap mod N.
     """
+    if topology == _Topology.Ring:
+        fwd_depth = num_devices // 2
+        bwd_depth = (num_devices - 1) // 2
+        fwd_neighbor = (i + 1) % num_devices if fwd_depth > 0 else None
+        bwd_neighbor = (i - 1) % num_devices if bwd_depth > 0 else None  # idle at N == 2
+        return fwd_depth, fwd_depth, bwd_depth, bwd_depth, fwd_neighbor, bwd_neighbor
+
     num_targets_fwd = num_devices - 1 - i  # devices reachable rightward
     num_targets_bwd = i  # devices reachable leftward
     fwd_sends = 1 + num_targets_bwd if num_targets_fwd > 0 else 0
     fwd_arrivals = num_targets_bwd
     bwd_sends = 1 + num_targets_fwd if num_targets_bwd > 0 else 0
     bwd_arrivals = num_targets_fwd
-    return fwd_sends, fwd_arrivals, bwd_sends, bwd_arrivals
+    fwd_neighbor = i + 1 if fwd_sends > 0 else None
+    bwd_neighbor = i - 1 if bwd_sends > 0 else None
+    return fwd_sends, fwd_arrivals, bwd_sends, bwd_arrivals, fwd_neighbor, bwd_neighbor
 
 
 def _build_device_program(
@@ -144,7 +184,7 @@ def _build_device_program(
     input_ta, gather_ta, output_ta = accessors
     fwd_noc, bwd_noc, reduce_noc = noc_coords
 
-    fwd_sends, fwd_arrivals, bwd_sends, bwd_arrivals = _linear_flow(i, num_devices)
+    fwd_sends, fwd_arrivals, bwd_sends, bwd_arrivals, fwd_neighbor, bwd_neighbor = _block_flow(i, num_devices, topology)
 
     fwd_set = ttnn.CoreRangeSet([ttnn.CoreRange(_FWD_CORE, _FWD_CORE)])
     bwd_set = ttnn.CoreRangeSet([ttnn.CoreRange(_BWD_CORE, _BWD_CORE)])
@@ -329,6 +369,8 @@ def _build_device_program(
         route = ttnn._ttnn.fabric.ccl_dm_route(mesh_device, coord_i, coord_next, topology)
         # Store-and-forward invariant: every hop is to the physical neighbour. The
         # route owns the fabric fwd/bwd sign reversal — never hand-derive is_forward.
+        # (The Ring wrap pair (N-1)<->0 resolves to 1 hop only through ccl_dm_route's
+        # Ring short-way branch — probed green on this box before implementation.)
         assert route.num_hops == 1, f"expected 1-hop neighbour route, got {route.num_hops}"
         ref = program.kernels[kernel_idx].runtime_args[core.x][core.y]
         block = ttnn._ttnn.fabric.build_ccl_fabric_rt_args(
@@ -350,9 +392,9 @@ def _build_device_program(
         )
 
     if fwd_sends > 0:
-        _wire_direction(_K_FWD_WRITER, _FWD_CORE, i + 1, sem_fwd_addr, fwd_noc)
+        _wire_direction(_K_FWD_WRITER, _FWD_CORE, fwd_neighbor, sem_fwd_addr, fwd_noc)
     if bwd_sends > 0:
-        _wire_direction(_K_BWD_WRITER, _BWD_CORE, i - 1, sem_bwd_addr, bwd_noc)
+        _wire_direction(_K_BWD_WRITER, _BWD_CORE, bwd_neighbor, sem_bwd_addr, bwd_noc)
 
     return program
 
