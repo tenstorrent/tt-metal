@@ -45,7 +45,7 @@ constexpr uint32_t ones = tt::CBIndex::c_7;
 constexpr uint32_t S = tt::CBIndex::c_8;
 constexpr uint32_t decay = tt::CBIndex::c_9;
 constexpr uint32_t decay_exp = tt::CBIndex::c_10;
-constexpr uint32_t decayfac = tt::CBIndex::c_11;  // prep; reused as cb_dl in scan
+constexpr uint32_t decayfac = tt::CBIndex::c_11;  // prep; reused as scan's v_new scratch
 constexpr uint32_t lmask = tt::CBIndex::c_12;
 constexpr uint32_t Tinv = tt::CBIndex::c_13;
 constexpr uint32_t vbeta = tt::CBIndex::c_14;
@@ -66,7 +66,13 @@ constexpr uint32_t scr1 = tt::CBIndex::c_28;
 constexpr uint32_t scr2 = tt::CBIndex::c_29;
 constexpr uint32_t scr3 = tt::CBIndex::c_30;
 constexpr uint32_t s3 = tt::CBIndex::c_31;
-constexpr uint32_t dl = decayfac;  // scan reads dl into this slot
+// SCAN aliases. The scan-side indices of the seven per-chunk inputs equal PREP'S OUTPUT indices
+// (v_beta=14, kd=18=w, q_decay=19, intra=20, k_dec_t=24, dl=22=vnew — prep's compute pushes dl
+// into its vnew slot — t_inv=13), so the fused program can declare one hand-off CB set on the
+// producer/receiver core union. Scan's v_new scratch took the 11 freed by dl. Pure renumber:
+// the phased path is numerically identical (CB indices never affect the math).
+constexpr uint32_t dl = vnew;             // 22: scan reads dl into prep's dl slot
+constexpr uint32_t scan_vnew = decayfac;  // 11: scan's v_new scratch
 }  // namespace pcb
 
 namespace {
@@ -423,8 +429,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     constexpr uint32_t sem_valid_id = 1;
 
     const uint32_t nbuf_in = (do_mcast && sdist.NV >= 4) ? 2u : 1u;
-    add_cb(pcb::u, cv, nbuf_in);  // v_beta
-    add_cb(pcb::w, ck, nbuf_in);  // kd
+    add_cb(pcb::vbeta, cv, nbuf_in);
+    add_cb(pcb::w, ck, nbuf_in);  // kd (prep's w slot)
     add_cb(pcb::qdecay, ck, nbuf_in);
     add_cb(pcb::intra, cc, nbuf_in);
     add_cb(pcb::kdec_t, kc, nbuf_in);
@@ -438,7 +444,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnScanProgramFactory::create_descriptor(
     add_cb(pcb::out, cv, 2, df_io);
     add_cb(pcb::final_s, kv);
     // Scratch.
-    add_cb(pcb::vnew, cv);
+    add_cb(pcb::scan_vnew, cv);
     add_cb(pcb::ointer, cv);
     add_cb(pcb::supd, kv);
     add_cb(pcb::stmp, kv);

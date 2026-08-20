@@ -21,10 +21,15 @@
 
 namespace {
 
-constexpr uint32_t cb_dl = 11, cb_Tinv = 13;
+// The seven per-chunk inputs live at PREP'S OUTPUT indices (v_beta=14, kd=18, q_decay=19,
+// intra=20, k_dec_t=24, dl=22, t_inv=13) so the fused program can declare ONE hand-off CB set on
+// the producer/receiver core union. That put dl at 22 (the slot prep's compute pushes dl into)
+// and moved the v_new scratch to the freed 11. Indices are plumbing only — the phased path stays
+// numerically identical across this renumber.
+constexpr uint32_t cb_dl = 22, cb_Tinv = 13;
 constexpr uint32_t cb_S = 8, cb_out = 16;
-constexpr uint32_t cb_vbeta = 17, cb_kd = 18, cb_qdecay = 19, cb_intra = 20;
-constexpr uint32_t cb_s2 = 21, cb_vnew = 22, cb_ointer = 23, cb_kdec_t = 24;
+constexpr uint32_t cb_vbeta = 14, cb_kd = 18, cb_qdecay = 19, cb_intra = 20;
+constexpr uint32_t cb_s2 = 21, cb_vnew = 11, cb_ointer = 23, cb_kdec_t = 24;
 constexpr uint32_t cb_supd = 25, cb_stmp = 26, cb_final = 27;
 constexpr uint32_t cb_scr1 = 28, cb_s3 = 31;
 

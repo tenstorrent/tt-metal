@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <mutex>
 #include <tuple>
@@ -12,6 +13,7 @@
 #include <vector>
 
 #include "device/chunk_gated_delta_rule_device_operation.hpp"
+#include "device/chunk_gdn_fused.hpp"
 #include "device/chunk_gdn_phased.hpp"
 
 #include "ttnn/operations/core/core.hpp"
@@ -272,23 +274,81 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
 
-    // Phase-split path: prep -> (DRAM hand-off) -> scan. The prep phase does all state-independent
-    // per-chunk work (incl. the WY inverse) fanned across the grid; the scan phase carries the
-    // recurrent state. Same math as the monolithic op. This is the DEFAULT; QWEN_GDN_PHASED=0 falls
-    // back to the single-kernel monolithic op (benchmark/debug only). Read fresh (not static) so a
-    // caller toggling it between calls is honored.
-    const bool phased = [] {
-        const char* e = std::getenv("QWEN_GDN_PHASED");
-        return e == nullptr || e[0] != '0';
+    // Path selection. Three device implementations, same math:
+    //   fused  — ONE program: per head a producer core runs prep and NoC-writes the 7
+    //            intermediates straight into a receiver core's CBs (zero DRAM intermediates).
+    //            Needs 2 cores/head.
+    //   phased — prep -> (7 fp32 DRAM tensors) -> scan, two prims. The bit-exact reference.
+    //   mono   — the original single-kernel op, 1 core/head (benchmark/debug only).
+    // Precedence: QWEN_GDN_PATH=fused|phased|mono if set; else the legacy QWEN_GDN_PHASED
+    // ('0' -> mono, else phased) if set; else DEFAULT phased. The fused path is bit-exact vs
+    // phased and eliminates the seven-tensor DRAM round trip, but at F1 (one producer per head)
+    // it is producer-math-bound at ~34us/chunk: measured 1.11x at BH=48/T=4096 and 0.82x at
+    // BH=48/T=512 — below the ship gate. It stays opt-in until the F2 producer-side work
+    // (input pipelining, init batching, HiFi2/SFPU on the now math-bound producers) clears the
+    // w_p <= ~27us checkpoint; then the default becomes shape-gated fused (BH >= 24 && 2*BH
+    // cores fit). See gdn-fused-handoff-design.md sections 6 and 8.
+    // Envs are read fresh per call — op-level env dispatch is cache-safe (each branch launches a
+    // DIFFERENT prim with its own program-cache hash), unlike an env read inside a factory.
+    enum class GdnPath { Fused, Phased, Mono };
+    const GdnPath path = [&] {
+        if (const char* p = std::getenv("QWEN_GDN_PATH")) {
+            if (std::strcmp(p, "fused") == 0) {
+                return GdnPath::Fused;
+            }
+            if (std::strcmp(p, "phased") == 0) {
+                return GdnPath::Phased;
+            }
+            if (std::strcmp(p, "mono") == 0) {
+                return GdnPath::Mono;
+            }
+            TT_FATAL(false, "QWEN_GDN_PATH must be one of fused|phased|mono (got '{}')", p);
+            return GdnPath::Phased;  // unreachable — TT_FATAL(false, ...) throws
+        }
+        if (const char* e = std::getenv("QWEN_GDN_PHASED")) {
+            return e[0] == '0' ? GdnPath::Mono : GdnPath::Phased;
+        }
+        return GdnPath::Phased;
     }();
 
     ttnn::Tensor o_c;          // [BH, NC, C, V]
     ttnn::Tensor final_state;  // [BH, K, V]
-    TT_FATAL(!flat_v || phased, "OPT-A flat v is only supported on the phased path (set QWEN_GDN_PHASED=1)");
+    // OPT-A/OPT-B are handled by the prep reader/compute, which both the phased and fused paths
+    // run unchanged; only the monolithic kernel lacks them.
+    TT_FATAL(!flat_v || path != GdnPath::Mono, "OPT-A flat v is not supported on the mono path");
     TT_FATAL(!flat_v || pad == 0, "OPT-A flat v requires T ({}) to be a multiple of chunk_size ({})", T, C);
-    TT_FATAL(!flat_qk || (phased && qk_norm), "OPT-A flat q/k needs the phased path + in-kernel norm (Ct==1)");
+    TT_FATAL(
+        !flat_qk || (path != GdnPath::Mono && qk_norm),
+        "OPT-A flat q/k needs the phased or fused path + in-kernel norm (Ct==1)");
     TT_FATAL(!flat_qk || pad == 0, "OPT-A flat q/k requires T ({}) to be a multiple of chunk_size ({})", T, C);
-    if (phased) {
+    if (path == GdnPath::Fused) {
+        // Same preprocessed inputs the phased branch feeds prep (incl. s0, which the host ALWAYS
+        // provides — zeros built above when the caller passed none), same outputs scan produces;
+        // the postprocessing below is shared.
+        auto fused = ttnn::prim::chunk_gdn_fused(
+            q_c,
+            k_c,
+            v_c,
+            g_c,
+            beta_c,
+            eye_c,
+            tril_c,
+            ones_c,
+            masks_c,
+            s0,
+            C,
+            output_final_state,
+            out_mem,
+            kernel_cfg,
+            flat_v,
+            HV,
+            qk_norm,
+            scale,
+            flat_qk,
+            H);
+        o_c = fused[0];
+        final_state = fused[1];
+    } else if (path == GdnPath::Phased) {
         auto prep = ttnn::prim::chunk_gdn_prep(
             q_c,
             k_c,
