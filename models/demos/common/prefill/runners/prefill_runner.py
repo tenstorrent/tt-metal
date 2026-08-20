@@ -790,7 +790,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # Mock integration (prefill_producer.py's PREFILL_PRODUCER_CHECK_PCC): publish the KV chunk table +
     # device map for an external device-less reader, with NO migration worker. Deliberately OUTSIDE the
     # _migration_enabled block below: that block's first step is
-    # deliver_device_map_and_gather_stage_layout(), which imports the _migration_client .so and joins a
+    # deliver_device_map_and_gather_stage_layouts(), which imports the _migration_client .so and joins a
     # cross-rank all-gather. Mock has neither a client nor peers, so routing it through there raises
     # ImportError(_migration_client) — which is exactly what happens if you only make the old in-block
     # `elif PREFILL_MOCK_MIGRATION` reachable. Both writes here are local (build table + serialize map).
@@ -817,17 +817,22 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # With PREFILL_MIGRATION_EXPORT_TO_FILE=1 the device map goes to a host-local text file
         # and the table stays on disk instead; no worker handshake.
         from models.demos.common.prefill.runners.migration import (
-            allgather_kv_stage_layout,
-            deliver_device_map_and_gather_stage_layout,
-            export_device_map_file_and_gather_stage_layout,
+            KvCacheStage,
+            allgather_kv_stage_layouts,
+            deliver_device_map_and_gather_stage_layouts,
+            export_device_map_file_and_gather_stage_layouts,
             migration_device_map_file_path,
             publish_serialized_table_and_wait_ready,
         )
 
         # This rank's pipeline stage owns layers [first_layer_idx, first_layer_idx + num_my_layers).
         # The layer-aware merge gathers each rank's range so the table spans all stages; pass this
-        # rank's range (same split the runtime/cache was built with).
-        first_layer_idx, num_my_layers = compute_layer_split(NUM_LAYERS, num_ranks)[rank]
+        # rank's range -- via the adapter's boundaries, so it is the split the MODEL was built with in
+        # main(). Without them a cross-layer-reuse model (GLM-5.2 snaps 39/39 to 38/40) describes a
+        # partition its KV cache does not hold, mismapping every layer of the second stage.
+        first_layer_idx, num_my_layers = compute_layer_split(
+            NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
+        )[rank]
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
 
@@ -855,32 +860,36 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # its co-located worker first; mock has no worker (the producer reads a serialized JSON map),
         # so it joins the gather directly and never imports the worker client extension.
         #
-        # Ask the runtime for this stage's KV base -- the engine must not introspect the opaque
-        # KvCaches struct, whose shape is per-model.
-        if not hasattr(runtime, "kv_migration_base_address"):
+        # Ask the runtime to describe its migratable caches -- the engine must not introspect the opaque
+        # KvCaches struct, whose shape is per-model. One stage per config of the model's table, since a
+        # layout carries one cache's DRAM base and one layer-index space. A runtime predating
+        # `kv_migration_stages` exposes only the single-cache base address.
+        _multi_cache_runtime = hasattr(runtime, "kv_migration_stages")
+        if _multi_cache_runtime:
+            kv_stages = runtime.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
+        elif hasattr(runtime, "kv_migration_base_address"):
+            kv_stages = [KvCacheStage(runtime.kv_migration_base_address(kv_caches), first_layer_idx, num_my_layers)]
+        else:
             raise RuntimeError(
-                f"migration enabled but runtime {type(runtime).__name__} implements no "
-                "kv_migration_base_address (see docs/ADDING_A_PREFILL_MODEL.md §2)."
+                f"migration enabled but runtime {type(runtime).__name__} implements neither "
+                "kv_migration_stages nor kv_migration_base_address "
+                "(see docs/ADDING_A_PREFILL_MODEL.md §2)."
             )
-        kv_base_addr = runtime.kv_migration_base_address(kv_caches)
         _mock_migration = os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1"
         if _mock_migration:
-            stage_layout = allgather_kv_stage_layout(
-                mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers
-            )
+            stage_layouts = allgather_kv_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE)
         elif _file_export:
-            stage_layout = export_device_map_file_and_gather_stage_layout(
-                mesh_device,
-                kv_base_addr,
-                GLOBAL_MESH_SHAPE,
-                first_layer_idx,
-                num_my_layers,
-                migration_device_map_file_path(),
+            stage_layouts = export_device_map_file_and_gather_stage_layouts(
+                mesh_device, kv_stages, GLOBAL_MESH_SHAPE, migration_device_map_file_path()
             )
         else:
-            stage_layout = deliver_device_map_and_gather_stage_layout(
-                mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers, rank
-            )
+            stage_layouts = deliver_device_map_and_gather_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE, rank)
+
+        # A runtime predating `kv_migration_stages` describes ONE cache and takes the singular
+        # `stage_layout=` -- its single gathered layout. Keep calling it that way: its single-rank guard
+        # counts stages in that layout, and handing it the outer per-cache list would count caches (always
+        # 1) and silently stop rejecting multi-rank migration.
+        _layout_kwarg = {"stage_layouts": stage_layouts} if _multi_cache_runtime else {"stage_layout": stage_layouts[0]}
 
         if _mock_migration:
             # Mock integration (prefill_producer.py): the SAME merged table the real publish builds, but
@@ -905,7 +914,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    stage_layout=stage_layout,
+                    **_layout_kwarg,
                 )
                 logger.info(f"[mock-migration] merged KV chunk table -> {table_path} (no migration worker)")
             logger.info(f"[mock-migration] rank {rank}: local device map -> {device_map_path}")
@@ -917,7 +926,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    stage_layout=stage_layout,
+                    **_layout_kwarg,
                 )
                 logger.info(f"[migration] merged KV chunk table -> {table_path} (file export; no worker handshake)")
             logger.info(f"[migration] rank {rank}: exported local device map -> {migration_device_map_file_path()}")
@@ -941,7 +950,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    stage_layout=stage_layout,
+                    **_layout_kwarg,
                 )
                 migration_endpoint = publish_serialized_table_and_wait_ready(
                     table_path=table_path,
@@ -967,7 +976,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # out of the pre-#48826 `if single_rank:` wrapper, so with num_ranks>1 every rank would build
         # a table covering only ITS layer slice and publish over the same paths -- and co-located
         # ranks would race serialize_device_map's `<path>.tmp` -> os.replace as well. Only the real
-        # migration path merges stages (deliver_device_map_and_gather_stage_layout), and that needs
+        # migration path merges stages (deliver_device_map_and_gather_stage_layouts), and that needs
         # the worker. Same guard #48826 removed for PREFILL_ENABLE_MIGRATION, kept for the mock path.
         if not single_rank:
             raise ValueError(

@@ -274,8 +274,11 @@ def _read_kv_chunk_table(timeout_s: int):
 
 
 def _read_device_map(timeout_s: int) -> dict:
-    """Poll for and read the runner's fabric_node -> ASIC-unique_id sidecar (JSON), so read_dram_umd can
-    pick chips by unique_id without touching the ControlPlane. Returns {(mesh_id, chip_id): unique_id}."""
+    """Poll for and read the runner's fabric_node -> ASIC-unique_id sidecar, so read_dram_umd can pick
+    chips by unique_id without touching the ControlPlane. Returns {(mesh_id, chip_id): unique_id}.
+
+    The runner's two publishers do not share an encoding -- the shmem path writes JSON keyed
+    "<mesh>:<chip>", the file-export path writes "<mesh> <chip> <umd>" lines -- so accept either."""
     import json
 
     path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
@@ -287,8 +290,18 @@ def _read_device_map(timeout_s: int) -> dict:
         time.sleep(0.1)
 
     with open(path) as f:
-        raw_map = json.load(f)
-    device_map = {tuple(int(x) for x in key.split(":")): int(unique_id) for key, unique_id in raw_map.items()}
+        raw = f.read()
+    try:
+        device_map = {
+            tuple(int(x) for x in key.split(":")): int(unique_id) for key, unique_id in json.loads(raw).items()
+        }
+    except json.JSONDecodeError:
+        device_map = {}
+        for line in raw.splitlines():
+            if not line.strip():
+                continue
+            mesh_id, chip_id, unique_id = line.split()
+            device_map[(int(mesh_id), int(chip_id))] = int(unique_id)
     logger.info(f"[producer] read device map {path}: {len(device_map)} chips")
     return device_map
 
