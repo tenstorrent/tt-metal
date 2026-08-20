@@ -691,6 +691,85 @@ with tempfile.TemporaryDirectory() as td:
         not any((sw.ev / "classify-batches").rglob("tt-llk-build")),
     )
 
+# ---------------- 5. batched session node-id robustness (pin-14 unblock) ---
+# The live 22-flag sweep died rc=1 on a pytest node id containing a single
+# quote (SdpaFwOp parametrization repr <DestSync.Half: 'SyncHalf'>): node ids
+# used to be inlined single-quoted into session.sh.  They now travel via the
+# line-oriented nodes.txt argfile expanded with bash mapfile, so no sh
+# quoting layer parses them.  Drive the REAL _run_batch_session with a stub
+# interpreter that prints its argv one-per-line: the tricky ids must arrive
+# as single argv entries, byte-exact.  Locks/LLK/PYDIR are patched to fixture
+# paths (hermetic: no real lock files, no real tree paths in the script).
+_saved = {k: getattr(sweep, k) for k in ("DEVICE_LOCK", "SILICON_LOCK", "LLK", "PYDIR")}
+with tempfile.TemporaryDirectory() as td:
+    td = pathlib.Path(td)
+    sweep.DEVICE_LOCK = str(td / "dev.lock")
+    sweep.SILICON_LOCK = str(td / "sil.lock")
+    sweep.LLK = td / "llk"
+    sweep.PYDIR = td / "pydir"
+    sweep.PYDIR.mkdir()
+    stub = td / "fake-python"
+    stub.write_text("#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\n")
+    stub.chmod(0o755)
+    sw = mk_sweep(td / "ev", "batched", dry_run=False)
+    sw.python = stub
+    # session splitting has its own fixtures above; this section's subject is
+    # the generated command surviving the shell layers.
+    sw._split_batch_session = lambda *a, **kw: None
+    gctx = {"rt": td / "rt"}
+    gctx["rt"].mkdir()
+    quoted_node = (
+        "test_sfpu_sdpa_fw.py::test_sfpu_sdpa_fw[variant:(<SdpaFwOp.Exp: 1>,"
+        " 49024, <DestSync.Half: 'SyncHalf'>)-precision:Bf16Dest]"
+    )
+    spacey_node = 'test_a.py::test_b[case with spaces (and "parens") $HOME `id`]'
+    jobs = [
+        {"file": "test_sfpu_sdpa_fw.py", "node": quoted_node, "sel": "sem-perf"},
+        {"file": "test_a.py", "node": spacey_node, "sel": "sem-perf"},
+    ]
+    gdir = td / "gdir"
+    gdir.mkdir()
+    sw._run_batch_session(gctx, gdir, "s1", jobs, "-O2", ())
+    argv_lines = (gdir / "s1/log.txt").read_text().splitlines()
+    check(
+        "batched session: single-quote node id reaches pytest argv byte-exact",
+        quoted_node in argv_lines,
+        argv_lines[-4:],
+    )
+    check(
+        "batched session: spaces/parens/metachar node id reaches pytest argv "
+        "byte-exact (no expansion)",
+        spacey_node in argv_lines,
+    )
+    check(
+        "batched session: session script inlines NO node text (argfile only)",
+        quoted_node not in (gdir / "s1/session.sh").read_text()
+        and spacey_node not in (gdir / "s1/session.sh").read_text(),
+    )
+    check(
+        "batched session: nodes.txt argfile carries the ids one per line "
+        "(jobs sort file-first, so test_a.py leads)",
+        (gdir / "s1/nodes.txt").read_text() == f"{spacey_node}\n{quoted_node}\n",
+    )
+    try:
+        sw._run_batch_session(
+            gctx,
+            gdir,
+            "s2",
+            [{"file": "t.py", "node": "bad\nnode", "sel": "sem-perf"}],
+            "-O2",
+            (),
+        )
+        check("batched session: newline node id refused by name", False)
+    except SystemExit as e:
+        check(
+            "batched session: newline node id refused by name",
+            "newline" in str(e),
+            str(e),
+        )
+for k, v in _saved.items():
+    setattr(sweep, k, v)
+
 if FAILS:
     print(f"batched-silicon self-test: FAILED ({len(FAILS)}: {', '.join(FAILS)})")
     sys.exit(1)
@@ -700,5 +779,7 @@ print(
     "back to per-leg evidence with mathop-filtered CSVs and manifest-subset "
     "TEXT_HASHES; cache keying; producer failure attributes per leg, never "
     "poisons the group; batched classify verdicts match the solo layout "
-    "with per-node attribution and solo fallback)"
+    "with per-node attribution and solo fallback; node ids survive every "
+    "shell layer via the nodes.txt argfile — quotes/spaces/parens proven, "
+    "newline refused by name)"
 )

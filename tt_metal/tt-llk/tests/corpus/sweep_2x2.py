@@ -175,6 +175,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1709,22 +1710,26 @@ class Sweep:
         (work / "jobkey.json").write_text(json.dumps(jobkey, indent=2) + "\n")
         env_prefix = " ".join(f'{k}="{v}"' for k, v in row_env(row, sel).items())
         inner = work / "inner.sh"
-        # Single-quoted node id survives the sh -c layers because pytest node
-        # ids never contain single quotes.  Explicit check, not an assert:
-        # asserts are compiled out under `python3 -O` (adversarial missed
-        # item, sweep_2x2.py:598).
-        if "'" in node:
+        # Node ids reach pytest via the line-oriented node.txt argfile
+        # expanded with bash mapfile — no sh quoting layer ever parses them,
+        # so single quotes, spaces, parens and angle brackets in pytest
+        # parametrization reprs are safe (the pin-14 sweep killer: SdpaFwOp
+        # nodes carry <DestSync.Half: 'SyncHalf'>).  The one impossible byte
+        # is a newline: it would split the argfile row.  Explicit check, not
+        # an assert: asserts are compiled out under `python3 -O`.
+        if "\n" in node or "\r" in node:
             sys.exit(
-                f"pytest node id contains a single quote (breaks the sh -c "
-                f"quoting layers): {node}"
+                f"pytest node id contains a newline (breaks the node-id "
+                f"argfile): {node!r}"
             )
         inner.write_text(
             f"""#!/usr/bin/env bash
 rm -rf "{LLK}/perf_data"
 cd "{PYDIR}" || exit 97
+mapfile -t NODES < "{work}/node.txt"
 env {env_prefix} CHIP_ARCH=blackhole LLK_HOME="{LLK}" RUNNER_TEMP="{rt}" \\
 TT_LLK_EXTRA_COMPILER_OPTIONS="{flags}" \\
-timeout 1500 "{self.python}" -m pytest -q -v '{node}' > "{work}/log.txt" 2>&1
+timeout 1500 "{self.python}" -m pytest -q -v "${{NODES[@]}}" > "{work}/log.txt" 2>&1
 RC=$?
 echo $RC > "{work}/rc.txt"
 # copy raw+post perf CSVs IN-LOCK immediately (they are overwritten per run)
@@ -1738,7 +1743,13 @@ exit $RC
             print(f"DRY-RUN device job: {row['op']}/{sel} {label}-{leg}")
             return 0
         subprocess.run(
-            ["flock", "-x", DEVICE_LOCK, "-c", f"flock -x {SILICON_LOCK} -c '{inner}'"],
+            [
+                "flock",
+                "-x",
+                DEVICE_LOCK,
+                "-c",
+                f"flock -x {SILICON_LOCK} -c {shlex.quote(str(inner))}",
+            ],
             check=False,
         )
         rc = (
@@ -2403,24 +2414,29 @@ exit $RC
         for j in jobs:
             if j["node"] not in nodes:
                 nodes.append(j["node"])
+        # Node ids reach pytest via the line-oriented nodes.txt argfile
+        # expanded with bash mapfile — no sh quoting layer ever parses them
+        # (the pin-14 sweep killer: SdpaFwOp parametrization reprs carry
+        # single quotes, spaces and parens).  The one impossible byte is a
+        # newline: it would split an argfile row.
         for n in nodes:
-            if "'" in n:
+            if "\n" in n or "\r" in n:
                 sys.exit(
-                    f"pytest node id contains a single quote (breaks the "
-                    f"sh -c quoting layers): {n}"
+                    f"pytest node id contains a newline (breaks the node-id "
+                    f"argfile): {n!r}"
                 )
         (sdir / "nodes.txt").write_text("\n".join(nodes) + "\n")
         env_prefix = " ".join(f'{k}="{v}"' for k, v in sorted(extra_env))
-        quoted = " ".join(f"'{n}'" for n in nodes)
         timeout_s = 600 + 300 * len(nodes)
         script = f"""#!/usr/bin/env bash
 rm -rf "{LLK}/perf_data" "{gctx['rt']}/tt-llk-build/temp_perf_data"
 cd "{PYDIR}" || exit 97
+mapfile -t NODES < "{sdir}/nodes.txt"
 env {env_prefix} CHIP_ARCH=blackhole LLK_HOME="{LLK}" RUNNER_TEMP="{gctx['rt']}" \\
 TT_LLK_EXTRA_COMPILER_OPTIONS="{flags}" \\
 SFPU_CORPUS_PYTEST_REPORT="{sdir}/report.json" \\
 PYTHONPATH="{HERE}:$PYTHONPATH" \\
-timeout {timeout_s} "{self.python}" -m pytest -q -v -p sfpu_corpus_pytest_plugin --compile-consumer {quoted} > "{sdir}/log.txt" 2>&1
+timeout {timeout_s} "{self.python}" -m pytest -q -v -p sfpu_corpus_pytest_plugin --compile-consumer "${{NODES[@]}}" > "{sdir}/log.txt" 2>&1
 RC=$?
 echo $RC > "{sdir}/rc.txt"
 # copy raw+post perf CSVs IN-LOCK immediately (they are overwritten per run)
@@ -2441,7 +2457,7 @@ exit $RC
                 "-x",
                 DEVICE_LOCK,
                 "-c",
-                f"flock -x {SILICON_LOCK} -c '{session_sh}'",
+                f"flock -x {SILICON_LOCK} -c {shlex.quote(str(session_sh))}",
             ],
             check=False,
         )
