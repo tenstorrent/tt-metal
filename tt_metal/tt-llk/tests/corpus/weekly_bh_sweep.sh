@@ -78,7 +78,11 @@ bash "$HERE/conf_lint.sh" > "$EV/conf-lint.txt" 2>&1 \
 # cell; CRAQ is a debug/lane-validation oracle (pinned sims), not a sweep
 # precondition.  This flag is therefore the sanctioned default here, and
 # sweep_2x2.py records an explicit CRAQ-gate taint/status line either way.
-python3 "$HERE/sweep_2x2.py" \
+# Unbuffered: without this the sweep's stdout block-buffers into the tee'd
+# log (a setsid-detached sweep looks dead for many minutes between flushes).
+# PYTHONUNBUFFERED covers python and every python child (pytest sessions);
+# stdbuf -oL -eL covers any C-stdio subprocess in between.
+PYTHONUNBUFFERED=1 stdbuf -oL -eL python3 "$HERE/sweep_2x2.py" \
   --evidence-root "$EV" \
   --cc1plus-sha "$PINNED_CC1PLUS_SHA256" \
   --compiler-sha "$PINNED_COMPILER_SHA256" \
