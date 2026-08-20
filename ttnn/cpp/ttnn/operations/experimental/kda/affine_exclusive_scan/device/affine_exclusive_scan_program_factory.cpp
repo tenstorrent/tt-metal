@@ -97,6 +97,9 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
         make_dfb(FINAL, kv, tt::DataFormat::Float32),
         make_dfb(SCRATCH, kv, tt::DataFormat::Float32),
     };
+    // Initial inputs/state and final output are one-shot transfers; scratch is compute-local. TO_REMOTE stays
+    // single-slot because dataflow releases the current block before the remote input that makes compute runnable.
+    // LOCAL is the only unconstrained cross-kernel path with overlapping current/next lifetimes, so it is depth two.
     // The sender addresses a peer's inbound mailbox with its own local write pointer, which is only
     // valid while these buffers hold one phase-independent slot. Any additional depth lets sender and
     // receiver select different halves and silently corrupts the scan.
