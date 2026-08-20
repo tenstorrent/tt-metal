@@ -56,14 +56,10 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
 
     const m2::DFBSpecName INITIAL_A{"initial_a"};
     const m2::DFBSpecName INITIAL_B{"initial_b"};
-    const m2::DFBSpecName STAGE_A_PING{"stage_a_ping"};
-    const m2::DFBSpecName STAGE_B_PING{"stage_b_ping"};
-    const m2::DFBSpecName STAGE_A_PONG{"stage_a_pong"};
-    const m2::DFBSpecName STAGE_B_PONG{"stage_b_pong"};
-    const m2::DFBSpecName SEND_A_PING{"send_a_ping"};
-    const m2::DFBSpecName SEND_B_PING{"send_b_ping"};
-    const m2::DFBSpecName SEND_A_PONG{"send_a_pong"};
-    const m2::DFBSpecName SEND_B_PONG{"send_b_pong"};
+    const m2::DFBSpecName STAGE_A{"stage_a"};
+    const m2::DFBSpecName STAGE_B{"stage_b"};
+    const m2::DFBSpecName SEND_A{"send_a"};
+    const m2::DFBSpecName SEND_B{"send_b"};
     const m2::DFBSpecName REMOTE_A{"remote_a"};
     const m2::DFBSpecName REMOTE_B{"remote_b"};
     const m2::DFBSpecName SCRATCH{"scratch"};
@@ -89,14 +85,10 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
     m2::Group<m2::DataflowBufferSpec> dfbs = {
         make_dfb(INITIAL_A, kk, summary_format),
         make_dfb(INITIAL_B, kv, summary_format),
-        make_dfb(STAGE_A_PING, kk, tt::DataFormat::Float32),
-        make_dfb(STAGE_B_PING, kv, tt::DataFormat::Float32),
-        make_dfb(STAGE_A_PONG, kk, tt::DataFormat::Float32),
-        make_dfb(STAGE_B_PONG, kv, tt::DataFormat::Float32),
-        make_dfb(SEND_A_PING, kk, tt::DataFormat::Float32),
-        make_dfb(SEND_B_PING, kv, tt::DataFormat::Float32),
-        make_dfb(SEND_A_PONG, kk, tt::DataFormat::Float32),
-        make_dfb(SEND_B_PONG, kv, tt::DataFormat::Float32),
+        make_dfb(STAGE_A, 2 * kk, tt::DataFormat::Float32),
+        make_dfb(STAGE_B, 2 * kv, tt::DataFormat::Float32),
+        make_dfb(SEND_A, 2 * kk, tt::DataFormat::Float32),
+        make_dfb(SEND_B, 2 * kv, tt::DataFormat::Float32),
         make_dfb(REMOTE_A, kk, tt::DataFormat::Float32),
         make_dfb(REMOTE_B, kv, tt::DataFormat::Float32),
         make_dfb(SCRATCH, kv, tt::DataFormat::Float32),
@@ -111,10 +103,8 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
             {
                 m2::DFBBinding{INITIAL_A, "initial_a", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{INITIAL_B, "initial_b", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{SEND_A_PING, "send_a_ping", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{SEND_B_PING, "send_b_ping", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{SEND_A_PONG, "send_a_pong", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{SEND_B_PONG, "send_b_pong", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{SEND_A, "send_a", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{SEND_B, "send_b", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{REMOTE_A, "remote_a", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{REMOTE_B, "remote_b", m2::DFBEndpointType::PRODUCER},
             },
@@ -141,7 +131,7 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
 
     auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
     auto& unpack_modes = m2::unpack_modes(compute_hw);
-    for (const auto& name : {STAGE_A_PING, STAGE_B_PING, STAGE_A_PONG, STAGE_B_PONG, REMOTE_A, REMOTE_B, SCRATCH}) {
+    for (const auto& name : {STAGE_A, STAGE_B, REMOTE_A, REMOTE_B, SCRATCH}) {
         unpack_modes[name] = UnpackMode::UnpackToSrc;
     }
     if (summary_format == tt::DataFormat::Float32) {
@@ -159,18 +149,12 @@ ttnn::device_operation::ProgramArtifacts ReduceAffineTransformsProgramFactory::c
             {
                 m2::DFBBinding{INITIAL_A, "initial_a", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{INITIAL_B, "initial_b", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STAGE_A_PING, "stage_a_ping", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STAGE_A_PING, "stage_a_ping", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STAGE_B_PING, "stage_b_ping", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STAGE_B_PING, "stage_b_ping", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STAGE_A_PONG, "stage_a_pong", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STAGE_A_PONG, "stage_a_pong", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{STAGE_B_PONG, "stage_b_pong", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{STAGE_B_PONG, "stage_b_pong", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{SEND_A_PING, "send_a_ping", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{SEND_B_PING, "send_b_ping", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{SEND_A_PONG, "send_a_pong", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{SEND_B_PONG, "send_b_pong", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{STAGE_A, "stage_a", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{STAGE_A, "stage_a", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{STAGE_B, "stage_b", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{STAGE_B, "stage_b", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{SEND_A, "send_a", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{SEND_B, "send_b", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{REMOTE_A, "remote_a", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{REMOTE_B, "remote_b", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{SCRATCH, "scratch", m2::DFBEndpointType::PRODUCER},

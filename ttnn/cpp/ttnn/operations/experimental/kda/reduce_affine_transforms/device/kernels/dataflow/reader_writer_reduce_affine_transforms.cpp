@@ -23,10 +23,8 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordina
     const auto output_b_accessor = TensorAccessor(tensor::output_b);
     DataflowBuffer initial_a(dfb::initial_a);
     DataflowBuffer initial_b(dfb::initial_b);
-    DataflowBuffer send_a_ping(dfb::send_a_ping);
-    DataflowBuffer send_b_ping(dfb::send_b_ping);
-    DataflowBuffer send_a_pong(dfb::send_a_pong);
-    DataflowBuffer send_b_pong(dfb::send_b_pong);
+    DataflowBuffer send_a(dfb::send_a);
+    DataflowBuffer send_b(dfb::send_b);
     DataflowBuffer remote_a(dfb::remote_a);
     DataflowBuffer remote_b(dfb::remote_b);
     Noc noc;
@@ -65,19 +63,19 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordina
         }
         release.wait_min(completed_stages);
     };
-    auto send_pair = [&](uint32_t target, DataflowBuffer& current_a, DataflowBuffer& current_b) {
+    auto send_pair = [&](uint32_t target, DataflowBuffer& send_a, DataflowBuffer& send_b) {
         const uint32_t target_x = worker_x(target);
         const uint32_t target_y = worker_y(target);
         noc.async_write(
-            current_a,
+            send_a,
             UnicastEndpoint{},
-            kk * current_a.get_entry_size(),
+            kk * send_a.get_entry_size(),
             {},
             {.noc_x = target_x, .noc_y = target_y, .addr = remote_a.get_write_ptr()});
         noc.async_write(
-            current_b,
+            send_b,
             UnicastEndpoint{},
-            kv * current_b.get_entry_size(),
+            kv * send_b.get_entry_size(),
             {},
             {.noc_x = target_x, .noc_y = target_y, .addr = remote_b.get_write_ptr()});
         noc.async_write_barrier();
@@ -85,16 +83,11 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordina
     };
 
     uint32_t ready_target = 0;
-    bool ping = false;
     for (uint32_t distance = 1; distance < G; distance *= 2) {
-        DataflowBuffer& current_a = ping ? send_a_pong : send_a_ping;
-        DataflowBuffer& current_b = ping ? send_b_pong : send_b_ping;
-        DataflowBuffer& next_a = ping ? send_a_ping : send_a_pong;
-        DataflowBuffer& next_b = ping ? send_b_ping : send_b_pong;
-        current_a.wait_front(kk);
-        current_b.wait_front(kv);
+        send_a.wait_front(kk);
+        send_b.wait_front(kv);
         if (group + distance < G) {
-            send_pair(worker_index + distance, current_a, current_b);
+            send_pair(worker_index + distance, send_a, send_b);
         }
         if (group >= distance) {
             remote_a.reserve_back(kk);
@@ -103,37 +96,34 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordina
             ready.wait_min(ready_target);
             remote_a.push_back(kk);
             remote_b.push_back(kv);
-            next_a.wait_front(kk);
-            next_b.wait_front(kv);
-            current_a.pop_front(kk);
-            current_b.pop_front(kv);
-            ping = !ping;
+            send_a.wait_front(2 * kk);
+            send_b.wait_front(2 * kv);
+            send_a.pop_front(kk);
+            send_b.pop_front(kv);
         }
         // Do not release the next NoC stage until every receiver has consumed the remote buffers and produced its
         // next prefix. Otherwise the following stage can overwrite the remote buffers while compute is reading them.
         stage_barrier();
     }
 
-    DataflowBuffer& current_a = ping ? send_a_pong : send_a_ping;
-    DataflowBuffer& current_b = ping ? send_b_pong : send_b_ping;
-    current_a.wait_front(kk);
-    current_b.wait_front(kv);
+    send_a.wait_front(kk);
+    send_b.wait_front(kv);
     if (group + 1 == G) {
         const uint32_t head = worker_index / G;
         for (uint32_t tile = 0; tile < kk; tile++) {
             noc.async_write(
-                current_a,
+                send_a,
                 output_a_accessor,
-                current_a.get_entry_size(),
-                {.offset_bytes = tile * current_a.get_entry_size()},
+                send_a.get_entry_size(),
+                {.offset_bytes = tile * send_a.get_entry_size()},
                 {.page_id = head * kk + tile});
         }
         for (uint32_t tile = 0; tile < kv; tile++) {
             noc.async_write(
-                current_b,
+                send_b,
                 output_b_accessor,
-                current_b.get_entry_size(),
-                {.offset_bytes = tile * current_b.get_entry_size()},
+                send_b.get_entry_size(),
+                {.offset_bytes = tile * send_b.get_entry_size()},
                 {.page_id = head * kv + tile});
         }
         noc.async_write_barrier();
