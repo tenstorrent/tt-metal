@@ -62,20 +62,12 @@ def upper_power_of_2(n: int) -> int:
 _TOPK_ROUTE_MIN_K_EXCLUSIVE = 64  # large_k_route_min_k_exclusive
 _TOPK_ROUTE_SMALL_K_MIN_PADDED_WIDTH = 4096  # small_k_route_min_padded_width
 _TOPK_ROUTE_MAX_K = 2048  # large_k_route_max_k
-_TOPK_ROUTE_K_MULTIPLE = 32  # large_k_route_k_multiple (k rounds to the TILE-output
-#   multiple since the routed pipeline requests tile_output; was 16 pre-TILE-native)
-_TOPK_ROUTE_MAX_WIDTH = 1 << 20  # large_k_route_max_width
+_TOPK_ROUTE_K_MULTIPLE = 16  # large_k_route_k_multiple (as merged in #53464)
+_TOPK_ROUTE_MAX_WIDTH = 1 << 19  # large_k_route_max_width (as merged in #53464)
 _TOPK_ROUTE_UINT16_MAX = 65535  # std::numeric_limits<uint16_t>::max()
 _TOPK_ROUTE_MULTI_CORE_MIN_WIDTH = 8192  # ttnn::prim::constants::multi_core_min_width
-# MoE-gate arm (gate_route_* constants in topk.cpp). UNREACHABLE from every
-# production sampling call site — sampling widths are per-device vocab shards
-# (>= 32768 after pow2 padding), far above the 512-wide gate ceiling — kept
-# here only to honor KEEP IN SYNC. Drift on this arm stays fail-safe exactly
-# as described above.
-_TOPK_ROUTE_GATE_MAX_K = 16  # gate_route_max_k
-_TOPK_ROUTE_GATE_MIN_PADDED_W = 128  # gate_route_min_padded_width
-_TOPK_ROUTE_GATE_MAX_PADDED_W = 512  # gate_route_max_padded_width
-_TOPK_ROUTE_GATE_MAX_ROWS = 32  # gate_route_max_flattened_rows
+# NOTE: merged topk.cpp has no MoE-gate arm; if one lands later, mirror it here
+# in the same PR (KEEP IN SYNC).
 
 
 def topk_would_route_to_large_indices(x, k, mesh_device) -> bool:
@@ -95,21 +87,13 @@ def topk_would_route_to_large_indices(x, k, mesh_device) -> bool:
     if x.memory_config().is_sharded():  # topk.cpp:308
         return False
     padded_width = x.padded_shape[-1]
-    if k <= _TOPK_ROUTE_MIN_K_EXCLUSIVE:  # small-k arm (wide + MoE-gate)
+    if k <= _TOPK_ROUTE_MIN_K_EXCLUSIVE:  # small-k arm (wide structurally-ineligible)
         pow2 = padded_width > 0 and (padded_width & (padded_width - 1)) == 0
         structurally_ineligible = (
             padded_width >= _TOPK_ROUTE_UINT16_MAX or not pow2 or padded_width < _TOPK_ROUTE_MULTI_CORE_MIN_WIDTH
         )
         wide_arm = structurally_ineligible and padded_width >= _TOPK_ROUTE_SMALL_K_MIN_PADDED_WIDTH
-        rows = 1
-        for d in tuple(x.shape)[:-1]:
-            rows *= d
-        gate_arm = (
-            k <= _TOPK_ROUTE_GATE_MAX_K
-            and _TOPK_ROUTE_GATE_MIN_PADDED_W <= padded_width <= _TOPK_ROUTE_GATE_MAX_PADDED_W
-            and rows <= _TOPK_ROUTE_GATE_MAX_ROWS
-        )
-        if not (wide_arm or gate_arm):
+        if not wide_arm:
             return False
     width = x.shape[-1]
     k_rounded = ((k + _TOPK_ROUTE_K_MULTIPLE - 1) // _TOPK_ROUTE_K_MULTIPLE) * _TOPK_ROUTE_K_MULTIPLE
