@@ -163,6 +163,24 @@ topologies:
     required: false       # probe op (compute-CCL validation), not a gating topology
     extra_env: {}
 
+  # ── reduce_scatter_average (the MINIMAL-GUIDANCE probe) — same WH all-MMIO (1,8) line ──
+  # reduce_scatter with the sum scaled by 1/N before landing: device i keeps slice i of the
+  # element-wise MEAN. Its prompt carries only the spec plus pointers at the four committed
+  # reference examples (no framework how-to), so this entry grades whether the pipeline can
+  # DESIGN a compute-CCL from examples rather than transcribe a prescription. Same lineage
+  # requirement as reduce_scatter (the CCL compute-helper tier).
+  - name: wh_t3k_allmmio_reduce_scatter_average
+    arch: wormhole_b0
+    sim_so: "{sim_wh_so}"
+    cluster_desc: "{craqsim_data}/wh/wormhole_t3k_all_mmio.yaml"
+    mesh_graph_desc: "{repo}/tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto"
+    mesh_shape: [1, 8]
+    fabric_config: FABRIC_1D
+    applies_to_ops: [reduce_scatter_average]
+    grade_primary: true
+    required: false       # probe op (minimal-guidance generation), not a gating topology
+    extra_env: {}
+
   # ── HARDWARE: real silicon, no simulator ───────────────────────────────────────────
   # A 4-chip Blackhole QuietBox (p150a x4). Selected only with `--runtime hardware`, so
   # it is invisible to every existing sim invocation. mesh_shape MUST be a shape the box
@@ -177,7 +195,7 @@ topologies:
     arch: blackhole
     mesh_shape: [1, 4]
     fabric_config: FABRIC_1D
-    applies_to_ops: [point_to_point, all_gather, all_reduce, reduce_scatter]
+    applies_to_ops: [point_to_point, all_gather, all_reduce, reduce_scatter, reduce_scatter_average]
     grade_primary: true   # the hardware grade target; _grade_primary_topology filters by runtime,
                           # so this does not collide with the sim entries' grade_primary.
     required: true
