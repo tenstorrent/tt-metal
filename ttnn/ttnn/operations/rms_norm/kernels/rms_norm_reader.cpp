@@ -338,7 +338,7 @@ void kernel_main() {
     // consumer), `_issue` (RISC-serial transaction issue) and `_barrier` (the
     // real NoC wait): a barrier at ~0 with a hot issue loop and a hot barrier
     // with a cheap issue loop want opposite fixes.
-    {
+    auto build_scaler = [&]() {
         MaybeDeviceZoneScope("rd_scaler");
         if constexpr (!REGIME_A && W_PARTIAL > 0) {
             // The two reduce datapaths consume DIFFERENT forms of the partial, in
@@ -370,7 +370,7 @@ void kernel_main() {
             dataflow_kernel_lib::
                 prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
         }
-    }  // rd_scaler
+    };  // build_scaler
 
     // ---- gamma ingest -------------------------------------------------------
     // Places gamma tiles [w0, w0 + n) into cb_gamma_tiles (TILE gamma), or
@@ -528,12 +528,60 @@ void kernel_main() {
         }
     };
 
+    // =====================================================================
+    // THE PROLOGUE ORDER
+    // =====================================================================
+    // The compute thread cannot begin `sum_of_squares` until the INPUT lands, so
+    // anything issued before the input read sits at the HEAD of the critical
+    // path.  Gamma is not consumed until `cp_gamma_mul` (the LAST compute phase)
+    // and the scaler not until the reduce, yet both used to be read first: on the
+    // focus case that is ~950 ns of latency in front of a 9 us kernel.
+    //
+    // Two things are done about it, and only the second one paid:
+    //   * the INPUT read goes FIRST, then gamma, then the scaler;
+    //   * Regime A's resident gamma leaves the prologue ENTIRELY and rides in the
+    //     shadow of the W-split combine (or, with no split, of the first block's
+    //     compute), where the NCRISC is idle anyway - its span is 5,170 ns against
+    //     the BRISC's 8,113.
+    //
+    // MEASURED (BH p150b): reordering alone is nearly FLAT (+1.6-2.1%) even though
+    // it moves the full ~950 ns off the head - the prologue is DRAM-bandwidth
+    // CONTENDED, not latency-serialised, so 32 cores issuing gamma concurrently
+    // with the input burst just lengthens the burst.  Only taking gamma out of the
+    // input's window pays: focus 9,061 -> 8,209 (1.104x), decode_1024 1.153x,
+    // decode_5120 1.116x, h_nonalign 1.224x.  See perf_experiments/reader_prologue/.
+    //
+    // CARVE-OUT, and the only one: ROW_MAJOR gamma keeps the prologue read.  It
+    // stages through the depth-1 `cb_gamma_rm` and the compute side must tilize it,
+    // so deferring the push drags that tilize along with it (otherwise reader and
+    // compute deadlock - reader on cb_sumsq_acc, compute on cb_gamma_rm).  The
+    // tilize is FREE at the top of the kernel, where the compute thread is starved
+    // on input anyway, and naked critical path after the combine: MEASURED 8,731 ->
+    // 9,062 and 8,849 -> 9,152 (0.963x / 0.967x) on (1,1,32,7168) with RM gamma.
+    // Written as an exception around the case that CANNOT carry it, not as an
+    // allow-list of the shapes that were benchmarked.
+    constexpr bool DEFER_GAMMA = REGIME_A && HAS_GAMMA && !GAMMA_IS_ROW_MAJOR;
+
     // Regime A holds the whole per-core width of gamma resident for the whole
     // kernel: filled exactly once, never popped.  That is what makes the gamma
-    // read cost 1x per core rather than 1x per row-block.
-    if constexpr (REGIME_A) {
+    // read cost 1x per core rather than 1x per row-block.  Regime B has no gamma
+    // in its prologue at all (it is per-W-chunk, inside the scale pass).
+    //
+    // `skip_first_read` hands the first chunk to the row-block loops below, which
+    // the prologue has already put in the CB.  A core with no row blocks
+    // prefetches nothing - nothing would ever consume it - but must still fill
+    // gamma, or the CB contract with a compute thread that waits on it breaks.
+    const uint32_t rt0_first = start_row_block * BLOCK_HT;
+    const bool has_work = num_row_blocks_here > 0;
+    bool skip_first_read = false;
+    if (has_work) {
+        read_input_chunk(rt0_first, 0, REGIME_A ? Wt_core : WT_REDUCE_BLOCK);
+        skip_first_read = true;
+    }
+    if constexpr (REGIME_A && !DEFER_GAMMA) {
         fill_gamma(0, Wt_core);
     }
+    build_scaler();
 
     // =====================================================================
     // W-SPLIT: the cross-core combine over the DEPENDENT axis.
@@ -587,7 +635,11 @@ void kernel_main() {
 
         for (uint32_t b = 0; b < num_row_blocks_here; ++b) {
             const uint32_t rt0 = (start_row_block + b) * BLOCK_HT;
-            read_input_chunk(rt0, 0, Wt_core);
+            if (skip_first_read) {
+                skip_first_read = false;  // the prologue already read this chunk
+            } else {
+                read_input_chunk(rt0, 0, Wt_core);
+            }
 
             // ---- step 2: N->1 gather (raw NoC; header justification #3) -------
             // `cb_gather_partial_wait` is this core STARVED on its own compute
@@ -641,6 +693,20 @@ void kernel_main() {
                 }
                 cb_push_back(cb_sumsq, BLOCK_HT);
             }
+
+            // Gamma rides in the shadow of the combine: the NCRISC has nothing
+            // else to do from here until the next row-block's read, and gamma's
+            // consumer is the LAST compute phase.  Once per core - it is resident.
+            if constexpr (DEFER_GAMMA) {
+                if (b == 0) {
+                    fill_gamma(0, Wt_core);
+                }
+            }
+        }
+        if constexpr (DEFER_GAMMA) {
+            if (!has_work) {
+                fill_gamma(0, Wt_core);  // degenerate core: keep the CB contract
+            }
         }
         return;  // the W-split arm owns its whole row-block loop
     }
@@ -649,10 +715,26 @@ void kernel_main() {
         const uint32_t rt0 = (start_row_block + b) * BLOCK_HT;
 
         if constexpr (REGIME_A) {
-            read_input_chunk(rt0, 0, Wt_core);
+            if (skip_first_read) {
+                skip_first_read = false;
+            } else {
+                read_input_chunk(rt0, 0, Wt_core);
+            }
+            // No combine to hide gamma behind here, so it lands right after the
+            // first input push - still off the HEAD of the critical path, which
+            // is the whole point.
+            if constexpr (DEFER_GAMMA) {
+                if (b == 0) {
+                    fill_gamma(0, Wt_core);
+                }
+            }
         } else {
             // pass A - reduction
             for (uint32_t c = 0; c < NUM_REDUCE_CHUNKS; ++c) {
+                if (skip_first_read) {
+                    skip_first_read = false;
+                    continue;  // the prologue already read chunk 0
+                }
                 read_input_chunk(rt0, c * WT_REDUCE_BLOCK, WT_REDUCE_BLOCK);
             }
             // pass B - scale (re-read of x, plus this chunk's gamma slice).
@@ -662,6 +744,11 @@ void kernel_main() {
                 fill_gamma(c * WT_SCALE_BLOCK, WT_SCALE_BLOCK);
                 read_input_chunk(rt0, c * WT_SCALE_BLOCK, WT_SCALE_BLOCK);
             }
+        }
+    }
+    if constexpr (DEFER_GAMMA) {
+        if (!has_work) {
+            fill_gamma(0, Wt_core);  // degenerate core: keep the CB contract
         }
     }
 }
