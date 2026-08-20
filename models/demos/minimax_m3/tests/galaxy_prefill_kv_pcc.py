@@ -294,7 +294,7 @@ def main():
         runtime.compile(kv_cache)
 
         # --- Request-mode WRITE+READ slot correctness (PREFILL_TWO_USER_PCC=1, PREFILL_NUM_USERS>=2):
-        # prefill each user into its own slot (device-valued write/read slot when PREFILL_DEVICE_SLOT_SLICE=1),
+        # prefill each user into its own slot (the write/read slot is device-valued whenever num_users > 1),
         # then PCC every user's cache vs the golden. A mis-targeted slot corrupts one user's KV -> its PCC
         # craters. Same golden for all users, so each slot must match it independently.
         if os.getenv("PREFILL_TWO_USER_PCC") == "1":
@@ -342,7 +342,7 @@ def main():
             # Request-mode: one captured bucket pool replayed once per active user, re-targeting the
             # cache-read slot between users via kv_cache.set_read_user. The user count is NOT baked into
             # the trace (prefill is per-user-per-chunk), so a load-varying 1..N users is just the replay
-            # count. Requires PREFILL_DEVICE_SLOT_SLICE=1 (device-valued read slot).
+            # count. The device-valued read slot this relies on is active because num_users > 1.
             users = int(os.getenv("PREFILL_TRACE_POOL_USERS", "1"))
             passes = []
             for r in range(repeats):
@@ -379,64 +379,6 @@ def main():
             else:
                 check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
             runtime.release_trace_pool()
-            print("[prefill-pcc] DONE", flush=True)
-            return 0
-
-        # --- Device-only per-chunk rate via execute_trace (PREFILL_TRACE_REPLAY=1). Captures ONE chunk's
-        # forward and replays it, so per-op HOST dispatch is paid once at capture, not per iter — the replay
-        # wall is ~pure device time. This separates the device-collective cost (what a traced production run
-        # pays) from eager host-dispatch, which the eager loop below conflates. A trace is fixed to its
-        # captured KV offset (cached_len is host-side), so one capture serves one depth only:
-        #   default        -> capture at cached_len=0 (Cold-5k device rate)
-        #   TRACE_AT_LAST=1 -> eagerly pre-fill chunks 0..n-2 to build the KV, then capture the LAST chunk at
-        #                      cached_len=(n_chunks-1)*chunk (the true 5k@50k depth rate).
-        if os.getenv("PREFILL_TRACE_REPLAY") == "1":
-            padded = token_ids + [0] * (total - n_tokens)
-            at_last = os.getenv("PREFILL_TRACE_AT_LAST") == "1"
-            a_cap = (n_chunks - 1) * chunk if at_last else 0
-            if at_last:
-                for c in range(n_chunks - 1):  # eager pre-fill to build the accumulated KV up to a_cap
-                    a = c * chunk
-                    inp = runtime.make_chunk_input(padded[a : a + chunk])
-                    runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=min(a + chunk, n_tokens))
-                ttnn.synchronize_device(mesh)
-            tokens = runtime.make_chunk_input(padded[a_cap : a_cap + chunk])  # persistent; embed reads, never frees
-
-            def _fwd():
-                x = runtime._embed_tokens(tokens)
-                return runtime.model.prefill_forward(
-                    x,
-                    rot_mats_global=runtime.rope_indexed,
-                    kv_cache=kv_cache,
-                    cached_len=a_cap,
-                    user_id=0,
-                    get_last_token=-1,
-                    skip_lm_head=True,
-                    indexed_rope=True,
-                    on_layer_complete=None,
-                )
-
-            o = _fwd()  # warmup after compile (stabilizes allocations before capture)
-            ttnn.synchronize_device(mesh)
-            if o is not None:
-                o.deallocate(True)
-            tid = ttnn.begin_trace_capture(mesh, cq_id=0)
-            o = _fwd()
-            ttnn.end_trace_capture(mesh, tid, cq_id=0)
-            ttnn.synchronize_device(mesh)
-            tr = []
-            for i in range(tps_iters):
-                t0 = time.perf_counter()
-                ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
-                tr.append(time.perf_counter() - t0)
-            ttnn.synchronize_device(mesh)
-            m = statistics.median(tr)
-            print(
-                f"[prefill-pcc] TRACED CHUNK over {tps_iters} iters: {chunk} tok @ {a_cap} cache, {num_layers}L, "
-                f"SP={rows}×TP={cols} EP={rows * cols}, median {chunk / m:.1f} tok/s; "
-                f"wall median {m * 1000:.2f} ms [min {min(tr) * 1000:.2f}, max {max(tr) * 1000:.2f}]",
-                flush=True,
-            )
             print("[prefill-pcc] DONE", flush=True)
             return 0
 
