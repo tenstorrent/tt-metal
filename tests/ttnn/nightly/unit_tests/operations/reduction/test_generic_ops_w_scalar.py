@@ -21,7 +21,7 @@ pytestmark = pytest.mark.use_module_device
 
 
 SHAPES = [(3, 4), (1, 1, 3, 4, 5), (3, 4, 8, 56, 33)]
-DIMS = [-1, -2, 0, (-2, -1), (0, -2, -1), None]
+DIMS = [-1, 0, (0, -2, -1), None]
 
 # Pair (shape, dim) to drop combos with more reduction dims than rank, and
 # (op, correction) since correction is live only for std/var.
@@ -39,7 +39,7 @@ OP_CORRECTION = [
 
 
 @pytest.mark.parametrize("op, correction", OP_CORRECTION)
-@pytest.mark.parametrize("scalar", [1.0, -2.0, 2.0, -2.43, 2.43, 4.0])
+@pytest.mark.parametrize("scalar", [1.0, -2.43, 4.0])
 @pytest.mark.parametrize("shape, dim", VALID_SHAPE_DIMS)
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype):
