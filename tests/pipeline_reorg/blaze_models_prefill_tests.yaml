@@ -396,7 +396,7 @@
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_kimi_k3_moe_perf_galaxy -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_k3_moe_perf.py -vvv --tb=short
     '
   test_type: kimi_k3_moe_perf
   test_group: module
