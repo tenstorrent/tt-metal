@@ -12,6 +12,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
+from models.tt_transformers.tests.decode_test_helpers import decode_step_state
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.common.sampling.tt_sampling import TTSampling
 from models.common.utility_functions import (
@@ -339,9 +340,12 @@ def test_llama_model_inference(
                 ref_output = reference_model(pt_decode_input.to(ref_dtype), current_pos[0])
 
             # Increment position
-            current_pos = torch.full((batch,), generation_start_pos + i)
+            next_position, next_token_index, num_written = decode_step_state(
+                generation_start_pos, i, len(encoded_prompts[0]), model_args.max_seq_len
+            )
+            current_pos = torch.full((batch,), next_position)
 
-            current_pos_sram = torch.full((model_args.sub_core_grids.num_cores(), batch), generation_start_pos + i)
+            current_pos_sram = torch.full((model_args.sub_core_grids.num_cores(), batch), next_position)
             current_pos_tensor = ttnn.from_torch(
                 current_pos_sram,
                 device=mesh_device,
@@ -357,22 +361,26 @@ def test_llama_model_inference(
             )
 
             # Append the generated token to the list of outputs
-            if i in range(len(encoded_prompts[0])):
+            if next_token_index is not None:
                 # While in "prefill" mode, use the prompt tokens as the output
-                all_outputs.append(encoded_prompts[0][i])  # Update list of TT outputs
+                all_outputs.append(encoded_prompts[0][next_token_index])  # Update list of TT outputs
                 if run_ref_pt:
-                    all_outputs_ref.append(encoded_prompts[0][i])  # Update list of ref outputs
+                    all_outputs_ref.append(encoded_prompts[0][next_token_index])  # Update list of ref outputs
 
-                tt_decode_input = embd(encoded_prompts_tensor[:, i]).view(batch, seqlen, -1)
+                tt_decode_input = embd(encoded_prompts_tensor[:, next_token_index]).view(batch, seqlen, -1)
                 if run_ref_pt:
-                    pt_decode_input = embd(encoded_prompts_tensor[:, i]).view(batch, seqlen, -1)
+                    pt_decode_input = embd(encoded_prompts_tensor[:, next_token_index]).view(batch, seqlen, -1)
             else:
                 # tt_out_tok is a tuple of (tt_out_tok, tt_log_probs)
                 tt_out_tok_device0 = ttnn.get_device_tensors(tt_out_tok[0])[0]
                 tt_out_tok_cpu = tt_out_tok_device0.cpu(blocking=True, cq_id=0)
-                tt_out_tok = ttnn.to_torch(
-                    tt_out_tok_cpu,
-                ).view(32, 1)
+                tt_out_tok = (
+                    ttnn.to_torch(
+                        tt_out_tok_cpu,
+                    )
+                    .view(32, 1)
+                    .long()
+                )
 
                 all_outputs.append(tt_out_tok.squeeze(1).tolist()[0])  # Update generated token to list of TT outputs
                 tt_decode_input = embd(tt_out_tok)
@@ -453,11 +461,10 @@ def test_llama_model_inference(
                                 )
 
                         for kv_cache, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-                            cache_length_to_check = min(
-                                model_args.max_seq_len, generation_start_pos + generation_length + 1
-                            )
-                            cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
-                            cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
+                            # The reference DynamicCache appends only positions written so far,
+                            # while the TT cache is a fixed buffer indexed by absolute position.
+                            cache_pt = cache_pt[:, :, 0:num_written, :]
+                            cache_tt = cache_tt[:, :, generation_start_pos : generation_start_pos + num_written, :]
                             if (
                                 layers == 1 and i == iterations - 1
                             ):  # On last iteration in the quick test, set a tighter PCC
