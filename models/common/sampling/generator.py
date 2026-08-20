@@ -519,6 +519,12 @@ def format_sampling_params(sampling_params, max_batch_size):
             top_k[i] = 32
         if top_k[i] > 32:
             top_k[i] = 32
+        if top_k[i] == 1:
+            # top_k=1 is semantically greedy even if the request also supplies a
+            # non-zero temperature. Keep the device path in its argmax
+            # representation so mixed temperature/top1 requests are deterministic.
+            temperature[i] = 1.0
+            top_p[i] = 0.0
 
         if repetition_penalty[i] == 0:
             repetition_penalty[i] = defaults["repetition_penalty"]

@@ -17,7 +17,14 @@ import pytest
 import torch
 from loguru import logger
 
-from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
+try:
+    from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
+except ModuleNotFoundError:
+
+    def get_supported_trace_region_size(request, mesh_device):
+        return None
+
+
 from tests.scripts.common import get_updated_device_params, run_process_and_get_result
 
 # Constants for device configurations

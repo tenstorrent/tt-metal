@@ -1,0 +1,50 @@
+{
+  "url": "http://localhost:8011/v1/completions",
+  "model": "Qwen/Qwen3.6-35B-A3B",
+  "prompt": "Summarize these words in one sentence: orchid, matrix, clock, harbor.",
+  "prompt_token_length": 18,
+  "alignment_moduli_checked": [
+    16,
+    32,
+    64,
+    128,
+    1072,
+    2048
+  ],
+  "is_non_aligned": true,
+  "payload": {
+    "model": "Qwen/Qwen3.6-35B-A3B",
+    "prompt": "Summarize these words in one sentence: orchid, matrix, clock, harbor.",
+    "max_tokens": 6,
+    "temperature": 0
+  },
+  "status_code": 200,
+  "elapsed_s": 8.420812845230103,
+  "response": {
+    "id": "cmpl-aed4893e6df81367",
+    "object": "text_completion",
+    "created": 1787211184,
+    "model": "Qwen/Qwen3.6-35B-A3B",
+    "choices": [
+      {
+        "index": 0,
+        "text": "\n\n<think>![]()\n\n",
+        "logprobs": null,
+        "finish_reason": "length",
+        "stop_reason": null,
+        "token_ids": null,
+        "prompt_logprobs": null,
+        "prompt_token_ids": null
+      }
+    ],
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "prompt_tokens": 18,
+      "total_tokens": 24,
+      "completion_tokens": 6,
+      "prompt_tokens_details": null
+    },
+    "kv_transfer_params": null
+  }
+}

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import gc
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -88,6 +88,13 @@ class QwenReadinessGenerator(Generator):
         self._reset_sampling_state()
 
     def reset(self) -> None:
+        self._release_decode_trace()
+        self._trace = None
+        self.cache = None
+        self.last_trace_counters = {}
+        self._reset_sampling_state()
+
+    def _release_decode_trace(self) -> None:
         released_trace = False
         if self._trace is not None:
             try:
@@ -100,9 +107,6 @@ class QwenReadinessGenerator(Generator):
         if released_trace:
             ttnn.synchronize_device(self.mesh_device)
         self._trace = None
-        self.cache = None
-        self.last_trace_counters = {}
-        self._reset_sampling_state()
 
     def teardown(self) -> None:
         self.reset()
@@ -489,6 +493,77 @@ class QwenReadinessGenerator(Generator):
         ttnn.synchronize_device(self.mesh_device)
         return self._read_active_token(token_buffer)
 
+    def vllm_prefill_sample_on_device(
+        self,
+        tokens: torch.Tensor,
+        *,
+        cache: QwenFullModelCache,
+        prompt_lens: list[int],
+        sampling_params,
+        empty_slots: list[int] | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """Prefill through the canonical on-device sampler and return token IDs."""
+
+        if self.model.sampling is None:
+            raise RuntimeError("vLLM prefill sampling requires on-device sampling")
+        batch = int(tokens.shape[0])
+        if empty_slots is None:
+            empty_slots = list(range(batch))
+        empty_slots = [int(slot) for slot in empty_slots]
+        if len(empty_slots) != batch:
+            raise ValueError(f"empty_slots length {len(empty_slots)} must match prefill batch {batch}")
+
+        max_batch = int(self.model.sampling.tt_sampling.max_batch_size)
+        if any(slot < 0 or slot >= max_batch for slot in empty_slots):
+            raise ValueError(f"empty_slots {empty_slots} exceed sampling batch {max_batch}")
+        if any(slot < 0 or slot >= cache.max_batch_size for slot in empty_slots):
+            raise ValueError(f"empty_slots {empty_slots} exceed cache batch {cache.max_batch_size}")
+
+        self.model.reset_linear_attention_state(cache, empty_slots)
+
+        formatted_params = format_sampling_params(sampling_params, max_batch)
+        slot_params = self._scatter_sampling_params_to_slots(formatted_params, empty_slots, max_batch=max_batch)
+        self.model.sampling.reset_sampling_params(slot_params, empty_slots=empty_slots)
+        self.model.sampling.seed_manager.reset_seed_from_slots(slot_params.seed, empty_slots)
+        self.model.sampling.seed_manager.get_new_values(empty_slots)
+        self.model.sampling.reset_prompt_tokens(
+            self._sampling_prompt_tokens(tokens, prompt_lens=prompt_lens, slots=empty_slots, max_batch=max_batch)
+        )
+        self.model.sampling.reset_output_state()
+
+        logits_by_slot: list[ttnn.Tensor | None] = [None] * max_batch
+        for request_idx, (prompt_len, slot) in enumerate(zip(prompt_lens, empty_slots, strict=True)):
+            prompt_len = int(prompt_len)
+            if prompt_len <= 0:
+                continue
+            if prompt_len > tokens.shape[1]:
+                raise ValueError(f"prompt_lens[{request_idx}]={prompt_len} exceeds token width {tokens.shape[1]}")
+            logits_by_slot[slot] = self.model.prefill_user(
+                tokens[request_idx : request_idx + 1, :prompt_len],
+                cache=cache,
+                user_id=slot,
+                page_table_user_id=slot,
+                return_all_logits=False,
+                return_tt_logits=True,
+            )
+        first_logits = next((logits for logits in logits_by_slot if logits is not None), None)
+        if first_logits is None:
+            return torch.zeros((batch,), dtype=torch.int32)
+        logits_filled = [logits if logits is not None else first_logits for logits in logits_by_slot]
+        logits = ttnn.concat(logits_filled, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        token_buffer = self._sample_token_buffer(0, width=max_batch)
+        sampled = self.model.sampling.sample(logits, enable_trace=False, tt_out_tok=token_buffer)
+        tt_log_probs = None
+        if isinstance(sampled, tuple):
+            _, tt_log_probs = sampled
+        ttnn.synchronize_device(self.mesh_device)
+        sampled_tokens = self._read_token_buffer(token_buffer)
+        output_tokens = sampled_tokens[empty_slots].to(torch.int32)
+        if tt_log_probs is None:
+            return output_tokens
+        host_log_probs = self._read_log_probs(tt_log_probs)
+        return output_tokens, host_log_probs
+
     def _warmup_traced_decode(self, *, prompt_len: int, max_seq_len: int) -> None:
         compile_cache = self.allocate_kv_cache(max_batch_size=1, max_seq_len=max_seq_len)
         token_buffer = self._sample_token_buffer(0)
@@ -517,7 +592,8 @@ class QwenReadinessGenerator(Generator):
         sampled = self.model.sampling.sample(logits, enable_trace=False, tt_out_tok=token_output)
         if isinstance(sampled, tuple):
             sampled = sampled[0]
-        ttnn.slice(sampled, (0, 0, 0, 0), (1, 1, 1, 1), output_tensor=token_input)
+        width = int(token_input.shape[-1])
+        ttnn.slice(sampled, (0, 0, 0, 0), (1, 1, 1, width), output_tensor=token_input)
         ttnn.plus_one(current_pos, skip_negative_entries=True)
 
     def _pad_logits_batch_for_sampling(self, logits: ttnn.Tensor) -> ttnn.Tensor:
@@ -532,15 +608,23 @@ class QwenReadinessGenerator(Generator):
             value=0.0,
         )
 
-    def _active_token_buffer(self, token: int, *, on_host: bool = False) -> ttnn.Tensor:
-        return self._token_buffer(token, width=1, on_host=on_host)
+    def _active_token_buffer(self, token: int | list[int] | torch.Tensor, *, on_host: bool = False) -> ttnn.Tensor:
+        width = 1 if isinstance(token, int) else max(1, int(torch.as_tensor(token).numel()))
+        return self._token_buffer(token, width=width, on_host=on_host)
 
-    def _sample_token_buffer(self, token: int, *, on_host: bool = False) -> ttnn.Tensor:
-        return self._token_buffer(token, width=32, on_host=on_host)
+    def _sample_token_buffer(
+        self,
+        token: int | list[int] | torch.Tensor,
+        *,
+        width: int = 32,
+        on_host: bool = False,
+    ) -> ttnn.Tensor:
+        return self._token_buffer(token, width=width, on_host=on_host)
 
-    def _token_buffer(self, token: int, *, width: int, on_host: bool = False) -> ttnn.Tensor:
+    def _token_buffer(self, token: int | list[int] | torch.Tensor, *, width: int, on_host: bool = False) -> ttnn.Tensor:
         data = torch.zeros((1, 1, 1, width), dtype=torch.uint32)
-        data[0, 0, 0, 0] = int(token)
+        values = torch.as_tensor([token] if isinstance(token, int) else token, dtype=torch.uint32).reshape(-1)
+        data[0, 0, 0, : min(width, values.numel())] = values[:width]
         return ttnn.from_torch(
             data,
             device=None if on_host else self.mesh_device,
@@ -562,6 +646,16 @@ class QwenReadinessGenerator(Generator):
         local = ttnn.get_device_tensors(token_buffer)[0]
         return int(ttnn.to_torch(local.cpu()).reshape(-1)[0].item())
 
+    def _read_token_buffer(self, token_buffer: ttnn.Tensor) -> torch.Tensor:
+        local = ttnn.get_device_tensors(token_buffer)[0]
+        return ttnn.to_torch(local.cpu()).reshape(-1).to(torch.int32)
+
+    def _read_log_probs(self, tt_log_probs) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        if isinstance(tt_log_probs, tuple):
+            return tuple(self._read_log_probs(part) for part in tt_log_probs)  # type: ignore[return-value]
+        local = ttnn.get_device_tensors(tt_log_probs)[0]
+        return ttnn.to_torch(local.cpu()).reshape(-1).float()
+
     def _write_active_token(self, token_buffer: ttnn.Tensor, token: int) -> None:
         host_token = self._token_buffer(token, width=int(token_buffer.shape[-1]), on_host=True)
         ttnn.copy_host_to_device_tensor(host_token, token_buffer)
@@ -576,6 +670,53 @@ class QwenReadinessGenerator(Generator):
         )
         self.model.sampling.reset_sampling_params(params, empty_slots=[])
         self.model.sampling.reset_output_state()
+
+    def _scatter_sampling_params_to_slots(self, sampling_params, slots: list[int], *, max_batch: int):
+        inactive_defaults = {
+            "temperature": 1.0,
+            "top_k": 1,
+            "top_p": 0.0,
+            "presence_penalty": 0.0,
+            "frequency_penalty": 0.0,
+            "repetition_penalty": 1.0,
+            "seed": None,
+            "enable_log_probs": False,
+            "num_logprobs": 0,
+        }
+
+        def scatter(value):
+            if not isinstance(value, list):
+                return value
+            values = list(value)
+            user_values = values[: len(slots)]
+            if not user_values:
+                return values
+            filler = inactive_defaults.get(field.name, user_values[-1])
+            scattered = [filler for _ in range(max_batch)]
+            for request_value, slot in zip(user_values, slots, strict=True):
+                scattered[int(slot)] = request_value
+            return scattered
+
+        updates = {}
+        for field in fields(sampling_params):
+            updates[field.name] = scatter(getattr(sampling_params, field.name))
+        return replace(sampling_params, **updates)
+
+    def _sampling_prompt_tokens(
+        self,
+        tokens: torch.Tensor,
+        *,
+        prompt_lens: list[int],
+        slots: list[int],
+        max_batch: int,
+    ) -> torch.Tensor:
+        max_prompt_len = max(max(int(length) for length in prompt_lens), 1)
+        prompt_tokens = torch.full((max_batch, max_prompt_len), -1, dtype=torch.long, device=tokens.device)
+        for request_idx, (prompt_len, slot) in enumerate(zip(prompt_lens, slots, strict=True)):
+            prompt_len = min(int(prompt_len), tokens.shape[1], max_prompt_len)
+            if prompt_len > 0:
+                prompt_tokens[int(slot), :prompt_len] = tokens[request_idx, :prompt_len]
+        return prompt_tokens
 
 
 def _no_readback_counters(decode_tokens: int, *, validate_final_token: bool) -> dict[str, int | bool]:

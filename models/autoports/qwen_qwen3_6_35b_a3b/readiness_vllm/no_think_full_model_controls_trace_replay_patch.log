@@ -1,0 +1,150 @@
+2026-08-20 11:55:56.512 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-20 11:55:56.904 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-20 11:55:56.904 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-20 11:55:56.904 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-20 11:55:56.904 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-20 11:55:56.905 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-08-20 11:55:56.905 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-20 11:55:56.909 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-20 11:55:57.129 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-20 11:55:57.129 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-20 11:55:57.129 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:145)
+2026-08-20 11:55:57.129 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-20 11:55:57.131 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-20 11:55:57.366 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-20 11:55:57.488 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-20 11:55:57.488 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-20 11:55:57.488 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-20 11:55:57.488 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-20 11:55:57.488 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-20 11:55:57.488 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-20 11:55:57.488 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-20 11:55:57.488 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-20 11:55:57.488 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-20 11:55:57.488 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-20 11:55:57.488 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-20 11:55:57.488 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-20 11:55:57.489 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-20 11:55:57.489 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-20 11:56:17.646 | critical |           Metal | Device 0: Virtual core 29-25, Port status: 0x1, Retrain count: 0x0, Rx link up: 0x1, Train status: 0x2, PCS status: 0x1, SerDes reset status: 0x1, Postcode: 0xc0dea000, ERISC0 reset PC: 0x357c, ERISC1 reset PC: 0x9330, RISC soft reset: 0x47000, Heartbeat start: 0xdcbadb40, Heartbeat end: 0xdcbadb40, Heartbeat changed: false (llrt.cpp:342)
+2026-08-20 11:56:17.646 | critical |          Always | TT_THROW: Device 0: Timed out while waiting for active ethernet core 29-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0 (assert.hpp:104)
+Traceback (most recent call last):
+  File "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/vllm_integration/scripts/build_no_think_controls.py", line 259, in <module>
+    main()
+  File "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/vllm_integration/scripts/build_no_think_controls.py", line 238, in main
+    tt_controls = _run_tt_greedy_controls(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/doc/vllm_integration/scripts/build_no_think_controls.py", line 106, in _run_tt_greedy_controls
+    mesh_device = open_readiness_mesh_device(mesh_device_label, fabric_config)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/localdev/vkovacevic/tt-metal/models/common/readiness_check/mesh_device.py", line 66, in open_readiness_mesh_device
+    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*shape), trace_region_size=trace_region_size)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/localdev/vkovacevic/tt-metal/ttnn/ttnn/distributed/distributed.py", line 671, in open_mesh_device
+    return ttnn._ttnn.multi_device.open_mesh_device(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/llrt/llrt.cpp:566: tt::exception
+info:
+Device 0: Timed out while waiting for active ethernet core 29-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xb2f808) [0x7609f212f808]
+ --- tt::llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(int, tt::xy_pair const&, int)
+ --- tt::tt_metal::RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(int)
+ --- tt::tt_metal::RiscFirmwareInitializer::reset_cores(int)
+ --- tt::tt_metal::RiscFirmwareInitializer::run_launch_phase(std::set<int, std::less<int>, std::allocator<int> > const&)
+ --- tt::tt_metal::MetalContext::initialize(tt::tt_metal::DispatchCoreConfig const&, unsigned char, std::vector<unsigned int, std::allocator<unsigned int> > const&, unsigned long, bool)
+ --- tt::tt_metal::MetalContext::initialize_device_manager(std::vector<int, std::allocator<int> > const&, unsigned char, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long, bool, bool)
+ --- tt::tt_metal::experimental::CreateDevices(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, std::vector<int, std::allocator<int> > const&, unsigned char, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::vector<unsigned int, std::allocator<unsigned int> > const&, unsigned long, bool, bool)
+ --- tt::tt_metal::distributed::MeshDeviceImpl::ScopedDevices::ScopedDevices(std::vector<tt::tt_metal::distributed::MaybeRemote<int>, std::allocator<tt::tt_metal::distributed::MaybeRemote<int> > > const&, std::vector<tt::tt_metal::distributed::MaybeRemote<int>, std::allocator<tt::tt_metal::distributed::MaybeRemote<int> > > const&, unsigned long, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+ --- tt::tt_metal::distributed::MeshDeviceImpl::create(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+ --- tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+ --- ttnn::distributed::open_mesh_device(unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::optional<tt::tt_metal::distributed::MeshShape> const&, std::optional<tt::tt_metal::distributed::MeshCoordinate> const&, std::vector<int, std::allocator<int> > const&, unsigned long)
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x801ff6) [0x7609f5001ff6]
+ --- /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3155d5) [0x7609f4b155d5]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x3887) [0x1616a07]
+ --- python_env/bin/python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python_env/bin/python() [0x16a4982]
+ --- python_env/bin/python() [0x17aebff]
+ --- python_env/bin/python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python_env/bin/python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python_env/bin/python() [0x17af1c4]
+ --- python_env/bin/python() [0x17af0d8]
+ --- python_env/bin/python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python_env/bin/python() [0x17406fa]
+ --- python_env/bin/python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x760a8562a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x760a8562a28b]
+ --- python_env/bin/python(_start+0x29) [0x1795ced]
+
+nanobind: leaked 2 instances!
+ - leaked instance 0x7609db03ff18 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x7609dac13b28 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 341 functions!
+ - leaked function ""
+ - leaked function "host_buffer"
+ - leaked function ""
+ - leaked function "get_device_ids"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "SetDefaultDevice"
+ - leaked function "unpad_from_tile"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-20 11:56:18.488 | info     |    BuildKernels | JIT cache stats: 10/10 hits (100.0%) [10 cached, 3 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-20 11:56:18.488 | info     |    BuildKernels | JIT telemetry: 2 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-20 11:56:38.490 | critical |           Metal | Device 0: Virtual core 29-25, Port status: 0x1, Retrain count: 0x0, Rx link up: 0x1, Train status: 0x2, PCS status: 0x1, SerDes reset status: 0x1, Postcode: 0xc0dea000, ERISC0 reset PC: 0x357c, ERISC1 reset PC: 0x9330, RISC soft reset: 0x47000, Heartbeat start: 0xdcbadb40, Heartbeat end: 0xdcbadb40, Heartbeat changed: false (llrt.cpp:342)
+2026-08-20 11:56:38.490 | critical |          Always | TT_THROW: Device 0: Timed out while waiting for active ethernet core 29-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0 (assert.hpp:104)
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  TT_THROW @ /localdev/vkovacevic/tt-metal/tt_metal/llrt/llrt.cpp:566: tt::exception
+info:
+Device 0: Timed out while waiting for active ethernet core 29-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0
+backtrace:
+ --- /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xb2f808) [0x7609f212f808]
+ --- tt::llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(int, tt::xy_pair const&, int)
+ --- tt::tt_metal::RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(int)
+ --- tt::tt_metal::RiscFirmwareInitializer::teardown(std::unordered_set<tt::tt_metal::InitializerKey, std::hash<tt::tt_metal::InitializerKey>, std::equal_to<tt::tt_metal::InitializerKey>, std::allocator<tt::tt_metal::InitializerKey> >&)
+ --- tt::tt_metal::MetalContext::teardown()
+ --- tt::tt_metal::MetalContext::~MetalContext()
+ --- tt::tt_metal::MetalContext::destroy_instance(bool, ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+ --- tt::tt_metal::MetalContext::destroy_all_instances(bool)
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x47a76) [0x760a85647a76]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x47bbe) [0x760a85647bbe]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1d1) [0x760a8562a1d1]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x760a8562a28b]
+ --- python_env/bin/python(_start+0x29) [0x1795ced]
+
+[qb2-120-p02t01:793852] *** Process received signal ***
+[qb2-120-p02t01:793852] Signal: Aborted (6)
+[qb2-120-p02t01:793852] Signal code:  (-6)
+[qb2-120-p02t01:793852] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x760a85645330]
+[qb2-120-p02t01:793852] [ 1] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x760a8569ec0c]
+[qb2-120-p02t01:793852] [ 2] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x760a8564527e]
+[qb2-120-p02t01:793852] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x760a856288ff]
+[qb2-120-p02t01:793852] [ 4] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xac2b5)[0x760a6d8ac2b5]
+[qb2-120-p02t01:793852] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xc31ea)[0x760a6d8c31ea]
+[qb2-120-p02t01:793852] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(_ZSt10unexpectedv+0x0)[0x760a6d8abcac]
+[qb2-120-p02t01:793852] [ 7] /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0x698b1e)[0x7609f1c98b1e]
+[qb2-120-p02t01:793852] [ 8] /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(+0xa7a071)[0x7609f207a071]
+[qb2-120-p02t01:793852] [ 9] /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(_ZN2tt8tt_metal12MetalContext16destroy_instanceEbN4ttsl10StrongTypeIiNS0_12ContextIdTagEEE+0x90)[0x7609f2079670]
+[qb2-120-p02t01:793852] [10] /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so(_ZN2tt8tt_metal12MetalContext21destroy_all_instancesEb+0xf)[0x7609f207974f]
+[qb2-120-p02t01:793852] [11] /lib/x86_64-linux-gnu/libc.so.6(+0x47a76)[0x760a85647a76]
+[qb2-120-p02t01:793852] [12] /lib/x86_64-linux-gnu/libc.so.6(+0x47bbe)[0x760a85647bbe]
+[qb2-120-p02t01:793852] [13] /lib/x86_64-linux-gnu/libc.so.6(+0x2a1d1)[0x760a8562a1d1]
+[qb2-120-p02t01:793852] [14] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x760a8562a28b]
+[qb2-120-p02t01:793852] [15] python_env/bin/python(_start+0x29)[0x1795ced]
+[qb2-120-p02t01:793852] *** End of error message ***

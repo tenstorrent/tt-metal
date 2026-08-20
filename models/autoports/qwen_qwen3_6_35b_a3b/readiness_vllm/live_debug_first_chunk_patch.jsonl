@@ -1,0 +1,14 @@
+{"cache_block_size": 1072, "decode_warmed": false, "empty_slots": [0], "input_shape": [1, 30], "input_tokens_first": [248045, 846, 198, 12188, 411, 3255, 303, 1330, 22157, 25, 9358, 5028, 264, 854, 11, 303, 264, 2944, 13362, 24284, 11, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271], "page_table_first_values": [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "phase": "adapter_prefill_input", "prompt_lens": [30], "sampling_seed_first": [null], "sampling_temperature_first": [0.0], "sampling_top_k_first": [1], "sampling_top_p_first": [0.0]}
+{"cache_block_size": 1072, "empty_slots": [0], "page_table_shape": [1, 245], "phase": "adapter_prefill_return", "prompt_lens": [30], "tokens": [64]}
+{"batch_rows": [0], "is_decode": false, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [64], "tt_out_shape": [1]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-adbb11ea7d2433d1-b30e6eaf"], "start_idxs": [30], "tokens": [64]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-adbb11ea7d2433d1-b30e6eaf"], "tokens": [64]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [3777], "tt_out_shape": [32]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-adbb11ea7d2433d1-b30e6eaf"], "start_idxs": [31], "tokens": [3777]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-adbb11ea7d2433d1-b30e6eaf"], "tokens": [3777]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [0], "tt_out_shape": [32]}
+{"end_idxs": [33], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-adbb11ea7d2433d1-b30e6eaf"], "start_idxs": [32], "tokens": [0]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-adbb11ea7d2433d1-b30e6eaf"], "tokens": [0]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [248046], "tt_out_shape": [32]}
+{"end_idxs": [34], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-adbb11ea7d2433d1-b30e6eaf"], "start_idxs": [33], "tokens": [248046]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-adbb11ea7d2433d1-b30e6eaf"], "tokens": [248046]}

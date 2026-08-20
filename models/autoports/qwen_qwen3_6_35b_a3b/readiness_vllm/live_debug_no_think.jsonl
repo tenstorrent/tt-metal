@@ -1,0 +1,13 @@
+{"cache_block_size": 1072, "empty_slots": [0], "page_table_shape": [1, 245], "phase": "adapter_prefill_return", "prompt_lens": [30], "tokens": [8160]}
+{"batch_rows": [0], "is_decode": false, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [8160], "tt_out_shape": [1]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["cmpl-8c798217574811e4-0-ba0c8ae3"], "start_idxs": [30], "tokens": [8160]}
+{"phase": "runner_apply_and_build", "req_ids": ["cmpl-8c798217574811e4-0-ba0c8ae3"], "tokens": [8160]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [513], "tt_out_shape": [32]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["cmpl-8c798217574811e4-0-ba0c8ae3"], "start_idxs": [31], "tokens": [513]}
+{"phase": "runner_apply_and_build", "req_ids": ["cmpl-8c798217574811e4-0-ba0c8ae3"], "tokens": [513]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [0], "tt_out_shape": [32]}
+{"end_idxs": [33], "phase": "runner_apply_tokens_live", "req_ids": ["cmpl-8c798217574811e4-0-ba0c8ae3"], "start_idxs": [32], "tokens": [0]}
+{"phase": "runner_apply_and_build", "req_ids": ["cmpl-8c798217574811e4-0-ba0c8ae3"], "tokens": [0]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [248046], "tt_out_shape": [32]}
+{"end_idxs": [34], "phase": "runner_apply_tokens_live", "req_ids": ["cmpl-8c798217574811e4-0-ba0c8ae3"], "start_idxs": [33], "tokens": [248046]}
+{"phase": "runner_apply_and_build", "req_ids": ["cmpl-8c798217574811e4-0-ba0c8ae3"], "tokens": [248046]}

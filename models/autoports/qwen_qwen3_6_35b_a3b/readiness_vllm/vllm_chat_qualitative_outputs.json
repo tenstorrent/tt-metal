@@ -1,0 +1,726 @@
+{
+  "url": "http://localhost:8011/v1/chat/completions",
+  "model": "Qwen/Qwen3.6-35B-A3B",
+  "records": [
+    {
+      "prompt_index": 1,
+      "prompt": "Write a haiku about machine learning.",
+      "profile": "greedy",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer directly and concisely. Do not include hidden reasoning, markdown image links, or analysis notes."
+          },
+          {
+            "role": "user",
+            "content": "Write a haiku about machine learning."
+          }
+        ],
+        "max_tokens": 48,
+        "temperature": 0
+      },
+      "status_code": 200,
+      "elapsed_s": 53.99674701690674,
+      "text": "Thinking Process!\n\n1.  **Analyze the Request:**\n    *   Topic: Machine Learning.\n    *   Format: Haiku (5-7-5 syllables).\n    *   Constraints: Direct, concise",
+      "response": {
+        "id": "chatcmpl-b103859245a28a73",
+        "object": "chat.completion",
+        "created": 1787213697,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Thinking Process!\n\n1.  **Analyze the Request:**\n    *   Topic: Machine Learning.\n    *   Format: Haiku (5-7-5 syllables).\n    *   Constraints: Direct, concise",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 44,
+          "total_tokens": 92,
+          "completion_tokens": 48,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 1,
+      "prompt": "Write a haiku about machine learning.",
+      "profile": "sampled",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer directly and concisely. Do not include hidden reasoning, markdown image links, or analysis notes."
+          },
+          {
+            "role": "user",
+            "content": "Write a haiku about machine learning."
+          }
+        ],
+        "max_tokens": 48,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "seed": 1235
+      },
+      "status_code": 200,
+      "elapsed_s": 66.81236124038696,
+      "text": "Thinking Process:\n\n1.  **Deconstruct the request:**\n    *   Topic: Machine Learning.\n    *   Form: Haiku (5-7-5 syllables).\n    *   Constraints: Direct, concise",
+      "response": {
+        "id": "chatcmpl-8e8d25c05687d17f",
+        "object": "chat.completion",
+        "created": 1787213751,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Thinking Process:\n\n1.  **Deconstruct the request:**\n    *   Topic: Machine Learning.\n    *   Form: Haiku (5-7-5 syllables).\n    *   Constraints: Direct, concise",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 44,
+          "total_tokens": 92,
+          "completion_tokens": 48,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 2,
+      "prompt": "Explain the difference between supervised and unsupervised learning in two sentences.",
+      "profile": "greedy",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer directly and concisely. Do not include hidden reasoning, markdown image links, or analysis notes."
+          },
+          {
+            "role": "user",
+            "content": "Explain the difference between supervised and unsupervised learning in two sentences."
+          }
+        ],
+        "max_tokens": 48,
+        "temperature": 0
+      },
+      "status_code": 200,
+      "elapsed_s": 46.54917049407959,
+      "text": "Here's!\n</think>\n\nSupervised learning uses labeled data to train models to predict specific outcomes, while unsupervised learning analyzes unlabeled data to discover hidden patterns or structures without predefined targets.",
+      "response": {
+        "id": "chatcmpl-9766df0a9d24cae7",
+        "object": "chat.completion",
+        "created": 1787213818,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Here's!\n</think>\n\nSupervised learning uses labeled data to train models to predict specific outcomes, while unsupervised learning analyzes unlabeled data to discover hidden patterns or structures without predefined targets.",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 51,
+          "total_tokens": 91,
+          "completion_tokens": 40,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 2,
+      "prompt": "Explain the difference between supervised and unsupervised learning in two sentences.",
+      "profile": "sampled",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer directly and concisely. Do not include hidden reasoning, markdown image links, or analysis notes."
+          },
+          {
+            "role": "user",
+            "content": "Explain the difference between supervised and unsupervised learning in two sentences."
+          }
+        ],
+        "max_tokens": 48,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "seed": 1236
+      },
+      "status_code": 200,
+      "elapsed_s": 66.91837215423584,
+      "text": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Topic: Difference between supervised and unsupervised learning.\n    *   Constraint: Two sentences exactly.\n    *   Constraint: Direct and concise.",
+      "response": {
+        "id": "chatcmpl-af1eae0f6a3da599",
+        "object": "chat.completion",
+        "created": 1787213864,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Topic: Difference between supervised and unsupervised learning.\n    *   Constraint: Two sentences exactly.\n    *   Constraint: Direct and concise.",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 51,
+          "total_tokens": 99,
+          "completion_tokens": 48,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 3,
+      "prompt": "Complete this story in two sentences: Once upon a time, in a faraway kingdom,",
+      "profile": "greedy",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer directly and concisely. Do not include hidden reasoning, markdown image links, or analysis notes."
+          },
+          {
+            "role": "user",
+            "content": "Complete this story in two sentences: Once upon a time, in a faraway kingdom,"
+          }
+        ],
+        "max_tokens": 48,
+        "temperature": 0
+      },
+      "status_code": 200,
+      "elapsed_s": 54.10120868682861,
+      "text": "Thinking Process!\n\n1.  **Analyze the Request:**\n    *   Input: \"Complete this story in two sentences: Once upon a time, in a faraway kingdom,\"\n    *   Constraints:\n        *  ",
+      "response": {
+        "id": "chatcmpl-bcec9e1908a359eb",
+        "object": "chat.completion",
+        "created": 1787213931,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Thinking Process!\n\n1.  **Analyze the Request:**\n    *   Input: \"Complete this story in two sentences: Once upon a time, in a faraway kingdom,\"\n    *   Constraints:\n        *  ",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 54,
+          "total_tokens": 102,
+          "completion_tokens": 48,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 3,
+      "prompt": "Complete this story in two sentences: Once upon a time, in a faraway kingdom,",
+      "profile": "sampled",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer directly and concisely. Do not include hidden reasoning, markdown image links, or analysis notes."
+          },
+          {
+            "role": "user",
+            "content": "Complete this story in two sentences: Once upon a time, in a faraway kingdom,"
+          }
+        ],
+        "max_tokens": 48,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "seed": 1237
+      },
+      "status_code": 200,
+      "elapsed_s": 66.96665835380554,
+      "text": "Thinking Process:\n\n1.  **Deconstruct the prompt:**\n    *   Input: \"Complete this story in two sentences: Once upon a time, in a faraway kingdom,\"\n    *   Constraints: Two sentences total (",
+      "response": {
+        "id": "chatcmpl-ac24623875fbab9a",
+        "object": "chat.completion",
+        "created": 1787213985,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Thinking Process:\n\n1.  **Deconstruct the prompt:**\n    *   Input: \"Complete this story in two sentences: Once upon a time, in a faraway kingdom,\"\n    *   Constraints: Two sentences total (",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 54,
+          "total_tokens": 102,
+          "completion_tokens": 48,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 4,
+      "prompt": "What are the three laws of thermodynamics? Answer briefly.",
+      "profile": "greedy",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer directly and concisely. Do not include hidden reasoning, markdown image links, or analysis notes."
+          },
+          {
+            "role": "user",
+            "content": "What are the three laws of thermodynamics? Answer briefly."
+          }
+        ],
+        "max_tokens": 48,
+        "temperature": 0
+      },
+      "status_code": 200,
+      "elapsed_s": 52.77852416038513,
+      "text": "Here's!\n</think>\n\n1. **First Law (Conservation of Energy):** Energy cannot be created or destroyed, only transferred or changed from one form to another.\n2. **Second Law (Entropy):** The total entropy of an",
+      "response": {
+        "id": "chatcmpl-8cdd9e188fb248c1",
+        "object": "chat.completion",
+        "created": 1787214052,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Here's!\n</think>\n\n1. **First Law (Conservation of Energy):** Energy cannot be created or destroyed, only transferred or changed from one form to another.\n2. **Second Law (Entropy):** The total entropy of an",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 48,
+          "total_tokens": 96,
+          "completion_tokens": 48,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 4,
+      "prompt": "What are the three laws of thermodynamics? Answer briefly.",
+      "profile": "sampled",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer directly and concisely. Do not include hidden reasoning, markdown image links, or analysis notes."
+          },
+          {
+            "role": "user",
+            "content": "What are the three laws of thermodynamics? Answer briefly."
+          }
+        ],
+        "max_tokens": 48,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "seed": 1238
+      },
+      "status_code": 200,
+      "elapsed_s": 66.7061779499054,
+      "text": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Question:** What are the three laws of thermodynamics?\n   - **Constraint:** Answer briefly.\n   - **Additional Constraint (from",
+      "response": {
+        "id": "chatcmpl-8c402b7a8062c142",
+        "object": "chat.completion",
+        "created": 1787214105,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Question:** What are the three laws of thermodynamics?\n   - **Constraint:** Answer briefly.\n   - **Additional Constraint (from",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 48,
+          "total_tokens": 96,
+          "completion_tokens": 48,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 5,
+      "prompt": "Translate to French: Hello, how are you today?",
+      "profile": "greedy",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer directly and concisely. Do not include hidden reasoning, markdown image links, or analysis notes."
+          },
+          {
+            "role": "user",
+            "content": "Translate to French: Hello, how are you today?"
+          }
+        ],
+        "max_tokens": 48,
+        "temperature": 0
+      },
+      "status_code": 200,
+      "elapsed_s": 22.43863320350647,
+      "text": "Here's!\n</think>\n\nBonjour, comment allez-vous aujourd'hui ?",
+      "response": {
+        "id": "chatcmpl-9876e8566f824127",
+        "object": "chat.completion",
+        "created": 1787214172,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Here's!\n</think>\n\nBonjour, comment allez-vous aujourd'hui ?",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 47,
+          "total_tokens": 62,
+          "completion_tokens": 15,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 5,
+      "prompt": "Translate to French: Hello, how are you today?",
+      "profile": "sampled",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer directly and concisely. Do not include hidden reasoning, markdown image links, or analysis notes."
+          },
+          {
+            "role": "user",
+            "content": "Translate to French: Hello, how are you today?"
+          }
+        ],
+        "max_tokens": 48,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "seed": 1239
+      },
+      "status_code": 200,
+      "elapsed_s": 66.92706441879272,
+      "text": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Input text:** \"Hello, how are you today?\"\n   - **Task:** Translate to French\n   - **Constraints:** Answer directly",
+      "response": {
+        "id": "chatcmpl-8814e4e486e7a03a",
+        "object": "chat.completion",
+        "created": 1787214194,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Input text:** \"Hello, how are you today?\"\n   - **Task:** Translate to French\n   - **Constraints:** Answer directly",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 47,
+          "total_tokens": 95,
+          "completion_tokens": 48,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 6,
+      "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+      "profile": "greedy",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer directly and concisely. Do not include hidden reasoning, markdown image links, or analysis notes."
+          },
+          {
+            "role": "user",
+            "content": "Write a Python function to calculate the Fibonacci sequence."
+          }
+        ],
+        "max_tokens": 48,
+        "temperature": 0
+      },
+      "status_code": 200,
+      "elapsed_s": 53.259527921676636,
+      "text": "Here's!\n</think>\n\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    \n    sequence = [0, 1]\n",
+      "response": {
+        "id": "chatcmpl-b10bfd7d62838f94",
+        "object": "chat.completion",
+        "created": 1787214261,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Here's!\n</think>\n\ndef fibonacci(n):\n    if n <= 0:\n        return []\n    elif n == 1:\n        return [0]\n    \n    sequence = [0, 1]\n",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 46,
+          "total_tokens": 94,
+          "completion_tokens": 48,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 6,
+      "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+      "profile": "sampled",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Answer directly and concisely. Do not include hidden reasoning, markdown image links, or analysis notes."
+          },
+          {
+            "role": "user",
+            "content": "Write a Python function to calculate the Fibonacci sequence."
+          }
+        ],
+        "max_tokens": 48,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "seed": 1240
+      },
+      "status_code": 200,
+      "elapsed_s": 66.80053615570068,
+      "text": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Task:** Write a Python function to calculate the Fibonacci sequence.\n   - **Constraints:** Answer directly and concisely. Do not include",
+      "response": {
+        "id": "chatcmpl-914740d630c3f61e",
+        "object": "chat.completion",
+        "created": 1787214314,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Here's a thinking process:\n\n1.  **Analyze User Input:**\n   - **Task:** Write a Python function to calculate the Fibonacci sequence.\n   - **Constraints:** Answer directly and concisely. Do not include",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 46,
+          "total_tokens": 94,
+          "completion_tokens": 48,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    }
+  ]
+}

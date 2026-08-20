@@ -1,0 +1,1355 @@
+{"cache_block_size": 1072, "cache_page_table_first_values": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "decode_warmed": false, "empty_slots": [0], "input_shape": [1, 30], "input_tokens_first": [248045, 846, 198, 12188, 411, 3255, 303, 1330, 22157, 25, 9358, 5028, 264, 854, 11, 303, 264, 2944, 13362, 24284, 11, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271], "page_table_first_values": [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "phase": "adapter_prefill_input", "prompt_lens": [30], "sampling_seed_first": [null], "sampling_temperature_first": [0.0], "sampling_top_k_first": [1], "sampling_top_p_first": [0.0]}
+{"cache_block_size": 1072, "empty_slots": [0], "page_table_shape": [1, 245], "phase": "adapter_prefill_return", "prompt_lens": [30], "tokens": [64]}
+{"batch_rows": [0], "is_decode": false, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [64], "tt_out_shape": [1]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "start_idxs": [30], "tokens": [64]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "tokens": [64]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [3777], "tt_out_shape": [32]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "start_idxs": [31], "tokens": [3777]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "tokens": [3777]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [87270], "tt_out_shape": [32]}
+{"end_idxs": [33], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "start_idxs": [32], "tokens": [87270]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "tokens": [87270]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [10782], "tt_out_shape": [32]}
+{"end_idxs": [34], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "start_idxs": [33], "tokens": [10782]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "tokens": [10782]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [264], "tt_out_shape": [32]}
+{"end_idxs": [35], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "start_idxs": [34], "tokens": [264]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "tokens": [264]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [7920], "tt_out_shape": [32]}
+{"end_idxs": [36], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "start_idxs": [35], "tokens": [7920]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "tokens": [7920]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [5817], "tt_out_shape": [32]}
+{"end_idxs": [37], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "start_idxs": [36], "tokens": [5817]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "tokens": [5817]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [303], "tt_out_shape": [32]}
+{"end_idxs": [38], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "start_idxs": [37], "tokens": [303]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9259acc17ed53fe8-b5950664"], "tokens": [303]}
+{"cache_block_size": 1072, "cache_page_table_first_values": [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "decode_warmed": true, "empty_slots": [0], "input_shape": [1, 20], "input_tokens_first": [248045, 846, 198, 7734, 264, 6185, 36974, 883, 5484, 6618, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271], "page_table_first_values": [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "phase": "adapter_prefill_input", "prompt_lens": [20], "sampling_seed_first": [null], "sampling_temperature_first": [0.0], "sampling_top_k_first": [1], "sampling_top_p_first": [0.0]}
+{"cache_block_size": 1072, "empty_slots": [0], "page_table_shape": [1, 245], "phase": "adapter_prefill_return", "prompt_lens": [20], "tokens": [1008]}
+{"batch_rows": [0], "is_decode": false, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1008], "tt_out_shape": [1]}
+{"end_idxs": [21], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [20], "tokens": [1008]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [1008]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [33254], "tt_out_shape": [32]}
+{"end_idxs": [22], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [21], "tokens": [33254]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [33254]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [279], "tt_out_shape": [32]}
+{"end_idxs": [23], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [22], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [279]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [3838], "tt_out_shape": [32]}
+{"end_idxs": [24], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [23], "tokens": [3838]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [3838]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [11], "tt_out_shape": [32]}
+{"end_idxs": [25], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [24], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [11]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [198], "tt_out_shape": [32]}
+{"end_idxs": [26], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [25], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [198]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [55722], "tt_out_shape": [32]}
+{"end_idxs": [27], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [26], "tokens": [55722]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [55722]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [31852], "tt_out_shape": [32]}
+{"end_idxs": [28], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [27], "tokens": [31852]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [31852]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [494], "tt_out_shape": [32]}
+{"end_idxs": [29], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [28], "tokens": [494]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [494]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [279], "tt_out_shape": [32]}
+{"end_idxs": [30], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [29], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [279]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [11639], "tt_out_shape": [32]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [30], "tokens": [11639]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [11639]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [11], "tt_out_shape": [32]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [31], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [11]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [198], "tt_out_shape": [32]}
+{"end_idxs": [33], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [32], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [198]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [23305], "tt_out_shape": [32]}
+{"end_idxs": [34], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [33], "tokens": [23305]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [23305]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [44669], "tt_out_shape": [32]}
+{"end_idxs": [35], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [34], "tokens": [44669]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [44669]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [310], "tt_out_shape": [32]}
+{"end_idxs": [36], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [35], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [310]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [6805], "tt_out_shape": [32]}
+{"end_idxs": [37], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [36], "tokens": [6805]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [6805]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [13], "tt_out_shape": [32]}
+{"end_idxs": [38], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [37], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [13]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [248046], "tt_out_shape": [32]}
+{"end_idxs": [39], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "start_idxs": [38], "tokens": [248046]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8af25e31b446b870-a909a7af"], "tokens": [248046]}
+{"end_idxs": [21], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [20], "tokens": [1008]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [1008]}
+{"end_idxs": [22], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [21], "tokens": [26565]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [26565]}
+{"end_idxs": [23], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [22], "tokens": [303]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [303]}
+{"end_idxs": [24], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [23], "tokens": [22327]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [22327]}
+{"end_idxs": [25], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [24], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [11]}
+{"end_idxs": [26], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [25], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [198]}
+{"end_idxs": [27], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [26], "tokens": [55722]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [55722]}
+{"end_idxs": [28], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [27], "tokens": [31852]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [31852]}
+{"end_idxs": [29], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [28], "tokens": [494]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [494]}
+{"end_idxs": [30], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [29], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [279]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [30], "tokens": [11639]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [11639]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [31], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [11]}
+{"end_idxs": [33], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [32], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [198]}
+{"end_idxs": [34], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [33], "tokens": [23305]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [23305]}
+{"end_idxs": [35], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [34], "tokens": [44669]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [44669]}
+{"end_idxs": [36], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [35], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [310]}
+{"end_idxs": [37], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [36], "tokens": [6805]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [6805]}
+{"end_idxs": [38], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [37], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [13]}
+{"end_idxs": [39], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "start_idxs": [38], "tokens": [248046]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a458d1a15f38392d-87149807"], "tokens": [248046]}
+{"cache_block_size": 1072, "cache_page_table_first_values": [3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "decode_warmed": true, "empty_slots": [0], "input_shape": [1, 27], "input_tokens_first": [248045, 846, 198, 814, 20139, 279, 6463, 1881, 56994, 321, 6758, 446, 75318, 6618, 303, 1330, 22157, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271], "page_table_first_values": [4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "phase": "adapter_prefill_input", "prompt_lens": [27], "sampling_seed_first": [null], "sampling_temperature_first": [0.0], "sampling_top_k_first": [1], "sampling_top_p_first": [0.0]}
+{"cache_block_size": 1072, "empty_slots": [0], "page_table_shape": [1, 245], "phase": "adapter_prefill_return", "prompt_lens": [27], "tokens": [9751]}
+{"batch_rows": [0], "is_decode": false, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [9751], "tt_out_shape": [1]}
+{"end_idxs": [28], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [27], "tokens": [9751]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [9751]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [75318], "tt_out_shape": [32]}
+{"end_idxs": [29], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [28], "tokens": [75318]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [75318]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [6618], "tt_out_shape": [32]}
+{"end_idxs": [30], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [29], "tokens": [6618]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [6618]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [17077], "tt_out_shape": [32]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [30], "tokens": [17077]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [17077]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [4706], "tt_out_shape": [32]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [31], "tokens": [4706]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [4706]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [264], "tt_out_shape": [32]}
+{"end_idxs": [33], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [32], "tokens": [264]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [264]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1558], "tt_out_shape": [32]}
+{"end_idxs": [34], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [33], "tokens": [1558]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [1558]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [383], "tt_out_shape": [32]}
+{"end_idxs": [35], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [34], "tokens": [383]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [383]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [28853], "tt_out_shape": [32]}
+{"end_idxs": [36], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [35], "tokens": [28853]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [28853]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [795], "tt_out_shape": [32]}
+{"end_idxs": [37], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [36], "tokens": [795]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [795]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [11], "tt_out_shape": [32]}
+{"end_idxs": [38], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [37], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [11]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1332], "tt_out_shape": [32]}
+{"end_idxs": [39], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [38], "tokens": [1332]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [1332]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [279], "tt_out_shape": [32]}
+{"end_idxs": [40], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [39], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [279]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [4252], "tt_out_shape": [32]}
+{"end_idxs": [41], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [40], "tokens": [4252]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [4252]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [2468], "tt_out_shape": [32]}
+{"end_idxs": [42], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [41], "tokens": [2468]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [2468]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [369], "tt_out_shape": [32]}
+{"end_idxs": [43], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [42], "tokens": [369]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [369]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [3766], "tt_out_shape": [32]}
+{"end_idxs": [44], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [43], "tokens": [3766]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [3766]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [310], "tt_out_shape": [32]}
+{"end_idxs": [45], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [44], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [310]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [8214], "tt_out_shape": [32]}
+{"end_idxs": [46], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [45], "tokens": [8214]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [8214]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [279], "tt_out_shape": [32]}
+{"end_idxs": [47], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [46], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [279]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [6618], "tt_out_shape": [32]}
+{"end_idxs": [48], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [47], "tokens": [6618]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [6618]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1817], "tt_out_shape": [32]}
+{"end_idxs": [49], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [48], "tokens": [1817]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [1817]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [13], "tt_out_shape": [32]}
+{"end_idxs": [50], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [49], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [13]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [733], "tt_out_shape": [32]}
+{"end_idxs": [51], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [50], "tokens": [733]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [733]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [12503], "tt_out_shape": [32]}
+{"end_idxs": [52], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [51], "tokens": [12503]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [12503]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [11], "tt_out_shape": [32]}
+{"end_idxs": [53], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [52], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [11]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [6758], "tt_out_shape": [32]}
+{"end_idxs": [54], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [53], "tokens": [6758]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [6758]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [446], "tt_out_shape": [32]}
+{"end_idxs": [55], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [54], "tokens": [446]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [446]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [75318], "tt_out_shape": [32]}
+{"end_idxs": [56], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [55], "tokens": [75318]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [75318]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [6618], "tt_out_shape": [32]}
+{"end_idxs": [57], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [56], "tokens": [6618]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [6618]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [5533], "tt_out_shape": [32]}
+{"end_idxs": [58], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [57], "tokens": [5533]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [5533]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [62690], "tt_out_shape": [32]}
+{"end_idxs": [59], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [58], "tokens": [62690]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [62690]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [21627], "tt_out_shape": [32]}
+{"end_idxs": [60], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [59], "tokens": [21627]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [21627]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [795], "tt_out_shape": [32]}
+{"end_idxs": [61], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [60], "tokens": [795]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [795]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [11], "tt_out_shape": [32]}
+{"end_idxs": [62], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [61], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [11]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [21998], "tt_out_shape": [32]}
+{"end_idxs": [63], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [62], "tokens": [21998]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [21998]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [279], "tt_out_shape": [32]}
+{"end_idxs": [64], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [63], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [279]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [11767], "tt_out_shape": [32]}
+{"end_idxs": [65], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [64], "tokens": [11767]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [11767]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [310], "tt_out_shape": [32]}
+{"end_idxs": [66], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [65], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [310]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [10229], "tt_out_shape": [32]}
+{"end_idxs": [67], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [66], "tokens": [10229]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [10229]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [7920], "tt_out_shape": [32]}
+{"end_idxs": [68], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [67], "tokens": [7920]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [7920]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [12261], "tt_out_shape": [32]}
+{"end_idxs": [69], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [68], "tokens": [12261]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [12261]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [466], "tt_out_shape": [32]}
+{"end_idxs": [70], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [69], "tokens": [466]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [466]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [13976], "tt_out_shape": [32]}
+{"end_idxs": [71], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [70], "tokens": [13976]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [13976]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1973], "tt_out_shape": [32]}
+{"end_idxs": [72], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [71], "tokens": [1973]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [1973]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [11135], "tt_out_shape": [32]}
+{"end_idxs": [73], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [72], "tokens": [11135]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [11135]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [18252], "tt_out_shape": [32]}
+{"end_idxs": [74], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [73], "tokens": [18252]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [18252]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [13], "tt_out_shape": [32]}
+{"end_idxs": [75], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [74], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [13]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [248046], "tt_out_shape": [32]}
+{"end_idxs": [76], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "start_idxs": [75], "tokens": [248046]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-a0104d0e60a0a2e6-b428d3dc"], "tokens": [248046]}
+{"end_idxs": [28], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [27], "tokens": [9751]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [9751]}
+{"end_idxs": [29], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [28], "tokens": [75318]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [75318]}
+{"end_idxs": [30], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [29], "tokens": [6618]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [6618]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [30], "tokens": [26791]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [26791]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [31], "tokens": [3983]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [3983]}
+{"end_idxs": [33], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [32], "tokens": [383]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [383]}
+{"end_idxs": [34], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [33], "tokens": [28853]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [28853]}
+{"end_idxs": [35], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [34], "tokens": [795]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [795]}
+{"end_idxs": [36], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [35], "tokens": [1332]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [1332]}
+{"end_idxs": [37], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [36], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [279]}
+{"end_idxs": [38], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [37], "tokens": [4252]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [4252]}
+{"end_idxs": [39], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [38], "tokens": [2468]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [2468]}
+{"end_idxs": [40], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [39], "tokens": [369]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [369]}
+{"end_idxs": [41], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [40], "tokens": [2582]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [2582]}
+{"end_idxs": [42], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [41], "tokens": [3750]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [3750]}
+{"end_idxs": [43], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [42], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [11]}
+{"end_idxs": [44], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [43], "tokens": [10377]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [10377]}
+{"end_idxs": [45], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [44], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [279]}
+{"end_idxs": [46], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [45], "tokens": [11767]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [11767]}
+{"end_idxs": [47], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [46], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [310]}
+{"end_idxs": [48], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [47], "tokens": [3827]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [3827]}
+{"end_idxs": [49], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [48], "tokens": [264]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [264]}
+{"end_idxs": [50], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [49], "tokens": [12366]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [12366]}
+{"end_idxs": [51], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [50], "tokens": [494]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [494]}
+{"end_idxs": [52], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [51], "tokens": [10804]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [10804]}
+{"end_idxs": [53], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [52], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [310]}
+{"end_idxs": [54], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [53], "tokens": [3050]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [3050]}
+{"end_idxs": [55], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [54], "tokens": [11218]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [11218]}
+{"end_idxs": [56], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [55], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [13]}
+{"end_idxs": [57], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [56], "tokens": [733]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [733]}
+{"end_idxs": [58], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [57], "tokens": [12503]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [12503]}
+{"end_idxs": [59], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [58], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [11]}
+{"end_idxs": [60], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [59], "tokens": [6758]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [6758]}
+{"end_idxs": [61], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [60], "tokens": [446]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [446]}
+{"end_idxs": [62], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [61], "tokens": [75318]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [75318]}
+{"end_idxs": [63], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [62], "tokens": [6618]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [6618]}
+{"end_idxs": [64], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [63], "tokens": [5533]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [5533]}
+{"end_idxs": [65], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [64], "tokens": [62690]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [62690]}
+{"end_idxs": [66], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [65], "tokens": [21627]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [21627]}
+{"end_idxs": [67], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [66], "tokens": [795]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [795]}
+{"end_idxs": [68], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [67], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [11]}
+{"end_idxs": [69], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [68], "tokens": [26477]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [26477]}
+{"end_idxs": [70], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [69], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [279]}
+{"end_idxs": [71], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [70], "tokens": [1558]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [1558]}
+{"end_idxs": [72], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [71], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [310]}
+{"end_idxs": [73], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [72], "tokens": [6779]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [6779]}
+{"end_idxs": [74], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [73], "tokens": [7920]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [7920]}
+{"end_idxs": [75], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [74], "tokens": [12261]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [12261]}
+{"end_idxs": [76], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [75], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [11]}
+{"end_idxs": [77], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [76], "tokens": [13976]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [13976]}
+{"end_idxs": [78], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [77], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [11]}
+{"end_idxs": [79], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [78], "tokens": [466]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [466]}
+{"end_idxs": [80], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [79], "tokens": [1809]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [1809]}
+{"end_idxs": [81], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [80], "tokens": [793]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [793]}
+{"end_idxs": [82], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [81], "tokens": [2785]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [2785]}
+{"end_idxs": [83], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [82], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [279]}
+{"end_idxs": [84], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [83], "tokens": [1879]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [1879]}
+{"end_idxs": [85], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [84], "tokens": [1973]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [1973]}
+{"end_idxs": [86], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [85], "tokens": [866]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [866]}
+{"end_idxs": [87], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [86], "tokens": [60936]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [60936]}
+{"end_idxs": [88], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [87], "tokens": [10926]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [10926]}
+{"end_idxs": [89], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [88], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [13]}
+{"end_idxs": [90], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "start_idxs": [89], "tokens": [248046]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9dfe978f4660eb67-afbcbbd0"], "tokens": [248046]}
+{"cache_block_size": 1072, "cache_page_table_first_values": [5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "decode_warmed": true, "empty_slots": [0], "input_shape": [1, 30], "input_tokens_first": [248045, 846, 198, 12188, 411, 3255, 303, 1330, 22157, 25, 9358, 5028, 264, 854, 11, 303, 264, 2944, 13362, 24284, 11, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271], "page_table_first_values": [6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "phase": "adapter_prefill_input", "prompt_lens": [30], "sampling_seed_first": [null], "sampling_temperature_first": [0.0], "sampling_top_k_first": [1], "sampling_top_p_first": [0.0]}
+{"cache_block_size": 1072, "empty_slots": [0], "page_table_shape": [1, 245], "phase": "adapter_prefill_return", "prompt_lens": [30], "tokens": [64]}
+{"batch_rows": [0], "is_decode": false, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [64], "tt_out_shape": [1]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [30], "tokens": [64]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [64]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [3777], "tt_out_shape": [32]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [31], "tokens": [3777]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [3777]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [87270], "tt_out_shape": [32]}
+{"end_idxs": [33], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [32], "tokens": [87270]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [87270]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [10782], "tt_out_shape": [32]}
+{"end_idxs": [34], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [33], "tokens": [10782]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [10782]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [264], "tt_out_shape": [32]}
+{"end_idxs": [35], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [34], "tokens": [264]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [264]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [7920], "tt_out_shape": [32]}
+{"end_idxs": [36], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [35], "tokens": [7920]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [7920]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [5817], "tt_out_shape": [32]}
+{"end_idxs": [37], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [36], "tokens": [5817]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [5817]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [303], "tt_out_shape": [32]}
+{"end_idxs": [38], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [37], "tokens": [303]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [303]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [279], "tt_out_shape": [32]}
+{"end_idxs": [39], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [38], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [279]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [13437], "tt_out_shape": [32]}
+{"end_idxs": [40], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [39], "tokens": [13437]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [13437]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [31508], "tt_out_shape": [32]}
+{"end_idxs": [41], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [40], "tokens": [31508]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [31508]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [13876], "tt_out_shape": [32]}
+{"end_idxs": [42], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [41], "tokens": [13876]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [13876]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [421], "tt_out_shape": [32]}
+{"end_idxs": [43], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [42], "tokens": [421]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [421]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [5879], "tt_out_shape": [32]}
+{"end_idxs": [44], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [43], "tokens": [5879]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [5879]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [310], "tt_out_shape": [32]}
+{"end_idxs": [45], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [44], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [310]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [264], "tt_out_shape": [32]}
+{"end_idxs": [46], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [45], "tokens": [264]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [264]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [21215], "tt_out_shape": [32]}
+{"end_idxs": [47], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [46], "tokens": [21215]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [21215]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1332], "tt_out_shape": [32]}
+{"end_idxs": [48], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [47], "tokens": [1332]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [1332]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [854], "tt_out_shape": [32]}
+{"end_idxs": [49], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [48], "tokens": [854]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [854]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [14217], "tt_out_shape": [32]}
+{"end_idxs": [50], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [49], "tokens": [14217]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [14217]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1990], "tt_out_shape": [32]}
+{"end_idxs": [51], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [50], "tokens": [1990]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [1990]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [13], "tt_out_shape": [32]}
+{"end_idxs": [52], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [51], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [13]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1216], "tt_out_shape": [32]}
+{"end_idxs": [53], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [52], "tokens": [1216]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [1216]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [7157], "tt_out_shape": [32]}
+{"end_idxs": [54], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [53], "tokens": [7157]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [7157]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [780], "tt_out_shape": [32]}
+{"end_idxs": [55], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [54], "tokens": [780]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [780]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [2199], "tt_out_shape": [32]}
+{"end_idxs": [56], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [55], "tokens": [2199]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [2199]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1017], "tt_out_shape": [32]}
+{"end_idxs": [57], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [56], "tokens": [1017]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [1017]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [6618], "tt_out_shape": [32]}
+{"end_idxs": [58], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [57], "tokens": [6618]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [6618]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [279], "tt_out_shape": [32]}
+{"end_idxs": [59], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [58], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [279]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [22857], "tt_out_shape": [32]}
+{"end_idxs": [60], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [59], "tokens": [22857]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [22857]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [314], "tt_out_shape": [32]}
+{"end_idxs": [61], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [60], "tokens": [314]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [314]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [279], "tt_out_shape": [32]}
+{"end_idxs": [62], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [61], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [279]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [9467], "tt_out_shape": [32]}
+{"end_idxs": [63], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [62], "tokens": [9467]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [9467]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [11], "tt_out_shape": [32]}
+{"end_idxs": [64], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [63], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [11]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1132], "tt_out_shape": [32]}
+{"end_idxs": [65], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [64], "tokens": [1132]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [1132]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [310], "tt_out_shape": [32]}
+{"end_idxs": [66], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [65], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [310]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [460], "tt_out_shape": [32]}
+{"end_idxs": [67], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [66], "tokens": [460]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [460]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1578], "tt_out_shape": [32]}
+{"end_idxs": [68], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [67], "tokens": [1578]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [1578]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [2843], "tt_out_shape": [32]}
+{"end_idxs": [69], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [68], "tokens": [2843]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [2843]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [310], "tt_out_shape": [32]}
+{"end_idxs": [70], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [69], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [310]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1423], "tt_out_shape": [32]}
+{"end_idxs": [71], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [70], "tokens": [1423]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [1423]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [421], "tt_out_shape": [32]}
+{"end_idxs": [72], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [71], "tokens": [421]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [421]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [780], "tt_out_shape": [32]}
+{"end_idxs": [73], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [72], "tokens": [780]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [780]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [24284], "tt_out_shape": [32]}
+{"end_idxs": [74], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [73], "tokens": [24284]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [24284]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [995], "tt_out_shape": [32]}
+{"end_idxs": [75], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [74], "tokens": [995]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [995]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [23772], "tt_out_shape": [32]}
+{"end_idxs": [76], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [75], "tokens": [23772]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [23772]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [780], "tt_out_shape": [32]}
+{"end_idxs": [77], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [76], "tokens": [780]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [780]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [803], "tt_out_shape": [32]}
+{"end_idxs": [78], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [77], "tokens": [803]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [803]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [13], "tt_out_shape": [32]}
+{"end_idxs": [79], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [78], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [13]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [248046], "tt_out_shape": [32]}
+{"end_idxs": [80], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "start_idxs": [79], "tokens": [248046]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-945acc32efbc1fc0-95255fe8"], "tokens": [248046]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [30], "tokens": [64]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [64]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [31], "tokens": [38257]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [38257]}
+{"end_idxs": [33], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [32], "tokens": [40348]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [40348]}
+{"end_idxs": [34], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [33], "tokens": [10782]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [10782]}
+{"end_idxs": [35], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [34], "tokens": [421]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [421]}
+{"end_idxs": [36], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [35], "tokens": [780]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [780]}
+{"end_idxs": [37], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [36], "tokens": [24284]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [24284]}
+{"end_idxs": [38], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [37], "tokens": [725]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [725]}
+{"end_idxs": [39], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [38], "tokens": [33576]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [33576]}
+{"end_idxs": [40], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [39], "tokens": [12050]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [12050]}
+{"end_idxs": [41], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [40], "tokens": [557]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [557]}
+{"end_idxs": [42], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [41], "tokens": [8613]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [8613]}
+{"end_idxs": [43], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [42], "tokens": [539]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [539]}
+{"end_idxs": [44], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [43], "tokens": [264]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [264]}
+{"end_idxs": [45], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [44], "tokens": [23772]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [23772]}
+{"end_idxs": [46], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [45], "tokens": [12477]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [12477]}
+{"end_idxs": [47], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [46], "tokens": [551]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [551]}
+{"end_idxs": [48], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [47], "tokens": [5387]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [5387]}
+{"end_idxs": [49], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [48], "tokens": [995]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [995]}
+{"end_idxs": [50], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [49], "tokens": [6113]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [6113]}
+{"end_idxs": [51], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [50], "tokens": [303]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [303]}
+{"end_idxs": [52], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [51], "tokens": [19381]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [19381]}
+{"end_idxs": [53], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [52], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [13]}
+{"end_idxs": [54], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [53], "tokens": [2985]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [2985]}
+{"end_idxs": [55], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [54], "tokens": [264]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [264]}
+{"end_idxs": [56], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [55], "tokens": [3074]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [3074]}
+{"end_idxs": [57], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [56], "tokens": [17052]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [17052]}
+{"end_idxs": [58], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [57], "tokens": [314]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [314]}
+{"end_idxs": [59], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [58], "tokens": [75382]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [75382]}
+{"end_idxs": [60], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [59], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [11]}
+{"end_idxs": [61], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [60], "tokens": [551]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [551]}
+{"end_idxs": [62], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [61], "tokens": [14009]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [14009]}
+{"end_idxs": [63], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [62], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [279]}
+{"end_idxs": [64], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [63], "tokens": [38671]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [38671]}
+{"end_idxs": [65], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [64], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [11]}
+{"end_idxs": [66], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [65], "tokens": [47455]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [47455]}
+{"end_idxs": [67], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [66], "tokens": [39026]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [39026]}
+{"end_idxs": [68], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [67], "tokens": [321]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [321]}
+{"end_idxs": [69], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [68], "tokens": [15420]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [15420]}
+{"end_idxs": [70], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [69], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [310]}
+{"end_idxs": [71], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [70], "tokens": [780]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [780]}
+{"end_idxs": [72], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [71], "tokens": [1208]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [1208]}
+{"end_idxs": [73], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [72], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [13]}
+{"end_idxs": [74], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "start_idxs": [73], "tokens": [248046]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-91185d37e8c524b6-b9a3327b"], "tokens": [248046]}
+{"cache_block_size": 1072, "cache_page_table_first_values": [7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "decode_warmed": true, "empty_slots": [0], "input_shape": [1, 24], "input_tokens_first": [248045, 846, 198, 3710, 513, 279, 2250, 6657, 314, 28868, 76214, 30, 21134, 25899, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271], "page_table_first_values": [8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "phase": "adapter_prefill_input", "prompt_lens": [24], "sampling_seed_first": [null], "sampling_temperature_first": [0.0], "sampling_top_k_first": [1], "sampling_top_p_first": [0.0]}
+{"cache_block_size": 1072, "empty_slots": [0], "page_table_shape": [1, 245], "phase": "adapter_prefill_return", "prompt_lens": [24], "tokens": [8160]}
+{"batch_rows": [0], "is_decode": false, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [8160], "tt_out_shape": [1]}
+{"end_idxs": [25], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [24], "tokens": [8160]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [8160]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [513], "tt_out_shape": [32]}
+{"end_idxs": [26], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [25], "tokens": [513]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [513]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [279], "tt_out_shape": [32]}
+{"end_idxs": [27], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [26], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [279]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [2250], "tt_out_shape": [32]}
+{"end_idxs": [28], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [27], "tokens": [2250]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [2250]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [6657], "tt_out_shape": [32]}
+{"end_idxs": [29], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [28], "tokens": [6657]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [6657]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [314], "tt_out_shape": [32]}
+{"end_idxs": [30], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [29], "tokens": [314]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [314]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [28868], "tt_out_shape": [32]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [30], "tokens": [28868]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [28868]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [76214], "tt_out_shape": [32]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [31], "tokens": [76214]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [76214]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [11], "tt_out_shape": [32]}
+{"end_idxs": [33], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [32], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [11]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [10661], "tt_out_shape": [32]}
+{"end_idxs": [34], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [33], "tokens": [10661]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [10661]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [25899], "tt_out_shape": [32]}
+{"end_idxs": [35], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [34], "tokens": [25899]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [25899]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [25], "tt_out_shape": [32]}
+{"end_idxs": [36], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [35], "tokens": [25]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [25]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [271], "tt_out_shape": [32]}
+{"end_idxs": [37], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [36], "tokens": [271]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [271]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [16], "tt_out_shape": [32]}
+{"end_idxs": [38], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [37], "tokens": [16]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [16]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [13], "tt_out_shape": [32]}
+{"end_idxs": [39], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [38], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [13]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [220], "tt_out_shape": [32]}
+{"end_idxs": [40], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [39], "tokens": [220]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [220]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [2972], "tt_out_shape": [32]}
+{"end_idxs": [41], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [40], "tokens": [2972]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [2972]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [5170], "tt_out_shape": [32]}
+{"end_idxs": [42], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [41], "tokens": [5170]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [5170]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [7271], "tt_out_shape": [32]}
+{"end_idxs": [43], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [42], "tokens": [7271]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [7271]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [318], "tt_out_shape": [32]}
+{"end_idxs": [44], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [43], "tokens": [318]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [318]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [14777], "tt_out_shape": [32]}
+{"end_idxs": [45], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [44], "tokens": [14777]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [14777]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [8503], "tt_out_shape": [32]}
+{"end_idxs": [46], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [45], "tokens": [8503]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [8503]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [314], "tt_out_shape": [32]}
+{"end_idxs": [47], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [46], "tokens": [314]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [314]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [12001], "tt_out_shape": [32]}
+{"end_idxs": [48], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [47], "tokens": [12001]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [12001]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [188912], "tt_out_shape": [32]}
+{"end_idxs": [49], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [48], "tokens": [188912]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [188912]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [12001], "tt_out_shape": [32]}
+{"end_idxs": [50], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [49], "tokens": [12001]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [12001]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [4021], "tt_out_shape": [32]}
+{"end_idxs": [51], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [50], "tokens": [4021]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [4021]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [381], "tt_out_shape": [32]}
+{"end_idxs": [52], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [51], "tokens": [381]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [381]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [3354], "tt_out_shape": [32]}
+{"end_idxs": [53], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [52], "tokens": [3354]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [3354]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [466], "tt_out_shape": [32]}
+{"end_idxs": [54], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [53], "tokens": [466]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [466]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [14012], "tt_out_shape": [32]}
+{"end_idxs": [55], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [54], "tokens": [14012]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [14012]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [11], "tt_out_shape": [32]}
+{"end_idxs": [56], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [55], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [11]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1132], "tt_out_shape": [32]}
+{"end_idxs": [57], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [56], "tokens": [1132]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [1132]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [21711], "tt_out_shape": [32]}
+{"end_idxs": [58], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [57], "tokens": [21711]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [21711]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [466], "tt_out_shape": [32]}
+{"end_idxs": [59], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [58], "tokens": [466]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [466]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [5324], "tt_out_shape": [32]}
+{"end_idxs": [60], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [59], "tokens": [5324]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [5324]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [494], "tt_out_shape": [32]}
+{"end_idxs": [61], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [60], "tokens": [494]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [494]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [799], "tt_out_shape": [32]}
+{"end_idxs": [62], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [61], "tokens": [799]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [799]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1304], "tt_out_shape": [32]}
+{"end_idxs": [63], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [62], "tokens": [1304]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [1304]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [310], "tt_out_shape": [32]}
+{"end_idxs": [64], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [63], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [310]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [2361], "tt_out_shape": [32]}
+{"end_idxs": [65], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [64], "tokens": [2361]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [2361]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [13], "tt_out_shape": [32]}
+{"end_idxs": [66], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [65], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [13]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [198], "tt_out_shape": [32]}
+{"end_idxs": [67], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [66], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [198]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [17], "tt_out_shape": [32]}
+{"end_idxs": [68], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [67], "tokens": [17]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [17]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [13], "tt_out_shape": [32]}
+{"end_idxs": [69], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [68], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [13]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [220], "tt_out_shape": [32]}
+{"end_idxs": [70], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [69], "tokens": [220]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [220]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [2972], "tt_out_shape": [32]}
+{"end_idxs": [71], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [70], "tokens": [2972]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [2972]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [15207], "tt_out_shape": [32]}
+{"end_idxs": [72], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [71], "tokens": [15207]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [15207]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [7271], "tt_out_shape": [32]}
+{"end_idxs": [73], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [72], "tokens": [7271]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [7271]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [318], "tt_out_shape": [32]}
+{"end_idxs": [74], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [73], "tokens": [318]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [318]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [94214], "tt_out_shape": [32]}
+{"end_idxs": [75], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [74], "tokens": [94214]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [94214]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [188912], "tt_out_shape": [32]}
+{"end_idxs": [76], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [75], "tokens": [188912]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [188912]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [561], "tt_out_shape": [32]}
+{"end_idxs": [77], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [76], "tokens": [561]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [561]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [2702], "tt_out_shape": [32]}
+{"end_idxs": [78], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [77], "tokens": [2702]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [2702]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [45918], "tt_out_shape": [32]}
+{"end_idxs": [79], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [78], "tokens": [45918]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [45918]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [318], "tt_out_shape": [32]}
+{"end_idxs": [80], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [79], "tokens": [318]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [318]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [4104], "tt_out_shape": [32]}
+{"end_idxs": [81], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [80], "tokens": [4104]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [4104]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1310], "tt_out_shape": [32]}
+{"end_idxs": [82], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [81], "tokens": [1310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [1310]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [8], "tt_out_shape": [32]}
+{"end_idxs": [83], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [82], "tokens": [8]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [8]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [314], "tt_out_shape": [32]}
+{"end_idxs": [84], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [83], "tokens": [314]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [314]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [449], "tt_out_shape": [32]}
+{"end_idxs": [85], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [84], "tokens": [449]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [449]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [23443], "tt_out_shape": [32]}
+{"end_idxs": [86], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [85], "tokens": [23443]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [23443]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1785], "tt_out_shape": [32]}
+{"end_idxs": [87], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [86], "tokens": [1785]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [1785]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [628], "tt_out_shape": [32]}
+{"end_idxs": [88], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "start_idxs": [87], "tokens": [628]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-b42d72eff4582928-857e9c80"], "tokens": [628]}
+{"end_idxs": [25], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [24], "tokens": [8160]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [8160]}
+{"end_idxs": [26], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [25], "tokens": [513]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [513]}
+{"end_idxs": [27], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [26], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [279]}
+{"end_idxs": [28], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [27], "tokens": [2250]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [2250]}
+{"end_idxs": [29], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [28], "tokens": [6657]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [6657]}
+{"end_idxs": [30], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [29], "tokens": [314]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [314]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [30], "tokens": [28868]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [28868]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [31], "tokens": [76214]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [76214]}
+{"end_idxs": [33], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [32], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [11]}
+{"end_idxs": [34], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [33], "tokens": [10661]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [10661]}
+{"end_idxs": [35], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [34], "tokens": [25899]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [25899]}
+{"end_idxs": [36], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [35], "tokens": [25]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [25]}
+{"end_idxs": [37], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [36], "tokens": [271]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [271]}
+{"end_idxs": [38], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [37], "tokens": [16]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [16]}
+{"end_idxs": [39], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [38], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [13]}
+{"end_idxs": [40], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [39], "tokens": [220]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [220]}
+{"end_idxs": [41], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [40], "tokens": [2972]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [2972]}
+{"end_idxs": [42], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [41], "tokens": [5170]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [5170]}
+{"end_idxs": [43], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [42], "tokens": [7271]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [7271]}
+{"end_idxs": [44], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [43], "tokens": [318]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [318]}
+{"end_idxs": [45], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [44], "tokens": [14777]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [14777]}
+{"end_idxs": [46], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [45], "tokens": [8503]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [8503]}
+{"end_idxs": [47], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [46], "tokens": [314]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [314]}
+{"end_idxs": [48], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [47], "tokens": [12001]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [12001]}
+{"end_idxs": [49], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [48], "tokens": [188912]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [188912]}
+{"end_idxs": [50], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [49], "tokens": [12001]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [12001]}
+{"end_idxs": [51], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [50], "tokens": [4021]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [4021]}
+{"end_idxs": [52], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [51], "tokens": [381]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [381]}
+{"end_idxs": [53], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [52], "tokens": [3354]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [3354]}
+{"end_idxs": [54], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [53], "tokens": [466]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [466]}
+{"end_idxs": [55], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [54], "tokens": [14012]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [14012]}
+{"end_idxs": [56], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [55], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [11]}
+{"end_idxs": [57], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [56], "tokens": [1132]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [1132]}
+{"end_idxs": [58], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [57], "tokens": [21711]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [21711]}
+{"end_idxs": [59], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [58], "tokens": [466]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [466]}
+{"end_idxs": [60], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [59], "tokens": [5324]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [5324]}
+{"end_idxs": [61], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [60], "tokens": [494]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [494]}
+{"end_idxs": [62], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [61], "tokens": [799]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [799]}
+{"end_idxs": [63], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [62], "tokens": [1304]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [1304]}
+{"end_idxs": [64], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [63], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [310]}
+{"end_idxs": [65], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [64], "tokens": [2361]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [2361]}
+{"end_idxs": [66], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [65], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [13]}
+{"end_idxs": [67], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [66], "tokens": [561]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [561]}
+{"end_idxs": [68], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [67], "tokens": [2222]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [2222]}
+{"end_idxs": [69], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [68], "tokens": [303]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [303]}
+{"end_idxs": [70], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [69], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [279]}
+{"end_idxs": [71], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [70], "tokens": [5138]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [5138]}
+{"end_idxs": [72], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [71], "tokens": [4649]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [4649]}
+{"end_idxs": [73], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [72], "tokens": [314]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [314]}
+{"end_idxs": [74], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [73], "tokens": [264]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [264]}
+{"end_idxs": [75], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [74], "tokens": [1785]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [1785]}
+{"end_idxs": [76], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [75], "tokens": [369]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [369]}
+{"end_idxs": [77], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [76], "tokens": [5951]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [5951]}
+{"end_idxs": [78], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [77], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [310]}
+{"end_idxs": [79], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [78], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [279]}
+{"end_idxs": [80], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [79], "tokens": [8364]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [8364]}
+{"end_idxs": [81], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [80], "tokens": [3568]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [3568]}
+{"end_idxs": [82], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [81], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [310]}
+{"end_idxs": [83], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [82], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [279]}
+{"end_idxs": [84], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [83], "tokens": [1785]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [1785]}
+{"end_idxs": [85], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [84], "tokens": [26401]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [26401]}
+{"end_idxs": [86], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [85], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [279]}
+{"end_idxs": [87], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [86], "tokens": [944]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [944]}
+{"end_idxs": [88], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "start_idxs": [87], "tokens": [2725]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-af8d5cb1349846f1-8e5e03d9"], "tokens": [2725]}
+{"cache_block_size": 1072, "cache_page_table_first_values": [9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "decode_warmed": true, "empty_slots": [0], "input_shape": [1, 23], "input_tokens_first": [248045, 846, 198, 26583, 310, 8323, 25, 21251, 11, 1204, 513, 488, 3242, 30, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271], "page_table_first_values": [10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "phase": "adapter_prefill_input", "prompt_lens": [23], "sampling_seed_first": [null], "sampling_temperature_first": [0.0], "sampling_top_k_first": [1], "sampling_top_p_first": [0.0]}
+{"cache_block_size": 1072, "empty_slots": [0], "page_table_shape": [1, 245], "phase": "adapter_prefill_return", "prompt_lens": [23], "tokens": [78768]}
+{"batch_rows": [0], "is_decode": false, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [78768], "tt_out_shape": [1]}
+{"end_idxs": [24], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "start_idxs": [23], "tokens": [78768]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "tokens": [78768]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [11], "tt_out_shape": [32]}
+{"end_idxs": [25], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "start_idxs": [24], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "tokens": [11]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [3847], "tt_out_shape": [32]}
+{"end_idxs": [26], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "start_idxs": [25], "tokens": [3847]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "tokens": [3847]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [189819], "tt_out_shape": [32]}
+{"end_idxs": [27], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "start_idxs": [26], "tokens": [189819]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "tokens": [189819]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [42755], "tt_out_shape": [32]}
+{"end_idxs": [28], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "start_idxs": [27], "tokens": [42755]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "tokens": [42755]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [72163], "tt_out_shape": [32]}
+{"end_idxs": [29], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "start_idxs": [28], "tokens": [72163]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "tokens": [72163]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [84146], "tt_out_shape": [32]}
+{"end_idxs": [30], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "start_idxs": [29], "tokens": [84146]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "tokens": [84146]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [907], "tt_out_shape": [32]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "start_idxs": [30], "tokens": [907]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "tokens": [907]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [248046], "tt_out_shape": [32]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "start_idxs": [31], "tokens": [248046]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-83aecef32132bb8c-9c96b32e"], "tokens": [248046]}
+{"end_idxs": [24], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "start_idxs": [23], "tokens": [78768]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "tokens": [78768]}
+{"end_idxs": [25], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "start_idxs": [24], "tokens": [11]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "tokens": [11]}
+{"end_idxs": [26], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "start_idxs": [25], "tokens": [3847]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "tokens": [3847]}
+{"end_idxs": [27], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "start_idxs": [26], "tokens": [189819]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "tokens": [189819]}
+{"end_idxs": [28], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "start_idxs": [27], "tokens": [42755]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "tokens": [42755]}
+{"end_idxs": [29], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "start_idxs": [28], "tokens": [72163]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "tokens": [72163]}
+{"end_idxs": [30], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "start_idxs": [29], "tokens": [87236]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "tokens": [87236]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "start_idxs": [30], "tokens": [907]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "tokens": [907]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "start_idxs": [31], "tokens": [248046]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-8362498c0c4a39e5-b88590a1"], "tokens": [248046]}
+{"cache_block_size": 1072, "cache_page_table_first_values": [11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "decode_warmed": true, "empty_slots": [0], "input_shape": [1, 22], "input_tokens_first": [248045, 846, 198, 7734, 264, 12654, 709, 310, 10724, 279, 76938, 8240, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271], "page_table_first_values": [12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "phase": "adapter_prefill_input", "prompt_lens": [22], "sampling_seed_first": [null], "sampling_temperature_first": [0.0], "sampling_top_k_first": [1], "sampling_top_p_first": [0.0]}
+{"cache_block_size": 1072, "empty_slots": [0], "page_table_shape": [1, 245], "phase": "adapter_prefill_return", "prompt_lens": [22], "tokens": [71093]}
+{"batch_rows": [0], "is_decode": false, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [71093], "tt_out_shape": [1]}
+{"end_idxs": [23], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [22], "tokens": [71093]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [71093]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [12305], "tt_out_shape": [32]}
+{"end_idxs": [24], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [23], "tokens": [12305]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [12305]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [198], "tt_out_shape": [32]}
+{"end_idxs": [25], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [24], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [198]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [727], "tt_out_shape": [32]}
+{"end_idxs": [26], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [25], "tokens": [727]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [727]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [73111], "tt_out_shape": [32]}
+{"end_idxs": [27], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [26], "tokens": [73111]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [73111]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1393], "tt_out_shape": [32]}
+{"end_idxs": [28], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [27], "tokens": [1393]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [1393]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [25], "tt_out_shape": [32]}
+{"end_idxs": [29], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [28], "tokens": [25]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [25]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [514], "tt_out_shape": [32]}
+{"end_idxs": [30], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [29], "tokens": [514]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [514]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [8], "tt_out_shape": [32]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [30], "tokens": [8]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [8]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1411], "tt_out_shape": [32]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [31], "tokens": [1411]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [1411]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1103], "tt_out_shape": [32]}
+{"end_idxs": [33], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [32], "tokens": [1103]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [1103]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [25], "tt_out_shape": [32]}
+{"end_idxs": [34], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [33], "tokens": [25]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [25]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [198], "tt_out_shape": [32]}
+{"end_idxs": [35], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [34], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [198]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [262], "tt_out_shape": [32]}
+{"end_idxs": [36], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [35], "tokens": [262]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [262]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [4071], "tt_out_shape": [32]}
+{"end_idxs": [37], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [36], "tokens": [4071]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [4071]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [198], "tt_out_shape": [32]}
+{"end_idxs": [38], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [37], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [198]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [262], "tt_out_shape": [32]}
+{"end_idxs": [39], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [38], "tokens": [262]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [262]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [19892], "tt_out_shape": [32]}
+{"end_idxs": [40], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [39], "tokens": [19892]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [19892]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [279], "tt_out_shape": [32]}
+{"end_idxs": [41], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [40], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [279]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [76938], "tt_out_shape": [32]}
+{"end_idxs": [42], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [41], "tokens": [76938]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [76938]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [8240], "tt_out_shape": [32]}
+{"end_idxs": [43], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [42], "tokens": [8240]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [8240]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [685], "tt_out_shape": [32]}
+{"end_idxs": [44], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [43], "tokens": [685]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [685]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [310], "tt_out_shape": [32]}
+{"end_idxs": [45], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [44], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [310]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [307], "tt_out_shape": [32]}
+{"end_idxs": [46], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [45], "tokens": [307]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [307]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [3665], "tt_out_shape": [32]}
+{"end_idxs": [47], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [46], "tokens": [3665]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [3665]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [13], "tt_out_shape": [32]}
+{"end_idxs": [48], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [47], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [13]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [198], "tt_out_shape": [32]}
+{"end_idxs": [49], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [48], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [198]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1031], "tt_out_shape": [32]}
+{"end_idxs": [50], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [49], "tokens": [1031]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [1031]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [262], "tt_out_shape": [32]}
+{"end_idxs": [51], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [50], "tokens": [262]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [262]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [17167], "tt_out_shape": [32]}
+{"end_idxs": [52], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [51], "tokens": [17167]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [17167]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [25], "tt_out_shape": [32]}
+{"end_idxs": [53], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [52], "tokens": [25]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [25]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [198], "tt_out_shape": [32]}
+{"end_idxs": [54], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [53], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [198]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [285], "tt_out_shape": [32]}
+{"end_idxs": [55], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [54], "tokens": [285]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [285]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [307], "tt_out_shape": [32]}
+{"end_idxs": [56], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [55], "tokens": [307]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [307]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [25], "tt_out_shape": [32]}
+{"end_idxs": [57], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [56], "tokens": [25]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [25]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [5447], "tt_out_shape": [32]}
+{"end_idxs": [58], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [57], "tokens": [5447]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [5447]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [314], "tt_out_shape": [32]}
+{"end_idxs": [59], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [58], "tokens": [314]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [314]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [3665], "tt_out_shape": [32]}
+{"end_idxs": [60], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [59], "tokens": [3665]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [3665]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [303], "tt_out_shape": [32]}
+{"end_idxs": [61], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [60], "tokens": [303]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [303]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [279], "tt_out_shape": [32]}
+{"end_idxs": [62], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [61], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [279]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [76938], "tt_out_shape": [32]}
+{"end_idxs": [63], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [62], "tokens": [76938]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [76938]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [8240], "tt_out_shape": [32]}
+{"end_idxs": [64], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [63], "tokens": [8240]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [8240]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [13], "tt_out_shape": [32]}
+{"end_idxs": [65], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [64], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [13]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [198], "tt_out_shape": [32]}
+{"end_idxs": [66], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [65], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [198]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1726], "tt_out_shape": [32]}
+{"end_idxs": [67], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [66], "tokens": [1726]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [1726]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [262], "tt_out_shape": [32]}
+{"end_idxs": [68], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [67], "tokens": [262]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [262]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [5019], "tt_out_shape": [32]}
+{"end_idxs": [69], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [68], "tokens": [5019]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [5019]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [25], "tt_out_shape": [32]}
+{"end_idxs": [70], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [69], "tokens": [25]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [25]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [198], "tt_out_shape": [32]}
+{"end_idxs": [71], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [70], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [198]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [285], "tt_out_shape": [32]}
+{"end_idxs": [72], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [71], "tokens": [285]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [285]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [357], "tt_out_shape": [32]}
+{"end_idxs": [73], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [72], "tokens": [357]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [357]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1103], "tt_out_shape": [32]}
+{"end_idxs": [74], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [73], "tokens": [1103]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [1103]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [8222], "tt_out_shape": [32]}
+{"end_idxs": [75], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [74], "tokens": [8222]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [8222]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [279], "tt_out_shape": [32]}
+{"end_idxs": [76], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [75], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [279]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [1118], "tt_out_shape": [32]}
+{"end_idxs": [77], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [76], "tokens": [1118]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [1118]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [307], "tt_out_shape": [32]}
+{"end_idxs": [78], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [77], "tokens": [307]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [307]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [76938], "tt_out_shape": [32]}
+{"end_idxs": [79], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [78], "tokens": [76938]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [76938]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [4947], "tt_out_shape": [32]}
+{"end_idxs": [80], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [79], "tokens": [4947]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [4947]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [13], "tt_out_shape": [32]}
+{"end_idxs": [81], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [80], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [13]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [198], "tt_out_shape": [32]}
+{"end_idxs": [82], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [81], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [198]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [262], "tt_out_shape": [32]}
+{"end_idxs": [83], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [82], "tokens": [262]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [262]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [4071], "tt_out_shape": [32]}
+{"end_idxs": [84], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [83], "tokens": [4071]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [4071]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [198], "tt_out_shape": [32]}
+{"end_idxs": [85], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [84], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [198]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [262], "tt_out_shape": [32]}
+{"end_idxs": [86], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "start_idxs": [85], "tokens": [262]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-9ea3c58ab6747b7f-a2d56f73"], "tokens": [262]}
+{"end_idxs": [23], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [22], "tokens": [71093]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [71093]}
+{"end_idxs": [24], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [23], "tokens": [12305]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [12305]}
+{"end_idxs": [25], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [24], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [198]}
+{"end_idxs": [26], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [25], "tokens": [727]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [727]}
+{"end_idxs": [27], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [26], "tokens": [73111]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [73111]}
+{"end_idxs": [28], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [27], "tokens": [1393]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [1393]}
+{"end_idxs": [29], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [28], "tokens": [25]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [25]}
+{"end_idxs": [30], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [29], "tokens": [514]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [514]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [30], "tokens": [8]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [8]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [31], "tokens": [1411]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [1411]}
+{"end_idxs": [33], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [32], "tokens": [1103]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [1103]}
+{"end_idxs": [34], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [33], "tokens": [25]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [25]}
+{"end_idxs": [35], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [34], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [198]}
+{"end_idxs": [36], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [35], "tokens": [262]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [262]}
+{"end_idxs": [37], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [36], "tokens": [4071]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [4071]}
+{"end_idxs": [38], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [37], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [198]}
+{"end_idxs": [39], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [38], "tokens": [262]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [262]}
+{"end_idxs": [40], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [39], "tokens": [19892]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [19892]}
+{"end_idxs": [41], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [40], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [279]}
+{"end_idxs": [42], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [41], "tokens": [76938]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [76938]}
+{"end_idxs": [43], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [42], "tokens": [8240]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [8240]}
+{"end_idxs": [44], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [43], "tokens": [685]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [685]}
+{"end_idxs": [45], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [44], "tokens": [310]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [310]}
+{"end_idxs": [46], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [45], "tokens": [307]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [307]}
+{"end_idxs": [47], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [46], "tokens": [3665]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [3665]}
+{"end_idxs": [48], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [47], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [13]}
+{"end_idxs": [49], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [48], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [198]}
+{"end_idxs": [50], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [49], "tokens": [1031]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [1031]}
+{"end_idxs": [51], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [50], "tokens": [262]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [262]}
+{"end_idxs": [52], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [51], "tokens": [17167]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [17167]}
+{"end_idxs": [53], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [52], "tokens": [25]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [25]}
+{"end_idxs": [54], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [53], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [198]}
+{"end_idxs": [55], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [54], "tokens": [285]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [285]}
+{"end_idxs": [56], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [55], "tokens": [307]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [307]}
+{"end_idxs": [57], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [56], "tokens": [25]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [25]}
+{"end_idxs": [58], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [57], "tokens": [561]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [561]}
+{"end_idxs": [59], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [58], "tokens": [1324]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [1324]}
+{"end_idxs": [60], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [59], "tokens": [314]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [314]}
+{"end_idxs": [61], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [60], "tokens": [3665]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [3665]}
+{"end_idxs": [62], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [61], "tokens": [303]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [303]}
+{"end_idxs": [63], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [62], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [279]}
+{"end_idxs": [64], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [63], "tokens": [76938]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [76938]}
+{"end_idxs": [65], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [64], "tokens": [8240]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [8240]}
+{"end_idxs": [66], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [65], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [13]}
+{"end_idxs": [67], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [66], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [198]}
+{"end_idxs": [68], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [67], "tokens": [1726]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [1726]}
+{"end_idxs": [69], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [68], "tokens": [262]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [262]}
+{"end_idxs": [70], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [69], "tokens": [5019]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [5019]}
+{"end_idxs": [71], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [70], "tokens": [25]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [25]}
+{"end_idxs": [72], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [71], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [198]}
+{"end_idxs": [73], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [72], "tokens": [285]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [285]}
+{"end_idxs": [74], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [73], "tokens": [357]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [357]}
+{"end_idxs": [75], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [74], "tokens": [1103]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [1103]}
+{"end_idxs": [76], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [75], "tokens": [8222]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [8222]}
+{"end_idxs": [77], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [76], "tokens": [279]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [279]}
+{"end_idxs": [78], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [77], "tokens": [1118]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [1118]}
+{"end_idxs": [79], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [78], "tokens": [307]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [307]}
+{"end_idxs": [80], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [79], "tokens": [76938]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [76938]}
+{"end_idxs": [81], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [80], "tokens": [4947]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [4947]}
+{"end_idxs": [82], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [81], "tokens": [13]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [13]}
+{"end_idxs": [83], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [82], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [198]}
+{"end_idxs": [84], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [83], "tokens": [262]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [262]}
+{"end_idxs": [85], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [84], "tokens": [4071]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [4071]}
+{"end_idxs": [86], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "start_idxs": [85], "tokens": [198]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-95d7080314c7dbdb-869af719"], "tokens": [198]}
+{"cache_block_size": 1072, "cache_page_table_first_values": [13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "decode_warmed": true, "empty_slots": [0], "input_shape": [1, 26], "input_tokens_first": [248045, 846, 198, 2427, 279, 9944, 4947, 2599, 1056, 25292, 11, 1179, 4087, 303, 799, 11316, 13, 248046, 198, 248045, 74455, 198, 248068, 271, 248069, 271], "page_table_first_values": [14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "phase": "adapter_prefill_input", "prompt_lens": [26], "sampling_seed_first": [null], "sampling_temperature_first": [0.0], "sampling_top_k_first": [1], "sampling_top_p_first": [0.0]}
+{"cache_block_size": 1072, "empty_slots": [0], "page_table_shape": [1, 245], "phase": "adapter_prefill_return", "prompt_lens": [26], "tokens": [3733]}
+{"batch_rows": [0], "is_decode": false, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [3733], "tt_out_shape": [1]}
+{"end_idxs": [27], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "start_idxs": [26], "tokens": [3733]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "tokens": [3733]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [513], "tt_out_shape": [32]}
+{"end_idxs": [28], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "start_idxs": [27], "tokens": [513]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "tokens": [513]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [220], "tt_out_shape": [32]}
+{"end_idxs": [29], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "start_idxs": [28], "tokens": [220]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "tokens": [220]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [16], "tt_out_shape": [32]}
+{"end_idxs": [30], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "start_idxs": [29], "tokens": [16]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "tokens": [16]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [15], "tt_out_shape": [32]}
+{"end_idxs": [31], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "start_idxs": [30], "tokens": [15]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "tokens": [15]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [9944], "tt_out_shape": [32]}
+{"end_idxs": [32], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "start_idxs": [31], "tokens": [9944]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "tokens": [9944]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [4947], "tt_out_shape": [32]}
+{"end_idxs": [33], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "start_idxs": [32], "tokens": [4947]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "tokens": [4947]}
+{"batch_rows": [0], "is_decode": true, "phase": "runner_get_output_tokens_device", "rows": [0], "tokens": [2599], "tt_out_shape": [32]}
+{"end_idxs": [34], "phase": "runner_apply_tokens_live", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "start_idxs": [33], "tokens": [2599]}
+{"phase": "runner_apply_and_build", "req_ids": ["chatcmpl-bdad74aec005eddd-aa621ee7"], "tokens": [2599]}

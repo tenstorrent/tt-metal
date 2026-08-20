@@ -35,6 +35,7 @@ from .functional_decoder import (
     _require,
     _rms_norm,
     _rms_weight,
+    _row_major_core_rangeset,
     _shape,
     _slice,
     _slice_last,
@@ -209,9 +210,9 @@ class _FusedFullAttention(LightweightModule):
         k = _apply_partial_rope_fused(k, cos, sin, self.cfg.rotary_dim, decode_layout=decode_layout)
         return q, k
 
-    def _decode_update_mem_config(self, batch: int, head_dim: int):
+    def _decode_update_mem_config(self, batch: int, head_dim: int, *, core_offset: int = 0):
         grid = self.device.compute_with_storage_grid_size()
-        shard_grid = ttnn.num_cores_to_corerangeset(batch, grid, True)
+        shard_grid = _row_major_core_rangeset(grid, batch, start=core_offset)
         shard_spec = ttnn.ShardSpec(
             shard_grid,
             (TILE_SIZE, head_dim),
@@ -219,7 +220,7 @@ class _FusedFullAttention(LightweightModule):
         )
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
-    def _cache_update_tensor(self, tensor: ttnn.Tensor, *, batch: int) -> ttnn.Tensor:
+    def _cache_update_tensor(self, tensor: ttnn.Tensor, *, batch: int, core_offset: int = 0) -> ttnn.Tensor:
         if _shape(tensor)[2] < TILE_SIZE:
             tensor = ttnn.pad(
                 tensor,
@@ -227,7 +228,9 @@ class _FusedFullAttention(LightweightModule):
                 (0, 0, 0, 0),
                 0.0,
             )
-        return ttnn.to_memory_config(tensor, self._decode_update_mem_config(batch, self.cfg.head_dim))
+        return ttnn.to_memory_config(
+            tensor, self._decode_update_mem_config(batch, self.cfg.head_dim, core_offset=core_offset)
+        )
 
     def prefill_forward(
         self,
@@ -328,12 +331,14 @@ class _FusedFullAttention(LightweightModule):
         q, k = self._norm_and_rope(q, k, position_embeddings, decode_layout=True)
 
         k_update = self._cache_update_tensor(k, batch=batch)
-        v_update = self._cache_update_tensor(v, batch=batch)
-        ttnn.experimental.paged_update_cache(
-            kv_cache.keys, k_update, update_idxs_tensor=current_pos, page_table=page_table
-        )
-        ttnn.experimental.paged_update_cache(
-            kv_cache.values, v_update, update_idxs_tensor=current_pos, page_table=page_table
+        v_update = self._cache_update_tensor(v, batch=batch, core_offset=batch)
+        ttnn.experimental.paged_fused_update_cache(
+            kv_cache.keys,
+            k_update,
+            kv_cache.values,
+            v_update,
+            update_idxs_tensor=current_pos,
+            page_table=page_table,
         )
 
         attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(

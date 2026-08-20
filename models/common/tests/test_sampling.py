@@ -108,6 +108,14 @@ def test_format_sampling_params_uses_device_argmax_sentinel_for_greedy_rows():
     assert params.top_k[0] == 1
     assert params.top_p[0] == 0.0
 
+    top1_params = format_sampling_params(
+        SamplingParams(temperature=2.0, top_k=1, top_p=0.95),
+        max_batch_size=32,
+    )
+    assert top1_params.temperature[0] == 1.0
+    assert top1_params.top_k[0] == 1
+    assert top1_params.top_p[0] == 0.0
+
 
 def _skip_if_not_galaxy(mesh_device):
     """Skip test if not running on TG Galaxy (32 devices)."""

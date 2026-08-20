@@ -1,0 +1,12 @@
+{
+  "model": "Qwen/Qwen3.6-35B-A3B",
+  "prompt": "Write a haiku about machine learning.",
+  "request_chat_template_kwargs": {
+    "enable_thinking": false
+  },
+  "rendered_prompt": "<|im_start|>user\nWrite a haiku about machine learning.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+  "token_count": 20,
+  "template_contains_empty_think_block": true,
+  "contains_no_think_marker": false,
+  "interpretation": "Qwen template no-thinking mode uses an empty think block before assistant content; generated serving text should not expose reasoning content."
+}

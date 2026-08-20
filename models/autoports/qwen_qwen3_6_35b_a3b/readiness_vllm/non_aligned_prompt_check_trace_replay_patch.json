@@ -1,0 +1,63 @@
+{
+  "server_url": "http://localhost:8014",
+  "model": "Qwen/Qwen3.6-35B-A3B",
+  "prompt": "Count the prime numbers less than thirty, then answer in one sentence.",
+  "divisibility": {
+    "by_16": 10,
+    "by_32": 26,
+    "by_64": 26,
+    "by_128": 26,
+    "by_1072": 26,
+    "by_2048": 26
+  },
+  "status_code": 200,
+  "elapsed_s": 12.57741403579712,
+  "response": {
+    "id": "chatcmpl-bdad74aec005eddd",
+    "object": "chat.completion",
+    "created": 1787226756,
+    "model": "Qwen/Qwen3.6-35B-A3B",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "There are 10 prime numbers less",
+          "refusal": null,
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "tool_calls": [],
+          "reasoning": null
+        },
+        "logprobs": null,
+        "finish_reason": "length",
+        "stop_reason": null,
+        "token_ids": null
+      }
+    ],
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "prompt_tokens": 26,
+      "total_tokens": 34,
+      "completion_tokens": 8,
+      "prompt_tokens_details": null
+    },
+    "prompt_logprobs": null,
+    "prompt_token_ids": null,
+    "kv_transfer_params": null
+  },
+  "prompt_token_length": 26,
+  "alignment_moduli_checked": [
+    16,
+    32,
+    64,
+    128,
+    1072,
+    2048
+  ],
+  "is_non_aligned": true,
+  "prompt_length_source": "response.usage.prompt_tokens from vLLM chat completion response; adapter debug for same request recorded prompt_lens=[26]",
+  "debug_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/live_debug_trace_replay_patch.jsonl"
+}

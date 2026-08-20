@@ -1,0 +1,992 @@
+[New LWP 3023855]
+[New LWP 3023854]
+[New LWP 3023853]
+[New LWP 3023852]
+[New LWP 3023851]
+[New LWP 3023850]
+[New LWP 3012471]
+[New LWP 3012470]
+[New LWP 3012469]
+[New LWP 3012468]
+[New LWP 3012467]
+[New LWP 3012466]
+[New LWP 3012465]
+[New LWP 3012463]
+[New LWP 3012400]
+[New LWP 3012399]
+[New LWP 3012398]
+[New LWP 3012397]
+[New LWP 3012396]
+[New LWP 3012395]
+[New LWP 3012394]
+[New LWP 3012393]
+[New LWP 3012392]
+[New LWP 3012386]
+[New LWP 3012385]
+[New LWP 3012384]
+[New LWP 3012383]
+[New LWP 3012382]
+[New LWP 3012381]
+[New LWP 3012380]
+[New LWP 3012379]
+[New LWP 3012378]
+[New LWP 3012377]
+[New LWP 3012376]
+[New LWP 3012375]
+[New LWP 3012374]
+[New LWP 3012373]
+[New LWP 3012372]
+[New LWP 3012371]
+[New LWP 3012370]
+[New LWP 3012369]
+[New LWP 3012303]
+[New LWP 3012302]
+[New LWP 3012301]
+[New LWP 3012300]
+[New LWP 3012299]
+[New LWP 3012298]
+[New LWP 3012297]
+[New LWP 3012296]
+[New LWP 3012295]
+[New LWP 3012294]
+[New LWP 3012293]
+[New LWP 3012292]
+[New LWP 3012291]
+[New LWP 3012290]
+[New LWP 3012289]
+[New LWP 3012221]
+[New LWP 3012220]
+[New LWP 3012219]
+[New LWP 3012218]
+[New LWP 3012217]
+[New LWP 3012216]
+[New LWP 3012215]
+[New LWP 3012214]
+[New LWP 3012213]
+[New LWP 3012212]
+[New LWP 3012211]
+[New LWP 3012210]
+[New LWP 3012209]
+[New LWP 3012208]
+[New LWP 3012207]
+[New LWP 3012201]
+[New LWP 3012200]
+[New LWP 3012199]
+[New LWP 3012198]
+[New LWP 3012197]
+[New LWP 3012134]
+[New LWP 3012133]
+[New LWP 3012132]
+[New LWP 3012131]
+[New LWP 3012130]
+[New LWP 3012129]
+[New LWP 3012128]
+[New LWP 3012127]
+[New LWP 3012126]
+[New LWP 3012125]
+[New LWP 3012124]
+[New LWP 3012123]
+[New LWP 3012122]
+[New LWP 3012121]
+[New LWP 3012120]
+
+warning: Loadable section ".dynstr" outside of ELF segments
+  in /home/ttuser/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/bin/python3.12
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x23332124) at ./nptl/futex-internal.c:57
+
+warning: 57	./nptl/futex-internal.c: No such file or directory
+
+Thread 92 (Thread 0x7ca5b41ff6c0 (LWP 3012120) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d2960 <thread_status+96>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d2960 <thread_status+96>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d2960 <thread_status+96>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d2910 <thread_status+16>, cond=0x7ca5d61d2938 <thread_status+56>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d2938 <thread_status+56>, mutex=0x7ca5d61d2910 <thread_status+16>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 91 (Thread 0x7ca5b39fe6c0 (LWP 3012121) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d29e0 <thread_status+224>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d29e0 <thread_status+224>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d29e0 <thread_status+224>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d2990 <thread_status+144>, cond=0x7ca5d61d29b8 <thread_status+184>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d29b8 <thread_status+184>, mutex=0x7ca5d61d2990 <thread_status+144>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 90 (Thread 0x7ca5b31fd6c0 (LWP 3012122) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d2a60 <thread_status+352>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d2a60 <thread_status+352>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d2a60 <thread_status+352>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d2a10 <thread_status+272>, cond=0x7ca5d61d2a38 <thread_status+312>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d2a38 <thread_status+312>, mutex=0x7ca5d61d2a10 <thread_status+272>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 89 (Thread 0x7ca5b29fc6c0 (LWP 3012123) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d2ae0 <thread_status+480>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d2ae0 <thread_status+480>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d2ae0 <thread_status+480>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d2a90 <thread_status+400>, cond=0x7ca5d61d2ab8 <thread_status+440>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d2ab8 <thread_status+440>, mutex=0x7ca5d61d2a90 <thread_status+400>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 88 (Thread 0x7ca5b21fb6c0 (LWP 3012124) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d2b60 <thread_status+608>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d2b60 <thread_status+608>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d2b60 <thread_status+608>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d2b10 <thread_status+528>, cond=0x7ca5d61d2b38 <thread_status+568>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d2b38 <thread_status+568>, mutex=0x7ca5d61d2b10 <thread_status+528>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 87 (Thread 0x7ca5b19fa6c0 (LWP 3012125) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d2be0 <thread_status+736>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d2be0 <thread_status+736>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d2be0 <thread_status+736>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d2b90 <thread_status+656>, cond=0x7ca5d61d2bb8 <thread_status+696>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d2bb8 <thread_status+696>, mutex=0x7ca5d61d2b90 <thread_status+656>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 86 (Thread 0x7ca5b11f96c0 (LWP 3012126) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d2c60 <thread_status+864>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d2c60 <thread_status+864>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d2c60 <thread_status+864>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d2c10 <thread_status+784>, cond=0x7ca5d61d2c38 <thread_status+824>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d2c38 <thread_status+824>, mutex=0x7ca5d61d2c10 <thread_status+784>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 85 (Thread 0x7ca5b09f86c0 (LWP 3012127) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d2ce0 <thread_status+992>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d2ce0 <thread_status+992>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d2ce0 <thread_status+992>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d2c90 <thread_status+912>, cond=0x7ca5d61d2cb8 <thread_status+952>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d2cb8 <thread_status+952>, mutex=0x7ca5d61d2c90 <thread_status+912>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 84 (Thread 0x7ca5b01f76c0 (LWP 3012128) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d2d60 <thread_status+1120>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d2d60 <thread_status+1120>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d2d60 <thread_status+1120>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d2d10 <thread_status+1040>, cond=0x7ca5d61d2d38 <thread_status+1080>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d2d38 <thread_status+1080>, mutex=0x7ca5d61d2d10 <thread_status+1040>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 83 (Thread 0x7ca5af9f66c0 (LWP 3012129) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d2de0 <thread_status+1248>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d2de0 <thread_status+1248>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d2de0 <thread_status+1248>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d2d90 <thread_status+1168>, cond=0x7ca5d61d2db8 <thread_status+1208>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d2db8 <thread_status+1208>, mutex=0x7ca5d61d2d90 <thread_status+1168>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 82 (Thread 0x7ca5af1f56c0 (LWP 3012130) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d2e60 <thread_status+1376>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d2e60 <thread_status+1376>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d2e60 <thread_status+1376>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d2e10 <thread_status+1296>, cond=0x7ca5d61d2e38 <thread_status+1336>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d2e38 <thread_status+1336>, mutex=0x7ca5d61d2e10 <thread_status+1296>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 81 (Thread 0x7ca5ae9f46c0 (LWP 3012131) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d2ee0 <thread_status+1504>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d2ee0 <thread_status+1504>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d2ee0 <thread_status+1504>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d2e90 <thread_status+1424>, cond=0x7ca5d61d2eb8 <thread_status+1464>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d2eb8 <thread_status+1464>, mutex=0x7ca5d61d2e90 <thread_status+1424>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 80 (Thread 0x7ca5ae1f36c0 (LWP 3012132) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d2f60 <thread_status+1632>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d2f60 <thread_status+1632>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d2f60 <thread_status+1632>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d2f10 <thread_status+1552>, cond=0x7ca5d61d2f38 <thread_status+1592>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d2f38 <thread_status+1592>, mutex=0x7ca5d61d2f10 <thread_status+1552>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 79 (Thread 0x7ca5ad9f26c0 (LWP 3012133) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d2fe0 <thread_status+1760>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d2fe0 <thread_status+1760>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d2fe0 <thread_status+1760>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d2f90 <thread_status+1680>, cond=0x7ca5d61d2fb8 <thread_status+1720>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d2fb8 <thread_status+1720>, mutex=0x7ca5d61d2f90 <thread_status+1680>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 78 (Thread 0x7ca5ad1f16c0 (LWP 3012134) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca5d61d3060 <thread_status+1888>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca5d61d3060 <thread_status+1888>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca5d61d3060 <thread_status+1888>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca5d61d3010 <thread_status+1808>, cond=0x7ca5d61d3038 <thread_status+1848>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca5d61d3038 <thread_status+1848>, mutex=0x7ca5d61d3010 <thread_status+1808>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5d503581b in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/numpy/_core/../../numpy.libs/libscipy_openblas64_-fdde5778.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 77 (Thread 0x7ca5921bc6c0 (LWP 3012197) "Tracy Sampling"):
+#0  0x00007ca5eececbdf in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=0x7ca5921ba4a0, rem=0x7ca5921ba4a0) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+#1  0x00007ca5eecf9b27 in __GI___nanosleep (req=<optimized out>, rem=<optimized out>) at ../sysdeps/unix/sysv/linux/nanosleep.c:25
+#2  0x00007ca597a53d2f in tracy::SysTraceWorker(void*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtracy.so.0.13.3
+#3  0x00007ca597a678bd in tracy::Thread::Launch(void*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtracy.so.0.13.3
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 76 (Thread 0x7ca5915ab6c0 (LWP 3012198) "Tracy Profiler"):
+#0  0x00007ca5eed1b5fd in __GI___poll (fds=0x7ca5915aa710, nfds=1, timeout=10) at ../sysdeps/unix/sysv/linux/poll.c:29
+#1  0x00007ca597a30156 in tracy::ListenSocket::Accept() () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtracy.so.0.13.3
+#2  0x00007ca597a2e552 in tracy::Profiler::Worker() () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtracy.so.0.13.3
+#3  0x00007ca597a678bd in tracy::Thread::Launch(void*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtracy.so.0.13.3
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 75 (Thread 0x7ca590daa6c0 (LWP 3012199) "Tracy DXT1"):
+#0  0x00007ca5eececbdf in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=0x7ca590da9e50, rem=0x7ca590da9e50) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+#1  0x00007ca5eecf9b27 in __GI___nanosleep (req=<optimized out>, rem=<optimized out>) at ../sysdeps/unix/sysv/linux/nanosleep.c:25
+#2  0x00007ca597a3195b in tracy::Profiler::CompressWorker() () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtracy.so.0.13.3
+#3  0x00007ca597a678bd in tracy::Thread::Launch(void*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtracy.so.0.13.3
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 74 (Thread 0x7ca58bfff6c0 (LWP 3012200) "Tracy Symbol Wo"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x7ca58bffee78, op=137, expected=0, futex_word=0x7ca597a6f428 <tracy::s_profiler+744>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x7ca58bffee78, clockid=0, expected=0, futex_word=0x7ca597a6f428 <tracy::s_profiler+744>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca597a6f428 <tracy::s_profiler+744>, expected=expected@entry=0, clockid=clockid@entry=1, abstime=abstime@entry=0x7ca58bffee78, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9c1f6 in __pthread_cond_wait_common (abstime=<optimized out>, clockid=<optimized out>, mutex=0x7ca597a6f430 <tracy::s_profiler+752>, cond=0x7ca597a6f400 <tracy::s_profiler+704>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_clockwait64 (abstime=<optimized out>, clockid=<optimized out>, mutex=0x7ca597a6f430 <tracy::s_profiler+752>, cond=0x7ca597a6f400 <tracy::s_profiler+704>) at ./nptl/pthread_cond_wait.c:691
+#5  ___pthread_cond_clockwait64 (cond=0x7ca597a6f400 <tracy::s_profiler+704>, mutex=0x7ca597a6f430 <tracy::s_profiler+752>, clockid=<optimized out>, abstime=<optimized out>) at ./nptl/pthread_cond_wait.c:679
+#6  0x00007ca597a351d0 in tracy::Profiler::SymbolWorker() () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtracy.so.0.13.3
+#7  0x00007ca597a678bd in tracy::Thread::Launch(void*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtracy.so.0.13.3
+#8  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#9  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 73 (Thread 0x7ca57bfff6c0 (LWP 3012201) "jemalloc_bg_thd"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=31909, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca588616630) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=31909, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca588616630) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca588616630, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca588616678, cond=0x7ca588616608) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca588616608, mutex=0x7ca588616678) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5821f7793 in background_thread_entry () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/pyarrow/libarrow.so.2100
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 72 (Thread 0x7ca5523ff6c0 (LWP 3012207) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573dae860 <thread_status+96>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573dae860 <thread_status+96>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573dae860 <thread_status+96>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573dae810 <thread_status+16>, cond=0x7ca573dae838 <thread_status+56>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573dae838 <thread_status+56>, mutex=0x7ca573dae810 <thread_status+16>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 71 (Thread 0x7ca551bfe6c0 (LWP 3012208) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573dae8e0 <thread_status+224>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573dae8e0 <thread_status+224>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573dae8e0 <thread_status+224>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573dae890 <thread_status+144>, cond=0x7ca573dae8b8 <thread_status+184>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573dae8b8 <thread_status+184>, mutex=0x7ca573dae890 <thread_status+144>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 70 (Thread 0x7ca5513fd6c0 (LWP 3012209) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573dae960 <thread_status+352>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573dae960 <thread_status+352>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573dae960 <thread_status+352>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573dae910 <thread_status+272>, cond=0x7ca573dae938 <thread_status+312>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573dae938 <thread_status+312>, mutex=0x7ca573dae910 <thread_status+272>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 69 (Thread 0x7ca550bfc6c0 (LWP 3012210) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573dae9e0 <thread_status+480>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573dae9e0 <thread_status+480>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573dae9e0 <thread_status+480>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573dae990 <thread_status+400>, cond=0x7ca573dae9b8 <thread_status+440>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573dae9b8 <thread_status+440>, mutex=0x7ca573dae990 <thread_status+400>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 68 (Thread 0x7ca5503fb6c0 (LWP 3012211) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573daea60 <thread_status+608>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573daea60 <thread_status+608>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573daea60 <thread_status+608>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573daea10 <thread_status+528>, cond=0x7ca573daea38 <thread_status+568>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573daea38 <thread_status+568>, mutex=0x7ca573daea10 <thread_status+528>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 67 (Thread 0x7ca54fbfa6c0 (LWP 3012212) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573daeae0 <thread_status+736>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573daeae0 <thread_status+736>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573daeae0 <thread_status+736>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573daea90 <thread_status+656>, cond=0x7ca573daeab8 <thread_status+696>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573daeab8 <thread_status+696>, mutex=0x7ca573daea90 <thread_status+656>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 66 (Thread 0x7ca54f3f96c0 (LWP 3012213) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573daeb60 <thread_status+864>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573daeb60 <thread_status+864>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573daeb60 <thread_status+864>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573daeb10 <thread_status+784>, cond=0x7ca573daeb38 <thread_status+824>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573daeb38 <thread_status+824>, mutex=0x7ca573daeb10 <thread_status+784>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 65 (Thread 0x7ca54ebf86c0 (LWP 3012214) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573daebe0 <thread_status+992>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573daebe0 <thread_status+992>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573daebe0 <thread_status+992>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573daeb90 <thread_status+912>, cond=0x7ca573daebb8 <thread_status+952>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573daebb8 <thread_status+952>, mutex=0x7ca573daeb90 <thread_status+912>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 64 (Thread 0x7ca54e3f76c0 (LWP 3012215) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573daec60 <thread_status+1120>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573daec60 <thread_status+1120>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573daec60 <thread_status+1120>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573daec10 <thread_status+1040>, cond=0x7ca573daec38 <thread_status+1080>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573daec38 <thread_status+1080>, mutex=0x7ca573daec10 <thread_status+1040>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 63 (Thread 0x7ca54dbf66c0 (LWP 3012216) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573daece0 <thread_status+1248>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573daece0 <thread_status+1248>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573daece0 <thread_status+1248>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573daec90 <thread_status+1168>, cond=0x7ca573daecb8 <thread_status+1208>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573daecb8 <thread_status+1208>, mutex=0x7ca573daec90 <thread_status+1168>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 62 (Thread 0x7ca54d3f56c0 (LWP 3012217) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573daed60 <thread_status+1376>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573daed60 <thread_status+1376>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573daed60 <thread_status+1376>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573daed10 <thread_status+1296>, cond=0x7ca573daed38 <thread_status+1336>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573daed38 <thread_status+1336>, mutex=0x7ca573daed10 <thread_status+1296>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 61 (Thread 0x7ca54cbf46c0 (LWP 3012218) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573daede0 <thread_status+1504>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573daede0 <thread_status+1504>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573daede0 <thread_status+1504>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573daed90 <thread_status+1424>, cond=0x7ca573daedb8 <thread_status+1464>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573daedb8 <thread_status+1464>, mutex=0x7ca573daed90 <thread_status+1424>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 60 (Thread 0x7ca54c3f36c0 (LWP 3012219) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573daee60 <thread_status+1632>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573daee60 <thread_status+1632>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573daee60 <thread_status+1632>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573daee10 <thread_status+1552>, cond=0x7ca573daee38 <thread_status+1592>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573daee38 <thread_status+1592>, mutex=0x7ca573daee10 <thread_status+1552>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 59 (Thread 0x7ca54bbf26c0 (LWP 3012220) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573daeee0 <thread_status+1760>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573daeee0 <thread_status+1760>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573daeee0 <thread_status+1760>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573daee90 <thread_status+1680>, cond=0x7ca573daeeb8 <thread_status+1720>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573daeeb8 <thread_status+1720>, mutex=0x7ca573daee90 <thread_status+1680>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 58 (Thread 0x7ca54b3f16c0 (LWP 3012221) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca573daef60 <thread_status+1888>) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca573daef60 <thread_status+1888>) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca573daef60 <thread_status+1888>, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca573daef10 <thread_status+1808>, cond=0x7ca573daef38 <thread_status+1848>) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca573daef38 <thread_status+1848>, mutex=0x7ca573daef10 <thread_status+1808>) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca572c393eb in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/scipy/linalg/../../scipy.libs/libscipy_openblas-6cdc3b4a.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 57 (Thread 0x7ca536bff6c0 (LWP 3012289) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafc5e0) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafc5e0) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafc5e0, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafc590, cond=0x7ca53dafc5b8) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafc5b8, mutex=0x7ca53dafc590) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 56 (Thread 0x7ca5363fe6c0 (LWP 3012290) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafc660) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafc660) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafc660, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafc610, cond=0x7ca53dafc638) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafc638, mutex=0x7ca53dafc610) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 55 (Thread 0x7ca535bfd6c0 (LWP 3012291) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafc6e0) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafc6e0) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafc6e0, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafc690, cond=0x7ca53dafc6b8) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafc6b8, mutex=0x7ca53dafc690) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 54 (Thread 0x7ca5251ff6c0 (LWP 3012292) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafc760) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafc760) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafc760, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafc710, cond=0x7ca53dafc738) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafc738, mutex=0x7ca53dafc710) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 53 (Thread 0x7ca51c7ff6c0 (LWP 3012293) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafc7e0) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafc7e0) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafc7e0, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafc790, cond=0x7ca53dafc7b8) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafc7b8, mutex=0x7ca53dafc790) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 52 (Thread 0x7ca513dff6c0 (LWP 3012294) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafc860) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafc860) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafc860, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafc810, cond=0x7ca53dafc838) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafc838, mutex=0x7ca53dafc810) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 51 (Thread 0x7ca5135fe6c0 (LWP 3012295) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafc8e0) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafc8e0) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafc8e0, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafc890, cond=0x7ca53dafc8b8) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafc8b8, mutex=0x7ca53dafc890) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 50 (Thread 0x7ca502bff6c0 (LWP 3012296) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafc960) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafc960) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafc960, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafc910, cond=0x7ca53dafc938) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafc938, mutex=0x7ca53dafc910) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 49 (Thread 0x7ca4fa1ff6c0 (LWP 3012297) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafc9e0) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafc9e0) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafc9e0, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafc990, cond=0x7ca53dafc9b8) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafc9b8, mutex=0x7ca53dafc990) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 48 (Thread 0x7ca4f17ff6c0 (LWP 3012298) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafca60) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafca60) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafca60, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafca10, cond=0x7ca53dafca38) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafca38, mutex=0x7ca53dafca10) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 47 (Thread 0x7ca4e8dff6c0 (LWP 3012299) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafcae0) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafcae0) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafcae0, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafca90, cond=0x7ca53dafcab8) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafcab8, mutex=0x7ca53dafca90) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 46 (Thread 0x7ca4e03ff6c0 (LWP 3012300) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafcb60) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafcb60) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafcb60, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafcb10, cond=0x7ca53dafcb38) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafcb38, mutex=0x7ca53dafcb10) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 45 (Thread 0x7ca4d79ff6c0 (LWP 3012301) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafcbe0) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafcbe0) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafcbe0, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafcb90, cond=0x7ca53dafcbb8) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafcbb8, mutex=0x7ca53dafcb90) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 44 (Thread 0x7ca4cefff6c0 (LWP 3012302) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafcc60) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafcc60) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafcc60, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafcc10, cond=0x7ca53dafcc38) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafcc38, mutex=0x7ca53dafcc10) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 43 (Thread 0x7ca4c65ff6c0 (LWP 3012303) "python"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7ca53dafcce0) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x7ca53dafcce0) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7ca53dafcce0, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x7ca53dafcc90, cond=0x7ca53dafccb8) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x7ca53dafccb8, mutex=0x7ca53dafcc90) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca53ba72b63 in blas_thread_server () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/cv2/../opencv_python_headless.libs/libopenblasp-r0-59ffcd50.3.15.so
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 42 (Thread 0x7ca4a97ff6c0 (LWP 3012369) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 41 (Thread 0x7ca4a8ffe6c0 (LWP 3012370) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 40 (Thread 0x7ca4a87fd6c0 (LWP 3012371) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 39 (Thread 0x7ca4a7ffc6c0 (LWP 3012372) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 38 (Thread 0x7ca4a77fb6c0 (LWP 3012373) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 37 (Thread 0x7ca4a6ffa6c0 (LWP 3012374) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 36 (Thread 0x7ca4a67f96c0 (LWP 3012375) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 35 (Thread 0x7ca4a5ff86c0 (LWP 3012376) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 34 (Thread 0x7ca4a57f76c0 (LWP 3012377) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 33 (Thread 0x7ca4a4ff66c0 (LWP 3012378) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 32 (Thread 0x7ca4a47f56c0 (LWP 3012379) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 31 (Thread 0x7ca4a3ff46c0 (LWP 3012380) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 30 (Thread 0x7ca4a37f36c0 (LWP 3012381) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 29 (Thread 0x7ca4a2ff26c0 (LWP 3012382) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 28 (Thread 0x7ca4a27f16c0 (LWP 3012383) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 27 (Thread 0x7ca4a1ff06c0 (LWP 3012384) "VLLM::EngineCor"):
+#0  syscall () at ../sysdeps/unix/sysv/linux/x86_64/syscall.S:38
+#1  0x00007ca5985055c8 in void std::__detail::__waiter<std::integral_constant<bool, true> >::_M_do_wait_v<unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}>(unsigned int, std::__atomic_base<unsigned int>::wait(unsigned int, std::memory_order) const::{lambda()#1}) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca598505461 in tf::Notifier::commit_wait(tf::Notifier::Waiter*) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5984ffd50 in tf::Executor::_wait_for_task(tf::Worker&, tf::Node*&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5984ffb24 in tf::Executor::_spawn(unsigned long)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#6  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#7  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 26 (Thread 0x7c834f5ff6c0 (LWP 3012385) "VLLM::EngineCor"):
+#0  0x00007ca5eed2a172 in epoll_wait (epfd=32, events=0x21913900, maxevents=32, timeout=2100000) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+#1  0x00007ca5d4af0f15 in ?? () from /lib/x86_64-linux-gnu/libevent_core-2.1.so.7
+#2  0x00007ca5d4aebda8 in event_base_loop () from /lib/x86_64-linux-gnu/libevent_core-2.1.so.7
+#3  0x00007ca596eb9e91 in progress_engine () from /opt/openmpi-v5.0.7-ulfm/lib/libpmix.so.2
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 25 (Thread 0x7c834ddfe6c0 (LWP 3012386) "VLLM::EngineCor"):
+#0  0x00007ca5eececbdf in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=0x7c834ddfde58, rem=0x7c834ddfde58) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+#1  0x00007ca5eecf9b27 in __GI___nanosleep (req=<optimized out>, rem=<optimized out>) at ../sysdeps/unix/sysv/linux/nanosleep.c:25
+#2  0x00007ca59833da2b in tt::tt_metal::inspector::RpcServerController::run_server() () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 24 (Thread 0x7c834d5fd6c0 (LWP 3012392) "VLLM::EngineCor"):
+#0  0x00007ca5eececbdf in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=0x7c834d5fce30, rem=0x7c834d5fce30) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+#1  0x00007ca5eecf9b27 in __GI___nanosleep (req=<optimized out>, rem=<optimized out>) at ../sysdeps/unix/sysv/linux/nanosleep.c:25
+#2  0x00007ca59866cc8e in tt::tt_metal::threading_primitives::NumaAwareExecutor::NumaAwareExecutor(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, unsigned int)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 23 (Thread 0x7c833f3ef6c0 (LWP 3012393) "VLLM::EngineCor"):
+#0  0x00007ca5eececbdf in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=0x7c833f3eee30, rem=0x7c833f3eee30) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+#1  0x00007ca5eecf9b27 in __GI___nanosleep (req=<optimized out>, rem=<optimized out>) at ../sysdeps/unix/sysv/linux/nanosleep.c:25
+#2  0x00007ca59866cc8e in tt::tt_metal::threading_primitives::NumaAwareExecutor::NumaAwareExecutor(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, unsigned int)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 22 (Thread 0x7c833ebee6c0 (LWP 3012394) "VLLM::EngineCor"):
+#0  0x00007ca5eececbdf in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=0x7c833ebede30, rem=0x7c833ebede30) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+#1  0x00007ca5eecf9b27 in __GI___nanosleep (req=<optimized out>, rem=<optimized out>) at ../sysdeps/unix/sysv/linux/nanosleep.c:25
+#2  0x00007ca59866cc8e in tt::tt_metal::threading_primitives::NumaAwareExecutor::NumaAwareExecutor(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, unsigned int)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 21 (Thread 0x7c833e3ed6c0 (LWP 3012395) "VLLM::EngineCor"):
+#0  0x00007ca5eececbdf in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=0x7c833e3ece30, rem=0x7c833e3ece30) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+#1  0x00007ca5eecf9b27 in __GI___nanosleep (req=<optimized out>, rem=<optimized out>) at ../sysdeps/unix/sysv/linux/nanosleep.c:25
+#2  0x00007ca59866cc8e in tt::tt_metal::threading_primitives::NumaAwareExecutor::NumaAwareExecutor(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, unsigned int)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 20 (Thread 0x7c833dbec6c0 (LWP 3012396) "VLLM::EngineCor"):
+#0  0x00007ca5eececbdf in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=0x7c833dbebe30, rem=0x7c833dbebe30) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+#1  0x00007ca5eecf9b27 in __GI___nanosleep (req=<optimized out>, rem=<optimized out>) at ../sysdeps/unix/sysv/linux/nanosleep.c:25
+#2  0x00007ca59866cc8e in tt::tt_metal::threading_primitives::NumaAwareExecutor::NumaAwareExecutor(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, unsigned int)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 19 (Thread 0x7c833d3eb6c0 (LWP 3012397) "VLLM::EngineCor"):
+#0  0x00007ca5eececbdf in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=0x7c833d3eae30, rem=0x7c833d3eae30) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+#1  0x00007ca5eecf9b27 in __GI___nanosleep (req=<optimized out>, rem=<optimized out>) at ../sysdeps/unix/sysv/linux/nanosleep.c:25
+#2  0x00007ca59866cc8e in tt::tt_metal::threading_primitives::NumaAwareExecutor::NumaAwareExecutor(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, unsigned int)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 18 (Thread 0x7c833cbea6c0 (LWP 3012398) "VLLM::EngineCor"):
+#0  0x00007ca5eececbdf in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=0x7c833cbe9e30, rem=0x7c833cbe9e30) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+#1  0x00007ca5eecf9b27 in __GI___nanosleep (req=<optimized out>, rem=<optimized out>) at ../sysdeps/unix/sysv/linux/nanosleep.c:25
+#2  0x00007ca59866cc8e in tt::tt_metal::threading_primitives::NumaAwareExecutor::NumaAwareExecutor(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, unsigned int)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 17 (Thread 0x7c8337fff6c0 (LWP 3012399) "VLLM::EngineCor"):
+#0  0x00007ca5eececbdf in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=0x7c8337ffee30, rem=0x7c8337ffee30) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+#1  0x00007ca5eecf9b27 in __GI___nanosleep (req=<optimized out>, rem=<optimized out>) at ../sysdeps/unix/sysv/linux/nanosleep.c:25
+#2  0x00007ca59866cc8e in tt::tt_metal::threading_primitives::NumaAwareExecutor::NumaAwareExecutor(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, unsigned int)::{lambda()#1}::operator()() const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 16 (Thread 0x7c83377fe6c0 (LWP 3012400) "VLLM::EngineCor"):
+#0  0x00007ca5978630c3 in tt::umd::ClusterDescriptor::is_chip_mmio_capable(int) const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt-umd.so.0
+#1  0x00007ca5987248d8 in tt::Cluster::read_sysmem(void*, unsigned int, unsigned long, int, unsigned short) const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#2  0x00007ca5983f825c in unsigned int tt::tt_metal::read_cq_host_ptr<true>(tt::tt_metal::SystemMemoryManager const&, int, unsigned char, unsigned int, unsigned int) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5983f6ff5 in tt::tt_metal::SystemMemoryManager::completion_queue_wait_front(unsigned char, std::atomic<bool>&) const () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#4  0x00007ca5987e97ba in tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue_event(tt::tt_metal::distributed::MeshReadEventDescriptor&) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#5  0x00007ca5987e2e6f in tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue() () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#6  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#7  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#8  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 15 (Thread 0x7c832fbef6c0 (LWP 3012463) "RealtimeProfile"):
+#0  0x00007ca5eececbdf in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=0x7c832fbeee08, rem=0x7c832fbeee08) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+#1  0x00007ca5eecf9b27 in __GI___nanosleep (req=<optimized out>, rem=<optimized out>) at ../sysdeps/unix/sysv/linux/nanosleep.c:25
+#2  0x00007ca5987c3ade in std::thread::_State_impl<std::thread::_Invoker<std::tuple<tt::tt_metal::distributed::RealtimeProfilerManager::RealtimeProfilerManager(std::shared_ptr<tt::tt_metal::distributed::MeshDevice> const&)::$_2> > >::_M_run() () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#3  0x00007ca5d6ef5c79 in ?? () from /lib/x86_64-linux-gnu/libstdc++.so.6
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 14 (Thread 0x7c832f3ee6c0 (LWP 3012465) "VLLM::EngineCor"):
+#0  0x00007ca5edc1de8e in gomp_barrier_wait_end () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/torch/lib/libgomp.so.1
+#1  0x00007ca5edc1b498 in gomp_thread_start () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/torch/lib/libgomp.so.1
+#2  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 13 (Thread 0x7c832ebed6c0 (LWP 3012466) "VLLM::EngineCor"):
+#0  0x00007ca5edc1de8e in gomp_barrier_wait_end () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/torch/lib/libgomp.so.1
+#1  0x00007ca5edc1b498 in gomp_thread_start () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/torch/lib/libgomp.so.1
+#2  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 12 (Thread 0x7c832e3ec6c0 (LWP 3012467) "VLLM::EngineCor"):
+#0  0x00007ca5edc1de8e in gomp_barrier_wait_end () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/torch/lib/libgomp.so.1
+#1  0x00007ca5edc1b498 in gomp_thread_start () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/torch/lib/libgomp.so.1
+#2  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 11 (Thread 0x7c83164df6c0 (LWP 3012468) "VLLM::EngineCor"):
+#0  0x00007ca5edc1de8e in gomp_barrier_wait_end () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/torch/lib/libgomp.so.1
+#1  0x00007ca5edc1b498 in gomp_thread_start () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/torch/lib/libgomp.so.1
+#2  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 10 (Thread 0x7c830ecff6c0 (LWP 3012469) "VLLM::EngineCor"):
+#0  0x00007ca5edc1de8e in gomp_barrier_wait_end () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/torch/lib/libgomp.so.1
+#1  0x00007ca5edc1b498 in gomp_thread_start () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/torch/lib/libgomp.so.1
+#2  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 9 (Thread 0x7c830e4fe6c0 (LWP 3012470) "VLLM::EngineCor"):
+#0  0x00007ca5edc1de8e in gomp_barrier_wait_end () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/torch/lib/libgomp.so.1
+#1  0x00007ca5edc1b498 in gomp_thread_start () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/torch/lib/libgomp.so.1
+#2  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 8 (Thread 0x7c830dcfd6c0 (LWP 3012471) "VLLM::EngineCor"):
+#0  0x00007ca5edc1de8e in gomp_barrier_wait_end () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/torch/lib/libgomp.so.1
+#1  0x00007ca5edc1b498 in gomp_thread_start () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/torch/lib/libgomp.so.1
+#2  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#3  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 7 (Thread 0x7c82c87fb6c0 (LWP 3023850) "VLLM::EngineCor"):
+#0  0x00007ca5eed1b5fd in __GI___poll (fds=0x7c82c87fa6d0, nfds=1, timeout=-1) at ../sysdeps/unix/sysv/linux/poll.c:29
+#1  0x00007ca5379af2d6 in zmq_poll () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/zmq/backend/cython/../../../pyzmq.libs/libzmq-7b073b3d.so.5.2.5
+#2  0x00007ca5396e66e9 in ?? () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/zmq/backend/cython/_zmq.abi3.so
+#3  0x0000000001616a07 in _PyEval_EvalFrameDefault ()
+#4  0x0000000001612849 in method_vectorcall.llvm ()
+#5  0x00000000016219c0 in _PyEval_EvalFrameDefault ()
+#6  0x00000000016128ad in method_vectorcall.llvm ()
+#7  0x0000000001742325 in thread_run ()
+#8  0x0000000001742261 in pythread_wrapper.llvm ()
+#9  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#10 0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 6 (Thread 0x7c82c8ffc6c0 (LWP 3023851) "VLLM::EngineCor"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=<optimized out>, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x7c82b0007120) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=<optimized out>, abstime=0x0, clockid=0, expected=0, futex_word=0x7c82b0007120) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x7c82b0007120, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=<optimized out>) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eeca4fff in do_futex_wait (sem=sem@entry=0x7c82b0007120, abstime=0x0, clockid=0) at ./nptl/sem_waitcommon.c:111
+#4  0x00007ca5eeca5098 in __new_sem_wait_slow64 (sem=0x7c82b0007120, abstime=0x0, clockid=0) at ./nptl/sem_waitcommon.c:183
+#5  0x000000000184d74a in PyThread_acquire_lock_timed.warm ()
+#6  0x00000000016be99c in acquire_timed ()
+#7  0x00000000016be67b in lock_PyThread_acquire_lock ()
+#8  0x0000000001640074 in method_vectorcall_VARARGS_KEYWORDS.llvm.13414486161704986667 ()
+#9  0x0000000001616a07 in _PyEval_EvalFrameDefault ()
+#10 0x0000000001612849 in method_vectorcall.llvm ()
+#11 0x00000000016219c0 in _PyEval_EvalFrameDefault ()
+#12 0x00000000016128ad in method_vectorcall.llvm ()
+#13 0x0000000001742325 in thread_run ()
+#14 0x0000000001742261 in pythread_wrapper.llvm ()
+#15 0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#16 0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 5 (Thread 0x7c82c97fd6c0 (LWP 3023852) "ZMQbg/Reaper"):
+#0  0x00007ca5eed2a172 in epoll_wait (epfd=55, events=0x7c82c97fc1c0, maxevents=256, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+#1  0x00007ca53794e365 in ?? () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/zmq/backend/cython/../../../pyzmq.libs/libzmq-7b073b3d.so.5.2.5
+#2  0x00007ca53796f439 in ?? () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/zmq/backend/cython/../../../pyzmq.libs/libzmq-7b073b3d.so.5.2.5
+#3  0x00007ca537998b88 in ?? () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/zmq/backend/cython/../../../pyzmq.libs/libzmq-7b073b3d.so.5.2.5
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 4 (Thread 0x7c82c9ffe6c0 (LWP 3023853) "ZMQbg/IO/0"):
+#0  0x00007ca5eed2a172 in epoll_wait (epfd=57, events=0x7c82c9ffd1c0, maxevents=256, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+#1  0x00007ca53794e365 in ?? () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/zmq/backend/cython/../../../pyzmq.libs/libzmq-7b073b3d.so.5.2.5
+#2  0x00007ca53796f439 in ?? () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/zmq/backend/cython/../../../pyzmq.libs/libzmq-7b073b3d.so.5.2.5
+#3  0x00007ca537998b88 in ?? () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/zmq/backend/cython/../../../pyzmq.libs/libzmq-7b073b3d.so.5.2.5
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 3 (Thread 0x7c82abcff6c0 (LWP 3023854) "ZMQbg/Reaper"):
+#0  0x00007ca5eed2a172 in epoll_wait (epfd=59, events=0x7c82abcfe1c0, maxevents=256, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+#1  0x00007ca53794e365 in ?? () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/zmq/backend/cython/../../../pyzmq.libs/libzmq-7b073b3d.so.5.2.5
+#2  0x00007ca53796f439 in ?? () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/zmq/backend/cython/../../../pyzmq.libs/libzmq-7b073b3d.so.5.2.5
+#3  0x00007ca537998b88 in ?? () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/zmq/backend/cython/../../../pyzmq.libs/libzmq-7b073b3d.so.5.2.5
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 2 (Thread 0x7c82ab4fe6c0 (LWP 3023855) "ZMQbg/IO/0"):
+#0  0x00007ca5eed2a172 in epoll_wait (epfd=61, events=0x7c82ab4fd1c0, maxevents=256, timeout=-1) at ../sysdeps/unix/sysv/linux/epoll_wait.c:30
+#1  0x00007ca53794e365 in ?? () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/zmq/backend/cython/../../../pyzmq.libs/libzmq-7b073b3d.so.5.2.5
+#2  0x00007ca53796f439 in ?? () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/zmq/backend/cython/../../../pyzmq.libs/libzmq-7b073b3d.so.5.2.5
+#3  0x00007ca537998b88 in ?? () from /localdev/vkovacevic/tt-metal/python_env/lib/python3.12/site-packages/zmq/backend/cython/../../../pyzmq.libs/libzmq-7b073b3d.so.5.2.5
+#4  0x00007ca5eec9cb84 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+#5  0x00007ca5eed29d6c in clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 1 (Thread 0x7ca5eefbd740 (LWP 3012119) "VLLM::EngineCor"):
+#0  0x00007ca5eec98e51 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x23332124) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x23332124) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x23332124, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007ca5eec9b8cd in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x23332128, cond=0x233320f8) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x233320f8, mutex=0x23332128) at ./nptl/pthread_cond_wait.c:627
+#5  0x00007ca5987e6416 in tt::tt_metal::distributed::FDMeshCommandQueue::finish_nolock(std::span<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> const, 18446744073709551615ul>) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#6  0x00007ca5987e762c in tt::tt_metal::distributed::FDMeshCommandQueue::finish(std::span<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> const, 18446744073709551615ul>) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#7  0x00007ca5987d8f9b in tt::tt_metal::distributed::Synchronize(tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned char>, std::span<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> const, 18446744073709551615ul>) () from /localdev/vkovacevic/tt-metal/build_Release/lib/libtt_metal.so
+#8  0x00007ca59b2217bb in nanobind::detail::func_create<false, false, nanobind::detail::func_create<false, true, ttnn::device::device_module(nanobind::module_&)::$_18, void, tt::tt_metal::distributed::MeshDevice*, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::QueueIdTag> >, std::vector<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag>, std::allocator<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > > const&, 0ul, 1ul, 2ul, nanobind::scope, nanobind::name, char const*, nanobind::arg, nanobind::arg_v, nanobind::arg_v, nanobind::call_guard<nanobind::gil_scoped_release> >(ttnn::device::device_module(nanobind::module_&)::$_18&&, void (*)(tt::tt_metal::distributed::MeshDevice*, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::QueueIdTag> >, std::vector<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag>, std::allocator<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > > const&), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul>, nanobind::scope const&, nanobind::name const&, char const* const&, nanobind::arg const&, nanobind::arg_v const&, nanobind::arg_v const&, nanobind::call_guard<nanobind::gil_scoped_release> const&)::{lambda(tt::tt_metal::distributed::MeshDevice*, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::QueueIdTag> >, std::vector<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag>, std::allocator<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > > const&)#1}, void, tt::tt_metal::distributed::MeshDevice*, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::QueueIdTag> >, std::vector<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag>, std::allocator<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > > const&, 0ul, 1ul, 2ul, nanobind::scope, nanobind::name, char const*, nanobind::arg, nanobind::arg_v, nanobind::arg_v, nanobind::call_guard<nanobind::gil_scoped_release> >(ttnn::device::device_module(nanobind::module_&)::$_18&&, void (*)(tt::tt_metal::distributed::MeshDevice*, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::QueueIdTag> >, std::vector<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag>, std::allocator<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > > const&), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul>, nanobind::scope const&, nanobind::name const&, char const* const&, nanobind::arg const&, nanobind::arg_v const&, nanobind::arg_v const&, nanobind::call_guard<nanobind::gil_scoped_release> const&)::{lambda(void*, _object**, unsigned char*, nanobind::rv_policy, nanobind::detail::cleanup_list*)#1}::__invoke(void*, _object**, unsigned char*, nanobind::rv_policy, nanobind::detail::cleanup_list*) () from /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so
+#9  0x00007ca59b1155d5 in nanobind::detail::nb_func_vectorcall_complex(_object*, _object* const*, unsigned long, _object*) () from /localdev/vkovacevic/tt-metal/ttnn/ttnn/_ttnn.so
+#10 0x0000000001616a07 in _PyEval_EvalFrameDefault ()
+#11 0x0000000001612910 in method_vectorcall.llvm ()
+#12 0x0000000001624cb0 in _PyEval_EvalFrameDefault ()
+#13 0x0000000001612849 in method_vectorcall.llvm ()
+#14 0x00000000016219c0 in _PyEval_EvalFrameDefault ()
+#15 0x0000000001684e62 in PyEval_EvalCode ()
+#16 0x00000000016a4982 in run_mod.llvm ()
+#17 0x00000000016a4800 in PyRun_StringFlags ()
+#18 0x000000000171fa7d in PyRun_SimpleStringFlags ()
+#19 0x000000000171fa11 in pymain_run_command ()
+#20 0x000000000171f2e7 in Py_RunMain ()
+#21 0x00000000017406fa in pymain_main.llvm ()
+#22 0x00000000017404ed in main ()
+[Inferior 1 (process 3012119) detached]

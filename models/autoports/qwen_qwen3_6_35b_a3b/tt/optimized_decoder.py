@@ -321,12 +321,14 @@ class _OptimizedFullAttention(_FusedFullAttention):
         q, k = self._norm_and_rope(q, k, position_embeddings, decode_layout=True)
 
         k_update = self._cache_update_tensor(k, batch=batch)
-        v_update = self._cache_update_tensor(v, batch=batch)
-        ttnn.experimental.paged_update_cache(
-            kv_cache.keys, k_update, update_idxs_tensor=current_pos, page_table=page_table
-        )
-        ttnn.experimental.paged_update_cache(
-            kv_cache.values, v_update, update_idxs_tensor=current_pos, page_table=page_table
+        v_update = self._cache_update_tensor(v, batch=batch, core_offset=batch)
+        ttnn.experimental.paged_fused_update_cache(
+            kv_cache.keys,
+            k_update,
+            kv_cache.values,
+            v_update,
+            update_idxs_tensor=current_pos,
+            page_table=page_table,
         )
 
         attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(

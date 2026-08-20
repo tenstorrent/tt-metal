@@ -1,0 +1,36 @@
+{
+  "status_code": 200,
+  "request": {
+    "model": "Qwen/Qwen3.6-35B-A3B",
+    "prompt": "<|im_start|>user\nComplete this story in two sentences: Once upon a time, in a faraway kingdom,<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    "max_tokens": 8,
+    "temperature": 0.0
+  },
+  "response": {
+    "id": "cmpl-8c798217574811e4",
+    "object": "text_completion",
+    "created": 1787222598,
+    "model": "Qwen/Qwen3.6-35B-A3B",
+    "choices": [
+      {
+        "index": 0,
+        "text": "Here are!",
+        "logprobs": null,
+        "finish_reason": "stop",
+        "stop_reason": null,
+        "token_ids": null,
+        "prompt_logprobs": null,
+        "prompt_token_ids": null
+      }
+    ],
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "prompt_tokens": 30,
+      "total_tokens": 34,
+      "completion_tokens": 4,
+      "prompt_tokens_details": null
+    },
+    "kv_transfer_params": null
+  }
+}

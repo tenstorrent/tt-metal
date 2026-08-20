@@ -1,0 +1,194 @@
+{
+  "findings": [
+    {
+      "severity": "critical",
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/full_model_no_think_greedy_controls.json",
+      "label": "prompt[1] completion ('Explain the difference between supervised and unsupervised l')",
+      "metric": "repeated_punctuation_run",
+      "value": 26.0,
+      "threshold": 16.0,
+      "detail": "Completion contains a long run of the same punctuation token. This is a sampler/logit-collapse signature that word-based duplication checks can miss."
+    },
+    {
+      "severity": "critical",
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/full_model_no_think_greedy_controls.json",
+      "label": "prompt[1] completion ('Explain the difference between supervised and unsupervised l')",
+      "metric": "token_id_run",
+      "value": 26.0,
+      "threshold": 16.0,
+      "detail": "Generated token ids contain a long contiguous run of the same token. Verify token feedback, sampling, and dtype/fidelity changes against the HF or previous-stage control."
+    },
+    {
+      "severity": "critical",
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/full_model_no_think_greedy_controls.json",
+      "label": "prompt[4] completion ('Translate to French: Hello, how are you today?')",
+      "metric": "token_id_run",
+      "value": 21.0,
+      "threshold": 16.0,
+      "detail": "Generated token ids contain a long contiguous run of the same token. Verify token feedback, sampling, and dtype/fidelity changes against the HF or previous-stage control."
+    },
+    {
+      "severity": "critical",
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/full_model_no_think_greedy_controls.json",
+      "label": "prompt[4] completion ('Translate to French: Hello, how are you today?')",
+      "metric": "adjacent_duplication",
+      "value": 0.46,
+      "threshold": 0.1,
+      "detail": "Adjacent-token duplication this high while the text advances is a decode-loop input bug signature (stale token/position/trace feedback), not a model-quality property. Compare the same prompt against the HF reference before classifying this as a model limitation."
+    }
+  ],
+  "measured": [
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[0] greedy_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 13,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2308
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[0] sampled_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 13,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2308
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 50,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.06
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[1] sampled_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 39,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0769
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[2] greedy_completion ('Complete this story in two sentences: Once upon a time, in a')",
+      "source": "words",
+      "num_tokens": 2,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[2] sampled_completion ('Complete this story in two sentences: Once upon a time, in a')",
+      "source": "words",
+      "num_tokens": 38,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0789
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[3] greedy_completion ('What are the three laws of thermodynamics? Answer briefly.')",
+      "source": "words",
+      "num_tokens": 51,
+      "adjacent_duplication": 0.02,
+      "trigram_loop_fraction": 0.0588
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[3] sampled_completion ('What are the three laws of thermodynamics? Answer briefly.')",
+      "source": "words",
+      "num_tokens": 43,
+      "adjacent_duplication": 0.0238,
+      "trigram_loop_fraction": 0.0698
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[4] greedy_completion ('Translate to French: Hello, how are you today?')",
+      "source": "words",
+      "num_tokens": 6,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.5
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[4] sampled_completion ('Translate to French: Hello, how are you today?')",
+      "source": "words",
+      "num_tokens": 6,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.5
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 38,
+      "adjacent_duplication": 0.027,
+      "trigram_loop_fraction": 0.0789
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[5] sampled_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 35,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0857
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/full_model_no_think_greedy_controls.json",
+      "label": "prompt[0] completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "token_id_run": 3,
+      "num_tokens": 46,
+      "adjacent_duplication": 0.0667,
+      "trigram_loop_fraction": 0.0652
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/full_model_no_think_greedy_controls.json",
+      "label": "prompt[1] completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "repeated_punctuation_run": 26,
+      "token_id_run": 26,
+      "num_tokens": 30,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/full_model_no_think_greedy_controls.json",
+      "label": "prompt[2] completion ('Complete this story in two sentences: Once upon a time, in a')",
+      "source": "words",
+      "token_id_run": 5,
+      "num_tokens": 60,
+      "adjacent_duplication": 0.0678,
+      "trigram_loop_fraction": 0.05
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/full_model_no_think_greedy_controls.json",
+      "label": "prompt[3] completion ('What are the three laws of thermodynamics? Answer briefly.')",
+      "source": "words",
+      "token_id_run": 1,
+      "num_tokens": 46,
+      "adjacent_duplication": 0.0222,
+      "trigram_loop_fraction": 0.0652
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/full_model_no_think_greedy_controls.json",
+      "label": "prompt[4] completion ('Translate to French: Hello, how are you today?')",
+      "source": "words",
+      "token_id_run": 21,
+      "num_tokens": 51,
+      "adjacent_duplication": 0.46,
+      "trigram_loop_fraction": 0.4118
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/full_model_no_think_greedy_controls.json",
+      "label": "prompt[5] completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "token_id_run": 1,
+      "num_tokens": 34,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1765
+    }
+  ],
+  "exit_code": 2
+}

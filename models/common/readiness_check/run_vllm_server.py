@@ -158,6 +158,7 @@ _FATAL_LOG_PATTERNS = (
 _MESH_SHAPES: dict[str, tuple[int, int]] = {
     "N150": (1, 1),
     "N300": (1, 2),
+    "P300C": (2, 2),
     "T3K": (1, 8),
     "TG": (8, 4),
 }
@@ -232,10 +233,10 @@ def _launch_server(
     ]
     if max_model_len is not None:
         cmd += ["--max_model_len", str(max_model_len)]
-    # Pass TT plugin config as a single JSON dict so JSON quoting can't be
-    # mangled by intermediate shells. The dict already has
+    # Pass TT plugin config through vLLM's namespaced additional_config so JSON
+    # quoting can't be mangled by intermediate shells. The dict already has
     # `sample_on_device_mode` enforced; callers extend via `tt_config`.
-    cmd += ["--plugin-config", json.dumps({"tt": tt_config})]
+    cmd += ["--additional-config", json.dumps({"tt": tt_config})]
     cmd += additional_args
 
     env = {

@@ -1,0 +1,102 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[0] greedy_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 13,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2308
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[0] sampled_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 13,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2308
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 39,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0769
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[1] sampled_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 50,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.06
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[2] greedy_completion ('Complete this story in two sentences: Once upon a time, in a')",
+      "source": "words",
+      "num_tokens": 46,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0652
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[2] sampled_completion ('Complete this story in two sentences: Once upon a time, in a')",
+      "source": "words",
+      "num_tokens": 39,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0769
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[3] greedy_completion ('What are the three laws of thermodynamics? Answer briefly.')",
+      "source": "words",
+      "num_tokens": 43,
+      "adjacent_duplication": 0.0238,
+      "trigram_loop_fraction": 0.0698
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[3] sampled_completion ('What are the three laws of thermodynamics? Answer briefly.')",
+      "source": "words",
+      "num_tokens": 52,
+      "adjacent_duplication": 0.0196,
+      "trigram_loop_fraction": 0.0577
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[4] greedy_completion ('Translate to French: Hello, how are you today?')",
+      "source": "words",
+      "num_tokens": 6,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.5
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[4] sampled_completion ('Translate to French: Hello, how are you today?')",
+      "source": "words",
+      "num_tokens": 6,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.5
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 32,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1875
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_checker_outputs.json",
+      "label": "prompt[5] sampled_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 33,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1818
+    }
+  ],
+  "exit_code": 0
+}

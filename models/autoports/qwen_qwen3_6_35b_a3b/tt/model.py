@@ -602,6 +602,7 @@ class QwenFullModel:
         *,
         cache: QwenFullModelCache,
         user_id: int,
+        page_table_user_id: int | None = None,
         return_all_logits: bool,
         return_tt_logits: bool = False,
     ) -> torch.Tensor | ttnn.Tensor:
@@ -613,6 +614,7 @@ class QwenFullModel:
         logits_chunks: list[torch.Tensor] = []
         last_logits: torch.Tensor | None = None
         last_tt_logits: ttnn.Tensor | None = None
+        page_table_user_id = user_id if page_table_user_id is None else int(page_table_user_id)
         for start in range(0, prompt_len, self.prefill_chunk_size):
             end = min(start + self.prefill_chunk_size, prompt_len)
             chunk_tokens = tokens[:, start:end]
@@ -620,15 +622,15 @@ class QwenFullModel:
             for layer_idx, layer in enumerate(self.layers):
                 if layer.layer_type == "full_attention":
                     position_embeddings = self._prefill_position_embeddings(start, end - start)
-                    user_page_table = self._page_table_for_user(cache, user_id)
+                    user_page_table = self._page_table_for_user(cache, page_table_user_id)
                     result = layer.prefill_forward(
                         hidden,
                         position_embeddings=position_embeddings,
                         page_table=user_page_table,
                         kv_cache=cache.full_attention[layer_idx],
-                        user_id=user_id,
-                        chunk_page_table=self._chunk_page_table(cache, user_id, start, end),
-                        chunk_start_idx=start,
+                        user_id=0,
+                        chunk_page_table=self._chunk_page_table(cache, page_table_user_id, start, end),
+                        chunk_start_idx=start if start > 0 else None,
                     )
                 else:
                     linear_state = self._linear_state_for_user(
@@ -897,6 +899,131 @@ class QwenFullModel:
             _copy_bf16_to_existing(src_t, dst_t)
         _copy_bf16_to_existing(src.recurrent_state, dst.recurrent_state)
         return dst
+
+    def remap_linear_attention_state(
+        self,
+        cache: QwenFullModelCache,
+        slot_remap: torch.Tensor | list[int] | tuple[int, ...] | None,
+    ) -> None:
+        """Move per-user linear-attention state after vLLM condenses slots.
+
+        ``slot_remap[i] = j`` means decode row ``i`` should read state that
+        previously lived in slot ``j``. Full-attention KV state is page-table
+        addressed, so only the recurrent/conv linear-attention state moves.
+        """
+
+        if slot_remap is None or cache.max_batch_size <= 1:
+            return
+        if isinstance(slot_remap, torch.Tensor):
+            remap = [int(v) for v in slot_remap.reshape(-1).tolist()]
+        else:
+            remap = [int(v) for v in slot_remap]
+        if len(remap) < cache.max_batch_size:
+            remap.extend(range(len(remap), cache.max_batch_size))
+        remap = remap[: cache.max_batch_size]
+        if all(src == dst for dst, src in enumerate(remap)):
+            return
+        if any(src < 0 or src >= cache.max_batch_size for src in remap):
+            raise ValueError(f"slot_remap contains out-of-range entries for batch {cache.max_batch_size}: {remap}")
+
+        for state in cache.linear_attention.values():
+            for tap in state.conv_state:
+                tap_shape = _shape(tap)
+                pieces = [_slice(tap, (0, 0, src, 0), (1, 1, src + 1, tap_shape[3])) for src in remap]
+                merged = (
+                    pieces[0]
+                    if len(pieces) == 1
+                    else ttnn.concat(
+                        pieces,
+                        dim=2,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                )
+                _copy_bf16_to_existing(merged, tap)
+
+            recurrent_shape = _shape(state.recurrent_state)
+            heads_per_user = recurrent_shape[1] // cache.max_batch_size
+            pieces = []
+            for src in remap:
+                start = src * heads_per_user
+                pieces.append(
+                    _slice(
+                        state.recurrent_state,
+                        (0, start, 0, 0),
+                        (recurrent_shape[0], start + heads_per_user, recurrent_shape[2], recurrent_shape[3]),
+                    )
+                )
+            merged = (
+                pieces[0]
+                if len(pieces) == 1
+                else ttnn.concat(
+                    pieces,
+                    dim=1,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
+            _copy_bf16_to_existing(merged, state.recurrent_state)
+
+    def reset_linear_attention_state(
+        self,
+        cache: QwenFullModelCache,
+        slots: Iterable[int],
+    ) -> None:
+        """Clear persistent linear-attention state for newly assigned serving slots."""
+
+        reset_slots = sorted({int(slot) for slot in slots})
+        if not reset_slots or cache.max_batch_size <= 0:
+            return
+        if any(slot < 0 or slot >= cache.max_batch_size for slot in reset_slots):
+            raise ValueError(f"linear-attention reset slots exceed cache batch {cache.max_batch_size}: {reset_slots}")
+        reset_set = set(reset_slots)
+        reset_all = len(reset_set) == cache.max_batch_size
+
+        for state in cache.linear_attention.values():
+            for tap in state.conv_state:
+                if reset_all:
+                    _copy_bf16_to_existing(ttnn.zeros_like(tap), tap)
+                    continue
+                tap_shape = _shape(tap)
+                pieces = []
+                for slot in range(cache.max_batch_size):
+                    piece = _slice(tap, (0, 0, slot, 0), (1, 1, slot + 1, tap_shape[3]))
+                    pieces.append(ttnn.zeros_like(piece) if slot in reset_set else piece)
+                merged = (
+                    pieces[0]
+                    if len(pieces) == 1
+                    else ttnn.concat(
+                        pieces,
+                        dim=2,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                )
+                _copy_bf16_to_existing(merged, tap)
+
+            if reset_all:
+                _copy_bf16_to_existing(ttnn.zeros_like(state.recurrent_state), state.recurrent_state)
+                continue
+            recurrent_shape = _shape(state.recurrent_state)
+            heads_per_user = recurrent_shape[1] // cache.max_batch_size
+            pieces = []
+            for slot in range(cache.max_batch_size):
+                start = slot * heads_per_user
+                piece = _slice(
+                    state.recurrent_state,
+                    (0, start, 0, 0),
+                    (recurrent_shape[0], start + heads_per_user, recurrent_shape[2], recurrent_shape[3]),
+                )
+                pieces.append(ttnn.zeros_like(piece) if slot in reset_set else piece)
+            merged = (
+                pieces[0]
+                if len(pieces) == 1
+                else ttnn.concat(
+                    pieces,
+                    dim=1,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
+            _copy_bf16_to_existing(merged, state.recurrent_state)
 
     def describe_precision_policy(self) -> dict[str, Any]:
         """Return observed runtime precision knobs from constructed TTNN modules."""

@@ -1,0 +1,256 @@
+[
+  {
+    "prompt_index": 1,
+    "prompt": "Write a haiku about machine learning.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write a haiku about machine learning."
+      }
+    ],
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "rendered_prompt": "<|im_start|>user\nWrite a haiku about machine learning.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    "prompt_token_ids": [
+      248045,
+      846,
+      198,
+      7734,
+      264,
+      6185,
+      36974,
+      883,
+      5484,
+      6618,
+      13,
+      248046,
+      198,
+      248045,
+      74455,
+      198,
+      248068,
+      271,
+      248069,
+      271
+    ],
+    "prompt_len": 20,
+    "template_contains_empty_think_block": true
+  },
+  {
+    "prompt_index": 2,
+    "prompt": "Explain the difference between supervised and unsupervised learning in two sentences.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Explain the difference between supervised and unsupervised learning in two sentences."
+      }
+    ],
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "rendered_prompt": "<|im_start|>user\nExplain the difference between supervised and unsupervised learning in two sentences.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    "prompt_token_ids": [
+      248045,
+      846,
+      198,
+      814,
+      20139,
+      279,
+      6463,
+      1881,
+      56994,
+      321,
+      6758,
+      446,
+      75318,
+      6618,
+      303,
+      1330,
+      22157,
+      13,
+      248046,
+      198,
+      248045,
+      74455,
+      198,
+      248068,
+      271,
+      248069,
+      271
+    ],
+    "prompt_len": 27,
+    "template_contains_empty_think_block": true
+  },
+  {
+    "prompt_index": 3,
+    "prompt": "Complete this story in two sentences: Once upon a time, in a faraway kingdom,",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Complete this story in two sentences: Once upon a time, in a faraway kingdom,"
+      }
+    ],
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "rendered_prompt": "<|im_start|>user\nComplete this story in two sentences: Once upon a time, in a faraway kingdom,<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    "prompt_token_ids": [
+      248045,
+      846,
+      198,
+      12188,
+      411,
+      3255,
+      303,
+      1330,
+      22157,
+      25,
+      9358,
+      5028,
+      264,
+      854,
+      11,
+      303,
+      264,
+      2944,
+      13362,
+      24284,
+      11,
+      248046,
+      198,
+      248045,
+      74455,
+      198,
+      248068,
+      271,
+      248069,
+      271
+    ],
+    "prompt_len": 30,
+    "template_contains_empty_think_block": true
+  },
+  {
+    "prompt_index": 4,
+    "prompt": "What are the three laws of thermodynamics? Answer briefly.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What are the three laws of thermodynamics? Answer briefly."
+      }
+    ],
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "rendered_prompt": "<|im_start|>user\nWhat are the three laws of thermodynamics? Answer briefly.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    "prompt_token_ids": [
+      248045,
+      846,
+      198,
+      3710,
+      513,
+      279,
+      2250,
+      6657,
+      314,
+      28868,
+      76214,
+      30,
+      21134,
+      25899,
+      13,
+      248046,
+      198,
+      248045,
+      74455,
+      198,
+      248068,
+      271,
+      248069,
+      271
+    ],
+    "prompt_len": 24,
+    "template_contains_empty_think_block": true
+  },
+  {
+    "prompt_index": 5,
+    "prompt": "Translate to French: Hello, how are you today?",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Translate to French: Hello, how are you today?"
+      }
+    ],
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "rendered_prompt": "<|im_start|>user\nTranslate to French: Hello, how are you today?<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    "prompt_token_ids": [
+      248045,
+      846,
+      198,
+      26583,
+      310,
+      8323,
+      25,
+      21251,
+      11,
+      1204,
+      513,
+      488,
+      3242,
+      30,
+      248046,
+      198,
+      248045,
+      74455,
+      198,
+      248068,
+      271,
+      248069,
+      271
+    ],
+    "prompt_len": 23,
+    "template_contains_empty_think_block": true
+  },
+  {
+    "prompt_index": 6,
+    "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write a Python function to calculate the Fibonacci sequence."
+      }
+    ],
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "rendered_prompt": "<|im_start|>user\nWrite a Python function to calculate the Fibonacci sequence.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+    "prompt_token_ids": [
+      248045,
+      846,
+      198,
+      7734,
+      264,
+      12654,
+      709,
+      310,
+      10724,
+      279,
+      76938,
+      8240,
+      13,
+      248046,
+      198,
+      248045,
+      74455,
+      198,
+      248068,
+      271,
+      248069,
+      271
+    ],
+    "prompt_len": 22,
+    "template_contains_empty_think_block": true
+  }
+]

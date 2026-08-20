@@ -1,0 +1,75 @@
+{
+  "overall_verdict": "serving qualitative accepted for chat_template_kwargs.enable_thinking=false; raw completions and default chat remain contamination evidence only",
+  "raw_completions": {
+    "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_qualitative_outputs.json",
+    "verdict": "fail-clean-output",
+    "coherence_topic": "mixed: several responses are partly on topic, but user-visible thinking/image-markdown contamination makes this mode unacceptable",
+    "repetition": "fail for earlier raw prompt outputs with repeated image-markdown fragments",
+    "gibberish": "no pure gibberish, but formatting/request-analysis contamination is severe",
+    "wrong_language_drift": "none observed in the French prompt",
+    "request_contamination": "present: thinking scaffolding, image placeholders, and analysis text appear in user-visible output"
+  },
+  "chat_default": {
+    "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_qualitative_outputs.json",
+    "verdict": "fail-clean-output",
+    "coherence_topic": "mostly on topic after the preamble",
+    "repetition": "no mechanical repetition loop observed in the short default-chat records",
+    "gibberish": "no gibberish observed",
+    "wrong_language_drift": "none observed in the French prompt",
+    "request_contamination": "present: reasoning/thinking scaffolding appears in user-visible text"
+  },
+  "chat_enable_thinking_false": {
+    "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_qualitative_outputs.json",
+    "verdict": "pass-with-minor-limitations",
+    "required_request_setting": {
+      "chat_template_kwargs": {
+        "enable_thinking": false
+      }
+    },
+    "coherence_topic": "pass: all six prompts are coherent and on topic; the story prompt now starts with a young shepherd discovering a hidden door",
+    "repetition": "pass: no repetition loops observed; machine-learning haiku intentionally repeats one line between greedy and sampled profiles",
+    "gibberish": "pass: no gibberish observed",
+    "wrong_language_drift": "pass: French translation remains French",
+    "request_contamination": "pass: no visible thinking, image-markdown, or request-analysis contamination in the accepted no-thinking outputs",
+    "minor_limitations": "some 64-token-capped explanation/code outputs truncate naturally before a full answer is complete",
+    "prompt_summaries": [
+      {
+        "prompt_index": 1,
+        "greedy_preview": "Data feeds the mind, Patterns emerge from the noise, Truth learns to predict.",
+        "sampled_preview": "Data flows in streams, Patterns emerge from the noise, Truth learns to predict."
+      },
+      {
+        "prompt_index": 2,
+        "greedy_preview": "Supervised learning involves training a model on labeled data, where the correct output is provided to guide the learning process. In contra",
+        "sampled_preview": "Supervised learning trains models on labeled data where the correct output is already known, allowing the algorithm to learn a mapping from "
+      },
+      {
+        "prompt_index": 3,
+        "greedy_preview": "a young shepherd discovered a hidden door in the ancient castle walls that led to a realm where time stood still. He spent his life there le",
+        "sampled_preview": "a lonely prince discovered that his kingdom\u2019s eternal winter was caused by a forgotten spell he himself had cast in childhood. With a single"
+      },
+      {
+        "prompt_index": 4,
+        "greedy_preview": "Here are the three laws of thermodynamics, stated briefly:  1.  **First Law (Conservation of Energy):** Energy cannot be created or destroye",
+        "sampled_preview": "Here are the three laws of thermodynamics, stated briefly:  1.  **First Law (Conservation of Energy):** Energy cannot be created or destroye"
+      },
+      {
+        "prompt_index": 5,
+        "greedy_preview": "Bonjour, comment allez-vous aujourd'hui ?",
+        "sampled_preview": "Bonjour, comment allez-vous aujourd\u2019hui ?"
+      },
+      {
+        "prompt_index": 6,
+        "greedy_preview": "```python def fibonacci(n: int) -> list:     \"\"\"     Calculate the Fibonacci sequence up to n terms.          Args:         n: Number of ter",
+        "sampled_preview": "```python def fibonacci(n: int) -> list:     \"\"\"     Calculate the Fibonacci sequence up to n terms.          Args:         n: The number of"
+      }
+    ]
+  },
+  "prompt_count": 6,
+  "profiles_per_prompt": [
+    "greedy",
+    "sampled"
+  ],
+  "degenerate_check_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/check_vllm_no_think_degenerate_output_trace_replay_patch.log",
+  "degenerate_check_result": "No degenerate output detected."
+}

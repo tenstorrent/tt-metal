@@ -1,0 +1,80 @@
+2026-08-20 13:24:47.680 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /localdev/vkovacevic/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/vkovacevic/tt-metal
+configfile: pytest.ini
+plugins: timeout-2.4.0, cov-7.0.0, benchmark-5.2.3, anyio-4.14.2, split-0.11.0, dash-2.15.0, github-actions-annotate-failures-0.3.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... INFO 08-20 13:24:49 [__init__.py:44] Available plugins for group vllm.platform_plugins:
+INFO 08-20 13:24:49 [__init__.py:46] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 08-20 13:24:49 [__init__.py:49] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 08-20 13:24:49 [__init__.py:212] Platform plugin tt is activated
+INFO 08-20 13:24:50 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 08-20 13:24:50 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+collected 5 items
+
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_capabilities_and_context_contract PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_uses_token_output_sampling_contract PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_resets_serving_slot_state_and_defers_trace_capture PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_normalizes_one_based_vllm_page_tables PASSED
+models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_scatters_prefill_page_tables_to_serving_slots PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/vkovacevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+0.28s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_capabilities_and_context_contract
+0.28s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_uses_token_output_sampling_contract
+0.28s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_scatters_prefill_page_tables_to_serving_slots
+0.28s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_resets_serving_slot_state_and_defers_trace_capture
+0.27s setup    models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_normalizes_one_based_vllm_page_tables
+
+(10 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_capabilities_and_context_contract
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_uses_token_output_sampling_contract
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_resets_serving_slot_state_and_defers_trace_capture
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_normalizes_one_based_vllm_page_tables
+PASSED models/autoports/qwen_qwen3_6_35b_a3b/tests/test_generator_vllm.py::test_vllm_adapter_scatters_prefill_page_tables_to_serving_slots
+======================== 5 passed, 2 warnings in 3.22s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 1 instances!
+ - leaked instance 0x70c53ebedde8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 13 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - ... skipped remainder
+nanobind: leaked 199 functions!
+ - leaked function "contains"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "volume"
+ - leaked function "to_json"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

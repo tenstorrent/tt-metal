@@ -1,0 +1,64 @@
+{
+  "prompt": "Complete this story in two sentences: Once upon a time, in a faraway kingdom,",
+  "rendered_prompt": "<|im_start|>user\nComplete this story in two sentences: Once upon a time, in a faraway kingdom,<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+  "prompt_len": 30,
+  "prompt_token_ids": [
+    248045,
+    846,
+    198,
+    12188,
+    411,
+    3255,
+    303,
+    1330,
+    22157,
+    25,
+    9358,
+    5028,
+    264,
+    854,
+    11,
+    303,
+    264,
+    2944,
+    13362,
+    24284,
+    11,
+    248046,
+    198,
+    248045,
+    74455,
+    198,
+    248068,
+    271,
+    248069,
+    271
+  ],
+  "kv_shape": [
+    277,
+    2,
+    1072,
+    256
+  ],
+  "block_size": 1072,
+  "num_blocks": 277,
+  "page_table_width": 245,
+  "results": [
+    {
+      "top_p": 1.0,
+      "token_id": 64,
+      "token_text": "a",
+      "raw_tokens": [
+        64
+      ]
+    },
+    {
+      "top_p": 0.0,
+      "token_id": 64,
+      "token_text": "a",
+      "raw_tokens": [
+        64
+      ]
+    }
+  ]
+}

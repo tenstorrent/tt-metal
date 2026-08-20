@@ -1,0 +1,102 @@
+{
+  "source": "vllm bench serve",
+  "profile": "single_user_decode",
+  "comparison_scope": "Primary batch-1 serving decode profile for headline t/s/u. TTFT is reported separately and is not blended into the TPOT-derived decode value beyond normal single-request timing.",
+  "raw_result_file": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_result.json",
+  "command": [
+    "/localdev/vkovacevic/tt-metal/python_env/bin/vllm",
+    "bench",
+    "serve",
+    "--backend",
+    "vllm",
+    "--model",
+    "Qwen/Qwen3.6-35B-A3B",
+    "--base-url",
+    "http://localhost:8011",
+    "--endpoint",
+    "/v1/completions",
+    "--dataset-name",
+    "random",
+    "--random-input-len",
+    "128",
+    "--random-output-len",
+    "128",
+    "--num-prompts",
+    "1",
+    "--ignore-eos",
+    "--percentile-metrics",
+    "ttft,tpot,itl,e2el",
+    "--save-result",
+    "--result-filename",
+    "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_result.json",
+    "--max-concurrency",
+    "1",
+    "--temperature",
+    "0.0"
+  ],
+  "command_string": "/localdev/vkovacevic/tt-metal/python_env/bin/vllm bench serve --backend vllm --model Qwen/Qwen3.6-35B-A3B --base-url http://localhost:8011 --endpoint /v1/completions --dataset-name random --random-input-len 128 --random-output-len 128 --num-prompts 1 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_result.json --max-concurrency 1 --temperature 0.0",
+  "config": {
+    "prompt_len": 128,
+    "output_len": 128,
+    "num_requests": 1,
+    "concurrency": 1,
+    "temperature": 0.0,
+    "generation_config_mode": "explicit",
+    "dataset_name": "random",
+    "ignore_eos": true
+  },
+  "elapsed_s": 127.568007952068,
+  "completed_requests": 1,
+  "total_input_tokens": 128.0,
+  "total_output_tokens": 128.0,
+  "requested_output_tokens": 128,
+  "missing_output_tokens": 0,
+  "ttft_ms": {
+    "p50": 7517.317604739219,
+    "p99": 7517.317604739219,
+    "mean": 7517.317604739219
+  },
+  "tpot_ms": {
+    "p50": 945.2785306617501,
+    "p99": 945.2785306617501,
+    "mean": 945.2785306617501
+  },
+  "itl_ms": {
+    "p50": 919.1511450335383,
+    "p99": 1231.9731665775157,
+    "mean": 945.2785349223675
+  },
+  "e2el_ms": {
+    "p50": 127567.69099878147,
+    "p99": 127567.69099878147,
+    "mean": 127567.69099878147
+  },
+  "itl_p50_decode_tps": 1.0879603484185527,
+  "itl_mean_decode_tps": 1.0578892496296095,
+  "vllm_mean_tpot_decode_tps": 1.057889254397793,
+  "mean_per_request_decode_tps": 1.057889254397793,
+  "mean_per_request_decode_tps_basis": "1000 / mean_tpot_ms from vllm bench serve; this is the TPOT-derived decode value. For burst-serving profiles, scheduler admission and chunked prefill can affect TPOT, so use the single-user profile for headline decode t/s/u.",
+  "output_throughput_tok_per_s": 1.003386366651538,
+  "request_throughput_per_s": 0.00783895598946514,
+  "total_token_throughput_tok_per_s": 2.006772733303076,
+  "secondary_benchmarks": {
+    "ci_serving_burst": {
+      "summary_file": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_ci_serving_benchmark.json",
+      "raw_result_file": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_ci_serving_result.json",
+      "log_file": "/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_ci_serving_benchmark.log",
+      "config": {
+        "prompt_len": 100,
+        "output_len": 100,
+        "num_requests": 32,
+        "concurrency": null,
+        "temperature": 0.0,
+        "generation_config_mode": "explicit",
+        "dataset_name": "random",
+        "ignore_eos": true
+      },
+      "output_throughput_tok_per_s": 12.753816018564939,
+      "vllm_mean_tpot_decode_tps": 0.9964797057808599,
+      "comparison_scope": "vLLM-nightly-style 100/100/32 serving-burst profile for CI parity and serving capacity. Do not use as headline decode t/s/u because burst admission and chunked prefill can affect TPOT."
+    }
+  }
+}
