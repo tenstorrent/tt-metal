@@ -951,7 +951,7 @@
 
 - name: TT-DiT common unit tests, shared amongst all models.
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     pytest --timeout 10000 models/tt_dit/tests/unit/
   model: dit-common
   skus:
