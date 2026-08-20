@@ -87,11 +87,6 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
         !attrs.compute_kernel_config.packer_l1_acc,
         "qkv_causal_conv1d_silu: packer_l1_acc=true is unsupported because the compute kernel does not accumulate "
         "through L1");
-    TT_FATAL(
-        attrs.compute_kernel_config.throttle_level ==
-            ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE,
-        "qkv_causal_conv1d_silu: compute throttling is unsupported because this kernel does not implement throttled "
-        "math");
 }
 
 QkvCausalConv1dSiluOperation::spec_return_value_t QkvCausalConv1dSiluOperation::compute_output_specs(
