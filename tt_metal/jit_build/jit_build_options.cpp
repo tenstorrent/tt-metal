@@ -6,37 +6,10 @@
 
 #include <string>
 
-#include <tt-metalium/constants.hpp>
-
 #include "build.hpp"
+#include "impl/metal2_host_api/llk_operand_facts.hpp"
 
 namespace tt::tt_metal {
-
-namespace {
-
-bool is_supported_tile_shape(uint32_t tile_height, uint32_t tile_width) {
-    if (tile_width != constants::FACE_WIDTH && tile_width != constants::TILE_WIDTH) {
-        return false;
-    }
-    if (tile_width == constants::FACE_WIDTH) {
-        return tile_height == 1 || tile_height == 2 || tile_height == 4 || tile_height == 8 ||
-               tile_height == constants::FACE_HEIGHT || tile_height == constants::TILE_HEIGHT;
-    }
-    return tile_height == 1 || tile_height == 2 || tile_height == 4 || tile_height == 8 ||
-           tile_height == constants::FACE_HEIGHT || tile_height == constants::TILE_HEIGHT;
-}
-
-std::optional<Tile> tile_from_unpack_face_geometry(const FaceGeometry& face_geometry) {
-    const uint32_t tile_height =
-        face_geometry.face_r_dim * (face_geometry.num_faces > 2 ? constants::TILE_HEIGHT / constants::FACE_HEIGHT : 1);
-    const uint32_t tile_width = face_geometry.num_faces == 1 ? constants::FACE_WIDTH : constants::TILE_WIDTH;
-    if (!is_supported_tile_shape(tile_height, tile_width)) {
-        return std::nullopt;
-    }
-    return Tile({tile_height, tile_width});
-}
-
-}  // namespace
 
 JitBuildOptions::JitBuildOptions(const JitBuildEnv& env) : build_env(env), hlk_desc(env.get_max_cbs()) {}
 

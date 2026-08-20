@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "api/llk_operand_members.h"
 #include "api/tensor/tensor_accessor_args.h"
 
 namespace tensor_accessor {
@@ -29,7 +30,7 @@ namespace tensor_accessor {
 // == How does it work? ==
 // For each kernel tensor binding, headergen emits the following into kernel_bindings_generated.h:
 //   - A type alias:  using my_TA_name_t = TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>;
-//   - A token value: constexpr my_TA_name_t my_TA_name{};
+//   - A token value: constexpr my_TA_name_t my_TA_name{{.format = ..., .face_r_dim = ...}};
 //
 // This indirection gives us ultimate future-proofing flexibility over what actually goes into the
 // TensorBindingToken. We can change TensorBindingToken at any time, or add a wrapper-type indirection,
@@ -44,6 +45,11 @@ struct TensorBindingToken {
     using args_t = TensorAccessorArgs<CTA_OFFSET>;
     static constexpr args_t args{};
     static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
+
+    constexpr TensorBindingToken(LlkOperandMembers llk) noexcept : llk_(llk) {}
+
+private:
+    LlkOperandMembers llk_;
 };
 
 }  // namespace tensor_accessor

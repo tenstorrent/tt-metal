@@ -314,10 +314,25 @@ void Kernel::process_named_compile_time_args(
     callback(this->named_compile_time_args());
 }
 
-void Kernel::process_dataflow_buffer_binding_handles(
-    const std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)> callback) const {
-    for (const auto& [accessor_name, logical_dfb_id] : this->dataflow_buffer_binding_handles_) {
-        callback(accessor_name, logical_dfb_id);
+void Kernel::process_dataflow_buffer_binding_handles(const std::function<void(
+                                                         const std::string& accessor_name,
+                                                         uint16_t logical_dfb_id,
+                                                         uint8_t hw_format,
+                                                         uint8_t face_r_dim,
+                                                         uint8_t face_c_dim,
+                                                         uint8_t num_faces_r_dim,
+                                                         uint8_t num_faces_c_dim,
+                                                         bool present)> callback) const {
+    for (const auto& handle : this->dataflow_buffer_binding_handles_) {
+        callback(
+            handle.accessor_name,
+            handle.slot,
+            handle.llk_facts.hw_format,
+            handle.llk_facts.face_r_dim,
+            handle.llk_facts.face_c_dim,
+            handle.llk_facts.num_faces_r_dim,
+            handle.llk_facts.num_faces_c_dim,
+            handle.llk_facts.present);
     }
 }
 
@@ -332,17 +347,49 @@ void Kernel::process_tensor_binding_handles(const std::function<void(
                                                 const std::string& accessor_name,
                                                 uint32_t cta_offset,
                                                 uint32_t addr_crta_offset,
-                                                uint32_t num_runtime_field_crta_words)> callback) const {
+                                                uint32_t num_runtime_field_crta_words,
+                                                uint8_t hw_format,
+                                                uint8_t face_r_dim,
+                                                uint8_t face_c_dim,
+                                                uint8_t num_faces_r_dim,
+                                                uint8_t num_faces_c_dim,
+                                                bool present)> callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
-        callback(handle.accessor_name, handle.cta_offset, handle.addr_crta_offset, handle.num_runtime_field_crta_words);
+        callback(
+            handle.accessor_name,
+            handle.cta_offset,
+            handle.addr_crta_offset,
+            handle.num_runtime_field_crta_words,
+            handle.llk_facts.hw_format,
+            handle.llk_facts.face_r_dim,
+            handle.llk_facts.face_c_dim,
+            handle.llk_facts.num_faces_r_dim,
+            handle.llk_facts.num_faces_c_dim,
+            handle.llk_facts.present);
     }
 }
 
-void Kernel::process_scratchpad_binding_handles(
-    const std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)> callback)
-    const {
+void Kernel::process_scratchpad_binding_handles(const std::function<void(
+                                                    const std::string& accessor_name,
+                                                    uint32_t size_bytes,
+                                                    uint32_t addr_crta_word,
+                                                    uint8_t hw_format,
+                                                    uint8_t face_r_dim,
+                                                    uint8_t face_c_dim,
+                                                    uint8_t num_faces_r_dim,
+                                                    uint8_t num_faces_c_dim,
+                                                    bool present)> callback) const {
     for (const auto& handle : this->scratchpad_binding_handles_) {
-        callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word);
+        callback(
+            handle.accessor_name,
+            handle.size_bytes,
+            handle.addr_crta_word,
+            handle.llk_facts.hw_format,
+            handle.llk_facts.face_r_dim,
+            handle.llk_facts.face_c_dim,
+            handle.llk_facts.num_faces_r_dim,
+            handle.llk_facts.num_faces_c_dim,
+            handle.llk_facts.present);
     }
 }
 
@@ -554,9 +601,24 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second));
     }
-    for (const auto& it : sorted_iters(this->dataflow_buffer_binding_handles_)) {
-        hasher.update(it->first);
-        hasher.update(static_cast<uint64_t>(it->second));
+    auto hash_llk_facts = [&hasher](const LlkOperandFacts& facts) {
+        hasher.update(static_cast<uint64_t>(facts.present));
+        hasher.update(static_cast<uint64_t>(facts.hw_format));
+        hasher.update(static_cast<uint64_t>(facts.face_r_dim));
+        hasher.update(static_cast<uint64_t>(facts.face_c_dim));
+        hasher.update(static_cast<uint64_t>(facts.num_faces_r_dim));
+        hasher.update(static_cast<uint64_t>(facts.num_faces_c_dim));
+    };
+    std::vector<const DataflowBufferBindingHandle*> dfb_sorted;
+    dfb_sorted.reserve(this->dataflow_buffer_binding_handles_.size());
+    for (const auto& handle : this->dataflow_buffer_binding_handles_) {
+        dfb_sorted.push_back(&handle);
+    }
+    std::ranges::sort(dfb_sorted, [](const auto* a, const auto* b) { return a->accessor_name < b->accessor_name; });
+    for (const auto* handle : dfb_sorted) {
+        hasher.update(handle->accessor_name);
+        hasher.update(static_cast<uint64_t>(handle->slot));
+        hash_llk_facts(handle->llk_facts);
     }
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
@@ -574,6 +636,7 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.cta_offset));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
         hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
+        hash_llk_facts(handle.llk_facts);
     }
     // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
     // the same order. Hash accessor_name + size_bytes + addr_crta_word — the accessor's compile-time
@@ -584,6 +647,7 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(handle.accessor_name);
         hasher.update(static_cast<uint64_t>(handle.size_bytes));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
+        hash_llk_facts(handle.llk_facts);
     }
     // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
     // Named RTA and CRTA counts also need to be hashed!

@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
@@ -21,6 +22,7 @@
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
+#include "impl/metal2_host_api/llk_operand_facts.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_source.hpp"
 #include <enchantum/enchantum.hpp>
@@ -90,8 +92,13 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
 
-// Metal 2.0: DFB accessor names -> logical DFB ids
-using DataflowBufferBindingHandleMap = std::unordered_map<std::string, uint16_t>;
+// Metal 2.0: per-kernel resolved DFB binding (accessor name, device slot, optional LLK facts).
+struct DataflowBufferBindingHandle {
+    std::string accessor_name;
+    uint16_t slot = 0;
+    LlkOperandFacts llk_facts;
+};
+using DataflowBufferBindingHandleMap = std::vector<DataflowBufferBindingHandle>;
 // Metal 2.0: semaphore accessor names -> semaphore ids
 using SemaphoreBindingHandleMap = std::unordered_map<std::string, uint16_t>;
 
@@ -117,6 +124,7 @@ struct TensorBindingHandle {
     // distinguish them with a boolean.
     // (We'll need to extend this to something more flexible if additional possibilities are added.)
     bool runtime_field_is_page_size = false;
+    LlkOperandFacts llk_facts;
 };
 
 // Metal 2.0: per-kernel resolved scratchpad binding.
@@ -136,6 +144,7 @@ struct ScratchpadBindingHandle {
     uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
     uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
+    LlkOperandFacts llk_facts;
 };
 
 class Kernel : public JitBuildSettings {
@@ -218,19 +227,39 @@ public:
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
-    void process_dataflow_buffer_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
+    void process_dataflow_buffer_binding_handles(std::function<void(
+                                                     const std::string& accessor_name,
+                                                     uint16_t logical_dfb_id,
+                                                     uint8_t hw_format,
+                                                     uint8_t face_r_dim,
+                                                     uint8_t face_c_dim,
+                                                     uint8_t num_faces_r_dim,
+                                                     uint8_t num_faces_c_dim,
+                                                     bool present)>) const override;
     void process_semaphore_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const override;
     void process_tensor_binding_handles(std::function<void(
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,
                                             uint32_t addr_crta_offset,
-                                            uint32_t num_runtime_field_crta_words)>) const override;
+                                            uint32_t num_runtime_field_crta_words,
+                                            uint8_t hw_format,
+                                            uint8_t face_r_dim,
+                                            uint8_t face_c_dim,
+                                            uint8_t num_faces_r_dim,
+                                            uint8_t num_faces_c_dim,
+                                            bool present)>) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
-    void process_scratchpad_binding_handles(
-        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>)
-        const override;
+    void process_scratchpad_binding_handles(std::function<void(
+                                                const std::string& accessor_name,
+                                                uint32_t size_bytes,
+                                                uint32_t addr_crta_word,
+                                                uint8_t hw_format,
+                                                uint8_t face_r_dim,
+                                                uint8_t face_c_dim,
+                                                uint8_t num_faces_r_dim,
+                                                uint8_t num_faces_c_dim,
+                                                bool present)>) const override;
     // Scratchpad binding handles are set post-construction.
     // Non-const accessor lets allocate_scratchpads fill each handle's allocated_address after L1 allocation.
     const std::vector<ScratchpadBindingHandle>& scratchpad_binding_handles() const {

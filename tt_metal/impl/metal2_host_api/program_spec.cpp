@@ -2330,6 +2330,7 @@ struct ResolvedTensorParameter {
     // For now, since there are only two mutually exclusive possibilities, it's sufficient to
     // distinguish them with a boolean.
     bool runtime_field_is_page_size = false;
+    const TensorSpec* spec = nullptr;
 };
 
 // Resolve a TensorParameter's static layout into a CTA payload + an extra CRTA word
@@ -2399,6 +2400,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
         std::numeric_limits<uint32_t>::max());
 
     ResolvedTensorParameter result;
+    result.spec = &spec;
     std::vector<uint32_t>& cta_payload = result.cta_payload;
 
     // Common header (always emitted, sharded or not):
@@ -2529,6 +2531,11 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
         handle.num_runtime_field_crta_words = resolved.extra_crta_words;
         handle.runtime_field_is_page_size = resolved.runtime_field_is_page_size;
+        TT_FATAL(
+            resolved.spec != nullptr,
+            "Resolved TensorParameter '{}' is missing its TensorSpec",
+            binding.tensor_parameter_name);
+        handle.llk_facts = facts_from_tensor_spec(*resolved.spec);
 
         out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
         cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
@@ -2572,6 +2579,7 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         handle.accessor_name = binding.accessor_name;
         handle.size_bytes = scratchpad_spec->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
+        handle.llk_facts = facts_from_scratchpad(*scratchpad_spec);
         // handle.allocated_address stays 0 until allocate_scratchpads runs.
         out.handles.push_back(std::move(handle));
         crta_word_index += 1;  // one address word per scratchpad binding
@@ -2584,7 +2592,9 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
 // Create map of local accessor name -> DFB device slot. This is the value baked into the kernel's
 // dfb::<name> accessor, so it must be the device slot rather than the program-wide id.
 tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
-    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
+    const KernelSpec& kernel_spec,
+    const DFBNameToSlotMap& dfb_name_to_slot,
+    const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
@@ -2595,7 +2605,11 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
             kernel_spec.unique_id,
             dfb_binding.dfb_spec_name,
             slot);
-        out.emplace(dfb_binding.accessor_name, static_cast<uint16_t>(slot));
+        tt::tt_metal::DataflowBufferBindingHandle handle;
+        handle.accessor_name = dfb_binding.accessor_name;
+        handle.slot = static_cast<uint16_t>(slot);
+        handle.llk_facts = facts_from_dfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
+        out.push_back(std::move(handle));
     }
     return out;
 }
@@ -3124,7 +3138,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 
         // Make the local accessor name -> DFB device slot map for this kernel
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles =
-            MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_slot);
+            MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_slot, collected.dfb_by_name);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
             MakeSemaphoreBindingHandles(kernel_spec, semaphore_name_to_id);
 
