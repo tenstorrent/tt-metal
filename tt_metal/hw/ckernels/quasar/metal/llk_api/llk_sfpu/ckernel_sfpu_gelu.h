@@ -45,18 +45,10 @@ namespace ckernel::sfpu {
 
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_gelu_appx() {
-    // Operands lut2_sign() requires; their contents are irrelevant on Quasar (see above).
-    sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
-    sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
-    sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
-
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat piecewise = lut2_sign(in, l0, l1, l2, l4, l5, l6);
+        sfpi::vFloat piecewise = sfpi::lut<sfpi::LutMode::Fp16x6_HWM3>(in, sfpi::LutSign::Update);
         sfpi::dst_reg[0] = in * 0.5f + piecewise;
         sfpi::dst_reg++;
     }
@@ -180,33 +172,13 @@ inline void gelu_init() {
     if constexpr (APPROXIMATION_MODE) {
         // Segment slopes/intercepts, packed hi/lo the way SFPLUTFP32's FP16 6-entry mode 1 reads
         // them. Same values as the Blackhole table (l_reg0 = 0x37E7322B, l_reg4 = 0xB12286D8, ...).
-        //
-        // 1.0 > x >= 0.5
-        // lreg9_hi  =  0.4939 (0x37E7)
-        // lreg12_hi = -0.1605 (0xB122)
-        // 0.5 > x >= 0.0
-        // lreg9_lo  =  0.1928 (0x322B)
-        // lreg12_lo = -7.4e-05 (0x86D8)
-        ckernel::math::_sfpu_load_config32_(0x9, 0x37E7, 0x322B);
-        ckernel::math::_sfpu_load_config32_(0xC, 0xB122, 0x86D8);
-
-        // 2.0 > x >= 1.5
-        // lreg10_hi =  0.6099 (0x38E1)
-        // lreg13_hi = -0.2635 (0xB437)
-        // 1.5 > x >= 1.0
-        // lreg10_lo =  0.6189 (0x38F3)
-        // lreg13_lo = -0.2797 (0xB479)
-        ckernel::math::_sfpu_load_config32_(0xA, 0x38E1, 0x38F3);
-        ckernel::math::_sfpu_load_config32_(0xD, 0xB437, 0xB479);
-
-        // x >= 3.0
-        // lreg11_hi =  0.50   (0x3800)
-        // lreg14_hi =  0.0    (0x7C00)
-        // 3.0 > x >= 2.0
-        // lreg11_lo =  0.5402 (0x3852)
-        // lreg14_lo = -0.1194 (0xAFA4)
-        ckernel::math::_sfpu_load_config32_(0xB, 0x3800, 0x3852);
-        ckernel::math::_sfpu_load_config32_(0xE, 0x7C00, 0xAFA4);
+        lut_init(
+            sLut16si(0.1928f, -0.00010443f),
+            sLut16si(0.4939f, -0.1604f),
+            sLut16si(0.6188f, -0.2795f),
+            sLut16si(0.6099f, -0.2635f),
+            sLut16si(0.5402f, -0.1194f),
+            sLut16si(0.5000f, 0.0f));
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         _init_reciprocal_<false>();
