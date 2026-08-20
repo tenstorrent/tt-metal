@@ -414,7 +414,7 @@ def test_ds_embedding(
     ccl,
     force_recalculate_weight_config,
     set_deterministic_env,
-    state_dict,
+    request,
 ):
     # CI skip logic: only run specific combinations in CI
     in_ci = os.getenv("CI") == "true"
@@ -450,6 +450,7 @@ def test_ds_embedding(
     if use_real_weights:
         from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 
+        state_dict = request.getfixturevalue("state_dict")
         embedding_state_dict = sub_state_dict(state_dict, "model.embed_tokens.")
 
     run_config, tt_input_ids, ref_output, batch_size, original_seq_len = _build_embedding_inputs(
