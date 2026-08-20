@@ -13,7 +13,7 @@
 
 namespace ttml::metal::ops::gumbel_sample::device {
 
-// Whether this temperature selects the Gumbel-noise kernel (DO_GUMBEL_NOISE) or greedy argmax.
+// Whether this temperature selects the Gumbel-noise kernel variant or greedy argmax.
 // Deliberately STRICTER than `temperature > 0`: the device receives 1/temperature as a runtime
 // arg, and for positive temperatures below ~1/FLT_MAX (~2.9e-39, subnormal range) that reciprocal
 // overflows to +inf. logit * inf then collapses every positive logit to the same +inf bit pattern
@@ -33,7 +33,7 @@ inline bool uses_gumbel_noise(float temperature) {
 struct GumbelSampleParams {
     // Softmax temperature, >= 0. Zero -- or a positive value so small that 1/temperature
     // overflows float32 (see uses_gumbel_noise above) -- selects greedy argmax: the compute kernel
-    // compiles out the RNG and the scaling (DO_GUMBEL_NOISE) and passes the logits straight to the
+    // compiles out the RNG and the scaling (the noise compile-time arg) and passes the logits straight to the
     // writer's running argmax. Note this makes uses_gumbel_noise(temperature) part of the program
     // hash, since it changes the kernel binary -- see compute_program_hash.
     float temperature = 1.0F;

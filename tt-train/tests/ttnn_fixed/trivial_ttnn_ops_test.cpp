@@ -509,7 +509,7 @@ TEST_F(TrivialTnnFixedTest, TestSamplingRaggedShapes) {
     EXPECT_EQ(greedy, expected);
 
     // The scan bounds also have to hold in the sampled kernel, which is a separate binary
-    // (DO_GUMBEL_NOISE). The noise makes the winner unpredictable, but no index may ever leave the
+    // (the noise compile-time arg). The noise makes the winner unpredictable, but no index may ever leave the
     // logical vocabulary -- reaching the zero-filled padding would.
     auto sampled = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 1.0F, 99));
     ASSERT_EQ(sampled.size(), kBatch * kTokens);
@@ -646,7 +646,7 @@ TEST_F(TrivialTnnFixedTest, TestSamplingAtPerRowPositions) {
     EXPECT_EQ(greedy_at, expected_at_positions);
 
     // The scan bounds have to hold in the sampled kernel too, which is a separate binary
-    // (DO_GUMBEL_NOISE). The noise makes the winner unpredictable, but every real logit here is
+    // (the noise compile-time arg). The noise makes the winner unpredictable, but every real logit here is
     // negative while from_xtensor zero-fills the padding, so any index that leaves the logical
     // vocabulary means the scan walked into padding.
     auto sampled_at = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(

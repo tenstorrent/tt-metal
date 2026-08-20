@@ -37,7 +37,7 @@ const std::vector<BenchConfig>& all_configs() {
     static const std::vector<BenchConfig> configs = {
         {.name = "decode_b8_v151936", .batch = 8, .tokens = 1, .vocab = 151936, .warmup = 10, .iters = 100},
         // Diagnostics, not part of the headline geomean: greedy compiles out the noise chain
-        // (DO_GUMBEL_NOISE off) — the gap to decode_b8_v151936 is the chain's device cost;
+        // (noise compiled out) — the gap to decode_b8_v151936 is the chain's device cost;
         // the small-vocab run checks whether time scales with Wt (device-bound signature).
         {.name = "greedy_b8_v151936",
          .batch = 8,

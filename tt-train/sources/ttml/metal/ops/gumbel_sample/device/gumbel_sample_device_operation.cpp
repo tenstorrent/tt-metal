@@ -270,7 +270,7 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
     // each step) reuses one cached program instead of thrashing the cache.
     //
     // WHICH KERNEL the temperature selects IS part of the key, though: uses_gumbel_noise picks the
-    // DO_GUMBEL_NOISE define, so greedy and sampled runs compile to different kernels. Omitting it
+    // noise compile-time arg, so greedy and sampled runs compile to different kernels. Omitting it
     // would let a cached noisy program be reused for a greedy call -- silently sampling when the
     // caller asked for argmax. It must be the SAME predicate the factory uses (not a bare
     // `temperature > 0`): a sub-reciprocal-overflow temperature builds the greedy kernel, and

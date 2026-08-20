@@ -41,21 +41,14 @@ void kernel_main() {
     // arg indices (and the TensorAccessorArgs offset chain below) stay stable.
     [[maybe_unused]] constexpr uint32_t num_entries = get_compile_time_arg_val(2);
 
-#ifdef DO_LOGITS_MASK
-    constexpr bool do_logits_mask = true;
-#else
-    constexpr bool do_logits_mask = false;
-#endif
-
-#ifdef DO_POSITIONS
-    constexpr bool do_positions = true;
-#else
-    constexpr bool do_positions = false;
-#endif
-
     constexpr auto logits_args = TensorAccessorArgs<3>();
     constexpr auto mask_args = TensorAccessorArgs<logits_args.next_compile_time_args_offset()>();
     constexpr auto positions_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
+    // Mode flags ride at the END of the compile-time args, past the accessor chain, so the
+    // hand-numbered offsets above never move when a flag is added or removed -- the index here is
+    // chained, not hard-coded, and the host appends in this same order after its accessor appends.
+    constexpr bool do_logits_mask = get_compile_time_arg_val(positions_args.next_compile_time_args_offset()) != 0;
+    constexpr bool do_positions = get_compile_time_arg_val(positions_args.next_compile_time_args_offset() + 1) != 0;
     const auto logits_address_generator = TensorAccessor(logits_args, logits_address);
     const auto mask_address_generator = TensorAccessor(mask_args, mask_address);
 

@@ -52,10 +52,6 @@ constexpr auto kRecordsCbIndex = tt::CBIndex::c_4;
 // first row's shard) and receives at most the row's shard fan-in -- see writer_gumbel_sample.cpp.
 constexpr uint32_t kRecordBytes = 72U * sizeof(uint32_t);
 
-const std::string kDoLogitsMaskDefineKey = "DO_LOGITS_MASK";
-const std::string kDoGumbelNoiseDefineKey = "DO_GUMBEL_NOISE";
-const std::string kDoPositionsDefineKey = "DO_POSITIONS";
-
 // The reader carries Ht as a runtime arg at slot 4 (see reader_gumbel_sample.cpp), the writer does
 // not, so the positions BUFFER ADDRESS lands at a different slot in each kernel. These two MUST
 // stay independent -- equalizing them would make one kernel read a neighbouring arg as the
@@ -378,16 +374,12 @@ tt::tt_metal::Program build_program(
     // degenerates to "first positive column". The hash uses the same predicate.
     const bool do_gumbel_noise = uses_gumbel_noise(args.temperature);
 
-    std::map<std::string, std::string> defines;
-    if (has_mask) {
-        defines[kDoLogitsMaskDefineKey] = "1";
-    }
-    if (do_gumbel_noise) {
-        defines[kDoGumbelNoiseDefineKey] = "1";
-    }
-    if (layout.position_aware) {
-        defines[kDoPositionsDefineKey] = "1";
-    }
+    // Mode flags (mask / noise / positions) travel as compile-time args rather than -D defines.
+    // The two are equivalent to the JIT -- both are -D macros on the compile line, both hashed
+    // into the kernel-binary identity -- so this is purely about keeping every compile-time input
+    // in one channel. Each kernel reads its flags PAST its accessor chain, at
+    // next_compile_time_args_offset(), so the hand-numbered accessor offsets never move when a
+    // flag is added; the appends below must match each kernel's read order.
 
     // Ht is NOT here: it is a runtime arg, so that one program serves every prompt length. Keep this
     // count in step with TensorAccessorArgs<N> in reader_gumbel_sample.cpp -- the accessor offset is
@@ -410,8 +402,10 @@ tt::tt_metal::Program build_program(
     } else {
         tt::tt_metal::TensorAccessorArgs().append_to(reader_ct_args);
     }
+    reader_ct_args.push_back(has_mask ? 1U : 0U);               // do_logits_mask
+    reader_ct_args.push_back(layout.position_aware ? 1U : 0U);  // do_positions
     shared_vars.reader_kernel_id =
-        create_reader_kernel(program, layout.all_cores, reader_ct_args, defines, kReaderKernelPath);
+        create_reader_kernel(program, layout.all_cores, reader_ct_args, {}, kReaderKernelPath);
 
     // Each split row's owner counts its senders on its own copy of this semaphore; cores that own
     // nothing never wait on it.
@@ -430,7 +424,7 @@ tt::tt_metal::Program build_program(
         // being constexpr. Ht cannot follow it: the writer divides by Ht, which folds to
         // shift/multiply only for a compile-time constant.
         //
-        // Ht is dead under DO_POSITIONS -- its only uses sit past unconditional returns -- but a
+        // Ht is dead in position mode -- its only uses sit past unconditional returns -- but a
         // compile-time arg is hashed into the kernel binary whether it is read or not, so it is
         // pinned to keep the build independent of the token dimension. ONE, never zero: the dead
         // fallback divides by Ht in code that is still compiled, and the JIT builds with
@@ -447,17 +441,20 @@ tt::tt_metal::Program build_program(
     } else {
         tt::tt_metal::TensorAccessorArgs().append_to(writer_ct_args);
     }
+    writer_ct_args.push_back(layout.position_aware ? 1U : 0U);  // do_positions
     shared_vars.writer_kernel_id =
-        create_writer_kernel(program, layout.all_cores, writer_ct_args, defines, kWriterKernelPath);
+        create_writer_kernel(program, layout.all_cores, writer_ct_args, {}, kWriterKernelPath);
 
-    const std::vector<uint32_t> compute_ct_args_g1{layout.tiles_per_core_group_1, layout.block_size};
+    const std::vector<uint32_t> compute_ct_args_g1{
+        layout.tiles_per_core_group_1, layout.block_size, has_mask ? 1U : 0U, do_gumbel_noise ? 1U : 0U};
     shared_vars.compute_kernel_group_1_id = create_compute_kernel(
-        program, layout.core_group_1, compute_ct_args_g1, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+        program, layout.core_group_1, compute_ct_args_g1, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     if (!layout.core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_ct_args_g2{layout.tiles_per_core_group_2, layout.block_size};
+        const std::vector<uint32_t> compute_ct_args_g2{
+            layout.tiles_per_core_group_2, layout.block_size, has_mask ? 1U : 0U, do_gumbel_noise ? 1U : 0U};
         shared_vars.compute_kernel_group_2_id = create_compute_kernel(
-            program, layout.core_group_2, compute_ct_args_g2, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+            program, layout.core_group_2, compute_ct_args_g2, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
     }
 
     // -------------------------------------------------------------------------

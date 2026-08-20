@@ -88,14 +88,11 @@ void kernel_main() {
     // arg indices (and the TensorAccessorArgs offset chain below) stay stable.
     [[maybe_unused]] constexpr uint32_t num_entries = get_compile_time_arg_val(5);
 
-#ifdef DO_POSITIONS
-    constexpr bool do_positions = true;
-#else
-    constexpr bool do_positions = false;
-#endif
-
     constexpr auto output_args = TensorAccessorArgs<6>();
     constexpr auto positions_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    // Appended past the accessor chain so the hand-numbered offsets above never move; the host
+    // appends it in this same position after its accessor appends.
+    constexpr bool do_positions = get_compile_time_arg_val(positions_args.next_compile_time_args_offset()) != 0;
     const auto output_address_generator = TensorAccessor(output_args, output_address);
 
     const uint32_t staging_address = get_write_ptr(cb_output_staging_idx);

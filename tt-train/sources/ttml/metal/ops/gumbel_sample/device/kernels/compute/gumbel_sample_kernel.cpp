@@ -38,11 +38,7 @@ constexpr auto cb_logits = tt::CBIndex::c_0;
 constexpr auto cb_mask = tt::CBIndex::c_1;
 constexpr auto cb_scores = tt::CBIndex::c_2;
 
-#ifdef DO_LOGITS_MASK
-constexpr bool do_logits_mask = true;
-#else
-constexpr bool do_logits_mask = false;
-#endif
+constexpr bool do_logits_mask = get_compile_time_arg_val(2) != 0;
 
 // Every caller builds the padding mask as [1, 1, 1, V] -- one row, reused for every token -- because
 // which vocab columns are padding does not depend on the token position. In TILE layout that single
@@ -55,11 +51,7 @@ constexpr bool do_logits_mask = false;
 // It still runs through this kernel rather than a separate ttnn::argmax, so the greedy path gets the
 // same fusion win -- the score tiles stream straight into the writer's running argmax and the
 // [B, 1, tokens, V] untilized copy that ttnn::argmax would need never exists.
-#ifdef DO_GUMBEL_NOISE
-constexpr bool do_gumbel_noise = true;
-#else
-constexpr bool do_gumbel_noise = false;
-#endif
+constexpr bool do_gumbel_noise = get_compile_time_arg_val(3) != 0;
 
 constexpr uint32_t onetile = 1U;
 
