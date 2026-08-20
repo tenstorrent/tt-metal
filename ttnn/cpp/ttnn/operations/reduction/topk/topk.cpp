@@ -315,6 +315,11 @@ bool should_route_to_topk_large_indices(
         //    composite still wins it — measured on p150a (bf16 largest W=4096, 3 Tracy
         //    trials, <0.2% spread): 70.3 -> 46.8 us (k=32, 1 tile row) up to
         //    165.5 -> 48.0 us (k=64, 2 tile rows).
+        //  * the pow2 [multi_core_min_width, 65535) bitonic band: stock is
+        //    structurally eligible, but its serial final gather-merge scales
+        //    with num_cores * k. The routed chain stays column-parallel end to
+        //    end and measured 155.7 -> 67.4 us at 32x8192 k=50 and 302.2 ->
+        //    178.6 us at 32x32768 k=64 on the #53793 stock model.
         // Both collapse to evaluating the SHARED
         // ttnn::prim::topk_multicore_structurally_eligible helper with the
         // low-Ht relaxation disabled (num_tile_rows pinned above
@@ -332,7 +337,17 @@ bool should_route_to_topk_large_indices(
             padded_width, ttnn::prim::constants::multi_core_low_ht_max_tile_rows + 1, k);
         const bool wide_arm =
             multicore_ineligible_ignoring_low_ht_arm && padded_width >= small_k_route_min_padded_width;
-        if (!wide_arm) {
+        const bool is_pow2 = padded_width != 0 && (padded_width & (padded_width - 1)) == 0;
+        // Bitonic-band arm: pow2 widths in [8192, 65535) with k <= 64 ARE
+        // eligible for the stock multi-core bitonic, but the routed composite
+        // measures faster there as well (p150a, Tracy device kernel duration,
+        // 3 trials, full prep+op+finish+slice chain): 32x8192 k=50 263.5 ->
+        // 67.4 us, 32x32768 k=64 333.8 -> 178.6 us. The bitonic's serial
+        // final gather-merge stage scales with num_cores * k while the routed
+        // chain stays column-parallel end to end.
+        const bool bitonic_band_arm = is_pow2 && padded_width >= ttnn::prim::constants::multi_core_min_width &&
+                                      padded_width < std::numeric_limits<uint16_t>::max();
+        if (!wide_arm && !bitonic_band_arm) {
             return false;
         }
     }
