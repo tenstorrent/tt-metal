@@ -505,6 +505,7 @@ class ModelArgs:
             "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
             "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
             "Qwen3.6-27B": "models/tt_transformers/model_params/Qwen3.6-27B",
+            "LFM2.5-VL-1.6B": "models/tt_transformers/model_params/LFM2.5-VL-1.6B",
         }.items()
     }
 
@@ -2471,6 +2472,7 @@ class ModelArgs:
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "LFM2.5-VL-1.6B": {"N150": 128, "N300": 128, "T3K": 128, "TG": None, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -3629,6 +3631,7 @@ class ModelArgs:
             "gemma-3-4b": "google/gemma-3-4b-it",
             "gemma-3-27b": "google/gemma-3-27b-it",
             "Qwen3.6-27B": "Qwen/Qwen3.6-27B",
+            "LFM2.5-VL-1.6B": "LiquidAI/LFM2.5-VL-1.6B",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")

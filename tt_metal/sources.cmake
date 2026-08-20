@@ -56,7 +56,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/forge_backdoor/global_semaphore.hpp
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
-    api/tt-metalium/experimental/internal/blitz_decode_pipeline.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
@@ -126,9 +125,11 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/hal_types.hpp
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
-    api/tt-metalium/internal/cluster.hpp
-    api/tt-metalium/internal/cluster_noc_helpers.hpp
-    api/tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp
+    api/internal/blitz_decode_pipeline.hpp
+    api/internal/cluster.hpp
+    api/internal/cluster_noc_helpers.hpp
+    api/internal/disaggregation/kv_chunk_address_table.hpp
+    api/internal/fabric.hpp
     api/tt-metalium/kernel_types.hpp
     api/tt-metalium/math.hpp
     api/tt-metalium/maybe_remote.hpp
@@ -154,6 +155,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/shape.hpp
     api/tt-metalium/shape2d.hpp
     api/tt-metalium/shape_base.hpp
+    api/tt-metalium/shard_data_transfer.hpp
     api/tt-metalium/sub_device.hpp
     api/tt-metalium/sub_device_types.hpp
     api/tt-metalium/system_mesh.hpp

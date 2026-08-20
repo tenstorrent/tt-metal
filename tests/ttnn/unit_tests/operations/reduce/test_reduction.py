@@ -2,11 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, torch_random
+from models.common.utility_functions import comp_allclose_and_pcc, is_blackhole, torch_random
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 TEST_PADDING_VALUE = -42
@@ -458,6 +460,17 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     )
 
 
+# The BH-routed ttnn.topk path (topk_large_indices, engages for bf16 largest at k>64 or wide
+# non-pow2 widths) crashes the CI simulator's ttsim build (silent worker death ~9s in; see the
+# sanity break on 1dc0e9673b6). The same tests pass on BH silicon and on a current ttsim
+# (SFPLOADMACRO-capable). Skip the routed cells on simulator runners until the runner image
+# ships an updated ttsim.
+skip_routed_topk_on_sim = pytest.mark.skipif(
+    is_blackhole() and bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason="BH-routed topk crashes the CI ttsim build; passes on silicon and current ttsim",
+)
+
+
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize("dim", [1])
 @pytest.mark.parametrize("largest", [True])
@@ -468,12 +481,14 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
 #   (8192, 1024) k > 64 -> single-core, and Kt=32 exercises the multi-tile-k merge ramp
 #   bfloat8_b is paired with the large-k case: bfp8 unpack/pack reconfig plus the bfp8 L1 sizing
 #                path, which only matters when Kt is large
+
+
 @pytest.mark.parametrize(
     "dim2, k, dtype",
     [
         (8192, 50, ttnn.bfloat16),
-        (50257, 50, ttnn.bfloat16),
-        (8192, 1024, ttnn.bfloat16),
+        pytest.param(50257, 50, ttnn.bfloat16, marks=skip_routed_topk_on_sim),
+        pytest.param(8192, 1024, ttnn.bfloat16, marks=skip_routed_topk_on_sim),
         (8192, 1024, ttnn.bfloat8_b),
     ],
 )
@@ -547,6 +562,7 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 @pytest.mark.parametrize("k", [50])
 @pytest.mark.parametrize("largest", [True])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@skip_routed_topk_on_sim
 def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2]
