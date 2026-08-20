@@ -17,10 +17,9 @@
 namespace tt::tt_metal {
 
 uint32_t calculate_max_prefetch_data_size_bytes(
-    ContextId context_id, const CoreType& /*dispatch_core_type*/, uint32_t num_subdevices) {
+    const MetalContext& metal_ctx, const CoreType& /*dispatch_core_type*/, uint32_t num_subdevices) {
     // CQ capacity would be reduced by the commands and alignment padding.
     // prefetch_relay_inline, dispatch_wait (x #workers), and dispatch_write_linear would add alignment padding
-    MetalContext& metal_ctx = MetalContext::instance(context_id);
     const auto host_alignment = metal_ctx.hal().get_alignment(HalMemType::HOST);
     auto padded_commands_size = tt::align(sizeof(CQPrefetchCmd), host_alignment) +
                                 (num_subdevices * tt::align(sizeof(CQDispatchCmd), host_alignment)) +
@@ -122,13 +121,11 @@ void write_to_core_impl(
     uint32_t cq_id,
     ttsl::Span<const uint32_t> expected_num_workers_completed,
     ttsl::Span<const SubDeviceId> sub_device_ids) {
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    const CoreType dispatch_core_type = metal_ctx.get_dispatch_core_manager().get_dispatch_core_type();
     while (size_bytes > 0) {
-        const CoreType dispatch_core_type =
-            MetalContext::instance(extract_context_id(device)).get_dispatch_core_manager().get_dispatch_core_type();
         const uint32_t size_bytes_to_write = std::min(
-            size_bytes,
-            calculate_max_prefetch_data_size_bytes(
-                extract_context_id(device), dispatch_core_type, sub_device_ids.size()));
+            size_bytes, calculate_max_prefetch_data_size_bytes(metal_ctx, dispatch_core_type, sub_device_ids.size()));
 
         CoreWriteDispatchParams dispatch_params{
             {virtual_core,
