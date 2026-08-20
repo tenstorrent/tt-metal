@@ -11,7 +11,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-namespace {
 void matmul(
     DataflowBuffer& a,
     DataflowBuffer& b,
@@ -93,7 +92,6 @@ void copy(DataflowBuffer& in, DataflowBuffer& out, DataflowBuffer& send, uint32_
     out.push_back(tiles);
     send.push_back(tiles);
 }
-}  // namespace
 
 template <uint32_t Kt, uint32_t Vt, uint32_t G>
 TT_KERNEL void compute(uint32_t group) {
