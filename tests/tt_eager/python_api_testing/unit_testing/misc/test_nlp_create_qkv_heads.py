@@ -814,3 +814,15 @@ def test_sharded_nlp_create_qkv_heads_kv_tied(
     run_sharded_nlp_create_qkv_heads_kv_tied_test(
         batch, seq_len, head_dim, num_q_heads, num_kv_heads, read_from_input_tensor_kv, dtype, device
     )
+
+
+def test_sharded_nlp_create_qkv_heads_kv_tied_with_program_cache(device):
+    dtype = ttnn.bfloat8_b
+    mem_config = ttnn.L1_MEMORY_CONFIG
+    for _ in range(2):
+        run_sharded_nlp_create_qkv_heads_kv_tied_test(32, 1, 64, 32, 2, False, dtype, device)
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+
+    assert device.num_program_cache_entries() == 1
