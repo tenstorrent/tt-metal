@@ -162,11 +162,25 @@ check(
     len(inst.reds) == 1 and len(result["notes"]) == 1,
 )
 
+# 12-13. CRAQ-gate taint (ledger 8(f)): a skipped gate must leave a
+# machine-readable marker; an active gate must say so.  The same line is
+# written into preflight MANIFEST.txt and the REPORT.md header.
+taint = sweep.craq_gate_taint(True)
+check(
+    "skip-craq-gate leaves an explicit SKIPPED taint line",
+    "SKIPPED" in taint and "--skip-craq-gate" in taint,
+    repr(taint),
+)
+check(
+    "active CRAQ gate states ACTIVE (never silent)",
+    "ACTIVE" in sweep.craq_gate_taint(False),
+)
+
 if FAILS:
     print(f"enforcement-gates self-test: FAILED ({len(FAILS)}: {', '.join(FAILS)})")
     sys.exit(1)
 print(
     "enforcement-gates self-test: ALL GREEN (review-record missing/wrong-pin/"
     "malformed refuse + valid/checked-in pass; macro/replay-launch classify; "
-    "empty-lb RED wired through Sweep)"
+    "empty-lb RED wired through Sweep; craq-gate taint line both ways)"
 )

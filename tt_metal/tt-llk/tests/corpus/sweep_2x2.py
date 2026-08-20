@@ -435,6 +435,19 @@ def macro_lb_red(op, marker, issue_slot_lb, macro_scan):
     )
 
 
+def craq_gate_taint(skipped):
+    """One-line CRAQ-gate disposition for the evidence trail (ledger 8(f):
+    --skip-craq-gate used to leave NO taint marker in evidence dirs).  The
+    line is written verbatim into preflight MANIFEST.txt and the REPORT.md
+    header so a skipped gate can never be mistaken for a green one."""
+    if skipped:
+        return (
+            "CRAQ gate: SKIPPED (--skip-craq-gate) — no paired-CRAQ evidence "
+            "in this run; cells rest on device-golden gating alone"
+        )
+    return "CRAQ gate: ACTIVE (paired CRAQ required before silicon legs)"
+
+
 def load_config(path):
     with path.open() as f:
         rows = list(
@@ -886,6 +899,7 @@ class Sweep:
                 )
             info["review_record"] = str(record)
             info["review_record_sha256"] = sha256(record)
+        info["craq_gate_skipped"] = bool(self.a.skip_craq_gate)
         (self.ev / "preflight.json").write_text(json.dumps(info, indent=2) + "\n")
         man = [
             f"Lane sweep-2x2 evidence — {self.ev.name}",
@@ -916,6 +930,7 @@ class Sweep:
                 if info["review_record"]
                 else "review record: not required (no silicon authorization this run)"
             ),
+            craq_gate_taint(self.a.skip_craq_gate),
             f"OFF flags: {OFF_FLAGS}",
             f"ON flags: {ON_FLAGS}",
             "loadmacro flags: CONFIRMED error on use (removed with quarantined exact-calendar pass)",
@@ -2655,6 +2670,7 @@ exit $RC
             f"- run: `{self.ev}`",
             f"- baseline: `{self.a.baseline or 'none'}`",
             f"- previous run: `{self.a.prev_run or 'none'}`",
+            f"- {craq_gate_taint(getattr(self.a, 'skip_craq_gate', False))}",
             "",
             "| op | verdict | detail |",
             "|---|---|---|",
