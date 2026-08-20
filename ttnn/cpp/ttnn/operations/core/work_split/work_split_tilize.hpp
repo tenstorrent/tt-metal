@@ -115,15 +115,22 @@ inline NcoresWH compute_ncores_wh(size_t grid_area, uint32_t nblocks, uint32_t w
 // factory entry point; hash-time callers must use this so a tight-L1 miss does not
 // TT_FATAL / backtrace on every dispatch.
 inline std::optional<NcoresWHsb> try_compute_ncores_wh_sb(
-    size_t grid_area, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles, uint32_t single_block_size_limit) {
+    size_t grid_area,
+    uint32_t nblocks,
+    uint32_t width_tiles,
+    uint32_t height_tiles,
+    uint32_t single_block_size_limit) noexcept {
     if (single_block_size_limit < 1) {
         return std::nullopt;
     }
+    // Compute grid area and initial blocks-per-core using integer math.
     uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
+    // Calculate ncores using single_block_size_limit.
     uint32_t total_blocks_width = tt::div_up(width_tiles, single_block_size_limit);
     uint32_t total_blocks_height = tt::div_up(height_tiles, single_block_size_limit);
     uint32_t total_blocks = total_blocks_width * total_blocks_height;
     uint32_t ncores = total_blocks;
+    // If ncores is smaller than grid_area, return an NcoresWH constructed using these values.
     if (ncores < grid_area) {
         return NcoresWHsb{
             ncores,
@@ -133,6 +140,11 @@ inline std::optional<NcoresWHsb> try_compute_ncores_wh_sb(
             single_block_size_limit,
             single_block_size_limit};
     }
+    // single_block_size = n * single_sub_block_size
+    // Conditions: (1) single_sub_block_size < single_block_size_limit
+    //             (2) Maximize total_blocks_sb (computed by single_block_size)
+    //             (3) Minimize n (prefer smaller n for tie-breaker)
+    //             (4) cliff_nblocks_row < single_block_size_limit
     uint32_t single_block_size = 0;
     uint32_t opt_n = 0;
     uint32_t single_sub_block_size = 0;
@@ -147,6 +159,7 @@ inline std::optional<NcoresWHsb> try_compute_ncores_wh_sb(
             uint32_t total_blocks_sb = total_blocks_width_sb * total_blocks_height_sb;
             uint32_t full_cores_per_row = width_tiles / tmp_single_block_size;
             uint32_t cliff_nblocks_row = width_tiles - full_cores_per_row * tmp_single_block_size;
+            // Select for max total_blocks_sb, for tie-break: prefer smaller n
             if (total_blocks_sb <= grid_area && cliff_nblocks_row < single_block_size_limit &&
                 (opt_n == 0 || total_blocks_sb > opt_ncores_sb || (total_blocks_sb == opt_ncores_sb && n < opt_n))) {
                 opt_n = n;
@@ -171,6 +184,7 @@ inline std::optional<NcoresWHsb> try_compute_ncores_wh_sb(
 
 inline NcoresWHsb compute_ncores_wh_sb(
     size_t grid_area, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles, uint32_t single_block_size_limit) {
+    TT_FATAL(single_block_size_limit >= 1, "single_block_size_limit must be at least 1");
     auto result = try_compute_ncores_wh_sb(grid_area, nblocks, width_tiles, height_tiles, single_block_size_limit);
     TT_FATAL(result.has_value(), "No solution found for single_block_size");
     return *result;
