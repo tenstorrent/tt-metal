@@ -65,17 +65,12 @@ void check_dtype_in(
 }
 
 void check_matching_dtype(
-    const Tensor& lhs,
-    const Tensor& rhs,
-    std::string_view operation_name,
-    std::string_view lhs_name,
-    std::string_view rhs_name) {
+    const Tensor& lhs, const Tensor& rhs, std::string_view operation_name, std::string_view tensor_group_name) {
     TT_FATAL(
         lhs.dtype() == rhs.dtype(),
-        "{}: {} and {} must have matching dtypes, got {} and {}",
+        "{}: {} must have matching dtypes, got {} and {}",
         operation_name,
-        lhs_name,
-        rhs_name,
+        tensor_group_name,
         lhs.dtype(),
         rhs.dtype());
 }

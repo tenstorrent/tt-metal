@@ -32,11 +32,7 @@ void check_dtype_in(
     std::string_view operation_name,
     std::string_view tensor_name);
 void check_matching_dtype(
-    const Tensor& lhs,
-    const Tensor& rhs,
-    std::string_view operation_name,
-    std::string_view lhs_name,
-    std::string_view rhs_name);
+    const Tensor& lhs, const Tensor& rhs, std::string_view operation_name, std::string_view tensor_group_name);
 void check_same_device(
     const Tensor& reference, const Tensor& candidate, std::string_view operation_name, std::string_view candidate_name);
 void check_interleaved(const Tensor& tensor, std::string_view operation_name, std::string_view tensor_name);
