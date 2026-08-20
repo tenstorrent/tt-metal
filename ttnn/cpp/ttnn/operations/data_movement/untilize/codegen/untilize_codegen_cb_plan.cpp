@@ -5,6 +5,8 @@
 #include "untilize_codegen_cb_plan.hpp"
 
 #include <algorithm>
+#include <functional>
+#include <numeric>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -46,16 +48,16 @@ uint32_t choose_2d_ncol(uint32_t total_tile_rows, uint32_t wt, uint32_t valid_co
 
 std::optional<CbPlan> plan_cb_depths(
     uint64_t usable_l1, uint32_t pages_per_unit, uint32_t page_size, uint32_t block_units) {
-    uint64_t p = pages_per_unit;
-    uint64_t ts = page_size;
-    uint64_t double_both = (2 * p + 2 * p) * ts;
-    uint64_t double_in = (2 * p + p) * ts;
-    uint64_t single_both = (p + p) * ts;
+    const uint64_t pages = pages_per_unit;
+    const uint64_t tile_bytes = page_size;
+    const uint64_t double_both = (2 * pages + 2 * pages) * tile_bytes;
+    const uint64_t double_in = (2 * pages + pages) * tile_bytes;
+    const uint64_t single_both = (pages + pages) * tile_bytes;
     if (double_both <= usable_l1) {
-        return CbPlan{static_cast<uint32_t>(2 * p), static_cast<uint32_t>(2 * p), pages_per_unit};
+        return CbPlan{2 * pages_per_unit, 2 * pages_per_unit, pages_per_unit};
     }
     if (double_in <= usable_l1) {
-        return CbPlan{static_cast<uint32_t>(2 * p), pages_per_unit, pages_per_unit};
+        return CbPlan{2 * pages_per_unit, pages_per_unit, pages_per_unit};
     }
     if (single_both <= usable_l1) {
         return CbPlan{pages_per_unit, pages_per_unit, block_units};
@@ -77,13 +79,12 @@ struct PaddedGrid {
 
 PaddedGrid padded_grid(const Tensor& input) {
     const auto& padded_shape = input.padded_shape();
-    uint32_t rank = padded_shape.rank();
-    uint32_t w = padded_shape[-1];
-    uint32_t h = padded_shape[-2];
-    uint32_t nc = 1;
-    for (uint32_t i = 0; i + 2 < rank; ++i) {
-        nc *= padded_shape[i];
-    }
+    const auto rank = padded_shape.rank();
+    const uint32_t w = padded_shape[-1];
+    const uint32_t h = padded_shape[-2];
+    const uint32_t batch_dims = rank > 2 ? rank - 2 : 0;
+    const uint32_t nc = std::accumulate(
+        padded_shape.begin(), padded_shape.begin() + batch_dims, uint32_t{1}, std::multiplies<uint32_t>{});
     uint32_t wt = w / TILE_WIDTH;
     uint32_t ht = h / TILE_HEIGHT;
     const auto& logical_shape = input.logical_shape();
