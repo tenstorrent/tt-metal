@@ -6168,30 +6168,47 @@ else:
         ("kimi_k3", 32, 640, 4, 67.07),
     ]
 
-# Local measurement entry (no committed CI baseline): an 8-chip non-galaxy Blackhole box runs a
-# single 8-device ring with TP=1, so kimi_k3 keeps its production 24 Q heads per device while the
-# ring length matches galaxy's sp=8. Neither branch above covers sp_size=8 off galaxy, so the
-# ring-4 ids skip and the ring-8 ids do not exist there. expected_util is the galaxy projection;
-# run with RING_MLA_SDPA_GRID_OVERRIDE=10x10 (the default non-galaxy SDPA grid) to measure without
-# asserting the band.
+# An 8-chip non-galaxy Blackhole box runs a single 8-device ring with TP=1, so kimi_k3 keeps its
+# production 24 Q heads per device while the ring length matches galaxy's sp=8. Neither branch
+# above covers sp_size=8 off galaxy, so the ring-4 ids skip and the ring-8 ids do not exist there.
+#
+# Measured 2026-08-20 on bh-lb-33 (8x p150b re-flashed to tensix_col_disable_count=1: 12x10 program
+# grid -> 11x10 = 110 SDPA cores, the same split galaxy gets), kimi_k3 50k+5k final chunk, fresh KV.
+# A stock p150 box detects an 11x10 grid -> 100 SDPA cores; utilization is per-core, so it lands
+# close but not inside the band (q32/k640 read 9.445 ms / 68.81% there, just above the +/-1% band
+# around 68.05). Re-measure rather than assuming these carry over.
 if not MESH_CONFIG.is_galaxy and MESH_CONFIG.sp_size == 8:
-    RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 32, 640, 8, 67.0))
-    # q64 K-chunk sweep on the 8-device ring. The per-device K prefix at the final chunk is 7040
-    # rows, so k in (128, 160, 320, 352, 640) divides it exactly and the rest straddle. k512 and up
-    # overflow L1 (1575936 B vs the 1572864 B max at k512).
-    for _k in (128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 480, 512):
-        RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 64, _k, 8, 67.0))
-    # Predictive test of the Sk_chunk_t-factorization model: Skt=19 (k608) is prime, so
-    # determine_largest_subblock_size collapses to (1,1)/(3,1) and find_valid_granularity to 1,
-    # while its neighbours Skt=18 (k576) and Skt=20 (k640) factor well. All three sit at 11-13
-    # chunks, so chunk-count overhead is near-constant across them. q32 keeps them inside L1.
-    for _k in (576, 608, 640):
-        RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 32, _k, 8, 67.0))
-    # q32 at the k values that topped the q64 sweep: q32 doubles the work-unit count (480 vs 240
-    # over 110 cores) so its occupancy quantization is finer, and Skt=14/10 keep the good
-    # subblock/granularity factorization at Sq_chunk_t=1 too.
-    for _k in (448, 320):
-        RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 32, _k, 8, 67.0))
+    RING_MLA_CHUNKED_PERF_CHECK_CONFIGS += [
+        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
+        # Shipped q32/k640 shape: 8.683 ms.
+        ("kimi_k3", 32, 640, 8, 68.05),
+        # Best shape found by the k sweep below: 8.288 ms. Not the shipped shape -- q64 doubles
+        # Sq_chunk_t, which the galaxy baselines have not been re-measured against.
+        ("kimi_k3", 64, 448, 8, 71.28),
+    ]
+
+# Local k-chunk exploration, off by default so it costs no collected ids: RING_MLA_K_SWEEP=1, with
+# RING_MLA_SDPA_GRID_OVERRIDE set to the box's own SDPA grid (grid_cols-1 x grid_rows; 11x10 on
+# bh-lb-33) so the band assert is skipped while sweeping. What the sweep showed at 110 cores:
+#   q64 (compute-bound) is ranked by Sk_chunk_t factorization: k448 71.28% > k320 69.35%. A prime
+#     Skt collapses determine_largest_subblock_size to (2,1) (Sq_chunk_t=2 is the only divisor
+#     left) and find_valid_granularity to 1, worth -12.7 pts at fixed chunk count. k448 wins as
+#     the largest well-factorized chunk that fits L1; k512 and up overflow it (1575936 B vs the
+#     1572864 B max), which is why the sweep stops at 480.
+#   q32 prefers the LARGEST k instead: k640 68.05% > k448 65.15% > k320 63.46%. The guess that
+#     q32's finer occupancy quantization (480 work units over 110 cores vs q64's 240) would
+#     reproduce the q64 ordering was tested and refuted -- at Sq_chunk_t=1 the kt_inplace_v path is
+#     data-movement bound, so chunk count dominates and factorization barely registers.
+#   Roofline: stubbing every tile read plus the chain mcast payload gives 8.099 ms / 72.95% at
+#     q64/k448, so data movement is only 2.3% of runtime.
+# The per-device K prefix at the final chunk is 7040 rows, so k in (128, 160, 320, 352, 640)
+# divides it exactly and the rest straddle.
+if os.environ.get("RING_MLA_K_SWEEP") and not MESH_CONFIG.is_galaxy and MESH_CONFIG.sp_size == 8:
+    # k448 (q64) and k640 (q32) are omitted: they are the committed entries above.
+    for _k in (128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 480):
+        RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 64, _k, 8, 71.28))
+    for _k in (320, 448, 576, 608):
+        RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 32, _k, 8, 68.05))
 
 
 if MESH_CONFIG.is_galaxy:
