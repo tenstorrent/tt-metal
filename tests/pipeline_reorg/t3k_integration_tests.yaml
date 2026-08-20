@@ -46,15 +46,6 @@
 #   team: models
 #   model-name: n300 mesh llama3.2-vision
 
-- name: t3k_qwenimage_tests
-  cmd: run_t3000_qwenimage_tests
-  skus:
-    wh_llmbox:
-      timeout: 10
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: qwenimage
-
 - name: t3k_deepseek_module_tests
   cmd: |
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt

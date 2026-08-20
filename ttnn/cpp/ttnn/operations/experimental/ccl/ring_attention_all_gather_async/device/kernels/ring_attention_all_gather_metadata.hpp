@@ -20,6 +20,23 @@
 
 namespace ring_attention_all_gather {
 
+struct LinkPageRange {
+    uint32_t start;
+    uint32_t end;
+};
+
+// Partition a valid page prefix as evenly as possible across links. Earlier links receive one
+// additional page when the prefix is not evenly divisible. Reader and writer must use the same
+// range or their cb_output producer/consumer page counts can diverge.
+inline LinkPageRange compute_link_page_range(uint32_t valid_pages, uint32_t num_links, uint32_t link_idx) {
+    const uint32_t pages_per_link = valid_pages / num_links;
+    const uint32_t remainder = valid_pages % num_links;
+    const uint32_t next_link_idx = link_idx + 1;
+    return {
+        link_idx * pages_per_link + (link_idx < remainder ? link_idx : remainder),
+        next_link_idx * pages_per_link + (next_link_idx < remainder ? next_link_idx : remainder)};
+}
+
 // gather_valid_Ht = ceil(logical_n / chunk_global) * chunk_local_tiles, where
 // logical_nt = kv_actual_isl / TILE_HEIGHT + chunk_global_tiles and chunk_global_tiles =
 // chunk_local_tiles * ring_size. TILE_HEIGHT is 32, hence the >> 5.
@@ -30,21 +47,24 @@ inline uint32_t compute_gather_valid_Ht(uint32_t kv_actual_isl, uint32_t chunk_l
     return valid_slabs * chunk_local_tiles;
 }
 
-// Shrink each input's page range to the valid slab prefix. Never grows a range: a caller that already
-// has a tighter host-provided end keeps it.
+// Clamp each input to the valid slab prefix, then repartition that prefix across links. Reader and
+// writer must update both range endpoints identically or their cb_output page counts can diverge.
 template <size_t NumInputs>
-inline void clamp_input_ranges_to_gather_extent(
+inline void update_link_page_ranges_for_gather_extent(
     uint32_t gather_valid_Ht,
-    const std::array<uint32_t, NumInputs>& input_tensor_Ht,
+    uint32_t num_links,
     const std::array<uint32_t, NumInputs>& input_tensor_Wt,
+    const std::array<uint32_t, NumInputs>& input_valid_pages,
+    const std::array<uint32_t, NumInputs>& worker_link,
+    std::array<uint32_t, NumInputs>& input_tile_id_start,
     std::array<uint32_t, NumInputs>& input_tile_id_end) {
     for (uint32_t input_idx = 0; input_idx < NumInputs; input_idx++) {
-        const uint32_t valid_Ht =
-            gather_valid_Ht < input_tensor_Ht[input_idx] ? gather_valid_Ht : input_tensor_Ht[input_idx];
-        const uint32_t valid_pages = valid_Ht * input_tensor_Wt[input_idx];
-        if (valid_pages < input_tile_id_end[input_idx]) {
-            input_tile_id_end[input_idx] = valid_pages;
-        }
+        const uint32_t gather_valid_pages = gather_valid_Ht * input_tensor_Wt[input_idx];
+        const uint32_t valid_pages =
+            input_valid_pages[input_idx] < gather_valid_pages ? input_valid_pages[input_idx] : gather_valid_pages;
+        const auto link_page_range = compute_link_page_range(valid_pages, num_links, worker_link[input_idx]);
+        input_tile_id_start[input_idx] = link_page_range.start;
+        input_tile_id_end[input_idx] = link_page_range.end;
     }
 }
 

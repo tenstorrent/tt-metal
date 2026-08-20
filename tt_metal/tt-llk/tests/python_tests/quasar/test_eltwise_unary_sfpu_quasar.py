@@ -8,7 +8,12 @@ from typing import List
 import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
+from helpers.golden_generators import (
+    TilizeGolden,
+    UnarySFPUGolden,
+    UntilizeGolden,
+    get_golden_generator,
+)
 from helpers.llk_params import (
     ApproximationMode,
     DataCopyType,
@@ -25,6 +30,7 @@ from helpers.param_config import (
     is_invalid_quasar_sfpu_format_combination,
     parametrize,
     runtime,
+    select_perf_input_dimensions,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -49,7 +55,12 @@ from helpers.test_variant_parameters import (
     TYPECAST_FORMATS,
     UNPACKER_ENGINE_SEL,
 )
-from helpers.tile_constants import MAX_NUM_FACES
+from helpers.tile_constants import (
+    DEFAULT_TILE_C_DIM,
+    DEFAULT_TILE_R_DIM,
+    MAX_FACE_R_DIM,
+    MAX_NUM_FACES,
+)
 from helpers.utils import passed_test
 
 
@@ -410,6 +421,28 @@ def prepare_trig_inputs(
     return (lo + u * (hi - lo)).to(torch_format)
 
 
+def prepare_cumsum_inputs(
+    src_A: torch.Tensor,
+    input_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Map the uniform [0, 1] stimulus into [-1, 1] for the column-wise cumulative sum.
+
+    A column total chains up to 32 adds, so |x| <= 1 keeps every partial sum inside +-32 —
+    well inside Float16's range, and clear of the subnormal magnitudes the SFPU MAD
+    datapath flushes to zero. Both signs are covered so the chain sees cancellation as
+    well as growth.
+    """
+    u = src_A.to(torch.float32)  # uniform [0, 1] from the uniform stimuli spec
+    return (-1.0 + 2.0 * u).to(format_dict[input_format])
+
+
+# Ops whose result depends on where in the tile a datum sits, so L1 has to hold a real tilized tile.
+# Every other op in this suite is element-wise and cannot tell a tilized buffer from a row-major one,
+# which is why the suite has always written the latter.
+LAYOUT_SENSITIVE_OPS = (MathOperation.Cumsum,)
+
+
 def prepare_unary_inputs(
     mathop: MathOperation,
     src_A: torch.Tensor,
@@ -422,6 +455,8 @@ def prepare_unary_inputs(
         return prepare_abs_inputs(src_A, src_B, input_format, output_format)
     if mathop == MathOperation.Square:
         return prepare_square_inputs(src_A, src_B, input_format, output_format)
+    if mathop == MathOperation.Cumsum:
+        return prepare_cumsum_inputs(src_A, input_format)
     if mathop in TRIGONOMETRY_OPS:
         return prepare_trig_inputs(src_A, mathop, input_format)
     if mathop in COMP_OPS:
@@ -655,6 +690,12 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
+    # tile) whose running total lives in LREG4-7 between calls. Every tile is swept with
+    # first=true, which zeroes that carry, so tiles are independent; covering the
+    # cross-tile carry (first=false) needs the shared C++ source to thread
+    # `first = (i == 0)` through its tile loop, so it is a follow-on.
+    OpConfig(MathOperation.Cumsum, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
     # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,
     # fed a uniform [0, 1] stimulus that prepare_trig_inputs maps into each op's domain.
@@ -721,7 +762,8 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
     Functional mode sweeps dest-sync, implied-math, and both [32, 32]/[64, 64]
     dimensions. Performance mode intentionally keeps the complete op, format,
     dest_acc, and approximation coverage while pinning those three axes to
-    DestSync.Half, ImpliedMathFormat.Yes, and [32, 32].
+    DestSync.Half, ImpliedMathFormat.Yes, and the largest functional matrix
+    because none of the preferred perf matrices are supported.
 
     Returns: list of (mathop, fmt, dest_acc, dest_sync, implied_math_format,
     approx_mode, input_dimensions) tuples.
@@ -770,7 +812,11 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
                     if is_perf
                     else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
                 )
-                input_dims = ([32, 32],) if is_perf else cfg.input_dims
+                input_dims = (
+                    select_perf_input_dimensions(cfg.input_dims)
+                    if is_perf
+                    else cfg.input_dims
+                )
                 for dest_sync in dest_sync_modes:
                     for implied_math_format in implied_math_formats:
                         for approx_mode in approx_modes:
@@ -805,8 +851,8 @@ def test_eltwise_unary_sfpu_quasar(
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
     variant (abs, exp, gelu, relu, reciprocal, sqrt, tanh, sigmoid, silu, rsqrt,
-    square, typecast, and the six compare-to-zero modes), validated against the
-    UnarySFPUGolden reference. Typecast sweeps explicit (src, dst) format pairs;
+    square, cumsum, typecast, and the six compare-to-zero modes), validated against
+    the UnarySFPUGolden reference. Typecast sweeps explicit (src, dst) format pairs;
     every other op sweeps the shared format matrix.
     """
     (
@@ -871,6 +917,19 @@ def test_eltwise_unary_sfpu_quasar(
                 op_res, dtype=format_dict[formats.output_format]
             )
 
+    # A layout-sensitive op reads the tile's face structure, so it gets the tilized buffer tt-metal
+    # would feed it, and its result is read back through the matching untilize. UnarySFPUGolden
+    # already models the logical -> Dest -> logical round trip, so the golden above stays on the
+    # logical tensor and only what crosses to L1 and back is converted.
+    is_layout_sensitive = mathop in LAYOUT_SENSITIVE_OPS
+    device_src_A = (
+        get_golden_generator(TilizeGolden)(
+            src_A, input_dimensions, formats.input_format
+        )
+        if is_layout_sensitive
+        else src_A
+    )
+
     unpack_to_dest = quasar_unpack_to_dest(formats, dest_acc, is_typecast)
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -908,7 +967,7 @@ def test_eltwise_unary_sfpu_quasar(
             LOOP_FACTOR(loop_factor),
         ],
         "variant_stimuli": StimuliConfig(
-            src_A,
+            device_src_A,
             formats.input_format,
             src_B,
             formats.input_format,
@@ -948,8 +1007,170 @@ def test_eltwise_unary_sfpu_quasar(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
+    if is_layout_sensitive:
+        res_tensor = get_golden_generator(UntilizeGolden)(
+            res_tensor, formats.output_format, input_dimensions
+        )
+
     assert passed_test(
         golden_tensor,
         res_tensor,
         formats.output_format,
     ), "Assert against golden failed"
+
+
+# ---------------------------------------------------------------------------
+# Cumsum layout / face-boundary detector.
+#
+# The random sweep above proves cumsum against UnarySFPUGolden; this case proves the two
+# properties that golden cannot name on its own, against an oracle that is exact rather
+# than tolerance-bounded:
+#   1. the kernel addresses Dest as the TILE-layout tile `copy_tile` puts there, not as an
+#      untilized row-major buffer, and
+#   2. the running total crosses the face-pair boundary (tile row 15 -> 16) intact.
+# Pinned to the 16-bit float formats on purpose: a Float32 input would be written straight
+# to Dest by UNPACR_DEST, bypassing the SrcA -> A2D datacopy that is `copy_tile`.
+# ---------------------------------------------------------------------------
+CUMSUM_DETECTOR_FORMATS = [
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+    InputOutputFormat(DataFormat.Float16, DataFormat.Float16),
+]
+
+# The tile row the accumulation chain crosses from face pair 0/1 into face pair 2/3.
+CUMSUM_FACE_BOUNDARY_ROW = MAX_FACE_R_DIM
+
+
+def _cumsum_detector_stimulus() -> torch.Tensor:
+    """
+    A one-tile stimulus of small integers that pins every axis the kernel could get wrong.
+
+    ``in(r, c) = 1 + (c % 2) + 3 * (r % 2)`` — values 1, 2, 4, 5:
+      - it varies with ``r``, so the tilized L1 tile differs element-for-element from the
+        row-major one the rest of this suite writes; an untilized-Dest kernel reads the
+        wrong rows and cannot produce the expected column sums;
+      - it varies with ``c``'s parity, so the even-column and odd-column halves of each
+        SFPLOAD carry different data and a swapped parity shows up immediately;
+      - every partial sum is an integer <= 112, so every comparison against the oracle is
+        exact in Float16, Float16_b and Float32 alike.
+    """
+    rows = torch.arange(DEFAULT_TILE_R_DIM).unsqueeze(1)
+    cols = torch.arange(DEFAULT_TILE_C_DIM).unsqueeze(0)
+    return (1 + (cols % 2) + 3 * (rows % 2)).to(torch.float32)
+
+
+@pytest.mark.quasar
+@parametrize(
+    cumsum_formats_dest_acc=[
+        (fmt, dest_acc)
+        for fmt in CUMSUM_DETECTOR_FORMATS
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+    ],
+)
+def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
+    """
+    Deterministic proof that Quasar cumsum walks the tilized Dest layout and carries its
+    running total across the face-pair boundary.
+
+    The stimulus reaches Dest exactly as TTNN delivers it: a Layout::TILE tile in L1,
+    unpacked to SrcA and datacopied into Dest by A2D — the LLK decomposition of
+    `copy_tile`. The result is packed back in tile layout and untilized before comparison,
+    so both the input and the output permutation are load-bearing: an untilized row-major
+    reading of Dest cannot satisfy this oracle.
+    """
+    (formats, dest_acc) = cumsum_formats_dest_acc[0]
+
+    input_dimensions = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
+    src_A = _cumsum_detector_stimulus().to(format_dict[formats.input_format])
+    # src_B is unused by a unary op, but StimuliConfig requires an operand-B buffer.
+    src_B = torch.zeros_like(src_A)
+
+    # The oracle: column-wise prefix sum of the logical tile, accumulated in float32 the
+    # way the SFPU accumulates in an FP32 LREG. Every value is a small exact integer, so
+    # the Dest-format rounding the hardware applies on each store is a no-op here.
+    logical_src_A = src_A.to(torch.float32)
+    expected = torch.cumsum(logical_src_A, dim=0)
+
+    # Layout::TILE in L1 — the discriminator. Feeding the row-major tensor instead would
+    # make an untilized-Dest kernel pass.
+    device_src_A = get_golden_generator(TilizeGolden)(
+        src_A, input_dimensions, formats.input_format
+    )
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=MathOperation.Cumsum),
+                APPROX_MODE(ApproximationMode.No),
+                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(UnpackerEngine.UnpA),
+                DEST_SYNC(DestSync.Half),
+                TYPECAST_FORMATS(),
+            ],
+            "runtimes": [
+                TILE_COUNT(1),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                device_src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=1,
+                tile_count_B=1,
+                tile_count_res=1,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": False,
+            "dest_acc": dest_acc,
+        },
+    )
+
+    res_from_L1 = configuration.run().result
+
+    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = get_golden_generator(UntilizeGolden)(
+        res_tensor, formats.output_format, input_dimensions
+    )
+    result = res_tensor.to(torch.float32).reshape(
+        DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM
+    )
+
+    # Row 0 must be the raw input: the carry bank was zeroed by first == true.
+    assert torch.allclose(
+        result[0], expected[0], rtol=0, atol=1e-3
+    ), f"row 0 is not the input row — carry bank not zeroed: got {result[0].tolist()}"
+
+    # The face-pair boundary, asserted on its own so a failure names the boundary instead
+    # of showing a wall of mismatches. out(16) - out(15) == in(16) is exactly the statement
+    # that the total through tile row 15 (face pair 0/1) reached tile row 16 (face pair 2/3).
+    boundary = CUMSUM_FACE_BOUNDARY_ROW
+    assert torch.allclose(
+        result[boundary - 1], expected[boundary - 1], rtol=0, atol=1e-3
+    ), (
+        f"last row of the first face pair is wrong: got {result[boundary - 1].tolist()}, "
+        f"expected {expected[boundary - 1].tolist()}"
+    )
+    assert torch.allclose(
+        result[boundary] - result[boundary - 1],
+        logical_src_A[boundary],
+        rtol=0,
+        atol=1e-3,
+    ), (
+        "cumulative total was not carried across the face-pair boundary "
+        f"(tile row {boundary - 1} -> {boundary}): row {boundary} = "
+        f"{result[boundary].tolist()}, row {boundary - 1} = {result[boundary - 1].tolist()}"
+    )
+
+    # Every logical tile row, which also rejects any chaining that skips or reorders rows.
+    assert torch.allclose(
+        result, expected, rtol=0, atol=1e-3
+    ), f"cumsum mismatch:\ngot\n{result}\nexpected\n{expected}"

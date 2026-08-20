@@ -21,11 +21,7 @@ def hw_configure_pack(
     pack_dst: DataFormat,
     pack_mode: str = "PackMode::Default",
 ) -> str:
-    desc = output.cpp_desc_name
-    return (
-        f"{desc}.reg_data_format = static_cast<std::uint8_t>({pack_src.cpp_underlying_value});\n"
-        f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>({desc}, ReluConfig::from_packed(0));\n"
-    )
+    return f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>(static_cast<DataFormat>({pack_src.cpp_underlying_value}), ReluConfig::from_packed(0));\n"
 
 
 def configure_pack(
@@ -34,11 +30,7 @@ def configure_pack(
     pack_src: DataFormat,
     pack_dst: DataFormat,
 ) -> str:
-    desc = output.cpp_desc_name
-    return (
-        f"{desc}.reg_data_format = static_cast<std::uint8_t>({pack_src.cpp_underlying_value});\n"
-        f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>({desc}, ReluConfig::from_packed(0));\n"
-    )
+    return f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>(static_cast<DataFormat>({pack_src.cpp_underlying_value}), ReluConfig::from_packed(0));\n"
 
 
 def relu_config(
