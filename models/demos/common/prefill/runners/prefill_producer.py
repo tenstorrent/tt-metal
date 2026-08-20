@@ -693,7 +693,10 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     """Read slot `slot_id`'s KV over [0, real_len) via the published table and PCC-check it against the
     golden trace. Dispatches on the model: MLA (single merged kvpe config), M3 (multi-config triple
-    cache), or GPT-OSS (multi-config K/V heads, no index_k). Returns the min PCC across layers.
+    cache), or GPT-OSS (multi-config K/V heads, no index_k). Returns ``{cache name: min PCC across that
+    cache's layers}`` — one entry per MODEL cache actually validated, so the caller can gate on the min
+    while still reporting each cache separately. A cache with no golden to compare against is ABSENT from
+    the mapping rather than present at 1.0.
 
     The reader is NOT adapter-pluggable — a new model whose cache is neither of those layouts needs
     a branch here (and its own decode), not just an adapter.
@@ -735,7 +738,8 @@ def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_
 
 def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     """GPT-OSS multi-config read-back: reconstruct per-head K/V from the 2N-config table and PCC vs the
-    GQA golden (no index_k). Config layout: k_h0..N-1 = 0..N-1, v_h0..N-1 = N..2N-1."""
+    GQA golden (no index_k). Config layout: k_h0..N-1 = 0..N-1, v_h0..N-1 = N..2N-1. Returns the per-cache
+    minima keyed by cache name."""
     from pathlib import Path
 
     from safetensors import safe_open
@@ -787,13 +791,13 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
         f"[producer] slot {slot_id} GPT-OSS KV PCC over [0,{real_len}) across {NUM_LAYERS} layers -> "
         f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min_pcc:.6f})"
     )
-    return min_pcc
+    return mins
 
 
 def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     """M3 multi-config read-back: reconstruct per-head K/V + index_k from the 9-config table and PCC vs the
     separate_k_v golden. Config layout matches the builder: k_h0..N-1 = 0..N-1, v_h0..N-1 = N..2N-1,
-    index_k = 2N."""
+    index_k = 2N. Returns the per-cache minima keyed by cache name."""
     from pathlib import Path
 
     from safetensors import safe_open
@@ -815,6 +819,7 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
     )
     kv_dir = Path(trace_dir) / "kv_cache"
     mins = {"k": 1.0, "v": 1.0, "index_k": 1.0}
+    ik_checked = 0
     for layer in range(NUM_LAYERS):
         dev_k = torch.stack(
             [
@@ -850,6 +855,7 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
             dev_ik = _read_kv_slice(table, device_map, ik_cfg, layer, slot_id, read_len, head_dim, ik_decode)[:real_len]
             pcc_ik = float(comp_pcc(g_ik, dev_ik, 0.0)[1])
             mins["index_k"] = min(mins["index_k"], pcc_ik)
+            ik_checked += 1
             line += f" index_k={pcc_ik:.5f}"
         logger.info(line)
 
@@ -858,7 +864,11 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
         f"[producer] slot {slot_id} M3 KV PCC over [0,{real_len}) across {NUM_LAYERS} layers -> "
         f"K={mins['k']:.5f} V={mins['v']:.5f} index_k={mins['index_k']:.5f} (min {min_pcc:.6f})"
     )
-    return min_pcc
+    # Only some traces carry an index_k golden. Its min is still the 1.0 init when none did, so drop the
+    # key rather than reporting an unmeasured cache as perfect.
+    if not ik_checked:
+        del mins["index_k"]
+    return mins
 
 
 def _full_indexer_layer_indices(num_layers: int):
@@ -884,9 +894,10 @@ def _full_indexer_layer_indices(num_layers: int):
 def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     """Read slot `slot_id`'s KV over [0, real_len) via the table and validate it. Config 0 (the KVPE
     cache) is PCC'd vs the golden trace. For a sparse/DSA model the merged table also carries config 1
-    (the index-key cache), which is PCC'd vs the golden indexer key. Returns the min PCC across both
-    caches / all layers, or across config 0 alone when the trace carries no indexer-key golden (warned,
-    not fatal — see below). Raises on an index-cache READ failure."""
+    (the index-key cache), which is PCC'd vs the golden indexer key. Returns ``{"kvpe": min}`` plus
+    ``"index": min`` when the index cache was validated — omitted, not defaulted to 1.0, when the model is
+    dense or the trace carries no indexer-key golden (warned, not fatal — see below). Raises on an
+    index-cache READ failure."""
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
         _load_golden_index_k,
         _load_golden_kv_post,
@@ -954,13 +965,14 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     # config-0 PCC rather than failing the slot: the KVPE result is still a valid check.
     # `_num_model_configs`, not `num_configs()`: under DFlash the same table also carries the drafter's
     # `dflash_*` configs, and config 1 is only the index cache when the MODEL published two caches.
+    mins = {"kvpe": min_pcc}
     if _num_model_configs(table) > 1:
         if not index_golden_present(trace_dir):
             logger.warning(
                 f"[producer] slot {slot_id}: table has an index config but {trace_dir} carries no "
                 f"indexer-key golden; validating the KVPE cache only (device index cache NOT checked)."
             )
-            return min_pcc
+            return mins
 
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
         n_index_layers = table.config(1).num_layers
@@ -1012,21 +1024,34 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             f"[producer] slot {slot_id} index PCC over [0,{real_len}) across "
             f"{checked_index}/{n_index_layers} local layers -> {min_index:.6f}"
         )
-        min_pcc = min(min_pcc, min_index)
+        mins["index"] = min_index
 
-    return min_pcc
+    return mins
 
 
-def _write_pcc_verdict(rank: int, ok: bool, min_pcc: float, checked: int, threshold: float) -> None:
+def _write_pcc_verdict(
+    rank: int, ok: bool, min_pcc: float, checked: int, threshold: float, per_cache: dict | None = None
+) -> None:
     """Persist this rank's PCC verdict to PREFILL_PCC_SUMMARY_DIR (opt-in). The verdict is logged to
     stdout just before the shutdown sentinel, and mpirun drops its buffered output forwarding when the
     runner tears down in response — so under a launcher the numbers never reach the captured log. A file
-    on shared storage is read back by the harness independently of that teardown."""
+    on shared storage is read back by the harness independently of that teardown.
+
+    `min_pcc` is the gated number: the min over every validated cache. `per_cache` breaks it down by cache
+    (a sparse model's KVPE vs index cache), so a durable verdict distinguishes which cache set the bar and
+    shows that the others were checked at all — a cache missing from it was NOT validated."""
     summary_dir = os.environ.get("PREFILL_PCC_SUMMARY_DIR")
     if not summary_dir:
         return
     os.makedirs(summary_dir, exist_ok=True)
-    verdict = {"rank": rank, "ok": bool(ok), "min_pcc": min_pcc, "slots_checked": checked, "threshold": threshold}
+    verdict = {
+        "rank": rank,
+        "ok": bool(ok),
+        "min_pcc": min_pcc,
+        "per_cache": per_cache or {},
+        "slots_checked": checked,
+        "threshold": threshold,
+    }
     with open(os.path.join(summary_dir, f"rank{rank}.json"), "w") as f:
         json.dump(verdict, f)
 
@@ -1042,7 +1067,7 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
     device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
     if not device_map:
         logger.error("[producer] no device map available; skipping KV read/PCC.")
-        _write_pcc_verdict(rank, ok=False, min_pcc=0.0, checked=0, threshold=threshold)
+        _write_pcc_verdict(rank, ok=False, min_pcc=0.0, checked=0, threshold=threshold, per_cache={})
         return False
 
     dflash_threshold = float(os.environ.get("PREFILL_DFLASH_PCC", "0.88"))
@@ -1059,6 +1084,7 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
             )
 
     min_pcc_overall = 1.0
+    per_cache = {}  # cache name -> min over slots; a cache never validated stays absent
     min_dflash_overall = None  # stays None unless a drafter slice is actually measured
     checked = 0
     failures = []
@@ -1067,7 +1093,10 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
         real_len = res.real_len
         if real_len <= 0:
             continue
-        pcc = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, slot_traces[slot_id])
+        slot_mins = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, slot_traces[slot_id])
+        for cache, value in slot_mins.items():
+            per_cache[cache] = value if cache not in per_cache else min(per_cache[cache], value)
+        pcc = min(slot_mins.values())  # the gate is the weakest cache
         min_pcc_overall = min(min_pcc_overall, pcc)
         checked += 1
         if pcc < threshold:
@@ -1086,9 +1115,13 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
     # what it was before this gate existed. Keep `min_pcc=` last-but-one so a `min_pcc=([\d.]+)` reader is
     # unaffected either way.
     dflash_field = "" if min_dflash_overall is None else f" min_dflash_pcc={min_dflash_overall:.6f}"
-    print(f"[producer] kv_cache_pcc_complete slots_checked={checked} min_pcc={min_pcc_overall:.6f}{dflash_field}")
+    per_cache_field = "".join(f" {cache}_pcc={value:.6f}" for cache, value in per_cache.items())
+    print(
+        f"[producer] kv_cache_pcc_complete slots_checked={checked} min_pcc={min_pcc_overall:.6f}"
+        f"{dflash_field}{per_cache_field}"
+    )
     ok = bool(checked) and not failures and not dflash_failures
-    _write_pcc_verdict(rank, ok=ok, min_pcc=min_pcc_overall, checked=checked, threshold=threshold)
+    _write_pcc_verdict(rank, ok=ok, min_pcc=min_pcc_overall, checked=checked, threshold=threshold, per_cache=per_cache)
     if failures:
         logger.error(f"[producer] KV cache PCC below {threshold} for (slot, real_len, pcc): {failures}")
     if dflash_failures:
@@ -1098,7 +1131,11 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
     if not checked:
         logger.error("[producer] verify requested but no resident slots had data to check.")
         return False
-    logger.success(f"[producer] KV cache PCC PASSED (min {min_pcc_overall:.6f} >= {threshold} across {checked} slots)")
+    per_cache_note = ", ".join(f"{cache}={value:.6f}" for cache, value in per_cache.items())
+    logger.success(
+        f"[producer] KV cache PCC PASSED (min {min_pcc_overall:.6f} >= {threshold} across {checked} slots"
+        f"{f'; per cache: {per_cache_note}' if per_cache_note else ''})"
+    )
     if min_dflash_overall is not None:
         logger.success(
             f"[producer] drafter KV PCC PASSED (min {min_dflash_overall:.6f} >= {dflash_threshold} "
