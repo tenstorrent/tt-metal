@@ -34,7 +34,7 @@ __attribute__((noinline)) void calculate_binary_fmod_fresh_cpp()
             const sfpi::vFloat aa = sfpi::abs(a);
             const sfpi::vFloat ab = sfpi::abs(b);
 
-            sfpi::vFloat r = fresh_mod_positive(aa, ab, fresh_recip_positive(ab));
+            sfpi::vFloat r = fresh_mod_positive(aa, ab, fresh_recip_hwseed(ab));
             // An exact multiple is exactly zero.
             v_if (r - ab == 0.0f)
             {

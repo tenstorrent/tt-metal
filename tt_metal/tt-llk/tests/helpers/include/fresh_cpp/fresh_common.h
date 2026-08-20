@@ -30,6 +30,28 @@ sfpi_inline sfpi::vFloat fresh_recip_positive(const sfpi::vFloat x)
     return r;
 }
 
+// Reciprocal of a nonzero finite fp32 vector, stated from the hardware
+// reciprocal estimate (SFPARECIP, ~7 bit seed; sign-agnostic) refined by two
+// Newton–Raphson steps.  Each step squares the relative error (~8e-3 ->
+// ~6e-5 -> fp32-limited), the same accuracy class as fresh_recip_positive's
+// three steps from the ~4.4-bit Blinn seed.  The steps are spelled through
+// the identity y*(2 - x*y) = y*(-t) - 0 with t = x*y - 2 so each half is a
+// single fused multiply-add: 5 issue slots at dependency depth 5 versus the
+// bit-seed statement's 13 slots at depth 11 (lane DJ loser-attack anatomy,
+// 2026-08-20).  Callers whose domain includes zero or infinite divisors must
+// state those cases themselves (the mod bodies overwrite them explicitly);
+// this statement is exact only on nonzero finite lanes.
+sfpi_inline sfpi::vFloat fresh_recip_hwseed(const sfpi::vFloat x)
+{
+    sfpi::vFloat y = sfpi::approx_recip(x);
+    for (int step = 0; step < 2; ++step)
+    {
+        const sfpi::vFloat t = x * y - 2.0f;
+        y                    = y * -t - 0.0f;
+    }
+    return y;
+}
+
 // Truncate a non-negative fp32 vector to its integer part: the 2^23
 // mantissa-shift round-to-nearest, then take back the one-off when nearest
 // rounded up.  Values at or above 2^23 carry no fraction and pass through.
@@ -55,7 +77,7 @@ sfpi_inline sfpi::vFloat fresh_trunc_nonneg(const sfpi::vFloat v)
 // Residue of a non-negative dividend modulo a positive divisor:
 // r = aa - trunc(aa * (1/ab)) * ab, followed by the two one-step corrections
 // that put a rounding-perturbed quotient back into the mathematical range
-// 0 <= r < ab.  recip is the divisor's reciprocal (fresh_recip_positive).
+// 0 <= r < ab.  recip is the divisor's reciprocal (either shared statement).
 sfpi_inline sfpi::vFloat fresh_mod_positive(const sfpi::vFloat aa, const sfpi::vFloat ab, const sfpi::vFloat recip)
 {
     const sfpi::vFloat quotient = fresh_trunc_nonneg(aa * recip);
