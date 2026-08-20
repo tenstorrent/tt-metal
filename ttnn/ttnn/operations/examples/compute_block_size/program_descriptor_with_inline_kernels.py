@@ -83,7 +83,7 @@ _COMPUTE_KERNEL = r"""
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
 // out = (A + B) @ C, all phases parallel over M. The M height is chopped into `num_blocks`
 // chunks of `block_rows` tile-rows each; the whole tilize/tilize/add/matmul/untilize chain runs
