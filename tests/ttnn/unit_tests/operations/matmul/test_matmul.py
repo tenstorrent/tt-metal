@@ -3690,40 +3690,30 @@ def test_matmul_default_width_sharded(
 
 
 @pytest.mark.parametrize(
-    "batch_size, m_size, n_size, expected_shard_shape",
+    "a_shape, b_shape, expected_shard_shape",
     [
-        (1, 400, 400, (416, 416)),
-        (1, 400, 128, (416, 128)),
-        (1, 512, 512, (512, 512)),
-        pytest.param(
-            5,
-            400,
-            400,
-            (416, 416),
-            marks=pytest.mark.skip(
-                reason="Blocked on a separate bug, not on the per-core cap. compute_output_specs "
-                "derives the output shard grid with fuse_batch=true (M=65 tiles -> 5 cores) while "
-                "the 2D mcast factory derives its work grid from program_config.fuse_batch=false "
-                "(Mt=13 tiles -> 1 core), so batched A on this path allocates an output the factory "
-                "never fully writes. The cap corrects the shard shape but not that mismatch."
-            ),
-        ),
+        ((1, 400, 32), (1, 32, 400), (416, 416)),
+        ((1, 400, 32), (1, 32, 128), (416, 128)),
+        ((1, 512, 32), (1, 32, 512), (512, 512)),
+        ((5, 400, 32), (32, 400), (416, 416)),
     ],
-    ids=["reported_13x13", "asymmetric_13x4", "cap_is_noop_16x16", "reported_batched"],
+    ids=["400x400", "400x128", "512x512", "batch5_broadcast_b"],
 )
-def test_matmul_default_block_sharded_single_core(device, batch_size, m_size, n_size, expected_shard_shape):
+def test_matmul_default_block_sharded_single_core(device, a_shape, b_shape, expected_shard_shape):
     """BLOCK_SHARDED output with no program_config: the shard shape must follow the output size.
 
     Issue #32435: the per-core block was sized to fit L1 (starting at 16x16 tiles) and never
     capped to the output, so a 13x13 tile output got a 16x16 block and a requested 416x416
     shard came back as 512x512.
 
-    Keep the shard grid 1x1, else matmul takes the 1D mcast path, which never runs this code.
+    Keep the shard grid 1x1 so this stays on the 2D path. A multi-core 1-row/1-col grid is
+    routed to 1D (or fatals when B is batched, issue #32306). When A batch > 1 and B batch
+    == 1, auto-config sets fuse_batch so the sharded out CB is not written in a batch loop.
     """
     torch.manual_seed(0)
 
-    torch_input_tensor_a = torch.randn((batch_size, m_size, 32), dtype=torch.bfloat16)
-    torch_input_tensor_b = torch.randn((batch_size, 32, n_size), dtype=torch.bfloat16)
+    torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(b_shape, dtype=torch.bfloat16)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)

@@ -1340,7 +1340,10 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 .per_core_N = per_core_N,
                 .transpose_mcast = transpose_mcast,
                 .fused_activation = std::nullopt,
-                .fuse_batch = false,
+                // Sharded out CB cannot hold a batch loop. Fold A's batch into M when B is
+                // unbatched (fuse_batch requires B batch == 1).
+                .fuse_batch = mem_config.is_sharded() and get_batch_size(a_shape_padded) > 1 and
+                              get_batch_size(b_shape_padded) == 1,
             };
         }
     }
