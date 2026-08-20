@@ -49,11 +49,6 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
         !attrs.compute_kernel_config.packer_l1_acc,
         "prepare_chunk_recurrence: packer_l1_acc=true is unsupported because the compute kernel does not accumulate "
         "through L1");
-    TT_FATAL(
-        attrs.compute_kernel_config.throttle_level ==
-            ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE,
-        "prepare_chunk_recurrence: compute throttling is unsupported because this kernel does not implement throttled "
-        "math");
 
     const auto& q_shape = in.q.logical_shape();
     const auto& k_shape = in.k.logical_shape();
