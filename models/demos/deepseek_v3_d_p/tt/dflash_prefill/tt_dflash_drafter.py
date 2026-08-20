@@ -83,8 +83,6 @@ class TtDFlashDrafter:
         # Prefill builds drafter KV for the FULL chunk the verifier hands it (e.g. 5120 tokens), so the
         # cache is sized to max_seq_len — NOT capped at 4k.
         self.cache_seq = max_seq_len if max_seq_len is not None else config.context_len
-        # Global chunk width (block-cyclic period the KV writer + rope table use); fixed for a run. Only the
-        # KV-tail rank needs it (to build the rope table once, below); non-tail ranks may leave it None.
         self.chunk_size = chunk_size
 
         assert (
@@ -104,21 +102,11 @@ class TtDFlashDrafter:
             packer_l1_acc=True,
         )
 
-        # Meta-rope branch (Plan B): the drafter persists K in Meta INTERLEAVED convention and ropes it with
-        # the verifier's on-device offset op (rotary_embedding_indexed). The half-split per-chunk host rope
-        # path (Plan A) was deleted here, so interleaved is the only convention implemented — fail closed on
-        # anything else (only the KV-tail rank ropes; non-tail ranks never touch this).
         if self.build_kv_tail and config.rope_convention != "interleaved":
             raise NotImplementedError(
-                f"rope_convention={config.rope_convention!r} is not supported on the DFlash meta-rope branch: "
-                "the half-split per-chunk host rope path was deleted (Plan B). Use 'interleaved'."
+                f"rope_convention={config.rope_convention!r} is not supported for DFlash: use 'interleaved'"
             )
         self._load_weights(state_dict)
-        # Whole-cache INTERLEAVED indexed rope table (cos/sin block-cyclic-reordered + SP-sharded, trans_mat
-        # replicated), built ONCE here and reused for every chunk/request/turn — only kv_actual_global varies
-        # (rotary_embedding_indexed derives each chunk's per-chip shard offset on-device). Mirrors the verifier
-        # transformer, which builds its indexed table once in __init__ from the same fixed chunk_size
-        # (tt_prefill_transformer.py). Only the KV-tail rank ropes, so only it builds the table.
         self._rope: Optional[dict] = None
         if self.build_kv_tail:
             assert self.chunk_size is not None, "chunk_size is required to build the drafter rope table (KV-tail rank)"
@@ -208,14 +196,6 @@ class TtDFlashDrafter:
             topology=self.topology,
         )
 
-        # Meta-rope branch: bake the half-split -> interleaved permutation into k_proj + k_norm at load, so the
-        # drafter can rope its persisted K with the interleaved on-device offset op (rotary_embedding_indexed)
-        # while the STORED K stays value-identical to the half-split path up to this one fixed head_dim
-        # permutation. Canonical direction: interleaved[j] == halfsplit[src[j]], so k_il = k_hs[..., src]
-        # (verified against the pure-torch rope reference, max|diff| = 0). rms_norm over head_dim is
-        # permutation-invariant, so permuting BOTH the k_proj output rows AND k_norm by src yields exactly the
-        # src-permuted pre-rope K. V never touches rope, so v_proj is untouched. Interleaved is enforced in
-        # __init__; a pure gather, no float error.
         src = torch.argsort(interleaved_to_halfsplit_perm(D))  # [0, 64, 1, 65, ...] for head_dim=128
 
         # Per draft layer: k/v proj column-parallel (KV heads split across TP), per-head k_norm replicated.
@@ -419,9 +399,6 @@ class TtDFlashDrafter:
             ttnn.deallocate(target_hidden)
             target_hidden = gathered  # [1,1,seq,H] replicated on TP
 
-        # The rope table was built once in __init__ for a fixed chunk_size (the block-cyclic period the writer
-        # uses); the verifier feeds that same chunk width every call, so fail loudly on any mismatch rather
-        # than silently roping with a table whose period disagrees with the write.
         assert (
             chunk_global == self.chunk_size
         ), f"chunk_global ({chunk_global}) != chunk_size the rope table was built for ({self.chunk_size})"
@@ -441,12 +418,6 @@ class TtDFlashDrafter:
             )
             k = self._split_heads(k)  # [1, kvh_local, seq, head_dim]
             v = self._split_heads(v)
-            # per-head RMSNorm over head_dim (permutation-invariant, so the src-permuted k_norm gives exactly
-            # the src-permuted pre-rope K), then Meta INTERLEAVED rope via the verifier's on-device offset op.
-            # V untouched. rotary_embedding_indexed derives each chip's per-chunk shard offset on-device from
-            # kv_actual_global (the same update_idxt math the KV-cache writer uses), so one whole-cache table
-            # ropes every tile-aligned offset -- including mid-band multi-turn resumes -- with no host mirror.
-            # Mirrors mla.py's call: keyword scalars, no compute_kernel_config.
             k = ttnn.rms_norm(
                 k,
                 weight=self.k_norm[i],

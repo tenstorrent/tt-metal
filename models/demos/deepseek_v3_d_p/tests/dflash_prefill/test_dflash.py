@@ -51,7 +51,7 @@ def _unrotate_blockcyclic(rotated: torch.Tensor, sp: int, chunk_global: int) -> 
     return natural
 
 
-def _maybe_reindex_k(rk: torch.Tensor, cfg) -> torch.Tensor:
+def _reshuffle_k_to_interleaved_layout(rk: torch.Tensor, cfg) -> torch.Tensor:
     """Reindex the HALF-SPLIT HF reference K (``rk``) to the drafter's persisted-K convention before the PCC
     compare. ``hf_context_kv`` ropes K half-split; the meta-rope drafter persists K interleaved (the same K
     with its head_dim ``src``-permuted, ``interleaved[j] == halfsplit[src[j]]``), so under ``"interleaved"``
@@ -175,7 +175,7 @@ def test_dflash_pcc(
 
     for i in range(cfg.num_hidden_layers):
         rk, rv = real[i]
-        rk = _maybe_reindex_k(rk, cfg)  # HF ref is half-split; device persists interleaved K
+        rk = _reshuffle_k_to_interleaved_layout(rk, cfg)  # HF ref is half-split; device persists interleaved K
         ok_k, pcc_k = comp_pcc(rk, dk[i], PCC_THRESHOLD)
         ok_v, pcc_v = comp_pcc(rv, dv[i], PCC_THRESHOLD)
         logger.info(f"layer {i}: K pcc={pcc_k} (ok={ok_k})  V pcc={pcc_v} (ok={ok_v})")
@@ -321,7 +321,7 @@ def test_dflash_multiturn_pcc(
 
     for i in range(cfg.num_hidden_layers):
         rk, rv = real[i]
-        rk = _maybe_reindex_k(rk, cfg)  # HF ref is half-split; device persists interleaved K
+        rk = _reshuffle_k_to_interleaved_layout(rk, cfg)  # HF ref is half-split; device persists interleaved K
         ok_k, pcc_k = comp_pcc(rk, dk[i], PCC_THRESHOLD)
         ok_v, pcc_v = comp_pcc(rv, dv[i], PCC_THRESHOLD)
         logger.info(f"layer {i}: K pcc={pcc_k} (ok={ok_k})  V pcc={pcc_v} (ok={ok_v})")

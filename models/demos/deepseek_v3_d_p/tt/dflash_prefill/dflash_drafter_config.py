@@ -44,15 +44,6 @@ class DFlashDrafterConfig:
     rope_orig_max_pos: int = 4096
     rope_mscale: float = 1.0
     rope_mscale_all_dim: float = 1.0
-    # RoPE convention for the *persisted* drafter K. This branch (nbabin/dflash_meta_rope) adopts Meta's
-    # INTERLEAVED convention (Plan B in .claude/plans/dazzling-spinning-scone.md): the drafter reuses the
-    # verifier's on-device offset op ``rotary_embedding_indexed``, and the half-split -> interleaved
-    # head_dim permutation is baked into k_proj/k_norm at load, so the STORED K is value-identical to the
-    # half-split (Plan A) path up to that one fixed permutation. Plan A's per-chunk host rope machinery is
-    # DELETED on this branch, so "interleaved" is the only convention the drafter implements here
-    # (``__init__`` fails closed on any other value); "half_split" is retained only as a documented seam and
-    # to gate the golden/reference reindex in the validators and tests. NOTE: interleaved stored K is a
-    # cross-team wire contract with decode (``tt-llm-engine``, not vendored) — see the plan's Plan B.
     rope_convention: str = "interleaved"
 
     @property
