@@ -177,6 +177,8 @@ LEVER_ARMS = {
     "coarsen_blocks": _arm(levers=dict(coarsen_blocks=0)),
     # The resident-x ladder's Regime C rung: OFF is Perf 1's streaming two-read plan.
     "resident_c": _arm(levers=dict(resident_c=0)),
+    # Dropping the per-phase data-format reconfig: OFF reconfigs at every boundary.
+    "no_reconfig": _arm(levers=dict(no_reconfig=0)),
     # --- Perf 1 -------------------------------------------------------------
     # The W-split work distribution: OFF forces G = 1, the pure row-parallel plan
     # the op shipped before this round.
@@ -379,6 +381,13 @@ PERF2_PAIRS = (
     ("masked_prefill_6143", None, "resident_c"),
     ("masked_prefill", ttnn.bfloat8_b, "resident_c"),
     ("w_nonalign", None, "resident_c"),
+    ("smallest", None, "no_reconfig"),
+    ("focus", None, "no_reconfig"),
+    ("h_nonalign", None, "no_reconfig"),
+    ("decode_1024", None, "no_reconfig"),
+    ("w_nonalign", None, "no_reconfig"),
+    ("row_major", None, "no_reconfig"),
+    ("prefill_1024", ttnn.bfloat8_b, "no_reconfig"),
 )
 
 

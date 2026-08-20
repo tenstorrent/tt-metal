@@ -137,6 +137,21 @@ constexpr uint32_t GROUP_SIZE = get_compile_time_arg_val(24);
 // Gamma held resident for the whole kernel (Regime A always; Regime C where the
 // solver affords it) instead of re-pushed once per W-chunk.
 constexpr bool GAMMA_RESIDENT = (get_compile_time_arg_val(33) != 0);
+// COMPUTE-ONLY arg 34 (appended after the shared geometry prefix).  1 = every CB
+// this chain crosses resolves to ONE data format, so the helpers' per-phase format
+// reconfig would rewrite the values the unpack/pack descriptors already hold - pure
+// MMIO.  The host owns the predicate (`fmt_uniform` in blocking_plan), which is
+// what makes this incapable of being a silent precision change: at a mixed-format
+// corner it is 0 and the kernel below is byte-identical to the reconfiguring one.
+// Measured bit-identical on 18 corners and 1.03-1.11x on (32,17).
+constexpr uint32_t NO_RECONFIG = get_compile_time_arg_val(34);
+constexpr auto RC = NO_RECONFIG ? ckl::DataFormatReconfig::Disabled : ckl::DataFormatReconfig::Enabled;
+constexpr auto RRC =
+    NO_RECONFIG ? ckl::ReduceDataFormatReconfigMode::NONE : ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
+constexpr auto TRC = NO_RECONFIG ? ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure
+                                 : ckl::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure;
+constexpr auto UTRC = NO_RECONFIG ? ckl::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure
+                                  : ckl::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure;
 // A resident plan whose last W-tile carries pad columns: it needs the two-pass
 // masked fold below.  ROW_MAJOR input never does - the reader zero-fills every
 // stick's pad tail, so the pad is exactly 0.
@@ -188,7 +203,13 @@ ALWI void ingest_gamma() {
     if constexpr (HAS_GAMMA && GAMMA_IS_ROW_MAJOR) {
         MaybeDeviceZoneScope("cp_gamma_tilize");
         for (uint32_t o = 0; o < N; o += GAMMA_INGEST_BLOCK) {
-            ckl::tilize<GAMMA_INGEST_BLOCK, cb_gamma_rm, cb_gamma_tiles>(1);
+            ckl::tilize<
+                GAMMA_INGEST_BLOCK,
+                cb_gamma_rm,
+                cb_gamma_tiles,
+                ckl::tilize_config::InitUninitMode::InitAndUninit,
+                ckl::tilize_config::WaitMode::WaitBlock,
+                TRC>(1);
         }
     }
 }
@@ -206,7 +227,7 @@ constexpr auto partial_scaler = (W_PARTIAL == 0)
 // Regime B's sum-of-squares phase: ONE fused accumulate per W-chunk
 // ===========================================================================
 // HELPER SUBSTITUTION (kernel_lib CAPABILITY gap - do NOT "fix" this back).
-// `fs_out` below is byte-for-byte what `ckl::row_output(cb_sumsq_acc)` expands to
+// `fs_out` below is byte-for-byte what `ckl::row_output(cb_sumsq_acc, RC)` expands to
 // inside `ckl::sum_of_squares` (eltwise/api/convenience.inl: PerOuter reserve +
 // PerOuter push + DestAccumulation::PerRow), and `sumsq_strided` is byte-for-byte
 // what `sum_of_squares` expands to (`square` -> `eltwise_chain(BinaryFpu<Mul, In,
@@ -227,7 +248,7 @@ constexpr auto fs_out = ckl::output(
     cb_sumsq_acc,
     ckl::ReservePolicy::PerOuter,
     ckl::PushPolicy::PerOuter,
-    ckl::DataFormatReconfig::Enabled,
+    RC,
     ckl::PackRelu::Disabled,
     ckl::L1Accumulation::Disabled,
     ckl::DestAccumulation::PerRow);
@@ -320,8 +341,12 @@ ALWI void rms_chain(uint32_t nt, uint32_t inv_w_bits, uint32_t eps_bits) {
         cb_reserve_back(cb_rms_recip, nt);
     }
     MaybeDeviceZoneScope("cp_rms_chain");
-    reconfig_data_format_srca(cb_sumsq);
-    pack_reconfig_data_format(cb_rms_recip);
+    // This chain drives the SFPU directly, so it owns the reconfig the bypassed
+    // helper would have emitted - and skips it on the same host predicate.
+    if constexpr (!NO_RECONFIG) {
+        reconfig_data_format_srca(cb_sumsq);
+        pack_reconfig_data_format(cb_rms_recip);
+    }
     pack_reconfig_l1_acc(0);
     copy_tile_init(cb_sumsq);
     for (uint32_t i = 0; i < nt; ++i) {
@@ -363,14 +388,14 @@ ALWI void sumsq_strided(uint32_t base) {
                 ckl::WaitPolicy::None,
                 ckl::PopPolicy::None,
                 ckl::OperandKind::Block,
-                ckl::DataFormatReconfig::Enabled,
+                RC,
                 ckl::TileOffset::Strided),
             ckl::input(
                 cb_input_tiles,
                 ckl::WaitPolicy::None,
                 ckl::PopPolicy::None,
                 ckl::OperandKind::Block,
-                ckl::DataFormatReconfig::Enabled,
+                RC,
                 ckl::TileOffset::Strided),
             ckl::Dst::D0,
             ckl::DestAccumulation::PerRow>{
@@ -391,7 +416,7 @@ ALWI void fold_partial_sum(uint32_t k, bool last, bool partial) {
         cb_reduce_scaler,
         cb_sumsq,
         REDUCE_POLICY,
-        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+        RRC,
         ReduceFp32Mode::Fast,  // default (global scope, not in ckl)
         REDUCE_ALGORITHM>(
         ckl::ReduceInputBlockShape::of(BLOCK_HT, 1, 1),
@@ -417,8 +442,9 @@ ALWI uint32_t sumsq_chunk(uint32_t k, bool is_last_chunk) {
         {
             MaybeDeviceZoneScope("cp_sumsq");
             ckl::square<
-                ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::output(cb_sumsq_acc, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                ckl::input(
+                    cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block, RC),
+                ckl::output(cb_sumsq_acc, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize, RC)>(
                 ckl::IterationShape::grid(BLOCK_HT, 1).block_size(DEST_BLOCK));
         }
         // The single tile of the chunk IS the last W-tile, so the mask lands on it.
@@ -431,8 +457,9 @@ ALWI uint32_t sumsq_chunk(uint32_t k, bool is_last_chunk) {
         {
             MaybeDeviceZoneScope("cp_sumsq");
             ckl::sum_of_squares<
-                ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                ckl::row_output(cb_sumsq_acc)>(
+                ckl::input(
+                    cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block, RC),
+                ckl::row_output(cb_sumsq_acc, RC)>(
                 ckl::IterationShape::grid(BLOCK_HT, WT_REDUCE_BLOCK).block_size(DEST_BLOCK));
         }
         fold_partial_sum(k, is_last_chunk, false);
@@ -546,13 +573,13 @@ ALWI void scale_chunk_resident(uint32_t cw, uint32_t base) {
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::None,
                     ckl::OperandKind::Block,
-                    ckl::DataFormatReconfig::Enabled,
+                    RC,
                     ckl::TileOffset::Strided),
                 ckl::input(
-                    cb_rms_recip, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, RmsPop, ckl::OperandKind::Col),
+                    cb_rms_recip, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, RmsPop, ckl::OperandKind::Col, RC),
                 ckl::Dst::D0>{ckl::StridedTileRange{base, Wt_core}},
             ckl::PackTile<ckl::output(
-                cb_scale_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                cb_scale_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize, RC)>{});
     }
 
     if constexpr (HAS_GAMMA) {
@@ -565,24 +592,29 @@ ALWI void scale_chunk_resident(uint32_t cw, uint32_t base) {
                 ckl::IterationShape::grid(BLOCK_HT, cw).block_size(DEST_BLOCK),
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Mul,
-                    ckl::input(cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                    ckl::input(cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block, RC),
                     ckl::input(
                         cb_gamma_tiles,
                         ckl::BroadcastDim::Row,
                         ckl::WaitPolicy::None,
                         ckl::PopPolicy::None,
                         ckl::OperandKind::Row,
-                        ckl::DataFormatReconfig::Enabled,
+                        RC,
                         ckl::TileOffset::Set),
                     ckl::Dst::D0>{0u, base},
                 ckl::PackTile<ckl::output(
-                    cb_output_tiles, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                    cb_output_tiles, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize, RC)>{});
         } else {
             ckl::mul<
-                ckl::input(cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                ckl::input(cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block, RC),
                 ckl::input(
-                    cb_gamma_tiles, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, GammaPop, ckl::OperandKind::Row),
-                ckl::output(cb_output_tiles, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                    cb_gamma_tiles,
+                    ckl::BroadcastDim::Row,
+                    ckl::WaitPolicy::Upfront,
+                    GammaPop,
+                    ckl::OperandKind::Row,
+                    RC),
+                ckl::output(cb_output_tiles, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize, RC)>(
                 ckl::IterationShape::grid(BLOCK_HT, cw).block_size(DEST_BLOCK));
         }
     }
@@ -599,19 +631,20 @@ ALWI void scale_chunk(uint32_t cw) {
     {
         MaybeDeviceZoneScope("cp_scale_mul");
         ckl::mul<
-            ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-            ckl::input(cb_rms_recip, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, RmsPop, ckl::OperandKind::Col),
-            ckl::output(cb_scale_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+            ckl::input(cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block, RC),
+            ckl::input(
+                cb_rms_recip, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, RmsPop, ckl::OperandKind::Col, RC),
+            ckl::output(cb_scale_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize, RC)>(
             ckl::IterationShape::grid(BLOCK_HT, cw).block_size(DEST_BLOCK));
     }
 
     if constexpr (HAS_GAMMA) {
         MaybeDeviceZoneScope("cp_gamma_mul");
         ckl::mul<
-            ckl::input(cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+            ckl::input(cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block, RC),
             ckl::input(
-                cb_gamma_tiles, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, GammaPop, ckl::OperandKind::Row),
-            ckl::output(cb_output_tiles, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                cb_gamma_tiles, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, GammaPop, ckl::OperandKind::Row, RC),
+            ckl::output(cb_output_tiles, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize, RC)>(
             ckl::IterationShape::grid(BLOCK_HT, cw).block_size(DEST_BLOCK));
     }
 }
@@ -653,7 +686,13 @@ void kernel_main() {
         if constexpr (RESIDENT_X) {
             if constexpr (IS_ROW_MAJOR) {
                 MaybeDeviceZoneScope("cp_tilize");
-                ckl::tilize<Wt_core, cb_rm_in, cb_input_tiles>(BLOCK_HT);
+                ckl::tilize<
+                    Wt_core,
+                    cb_rm_in,
+                    cb_input_tiles,
+                    ckl::tilize_config::InitUninitMode::InitAndUninit,
+                    ckl::tilize_config::WaitMode::WaitBlock,
+                    TRC>(BLOCK_HT);
             }
             // accumulate-then-finalize (catalog `row_reduce_accumulate`):
             // sum_of_squares folds the whole tile-row of x*x into ONE tile per
@@ -673,8 +712,12 @@ void kernel_main() {
                     MaybeDeviceZoneScope("cp_sumsq");
                     ckl::sum_of_squares<
                         ckl::input(
-                            cb_input_tiles, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Block),
-                        ckl::row_output(cb_sumsq_acc)>(
+                            cb_input_tiles,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::None,
+                            ckl::OperandKind::Block,
+                            RC),
+                        ckl::row_output(cb_sumsq_acc, RC)>(
                         ckl::IterationShape::grid(BLOCK_HT, Wt_core).block_size(DEST_BLOCK));
                 }
 
@@ -711,7 +754,7 @@ void kernel_main() {
                             cb_reduce_scaler,
                             cb_l1_sum,
                             ckl::ReduceInputPolicy::BulkWaitBulkPop,
-                            ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                            RRC,
                             ReduceFp32Mode::Fast,
                             ckl::ReduceAlgorithm::AccumulateViaAdd>(
                             ckl::ReduceInputBlockShape::of(BLOCK_HT, GX, 1),
@@ -728,7 +771,7 @@ void kernel_main() {
                             cb_reduce_scaler,
                             cb_sumsq_bcast,
                             ckl::ReduceInputPolicy::BulkWaitBulkPop,
-                            ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                            RRC,
                             ReduceFp32Mode::Fast,
                             ckl::ReduceAlgorithm::AccumulateViaAdd>(
                             ckl::ReduceInputBlockShape::of(BLOCK_HT, COMBINE_GY, 1));
@@ -747,7 +790,7 @@ void kernel_main() {
                         cb_reduce_scaler,
                         cb_sumsq_bcast,
                         ckl::ReduceInputPolicy::BulkWaitBulkPop,
-                        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                        RRC,
                         ReduceFp32Mode::Fast,
                         ckl::ReduceAlgorithm::AccumulateViaAdd>(
                         ckl::ReduceInputBlockShape::of(BLOCK_HT, GROUP_SIZE, 1));
@@ -765,7 +808,13 @@ void kernel_main() {
             for (uint32_t c = 0; c < NUM_REDUCE_CHUNKS; ++c) {
                 if constexpr (IS_ROW_MAJOR) {
                     MaybeDeviceZoneScope("cp_tilize");
-                    ckl::tilize<WT_REDUCE_BLOCK, cb_rm_in, cb_input_tiles>(BLOCK_HT);
+                    ckl::tilize<
+                        WT_REDUCE_BLOCK,
+                        cb_rm_in,
+                        cb_input_tiles,
+                        ckl::tilize_config::InitUninitMode::InitAndUninit,
+                        ckl::tilize_config::WaitMode::WaitBlock,
+                        TRC>(BLOCK_HT);
                 }
                 k = sumsq_chunk(k, c + 1 == NUM_REDUCE_CHUNKS);
             }
@@ -782,7 +831,13 @@ void kernel_main() {
             scale_chunk<ckl::PopPolicy::AtEnd, ckl::PopPolicy::None>(Wt_core);
             if constexpr (IS_ROW_MAJOR) {
                 MaybeDeviceZoneScope("cp_untilize");
-                ckl::untilize<Wt_core, cb_output_tiles, cb_rm_out>(BLOCK_HT);
+                ckl::untilize<
+                    Wt_core,
+                    cb_output_tiles,
+                    cb_rm_out,
+                    ckl::untilize_config::InitUninitMode::InitAndUninit,
+                    ckl::untilize_config::WaitMode::WaitBlock,
+                    UTRC>(BLOCK_HT);
             }
         } else if constexpr (REGIME_C) {
             // The scale pass walks W in chunks over the RESIDENT x.  Nothing is
@@ -794,7 +849,13 @@ void kernel_main() {
                 scale_chunk_resident<ckl::PopPolicy::None, ckl::PopPolicy::AtEnd>(WT_SCALE_BLOCK, c * WT_SCALE_BLOCK);
                 if constexpr (IS_ROW_MAJOR) {
                     MaybeDeviceZoneScope("cp_untilize");
-                    ckl::untilize<WT_SCALE_BLOCK, cb_output_tiles, cb_rm_out>(BLOCK_HT);
+                    ckl::untilize<
+                        WT_SCALE_BLOCK,
+                        cb_output_tiles,
+                        cb_rm_out,
+                        ckl::untilize_config::InitUninitMode::InitAndUninit,
+                        ckl::untilize_config::WaitMode::WaitBlock,
+                        UTRC>(BLOCK_HT);
                 }
             }
             // cb_rms_recip was held across every chunk (PopPolicy::None), and the
@@ -808,12 +869,24 @@ void kernel_main() {
                 ingest_gamma<WT_SCALE_BLOCK>();
                 if constexpr (IS_ROW_MAJOR) {
                     MaybeDeviceZoneScope("cp_tilize");
-                    ckl::tilize<WT_SCALE_BLOCK, cb_rm_in, cb_input_tiles>(BLOCK_HT);
+                    ckl::tilize<
+                        WT_SCALE_BLOCK,
+                        cb_rm_in,
+                        cb_input_tiles,
+                        ckl::tilize_config::InitUninitMode::InitAndUninit,
+                        ckl::tilize_config::WaitMode::WaitBlock,
+                        TRC>(BLOCK_HT);
                 }
                 scale_chunk<ckl::PopPolicy::None, ckl::PopPolicy::AtEnd>(WT_SCALE_BLOCK);
                 if constexpr (IS_ROW_MAJOR) {
                     MaybeDeviceZoneScope("cp_untilize");
-                    ckl::untilize<WT_SCALE_BLOCK, cb_output_tiles, cb_rm_out>(BLOCK_HT);
+                    ckl::untilize<
+                        WT_SCALE_BLOCK,
+                        cb_output_tiles,
+                        cb_rm_out,
+                        ckl::untilize_config::InitUninitMode::InitAndUninit,
+                        ckl::untilize_config::WaitMode::WaitBlock,
+                        UTRC>(BLOCK_HT);
                 }
             }
             // cb_rms_recip was held across every W-chunk (PopPolicy::None).

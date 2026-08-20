@@ -107,6 +107,12 @@ LEVER_DEFAULTS = {
     # ladder, where a masked or too-wide shape always fell to the streaming
     # two-read Regime B.
     "resident_c": 1,
+    # 1 (applied) = when every CB this compute chain crosses resolves to ONE data
+    # format, drop the per-phase format reconfig (it would rewrite the values the
+    # unpack/pack descriptors already hold); 0 = reconfig at every phase boundary,
+    # the Perf-1 behaviour.  At a MIXED-format corner the host predicate is False
+    # and the knob is inert, so this can never be a silent precision change.
+    "no_reconfig": 1,
     # 0 = let the policy choose; N = pin G = N.  This is what makes the group-size
     # calibration in `_choose_group_size` re-MEASURABLE instead of asserted: a new
     # box or a new shape can be swept without editing the policy.
@@ -1576,7 +1582,28 @@ def create_program_descriptor(
     writer_ct_args = list(geometry_ct_args)
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
+    # COMPUTE-ONLY compile-time args, appended AFTER the shared geometry prefix.
+    # The compute kernel takes no TensorAccessorArgs, so extending it here cannot
+    # move the reader's / writer's CT_ACCESSOR_BASE.
+    #
+    # `fmt_uniform` is read off the SAME table the CBs are built from rather than
+    # assumed: it is True only when `in`, `out`, `gamma`, `interm`, `acc` and the
+    # mandatory-bfloat16 reduce scaler all resolve to one format.  Measured False
+    # (so inert) at every mixed corner: bfloat8_b input (bf8b + bf16), float32
+    # (fp32 + bf16 scaler), and fp32_dest_acc_en=True at any dtype (the accumulator
+    # CBs promote to fp32).  Note it is worth nothing without the `acc_narrow`
+    # lever: at acc_narrow=0 the accumulators are unconditionally fp32 and the
+    # predicate is False everywhere.
+    #
+    # MEASURED: bit-identical (torch.equal) on 18 corners, and 1.03-1.11x whole-op
+    # on (32,17) - 1.06-1.11x on the compute-isolated arm - where the core's own
+    # compute issue stream IS the wall.  Flat on the focus case and the prefills,
+    # whose walls are the combine round-trip and DRAM: the ~250-330 ns of reconfig
+    # MMIO it removes is real there too, just not on the critical path.  Flat is IN
+    # the domain.  See perf_experiments/no_reconfig/.
+    fmt_uniform = len({fmt_of_kind[kind] for _, _, _, kind in plan.cb_layout}) == 1
     compute_ct_args = list(geometry_ct_args)
+    compute_ct_args.append(1 if (fmt_uniform and _lever(levers, "no_reconfig")) else 0)  # 34
 
     inv_w_bits = _f32_bits(1.0 / float(plan.W_true))
     eps_bits = _f32_bits(epsilon)
