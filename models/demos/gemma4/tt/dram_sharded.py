@@ -869,7 +869,9 @@ def lm_head_decode_config(mesh_device, m, k, n):
 
     ``test_lm_head_matmul_sweep`` overall winner at M=32 K=5376 N=32768 (31B TP=8):
     ``1d_c64_bw1`` + DRAM in0 + L1-interleaved out + HiFi4 bf16 (~1.08x vs auto).
-    Scoped to ``m_tiles==1`` and ``n <= 64K`` — the same regime as the prior
+    ``fp32_dest_acc_en`` is on: this is a single last-token matmul (not the
+    prefill-layer band where dest-acc hurt last-token PCC). Scoped to
+    ``m_tiles==1`` and ``n <= 64K`` — the same regime as the prior
     ``_get_lm_head_program_config`` guard (full-vocab tp=1 and multi-row-tile
     prefill fall back to auto).
     """
@@ -885,7 +887,7 @@ def lm_head_decode_config(mesh_device, m, k, n):
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
     return program_config, ttnn.L1_MEMORY_CONFIG, compute_kernel_config
