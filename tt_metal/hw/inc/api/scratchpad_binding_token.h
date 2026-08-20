@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "api/llk_operand_members.h"
+
 // Forward declaration only: the token grants Scratchpad<T> access to its members, but nothing
 // in this header needs the definition. Defined in api/scratchpad.h.
 template <typename T>
@@ -25,14 +27,16 @@ class Scratchpad;
 // Here my_scratchpad_name is a constexpr ScratchpadBindingToken, auto-included in
 // kernel_bindings_generated.h.
 //
-// This header holds only the token, with no dependency beyond <cstdint>, so the generated
-// bindings header (and anything else that just needs to name a binding) does not have to pull
-// in the whole Scratchpad implementation. See api/scratchpad.h for the Scratchpad class this
-// token constructs.
+// This header holds only the token, with no dependency beyond <cstdint> plus the LLK member
+// sidecar, so the generated bindings header (and anything else that just needs to name a binding)
+// does not have to pull in the whole Scratchpad implementation. See api/scratchpad.h for the
+// Scratchpad class this token constructs.
 class ScratchpadBindingToken {
 public:
     explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
+    constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes, LlkOperandMembers llk) noexcept :
+        crta_offset_(crta_offset), size_in_bytes_(size_in_bytes), llk_(llk) {}
 
 private:
     template <typename T>
@@ -40,4 +44,5 @@ private:
 
     uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
     uint32_t size_in_bytes_;  // static per-node size
+    LlkOperandMembers llk_{};
 };

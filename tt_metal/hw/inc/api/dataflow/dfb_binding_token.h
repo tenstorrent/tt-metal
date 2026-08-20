@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "api/llk_operand_members.h"
+
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
 //
@@ -19,13 +21,14 @@
 //
 // Here my_dfb_name is a constexpr DFBBindingToken, auto-included in kernel_bindings_generated.h.
 //
-// This header holds only the tokens, with no dependency beyond <cstdint>, so the generated
-// bindings header (and anything else that just needs to name a binding) does not have to pull
-// in the whole DataflowBuffer implementation. See api/dataflow/dataflow_buffer.h for the
-// DataflowBuffer class these tokens construct.
+// This header holds only the tokens, with no dependency beyond <cstdint> plus the LLK member
+// sidecar, so the generated bindings header (and anything else that just needs to name a binding)
+// does not have to pull in the whole DataflowBuffer implementation. See
+// api/dataflow/dataflow_buffer.h for the DataflowBuffer class these tokens construct.
 //
 struct DFBBindingToken {
     explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
+    constexpr DFBBindingToken(uint16_t id, LlkOperandMembers llk) noexcept : id_(id), llk_(llk) {}
 
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
 
@@ -37,6 +40,7 @@ struct DFBBindingToken {
 
 private:
     uint16_t id_;
+    LlkOperandMembers llk_{};
 };
 
 // Compile-time handle for a CrossNode/PrefetcherPipe *relay* local DFB binding.
@@ -54,6 +58,8 @@ struct RelayDFBBindingToken {
 
     explicit constexpr RelayDFBBindingToken(uint16_t id, uint8_t prefetcher_pipe_id = NO_PREFETCHER_PIPE) noexcept :
         id_(id), prefetcher_pipe_id_(prefetcher_pipe_id) {}
+    constexpr RelayDFBBindingToken(uint16_t id, uint8_t prefetcher_pipe_id, LlkOperandMembers llk) noexcept :
+        id_(id), prefetcher_pipe_id_(prefetcher_pipe_id), llk_(llk) {}
 
     constexpr operator uint32_t() const noexcept { return id_; }
 
@@ -62,4 +68,5 @@ struct RelayDFBBindingToken {
 private:
     uint16_t id_;
     uint8_t prefetcher_pipe_id_;
+    LlkOperandMembers llk_{};
 };
