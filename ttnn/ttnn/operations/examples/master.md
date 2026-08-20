@@ -342,16 +342,11 @@ root tops out at **70** tiles/core on a `1x8` line and **36** on `4x4`, tree red
 reduce-scatter at **224** on both — **3.2×/6.2×** more payload. Past ~200 tiles/core the binding cost is
 the `2*T*P` of the input and output shards, not the reducer. Headroom, not speed, is usually what rules
 the root reducers out first.
-**Push vs pull for the gather, measured both ways** (`reduce_scatter_push` vs `reduce_scatter_mcast`):
-**no L1 difference and none required** — the gather buffer's size follows the *work* split (each worker
-holds `G` copies of its own `1/W` slice), not the transfer direction; both top out at 224 tiles/core on
-`1x8`. **It is not contention:** `--collect-noc-traces` + tt-npe gives a congestion cost of *exactly 0
-cycles* for both directions at both sizes, avg link util ≤11%. A trace census shows why push loses —
-byte-for-byte identical payload plus **512 extra `SEMAPHORE_INC`** (`G*W` per group), the handshake push
-needs and pull does not (pull reads the immutable input, so no contributor-ready notification exists), so
-push does strictly more NoC work. Measure with **`--kernel-iters 1`**: push has no consumer back-pressure,
-so in-kernel repeats let contributors run ahead and inflate it. Corrected picture — push is monotone and
-stable (~247 ns/tile, ≤1.5% noise); **pull is erratic above ~24 tiles/core** (36 t/c is 1.46× slower than
-48 t/c, noise to 10.4%), and that instability, not a push advantage, is what looks like a crossover.
-Prefer **pull** (less NoC work, no handshake, faster where it behaves); pick **push** when predictability
-beats the median.
+**Push or pull the gather is second-order next to the topology choice.** `reduce_scatter_push`
+(contributors write into the owning worker) shows **no L1 difference** — the buffer's size follows the
+*work* split, not the direction — and it is **not** contention-limited: `--collect-noc-traces` + tt-npe
+puts congestion at *exactly 0 cycles* for both, link util ≤11%. A trace census shows identical payload
+plus **512 extra `SEMAPHORE_INC`** for push (`G*W`/group), the handshake pull never needs since it reads
+the immutable input. Pull is faster wherever it behaves, but goes erratic above ~24 tiles/core (36 t/c
+1.46× slower than 48) where push stays monotone ≤1.5%. Prefer pull; compare only at `--kernel-iters 1`
+(push has no back-pressure, so in-kernel repeats inflate it).
