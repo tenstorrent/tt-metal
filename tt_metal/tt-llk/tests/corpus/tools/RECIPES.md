@@ -75,6 +75,31 @@ Rules the tools enforce for you (do not work around them):
 Saving: ~40-60 min per lane per pin cycle (the full mapped-corpus base
 leg), multiplied by every lane that used to recompile it.
 
+**The three gate legs (laneDR, 2026-08-20)** — a lane's byte gate is
+complete only when it covers all three flag surfaces, each a separate
+store key:
+
+1. **flags-off** — the `OFF_FLAGS` `-mno-...` list (sweep_2x2.py):
+   every reviewed optimization force-disabled.  Proves the passes stay
+   dormant when told to.
+2. **ON** — the `ON_FLAGS` review set: every reviewed optimization
+   force-enabled.  Proves the review surface.
+3. **TRUE-DEFAULT** — `TRUE_DEFAULT_FLAGS` = NO `-mtt` flags at all
+   (the flag string is empty apart from any `-B`).  This is the
+   STOCK-USER leg: compiler-default-ON passes (`Init(1)` in riscv.opt —
+   today lut-select, setexp-fold, replay) run exactly as they do for a
+   user who passes nothing.  The flags-off leg does NOT cover this
+   surface (it force-disables those passes), so before this leg
+   existed, default-ON codegen was UNGATED: an edit could change what
+   stock users get while both traditional legs stayed byte-identical.
+   Seed it per pin exactly like the others:
+
+       python3 corpus_leg_store.py ensure --arch bh --flags ''
+       # or with a lane build: --flags '-B<install>/libexec/gcc/riscv-tt-elf/15.1.0/'
+
+   and gate the edit leg against it with `tools/leg_store_gate.py`
+   using the same empty-apart-from-`-B` flag string.
+
 ## 2. DejaGnu: parallel full rvtt.exp — IDENTITY PROVEN (and a surprise)
 
 Proof (laneDA evidence, dejagnu/): full rvtt.exp on ONE build

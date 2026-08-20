@@ -236,6 +236,15 @@ DEFAULT_CONFIG = HERE / "sweep_2x2_ops.tsv"
 # Post-WP8 flag sets (HANDOFF §10 as amended: the -m{no-,}tt-tensix-{analyze,
 # emit}-loadmacro flags were REMOVED with the quarantined exact-calendar pass
 # and now error on use; the planner ON leg is -mtt-tensix-macro-planner).
+#
+# TRUE_DEFAULT_FLAGS is the STOCK-USER leg (laneDR, 2026-08-20): no -mtt
+# flags at all, so every Init(1) compiler-default pass (today: lut-select,
+# setexp-fold, replay, and whatever is promoted next) runs exactly as a
+# stock tt-metal build would run it.  OFF_FLAGS is NOT that leg -- it
+# force-disables the promoted defaults -- and ON_FLAGS is not either --
+# it force-enables the review set.  Byte-gating all three via the leg
+# store is what proves stock-user codegen unchanged across a pin cycle.
+TRUE_DEFAULT_FLAGS = ""
 OFF_FLAGS = (
     "-mno-tt-tensix-optimize-latency-schedule "
     "-mno-tt-tensix-optimize-dst-iteration-fusion "
