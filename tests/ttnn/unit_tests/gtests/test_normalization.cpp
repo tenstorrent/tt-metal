@@ -515,13 +515,6 @@ TEST_F(NormalizationSmoke, LayerNormSharded1x1) {
 }
 
 // LayerNormShardedProgramFactory, Welford variant (compute/layernorm_sharded_welford.cpp).
-// >>> HARDWARE-VERIFY THIS CELL ON SILICON BEFORE MERGING <<<
-// The validator allows sharded Welford for non-distributed LAYERNORM and nightly runs it
-// (test_layernorm_sharded.py::test_layernorm_block_sharded_all_config[welford]), but
-// Welford-sharded is the breakage class currently active in groupnorm CI, so this cell is
-// included per validator only and must be confirmed on hardware. Recip LUT lives on the
-// input's shard grid with width == shard width (== block_w * tile_w), mirroring the
-// nightly test (sspec.grid, sspec.shape[1]).
 TEST_F(NormalizationSmoke, LayerNormShardedWelford1x1) {
     auto& device = *device_;
     const ttnn::Shape shape({1, 1, 32, 64});
@@ -543,15 +536,10 @@ TEST_F(NormalizationSmoke, LayerNormShardedWelford1x1) {
 }
 
 // LayerNormMultiCoreProgramFactory with ROW_MAJOR gamma/beta -> selects the rm_gb reader
-// (reader_unary_interleaved_ln_rm_gb.cpp), whose datum-size and welford-CB contracts were
-// fixed in 65756f91155 (closes #49902, part of #49970). RM gamma/beta shape rule
+// (reader_unary_interleaved_ln_rm_gb.cpp). RM gamma/beta shape rule
 // (layernorm_device_operation.cpp): padded[-1] == tile width and
 // volume/tile_width == W/tile_width, i.e. [1, 1, W/32, 32] -- stick j covers columns
 // j*32..j*32+31 (constant weights make ordering immaterial here).
-// CAUTION: the input must stay TILE. ROW_MAJOR input + ROW_MAJOR gamma/beta hangs the
-// device (rm_gb has no TILIZE_IN path, cb_in_rm is never filled -- open as #49970).
-// The TILE-input + RM-gamma bf16 non-Welford path used here is NOT implicated: nightly
-// runs it un-skipped (test_layernorm.py::test_layernorm_interleaved_all_config, tile_in+gb_rm).
 // Same golden as LayerNormInterleaved: {-1.5, +2.5}.
 TEST_F(NormalizationSmoke, LayerNormRowMajorGammaBeta) {
     auto& device = *device_;
@@ -733,10 +721,6 @@ TEST_F(NormalizationSmoke, DistributedRmsNormEndToEnd) {
 TEST_F(NormalizationSmoke, DistributedRmsNorm2DGrid) {
     // LayerNormPreAllGather2DProgramFactory (worker cores + merge-core column reduce) and the 2D
     // work split inside LayerNormPostAllGatherProgramFactory (use_2d_core_grid = true).
-    // Issue #52110: the 2D pre factory hardcodes out0_tiles = 1 and the RMS stats kernel
-    // (layernorm_pre_allgather_2d.cpp), ignoring is_rmsnorm. That breaks LN-2D - which is not
-    // publicly reachable, layer_norm_pre_all_gather passes nullopt - but is the correct path for
-    // RMS, which is what this cell runs. Mark for hardware verification alongside #52110.
     auto& device = *device_;
     const ttnn::Shape shape({1, 1, 32, 64});
     const auto x_data = detail::dist_norm_alternating(32 * 64, 2.0f, -2.0f);
