@@ -202,13 +202,13 @@ def test_voc_bucket_invariance(device):
 
 
 # Traces need their own region on top of the L1_SMALL the conv shapes want.
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 262144, "trace_region_size": 120_000_000}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 262144, "trace_region_size": 160_000_000}], indirect=True)
 def test_voc_trace_replay(device):
     passed, msg = run_voc_trace_replay(device)
     assert passed, f"replaying other buckets changed the largest bucket's output: {msg}"
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 262144, "trace_region_size": 120_000_000}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 262144, "trace_region_size": 160_000_000}], indirect=True)
 def test_voc_traced_reference(device):
     passed, msg = run_voc_traced_reference(device)
     assert passed, f"traced vocoder waveform below {TARGET_PCC_WAV} vs the CPU reference: {msg}"
@@ -230,7 +230,7 @@ if __name__ == "__main__":
     import sys
 
     run_voc_bucket_selection()
-    dev = ttnn.open_device(device_id=0, l1_small_size=262144, trace_region_size=120_000_000)
+    dev = ttnn.open_device(device_id=0, l1_small_size=262144, trace_region_size=160_000_000)
     try:
         dev.enable_program_cache()
         ok, msg = run_voc_bucket_invariance(dev)

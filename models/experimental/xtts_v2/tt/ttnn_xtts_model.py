@@ -24,8 +24,8 @@ with `seen` per step; measured ~240x slower by step 586).
 Device layout notes carried over from the block bringups:
   * `l1_small_size=65536` is REQUIRED: the fp32 HiFi-GAN convs' halo config OOMs in the
     default/32K L1_SMALL (BUG-2/3 in the block docs).
-  * `trace_region_size=120_000_000` holds the traced 30-layer GPT decode step (3 MB) plus one
-    vocoder trace per VOC_BUCKETS shape (11-37 MB each, 95 MB together).
+  * `trace_region_size=160_000_000` holds the traced 30-layer GPT decode step plus one vocoder
+    trace per VOC_BUCKETS shape; the traces scale with their frame count.
   * Blocks 1 (cond+perceiver) and 4 (vocoder) run fp32 activations (PCC); Blocks 2/3 bf16.
 
 Trace lifecycle — WHY the decode trace is captured once (option (a)):
@@ -110,10 +110,13 @@ OUTPUT_SR = OSR
 # in L1_SMALL for the lifetime of their program-cache entry, so every DISTINCT input length
 # permanently consumes L1_SMALL — with per-utterance lengths the second generate() OOMs
 # ("Not enough space to allocate ... L1_SMALL buffer"). Buckets bound the compiled shapes and
-# keep short utterances off the cap, whose cost per frame is also the worst (0.41 vs 0.25 ms).
-# The trimmed tail only ever sees zero context beyond its own end.
+# keep short utterances off the cap, whose cost per frame is also the worst.
 VOC_L = (GPT_MAX_AUDIO * AR_COMP // HOP) * OSR // ISR  # 2634
-VOC_BUCKETS = tuple(round(VOC_L * k / 4) for k in range(1, 5))  # 658, 1317, 1976, 2634
+# A request pays for its whole bucket, so the gap to the bucket below is its worst-case waste.
+# Steps alternate 1.5x / 1.33x: even spacing leaves the bottom of the range doubling, which is
+# exactly where the vocoder is the largest share of a request.
+# 329, 494, 658, 988, 1317, 1976, 2634.
+VOC_BUCKETS = tuple(round(VOC_L * k / 16) for k in (2, 3, 4, 6, 8, 12, 16))
 
 
 @dataclass
@@ -211,7 +214,7 @@ class XttsV2:
             # each pins a few KB. The trace region holds the decode step + one vocoder trace
             # per bucket.
             self.mesh_device = ttnn.open_mesh_device(
-                ttnn.MeshShape(1, 1), l1_small_size=262144, trace_region_size=120_000_000
+                ttnn.MeshShape(1, 1), l1_small_size=262144, trace_region_size=160_000_000
             )
             self._owns_device = True
         else:

@@ -40,22 +40,31 @@ TARGET_PCC_WAV = 0.99  # waveform vs the CPU reference, same gate as test_hifiga
 
 # max_new_tokens picks the bucket: a code is 1024 samples @22.05kHz resampled to 24 kHz, so
 # frames = codes * (1024/256) * (24000/22050) ~= codes * 4.354.
-TEXTS = {
-    "short": "Hello from Tenstorrent.",
-    "long": "Text to speech synthesis on dedicated accelerator hardware requires careful attention "
-    "to both numerical precision and memory layout. " * 4,  # 304 tokens, under the 402 cap
+PROMPTS = {
+    "one_line": "Hello from Tenstorrent.",  # 47 tokens, and it stops on its own after ~50 codes
+    "paragraph": "Text to speech synthesis on dedicated accelerator hardware requires careful "
+    "attention to both numerical precision and memory layout. " * 4,  # 304 tokens, under the 402 cap
 }
-# Two prompt lengths (a NEW one compiles prefill programs post-capture) and every bucket reused
-# after other buckets have replayed — both are what past corruption needed to show itself.
+# (prompt, max_new_tokens). The prompt picks the PREFILL shape, and a new one compiles programs
+# after the capture; max_new_tokens caps the AUDIO and so picks the vocoder bucket. Nearly every
+# row is the paragraph because the cap only bites while the model is still generating — one_line
+# ends by itself, so it cannot be stretched to reach the upper buckets. Both matter here: two
+# prompt lengths, and every bucket reused after other buckets have replayed.
 ORDER = (
-    ("long", 550),
-    ("short", 100),
-    ("long", 250),
-    ("long", 400),
-    ("long", 550),
-    ("short", 100),
-    ("long", 250),
-    ("long", 400),
+    ("paragraph", 550),
+    ("one_line", 100),
+    ("paragraph", 90),
+    ("paragraph", 120),
+    ("paragraph", 180),
+    ("paragraph", 250),
+    ("paragraph", 400),
+    ("paragraph", 550),
+    ("one_line", 100),
+    ("paragraph", 90),
+    ("paragraph", 120),
+    ("paragraph", 180),
+    ("paragraph", 250),
+    ("paragraph", 400),
 )
 
 
@@ -83,19 +92,19 @@ def run_model_e2e(verbose=True):
 
         first, buckets, worst = {}, set(), 0.0
         for i, key in enumerate(ORDER):
-            text, n = key
-            wav = tts.generate(TEXTS[text], voice, seed=0, max_new_tokens=n)
+            prompt, n = key
+            wav = tts.generate(PROMPTS[prompt], voice, seed=0, max_new_tokens=n)
             Lb = _voc_bucket(wav.shape[-1] // 256)
             buckets.add(Lb)
-            assert torch.isfinite(wav).all(), f"request {i} ({text}, {n}) produced non-finite samples"
+            assert torch.isfinite(wav).all(), f"request {i} ({prompt}, {n}) produced non-finite samples"
             if key not in first:
                 first[key] = wav
-                tts.generate(TEXTS["short"], other, seed=0, max_new_tokens=60)  # interpose the other voice
+                tts.generate(PROMPTS["one_line"], other, seed=0, max_new_tokens=60)  # interpose the other voice
             else:
                 d = (first[key] - wav).abs().max().item() if first[key].shape == wav.shape else float("inf")
                 worst = max(worst, d)
                 if verbose:
-                    print(f"  {i}: {text:5s} max_new={n:4d} bucket {Lb:5d} repeat maxabs {d:.3e}")
+                    print(f"  {i}: {prompt:9s} max_new={n:4d} bucket {Lb:5d} repeat maxabs {d:.3e}")
 
         # Every bucket against CPU: each has its own trace and slots, and the repeat check above
         # reports maxabs 0 for a bucket that is consistently wrong just as it does for a clean one.
