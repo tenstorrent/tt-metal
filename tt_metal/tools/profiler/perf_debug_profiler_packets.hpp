@@ -19,17 +19,18 @@ struct WorkerZonePacket {
     uint32_t core_noc0_x = 0;  // translated -> matches the standard DeviceProfiler / DRAM view
     uint32_t core_noc0_y = 0;
     uint32_t risc = 0;       // 0=BRISC 1=NCRISC 2/3/4=TRISC_0/1/2
-    uint32_t timer_id = 0;   // 16-bit zone-name hash
-    std::string_view name;   // deciphered zone name; stable for the profiler session
+    uint32_t timer_id = 0;   // the 27-bit structural zone id (hostdevcommon/profiler_zone_id.h)
+    std::string_view name;   // zone name, resolved from the kernel's own ELF; stable for the profiler session
     uint64_t timestamp = 0;  // full device ticks (59-bit, reconstructed from STICKY_TIMER)
     bool is_start = false;   // true = ZONE_START, false = ZONE_END
     uint32_t color = 0;      // explicit Tracy zone color (0 = auto by name)
 };
 
-// A point-in-time worker-core event: the unified PP_DATA packet (an "event" is just size 0). Resolved
-// host-side exactly like a zone, but it has no duration, so it lands on the lane's marker row rather than
-// in the zone nesting. `values` is a NON-OWNING view into the consumer's reassembly scratch -- valid only
-// for the duration of the HandleWorkerEvent call, same contract as `name`.
+// A point-in-time worker-core event: a PP_DATA packet (payload) or a PP_EVENT flag (none). Resolved
+// host-side exactly like a zone -- both types carry a compile-time 27-bit structural id -- but it has no
+// duration, so it lands on the lane's marker row rather than in the zone nesting. `values` is a NON-OWNING
+// view into the consumer's reassembly scratch -- valid only for the duration of the HandleWorkerEvent
+// call, same contract as `name`.
 struct WorkerEventPacket {
     uint32_t chip_id = 0;
     uint32_t core_virtual_x = 0;
@@ -37,9 +38,8 @@ struct WorkerEventPacket {
     uint32_t core_noc0_x = 0;
     uint32_t core_noc0_y = 0;
     uint32_t risc = 0;
-    uint32_t id = 0;                   // 20-bit wire id: a compile-time name hash, or a runtime value
-    bool runtime_id = false;           // true = the id is a runtime value (DeviceRuntimeEvent): NOT nameable
-    std::string_view name;             // resolved from the hash map; always empty when runtime_id
+    uint32_t id = 0;                   // the 27-bit structural zone id, compile-time like a zone's
+    std::string_view name;             // resolved from the emitting kernel's ELF, like a zone's
     uint64_t timestamp = 0;            // full device ticks, already rebased like a zone's
     uint32_t runtime_host_id = 0;      // STICKY_PROG value in effect
     const uint64_t* values = nullptr;  // payload, one entry per uint64 the kernel passed

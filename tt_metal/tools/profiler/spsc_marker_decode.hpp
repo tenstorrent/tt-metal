@@ -40,6 +40,13 @@ static_assert(PP_ZONE_START == kernel_profiler::SPSC_TYPE_ZONE_START, "ZONE_STAR
 static_assert(PP_ZONE_END == kernel_profiler::SPSC_TYPE_ZONE_END, "ZONE_END wire code disagrees");
 static_assert(PP_STICKY_TIMER == kernel_profiler::SPSC_TYPE_STICKY_TIMER, "STICKY_TIMER wire code disagrees");
 static_assert(PP_TYPE_SHIFT == kernel_profiler::SPSC_SPAN_TYPE_SHIFT, "packet type field moved");
+// The DRISC drain kernel keeps its OWN copy of the PP_DATA packer (it cannot include kernel_profiler.hpp),
+// so its layout constants have to be pinned against this header's. Widening the id and moving the size
+// word without updating that copy is not a crash -- it renders every one of its markers perfectly, with
+// correct timestamps and nesting, under the WRONG identity. This translation unit is the only one that
+// sees both headers, which makes it the only place the two can be held together.
+static_assert(PP_DATA == kernel_profiler::SPSC_TYPE_DATA, "PP_DATA wire code disagrees");
+static_assert(PP_DATA_SIZE_SHIFT == kernel_profiler::SPSC_DATA_SIZE_SHIFT, "PP_DATA size field moved");
 
 namespace tt::tt_metal::profiler {
 
@@ -80,13 +87,16 @@ struct SpscDecodeState {
 };
 
 // Decode `in[0..in_n)` (a fresh read), prepending any carried residual. For each MARKER packet, calls
-//   emit(uint32_t lane, uint32_t type, uint32_t zone_hash, uint64_t full_ts, uint32_t prog)
-// where type is PP_ZONE_START/END/TOTAL, zone_hash is the low-16 srcloc hash, and full_ts is the 59-bit
+//   emit(uint32_t lane, uint32_t type, uint32_t zone_id, uint64_t full_ts, uint32_t prog)
+// where type is PP_ZONE_START/END/TOTAL, zone_id is the FULL 27-bit structural zone id
+// (tu_id << TT_ZONE_LOCAL_BITS | local -- hostdevcommon/profiler_zone_id.h; it was a 16-bit
+// source-location hash before, and the mask that truncated it here is gone), and full_ts is the 59-bit
 // device timestamp (timer_hi<<32 | timer_low). Sticky packets update `st` and are not emitted. A trailing
 // partial packet is saved into st.resid for the next call. `nl` = number of lanes (num_cores * NRISC).
 // No-op default for the point-marker sink (PP_DATA / PP_EVENT), so a caller that only wants zones compiles
-// unchanged. `type` is the wire type: PP_DATA ids are compile-time tags and can be name-resolved, PP_EVENT
-// ids are runtime values and must NOT be.
+// unchanged. `type` is the wire type: BOTH PP_DATA and PP_EVENT now carry a compile-time structural id in
+// the same 27 bits a zone marker uses, so both are name-resolved the same way. They differ only in LENGTH
+// -- PP_EVENT is a bare 2-word flag, PP_DATA is 3 + payload with the length in its word2.
 struct SpscIgnoreData {
     void operator()(
         uint32_t /*lane*/,
@@ -156,32 +166,50 @@ inline void spsc_decode(
                         break;  // partial trailing marker inside the run (shouldn't happen on a full frame)
                     }
                     const uint32_t rw1 = ring[(head_mod + i + 1) % kSpscRingCap];
-                    if (pp_is_point(rw0)) {
-                        // PP_DATA is VARIABLE length (2 + size). Its length is in the header, so the walk
-                        // stays in sync without a per-type table -- the whole point of the unified packet.
-                        const uint32_t n = pp_data_size(rw0);
-                        if (i + 2u + n > run) {
+                    if (pp_is_event(rw0)) {
+                        // PP_EVENT: a bare 2-word flag, no payload and no size word.
+                        if (lane < nl) {
+                            emit_data(
+                                lane,
+                                PP_EVENT,
+                                pp_point_id(rw0),
+                                pp_full_ts(st.cur_hi[lane], rw1),
+                                st.cur_prog,
+                                nullptr,
+                                0);
+                        }
+                        i += 2;
+                        continue;
+                    }
+                    if (pp_is_data(rw0)) {
+                        // PP_DATA is VARIABLE length (3 + size), and the length lives in word2 -- so the
+                        // whole header has to be inside this frame before it can be sized at all.
+                        if (i + 2u >= run) {
+                            break;
+                        }
+                        const uint32_t n = pp_data_size(ring[(head_mod + i + 2) % kSpscRingCap]);
+                        if (i + 3u + n > run) {
                             break;  // payload not fully inside this frame -> carry via the next head
                         }
                         if (lane < nl) {
                             // The payload can wrap the circular ring, so unwrap it into a flat scratch buffer
                             // before handing it to the sink.
                             uint32_t payload[kSpscMaxDataWords];
-                            for (uint32_t k = 0; k < n; k++) {
-                                payload[k] = ring[(head_mod + i + 2 + k) % kSpscRingCap];
+                            for (uint32_t k = 0; k < n && k < kSpscMaxDataWords; k++) {
+                                payload[k] = ring[(head_mod + i + 3 + k) % kSpscRingCap];
                             }
                             const uint64_t ts = pp_full_ts(st.cur_hi[lane], rw1);
-                            emit_data(lane, pp_type(rw0), pp_data_id(rw0), ts, st.cur_prog, payload, n);
+                            emit_data(lane, PP_DATA, pp_point_id(rw0), ts, st.cur_prog, payload, n);
                         }
-                        i += 2u + n;
+                        i += 3u + n;
                         continue;
                     }
                     if (pp_type(rw0) == PP_STICKY_PROG) {
                         st.cur_prog = rw1;
                     } else if (lane < nl) {
-                        const uint32_t hash = pp_low27(rw0) & 0xFFFFu;
+                        const uint32_t zone_id = pp_low27(rw0);  // full 27-bit structural id
                         const uint64_t ts = pp_full_ts(st.cur_hi[lane], rw1);
-                        emit(lane, pp_type(rw0), hash, ts, st.cur_prog);
+                        emit(lane, pp_type(rw0), zone_id, ts, st.cur_prog);
                     }
                     i += 2;
                 }
@@ -242,32 +270,40 @@ inline void spsc_decode(
                         break;
                     }
                     const uint32_t rw1 = ring[(head_mod + i + 1) % kSpscRingCap];
-                    if (pp_is_point(rw0)) {
-                        const uint32_t n = pp_data_size(rw0);
-                        if (i + 2u + n > run) {
+                    if (pp_is_event(rw0)) {
+                        emit_data(
+                            lane,
+                            PP_EVENT,
+                            pp_point_id(rw0),
+                            pp_full_ts(st.cur_hi[lane], rw1),
+                            st.cur_prog,
+                            nullptr,
+                            0);
+                        i += 2;
+                        continue;
+                    }
+                    if (pp_is_data(rw0)) {
+                        if (i + 2u >= run) {
+                            break;
+                        }
+                        const uint32_t n = pp_data_size(ring[(head_mod + i + 2) % kSpscRingCap]);
+                        if (i + 3u + n > run) {
                             break;
                         }
                         // The payload can wrap the ring, so unwrap it into a flat scratch buffer first.
                         uint32_t payload[kSpscMaxDataWords];
                         for (uint32_t k = 0; k < n && k < kSpscMaxDataWords; k++) {
-                            payload[k] = ring[(head_mod + i + 2 + k) % kSpscRingCap];
+                            payload[k] = ring[(head_mod + i + 3 + k) % kSpscRingCap];
                         }
                         emit_data(
-                            lane,
-                            pp_type(rw0),
-                            pp_data_id(rw0),
-                            pp_full_ts(st.cur_hi[lane], rw1),
-                            st.cur_prog,
-                            payload,
-                            n);
-                        i += 2u + n;
+                            lane, PP_DATA, pp_point_id(rw0), pp_full_ts(st.cur_hi[lane], rw1), st.cur_prog, payload, n);
+                        i += 3u + n;
                         continue;
                     }
                     if (pp_type(rw0) == PP_STICKY_PROG) {
                         st.cur_prog = rw1;
                     } else {
-                        emit(
-                            lane, pp_type(rw0), pp_low27(rw0) & 0xFFFFu, pp_full_ts(st.cur_hi[lane], rw1), st.cur_prog);
+                        emit(lane, pp_type(rw0), pp_low27(rw0), pp_full_ts(st.cur_hi[lane], rw1), st.cur_prog);
                     }
                     i += 2;
                 }
@@ -281,21 +317,32 @@ inline void spsc_decode(
                 st.cur_hi[st.cur_lane] = pp_timer_hi(w0);
             }
             p += 1;
-        } else if (pp_is_point(w0)) {
-            // 2 + size words: the unified EVENT/DATA packet (size 0 == a bare event). Self-describing
-            // length, so an unknown payload shape can never desynchronize the walk.
+        } else if (pp_is_event(w0)) {
+            // PP_EVENT: exactly 2 words -- a flag with a compile-time structural id and no payload.
             if (p + 1 >= sz) {
-                break;  // need the timestamp word to know we have the whole header
+                break;
             }
-            const uint32_t n = pp_data_size(w0);
-            if (p + 2 + n > sz) {
+            if (st.cur_lane < nl) {
+                const uint64_t ts = pp_full_ts(st.cur_hi[st.cur_lane], w[p + 1]);
+                emit_data(st.cur_lane, PP_EVENT, pp_point_id(w0), ts, st.cur_prog, nullptr, 0);
+            }
+            p += 2;
+        } else if (pp_is_data(w0)) {
+            // PP_DATA: 3 + size words. The length lives in word2, so the full 3-word header must be in
+            // hand before the packet can be sized; it is still self-describing, so an unknown payload
+            // shape can never desynchronize the walk.
+            if (p + 2 >= sz) {
+                break;  // need word2 to know how long this packet is
+            }
+            const uint32_t n = pp_data_size(w[p + 2]);
+            if (p + 3 + n > sz) {
                 break;  // partial payload -> carry
             }
             if (st.cur_lane < nl) {
                 const uint64_t ts = pp_full_ts(st.cur_hi[st.cur_lane], w[p + 1]);
-                emit_data(st.cur_lane, pp_type(w0), pp_data_id(w0), ts, st.cur_prog, &w[p + 2], n);
+                emit_data(st.cur_lane, PP_DATA, pp_point_id(w0), ts, st.cur_prog, &w[p + 3], n);
             }
-            p += 2 + n;
+            p += 3 + n;
         } else {  // 2-word: STICKY_PROG or a marker
             if (p + 1 >= sz) {
                 break;  // partial marker -> carry
@@ -304,9 +351,9 @@ inline void spsc_decode(
             if (pp_type(w0) == PP_STICKY_PROG) {
                 st.cur_prog = w1;
             } else if (st.cur_lane < nl) {
-                const uint32_t hash = pp_low27(w0) & 0xFFFFu;
+                const uint32_t zone_id = pp_low27(w0);  // full 27-bit structural id
                 const uint64_t ts = pp_full_ts(st.cur_hi[st.cur_lane], w1);
-                emit(st.cur_lane, pp_type(w0), hash, ts, st.cur_prog);
+                emit(st.cur_lane, pp_type(w0), zone_id, ts, st.cur_prog);
             }
             p += 2;
         }

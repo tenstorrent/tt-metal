@@ -16,6 +16,13 @@
 
 namespace noc_event_profiler {
 
+// The NoC trace marker's identity. It is an ORDINARY structural zone id with an ordinary .tt_zone_meta
+// record, so the host names it "NOC-TRACE" straight out of the ELF -- the same way it names a kernel zone.
+// It used to be the magic constant kernel_profiler::NOC_TRACING_STATIC_ID (12345), which the host had to
+// compare against by VALUE to know what it was looking at. Nothing about what NoC tracing MEASURES changes:
+// this is still a POINT marker (PP_DATA) carrying the same KernelProfilerNocEventMetadata payload.
+TT_ZONE_DEFINE_ID(kNocTraceZoneId, "NOC-TRACE");
+
 constexpr bool shouldRecordEvent([[maybe_unused]] KernelProfilerNocEventMetadata::NocEventType event_type) {
 #if defined(DEVICE_DEBUG_DUMP)
     return true;
@@ -88,7 +95,7 @@ FORCE_INLINE KernelProfilerNocEventMetadata createNocEventDstTrailer(uint32_t sr
 template <
     KernelProfilerNocEventMetadata::NocEventType noc_event_type,
     bool posted,
-    uint32_t STATIC_ID = kernel_profiler::NOC_TRACING_STATIC_ID>
+    uint32_t STATIC_ID = noc_event_profiler::kNocTraceZoneId>
 FORCE_INLINE void recordNocEvent(
     int32_t dst_x = -1,
     int32_t dst_y = -1,
@@ -128,7 +135,7 @@ FORCE_INLINE void recordNocEvent(
 template <
     KernelProfilerNocEventMetadata::NocEventType noc_event_type,
     bool posted = false,
-    uint32_t STATIC_ID = kernel_profiler::NOC_TRACING_STATIC_ID>
+    uint32_t STATIC_ID = noc_event_profiler::kNocTraceZoneId>
 FORCE_INLINE void recordMulticastNocEvent(
     int32_t mcast_dst_start_x,
     int32_t mcast_dst_start_y,

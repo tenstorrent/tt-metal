@@ -100,6 +100,29 @@
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 #endif
 
+// ---- The drainer's own zone ids ---------------------------------------------------------------------
+//
+// ORDINARY structural zone ids with ORDINARY .tt_zone_meta records, declared here in the drain kernel's
+// own translation unit exactly the way a worker kernel declares its zones. The host resolves these names
+// out of THIS ELF as it loads, like any other kernel's -- there is no reserved band, no fixed id and no
+// hardcoded host name table any more. (They used to be fixed values 0x7FF0..0x7FF8 in a reserved band,
+// with their names registered by hand next to PRODUCER-STALL in perf_debug_profiler.cpp.)
+//
+// Declared inside `namespace kernel_profiler` under their original spellings so the ~20 emission sites
+// below are unchanged. The names are the strings a human reads in Tracy, so they keep their old text.
+namespace kernel_profiler {
+TT_ZONE_DEFINE_ID(DRISC_ZONE_SWEEP, "DRISC-SWEEP");              // one whole poll sweep (the parent)
+TT_ZONE_DEFINE_ID(DRISC_ZONE_READ, "DRISC-READ");                // filler: span-read ISSUE. mover: the DRAM read
+TT_ZONE_DEFINE_ID(DRISC_ZONE_READ_WAIT, "DRISC-READ-WAIT");      // filler: read-barrier wait left after proc
+TT_ZONE_DEFINE_ID(DRISC_ZONE_PROC, "DRISC-PROC");                // control-vector scan + head write-back
+TT_ZONE_DEFINE_ID(DRISC_ZONE_CREDIT_WAIT, "DRISC-CREDIT-WAIT");  // filler: DRAM ring room. mover: socket credit
+TT_ZONE_DEFINE_ID(DRISC_ZONE_WRITE, "DRISC-WRITE");              // the egress write itself
+TT_ZONE_DEFINE_ID(DRISC_ZONE_WR_BARRIER, "DRISC-WR-BARRIER");    // write barrier before staging is reused
+TT_ZONE_DEFINE_ID(DRISC_ZONE_PACE, "DRISC-PACE");                // the inter-sweep pacing gap
+TT_ZONE_DEFINE_ID(DRISC_ZONE_SYNC, "DRISC-SYNC");                // common-trigger sync fiducial
+TT_ZONE_DEFINE_ID(SPSC_DATA_ID_NOCFP, "DRISC-NOC-FOOTPRINT");    // the per-sweep NoC-counter PP_DATA sample
+}  // namespace kernel_profiler
+
 // D2H: write L1 to PCIe host RAM in NOC_MAX_BURST_SIZE chunks.
 inline void write_to_host_chunked(uint32_t pcie_xy_enc, uint32_t src_l1, uint64_t dst_pcie, uint32_t size) {
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
@@ -1116,16 +1139,17 @@ void kernel_main() {
             if (!self_on || self_busy) {
                 return false;
             }
-            // The margin is 8 words, which covers every shape that uses this: 1-word sticky + 2-word marker = 3,
-            // and 1 + 2 + SPSC_NOCFP_WORDS = 7 for a footprint sample. Leave a margin so a run can never exceed
-            // the ring capacity, which the host clamps (spsc_span_live) rather than trusts.
+            // The margin is 9 words, which covers every shape that uses this: 1-word sticky + 2-word marker = 3,
+            // and 1 + 3 + SPSC_NOCFP_WORDS = 8 for a footprint sample (PP_DATA grew a word2 when its id
+            // widened to the full 27 bits). Leave a margin so a run can never exceed the ring capacity,
+            // which the host clamps (spsc_span_live) rather than trusts.
             // RING FULL -> PUBLISH AND CARRY ON. Publishing HERE rather than once per sweep is what makes tracing
             // every sweep affordable: a frame carries as many markers as the ring holds (~250 at full detail, ~63
             // SWEEP/PACE pairs at detail 0) instead of the handful one sweep produces. A marker is only lost if the
             // publish could not free the ring -- egress dead -- and that is counted, never silent.
-            if (self_tail - self_head > kRingWords - 8u) {
+            if (self_tail - self_head > kRingWords - 9u) {
                 self_publish();
-                if (self_tail - self_head > kRingWords - 8u) {
+                if (self_tail - self_head > kRingWords - 9u) {
                     self_dropped++;
                     return false;
                 }
@@ -1161,20 +1185,22 @@ void kernel_main() {
     // Needs BOTH knobs: the sample rides the self-zone marker stream, so TT_METAL_PERF_DEBUG_NOC_FOOTPRINT
     // alone produces the out[] totals but NO per-sweep series and hence no plots.
     //
-    // The existing kRingWords - 8 headroom check already covers the worst case here: 1 sticky + 1 header +
-    // 1 timestamp + 4 payload = 7 words.
+    // The kRingWords - 9 headroom check already covers the worst case here: 1 sticky + 1 header +
+    // 1 timestamp + 1 size word + 4 payload = 8 words.
     auto self_nocfp = [&](uint64_t ts) {
         if constexpr (kSelfZones == 0 || kNocFootprint == 0) {
             (void)ts;
             return;
         } else {
             // Header + timestamp through the shared prologue; the payload only if that actually landed.
-            if (!self_mark_w0(
-                    kernel_profiler::spsc_data_w0(
-                        kernel_profiler::SPSC_DATA_ID_NOCFP, kernel_profiler::SPSC_NOCFP_WORDS),
-                    ts)) {
+            // PP_DATA is 3 + N words now: word0 carries the full 27-bit structural id (so this sample is
+            // named from the ELF like a zone), and the payload LENGTH moved out to its own word2, written
+            // here between the timestamp and the payload.
+            if (!self_mark_w0(kernel_profiler::spsc_data_w0(kernel_profiler::SPSC_DATA_ID_NOCFP), ts)) {
                 return;
             }
+            self_ring[self_tail % kRingWords] = kernel_profiler::spsc_data_w2(kernel_profiler::SPSC_NOCFP_WORDS);
+            self_tail++;
             // ROLE-SPECIALISED, read straight out of nf.last[] at compile-time indices -- no intermediate
             // array, which is where the last of the code budget went. A filler reads on kReadNoc and writes on
             // NOC_INDEX; a mover does both on NOC_INDEX. The four counters this role does NOT use are the

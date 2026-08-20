@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "hostdevcommon/profiler_zone_id.h"
+
 #define PROFILER_OPT_DO_DISPATCH_CORES (1 << 1)
 #define PROFILER_OPT_DO_TRACE_ONLY (1 << 2)
 #define PROFILER_OPT_DO_SUM (1 << 3)
@@ -204,38 +206,19 @@ enum SpscControlBuffer {
 // words WOULD grow kMiscBytes and cost a staging slot. Check that arithmetic, not just this constant.
 static constexpr std::uint32_t SPSC_DRAIN_RESULT_WORDS = 144;
 
-// ---- Reserved zone ids for DRAINER-AUTHORED zones (DRISC self-profiling) ----------------------------
+// ---- DRAINER-AUTHORED zones (DRISC self-profiling) --------------------------------------------------
 //
-// The drainer emits its own zones into its own span frame, so those zones need ids the host can name. They
-// cannot come from Hash16_CT: the host resolves names by harvesting `#pragma message` source locations out
-// of the JIT build log, and the drain kernel's zones are not scoped by the DeviceZoneScopedN macros (they
-// are stamped from timestamps the drain loop had already read -- see drisc_profiler_drain.cpp). So they take
-// FIXED ids in the same reserved band PROFILER_STALL_ZONE_ID (0x7FFF) already uses, and the host registers
-// their names explicitly next to PRODUCER-STALL.
+// The drainer emits its own zones, and they are now ORDINARY zones in every respect that matters: an
+// ordinary structural id from the tu_id/local scheme (hostdevcommon/profiler_zone_id.h), an ordinary
+// .tt_zone_meta record in the drain kernel's own ELF, and an ordinary name resolved from that ELF. There
+// is no reserved band and no fixed id any more -- the ids are declared at their scope sites in
+// tools/profiler/kernels/drisc_profiler_drain.cpp, exactly like a worker kernel declares its zones.
 //
-// 0x7FF0..0x7FF8, i.e. immediately below the stall zone: a 16-bit hash landing here is possible in principle
-// but has the same (accepted) probability the stall id has carried since it was introduced.
-static constexpr std::uint32_t PROFILER_DRISC_ZONE_BASE = 0x7FF0;
-enum DriscSelfZone : std::uint32_t {
-    DRISC_ZONE_SWEEP = PROFILER_DRISC_ZONE_BASE + 0,        // one whole poll sweep (the parent)
-    DRISC_ZONE_READ = PROFILER_DRISC_ZONE_BASE + 1,         // filler: span-read ISSUE. mover: the DRAM read
-    DRISC_ZONE_READ_WAIT = PROFILER_DRISC_ZONE_BASE + 2,    // filler: the read-barrier wait left after proc
-    DRISC_ZONE_PROC = PROFILER_DRISC_ZONE_BASE + 3,         // control-vector scan + head write-back
-    DRISC_ZONE_CREDIT_WAIT = PROFILER_DRISC_ZONE_BASE + 4,  // filler: DRAM ring room. mover: socket credit
-    DRISC_ZONE_WRITE = PROFILER_DRISC_ZONE_BASE + 5,        // the egress write itself
-    DRISC_ZONE_WR_BARRIER = PROFILER_DRISC_ZONE_BASE + 6,   // write barrier before staging is reused
-    // The inter-sweep PACING GAP -- a sibling of SWEEP at depth 0, not a child. A filler's gap is set by the
-    // fill-ratio controller and measured 17,156 cycles (12.7 us) against its own 8.5 us sweep, so without a
-    // zone for it a filler's Tracy row is more whitespace than zones and the whitespace looks like a gap in
-    // the instrument. A MOVER is excluded from the controller (see drisc_profiler_drain.cpp) so its gap is 0
-    // and this zone simply never appears there -- which is itself the answer to "is the mover being paced".
-    DRISC_ZONE_PACE = PROFILER_DRISC_ZONE_BASE + 7,
-    // COMMON-TRIGGER SYNC EVENT: every drainer marks the SAME physical instant (released together from a
-    // rendezvous barrier), so the spread in these zones' rendered timestamps is anchor + render error only.
-    // Replaces comparing zone-window OPENs, which are two independent events and cannot validate an anchor.
-    DRISC_ZONE_SYNC = PROFILER_DRISC_ZONE_BASE + 8,
-    DRISC_ZONE_COUNT = 9,
-};
+// The one thing that is NOT ordinary is the TRANSPORT, and that is why SpscZoneScope exists below: the
+// drain kernel cannot include kernel_profiler.hpp (that header binds itself to the mailbox profiler
+// region and to PROCESSOR_INDEX to drive a per-RISC producer ring, and a drainer has no such ring -- it
+// assembles markers in its staging area and ships them as a span frame). So the scope type takes the
+// emitter as a parameter and everything else is identical to a worker zone.
 
 // STICKY_META (SPSC/drainer backend): an 8B context packet emitted once per RISC per launch at the main
 // zone scope. High word carries (core_x, core_y, risc) + this type; low word a 32-bit host-side ID. The
@@ -364,19 +347,53 @@ static constexpr std::uint32_t SPSC_TYPE_STICKY_TIMER = 9;
 static constexpr std::uint32_t SPSC_TIMER_HI_MASK = 0x7FFFFFFu;  // the 27-bit low field of word0
 
 inline std::uint32_t spsc_marker_w0(std::uint32_t type, std::uint32_t zone_id) {
-    return (type << SPSC_SPAN_TYPE_SHIFT) | (zone_id & 0xFFFFu);
+    // FULL 27 bits. This mask was 0xFFFF, and that truncation was invisible: markers rendered perfectly,
+    // with correct timestamps and nesting, and only their NAMES could not be resolved. Any change to the
+    // id width has to be made in EVERY copy of the packer at once -- this one, ppfmt in
+    // kernel_profiler.hpp, and pp_* in spsc_packet.h.
+    return (type << SPSC_SPAN_TYPE_SHIFT) | (zone_id & TT_ZONE_ID_MASK);
 }
 inline std::uint32_t spsc_sticky_timer_w0(std::uint32_t timer_hi) {
     return (SPSC_TYPE_STICKY_TIMER << SPSC_SPAN_TYPE_SHIFT) | (timer_hi & SPSC_TIMER_HI_MASK);
 }
-// PP_DATA word0: a point-in-time packet with a self-describing payload length. Mirrors spsc_packet.h's
-// pp_data_w0 (low27 = size(7) << 20 | id(20)) and is asserted against it in spsc_marker_decode.hpp, the one
-// translation unit that sees both headers.
+// PP_DATA: a point-in-time packet with a self-describing payload length, 3 + N words. Mirrors
+// spsc_packet.h's pp_data_w0 / pp_data_w2 and is asserted against them in spsc_marker_decode.hpp, the one
+// translation unit that sees both headers. word0 is shaped exactly like a zone marker (type | the full
+// 27-bit structural id); the length lives in its own word2.
 static constexpr std::uint32_t SPSC_TYPE_DATA = 10;
-static constexpr std::uint32_t SPSC_DATA_SIZE_SHIFT = 20;
-inline std::uint32_t spsc_data_w0(std::uint32_t id, std::uint32_t size_words) {
-    return (SPSC_TYPE_DATA << SPSC_SPAN_TYPE_SHIFT) | ((size_words & 0x7Fu) << SPSC_DATA_SIZE_SHIFT) | (id & 0xFFFFFu);
+static constexpr std::uint32_t SPSC_DATA_SIZE_SHIFT = 25;
+inline std::uint32_t spsc_data_w0(std::uint32_t id) {
+    return (SPSC_TYPE_DATA << SPSC_SPAN_TYPE_SHIFT) | (id & TT_ZONE_ID_MASK);
 }
+inline std::uint32_t spsc_data_w2(std::uint32_t size_words) { return (size_words & 0x7Fu) << SPSC_DATA_SIZE_SHIFT; }
+
+// ---- The drainer's zone scope ------------------------------------------------------------------------
+//
+// An ordinary RAII zone: the constructor stamps ZONE_START, the destructor stamps ZONE_END, each from its
+// own clock read. Identity, ELF record and naming are identical to a worker zone; only the transport is
+// different, and that arrives as `mark`, a callable taking a packed word0 and returning whether the
+// marker was actually written.
+//
+// `started_` exists because the drainer decides MID-SWEEP whether to instrument (see self_on in
+// drisc_profiler_drain.cpp): if the constructor did not write START, the destructor must not write an
+// orphan END.
+template <std::uint32_t ZoneId, typename MarkFn>
+class SpscZoneScope {
+public:
+    inline __attribute__((always_inline)) explicit SpscZoneScope(MarkFn& mark) :
+        mark_(mark), started_(mark(spsc_marker_w0(SPSC_TYPE_ZONE_START, ZoneId))) {}
+    inline __attribute__((always_inline)) ~SpscZoneScope() {
+        if (started_) {
+            (void)mark_(spsc_marker_w0(SPSC_TYPE_ZONE_END, ZoneId));
+        }
+    }
+    SpscZoneScope(const SpscZoneScope&) = delete;
+    SpscZoneScope& operator=(const SpscZoneScope&) = delete;
+
+private:
+    MarkFn& mark_;
+    bool started_;
+};
 
 // ---- NoC-FOOTPRINT per-sweep sample: the PP_DATA payload contract ------------------------------------
 //
@@ -399,7 +416,6 @@ inline std::uint32_t spsc_data_w0(std::uint32_t id, std::uint32_t size_words) {
 // OVER THE INTERVAL since the previous sample, and a delta belongs to an interval, not to an instant. The
 // counters are also read back-to-back a few tens of cycles apart, so per-counter timestamps would be
 // fictitious precision. Do not "fix" this by splitting the packet.
-static constexpr std::uint32_t SPSC_DATA_ID_NOCFP = 0x7FF0;  // same reserved band as the DRISC zone ids
 static constexpr std::uint32_t SPSC_NOCFP_WORDS = 4;         // payload words == values, in the order below
 enum SpscNocFpWord {
     // A FILLER reads on kReadNoc (NoC 1) and writes on NOC_INDEX (NoC 0); a MOVER does both on NOC_INDEX.

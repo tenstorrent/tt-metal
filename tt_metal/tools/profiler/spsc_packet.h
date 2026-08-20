@@ -11,7 +11,7 @@
  *   word1:  [31:0]  payload32
  *
  *   STICKY_META : low27 = timer_hi(27)             payload32 = prog_id(32)
- *   marker      : low27 = zone_srcloc(16b hash, 11 spare)   payload32 = timer_low(32)
+ *   marker      : low27 = zone_id(27b structural: tu_id(17)<<10|local(10))  payload32 = timer_low(32)
  *
  * Timer split is at bit 32 (no header bit to dodge):
  *   timer_low = ts & 0xFFFFFFFF ;  timer_hi = ts >> 32 ;  full = (timer_hi<<32) | timer_low  (59-bit)
@@ -65,26 +65,30 @@
  * The decoder advances by pp_packet_words(); SENT is always published on a packet boundary. (The frozen
  * synthetic bench predates this and uses a fixed 2-word SRC -- it never calls pp_packet_words.)
  *
- * A marker (ZONE_START/END) is minimal: low27 = zone srcloc (16-bit hash for now, room to 27),
- * payload32 = timer_low. Host binds each marker to the last-seen PROG (prog), TIMER (timer_hi) and
- * SRC (lane) to reconstruct the full record. */
+ * A marker (ZONE_START/END) is minimal: low27 = the FULL 27-bit structural zone id
+ * (tu_id << TT_ZONE_LOCAL_BITS | local -- hostdevcommon/profiler_zone_id.h), payload32 = timer_low. Host binds each
+ * marker to the last-seen PROG (prog), TIMER (timer_hi) and SRC (lane) to reconstruct the full record. */
 #define PP_STICKY_PROG 8u
 #define PP_STICKY_TIMER 9u
 
-/* DATA: a point-in-time event carrying an OPTIONAL payload -- the unified EVENT/DATA packet. An "event"
- * is just size==0, so there is one code and one decode path for both. SELF-DESCRIBING LENGTH: the word
- * count lives in the header, so the host advances correctly over any payload without a per-type length
- * table, and a future payload shape needs no decoder change. 2 + N words:
- *   [0] word0 = pp_data_w0(id, size)   [1] timer_low   [2 .. 2+size-1] payload
- * low27 = size(7) << 20 | id(20). The id sits in the LOW bits so the existing `pp_low27(w0) & 0xFFFF`
- * still yields the 16-bit hash, and a plain 2-word marker reads as size==0.
+/* DATA: a point-in-time marker carrying a payload. 3 + N words:
+ *   [0] word0 = pp_data_w0(id)   [1] timer_low   [2] word2 = pp_data_w2(size)   [3 .. 3+size-1] payload
+ * word0 is EXACTLY a zone marker's word0 -- type(5) | the full 27-bit structural id -- so a point marker
+ * has the same compile-time source-location identity, and the same ELF-resolved name, as any zone. The
+ * payload length moved OUT of word0 into its own word2 to make that possible: the old packing was
+ * low27 = size(7) << 20 | id(20), which capped a point marker's id at 20 bits and forced a separate,
+ * narrower id space onto exactly the markers (NoC trace/debug tags) that most needed naming.
+ * SELF-DESCRIBING LENGTH is preserved -- the count still travels in the packet, so the host advances over
+ * any payload without a per-type length table -- it just lives one word further in.
  * Codes 10+ are unreachable by any zone marker, which is what keeps this out of the alias trap above. */
 #define PP_DATA 10u
 
-/* EVENT: same layout as PP_DATA, but its id is a RUNTIME value from the kernel rather than a compile-time
- * source-location hash. That is why it is a separate type and not "DATA with size 0": the host must NOT
- * name-resolve a runtime id -- the two share one 20-bit space, so a runtime id of 42 would otherwise
- * borrow the name of whatever zone hashes to 42. Carries the same size field so it can grow a payload. */
+/* EVENT: a point-in-time FLAG -- no payload, and therefore no size word. EXACTLY 2 words, the same shape
+ * as a zone marker:
+ *   [0] word0 = pp_event_w0(id)   [1] timer_low
+ * Split apart from PP_DATA rather than expressed as "DATA with size 0": carrying a size word for a packet
+ * that can never have a payload is a wasted word on the wire and a decode branch that can disagree with
+ * itself. Its id is a compile-time structural id like any other, so an EVENT is named from the ELF too. */
 #define PP_EVENT 12u
 
 /* ZONE_TOTAL: an accumulated-duration zone (DO_SUM / profileScopeAccumulate). 2 words, but word1 is the
@@ -92,10 +96,9 @@
  * value 2, which does not name a marker type on this wire. */
 #define PP_ZONE_TOTAL 11u
 
-/* --- PP_DATA low27 sub-fields --- */
-#define PP_DATA_ID_MASK 0xFFFFFu /* [19:0]  20-bit id (currently populated with the 16-bit hash) */
-#define PP_DATA_SIZE_SHIFT 20u
-#define PP_DATA_SIZE_MASK 0x7Fu /* [26:20] payload length in 32-bit words, 0..127 */
+/* --- PP_DATA word2 sub-fields (word0 is type|id27, identical to a zone marker) --- */
+#define PP_DATA_SIZE_SHIFT 25u
+#define PP_DATA_SIZE_MASK 0x7Fu /* [31:25] payload length in 32-bit words, 0..127; [24:0] unused, zero */
 
 /* BULK_CORE: raw-bulk frame for the whole core, emitted by the reader when it does ONE bulk NoC read of all
  * 5 rings (reclaims the single-read NoC amortization). The host splits it into the 5 lanes. Frame layout in
@@ -119,7 +122,7 @@
 /* --- word0 fields --- */
 #define PP_TYPE_SHIFT 27
 #define PP_TYPE_MASK 0x1Fu       /* 5 bits */
-#define PP_LOW27_MASK 0x7FFFFFFu /* [26:0]: timer_hi (sticky) or zone_srcloc (marker) */
+#define PP_LOW27_MASK 0x7FFFFFFu /* [26:0]: timer_hi (sticky) or the full 27-bit zone id (marker) */
 
 /* --- word1 is a full 32-bit payload (prog_id or timer_low) --- */
 #define PP_TIMER_HI_MASK 0x7FFFFFFu /* 27-bit high half (fits low27 of a sticky word0) */
@@ -140,21 +143,17 @@ static inline uint32_t pp_prog_w1(uint32_t prog_id) { return prog_id; }
 static inline uint32_t pp_timer_w0(uint32_t timer_hi) { return pp_word0(PP_STICKY_TIMER, timer_hi & PP_TIMER_HI_MASK); }
 static inline uint32_t pp_timer_w1(void) { return 0u; }
 
-static inline uint32_t pp_marker_w0(uint32_t type, uint32_t zone_srcloc) {
-    return pp_word0(type, zone_srcloc & PP_LOW27_MASK);
-}
+static inline uint32_t pp_marker_w0(uint32_t type, uint32_t zone_id) { return pp_word0(type, zone_id & PP_LOW27_MASK); }
 static inline uint32_t pp_marker_w1(uint32_t timer_low) { return timer_low; }
 
-/* DATA/EVENT header: size is in 32-bit words (0 = a bare event). */
-static inline uint32_t pp_data_w0(uint32_t id, uint32_t size_words) {
-    return pp_word0(PP_DATA, ((size_words & PP_DATA_SIZE_MASK) << PP_DATA_SIZE_SHIFT) | (id & PP_DATA_ID_MASK));
+/* DATA header word0 (type | full 27-bit id) and its separate length word2. */
+static inline uint32_t pp_data_w0(uint32_t id) { return pp_word0(PP_DATA, id & PP_LOW27_MASK); }
+static inline uint32_t pp_data_w2(uint32_t size_words) {
+    return (size_words & PP_DATA_SIZE_MASK) << PP_DATA_SIZE_SHIFT;
 }
 
-/* Runtime-id event header; `id` is masked at runtime since it is not a constant. */
-static inline uint32_t pp_event_w0(uint32_t runtime_id, uint32_t size_words) {
-    return pp_word0(
-        PP_EVENT, ((size_words & PP_DATA_SIZE_MASK) << PP_DATA_SIZE_SHIFT) | (runtime_id & PP_DATA_ID_MASK));
-}
+/* EVENT header: 2 words, no size word. */
+static inline uint32_t pp_event_w0(uint32_t id) { return pp_word0(PP_EVENT, id & PP_LOW27_MASK); }
 
 /* ----- decode (host) ----- */
 
@@ -169,25 +168,28 @@ static inline uint32_t pp_prog_id(uint32_t w1) { return w1; }
 static inline uint32_t pp_timer_hi(uint32_t w0) { return pp_low27(w0); }
 static inline int pp_is_data(uint32_t w0) { return pp_type(w0) == PP_DATA; }
 static inline int pp_is_event(uint32_t w0) { return pp_type(w0) == PP_EVENT; }
-/* Both point-marker types share the {size,id} low27 layout, so the walk can size them identically. */
-static inline int pp_is_point(uint32_t w0) { return pp_is_data(w0) || pp_is_event(w0); }
-static inline uint32_t pp_data_id(uint32_t w0) { return pp_low27(w0) & PP_DATA_ID_MASK; }
-static inline uint32_t pp_data_size(uint32_t w0) { return (pp_low27(w0) >> PP_DATA_SIZE_SHIFT) & PP_DATA_SIZE_MASK; }
+/* NOTE there is deliberately NO pp_is_point(): the two point-marker types no longer share a shape, so a
+ * single "is it a point marker" test would invite sizing them identically. EVENT is ALWAYS 2 words; DATA is
+ * 3 + the size in its word2. A walk that advances an EVENT by 2 + size does not error -- it desynchronizes
+ * from that packet onward and produces plausible garbage. Branch on pp_is_event / pp_is_data separately. */
+static inline uint32_t pp_point_id(uint32_t w0) { return pp_low27(w0); }
+static inline uint32_t pp_data_size(uint32_t w2) { return (w2 >> PP_DATA_SIZE_SHIFT) & PP_DATA_SIZE_MASK; }
 static inline int pp_is_zone_total(uint32_t w0) { return pp_type(w0) == PP_ZONE_TOTAL; }
 
-/* Wire length (32-bit words) of a real-path packet from its type: SRC/TIMER are 1 word (identity/timer_hi
- * fit in low27, no payload), markers + PROG + META are 2. BULK_CORE has its own framing -- do NOT pass it
- * here (the decoder special-cases it first). SENT is always published on a packet boundary, so a decoder
- * that advances by this length stays in sync. */
-static inline uint32_t pp_packet_words(uint32_t w0) {
+/* Wire length (32-bit words) of a real-path packet: SRC/TIMER are 1 word (identity/timer_hi fit in low27,
+ * no payload); zone markers, EVENT, PROG and META are 2; DATA is 3 + payload, and its length lives in
+ * word2 -- which is why this takes w2 as well. Pass 0 for w2 when the type is known not to be DATA.
+ * BULK_CORE has its own framing -- do NOT pass it here (the decoder special-cases it first). SENT is
+ * always published on a packet boundary, so a decoder that advances by this length stays in sync. */
+static inline uint32_t pp_packet_words(uint32_t w0, uint32_t w2) {
     uint32_t t = pp_type(w0);
     if (t == PP_STICKY_SRC || t == PP_STICKY_TIMER) {
         return 1u;
     }
-    if (t == PP_DATA || t == PP_EVENT) {
-        return 2u + pp_data_size(w0);  // header + timer_low + payload (self-describing)
+    if (t == PP_DATA) {
+        return 3u + pp_data_size(w2);  // word0 + timer_low + size word + payload (self-describing)
     }
-    return 2u;
+    return 2u;  // zone markers, PP_EVENT, STICKY_PROG, STICKY_META
 }
 
 /* reader-injected source sticky: lane_id = core*NRISC + risc, carried in both words. */
