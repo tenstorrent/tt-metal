@@ -983,6 +983,40 @@ class TOPK_XL(TemplateParameter):
 
 
 @dataclass
+class TOP32_RM(TemplateParameter):
+    """Compile-time knobs for ``top32_rm_test.cpp`` (the DeepSeek top32_rm family).
+
+    ``row_elements``  length of the row being reduced to its top 32. The driver walks it in
+                      64-element chunks, so a value that is 32 (mod 64) is what reaches the
+                      ``num_faces=2`` tail path -- the same shape the Metal dev test covers
+                      with row=160.
+    ``datum_bytes``   L1 datum size of both operands, which is the only thing the driver
+                      needs to turn a chunk index into an address: one chunk is
+                      ``64 * datum_bytes`` bytes, and unpacker addresses count 16-byte words.
+                      Must match the format the stimuli are written in.
+    ``top_min``       ``_bitonic_top32_merge_``'s template polarity. False (the consumer's
+                      value) keeps the max half of each compare-exchange, i.e. a top-32.
+    """
+
+    row_elements: int = 64
+    datum_bytes: int = 2
+    top_min: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if self.row_elements % 32 != 0:
+            raise ValueError(
+                f"row_elements must be a multiple of 32, got {self.row_elements}"
+            )
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t TOP32_ROW_ELEMENTS = {self.row_elements}u;",
+                f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.datum_bytes}u;",
+                f"constexpr bool TOP32_TOP_MIN = {str(self.top_min).lower()};",
+            ]
+        )
+
+
+@dataclass
 class ADD_TOP_ROW(TemplateParameter):
     add_top_row: bool
 
