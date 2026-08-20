@@ -539,8 +539,8 @@ def test_ttnn_combine(
 
 
 def _all_externally_owned_test_cases():
-    def _externally_owned_test_case(mesh, fabric_cfg, seq_len_per_chip, num_links, model):
-        model_name = model.__name__.removesuffix("Config")
+    def _tc(mesh, fabric_cfg, seq_len_per_chip, num_links, model):
+        model_name = model.__class__.__name__.removesuffix("Config")
         return pytest.param(
             mesh,
             fabric_to_device_params(fabric_cfg),
@@ -555,11 +555,18 @@ def _all_externally_owned_test_cases():
         )
 
     return [
-        _externally_owned_test_case((4, 8), ttnn.FabricConfig.FABRIC_1D, 1024, 4, GptOss20BConfig),
-        _externally_owned_test_case((4, 8), ttnn.FabricConfig.FABRIC_1D, 128, 2, GptOss120BConfig),
-        _externally_owned_test_case((4, 8), ttnn.FabricConfig.FABRIC_1D, 1280, 2, GptOss120BConfig),
-        _externally_owned_test_case((8, 4), ttnn.FabricConfig.FABRIC_1D, 128, 2, MiniMaxM3Config),
-        _externally_owned_test_case((8, 4), ttnn.FabricConfig.FABRIC_1D, 640, 2, MiniMaxM3Config),
+        # Full scale mesh tests as invoked in production scenarios
+        _tc((4, 8), ttnn.FabricConfig.FABRIC_1D, 1024, 4, GptOss20BConfig()),
+        _tc((4, 8), ttnn.FabricConfig.FABRIC_1D, 128, 2, GptOss120BConfig()),
+        _tc((4, 8), ttnn.FabricConfig.FABRIC_1D, 1280, 2, GptOss120BConfig()),
+        _tc((8, 4), ttnn.FabricConfig.FABRIC_1D, 128, 2, MiniMaxM3Config()),
+        _tc((8, 4), ttnn.FabricConfig.FABRIC_1D, 640, 2, MiniMaxM3Config()),
+        # Proxy tests executable on CIs which run op unit tests
+        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 1024, 4, _model_scaledown(GptOss20BConfig(), (4, 8), (4, 1), False)),
+        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 128, 2, _model_scaledown(GptOss120BConfig(), (4, 8), (4, 1), False)),
+        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 1280, 2, _model_scaledown(GptOss120BConfig(), (4, 8), (4, 1), False)),
+        _tc((8, 1), ttnn.FabricConfig.FABRIC_1D, 128, 2, _model_scaledown(MiniMaxM3Config(), (8, 4), (8, 1), False)),
+        _tc((8, 1), ttnn.FabricConfig.FABRIC_1D, 640, 2, _model_scaledown(MiniMaxM3Config(), (8, 4), (8, 1), False)),
     ]
 
 
