@@ -722,6 +722,7 @@ class Sweep:
                     + ",".join(r["op"] for r in self.deferred)
                 )
         self.reds = []
+        self.reused = []  # cross-run adopted device cells (provenance)
 
     @staticmethod
     def _find_python(venv):
@@ -1798,6 +1799,13 @@ class Sweep:
             "tag": tag,
             "mode": "batched" if batched else "serial",
         }
+        # Cross-run adoption (laneDA fix): with no local evidence for this
+        # leg, probe the --prev-run root(s) and adopt a jobkey- and
+        # .text-hash-matched green cell into this run's root (REUSED_FROM
+        # marker written).  The adopted cell then flows through the very
+        # resume validation below — adoption can never bypass it.
+        if not (work / "rc.txt").is_file() and not self.a.force:
+            self._adopt_prev_cell(work, jobkey, expected_texts)
         # Resume skips only GREEN jobs whose (node, flags, extra_env) jobkey
         # matches AND whose archived .text hash set equals what THIS run's
         # compiler produces for the same node/flags (from the classify
@@ -2174,11 +2182,20 @@ exit $RC
             "mode": "batched",
         }
 
-    def _job_cached(self, job):
-        """Quiet twin of _device_job's keyed hash-matched resume check."""
-        if self.a.force:
-            return False
-        work = job["work"]
+    def _prev_roots(self):
+        """--prev-run evidence roots as a list (newest first).  Accepts the
+        legacy single-Path form (older wrappers/selftests) and None."""
+        prev = getattr(self.a, "prev_run", None)
+        if not prev:
+            return []
+        return list(prev) if isinstance(prev, (list, tuple)) else [prev]
+
+    def _cell_green(self, work, jobkey, expected_texts):
+        """The keyed hash-matched cell validity check (one evidence dir):
+        green rc + 'passed' log, jobkey equality, and archived .text set ==
+        THIS run's classify hashes.  expected_texts=None never validates.
+        Shared verbatim by the local resume and the cross-run adoption
+        probe so reuse can never be weaker than resume."""
         if not (work / "rc.txt").is_file():
             return False
         try:
@@ -2191,12 +2208,64 @@ exit $RC
             cached_key = json.loads((work / "jobkey.json").read_text())
         except (ValueError, OSError):
             return False
-        if cached_key != self._job_key(job):
+        if cached_key != jobkey:
             return False
+        if expected_texts is None or not (work / "TEXT_HASHES.txt").is_file():
+            return False
+        return self._texts_of(work / "TEXT_HASHES.txt") == expected_texts
+
+    def _adopt_prev_cell(self, work, jobkey, expected_texts):
+        """Cross-run/cross-pin silicon cell reuse (laneDA root cause:
+        --prev-run fed ONLY the scoreboard annotator while the resume prober
+        looked at the current run root alone, so byte-identical OFF/hand
+        cells re-ran every pin).  Probe each --prev-run root (newest first)
+        for this leg's evidence at the SAME relative path and adopt it iff
+        it passes the EXACT checks the local resume applies (_cell_green:
+        green rc + jobkey equality + .text set == THIS run's classify
+        hashes — a cc1plus bump that changes the bytes can never reuse).
+        Adoption COPIES the evidence into this run's root (self-contained,
+        SHA256SUMS-covered) and writes a REUSED_FROM.txt marker beside it —
+        provenance visible, never silent.  Returns the source root or None.
+        """
+        if expected_texts is None or getattr(self.a, "force", False):
+            return None
+        try:
+            rel = work.relative_to(self.ev)
+        except ValueError:
+            return None
+        for root in self._prev_roots():
+            prev = pathlib.Path(root)
+            if prev.resolve() == self.ev.resolve():
+                continue
+            src = prev / rel
+            if not self._cell_green(src, jobkey, expected_texts):
+                continue
+            shutil.rmtree(work, ignore_errors=True)
+            shutil.copytree(src, work)
+            (work / "REUSED_FROM.txt").write_text(
+                f"reused-from:{prev}\nleg:{rel}\n"
+                "checks: jobkey equality (node/flags/extra_env/tag/mode) + "
+                "archived .text hash set == this run's classify hashes + "
+                "green rc/'passed' log\n"
+            )
+            if not hasattr(self, "reused"):
+                self.reused = []
+            self.reused.append({"leg": str(rel), "reused_from": str(prev)})
+            print(f"reuse: {rel} reused-from:{prev} (jobkey + .text hash-matched)")
+            return prev
+        return None
+
+    def _job_cached(self, job):
+        """Quiet twin of _device_job's keyed hash-matched resume check,
+        extended with the --prev-run cross-run adoption probe."""
+        if self.a.force:
+            return False
+        work = job["work"]
+        jobkey = self._job_key(job)
         exp = self._classify_texts(job["row"], job["sel"], job["leg"])
-        if exp is None or not (work / "TEXT_HASHES.txt").is_file():
-            return False
-        return self._texts_of(work / "TEXT_HASHES.txt") == exp
+        if self._cell_green(work, jobkey, exp):
+            return True
+        return self._adopt_prev_cell(work, jobkey, exp) is not None
 
     def _batched_leg_verdict(self, row, sel, label, leg, work, jobkey, expected_texts):
         """Assembly-side verdict on evidence the batched executor produced
@@ -3079,6 +3148,9 @@ exit $RC
             "results": results,
             "skips": skips,
             "reds": self.reds,
+            # cross-run adopted device cells (also marked per-leg by
+            # REUSED_FROM.txt in each adopted evidence dir)
+            "reused_cells": getattr(self, "reused", []),
         }
         (self.ev / "scoreboard.json").write_text(json.dumps(payload, indent=2) + "\n")
         cc1 = self.info["cc1plus_sha256"]
@@ -3216,20 +3288,30 @@ exit $RC
             return "parity"
         return "loss"
 
+    def _load_prev_results(self):
+        """Previous-run results for the report's drift annotation: the
+        NEWEST --prev-run root that carries a scoreboard.json (roots are
+        given newest first)."""
+        prev = {}
+        for root in self._prev_roots():
+            sb = pathlib.Path(root) / "scoreboard.json"
+            if not sb.is_file():
+                continue
+            for r in json.loads(sb.read_text()).get("results", []):
+                prev[r["op"]] = r
+            break
+        return prev
+
     def report(self, results, skips):
         baseline, base_classes = self._load_baseline(self.a.baseline)
-        prev = {}
-        if self.a.prev_run and (self.a.prev_run / "scoreboard.json").is_file():
-            for r in json.loads((self.a.prev_run / "scoreboard.json").read_text()).get(
-                "results", []
-            ):
-                prev[r["op"]] = r
+        prev = self._load_prev_results()
+        prev_desc = ",".join(str(p) for p in self._prev_roots()) or "none"
         lines = [
             "# 2x2 sweep report",
             "",
             f"- run: `{self.ev}`",
             f"- baseline: `{self.a.baseline or 'none'}`",
-            f"- previous run: `{self.a.prev_run or 'none'}`",
+            f"- previous run: `{prev_desc}`",
             f"- {craq_gate_taint(getattr(self.a, 'skip_craq_gate', False))}",
             "",
             "| op | verdict | detail |",
@@ -3760,8 +3842,14 @@ def main():
     )
     ap.add_argument(
         "--prev-run",
-        type=pathlib.Path,
-        help="previous evidence root for drift comparison",
+        type=lambda s: [pathlib.Path(x) for x in s.split(",") if x],
+        help="previous evidence root(s), comma list NEWEST FIRST: the newest "
+        "feeds the report's drift comparison, and EVERY root is probed for "
+        "cross-pin silicon cell reuse — a leg whose jobkey (node/flags/"
+        "extra_env/tag/mode) matches and whose archived .text hash set "
+        "equals THIS run's classify hashes is adopted instead of re-run, "
+        "copied into this run's evidence with a REUSED_FROM.txt marker "
+        "(provenance visible, never silent)",
     )
     ap.add_argument("--max-drift-pct", type=float, default=5.0)
     ap.add_argument(
