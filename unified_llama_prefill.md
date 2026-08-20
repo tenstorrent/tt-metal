@@ -1039,6 +1039,52 @@ format is unchanged -- as the only route further, and it still rests on an unpro
 about MOP equivalence. It should be attacked, if at all, with the mixed-format sabotage
 already shown to catch exactly this class of bug.
 
+### Where the bottleneck thread's time goes, by strategy
+
+With the math TRISC established as the constraint, the useful question is which strategy
+owns its time. A sum zone on each `Strategy<...>::run`, two per run because there are only
+two slots per RISC. flash, 2 chunks, HiFi2 + approx, math thread span 45.85us:
+
+| strategy | math thread | share |
+|---|---|---|
+| `SFPUFusion` | **25.79 us** | **56%** |
+| `FPUFusion` (matmul) | 9.53 us | 21% |
+| `BcastFusion` | 5.90 us | 13% |
+| `ReduceFusion` | 3.46 us | 8% |
+| accounted | 44.68 us | **97%** |
+
+97% of the bottleneck thread is accounted for, which is the first time anything in this
+file has closed. The FPU/SFPU pair was measured twice in separate runs and agreed to
+0.03us. Unpack and pack now show ~23us of stall each -- leaf-outer moved the balance, and
+they have slack to spare.
+
+**SFPU is the heavy hitter, and it is not the arithmetic.** Of its 25.79us,
+reconfiguration is 5.9us and the per-pass fixed cost about 2.6us; the rest is leaf loads
+and packing. flash runs six SFPU passes per chunk and, counting tiles times leaves, about
+64 `copy_tile`s per chunk -- every one of them a tile fetched out of L1 because the
+previous pass put it there.
+
+That reframes the remaining list. `matmul_init` was a suspect worth a measurement, but the
+whole FPU strategy is 9.53us, so even eliminating its setup entirely cannot be the 2x.
+Reduce and bcast are 9.4us combined and were already measured cheap per op. The lever is
+the SFPU pass count and the leaf count within each pass:
+
+- `m_state = copy(m_now)` is a pure copy pass that exists only because the running maximum
+  needs a scratch buffer -- 4 tiles of pure overhead per chunk. Alternating two CBs for the
+  state would remove the pass outright.
+- `l = l_prev * c_old + rs` is three leaves over 4 tiles, twelve `copy_tile`s for four
+  output tiles.
+- `sm = s + mask` is the largest single SFPU pass: 8 tiles, 2 leaves, 16 `copy_tile`s. It
+  exists only to add the mask to the matmul's result, and the matmul already has an
+  epilogue mechanism -- `Strategy<FPUFusion>::bias_finish` -- that applies a resident
+  operand to DST before packing. A full-block add is not the same shape as a broadcast
+  bias, but the place to put it exists. Folding it in removes a whole pass AND the L1 round
+  trip of `s`.
+
+That last one is the heaviest single item on the list and is the same fusion ttnn appears
+to do -- its `normalize_row_streaming` name suggests the softmax normalisation happens in
+one streaming pass over DST rather than the six this kernel spends.
+
 ### What to test next
 
 Ordered by expected value, with what each result would actually mean. Six candidates are
