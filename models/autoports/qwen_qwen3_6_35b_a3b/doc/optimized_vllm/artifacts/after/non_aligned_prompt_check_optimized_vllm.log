@@ -1,0 +1,7 @@
+{
+  "output": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/non_aligned_prompt_check_optimized_vllm.json",
+  "status_code": 200,
+  "prompt_token_length": 26,
+  "is_non_aligned": true,
+  "elapsed_s": 3.6175737380981445
+}

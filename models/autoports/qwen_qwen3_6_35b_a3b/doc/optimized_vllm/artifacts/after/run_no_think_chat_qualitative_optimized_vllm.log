@@ -1,0 +1,16 @@
+1 greedy: 'Data flows like rain, Patterns emerge from the noise, Silent minds learn fast.'
+1 sampled: 'Data flows in streams, Patterns emerge from the noise, Truth learns to predict.'
+2 greedy: 'Supervised learning trains models using labeled data, where the algorithm learns to map inputs t'
+2 sampled: 'Supervised learning trains models on labeled data where the correct output is already known, all'
+3 greedy: 'a young shepherd discovered a hidden door in the ancient castle walls that led to a realm where '
+3 sampled: 'a lonely prince discovered that his kingdom’s eternal winter was caused by a forgotten spell he '
+4 greedy: 'Here are the three laws of thermodynamics, stated briefly:  1.  **First Law (Conservation of Ene'
+4 sampled: 'Here are the three laws of thermodynamics, stated briefly:  1.  **First Law (Conservation of Ene'
+5 greedy: "Bonjour, comment allez-vous aujourd'hui ?"
+5 sampled: 'Bonjour, comment allez-vous aujourd’hui ?'
+6 greedy: '```python def fibonacci(n: int) -> list:     """     Calculate the Fibonacci sequence up to n te'
+6 sampled: '```python def fibonacci(n: int) -> list:     """     Calculate the Fibonacci sequence up to n te'
+{
+  "output": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_qualitative_outputs_optimized_vllm.json",
+  "records": 12
+}

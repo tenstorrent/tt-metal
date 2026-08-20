@@ -1,0 +1,76 @@
+Launching vLLM server for Qwen/Qwen3.6-35B-A3B on P300C
+  cmd: /localdev/vkovacevic/tt-metal/python_env/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.6-35B-A3B --block_size 32 --max_num_seqs 32 --port 8024 --max_model_len 262144 --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 384000000, "fabric_config": "FABRIC_1D_RING"}}' --async-scheduling
+  log: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/server.log
+Waiting up to 2400s for server to become ready...
+  Server ready after ~360s
+
+=== Running vLLM serving benchmark: single_user_decode ===
+  prompt_len=128, output_len=128, num_requests=1, concurrency=1, temperature=0.0
+  comparison_scope: Primary batch-1 serving decode profile for headline t/s/u. TTFT is reported separately and is not blended into the TPOT-derived decode value beyond normal single-request timing.
+  command: /localdev/vkovacevic/tt-metal/python_env/bin/vllm bench serve --backend vllm --model Qwen/Qwen3.6-35B-A3B --base-url http://localhost:8024 --endpoint /v1/completions --dataset-name random --random-input-len 128 --random-output-len 128 --num-prompts 1 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_result.json --max-concurrency 1 --temperature 0.0
+  log: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_benchmark.log
+
+=== Serving benchmark summary: single_user_decode ===
+  Requests : 1/1 completed
+  TTFT     : P50=6274.1ms  P99=6274.1ms
+  TPOT     : mean=60.7ms  P99=60.7ms
+  ITL      : P50=57.3ms  P99=58.1ms
+  Output   : 9.2 tok/s aggregate
+  Decode   : 16.5 t/s/u from mean TPOT
+  Raw      : /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_result.json
+  Summary  : /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_benchmark.json
+
+=== Running vLLM serving benchmark: ci_serving_burst ===
+  prompt_len=100, output_len=100, num_requests=32, concurrency=None, temperature=0.0
+  comparison_scope: vLLM-nightly-style 100/100/32 serving-burst profile for CI parity and serving capacity. Do not use as headline decode t/s/u because burst admission and chunked prefill can affect TPOT.
+  command: /localdev/vkovacevic/tt-metal/python_env/bin/vllm bench serve --backend vllm --model Qwen/Qwen3.6-35B-A3B --base-url http://localhost:8024 --endpoint /v1/completions --dataset-name random --random-input-len 100 --random-output-len 100 --num-prompts 32 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_ci_serving_result.json --temperature 0.0
+  log: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_ci_serving_benchmark.log
+
+=== Serving benchmark summary: ci_serving_burst ===
+  Requests : 32/32 completed
+  TTFT     : P50=155431.5ms  P99=155432.3ms
+  TPOT     : mean=1000.1ms  P99=1999.4ms
+  ITL      : P50=915.1ms  P99=2443.9ms
+  Output   : 12.8 tok/s aggregate
+  Decode   : 1.0 t/s/u from mean TPOT
+  Raw      : /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_ci_serving_result.json
+  Summary  : /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_ci_serving_benchmark.json
+
+============================================================
+vLLM checks complete. Results in /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm
+============================================================
+
+Shutting down server (PID 1437581)...
+  Terminated cleanly.
+
+=== Server log tail (/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/server.log, last 30 lines) ===
+ - leaked instance 0x7f71b03df0a8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x48aea200 of type "ttnn._ttnn.operations.unary.identity_t"
+ - leaked instance 0x7f71b02af888 of type "ttnn._ttnn.operations.normalization.SoftmaxDefaultProgramConfig"
+ - ... skipped remainder
+nanobind: leaked 909 types!
+ - leaked type "SocketEndpoint"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.gt__t"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.SliceDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "ttnn._ttnn.operations.binary.lt__t"
+ - leaked type "ttnn._ttnn.operations.binary_backward.xlogy_bw_t"
+ - leaked type "ttnn._ttnn.operations.experimental.insert_t"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.isclose_t"
+ - leaked type "ttnn._ttnn.operations.reduction.var_t"
+ - leaked type "DispatchCoreAxis"
+ - ... skipped remainder
+nanobind: leaked 4183 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__call__"
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

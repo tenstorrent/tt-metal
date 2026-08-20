@@ -1,0 +1,35 @@
+2026-08-20 18:09:34.102 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+{
+  "output_dir": "models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_vllm/artifacts/after/no_think_controls_optimized",
+  "prompts": 6
+}
+nanobind: leaked 2 instances!
+ - leaked instance 0x7f5198fe53f8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7f51990f13f8 of type "ttnn._ttnn.device.DispatchCoreConfig"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 341 functions!
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "id"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function "sharded_across_dims"
+ - leaked function "terminate_fast_dispatch"
+ - leaked function "__repr__"
+ - leaked function "reshape"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

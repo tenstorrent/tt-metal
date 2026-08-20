@@ -1,0 +1,714 @@
+{
+  "url": "http://localhost:8027/v1/chat/completions",
+  "model": "Qwen/Qwen3.6-35B-A3B",
+  "records": [
+    {
+      "prompt_index": 1,
+      "prompt": "Write a haiku about machine learning.",
+      "profile": "greedy",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Write a haiku about machine learning."
+          }
+        ],
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_tokens": 64,
+        "temperature": 0
+      },
+      "status_code": 200,
+      "elapsed_s": 3.652312994003296,
+      "text": "Data flows like rain,\nPatterns emerge from the noise,\nSilent minds learn fast.",
+      "response": {
+        "id": "chatcmpl-a7062eeaa92143e2",
+        "object": "chat.completion",
+        "created": 1787248800,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Data flows like rain,\nPatterns emerge from the noise,\nSilent minds learn fast.",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 20,
+          "total_tokens": 40,
+          "completion_tokens": 20,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 1,
+      "prompt": "Write a haiku about machine learning.",
+      "profile": "sampled",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Write a haiku about machine learning."
+          }
+        ],
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_tokens": 64,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "seed": 2001
+      },
+      "status_code": 200,
+      "elapsed_s": 28.651718616485596,
+      "text": "Data flows in streams,\nPatterns emerge from the noise,\nTruth learns to predict.",
+      "response": {
+        "id": "chatcmpl-accab2198d4c82ab",
+        "object": "chat.completion",
+        "created": 1787248804,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Data flows in streams,\nPatterns emerge from the noise,\nTruth learns to predict.",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 20,
+          "total_tokens": 39,
+          "completion_tokens": 19,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 2,
+      "prompt": "Explain the difference between supervised and unsupervised learning in two sentences.",
+      "profile": "greedy",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Explain the difference between supervised and unsupervised learning in two sentences."
+          }
+        ],
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_tokens": 64,
+        "temperature": 0
+      },
+      "status_code": 200,
+      "elapsed_s": 6.002680540084839,
+      "text": "Supervised learning trains models using labeled data, where the algorithm learns to map inputs to known outputs by minimizing prediction errors. In contrast, unsupervised learning operates on unlabeled data, aiming to discover hidden patterns, structures, or groupings within the information without predefined answers.",
+      "response": {
+        "id": "chatcmpl-99b952c56fc496e3",
+        "object": "chat.completion",
+        "created": 1787248832,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Supervised learning trains models using labeled data, where the algorithm learns to map inputs to known outputs by minimizing prediction errors. In contrast, unsupervised learning operates on unlabeled data, aiming to discover hidden patterns, structures, or groupings within the information without predefined answers.",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 27,
+          "total_tokens": 83,
+          "completion_tokens": 56,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 2,
+      "prompt": "Explain the difference between supervised and unsupervised learning in two sentences.",
+      "profile": "sampled",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Explain the difference between supervised and unsupervised learning in two sentences."
+          }
+        ],
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_tokens": 64,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "seed": 2002
+      },
+      "status_code": 200,
+      "elapsed_s": 90.99723362922668,
+      "text": "Supervised learning trains models on labeled data where the correct output is already known, allowing the algorithm to learn a mapping from inputs to specific targets. In contrast, unsupervised learning uses unlabeled data, enabling the model to discover hidden patterns, structures, or groupings within the input without any predefined answers.",
+      "response": {
+        "id": "chatcmpl-8c94db4a742c8914",
+        "object": "chat.completion",
+        "created": 1787248838,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Supervised learning trains models on labeled data where the correct output is already known, allowing the algorithm to learn a mapping from inputs to specific targets. In contrast, unsupervised learning uses unlabeled data, enabling the model to discover hidden patterns, structures, or groupings within the input without any predefined answers.",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 27,
+          "total_tokens": 90,
+          "completion_tokens": 63,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 3,
+      "prompt": "Complete this story in two sentences: Once upon a time, in a faraway kingdom,",
+      "profile": "greedy",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Complete this story in two sentences: Once upon a time, in a faraway kingdom,"
+          }
+        ],
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_tokens": 64,
+        "temperature": 0
+      },
+      "status_code": 200,
+      "elapsed_s": 10.759127855300903,
+      "text": "a young shepherd discovered a hidden door in the ancient castle walls that led to a realm where time stood still. He spent his life there learning the secrets of the stars, only to return years later to find that not a single day had passed in the kingdom he left behind.",
+      "response": {
+        "id": "chatcmpl-9fcba3a5cecae22e",
+        "object": "chat.completion",
+        "created": 1787248929,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "a young shepherd discovered a hidden door in the ancient castle walls that led to a realm where time stood still. He spent his life there learning the secrets of the stars, only to return years later to find that not a single day had passed in the kingdom he left behind.",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 30,
+          "total_tokens": 86,
+          "completion_tokens": 56,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 3,
+      "prompt": "Complete this story in two sentences: Once upon a time, in a faraway kingdom,",
+      "profile": "sampled",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Complete this story in two sentences: Once upon a time, in a faraway kingdom,"
+          }
+        ],
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_tokens": 64,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "seed": 2003
+      },
+      "status_code": 200,
+      "elapsed_s": 64.4855489730835,
+      "text": "a lonely prince discovered that his kingdom\u2019s eternal winter was caused by a forgotten spell he himself had cast in childhood. With a single tear of remorse, he broke the curse, restoring warmth and joy to his people.",
+      "response": {
+        "id": "chatcmpl-92c2dcccaf411bab",
+        "object": "chat.completion",
+        "created": 1787248940,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "a lonely prince discovered that his kingdom\u2019s eternal winter was caused by a forgotten spell he himself had cast in childhood. With a single tear of remorse, he broke the curse, restoring warmth and joy to his people.",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 30,
+          "total_tokens": 74,
+          "completion_tokens": 44,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 4,
+      "prompt": "What are the three laws of thermodynamics? Answer briefly.",
+      "profile": "greedy",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "What are the three laws of thermodynamics? Answer briefly."
+          }
+        ],
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_tokens": 64,
+        "temperature": 0
+      },
+      "status_code": 200,
+      "elapsed_s": 6.3831799030303955,
+      "text": "Here are the three laws of thermodynamics, stated briefly:\n\n1.  **First Law (Conservation of Energy):** Energy cannot be created or destroyed, only transferred or changed from one form to another.\n2.  **Second Law (Entropy):** The total entropy of an isolated system can never decrease over time",
+      "response": {
+        "id": "chatcmpl-81db4f51e3773af2",
+        "object": "chat.completion",
+        "created": 1787249005,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Here are the three laws of thermodynamics, stated briefly:\n\n1.  **First Law (Conservation of Energy):** Energy cannot be created or destroyed, only transferred or changed from one form to another.\n2.  **Second Law (Entropy):** The total entropy of an isolated system can never decrease over time",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 24,
+          "total_tokens": 88,
+          "completion_tokens": 64,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 4,
+      "prompt": "What are the three laws of thermodynamics? Answer briefly.",
+      "profile": "sampled",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "What are the three laws of thermodynamics? Answer briefly."
+          }
+        ],
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_tokens": 64,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "seed": 2004
+      },
+      "status_code": 200,
+      "elapsed_s": 90.92440819740295,
+      "text": "Here are the three laws of thermodynamics, stated briefly:\n\n1.  **First Law (Conservation of Energy):** Energy cannot be created or destroyed, only transferred or changed from one form to another. The change in the internal energy of a system is equal to the heat added to the system minus the work done",
+      "response": {
+        "id": "chatcmpl-a162c0f77f2c552e",
+        "object": "chat.completion",
+        "created": 1787249011,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Here are the three laws of thermodynamics, stated briefly:\n\n1.  **First Law (Conservation of Energy):** Energy cannot be created or destroyed, only transferred or changed from one form to another. The change in the internal energy of a system is equal to the heat added to the system minus the work done",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 24,
+          "total_tokens": 88,
+          "completion_tokens": 64,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 5,
+      "prompt": "Translate to French: Hello, how are you today?",
+      "profile": "greedy",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Translate to French: Hello, how are you today?"
+          }
+        ],
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_tokens": 64,
+        "temperature": 0
+      },
+      "status_code": 200,
+      "elapsed_s": 2.926020860671997,
+      "text": "Bonjour, comment allez-vous aujourd'hui ?",
+      "response": {
+        "id": "chatcmpl-9d3c21b325f79fe8",
+        "object": "chat.completion",
+        "created": 1787249102,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Bonjour, comment allez-vous aujourd'hui ?",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 23,
+          "total_tokens": 32,
+          "completion_tokens": 9,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 5,
+      "prompt": "Translate to French: Hello, how are you today?",
+      "profile": "sampled",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Translate to French: Hello, how are you today?"
+          }
+        ],
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_tokens": 64,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "seed": 2005
+      },
+      "status_code": 200,
+      "elapsed_s": 14.669463872909546,
+      "text": "Bonjour, comment allez-vous aujourd\u2019hui ?",
+      "response": {
+        "id": "chatcmpl-83f9390b103d7273",
+        "object": "chat.completion",
+        "created": 1787249105,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Bonjour, comment allez-vous aujourd\u2019hui ?",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 23,
+          "total_tokens": 32,
+          "completion_tokens": 9,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 6,
+      "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+      "profile": "greedy",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Write a Python function to calculate the Fibonacci sequence."
+          }
+        ],
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_tokens": 64,
+        "temperature": 0
+      },
+      "status_code": 200,
+      "elapsed_s": 9.764026880264282,
+      "text": "```python\ndef fibonacci(n: int) -> list:\n    \"\"\"\n    Calculate the Fibonacci sequence up to n terms.\n    \n    Args:\n        n: Number of terms in the Fibonacci sequence\n        \n    Returns:\n        A list containing the first n Fibonacci numbers\n        \n    Raises:\n        ValueError:",
+      "response": {
+        "id": "chatcmpl-9c42b5789d140fd1",
+        "object": "chat.completion",
+        "created": 1787249119,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "```python\ndef fibonacci(n: int) -> list:\n    \"\"\"\n    Calculate the Fibonacci sequence up to n terms.\n    \n    Args:\n        n: Number of terms in the Fibonacci sequence\n        \n    Returns:\n        A list containing the first n Fibonacci numbers\n        \n    Raises:\n        ValueError:",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 22,
+          "total_tokens": 86,
+          "completion_tokens": 64,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    },
+    {
+      "prompt_index": 6,
+      "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+      "profile": "sampled",
+      "payload": {
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Write a Python function to calculate the Fibonacci sequence."
+          }
+        ],
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        },
+        "max_tokens": 64,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "seed": 2006
+      },
+      "status_code": 200,
+      "elapsed_s": 91.02156329154968,
+      "text": "```python\ndef fibonacci(n: int) -> list:\n    \"\"\"\n    Calculate the Fibonacci sequence up to n terms.\n    \n    Args:\n        n: The number of terms in the Fibonacci sequence.\n        \n    Returns:\n        A list containing the first n Fibonacci numbers.\n    \"\"\"\n",
+      "response": {
+        "id": "chatcmpl-853df889e9f00c23",
+        "object": "chat.completion",
+        "created": 1787249129,
+        "model": "Qwen/Qwen3.6-35B-A3B",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "```python\ndef fibonacci(n: int) -> list:\n    \"\"\"\n    Calculate the Fibonacci sequence up to n terms.\n    \n    Args:\n        n: The number of terms in the Fibonacci sequence.\n        \n    Returns:\n        A list containing the first n Fibonacci numbers.\n    \"\"\"\n",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "tool_calls": [],
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": null,
+        "usage": {
+          "prompt_tokens": 22,
+          "total_tokens": 86,
+          "completion_tokens": 64,
+          "prompt_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "kv_transfer_params": null
+      }
+    }
+  ]
+}

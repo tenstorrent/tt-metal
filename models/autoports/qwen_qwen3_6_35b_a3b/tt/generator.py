@@ -504,6 +504,15 @@ class QwenReadinessGenerator(Generator):
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Prefill through the canonical on-device sampler and return token IDs."""
 
+        audit_inc = getattr(self, "_audit_inc", None)
+        audit_write = getattr(self, "_write_vllm_audit", None)
+
+        def audit(stage: str) -> None:
+            if callable(audit_inc):
+                audit_inc(stage)
+            if callable(audit_write):
+                audit_write()
+
         if self.model.sampling is None:
             raise RuntimeError("vLLM prefill sampling requires on-device sampling")
         batch = int(tokens.shape[0])
@@ -519,7 +528,9 @@ class QwenReadinessGenerator(Generator):
         if any(slot < 0 or slot >= cache.max_batch_size for slot in empty_slots):
             raise ValueError(f"empty_slots {empty_slots} exceed cache batch {cache.max_batch_size}")
 
+        audit("prefill_sample_reset_linear_state_before")
         self.model.reset_linear_attention_state(cache, empty_slots)
+        audit("prefill_sample_reset_linear_state_after")
 
         formatted_params = format_sampling_params(sampling_params, max_batch)
         slot_params = self._scatter_sampling_params_to_slots(formatted_params, empty_slots, max_batch=max_batch)
@@ -530,6 +541,7 @@ class QwenReadinessGenerator(Generator):
             self._sampling_prompt_tokens(tokens, prompt_lens=prompt_lens, slots=empty_slots, max_batch=max_batch)
         )
         self.model.sampling.reset_output_state()
+        audit("prefill_sample_sampling_state_after")
 
         logits_by_slot: list[ttnn.Tensor | None] = [None] * max_batch
         for request_idx, (prompt_len, slot) in enumerate(zip(prompt_lens, empty_slots, strict=True)):
@@ -538,6 +550,7 @@ class QwenReadinessGenerator(Generator):
                 continue
             if prompt_len > tokens.shape[1]:
                 raise ValueError(f"prompt_lens[{request_idx}]={prompt_len} exceeds token width {tokens.shape[1]}")
+            audit("prefill_sample_prefill_user_before")
             logits_by_slot[slot] = self.model.prefill_user(
                 tokens[request_idx : request_idx + 1, :prompt_len],
                 cache=cache,
@@ -546,22 +559,33 @@ class QwenReadinessGenerator(Generator):
                 return_all_logits=False,
                 return_tt_logits=True,
             )
+            audit("prefill_sample_prefill_user_after")
         first_logits = next((logits for logits in logits_by_slot if logits is not None), None)
         if first_logits is None:
             return torch.zeros((batch,), dtype=torch.int32)
         logits_filled = [logits if logits is not None else first_logits for logits in logits_by_slot]
+        audit("prefill_sample_logits_concat_before")
         logits = ttnn.concat(logits_filled, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        audit("prefill_sample_logits_concat_after")
         token_buffer = self._sample_token_buffer(0, width=max_batch)
+        audit("prefill_sample_sample_before")
         sampled = self.model.sampling.sample(logits, enable_trace=False, tt_out_tok=token_buffer)
+        audit("prefill_sample_sample_after")
         tt_log_probs = None
         if isinstance(sampled, tuple):
             _, tt_log_probs = sampled
+        audit("prefill_sample_sync_before")
         ttnn.synchronize_device(self.mesh_device)
+        audit("prefill_sample_sync_after")
+        audit("prefill_sample_token_read_before")
         sampled_tokens = self._read_token_buffer(token_buffer)
+        audit("prefill_sample_token_read_after")
         output_tokens = sampled_tokens[empty_slots].to(torch.int32)
         if tt_log_probs is None:
             return output_tokens
+        audit("prefill_sample_logprob_read_before")
         host_log_probs = self._read_log_probs(tt_log_probs)
+        audit("prefill_sample_logprob_read_after")
         return output_tokens, host_log_probs
 
     def _warmup_traced_decode(self, *, prompt_len: int, max_seq_len: int) -> None:

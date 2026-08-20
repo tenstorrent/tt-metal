@@ -1,0 +1,305 @@
+{
+  "model_id": "Qwen/Qwen3.6-35B-A3B",
+  "stage": "optimized_vllm",
+  "context_contract": {
+    "doc": "doc/context_contract.json",
+    "supported_context": 262144,
+    "max_model_len_used": 262144,
+    "max_model_len_lowered": false,
+    "non_aligned_prompt_support_checked": true
+  },
+  "serving_path": {
+    "generator": "models/autoports/qwen_qwen3_6_35b_a3b/tt/generator_vllm.py",
+    "entrypoint": "vLLM TT plugin OpenAI server via models.common.readiness_check.run_vllm_server",
+    "mesh_device": "P300C",
+    "block_size": 32,
+    "max_num_seqs": 32,
+    "max_model_len": 262144,
+    "tt_config": {
+      "sample_on_device_mode": "all",
+      "trace_region_size": 384000000,
+      "fabric_config": "FABRIC_1D_RING"
+    },
+    "additional_server_args": [
+      "--async-scheduling"
+    ]
+  },
+  "primary_single_user": {
+    "comparison_scope": "headline decode metric; batch-1 128 input / 128 output, max concurrency 1, temperature 0.0, ignore EOS",
+    "before": {
+      "artifact": "vllm_result.json",
+      "profile": "single_user_decode",
+      "workload": {
+        "prompt_len": 128,
+        "output_len": 128,
+        "num_requests": 1,
+        "concurrency": 1,
+        "temperature": 0.0,
+        "ignore_eos": true
+      },
+      "completed_requests": 1,
+      "missing_output_tokens": 0,
+      "elapsed_s": 127.568007952068,
+      "ttft_ms": {
+        "p50": 7517.317604739219,
+        "p99": 7517.317604739219,
+        "mean": 7517.317604739219
+      },
+      "tpot_ms": {
+        "p50": 945.2785306617501,
+        "p99": 945.2785306617501,
+        "mean": 945.2785306617501
+      },
+      "itl_ms": {
+        "p50": 919.1511450335383,
+        "p99": 1231.9731665775157,
+        "mean": 945.2785349223675
+      },
+      "output_throughput_tok_per_s": 1.003386366651538,
+      "aggregate_throughput_tok_per_s": 1.003386366651538,
+      "tpot_decode_t_s_u": 1.057889254397793,
+      "command_string": "/localdev/vkovacevic/tt-metal/python_env/bin/vllm bench serve --backend vllm --model Qwen/Qwen3.6-35B-A3B --base-url http://localhost:8011 --endpoint /v1/completions --dataset-name random --random-input-len 128 --random-output-len 128 --num-prompts 1 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_result.json --max-concurrency 1 --temperature 0.0"
+    },
+    "after": {
+      "artifact": "vllm_result.json",
+      "profile": "single_user_decode",
+      "workload": {
+        "prompt_len": 128,
+        "output_len": 128,
+        "num_requests": 1,
+        "concurrency": 1,
+        "temperature": 0.0,
+        "ignore_eos": true
+      },
+      "completed_requests": 1,
+      "missing_output_tokens": 0,
+      "elapsed_s": 13.985958936158568,
+      "ttft_ms": {
+        "p50": 6274.110241793096,
+        "p99": 6274.110241793096,
+        "mean": 6274.110241793096
+      },
+      "tpot_ms": {
+        "p50": 60.72071345713665,
+        "p99": 60.72071345713665,
+        "mean": 60.72071345713665
+      },
+      "itl_ms": {
+        "p50": 57.31593817472458,
+        "p99": 58.14607380889356,
+        "mean": 60.72071503011847
+      },
+      "output_throughput_tok_per_s": 9.152036023005579,
+      "aggregate_throughput_tok_per_s": 9.152036023005579,
+      "tpot_decode_t_s_u": 16.468844700020032,
+      "command_string": "/localdev/vkovacevic/tt-metal/python_env/bin/vllm bench serve --backend vllm --model Qwen/Qwen3.6-35B-A3B --base-url http://localhost:8024 --endpoint /v1/completions --dataset-name random --random-input-len 128 --random-output-len 128 --num-prompts 1 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_result.json --max-concurrency 1 --temperature 0.0"
+    },
+    "delta": {
+      "ttft_ms_pct": -16.53791190307504,
+      "tpot_ms_pct": -93.57642097143277,
+      "tpot_decode_t_s_u_pct": 1456.7645319731487,
+      "aggregate_output_throughput_pct": 812.1148470003034
+    }
+  },
+  "ci_serving_burst_secondary": {
+    "comparison_scope": "capacity/nightly-parity evidence only; not headline decode t/s/u",
+    "before": {
+      "artifact": "vllm_ci_serving_result.json",
+      "profile": "ci_serving_burst",
+      "workload": {
+        "prompt_len": 100,
+        "output_len": 100,
+        "num_requests": 32,
+        "concurrency": null,
+        "temperature": 0.0,
+        "ignore_eos": true
+      },
+      "completed_requests": 32,
+      "missing_output_tokens": 0,
+      "elapsed_s": 250.9052973119542,
+      "ttft_ms": {
+        "p50": 156247.17300245538,
+        "p99": 156248.15843465272,
+        "mean": 151553.9541598846
+      },
+      "tpot_ms": {
+        "p50": 956.1263839643674,
+        "p99": 2002.8738168863636,
+        "mean": 1003.5327304697907
+      },
+      "itl_ms": {
+        "p50": 919.1920938901603,
+        "p99": 3851.690359916538,
+        "mean": 1003.5327311725453
+      },
+      "output_throughput_tok_per_s": 12.753816018564939,
+      "aggregate_throughput_tok_per_s": 12.753816018564939,
+      "tpot_decode_t_s_u": 0.9964797057808599,
+      "command_string": "/localdev/vkovacevic/tt-metal/python_env/bin/vllm bench serve --backend vllm --model Qwen/Qwen3.6-35B-A3B --base-url http://localhost:8011 --endpoint /v1/completions --dataset-name random --random-input-len 100 --random-output-len 100 --num-prompts 32 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_ci_serving_result.json --temperature 0.0"
+    },
+    "after": {
+      "artifact": "vllm_ci_serving_result.json",
+      "profile": "ci_serving_burst",
+      "workload": {
+        "prompt_len": 100,
+        "output_len": 100,
+        "num_requests": 32,
+        "concurrency": null,
+        "temperature": 0.0,
+        "ignore_eos": true
+      },
+      "completed_requests": 32,
+      "missing_output_tokens": 0,
+      "elapsed_s": 249.7466707760468,
+      "ttft_ms": {
+        "p50": 155431.48702313192,
+        "p99": 155432.30627548415,
+        "mean": 150738.25836989272
+      },
+      "tpot_ms": {
+        "p50": 952.6626731838204,
+        "p99": 1999.378570431488,
+        "mean": 1000.0681261597566
+      },
+      "itl_ms": {
+        "p50": 915.0992308277637,
+        "p99": 2443.8573396435368,
+        "mean": 1000.0681268409037
+      },
+      "output_throughput_tok_per_s": 12.812983612780602,
+      "aggregate_throughput_tok_per_s": 12.812983612780602,
+      "tpot_decode_t_s_u": 0.9999318784811009,
+      "command_string": "/localdev/vkovacevic/tt-metal/python_env/bin/vllm bench serve --backend vllm --model Qwen/Qwen3.6-35B-A3B --base-url http://localhost:8024 --endpoint /v1/completions --dataset-name random --random-input-len 100 --random-output-len 100 --num-prompts 32 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_ci_serving_result.json --temperature 0.0"
+    },
+    "delta": {
+      "ttft_ms_pct": -0.5382213842677736,
+      "tpot_ms_pct": -0.34524078835099115,
+      "tpot_decode_t_s_u_pct": 0.34643682959261285,
+      "aggregate_output_throughput_pct": 0.463920713059818
+    }
+  },
+  "optimized_full_model_comparison": {
+    "artifact": "doc/optimized_full_model/artifacts/perf_summary.json",
+    "workload": {
+      "prompt_len": 128,
+      "max_new_tokens": 128,
+      "decode_tokens": 127
+    },
+    "full_model_ttft_ms": 5895.72538016364,
+    "full_model_decode_replay_t_s_u": 17.433914397834936,
+    "full_model_decode_replay_ms_per_token": 57.35946484423411,
+    "vllm_primary_decode_t_s_u": 16.468844700020032,
+    "vllm_vs_full_model_decode_pct": 94.46441185959503
+  },
+  "sampling_and_quality": {
+    "sampling_tests": {
+      "artifact": "artifacts/after/sampling_tests_optimized.log",
+      "result": "72 passed, 1 skipped"
+    },
+    "default_qualitative": {
+      "artifact": "artifacts/after/vllm_qualitative_outputs_optimized.json",
+      "degenerate_report": "artifacts/after/degenerate_output_report_default_vllm.json",
+      "result": "no degenerate output detected"
+    },
+    "no_thinking_qualitative": {
+      "artifact": "artifacts/after/vllm_chat_no_think_qualitative_outputs_optimized_vllm.json",
+      "records": 12,
+      "checker_artifact": "artifacts/after/no_think_controls_optimized/vllm_chat_no_think_checker_outputs.json",
+      "degenerate_report": "artifacts/after/degenerate_output_report_no_think_vllm.json",
+      "result": "no degenerate output detected"
+    },
+    "non_aligned_prompt": {
+      "artifact": "artifacts/after/non_aligned_prompt_check_optimized_vllm.json",
+      "prompt_token_length": 26,
+      "alignment_moduli_checked": [
+        32,
+        64,
+        128
+      ],
+      "status_code": 200
+    }
+  },
+  "trace_async_evidence": {
+    "benchmark_audit_artifact": "artifacts/after/vllm_trace_audit_benchmark_selective_cleanup.json",
+    "sampling_qualitative_audit_artifact": "artifacts/after/vllm_trace_audit_sampling_qualitative_fixed.json",
+    "non_aligned_no_think_audit_artifact": "artifacts/after/vllm_trace_audit_non_aligned_no_think.json",
+    "benchmark_counters": {
+      "active_decode_cache_creates": 1,
+      "active_decode_cache_discards": 1,
+      "async_decode_reads": 226,
+      "decode_forward_calls": 226,
+      "decode_forward_read_from_device_false": 226,
+      "decode_reset_batch_true": 2,
+      "decode_reset_inputs": 4,
+      "decode_trace_captures": 2,
+      "decode_trace_releases": 1,
+      "decode_trace_replays": 222,
+      "decode_trace_width_1": 127,
+      "decode_trace_width_32": 99,
+      "decode_trace_width_forced_full": 99,
+      "decode_untraced_warm_steps": 2,
+      "execute_trace_blocking_false": 224,
+      "force_full_decode_width_false": 127,
+      "force_full_decode_width_true": 99,
+      "page_table_device_refreshes": 5,
+      "page_table_forced_refreshes": 5,
+      "page_table_unchanged_hits": 224,
+      "prefill_active_cache_discards": 3,
+      "prefill_force_full_decode_width": 1,
+      "prefill_forward_calls": 3,
+      "prefill_sample_logits_concat_after": 3,
+      "prefill_sample_logits_concat_before": 3,
+      "prefill_sample_prefill_user_after": 33,
+      "prefill_sample_prefill_user_before": 33,
+      "prefill_sample_reset_linear_state_after": 3,
+      "prefill_sample_reset_linear_state_before": 3,
+      "prefill_sample_sample_after": 3,
+      "prefill_sample_sample_before": 3,
+      "prefill_sample_sampling_state_after": 3,
+      "prefill_sample_sync_after": 3,
+      "prefill_sample_sync_before": 3,
+      "prefill_sample_token_read_after": 3,
+      "prefill_sample_token_read_before": 3,
+      "process_decode_output_host_calls": 226,
+      "read_decode_output_calls": 226,
+      "slot_remap_calls": 1,
+      "steady_device_feedback_replays": 222,
+      "trace_input_host_refreshes": 2
+    },
+    "sampling_qualitative_counters_subset": {
+      "async_decode_reads": 2878,
+      "decode_forward_calls": 4074,
+      "decode_forward_read_from_device_false": 4074,
+      "decode_trace_captures": 52,
+      "decode_trace_replays": 2769,
+      "decode_trace_width_1": 2804,
+      "decode_trace_width_32": 74,
+      "execute_trace_blocking_false": 2821,
+      "force_full_decode_width_false": 2804,
+      "force_full_decode_width_true": 74,
+      "page_table_unchanged_hits": 3917,
+      "prefill_forward_calls": 186,
+      "steady_device_feedback_replays": 2769,
+      "trace_input_host_refreshes": 52
+    },
+    "non_aligned_no_think_counters_subset": {
+      "async_decode_reads": 274,
+      "decode_forward_calls": 535,
+      "decode_forward_read_from_device_false": 535,
+      "decode_trace_captures": 7,
+      "decode_trace_replays": 260,
+      "decode_trace_width_1": 274,
+      "execute_trace_blocking_false": 267,
+      "force_full_decode_width_false": 274,
+      "page_table_unchanged_hits": 528,
+      "prefill_forward_calls": 13,
+      "steady_device_feedback_replays": 260,
+      "trace_input_host_refreshes": 7
+    }
+  },
+  "limitations": [
+    "Burst CI profile remains prefill/admission dominated and is retained as capacity evidence, not headline decode t/s/u.",
+    "The plugin forces full-width decode while the scheduler has waiting or multiple running requests to preserve cache/page-table correctness, then narrows to active width when idle.",
+    "Startup after one long sampling run required tt-smi -r all before a clean retry; final server shutdown and process cleanup were clean."
+  ]
+}

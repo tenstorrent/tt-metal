@@ -1,0 +1,43 @@
+Launching vLLM server for Qwen/Qwen3.6-35B-A3B on P300C
+  cmd: /localdev/vkovacevic/tt-metal/python_env/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.6-35B-A3B --block_size 32 --max_num_seqs 32 --port 8027 --max_model_len 262144 --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 384000000, "fabric_config": "FABRIC_1D_RING"}}' --async-scheduling
+  log: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/server.log
+Waiting up to 2400s for server to become ready...
+  Server ready after ~360s
+
+Server ready at http://localhost:8027
+Server is running. Press Ctrl-C (or send SIGTERM) to stop.
+
+Shutting down server (PID 1644443)...
+  Terminated cleanly.
+
+=== Server log tail (/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/server.log, last 30 lines) ===
+ - leaked instance 0x27f72460 of type "ttnn._ttnn.operations.unary.identity_t"
+ - leaked instance 0x289f1e70 of type "ttnn._ttnn.operations.unary.bitcast_t"
+ - leaked instance 0x7d445bea7018 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - ... skipped remainder
+nanobind: leaked 909 types!
+ - leaked type "SocketEndpoint"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.gt__t"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.SliceDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "ttnn._ttnn.operations.binary.lt__t"
+ - leaked type "ttnn._ttnn.operations.binary_backward.xlogy_bw_t"
+ - leaked type "ttnn._ttnn.operations.experimental.insert_t"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.isclose_t"
+ - leaked type "ttnn._ttnn.operations.reduction.var_t"
+ - leaked type "DispatchCoreAxis"
+ - ... skipped remainder
+nanobind: leaked 4183 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "deallocate_buffers"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

@@ -1,0 +1,49 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/localdev/vkovacevic/tt-metal/models/common/readiness_check/run_vllm_server.py", line 1071, in <module>
+    _main()
+  File "/localdev/vkovacevic/tt-metal/models/common/readiness_check/run_vllm_server.py", line 970, in _main
+    _wait_for_server(
+  File "/localdev/vkovacevic/tt-metal/models/common/readiness_check/run_vllm_server.py", line 298, in _wait_for_server
+    raise RuntimeError(f"Fatal marker {fatal!r} found in {log_file}. Server cannot start.")
+RuntimeError: Fatal marker 'EngineCore failed to start' found in /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/server.log. Server cannot start.
+Launching vLLM server for Qwen/Qwen3.6-35B-A3B on P300C
+  cmd: /localdev/vkovacevic/tt-metal/python_env/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.6-35B-A3B --block_size 32 --max_num_seqs 32 --port 8027 --max_model_len 262144 --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 384000000, "fabric_config": "FABRIC_1D_RING"}}' --async-scheduling
+  log: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/server.log
+Waiting up to 2400s for server to become ready...
+
+Shutting down server (PID 1638994)...
+  Did not exit after SIGTERM; sending SIGKILL.
+
+=== Server log tail (/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/server.log, last 30 lines) ===
+(EngineCore_DP0 pid=1639565)  --- VLLM::EngineCore(_start+0x29) [0x1795ced]
+(EngineCore_DP0 pid=1639565)
+nanobind: leaked 1 instances!
+ - leaked instance 0x7d2e5308f618 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 15 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - ... skipped remainder
+nanobind: leaked 233 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "create_submesh"
+ - leaked function "reshape"
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function "clear_loaded_sub_device_manager"
+ - leaked function ""
+ - leaked function "create_sub_device_manager"
+ - leaked function "__repr__"
+ - leaked function "default_core_range"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

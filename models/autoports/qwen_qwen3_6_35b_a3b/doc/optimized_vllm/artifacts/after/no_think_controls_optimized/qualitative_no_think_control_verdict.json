@@ -1,0 +1,70 @@
+{
+  "scope": "no-thinking chat qualitative control",
+  "accepted_serving_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_qualitative_outputs.json",
+  "prompt_format_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_vllm/artifacts/after/no_think_controls_optimized/qualitative_no_think_prompt_format.json",
+  "prompts_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_vllm/artifacts/after/no_think_controls_optimized/qualitative_no_think_prompts.json",
+  "full_model_control_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_vllm/artifacts/after/no_think_controls_optimized/full_model_no_think_greedy_controls.json",
+  "vllm_checker_artifact": "models/autoports/qwen_qwen3_6_35b_a3b/doc/optimized_vllm/artifacts/after/no_think_controls_optimized/vllm_chat_no_think_checker_outputs.json",
+  "comparison": [
+    {
+      "prompt_index": 1,
+      "prompt": "Write a haiku about machine learning.",
+      "vllm_greedy": "Data flows like rain,\nPatterns emerge from the noise,\nSilent minds learn fast.",
+      "vllm_sampled": "Data flows in streams,\nPatterns emerge from the noise,\nTruth learns to predict.",
+      "full_model_greedy_control": null,
+      "vllm_greedy_matches_full_model_control": false,
+      "vllm_greedy_word_count": 13,
+      "full_model_greedy_word_count": 0
+    },
+    {
+      "prompt_index": 2,
+      "prompt": "Explain the difference between supervised and unsupervised learning in two sentences.",
+      "vllm_greedy": "Supervised learning trains models using labeled data, where the algorithm learns to map inputs to known outputs by minimizing prediction errors. In contrast, unsupervised learning operates on unlabeled data, aiming to discover hidden patterns, structures, or groupings within the information without predefined answers.",
+      "vllm_sampled": "Supervised learning trains models on labeled data where the correct output is already known, allowing the algorithm to learn a mapping from inputs to specific targets. In contrast, unsupervised learning uses unlabeled data, enabling the model to discover hidden patterns, structures, or groupings within the input without any predefined answers.",
+      "full_model_greedy_control": null,
+      "vllm_greedy_matches_full_model_control": false,
+      "vllm_greedy_word_count": 43,
+      "full_model_greedy_word_count": 0
+    },
+    {
+      "prompt_index": 3,
+      "prompt": "Complete this story in two sentences: Once upon a time, in a faraway kingdom,",
+      "vllm_greedy": "a young shepherd discovered a hidden door in the ancient castle walls that led to a realm where time stood still. He spent his life there learning the secrets of the stars, only to return years later to find that not a single day had passed in the kingdom he left behind.",
+      "vllm_sampled": "a lonely prince discovered that his kingdom\u2019s eternal winter was caused by a forgotten spell he himself had cast in childhood. With a single tear of remorse, he broke the curse, restoring warmth and joy to his people.",
+      "full_model_greedy_control": null,
+      "vllm_greedy_matches_full_model_control": false,
+      "vllm_greedy_word_count": 52,
+      "full_model_greedy_word_count": 0
+    },
+    {
+      "prompt_index": 4,
+      "prompt": "What are the three laws of thermodynamics? Answer briefly.",
+      "vllm_greedy": "Here are the three laws of thermodynamics, stated briefly:\n\n1.  **First Law (Conservation of Energy):** Energy cannot be created or destroyed, only transferred or changed from one form to another.\n2.  **Second Law (Entropy):** The total entropy of an isolated system can never decrease over time",
+      "vllm_sampled": "Here are the three laws of thermodynamics, stated briefly:\n\n1.  **First Law (Conservation of Energy):** Energy cannot be created or destroyed, only transferred or changed from one form to another. The change in the internal energy of a system is equal to the heat added to the system minus the work done",
+      "full_model_greedy_control": null,
+      "vllm_greedy_matches_full_model_control": false,
+      "vllm_greedy_word_count": 46,
+      "full_model_greedy_word_count": 0
+    },
+    {
+      "prompt_index": 5,
+      "prompt": "Translate to French: Hello, how are you today?",
+      "vllm_greedy": "Bonjour, comment allez-vous aujourd'hui ?",
+      "vllm_sampled": "Bonjour, comment allez-vous aujourd\u2019hui ?",
+      "full_model_greedy_control": null,
+      "vllm_greedy_matches_full_model_control": false,
+      "vllm_greedy_word_count": 5,
+      "full_model_greedy_word_count": 0
+    },
+    {
+      "prompt_index": 6,
+      "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+      "vllm_greedy": "```python\ndef fibonacci(n: int) -> list:\n    \"\"\"\n    Calculate the Fibonacci sequence up to n terms.\n    \n    Args:\n        n: Number of terms in the Fibonacci sequence\n        \n    Returns:\n        A list containing the first n Fibonacci numbers\n        \n    Raises:\n        ValueError:",
+      "vllm_sampled": "```python\ndef fibonacci(n: int) -> list:\n    \"\"\"\n    Calculate the Fibonacci sequence up to n terms.\n    \n    Args:\n        n: The number of terms in the Fibonacci sequence.\n        \n    Returns:\n        A list containing the first n Fibonacci numbers.\n    \"\"\"\n",
+      "full_model_greedy_control": null,
+      "vllm_greedy_matches_full_model_control": false,
+      "vllm_greedy_word_count": 35,
+      "full_model_greedy_word_count": 0
+    }
+  ]
+}

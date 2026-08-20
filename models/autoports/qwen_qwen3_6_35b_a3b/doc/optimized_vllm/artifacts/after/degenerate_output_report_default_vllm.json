@@ -1,0 +1,102 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[0] greedy_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 115,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0783
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[0] sampled_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 115,
+      "adjacent_duplication": 0.0088,
+      "trigram_loop_fraction": 0.1043
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 145,
+      "adjacent_duplication": 0.0139,
+      "trigram_loop_fraction": 0.0414
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[1] sampled_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 146,
+      "adjacent_duplication": 0.0207,
+      "trigram_loop_fraction": 0.0205
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 143,
+      "adjacent_duplication": 0.0141,
+      "trigram_loop_fraction": 0.0629
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[2] sampled_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 151,
+      "adjacent_duplication": 0.0067,
+      "trigram_loop_fraction": 0.0397
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[3] greedy_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 201,
+      "adjacent_duplication": 0.02,
+      "trigram_loop_fraction": 0.0896
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[3] sampled_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 209,
+      "adjacent_duplication": 0.0048,
+      "trigram_loop_fraction": 0.0574
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[4] greedy_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 8,
+      "adjacent_duplication": 0.1429,
+      "trigram_loop_fraction": 0.375
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[4] sampled_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 8,
+      "adjacent_duplication": 0.1429,
+      "trigram_loop_fraction": 0.375
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 160,
+      "adjacent_duplication": 0.0189,
+      "trigram_loop_fraction": 0.0375
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[5] sampled_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 97,
+      "adjacent_duplication": 0.0104,
+      "trigram_loop_fraction": 0.0619
+    }
+  ],
+  "exit_code": 0
+}

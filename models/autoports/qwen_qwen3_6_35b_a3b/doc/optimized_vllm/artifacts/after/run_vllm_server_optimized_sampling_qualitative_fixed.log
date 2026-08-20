@@ -1,0 +1,84 @@
+Launching vLLM server for Qwen/Qwen3.6-35B-A3B on P300C
+  cmd: /localdev/vkovacevic/tt-metal/python_env/bin/python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen3.6-35B-A3B --block_size 32 --max_num_seqs 32 --port 8026 --max_model_len 262144 --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 384000000, "fabric_config": "FABRIC_1D_RING"}}' --async-scheduling
+  log: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/server.log
+Waiting up to 2400s for server to become ready...
+  Server ready after ~360s
+
+=== Running plugin sampling tests ===
+  profile: full (1 target(s))
+  tt-max-num-seqs: 32
+  cmd: /localdev/vkovacevic/tt-metal/python_env/bin/python -m pytest /localdev/vkovacevic/vllm/plugins/vllm-tt-plugin/tests/tt -v --tt-server-url=http://localhost:8026 --tt-model-name=Qwen/Qwen3.6-35B-A3B --tt-max-num-seqs=32
+  log: /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/sampling_tests.log
+  PASS
+
+=== Running qualitative prompts from /localdev/vkovacevic/tt-metal/models/common/readiness_check/vllm_prompts.txt ===
+  Loaded 6 prompts
+
+  Prompt 1/6: Write a haiku about machine learning....
+    Greedy : '  <think> Thinking Process:  1.  **Deconstruct the request:**     *   Topic: Mac'
+    Sampled: '  <think> Thinking Process:  1.  **Deconstruct the topic:**     *   Topic: Machi'
+
+  Prompt 2/6: Explain the difference between supervised and unsupervised l...
+    Greedy : "  <think> Here's a thinking process:  1.  **Understand User Request:**    - **To"
+    Sampled: "  <think> Here's a thinking process:  1.  **Understand User Request:**    - **To"
+
+  Prompt 3/6: Complete this story: Once upon a time, in a faraway kingdom,...
+    Greedy : " a strange, glowing device.  <think> Here's a thinking thinking sequence  1.  **"
+    Sampled: " a mysterious device that could control time flow.  <think> Here's a thinking th"
+
+  Prompt 4/6: What are the three laws of thermodynamics?...
+    Greedy : '  The three laws of thermodynamics are: 1. **First Law (Law of Conservation of E'
+    Sampled: '  The three laws of thermodynamics are: 1. **First Law (Cons of Energy Conservat'
+
+  Prompt 5/6: Translate the following to French: "Hello, how are you today...
+    Greedy : "  <think>  </think>  Bonjour, comment allez-vous aujourd'hui ?"
+    Sampled: "  <think>  </think>  Bonjour, comment allez-vous aujourd'hui ?"
+
+  Prompt 6/6: Write a Python function to calculate the Fibonacci sequence....
+    Greedy : "  <think> Here's a thinking process:  1.  **Understand User Request:** The user "
+    Sampled: '  <think>  </think>  ```python def fibonacci(n: int) -> list:     """     Calcul'
+
+Saved 6 completions to /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_qualitative_outputs.json
+Read both completions for each prompt and judge:
+  - coherent and on-topic
+  - no repetition loops or gibberish
+  - greedy and sampled outputs both reasonable
+
+============================================================
+vLLM checks complete. Results in /localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm
+============================================================
+
+Shutting down server (PID 1485741)...
+  Terminated cleanly.
+
+=== Server log tail (/localdev/vkovacevic/tt-metal/models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/server.log, last 30 lines) ===
+ - leaked instance 0x758ca8b9ff48 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x10df0c80 of type "ttnn._ttnn.operations.unary.eqz_t"
+ - leaked instance 0x12d821a0 of type "ttnn._ttnn.operations.unary.erfinv_t"
+ - ... skipped remainder
+nanobind: leaked 909 types!
+ - leaked type "SocketEndpoint"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.gt__t"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.SliceDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "ttnn._ttnn.operations.binary.lt__t"
+ - leaked type "ttnn._ttnn.operations.binary_backward.xlogy_bw_t"
+ - leaked type "ttnn._ttnn.operations.experimental.insert_t"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.isclose_t"
+ - leaked type "ttnn._ttnn.operations.reduction.var_t"
+ - leaked type "DispatchCoreAxis"
+ - ... skipped remainder
+nanobind: leaked 4183 functions!
+ - leaked function "__call__"
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

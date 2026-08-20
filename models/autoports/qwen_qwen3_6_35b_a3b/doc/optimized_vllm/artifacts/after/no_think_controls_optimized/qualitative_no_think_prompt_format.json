@@ -1,0 +1,15 @@
+{
+  "hf_model_id": "Qwen/Qwen3.6-35B-A3B",
+  "served_model_id": "Qwen/Qwen3.6-35B-A3B",
+  "tokenizer_class": "Qwen2Tokenizer",
+  "prompt_source": "models/autoports/qwen_qwen3_6_35b_a3b/readiness_vllm/vllm_chat_no_think_qualitative_outputs_optimized_vllm.json",
+  "format": "hf_tokenizer_chat_template",
+  "add_generation_prompt": true,
+  "chat_template_kwargs": {
+    "enable_thinking": false
+  },
+  "chat_template_sha256": "e84f32a23fdda27689f868aa4a1a5621f41133e51a48d7f3efcbea2839574259",
+  "max_new_tokens": 64,
+  "num_prompts": 6,
+  "num_vllm_records": 12
+}
