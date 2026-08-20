@@ -524,6 +524,33 @@ install(
 
 target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
+# _ttml cannot REUSE_FROM ttml_pch (nanobind_add_module alters its compile flags),
+# so it gets its own PCH covering nanobind plus the heavy ttml umbrella headers.
+if(NOT CMAKE_DISABLE_PRECOMPILE_HEADERS)
+    target_precompile_headers(
+        _ttml
+        PRIVATE
+            <fmt/core.h>
+            <fmt/format.h>
+            <nlohmann/json.hpp>
+            <memory>
+            <optional>
+            <string>
+            <unordered_map>
+            <variant>
+            <vector>
+            <nanobind/nanobind.h>
+            <nanobind/stl/optional.h>
+            <nanobind/stl/shared_ptr.h>
+            <nanobind/stl/string.h>
+            <nanobind/stl/vector.h>
+            core/ttnn_all_includes.hpp
+    )
+    if(COMMAND tt_disable_ccache_for_pch)
+        tt_disable_ccache_for_pch(_ttml)
+    endif()
+endif()
+
 # CPack configuration for creating ttml deb package
 set(CPACK_GENERATOR "DEB")
 set(CPACK_PACKAGE_NAME "ttml")

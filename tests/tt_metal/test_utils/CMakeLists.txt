@@ -14,7 +14,7 @@ target_link_libraries(
         gtest
         gtest_main
 )
-target_precompile_headers(unit_tests_gha_annotation REUSE_FROM metal_common_pch)
+target_precompile_headers(unit_tests_gha_annotation REUSE_FROM metal_test_pch)
 set_target_properties(
     unit_tests_gha_annotation
     PROPERTIES
