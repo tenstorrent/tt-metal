@@ -84,7 +84,7 @@ protected:
     // Fork a child that attaches, records `dram_bytes`, tells us it is ready, and then
     // either waits for permission to exit cleanly or kills itself outright.
     // Returns the child pid; `ready_fd` becomes readable once the child has recorded.
-    pid_t spawn_child(uint64_t dram_bytes, bool die_by_signal, int& ready_fd, int& release_fd) {
+    pid_t spawn_child(uint64_t dram_bytes, bool die_by_signal, int& ready_fd, int& release_fd) const {
         int ready[2], release[2];
         EXPECT_EQ(pipe(ready), 0);
         EXPECT_EQ(pipe(release), 0);
