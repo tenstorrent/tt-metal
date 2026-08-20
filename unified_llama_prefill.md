@@ -902,6 +902,45 @@ metal's built-in CB zones occupy one on unpack and one on pack, so a custom zone
 silently land on an unexpected thread. Slot contention is why the first attempt attributed
 a pack-side zone to unpack.
 
+### Splitting the reconfiguration cost, and what it does to the plan
+
+The leaf does two unconditional things, and they are not equally expensive. Zones on each,
+with a calibration run where the same zones wrap NOTHING at the same invocation count, so
+the subtraction removes the instrument rather than trusting it:
+
+| on the math TRISC | measured | calibration | **net** |
+|---|---|---|---|
+| (a) `reconfig_data_format_srca` | 3.632 us | 0.375 us | **3.26 us** |
+| (b) `copy_tile_to_dst_init_short` | 6.130 us | 0.224 us | **5.91 us** |
+| total | | | **9.17 us** |
+
+Cross-checks: the total agrees with the 9.46us measured earlier as one combined zone, and
+the calibration confirms the zones cost 0.2-0.4us, so these are real. The same split on
+the unpack thread puts (b) at 11.01us, but unpack has ~22us of slack so it does not gate.
+
+**This inverts the recommendation.** (b) is 1.8x (a), and (b) -- reprogramming the
+unpacker MOP and the math datacopy -- is the one metal offers **no conditional variant**
+for. So:
+
+- **Option 1 alone is now a minor win.** Metal's two-argument conditional reconfig
+  addresses (a) only: 3.26 of 9.17us, about 36% of the reconfiguration cost and ~6% of
+  the kernel. Worth having, not worth leading with. Note that
+  `copy_tile_to_dst_init_short_with_dt` looks like the fix and is not -- it makes (a)
+  conditional and still runs (b) every time.
+- **Option 3 becomes the recommendation.** Leaf-outer batching -- reconfigure once per
+  leaf, `copy_tile` all G tiles of that leaf, then apply the op -- cuts (a) AND (b)
+  together by the group factor, with no format tracking and so no silently-wrong failure
+  mode. For a 2-leaf 8-tile pass at G=4 that is 16 pairs down to 4, taking ~9.2us to
+  ~2.3us. Bounded by `G * leaf_count <= kMaxDstTiles`.
+- **Option 2 is only for what survives.** Skipping (b) on unchanged formats is the sole
+  route to zero, and it still rests on the unproven claim that same format plus uniform
+  tile geometry means an identical MOP. Reach for it after 3, if the remainder justifies
+  the risk.
+
+Option 3 sits next to the DST batching that already regressed, and the difference is worth
+stating: that attempt kept whole-tree-per-tile order, so it never reduced reconfiguration
+at all -- it only moved the acquire. Leaf-outer changes what is actually expensive here.
+
 ### What to test next
 
 Ordered by expected value, with what each result would actually mean. Six candidates are
