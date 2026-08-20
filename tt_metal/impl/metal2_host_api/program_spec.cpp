@@ -22,6 +22,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
@@ -687,6 +688,81 @@ bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, con
     const auto& vec = gen2_config.disable_dfb_implicit_sync_for;
     return std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
 }
+
+namespace {
+
+// LLK operand metadata (SPEC §14). Same FaceGeometry predicates as
+// CircularBufferConfig::set_unpack_face_geometry; same face-grid overflow as
+// compute_num_faces_rc_dims. Slice B will share a helper with JIT; keep the
+// checks local here so host rejection does not wait on filegen plumbing.
+template <typename Id>
+void ValidateUnpackFaceGeometry(std::string_view kind, const Id& unique_id, const FaceGeometry& geom) {
+    TT_FATAL(
+        geom.face_r_dim > 0,
+        "{} '{}' has unpack_face_geometry_metadata.face_r_dim == 0; face_r_dim must be > 0",
+        kind,
+        unique_id);
+    TT_FATAL(
+        geom.face_r_dim <= tt::constants::FACE_HEIGHT,
+        "{} '{}' has unpack_face_geometry_metadata.face_r_dim ({}) which must be <= FACE_HEIGHT ({})",
+        kind,
+        unique_id,
+        geom.face_r_dim,
+        tt::constants::FACE_HEIGHT);
+    TT_FATAL(
+        geom.num_faces > 0,
+        "{} '{}' has unpack_face_geometry_metadata.num_faces == 0; num_faces must be > 0",
+        kind,
+        unique_id);
+}
+
+template <typename Id>
+void ValidateFaceGridFitsTile(std::string_view kind, const Id& unique_id, const Tile& tile, const FaceGeometry& geom) {
+    TT_FATAL(
+        tile.get_width() % tt::constants::FACE_WIDTH == 0,
+        "{} '{}' tile_c_dim ({}) must be a multiple of FACE_WIDTH ({})",
+        kind,
+        unique_id,
+        tile.get_width(),
+        tt::constants::FACE_WIDTH);
+    const uint32_t tile_c_faces = tile.get_width() / tt::constants::FACE_WIDTH;
+    TT_FATAL(
+        tile_c_faces > 0, "{} '{}' tile_c_dim ({}) must include at least one face", kind, unique_id, tile.get_width());
+    const uint32_t num_faces_c_dim = std::min(tile_c_faces, geom.num_faces);
+    TT_FATAL(
+        geom.num_faces % num_faces_c_dim == 0,
+        "{} '{}' num_faces ({}) must be divisible by num_faces_c_dim ({})",
+        kind,
+        unique_id,
+        geom.num_faces,
+        num_faces_c_dim);
+    const uint32_t num_faces_r_dim = geom.num_faces / num_faces_c_dim;
+    TT_FATAL(
+        num_faces_r_dim * geom.face_r_dim <= tile.get_height(),
+        "{} '{}' face grid (num_faces_r_dim={} * face_r_dim={} = {} rows) exceeds tile_r_dim ({})",
+        kind,
+        unique_id,
+        num_faces_r_dim,
+        geom.face_r_dim,
+        num_faces_r_dim * geom.face_r_dim,
+        tile.get_height());
+}
+
+template <typename Id>
+void ValidateLlkTileAndFaceGeometry(
+    std::string_view kind,
+    const Id& unique_id,
+    const std::optional<Tile>& tile,
+    const std::optional<FaceGeometry>& face) {
+    if (face.has_value()) {
+        ValidateUnpackFaceGeometry(kind, unique_id, *face);
+    }
+    if (tile.has_value() && face.has_value()) {
+        ValidateFaceGridFitsTile(kind, unique_id, *tile, *face);
+    }
+}
+
+}  // namespace
 
 // ValidateProgramSpec: Semantic validation
 // ----------------------------------------------------------------------------
@@ -1681,6 +1757,35 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 dfb.data_format_metadata.value(),
                 arch);
         }
+        ValidateLlkTileAndFaceGeometry(
+            "DFB", dfb.unique_id, dfb.tile_format_metadata, dfb.unpack_face_geometry_metadata);
+    }
+
+    // Scratchpad LLK operand metadata (SPEC §3.2 / §14).
+    // Do not require a format merely because a compute kernel binds the scratchpad
+    // (binding ≠ LLK operand). Geometry without a format cannot build LLKOperand.
+    for (const auto& scratchpad : spec.scratchpads) {
+        const bool has_format = scratchpad.data_format_metadata.has_value();
+        const bool has_geometry =
+            scratchpad.tile_format_metadata.has_value() || scratchpad.unpack_face_geometry_metadata.has_value();
+        TT_FATAL(
+            has_format || !has_geometry,
+            "ScratchpadSpec '{}' has tile_format_metadata or unpack_face_geometry_metadata but no "
+            "data_format_metadata",
+            scratchpad.unique_id);
+        if (has_format) {
+            TT_FATAL(
+                tt::is_data_format_supported(scratchpad.data_format_metadata.value(), arch),
+                "ScratchpadSpec '{}' has data format '{}' which is not supported on architecture {}",
+                scratchpad.unique_id,
+                scratchpad.data_format_metadata.value(),
+                arch);
+        }
+        ValidateLlkTileAndFaceGeometry(
+            "ScratchpadSpec",
+            scratchpad.unique_id,
+            scratchpad.tile_format_metadata,
+            scratchpad.unpack_face_geometry_metadata);
     }
 
     //////////////////////////////////
