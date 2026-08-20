@@ -60,6 +60,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     reduce_scatter_minimal_direct/reduce_scatter_minimal_direct.cpp
     reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_op_device_operation.cpp
     reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_factory.cpp
+    send_recv_async/send_recv_utils.cpp
     send_recv_async/send_async/send_async.cpp
     send_recv_async/send_async/device/send_async_op_device_operation.cpp
     send_recv_async/send_async/device/send_async_op_program_factory.cpp
