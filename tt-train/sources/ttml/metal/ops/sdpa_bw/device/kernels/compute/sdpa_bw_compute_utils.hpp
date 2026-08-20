@@ -128,7 +128,10 @@ void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t c
     sdpa_exp_tile(scores_reg);
 }
 
-// Transposes a single tile using the FPU transpose_wh path (reads via SrcA).
+// Transposes a single tile via transpose_tile, whose datapath is chosen by the input
+// CB's unpack-dst format: with UnpackToDestFp32 (P/dS in the kv kernel) the data goes
+// unpack-to-dest + transpose_dest, which is bit-exact for 32-bit values; with Default
+// it falls back to the SrcA path, which truncates FP32 to TF32.
 inline void transpose_tile_fpu(const uint32_t cb_input, /*output cb*/ const uint32_t cb_transpose_wh) {
     cb_wait_front(cb_input, onetile);
 
