@@ -35,13 +35,21 @@
 //   run 1  A plain per-tile _llk_pack_<PackMode::Default>, with NO packer re-init, so it
 //          packs through whatever state the uninit left.
 //
-// BLOCK_MOP_NUM_FACES must be 4 here, i.e. the same geometry run 1 needs. That is what
-// isolates the stride: the pack MOP bakes in tile geometry, so at a mismatched geometry
-// (2 faces) run 1 is wrong no matter what the stride is, and the stride restore would be
-// unobservable. At 4 faces the MOP is not a confound and run 1 is correct exactly when
-// the W-stride was restored.
+// BLOCK_MOP_NUM_FACES selects which of the two packer states run 1 measures, and the
+// python side builds this source at both values on purpose. Do not normalize it to one:
 //
-// Expectation, owned by the python side:
+//   4 faces  the geometry run 1 needs, so the MOP is not a confound and run 1 is correct
+//            exactly when the W-stride was restored. This is the value the W-stride tests
+//            (the positive test and the skip-uninit control) require -- at a mismatched
+//            geometry run 1 is wrong whatever the stride is, and the restore would be
+//            unobservable.
+//   2 faces  a 16x32 tiny tile, a geometry run 1 does NOT want, used by
+//            test_custom_mm_uninit_leaves_the_caller_mop_installed. Run 1 can only come
+//            back correct if something reinstalled the Default MOP -- which main's uninit
+//            must not do -- so that test asserts run 1 is *wrong*. Deleting this case
+//            deletes the only coverage that would catch a MOP restore being re-added.
+//
+// Expectation for the W-stride tests (4 faces), owned by the python side:
 //   run 1 is correct  <=>  dense_packing was not set, OR the uninit ran and restored the
 //                          stride.
 // UNINIT_SKIP is the negative control that drops the uninit entirely, proving the stride
