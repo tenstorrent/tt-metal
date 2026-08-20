@@ -81,8 +81,6 @@ class Gemma4Attention:
         max_seq_len=131072,
         weight_dtype=ttnn.bfloat16,
         bounded_sliding_kv_cache: bool = False,
-        # Global prefill chunk size; enables the ring KV cache when CP is on and
-        # prefill is chunked. None means single-chunk prefill.
         ring_prefill_chunk_size=None,
         # Legacy parameter — ignored (no longer needed with HF-style RoPE)
         transformation_mats=None,

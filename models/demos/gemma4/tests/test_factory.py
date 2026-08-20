@@ -436,30 +436,16 @@ def _is_device_discovery_failure(exc):
 
 
 def _fabric_router_config():
-    """Fabric router tuning applied alongside the fabric config.
+    """Fabric router tuning applied alongside the fabric config."""
 
-    The CCL pages these models move are 2048 B, and the default 4352 B packet does not
-    divide them -- the runtime says so at every op launch ("Fabric packet size 4352 B is
-    suboptimal for transporting 2048 B pages. Configure 8192 B packet"). 8192 is exactly
-    four pages. Measured on a 4x8 Blackhole Galaxy over the 60-layer prefill body:
-    252.2 ms at the 4352 default, 249.0 / 248.6 ms at 8192 across two runs, 250.7 ms at
-    12288 and 274.5 ms at 15232 (the Blackhole maximum; 16384 is rejected outright). The
-    knob has a peak rather than a trend, so larger is not better.
-    """
     config = ttnn.FabricRouterConfig()
     config.max_packet_payload_size_bytes = 8192
     return config
 
 
 def _fabric_config_for_shape(shape):
-    """Fabric config for a mesh shape.
+    """Fabric config for a mesh shape."""
 
-    A single device needs no fabric: launching it on a 1x1 mesh of a multi-device
-    system fails the is_device_active() check, since fabric expects every device to
-    be opened. A line mesh only ever routes along one axis, so FABRIC_1D suffices.
-    A mesh with both dims > 1 runs collectives on both axes — tensor parallel on
-    one, context parallel on the other — and needs 2D routing.
-    """
     if shape == (1, 1):
         return None
     if shape[0] > 1 and shape[1] > 1:
