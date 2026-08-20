@@ -31,7 +31,7 @@ from helpers.llk_params import (
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
-    generate_sfpu_format_dest_acc_combinations,
+    generate_quasar_srcs_format_dest_acc_combinations,
     parametrize,
     runtime,
 )
@@ -80,8 +80,8 @@ def generate_parallel_matmul_exp_combinations(
     formats_list: list[FormatConfig], *, is_perf: bool = False
 ):
     combinations = []
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(
-        formats_list, srcs_pipeline=True
+    for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
+        formats_list
     ):
         if not fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
             continue

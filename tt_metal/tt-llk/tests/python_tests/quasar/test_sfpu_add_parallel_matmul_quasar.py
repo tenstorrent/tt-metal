@@ -17,7 +17,6 @@ from helpers.golden_generators import (
     BinarySFPUGolden,
     MatmulGolden,
     get_golden_generator,
-    quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
     DestAccumulation,
@@ -31,7 +30,7 @@ from helpers.llk_params import (
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
-    generate_sfpu_format_dest_acc_combinations,
+    generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
 )
@@ -55,7 +54,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
-from helpers.tilize_untilize import tilize_block, untilize_block
+from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
 # (ADD_INPUT_DIMENSIONS, MATMUL_A_DIMENSIONS, MATMUL_B_DIMENSIONS)
@@ -69,8 +68,6 @@ ADD_RANGE_SAFETY_FACTOR = 0.45
 
 SFPU_ADD_FORMATS = input_output_formats(
     [
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
@@ -92,8 +89,8 @@ def _matmul_output_fits_dest(
 
 def generate_parallel_matmul_add_combinations(formats_list):
     combinations = []
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(
-        formats_list, srcs_pipeline=True
+    for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
+        formats_list
     ):
         if not fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
             continue
@@ -212,30 +209,10 @@ def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
     )[0]
     pack_src_format = formats_config.pack_src
 
-    src_A_golden = src_A
-    src_B_golden = src_B
-    if formats.input_format.is_mx_format():
-        tilized_A_golden = quantize_mx_tensor_chunked(
-            tilized_A.flatten().to(torch.bfloat16), formats.input_format
-        ).reshape(tilized_A.shape)
-        tilized_B_golden = quantize_mx_tensor_chunked(
-            tilized_B.flatten().to(torch.bfloat16), formats.input_format
-        ).reshape(tilized_B.shape)
-        src_A_golden = untilize_block(
-            tilized_A_golden,
-            stimuli_format=formats.input_format,
-            dimensions=MATMUL_A_DIMENSIONS,
-        )
-        src_B_golden = untilize_block(
-            tilized_B_golden,
-            stimuli_format=formats.input_format,
-            dimensions=MATMUL_B_DIMENSIONS,
-        )
-
     generate_matmul_golden = get_golden_generator(MatmulGolden)
     golden_matmul = generate_matmul_golden(
-        src_A_golden,
-        src_B_golden,
+        src_A,
+        src_B,
         formats.output_format,
         MathFidelity.LoFi,
         input_A_dimensions=MATMUL_A_DIMENSIONS,
@@ -246,11 +223,6 @@ def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         math_format=pack_src_format,
         dest_acc=dest_acc,
     )
-    if formats.output_format.is_mx_format():
-        golden_matmul = quantize_mx_tensor_chunked(
-            golden_matmul.to(format_dict[pack_src_format]), formats.output_format
-        ).to(torch_format)
-
     generate_add_golden = get_golden_generator(BinarySFPUGolden)
     golden_add = generate_add_golden(
         MathOperation.SfpuElwadd,
@@ -310,7 +282,6 @@ def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         variant_stimuli=stimuli,
         unpack_to_srcs=True,
         dest_acc=dest_acc,
-        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     outcome = configuration.run()
