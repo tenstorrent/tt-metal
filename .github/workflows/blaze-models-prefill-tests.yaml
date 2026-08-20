@@ -13,7 +13,7 @@ on:
           "sdpa_perf" runs ring-joint SDPA and high-bandwidth all-gather.
           Valid stages: dsa_mla_glm, glm_chunked, glm_chunked_accuracy,
           glm_moe, glm_prefill_block, hca_chunked, hca_perf, high_bw_all_gather_perf,
-          k3_mla, k3_mla_perf, kimi_chunked, kimi_chunked_padded, kimi_dflash,
+          k3_mla, k3_mla_perf, k3_mla_trace, kimi_chunked, kimi_chunked_padded, kimi_dflash,
           kimi_k3_moe, kimi_k3_moe_perf, kimi_mla, kimi_moe, kimi_prefill_block,
           kv_cache_table, minimax_prefill_kv_pcc, minimax_prefill_perf, mla,
           mla_chunked, moe_gate, prefill_block, prefill_block_determinism,

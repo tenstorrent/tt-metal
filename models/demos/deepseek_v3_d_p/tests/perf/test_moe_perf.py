@@ -107,9 +107,16 @@ _CMD_K3_8X4 = f"pytest {_K3_TEST_PATH} -k 'fabric2d-mesh-8x4 and kimi_k3-5k-perf
 @pytest.mark.timeout(0)
 def test_kimi_k3_moe_perf_galaxy():
     """
-    Measures the SiLU path, not the checkpoint's SiTU-GLU (#51335), so this baseline moves when that
-    kernel lands. MoE_START/MoE_END bracket the forward only -- the constructor's one-time weight
-    tilize/typecast is a large share of wall time at 896 experts, but is not per-token cost.
+    MoE_START/MoE_END bracket the forward only -- the constructor's one-time weight tilize/typecast
+    is a large share of wall time at 896 experts, but is not per-token cost.
+
+    NOTE: this gate does not currently execute anywhere -- see #53612. Its blaze entry does not
+    export MESH_DEVICE, so _is_galaxy_env() is false and the test skips itself, and the blaze
+    pipeline builds without tracy, so run_model_device_perf_test_with_merge could not profile even
+    if it did run. The baseline below is therefore a hand measurement, taken on the SiLU path before
+    #51351 moved K3's routed experts to SiTU-GLU, and it has never been checked by CI. Expect it to
+    move once the gate runs: the routed expert is ~79% of MoE device kernel time and costs ~14% more
+    under SiTU-GLU at these token counts.
     """
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
@@ -128,5 +135,5 @@ def test_kimi_k3_moe_perf_galaxy():
         batch_size=1,
         margin=margin,
         between_signposts=("MoE_START", "MoE_END"),
-        comments="seq640_5k_isl_glx_8x4_fabric2d_ground_truth_latent_moe_silu",
+        comments="seq640_5k_isl_glx_8x4_fabric2d_ground_truth_latent_moe_situ",
     )
