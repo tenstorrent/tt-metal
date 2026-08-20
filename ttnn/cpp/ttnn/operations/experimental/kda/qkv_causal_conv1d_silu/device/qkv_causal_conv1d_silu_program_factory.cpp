@@ -80,11 +80,11 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     };
 
     m2::Group<m2::DataflowBufferSpec> dfbs = {
-        make_dfb(ACT_RM_DFB, block_ct),
+        make_dfb(ACT_RM_DFB, 2 * block_ct),
         make_dfb(ACT_TILE_DFB, block_ct),
         make_dfb(WEIGHTS_DFB, 4 * block_ct),
         make_dfb(PARTIAL_DFB, 2 * block_ct),
-        make_dfb(OUTPUT_DFB, block_ct),
+        make_dfb(OUTPUT_DFB, 2 * block_ct),
     };
 
     m2::KernelSpec reader{
