@@ -27,3 +27,11 @@ match the operating reality (straight silicon, CRAQ demoted to debug oracle, `--
 taint line now enforced by the merged taint-marker gate) or the sim gate is restored. This
 record will be superseded by the owner's answer; until then the taint marker makes every
 skip explicit and auditable.
+
+## Addendum (2026-08-20, owner order): `work/nkapre-sfpi` RETIRED
+
+Owner ruling on the frozen-vs-live root cause: the dual-branch arrangement is dead.
+`work/nkapre-sfpi` was deleted on origin at `f23af11348` (verified byte-identical to
+`nkapre/sfpi` at deletion). `nkapre/sfpi` is the single canonical and integration branch;
+all lane merges land there directly. Reviews and provenance cite one branch from now on —
+the divergence class that generated three waves of false chronic findings cannot recur.
