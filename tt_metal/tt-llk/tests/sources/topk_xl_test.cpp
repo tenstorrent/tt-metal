@@ -94,8 +94,21 @@ constexpr bool FUSED_E2E = TOPK_XL_FUSED_E2E;
 // dummy SrcB valid: it returns before anything consumes the operand.
 constexpr bool LOCAL_SORT_NEEDS_SRCB = !SORT_MODE_EARLY_EXIT;
 
-static_assert(!SORT_MODE_EARLY_EXIT || (TOPK_XL_NUM_CHUNKS == 1 && !FUSED_REDUCE), "the early-exit sort leaves a partial order, so there is nothing to merge");
-static_assert(!TOPK_XL_LSB_ROW_MAJOR || !INDEX_OP_ROW_MAJOR, "separate_indices_row_major decodes the coordinate add_lsb numbering");
+// copy_sort_rt hard-codes the dispatch sort, so TOPK_XL_SORT_MODE reaches copy_sort
+// only. Under fused-e2e a non-default mode would compile and then be ignored: Generic
+// silently runs the dispatch sort, and early exit also drops the SrcB dummy valid on
+// UNPACK (below) that the dispatch sort it actually runs still waits for, so MATH hangs.
+static_assert(TOPK_XL_SORT_MODE == 0 || !FUSED_E2E, "TOPK_XL_SORT_MODE has no effect on the fused-e2e path: copy_sort_rt always calls the dispatch sort");
+// The early-exit sort leaves each column sorted on its own, so nothing may merge or
+// rebuild over it: no second chunk, neither fused reduction, and not the row-major op
+// path, whose lone-chunk rebuild would permute the partial order into a bogus one.
+static_assert(
+    !SORT_MODE_EARLY_EXIT || (TOPK_XL_NUM_CHUNKS == 1 && !FUSED_REDUCE && !INDEX_OP_ROW_MAJOR),
+    "the early-exit sort leaves a partial order, so nothing may merge or rebuild over it");
+// Op 0 is the only index op that decodes the tile-coordinate numbering. It is also the
+// ignored default under the fused branches, which reach their own terminal split, so
+// exclude those before rejecting the combination.
+static_assert(!TOPK_XL_LSB_ROW_MAJOR || !INDEX_OP_ROW_MAJOR || FUSED_REDUCE, "separate_indices_row_major decodes the coordinate add_lsb numbering");
 
 // Second merge operand. `_topk_xl_merge_` reads it at a fixed distance from the
 // first: 64 dest units (one tile) per sequence-tile when fused, 128 (value +
@@ -336,11 +349,11 @@ __attribute__((noinline)) void copy_sort(std::uint32_t slot, std::uint32_t activ
     topk_xl_init<K, true>();
     if constexpr (SORT_MODE_EARLY_EXIT)
     {
-        topk_xl_local_sort_generic<K, true>(slot, ascending);
+        topk_xl_local_sort_generic<K, true /* early_exit_K64 */>(slot, ascending);
     }
     else if constexpr (SORT_MODE_GENERIC)
     {
-        topk_xl_local_sort_generic<K, false>(slot, ascending);
+        topk_xl_local_sort_generic<K, false /* early_exit_K64 */>(slot, ascending);
     }
     else
     {
@@ -406,7 +419,7 @@ inline void topk_xl_reinit_after_copy(std::uint32_t dst_format)
 {
     if constexpr (!fused)
     {
-        topk_xl_init<K, false>();
+        topk_xl_init<K, false /* fused */>();
     }
     ckernel::_llk_math_topk_xl_copy_init_(dst_format);
     if constexpr (fused)
@@ -424,6 +437,9 @@ inline void topk_xl_reinit_after_copy(std::uint32_t dst_format)
 // length and iteration count all differ (see topk_mop_config / _topk_xl_merge_).
 // `_topk_xl_merge_` always keeps the max half, so TOPK_XL_ASCENDING changes only
 // the order the surviving top-K is rebuilt into, not which elements survive.
+// Under TOPK_XL_REINIT_AFTER_COPY the stage is reached through topk_xl_reinit_after_copy
+// instead of a full init, which is why `dst_format` is needed: the copy init it replays
+// takes it.
 template <std::uint32_t K, bool fused>
 __attribute__((noinline)) void merge_and_rebuild(bool do_merge, std::uint32_t dst_format)
 {

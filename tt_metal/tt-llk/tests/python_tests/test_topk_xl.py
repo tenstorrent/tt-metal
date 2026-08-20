@@ -585,26 +585,36 @@ def test_topk_xl_separate_indices(K, core_id, group_shift):
     )
 
 
-@parametrize(K=[512, 1024, 2048])
-def test_topk_xl_remove_msb(K):
+def _check_remove_msb(result, K, rows, core_id=0, row_major=False):
     """
-    remove_msb_values: fused region -> [0 | raw], packed in place as one region.
-    Check the value half is zeroed and the decoded positions form the full 0..K-1 set.
+    remove_msb_values packs the fused region in place as one region of
+    [0 | core_id<<11 | coordinate]. Check the value half is zeroed, the core_id field
+    survives, and the coordinates form the full 0..K-1 set. `row_major` selects the
+    add_lsb numbering the coordinate is in.
     """
-    (K,) = K
-
-    result, rows = _run(
-        K, index_op=TopKXLIndexOp.RemoveMsb, group_id=GROUP_ID, group_shift=GROUP_SHIFT
-    )
     for r, (fused, _) in enumerate(_extract_hw_topk(result, K, rows.shape[0], 1)):
         assert fused.numel() == K, f"row {r}: expected {K} lanes, got {fused.numel()}"
         untouched = int(torch.count_nonzero(fused >> 16))
         assert untouched == 0, f"row {r}: value half not zeroed in {untouched} lanes"
 
-        pos = [_decode_row_major(int(x), K) for x in (fused & 0xFFFF).tolist()]
+        hw_core = (fused >> CORE_ID_SHIFT) & CORE_ID_MASK
+        assert torch.all(hw_core == core_id), (
+            f"row {r}: core_id field is "
+            f"{sorted(set(int(c) for c in hw_core.tolist()))[:4]}, want {core_id}"
+        )
+
+        pos = [_index_to_chunk_offset(int(x), K, row_major) for x in fused.tolist()]
         assert set(pos) == set(
             range(K)
-        ), f"row {r}: decoded positions are not the full 0..K-1 set"
+        ), f"row {r}: coordinates are not the full 0..K-1 set"
+
+
+@parametrize(K=[512, 1024, 2048])
+def test_topk_xl_remove_msb(K):
+    (K,) = K
+
+    result, rows = _run(K, index_op=TopKXLIndexOp.RemoveMsb)
+    _check_remove_msb(result, K, rows)
 
 
 # chunk_base is saved by one of three inits, based on a template argument:
@@ -859,26 +869,10 @@ def test_topk_xl_dest_sync_half(K):
     _run_test_topk(K, num_chunks=2, num_rows=2, dest_sync=DestSync.Half)
 
 
-# The generic body is what local_sort dispatches to for K = 512 and K = 1024, so both
-# modes have to leave a total order there. K = 2048 has no generic full sort, so it runs
-# Dispatch only, through its own fast path.
-@parametrize(
-    K=[512, 1024, 2048],
-    sort_direction=list(TopKSortDirection),
-    sort_mode=lambda K: (
-        [TopKXLSortMode.Dispatch]
-        if K == 2048
-        else [TopKXLSortMode.Dispatch, TopKXLSortMode.Generic]
-    ),
-)
-def test_topk_xl_local_sort_order(K, sort_direction, sort_mode):
+@parametrize(K=[512, 1024, 2048], sort_direction=list(TopKSortDirection))
+def test_topk_xl_local_sort_order(K, sort_direction):
     """local_sort leaves the whole K-element sequence sorted in Dest."""
-    values = [
-        hi16
-        for hi16, _ in _sorted_sequence(
-            K, sort_direction=sort_direction, sort_mode=sort_mode
-        )
-    ]
+    values = [hi16 for hi16, _ in _sorted_sequence(K, sort_direction=sort_direction)]
 
     ascending = sort_direction == TopKSortDirection.Ascending
     inversions = [p for p in range(K - 1) if (values[p] < values[p + 1]) != ascending]
@@ -889,11 +883,15 @@ def test_topk_xl_local_sort_order(K, sort_direction, sort_mode):
     )
 
 
-@parametrize(K=[512, 1024], num_chunks=[1, 2])
-def test_topk_xl_local_sort_generic(K, num_chunks):
-    _run_test_topk(
-        K, num_chunks=num_chunks, num_rows=2, sort_mode=TopKXLSortMode.Generic
-    )
+# Smoke test on the entry point only. `_topk_xl_local_sort_` is a pure forward to
+# `_topk_xl_local_sort_generic_` for K != 2048, so calling the generic body directly
+# builds the same SFPU code the default path already covers; both legal K are kept
+# because the network itself differs between them, but nothing past that would.
+@parametrize(K=[512, 1024])
+def test_topk_xl_local_sort_generic(K):
+    (K,) = K
+
+    _run_test_topk(K, num_rows=2, sort_mode=TopKXLSortMode.Generic)
 
 
 # early_exit_K64 stops the generic body after the per-column len-64 builds, so each
@@ -963,21 +961,7 @@ def test_topk_xl_remove_msb_row_major(K, core_id):
     result, rows = _run(
         K, index_op=TopKXLIndexOp.RemoveMsb, core_id=core_id, lsb_row_major=True
     )
-    for r, (fused, _) in enumerate(_extract_hw_topk(result, K, rows.shape[0], 1)):
-        assert fused.numel() == K, f"row {r}: expected {K} lanes, got {fused.numel()}"
-        untouched = int(torch.count_nonzero(fused >> 16))
-        assert untouched == 0, f"row {r}: value half not zeroed in {untouched} lanes"
-
-        hw_core = (fused >> CORE_ID_SHIFT) & CORE_ID_MASK
-        assert torch.all(hw_core == core_id), (
-            f"row {r}: core_id field is "
-            f"{sorted(set(int(c) for c in hw_core.tolist()))[:4]}, want {core_id}"
-        )
-
-        pos = [_index_to_chunk_offset(int(x), K, True) for x in fused.tolist()]
-        assert set(pos) == set(
-            range(K)
-        ), f"row {r}: offsets are not the full 0..K-1 set"
+    _check_remove_msb(result, K, rows, core_id=core_id, row_major=True)
 
 
 # Check reinits that run after copy init.
