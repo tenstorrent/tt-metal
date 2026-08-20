@@ -54,6 +54,13 @@ constexpr uint32_t SHM_INIT_UNINITIALIZED = 0u;
 constexpr uint32_t SHM_INIT_IN_PROGRESS = 1u;
 constexpr uint32_t SHM_INIT_READY = 0x52454459u;  // 'REDY'
 
+// A ProcessStats slot whose pid reads this is mid-release: its owner is gone but its counters
+// have not been cleared yet. Not claimable (claim_own_pid_entry only takes a slot whose pid is
+// 0) and not a live pid (process_is_alive rejects <= 0), so it is invisible to everything but
+// the releaser that put it there. Whoever wins the CAS to it owns the release, which is what
+// keeps two reapers from clearing one slot twice.
+constexpr pid_t SHM_SLOT_RELEASING = -1;
+
 // Shared memory region layout for per-device memory statistics
 // This structure is mapped into shared memory at /dev/shm/tt_device_*_memory
 // SHM files persist across runs (like UMD locks) - manual cleanup: rm /dev/shm/tt_device_*

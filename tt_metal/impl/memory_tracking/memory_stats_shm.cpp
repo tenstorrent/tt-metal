@@ -167,16 +167,49 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
                 expected, SHM_INIT_IN_PROGRESS, std::memory_order_acq_rel, std::memory_order_relaxed)) {
             must_initialize = true;
         } else if (!wait_for_region_ready()) {
-            log_warning(
-                tt::LogMetal,
-                "Timed out waiting for another process to initialize SHM region for asic_id=0x{:x}; "
-                "disabling SHM tracking for this provider",
-                asic_id_);
-            munmap(region_, sizeof(DeviceMemoryRegion));
-            region_ = nullptr;
-            close(shm_fd_);
-            shm_fd_ = -1;
-            return;
+            // Nobody published READY. Either the initializer is pathologically slow, or it died
+            // between claiming initialization and publishing -- which leaves init_state stuck at
+            // IN_PROGRESS and would wedge this region for every later process, exactly the
+            // one-way dead end that a leaked reference_count used to cause.
+            //
+            // Take it over when nothing can be using it: either the region was never
+            // initialized (version still 0, so it is zero-filled and there is nothing to lose)
+            // or its layout is one we know and no live process owns a slot. Reset to
+            // UNINITIALIZED and re-claim, so that two processes timing out together still leave
+            // exactly one initializer -- the loser's CAS fails and it waits for READY.
+            bool taken_over = false;
+            const uint32_t found_version = region_->version.load(std::memory_order_relaxed);
+            const bool inspectable = found_version == 0 || process_table_layout_is_known(found_version);
+            if (region_->init_state.load(std::memory_order_acquire) == SHM_INIT_IN_PROGRESS && inspectable &&
+                !region_has_live_process()) {
+                uint32_t expected = SHM_INIT_IN_PROGRESS;
+                if (region_->init_state.compare_exchange_strong(
+                        expected, SHM_INIT_UNINITIALIZED, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                    expected = SHM_INIT_UNINITIALIZED;
+                    taken_over = region_->init_state.compare_exchange_strong(
+                        expected, SHM_INIT_IN_PROGRESS, std::memory_order_acq_rel, std::memory_order_relaxed);
+                }
+            }
+
+            if (taken_over) {
+                log_warning(
+                    tt::LogMetal,
+                    "SHM region for asic_id=0x{:x} was left mid-initialization by a process that did not "
+                    "finish; reinitializing it",
+                    asic_id_);
+                must_initialize = true;
+            } else {
+                log_warning(
+                    tt::LogMetal,
+                    "Timed out waiting for another process to initialize SHM region for asic_id=0x{:x}; "
+                    "disabling SHM tracking for this provider",
+                    asic_id_);
+                munmap(region_, sizeof(DeviceMemoryRegion));
+                region_ = nullptr;
+                close(shm_fd_);
+                shm_fd_ = -1;
+                return;
+            }
         }
     }
 
@@ -352,6 +385,19 @@ void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmB
             asic_id_);
     }
 
+    // Find our slot FIRST. Every aggregate here moves by delta, and the only thing that ever
+    // subtracts these bytes again is the release of this slot -- so recording into the totals
+    // without one inflates them for the life of the region. With the table full (64 processes,
+    // or dead slots not yet reaped) it is better to report nothing for this process than to
+    // corrupt the device-wide figure everybody else reads.
+    DeviceMemoryRegion::ProcessStats* pid_entry = nullptr;
+    if (per_pid_tracking_enabled_) {
+        pid_entry = find_or_create_pid_entry(pid);
+        if (pid_entry == nullptr) {
+            return;  // claim_own_pid_entry has already warned about the full table
+        }
+    }
+
     // Update aggregated counters (always - this is the fast path)
     switch (type) {
         case ShmBufferType::DRAM: region_->total_dram_allocated.fetch_add(size, std::memory_order_relaxed); break;
@@ -383,21 +429,18 @@ void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmB
     region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
 
     // Update per-PID stats if enabled
-    if (per_pid_tracking_enabled_) {
-        auto* pid_entry = find_or_create_pid_entry(pid);
-        if (pid_entry) {
-            switch (type) {
-                case ShmBufferType::DRAM: pid_entry->dram_allocated.fetch_add(size, std::memory_order_relaxed); break;
-                case ShmBufferType::L1: pid_entry->l1_allocated.fetch_add(size, std::memory_order_relaxed); break;
-                case ShmBufferType::L1_SMALL:
-                    pid_entry->l1_small_allocated.fetch_add(size, std::memory_order_relaxed);
-                    break;
-                case ShmBufferType::TRACE: pid_entry->trace_allocated.fetch_add(size, std::memory_order_relaxed); break;
-                case ShmBufferType::CB: pid_entry->cb_allocated.fetch_add(size, std::memory_order_relaxed); break;
-                default: break;
-            }
-            pid_entry->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
+    if (pid_entry != nullptr) {
+        switch (type) {
+            case ShmBufferType::DRAM: pid_entry->dram_allocated.fetch_add(size, std::memory_order_relaxed); break;
+            case ShmBufferType::L1: pid_entry->l1_allocated.fetch_add(size, std::memory_order_relaxed); break;
+            case ShmBufferType::L1_SMALL:
+                pid_entry->l1_small_allocated.fetch_add(size, std::memory_order_relaxed);
+                break;
+            case ShmBufferType::TRACE: pid_entry->trace_allocated.fetch_add(size, std::memory_order_relaxed); break;
+            case ShmBufferType::CB: pid_entry->cb_allocated.fetch_add(size, std::memory_order_relaxed); break;
+            default: break;
         }
+        pid_entry->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
     }
 }
 
@@ -431,6 +474,16 @@ void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, Sh
             asic_id_);
     }
 
+    // Symmetric with record_allocation: a process that never got a slot never added these
+    // bytes to the totals, so it must not subtract them either.
+    DeviceMemoryRegion::ProcessStats* pid_entry = nullptr;
+    if (per_pid_tracking_enabled_) {
+        pid_entry = find_or_create_pid_entry(pid);
+        if (pid_entry == nullptr) {
+            return;
+        }
+    }
+
     // Aggregated counters, clamped so a stale or duplicated free cannot wrap them.
     switch (type) {
         case ShmBufferType::DRAM: saturating_sub(region_->total_dram_allocated, size); break;
@@ -458,9 +511,8 @@ void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, Sh
     region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
 
     // Update per-PID stats if enabled (with underflow protection using atomics)
-    if (per_pid_tracking_enabled_) {
-        auto* pid_entry = find_or_create_pid_entry(pid);
-        if (pid_entry) {
+    if (pid_entry != nullptr) {
+        {
             // Helper lambda for atomic subtraction with underflow protection
             auto safe_atomic_sub = [](std::atomic<uint64_t>& counter, uint64_t size) {
                 uint64_t current = counter.load(std::memory_order_relaxed);
@@ -506,7 +558,7 @@ std::vector<SharedMemoryStatsProvider::ProcessInfo> SharedMemoryStatsProvider::g
 
     result.reserve(MAX_PROCESSES);
     for (auto & processe : region_->processes) {
-        if (processe.pid.load(std::memory_order_relaxed) != 0) {
+        if (processe.pid.load(std::memory_order_relaxed) > 0) {
             ProcessInfo info;
             info.pid = processe.pid.load(std::memory_order_relaxed);
             info.dram_allocated = processe.dram_allocated.load(std::memory_order_relaxed);
@@ -591,6 +643,26 @@ void SharedMemoryStatsProvider::release_process_slot(DeviceMemoryRegion::Process
         return;
     }
 
+    // Claim the release before touching anything. Two attachers can decide to reap the same
+    // dead slot at the same moment; without this both would subtract from reference_count and
+    // num_active_processes -- the byte totals are safe either way, since only one exchange
+    // returns the value -- and the counts would then read lower than the number of attached
+    // processes. An under-counted reference_count is not cosmetic: the version-mismatch path
+    // treats zero as "nobody is using this" and reinitializes.
+    //
+    // CAS to SHM_SLOT_RELEASING rather than straight to 0, so the slot cannot be claimed by a
+    // new process while its counters are still being cleared. The loser of the CAS returns
+    // without doing anything, which also stops it from clearing a slot that the winner has
+    // already handed to somebody else.
+    pid_t owner = slot.pid.load(std::memory_order_acquire);
+    if (owner <= 0) {
+        return;  // already free, or another party owns the release
+    }
+    if (!slot.pid.compare_exchange_strong(
+            owner, SHM_SLOT_RELEASING, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+        return;
+    }
+
     // Subtract this slot's contribution from the device-wide totals before dropping it.
     //
     // Every mutation of an aggregate is a delta -- fetch_add on allocation, saturating
@@ -657,8 +729,8 @@ size_t SharedMemoryStatsProvider::reap_dead_processes() {
     size_t reaped = 0;
     for (auto& slot : region_->processes) {
         const pid_t pid = slot.pid.load(std::memory_order_acquire);
-        if (pid == 0 || pid == getpid() || process_is_alive(pid)) {
-            continue;
+        if (pid <= 0 || pid == getpid() || process_is_alive(pid)) {
+            continue;  // free, mid-release by somebody else, ours, or still running
         }
         log_debug(
             tt::LogMetal,
