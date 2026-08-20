@@ -41,7 +41,7 @@ bool paged_fill_cache_noop(
 
 // Worker-core list for the fill_cache work-split. Single source of truth for core ordering: called by
 // both build_paged_fill_cache_descriptor (cache miss, emitting per-core runtime args) and
-// PagedFillCacheDeviceOperation::override_runtime_arguments (cache hit, patching them), so the two
+// PagedFillCacheProgramFactory::override_runtime_arguments (cache hit, patching them), so the two
 // paths cannot drift in which cores they touch or in what order.
 std::vector<tt_metal::CoreCoord> compute_paged_fill_cache_cores(
     const PagedFillCacheParams& /*operation_attributes*/, const PagedFillCacheInputs& tensor_args) {
@@ -358,11 +358,11 @@ ProgramDescriptor PagedFillCacheMeshWorkloadFactory::create_descriptor(
         operation_attributes, tensor_args, paged_fill_cache_noop(operation_attributes, mesh_dispatch_coordinate));
 }
 
-void PagedFillCacheDeviceOperation::override_runtime_arguments(
+void PagedFillCacheProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/,
+    const PagedFillCacheParams& operation_attributes,
+    const PagedFillCacheInputs& tensor_args,
+    Tensor& /*tensor_return_value*/,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     // Patch the cached program in place. Calling create_descriptor() here would re-pay the whole
     // cache-MISS host cost on every hit (work-split, CoreRangeSet, TensorAccessorArgs, kernel-source
@@ -415,6 +415,16 @@ void PagedFillCacheDeviceOperation::override_runtime_arguments(
         writer_args[6] = valid_seq_len_arg;
     }
     // No CB addresses to re-point: none of the four CBs is globally allocated (no .buffer/.tensor).
+}
+
+void PagedFillCacheMeshWorkloadFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const PagedFillCacheParams& operation_attributes,
+    const PagedFillCacheInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    PagedFillCacheProgramFactory::override_runtime_arguments(
+        program, operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
 }
 
 }  // namespace ttnn::experimental::prim

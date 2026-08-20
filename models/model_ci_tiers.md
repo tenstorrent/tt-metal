@@ -88,6 +88,8 @@ it is classified differently on different systems.
 | Gemma-4-31B | WH LLMBox |
 | Stable Diffusion XL | WH N150, WH N300, BH P150 |
 | ViT | WH N150, WH N300 |
+| Motif-Image-6B | WH LLMBox |
+| BGE-M3 | WH N150 |
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|

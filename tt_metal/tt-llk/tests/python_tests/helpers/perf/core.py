@@ -75,6 +75,7 @@ _CODE_SIZE_COMPONENTS = {
     PerfRunType.UNPACK_ISOLATE: ["unpack"],
     PerfRunType.MATH_ISOLATE: ["math"],
     PerfRunType.PACK_ISOLATE: ["pack"],
+    PerfRunType.SFPU_ISOLATE: ["sfpu"],
 }
 
 # Common postprocessing
@@ -787,6 +788,11 @@ class PerfConfig(TestConfig):
                 TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
             )
             components = _CODE_SIZE_COMPONENTS.get(run_type)
+            # 4-TRISC tests include SFPU_ISOLATE; L1_TO_L1 code size must count sfpu.elf too.
+            if run_type == PerfRunType.L1_TO_L1 and any(
+                rt == PerfRunType.SFPU_ISOLATE for _, _, rt in self.run_configs
+            ):
+                components = ["unpack", "math", "pack", "sfpu"]
             if components is not None:
                 code_sizes[run_type] = sum(
                     TestConfig.get_elf_text_size(elf_dir / f"{c}.elf")

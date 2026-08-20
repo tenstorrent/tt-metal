@@ -555,13 +555,24 @@ IndexerScoreDeviceOperation::create_op_performance_model(
         2ull * valid_tiles * Hi * B * static_cast<uint64_t>(tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH) * D;
 
     // Cores used: the banded schedule's (group_rows x row_blocks) x cols rectangle, via the same helper the
-    // factory uses (block-split included), so this equals tracy's CORE COUNT.
+    // factory uses (block-split included). The fused ring factory reserves columns for its all-gather workers;
+    // model the same reduced compute width so ideal/actual reports use the real FPU core count.
     const uint32_t QC = attrs.program_config.q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t KC = attrs.program_config.k_chunk_size / tt::constants::TILE_WIDTH;
     const uint32_t group_count = Sqt / QC;
     const uint32_t band_count = units_in_group(KC, Tt);  // ceil(Tt/KC); shared with the factory
     const auto grid = q.device()->compute_with_storage_grid_size();
-    const uint64_t num_cores = banded_core_count(group_count, band_count, grid.x, grid.y);
+    uint32_t compute_grid_x = grid.x;
+    if (attrs.has_fused_ring()) {
+        const uint32_t ag_worker_cores = attrs.fused_ring->num_links * 2u;  // forward + backward per link
+        const uint32_t reserved_cols = (ag_worker_cores + grid.y - 1) / grid.y;
+        TT_FATAL(
+            compute_grid_x > reserved_cols,
+            "indexer_score fused: grid too small to reserve {} AG columns",
+            reserved_cols);
+        compute_grid_x -= reserved_cols;
+    }
+    const uint64_t num_cores = banded_core_count(group_count, band_count, compute_grid_x, grid.y);
 
     // Blackhole matmul peak: 4096 mul-adds/cycle/core at LoFi, scaled by the fidelity multiplier.
     const auto math_fidelity = std::get<0>(ttnn::get_compute_kernel_config_args(arch, attrs.compute_kernel_config));
