@@ -290,9 +290,16 @@ enum class PackRelu : bool { Disabled = false, Zero = true };
 /// Intra-tile broadcast applied to an FPU binary's srcB operand. Mirrors
 /// `ckernel::BroadcastType` values (NONE=0, COL=1, ROW=2, SCALAR=3).
 ///
-/// The dim names the axis being broadcast, not the axis that was reduced. A REDUCE_ROW result is
-/// column-shaped (N,1) and broadcasts back across columns via `BroadcastDim::Col`; a REDUCE_COL
-/// result (1,M) uses `BroadcastDim::Row`.
+/// Given srcB:
+///   [b00 b01 ...]         Row    -> [b00 b01 ...]  output row 0
+///   [b10 b11 ...]                   [b00 b01 ...]  output row 1
+///
+///                         Col    -> [b00 b00 ...]  output row 0
+///                                   [b10 b10 ...]  output row 1
+///
+///                         Scalar -> [b00 b00 ...]  every output row
+///
+///                         None   -> [br0 br1 ...]  output row r
 enum class BroadcastDim : uint8_t {
     None = 0,
     Col = 1,
