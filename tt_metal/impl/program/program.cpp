@@ -106,12 +106,12 @@ namespace {
 using namespace tt::tt_metal;
 
 size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
+    const auto& hal = MetalContext::instance(extract_context_id(device)).hal();
     if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
         return device->allocator_impl()->get_config().l1_unreserved_base -
-               MetalContext::instance().hal().get_dev_addr(
-                   HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+               hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
     }
-    return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    return hal.get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
 void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel, tt::ChipId physical_chip_id) {
@@ -120,17 +120,18 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     //      - tensix kernels cannot be on dispatch cores
     //  Fast dispatch (ethernet):
     //      - eth kernels cannot be on idle eth cores
-    bool slow_dispatch = !(MetalContext::instance().rtoptions().get_fast_dispatch());
+    MetalContext& metal_ctx = MetalContext::instance(kernel->get_context_id());
+    bool slow_dispatch = !(metal_ctx.rtoptions().get_fast_dispatch());
 
-    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    tt::CoreType dispatch_core_type =
-        resolve_dispatch_core_type(MetalEnvAccessor(MetalContext::instance().get_env()).impl(), physical_chip_id, dispatch_core_config);
+    const auto& dispatch_core_config = metal_ctx.get_dispatch_core_manager().get_dispatch_core_config();
+    tt::CoreType dispatch_core_type = resolve_dispatch_core_type(
+        MetalEnvAccessor(metal_ctx.get_env()).impl(), physical_chip_id, dispatch_core_config);
 
     // Kernels used to implement fast dispatch can be placed on dispatch cores
     if (not slow_dispatch and not force_slow_dispatch) {
         const std::vector<CoreCoord>& dispatch_cores =
-            MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
-        const auto& service_claims = MetalContext::instance().get_service_core_manager().impl();
+            metal_ctx.get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
+        const auto& service_claims = metal_ctx.get_service_core_manager().impl();
         bool on_dispatch_core = std::any_of(
             dispatch_cores.begin(),
             dispatch_cores.end(),
@@ -177,8 +178,9 @@ void generate_kernel_source_files(
 // the client can skip the remote round-trip (preprocess + RPC + ELF transfer) entirely and let
 // read_binaries() load the cached ELF.
 bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel) {
-    uint32_t core_type =
-        MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
+    uint32_t core_type = MetalContext::instance(kernel->get_context_id())
+                             .hal()
+                             .get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
     uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
     int num_binaries = kernel->expected_num_binaries();
     if (num_binaries <= 0) {
@@ -200,8 +202,9 @@ bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel
 // step left on disk plus the link inputs. Called only after the remote compile succeeds and the ELFs
 // are on disk, so a failed compile leaves no validatable cache to reuse a stale ELF.
 void finalize_preprocess_reuse_cache(IDevice* device, const std::shared_ptr<Kernel>& kernel) {
-    uint32_t core_type =
-        MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
+    uint32_t core_type = MetalContext::instance(kernel->get_context_id())
+                             .hal()
+                             .get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
     uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
     int num_binaries = kernel->expected_num_binaries();
     for (int i = 0; i < num_binaries; ++i) {
@@ -222,8 +225,9 @@ KernelCompileDescriptor build_kernel_descriptor(
     const auto& build_env =
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
 
-    uint32_t core_type =
-        MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
+    uint32_t core_type = MetalContext::instance(kernel->get_context_id())
+                             .hal()
+                             .get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
     uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
 
     KernelCompileDescriptor desc;
@@ -1843,7 +1847,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
 
     // Flatten MeshDevice into constituent physical devices so ServiceCoreManager (keyed by ChipId) can be queried per
     // core
-    const auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager().impl();
+    const auto& svc = tt::tt_metal::MetalContext::instance(context_id_).get_service_core_manager().impl();
     std::vector<const IDevice*> devices_for_svc_check;
     if (svc.has_any_claims()) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
@@ -1934,7 +1938,7 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
     auto grid_size = device->compute_with_storage_grid_size();
     // Flatten MeshDevice into constituent physical devices so ServiceCoreManager (keyed by ChipId) can be queried per
     // core. Mirrors validate_circular_buffer_region.
-    const auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager().impl();
+    const auto& svc = tt::tt_metal::MetalContext::instance(context_id_).get_service_core_manager().impl();
     std::unordered_set<CoreCoord> claimed;
     if (svc.has_any_claims()) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
@@ -1976,14 +1980,15 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
 
 void detail::ProgramImpl::init_semaphores(
     const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
-    const auto& hal = MetalContext::instance().hal();
+    MetalContext& metal_ctx = MetalContext::instance(context_id_);
+    const auto& hal = metal_ctx.hal();
     HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
     uint64_t kernel_config_base = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
     uint64_t addr = kernel_config_base + this->program_configs_[programmable_core_type_index].sem_offset;
-    CoreType core_type = MetalContext::instance().hal().get_core_type(programmable_core_type_index);
+    CoreType core_type = hal.get_core_type(programmable_core_type_index);
     auto semaphores_on_core = this->semaphores_on_core(logical_core, core_type);
     for (auto semaphore : semaphores_on_core) {
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        metal_ctx.get_cluster().write_core(
             device.id(),
             device.virtual_core_from_logical_core(logical_core, core_type),
             std::vector{semaphore.get().initial_value()},
@@ -2235,7 +2240,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     }
 
     std::uint32_t num_active_cores = 0;
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance(context_id_).hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         for (const auto& kernel_group : this->get_kernel_groups(index)) {
@@ -2319,7 +2324,7 @@ const ProgramConfig& detail::ProgramImpl::get_program_config(uint32_t programmab
 }
 
 void detail::ProgramImpl::set_launch_msg_sem_offsets() {
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance(context_id_).hal();
     for (uint32_t kg_type_index = 0; kg_type_index < hal.get_programmable_core_type_count(); kg_type_index++) {
         for (auto& kg : this->get_kernel_groups(kg_type_index)) {
             auto sem_offset = kg->launch_msg.view().kernel_config().sem_offset();
@@ -2336,13 +2341,15 @@ uint32_t& detail::ProgramImpl::get_program_config_size(uint32_t programmable_cor
 }
 
 const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(const IDevice* device) {
+    const auto& metal_ctx = MetalContext::instance(context_id_);
+    const auto& hal = metal_ctx.hal();
     // We need to calculate the sub_device_id when we haven't compiled the program yet, or this is the first time we
     // are getting the sub_device_ids after compilation
     auto sub_device_manager_id = device->get_active_sub_device_manager_id();
     auto& sub_device_ids_map = this->sub_device_ids_[device->id()];
     auto sub_device_ids = sub_device_ids_map.find(sub_device_manager_id);
     if (this->compiled_.empty() || sub_device_ids == sub_device_ids_map.end()) {
-        if (!MetalContext::instance().rtoptions().get_fast_dispatch() ||
+        if (!metal_ctx.rtoptions().get_fast_dispatch() ||
             sub_device_manager_id == device->get_default_sub_device_manager_id()) {
             // No sub device manager, nothing to validate
             auto [sub_device_ids, _] =
@@ -2351,12 +2358,11 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
         }
         std::unordered_set<SubDeviceId> used_sub_device_ids;
         auto find_sub_device_ids = [&](HalProgrammableCoreType core_type) {
-            auto core_type_index = MetalContext::instance().hal().get_programmable_core_type_index(core_type);
+            auto core_type_index = hal.get_programmable_core_type_index(core_type);
             if (core_type_index == -1) {
                 return;
             }
-            const auto& program_kgs =
-                this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(core_type));
+            const auto& program_kgs = this->get_kernel_groups(hal.get_programmable_core_type_index(core_type));
             uint32_t num_intersections = 0;
             uint32_t num_cores = 0;
             for (const auto& kg : program_kgs) {
@@ -2404,12 +2410,13 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 
 void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device));
 
     uint64_t device_hash =
         BuildEnvManager::get_instance(extract_context_id(mesh_device))
             .get_device_build_env(mesh_device->build_id())
             .build_key();
-    if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
+    if (not metal_ctx.hal().is_coordinate_virtualization_enabled()) {
         ttsl::hash::hash_combine(device_hash, mesh_device->id());
     }
     if (!is_cached()) {
@@ -2424,7 +2431,7 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
     if (!cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
         auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
-        ProgramCommandSequence program_command_sequence{MetalContext::instance(extract_context_id(mesh_device))};
+        ProgramCommandSequence program_command_sequence{metal_ctx};
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
@@ -2445,12 +2452,13 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
 
 void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device));
 
     uint64_t device_hash =
         BuildEnvManager::get_instance(extract_context_id(mesh_device))
             .get_device_build_env(mesh_device->build_id())
             .build_key();
-    if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
+    if (not metal_ctx.hal().is_coordinate_virtualization_enabled()) {
         device_hash = (device_hash << 32) | (mesh_device->id());
     }
     if (!is_cached()) {
@@ -2465,7 +2473,7 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
     if (!trace_cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
         auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
-        ProgramCommandSequence program_command_sequence{MetalContext::instance(extract_context_id(mesh_device))};
+        ProgramCommandSequence program_command_sequence{metal_ctx};
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
@@ -2707,17 +2715,19 @@ void Program::set_runtime_id(ProgramId id) { internal_->set_runtime_id(id); }
 uint32_t detail::ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
-    return base_addr + this->get_program_config(
-                               MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
-                           .sem_offset;
+    return base_addr +
+           this->get_program_config(
+                   MetalContext::instance(context_id_).hal().get_programmable_core_type_index(programmable_core_type))
+               .sem_offset;
 }
 
 uint32_t detail::ProgramImpl::get_cb_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
-    return base_addr + this->get_program_config(
-                               MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
-                           .cb_offset;
+    return base_addr +
+           this->get_program_config(
+                   MetalContext::instance(context_id_).hal().get_programmable_core_type_index(programmable_core_type))
+               .cb_offset;
 }
 
 void detail::ProgramImpl::set_last_used_command_queue_for_testing(HWCommandQueue* queue) {
@@ -2731,7 +2741,7 @@ HWCommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
 uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
-    uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
+    uint32_t index = MetalContext::instance(context_id_).hal().get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].sem_size;
 }
@@ -2739,7 +2749,7 @@ uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_co
 uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
-    uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
+    uint32_t index = MetalContext::instance(context_id_).hal().get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].cb_size;
 }
@@ -2858,7 +2868,7 @@ void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
     program_config_sizes_[programmable_core_count_ + 1] = runs_on_noc_unicast_only_cores();
     set_launch_msg_sem_offsets();
     // TODO: This check is wrong - it populates dispatch data for dispatch kernels
-    if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (MetalContext::instance(context_id_).rtoptions().get_fast_dispatch()) {
         populate_dispatch_data(device);  // TODO: maybe rename
     }
 }
