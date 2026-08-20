@@ -180,11 +180,17 @@ echo "corpus-compile-gate: $GATE_STATUS — $GATE_REASON" | tee "$EV/corpus-comp
 # via g++ -print-prog-name=cc1plus; the driver sha is a secondary check —
 # the driver is byte-identical across cc1plus-only changes), removed
 # loadmacro flags error on use, OFF/ON flag sets accepted. It classifies
-# BEFORE any device job, refuses byte-identical pairs, gates silicon on
-# paired CRAQ, serializes every device job under both flocks, copies CSVs
+# BEFORE any device job, refuses byte-identical pairs, gates every perf cell on
+# per-cell device-golden correctness legs (straight silicon, ratified; CRAQ is a
+# pinned-sim debug/lane oracle, skip-runs taint-marked), serializes every device job under both flocks, copies CSVs
 # in-lock, and never parses results while a lock is held. Resume is
 # hash-matched: cached cells are reused only when their archived .text
 # hashes equal this run's classify build. Baselines are read-only here.
+# RATIFIED (owner, 2026-08-20; charter §1(3) amended same day): sweeps run
+# STRAIGHT SILICON — per-cell device-golden correctness legs gate every perf
+# cell; CRAQ is a debug/lane-validation oracle (pinned sims), not a sweep
+# precondition.  This flag is therefore the sanctioned default here, and
+# sweep_2x2.py records an explicit CRAQ-gate taint/status line either way.
 python3 "$HERE/sweep_2x2.py" \
   --evidence-root "$EV" \
   --cc1plus-sha "$PINNED_CC1PLUS_SHA256" \
@@ -192,11 +198,6 @@ python3 "$HERE/sweep_2x2.py" \
   --sim-bh "$SIM_BH" --sim-wh "$SIM_WH" \
   --sim-bh-sha "$PINNED_SIM_BH_SHA256" --sim-wh-sha "$PINNED_SIM_WH_SHA256" \
   --phases "${SWEEP_PHASES:-classify,silicon,report}" \
-  # RATIFIED (owner, 2026-08-20; charter §1(3) amended same day): sweeps run
-  # STRAIGHT SILICON — per-cell device-golden correctness legs gate every perf
-  # cell; CRAQ is a debug/lane-validation oracle (pinned sims), not a sweep
-  # precondition.  This flag is therefore the sanctioned default here, and
-  # sweep_2x2.py records an explicit CRAQ-gate taint/status line either way.
   --skip-craq-gate \
   --allow-hardware \
   --baseline "$BASELINE" \

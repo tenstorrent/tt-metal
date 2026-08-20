@@ -3223,7 +3223,7 @@ def main():
     ap.add_argument(
         "--skip-craq-gate",
         action="store_true",
-        help="documented override: run silicon without a green CRAQ gate (control experiments only)",
+        help="run silicon without a green CRAQ gate — the RATIFIED default for scheduled sweeps (owner, 2026-08-20): per-cell device-golden legs gate correctness; the run is taint-marked in evidence either way",
     )
     ap.add_argument(
         "--classify-workers",
