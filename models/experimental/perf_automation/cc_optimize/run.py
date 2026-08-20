@@ -5184,6 +5184,7 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     experts = cfg.get("num_local_experts") or cfg.get("num_experts") or cfg.get("n_routed_experts")
     src = "checkpoint bytes + HF config"
     analytic_params = 0
+    _unit = ""  # bound before the try below, which can raise before assigning it (params_basis reads it)
     # ANALYTIC FIRST: every tensor's shape and dtype from the safetensors header, with the on-device
     # widths applied per name pattern. The checkpoint's FILE SIZE counts the stored dtype -- 15.0 GB of
     # bf16 for Llama-3.1-8B, where the device streams 6.09 GB as bfp4/bfp8 -- so it understates the
@@ -5256,6 +5257,27 @@ def _perf_target_inputs(demo_dir, model_id_hint, manifest) -> dict | None:
     total_params = analytic_params or name_total
     if total_params:
         facts["total_params"] = int(total_params)
+        # SAY WHICH COUNT THIS IS. The key is named total_params and, when the header walk supplied
+        # it, the value is NOT a total: model_bytes counts the READ SET for the observed unit, which
+        # for a token unit deliberately drops lookup-only tensors (an embedding table is read one row
+        # at a time) and tower-only tensors (an encoder runs per clip, not per token).
+        #
+        # On Voxtral-Mini-3B-2507 that reads: total_params 3.611B, under two blocks declaring 0.637B
+        # and 4.014B. A total smaller than its own parts is alarming to anyone checking the ceiling,
+        # and the only way to find out it was correct was to rediscover both exclusions in
+        # model_bytes. 3.611B is exactly 4.014B (language_model) minus 0.403B (embedding); the
+        # checkpoint holds 4.676B.
+        #
+        # Nothing is renamed here: `total_params` is read by perf_target.ceiling_params,
+        # simple_active_bytes and two places in summary, and by any perf_target_inputs.json already
+        # on disk. Renaming buys a clearer word and costs a compatibility break. Stating the basis
+        # costs one string and removes the ambiguity outright -- and a reader that does not know the
+        # basis cannot tell a read set from a total, which is the actual failure.
+        facts["params_basis"] = (
+            "read set for unit=%s: lookup-only and tower-only tensors excluded" % (_unit or "unknown")
+            if analytic_params
+            else "count published by the model name (no readable checkpoint headers)"
+        )
     if experts:
         facts["is_moe"] = True
         active = _env_params("TT_PERF_ACTIVE_PARAMS") or name_active

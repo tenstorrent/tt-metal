@@ -186,6 +186,8 @@ def test_the_byte_walk_exclusion_uses_the_observation_too():
     no token loop, so its tables would be excluded from a byte count they belong in -- and the ceiling
     is peak_BW over exactly those bytes."""
     src = RUN.read_text()
-    i = src.index("_unit = ")
+    # Anchor on the ASSIGNMENT that reads the observation, not on the first `_unit = ` in the file --
+    # a definite-assignment guard (`_unit = ""`) now precedes it and would capture a bare prefix.
+    i = src.index("_unit = str(os.environ.get(")
     assert "PERF_MCP_LAST_HEADLINE_UNIT" in src[i : i + 300], src[i : i + 300]
     assert "unit_for_tag" in src[i : i + 400], "the pre-trace fallback was dropped"
