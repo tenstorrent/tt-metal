@@ -22,7 +22,9 @@ export PYTHONPATH="${TT_METAL_HOME}"
 MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests"
 MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration"
 
-# Shared defaults; a case block below overrides what its model needs.
+# Shared defaults; a case block below overrides what its model needs. Each branch also names its own
+# scratch dir by swapping the summaries component out of PREFILL_SUMMARIES: that keeps the run-scoped leaf
+# and the shared-NFS root the blaze impl chose, while leaving the summaries dir itself alone.
 MAX_SEQ_LEN=56320
 PCC_THRESHOLD=0.85
 RUNNER_ENV=""
@@ -30,28 +32,25 @@ PRODUCER_ENV=""
 
 case "${MODEL}" in
   kimi27)
-    SLUG=prefill_runner_kv
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MGD="${MGD_DIR}/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
-    # Dense MLA: one device cache, and the manifest carries the producer's schedule and golden trace.
+    # Dense MLA: one device cache, so the manifest's model + depth are all the producer needs. The runner
+    # needs the weight path on top: the K2.7 adapter inherits K2.6's reference default.
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized;"
-    PRODUCER_ENV="export PREFILL_MANIFEST='${MANIFEST}'; \
-        export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized;"
+    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
     ;;
   glm52)
-    SLUG=glm52_prefill_runner_kv
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
     # LINE/LINE variant: GLM-5.2's MoE all_to_all deadlocks in warmup under the torus fabric modes on
     # multi-galaxy pipeline prefill, so the descriptor declares no wrap and the fabric mode stays 2d.
     MGD="${MGD_DIR}/pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto"
     MANIFEST="${MANIFEST_DIR}/glm52.json"
     # Sparse DSA: TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over the
     # 21 `full` layers), both PCC'd. The trace must be the indexer-K dump -- the adapter's default golden
-    # carries no dsa/indexer_k_layer_*, which would silently downgrade this leg to a KVPE-only check -- so
-    # the producer takes its model/depth/schedule explicitly rather than through the manifest.
-    PRODUCER_ENV="export PREFILL_MODEL=glm_5_2; \
-        export PREFILL_NUM_LAYERS=78; \
-        export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k; \
-        export PREFILL_PRODUCER_CHUNKS=4,4;"
+    # carries no dsa/indexer_k_layer_*, which would silently downgrade this leg to a KVPE-only check.
+    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
+        export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
     ;;
   *)
     echo "unknown model key '${MODEL}'" >&2
@@ -59,7 +58,6 @@ case "${MODEL}" in
     ;;
 esac
 
-export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/${SLUG}}"
 mkdir -p "${PIPELINE_DIR}"
 TTRUN_DIR="${TTRUN_DIR:-/etc/ttop}"
 TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
@@ -128,7 +126,6 @@ python3 "${TTRUN_PY}" \
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
-    export MESH_DEVICE=TG; \
     export PREFILL_FABRIC_MODE=2d; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_ENABLE_MIGRATION=1; \
@@ -167,7 +164,6 @@ set +e
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PYTHONUNBUFFERED=1; \
-    export MESH_DEVICE=TG; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
