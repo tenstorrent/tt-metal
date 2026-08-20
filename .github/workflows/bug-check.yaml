@@ -9,6 +9,10 @@ on:
 jobs:
   parse-comment:
     name: Resolve Target
+    # Automatic runs are skipped for PRs from forks — secrets (BUG_CHECKER_API_KEY,
+    # the PAT) are unavailable and the GITHUB_TOKEN is read-only in that context, so
+    # the scan would fail. Forks can still be checked via a maintainer's /bug-check
+    # comment, which runs in the base repo's Actions context.
     if: >-
       (
         github.event_name == 'issue_comment' &&
@@ -21,7 +25,8 @@ jobs:
       ) ||
       (
         github.event_name == 'pull_request' &&
-        !github.event.pull_request.draft
+        !github.event.pull_request.draft &&
+        github.event.pull_request.head.repo.full_name == github.repository
       )
     runs-on: ubuntu-slim
     permissions:
