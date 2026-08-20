@@ -31,7 +31,6 @@ from other dispatch groups contain uninitialized values. The per-device output s
 TtDispatchModule produces the dispatched_buffer and metadata consumed here.
 """
 
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
@@ -100,6 +99,7 @@ class TtCombineModule(LightweightModule):
         dispatched_metadata: ttnn.Tensor,
         expert_token_counts: ttnn.Tensor,
         expert_region_offsets: ttnn.Tensor,
+        seq_len_per_chip=None,
     ):
         """
         Route expert-processed tokens back to origin devices and accumulate weighted contributions.
@@ -148,7 +148,9 @@ class TtCombineModule(LightweightModule):
             dispatch_group_size=self.dispatch_group_size,
             experts_per_chip=self.experts_per_chip,
             num_experts_per_tok=self.num_experts_per_tok,
-            seq_len_per_chip=self.seq_len_per_chip,
+            # Variable chunk length: caller may pass the ACTUAL per-chip token count for this
+            # chunk (default None = the build-time size, so existing callers are unchanged).
+            seq_len_per_chip=(self.seq_len_per_chip if seq_len_per_chip is None else seq_len_per_chip),
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,
