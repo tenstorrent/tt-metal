@@ -53,7 +53,10 @@ TRIAGE_LLM_DIR="${REPO_DIR}/generated/tt-triage"
 LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
 TRIAGE_LOG="/tmp/safe-pytest-triage-$$.log"
-TRIAGE_LLM="${TRIAGE_LLM_DIR}/triage.csv"
+TRIAGE_ONCE_FLAG="/tmp/safe-pytest-triage-$$.ran"
+TRIAGE_LLM_NOC0="${TRIAGE_LLM_DIR}/triage_noc0.csv"
+TRIAGE_LLM_NOC1="${TRIAGE_LLM_DIR}/triage_noc1.csv"
+TRIAGE_TIMEOUT_SECONDS=30
 PROFILE_REPORTS_DIR="${REPO_DIR}/generated/profiler/reports"
 
 # --- Detect simulator mode ---
@@ -178,7 +181,7 @@ fi
 # On timeout, the dispatch layer runs tt-triage. Fires only on actual hang —
 # zero overhead for passing tests. On sim there is no hang detection because
 # wall-clock timeouts are meaningless at kHz clock speeds.
-rm -f "$TRIAGE_LOG"
+rm -f "$TRIAGE_LOG" "$TRIAGE_ONCE_FLAG" "$TRIAGE_LLM_NOC0" "$TRIAGE_LLM_NOC1"
 if [[ "$SIM_MODE" == false ]]; then
     export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
     # Requires tt-exalens: uv pip install -r tools/triage/requirements.txt
@@ -186,10 +189,20 @@ if [[ "$SIM_MODE" == false ]]; then
         defer_warning "SAFE_PYTEST: WARNING: tt-exalens not installed — triage on hang will be unavailable."
         defer_warning "SAFE_PYTEST: Install with: uv pip install -r tools/triage/requirements.txt"
     fi
-    # --llm-output-path also writes the triage report as CSV to a persistent file,
-    # so machine-readers can consume it directly instead of scraping the log.
+    # Make the timeout hook deterministic and bounded:
+    #   - explicit --dev=all avoids depending on Inspector during a crash;
+    #   - unbuffered Python preserves partial diagnostics if a NOC is wedged;
+    #   - try NOC0 first and NOC1 as a fallback;
+    #   - the per-process flag prevents recursive triage during failed teardown.
+    # Each attempt writes a separate persistent CSV so a failed fallback cannot
+    # overwrite useful output from the first path.
     mkdir -p "${TRIAGE_LLM_DIR}"
-    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output-path=${TRIAGE_LLM} > ${TRIAGE_LOG} 2>&1"
+    printf -v triage_script_q '%q' "$TRIAGE_SCRIPT"
+    printf -v triage_log_q '%q' "$TRIAGE_LOG"
+    printf -v triage_once_q '%q' "$TRIAGE_ONCE_FLAG"
+    printf -v triage_llm_noc0_q '%q' "$TRIAGE_LLM_NOC0"
+    printf -v triage_llm_noc1_q '%q' "$TRIAGE_LLM_NOC1"
+    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="if [ -e ${triage_once_q} ]; then echo 'tt-triage already ran for this pytest process; skipping repeated timeout hook' >> ${triage_log_q}; else touch ${triage_once_q}; echo '=== tt-triage NOC0 attempt ===' > ${triage_log_q}; if ! timeout --signal=INT --kill-after=5s ${TRIAGE_TIMEOUT_SECONDS}s python3 -u ${triage_script_q} --disable-progress --disable-colors --skip-version-check --print-script-times --noc-id=NOC0 --dev=all --llm-output-path=${triage_llm_noc0_q} >> ${triage_log_q} 2>&1; then echo '=== NOC0 attempt failed or timed out; trying NOC1 ===' >> ${triage_log_q}; timeout --signal=INT --kill-after=5s ${TRIAGE_TIMEOUT_SECONDS}s python3 -u ${triage_script_q} --disable-progress --disable-colors --skip-version-check --print-script-times --noc-id=NOC1 --dev=all --llm-output-path=${triage_llm_noc1_q} >> ${triage_log_q} 2>&1; fi; fi"
 fi
 
 if [[ "$DEV_MODE" == true ]]; then
@@ -270,9 +283,9 @@ echo "========================================"
 # The triage-log guard matters in profile mode: the tracy wrapper exits 0 even
 # when the underlying test failed OR hung, so without it a hang would be reported
 # PASS and skip the device reset. An empty triage log means no hang fired.
-if [[ $EXIT_CODE -eq 0 && ! -s "$TRIAGE_LOG" ]]; then
+if [[ $EXIT_CODE -eq 0 && ! -e "$TRIAGE_ONCE_FLAG" ]]; then
     rm -f "$DIRTY_FLAG"
-    rm -f "$TRIAGE_LOG"
+    rm -f "$TRIAGE_LOG" "$TRIAGE_ONCE_FLAG"
     emit_profiler_csv
     echo "SAFE_PYTEST_RESULT: PASS"
     exit 0
@@ -283,7 +296,7 @@ fi
 #   5 = no tests collected (typo in path, bad marker filter, etc.)
 if [[ $EXIT_CODE -eq 4 || $EXIT_CODE -eq 5 ]]; then
     rm -f "$DIRTY_FLAG"
-    rm -f "$TRIAGE_LOG"
+    rm -f "$TRIAGE_LOG" "$TRIAGE_ONCE_FLAG"
     if [[ $EXIT_CODE -eq 4 ]]; then
         echo "SAFE_PYTEST_ERROR: Pytest usage error (invalid path or arguments)"
     else
@@ -296,10 +309,11 @@ fi
 pkill -9 -P $$ 2>/dev/null || true
 
 # Determine if this was a hang:
-#   Triage log non-empty = dispatch timeout handler ran tt-triage (definitive hang signal)
+#   Run-once flag exists = dispatch timeout handler ran (definitive hang signal),
+#   even if a hard device failure prevented triage from producing output.
 # On sim there is no hang detection, so IS_HANG always stays false.
 IS_HANG=false
-if [[ -s "$TRIAGE_LOG" ]]; then
+if [[ -e "$TRIAGE_ONCE_FLAG" ]]; then
     IS_HANG=true
 fi
 
@@ -334,15 +348,14 @@ if [[ "$IS_HANG" == true ]]; then
     fi
 
     # Emit the LLM triage path so machine-readers can find it (grep the prefix).
-    if [[ -f "$TRIAGE_LLM" ]]; then
-        echo "SAFE_PYTEST: LLM triage: ${TRIAGE_LLM}"
-    fi
+    [[ -s "$TRIAGE_LLM_NOC0" ]] && echo "SAFE_PYTEST: LLM triage NOC0: ${TRIAGE_LLM_NOC0}"
+    [[ -s "$TRIAGE_LLM_NOC1" ]] && echo "SAFE_PYTEST: LLM triage NOC1: ${TRIAGE_LLM_NOC1}"
 
-    rm -f "$TRIAGE_LOG"
+    rm -f "$TRIAGE_LOG" "$TRIAGE_ONCE_FLAG"
     exit 2
 fi
 
 rm -f "$DIRTY_FLAG"
-rm -f "$TRIAGE_LOG"
+rm -f "$TRIAGE_LOG" "$TRIAGE_ONCE_FLAG"
 echo "SAFE_PYTEST_RESULT: FAIL (exit code: $EXIT_CODE)"
 exit 1
