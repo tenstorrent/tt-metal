@@ -216,6 +216,15 @@ def build(mapping, expected, passed, failed, verdict, suites=None):
     }
 
 
+def _in_scope(requirements):
+    """Requirements the Quasar gate could in principle evidence."""
+    return [r for r in requirements if r.get("in_scope", True)]
+
+
+def _out_of_scope(requirements):
+    return [r for r in requirements if not r.get("in_scope", True)]
+
+
 def _lines(rows):
     return [f"  - {format_test(r['config'], r['group'], r['filter'], r['runner'])}" for r in rows]
 
@@ -223,8 +232,9 @@ def _lines(rows):
 def render_plain(report, meta):
     """Plain text for the Jira description (ADF renders one paragraph per line)."""
     verdict = report["verdict"]
-    with_evidence = [r for r in report["requirements"] if r["passed"]]
-    without = [r for r in report["requirements"] if not r["passed"]]
+    scoped = _in_scope(report["requirements"])
+    with_evidence = [r for r in scoped if r["passed"]]
+    without = [r for r in scoped if not r["passed"]]
 
     out = [f"Release test evidence for {meta['version']}", ""]
     if verdict == PASSED:
@@ -237,7 +247,7 @@ def render_plain(report, meta):
             "per-test detail, so no test can be recorded as having passed."
         )
     out += [
-        f"Requirements with passing evidence: {len(with_evidence)} of {len(report['requirements'])}.",
+        f"Requirements with passing evidence: {len(with_evidence)} of {len(scoped)}.",
         "",
         f"Commit:      {meta['sha']}",
         f"Sim results: {meta['url']}",
@@ -271,6 +281,14 @@ def render_plain(report, meta):
         out += ["", "--- Tests executed that map to no requirement ---"]
         out += _lines(report["unattributed"][PASSED] + report["unattributed"][FAILED])
 
+    oos = _out_of_scope(report["requirements"])
+    if oos:
+        out += [
+            "",
+            "Out of scope for this gate -- a different platform, so neither covered nor missing: "
+            + ", ".join(f"{r['key']} ({r.get('team', '?')})" for r in oos),
+        ]
+
     suites = report.get("suites") or []
     if suites:
         t = suite_totals(suites)
@@ -303,13 +321,14 @@ def render_markdown(report, meta):
     badge = {PASSED: "✅ all gating tests passed", FAILED: "❌ failures present", INCONCLUSIVE: "⚠️ inconclusive"}[
         verdict
     ]
-    with_evidence = [r for r in report["requirements"] if r["passed"]]
+    scoped = _in_scope(report["requirements"])
+    with_evidence = [r for r in scoped if r["passed"]]
 
     out = [
         f"# Release test evidence — {meta['version']}",
         "",
         f"**{badge}** — {len(report['passed'])} passed, {len(report['failed'])} failed, "
-        f"{len(with_evidence)} of {len(report['requirements'])} requirements with passing evidence.",
+        f"{len(with_evidence)} of {len(scoped)} requirements with passing evidence.",
         "",
         f"| | |",
         f"|---|---|",
@@ -356,7 +375,7 @@ def render_markdown(report, meta):
         "",
     ]
     out += ["| Requirement | Milestone | Owner | Why |", "|---|---|---|---|"]
-    for req in [r for r in report["requirements"] if not r["passed"]]:
+    for req in [r for r in scoped if not r["passed"]]:
         why = req.get("_evidence") or "no test executed by the release gate"
         if req["failed"]:
             why = "**failed this run**: " + ", ".join(
@@ -370,6 +389,15 @@ def render_markdown(report, meta):
         out += ["## Tests executed that map to no requirement", ""]
         out += [f"- `{format_test(r['config'], r['group'], r['filter'], r['runner'])}`" for r in extras]
         out.append("")
+
+    oos = _out_of_scope(report["requirements"])
+    if oos:
+        out += [
+            "_Out of scope for this gate — a different platform, so neither covered nor missing: "
+            + ", ".join(f"**{r['key']}** ({r.get('team', '?')})" for r in oos)
+            + "._",
+            "",
+        ]
 
     suites = report.get("suites") or []
     if suites:

@@ -330,3 +330,22 @@ def test_evidence_carries_no_test_counts(mapping):
         if found:
             offenders.append((r["key"], found))
     assert not offenders, f"hard-coded counts will go stale: {offenders}"
+
+
+def test_out_of_scope_requirements_leave_the_ratio_alone(mapping):
+    """A platform this gate cannot test must not inflate the denominator."""
+    rows = load_expected(SIM_YAML, "1x3")
+    report = build(mapping, rows, rows, [], PASSED)
+    scoped = [r for r in report["requirements"] if r.get("in_scope", True)]
+    oos = [r for r in report["requirements"] if not r.get("in_scope", True)]
+    assert oos, "fixture expects at least one out-of-scope requirement"
+
+    md = render_markdown(report, META)
+    assert f"of {len(scoped)} requirements" in md
+    assert f"of {len(report['requirements'])} requirements" not in md, "denominator must exclude out-of-scope"
+
+    # they are still named once, so nothing looks forgotten
+    for r in oos:
+        assert r["key"] in md and r["key"] in render_plain(report, META)
+    # ...but not as a row in the no-evidence table
+    assert md.count(oos[0]["key"]) == 1
