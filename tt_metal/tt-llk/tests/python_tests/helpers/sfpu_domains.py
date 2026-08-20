@@ -2396,6 +2396,11 @@ BINARY_SPECIALS_READY_OPS: Dict[MathOperation, str] = {
     MathOperation.SfpuElwmul: "IEEE: inf*x = inf, inf*0 = NaN, +/-0 signs multiply. Green on "
     "Wormhole.",
     MathOperation.SfpuElwrsub: "As SfpuElwsub with the operands reversed.",
+    MathOperation.SfpuElwdiv: "IEEE: x/inf = +/-0, inf/x = +/-inf, inf/inf and 0/0 = NaN, and a "
+    "NaN operand propagates. Was out as a reciprocal + Newton-Raphson composition whose "
+    "non-finite behaviour was undecided; the kernel now skips the residual refinement for a "
+    "non-finite divisor and states the NaN, signed-zero and zero-divisor arms explicitly. "
+    "Green on Blackhole over the full 5x5 special product at float32.",
     # Total order -- and the reason max/min enrol on a model the six comparisons could not: their
     # kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard.
     MathOperation.SfpuBinaryMax: "binary_max_min is a bare SFPSWAP(VEC_MIN_MAX) with no NaN "
@@ -2427,7 +2432,6 @@ _BINARY_SPECIALS_NOT_READY: Dict[MathOperation, str] = {
     # the ISA specifies only inside a stated range (SFPARECIP gives accuracy bounds for 0 <= x < 2;
     # SFPLUTFP32 documents no NaN/inf handling), so what the composition does with a non-finite
     # input is an LLK decision rather than an ISA one. One answer decides all six.
-    MathOperation.SfpuElwdiv: "composition: reciprocal + Newton-Raphson. Section 5.6 Q1.",
     MathOperation.SfpuXlogy: "composition: x * log(y). Section 5.6 Q1.",
     MathOperation.SfpuElwpow: "composition: exp(b * ln a). Section 5.6 Q1.",
     MathOperation.SfpuBinaryFmod: "composition: quotient via reciprocal. Section 5.6 Q1.",
