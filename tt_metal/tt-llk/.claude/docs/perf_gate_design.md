@@ -1,8 +1,21 @@
 # LLK Perf Regression Gate — Design
 
-**Status:** Design proposal for discussion and team approval.
+**Status:** Design proposal for discussion and team approval. Ready for implementation once team aligns on open questions.
 
 **Goal:** Catch performance regressions in LLK kernels at PR merge time, before they land on main.
+
+---
+
+## Executive Summary
+
+**Rule:** Flag a regression when a measurement is **more than 2% slower AND more than 30 cycles slower** than main.
+
+**Cost:** ~9 minutes for `L1_TO_L1`, ~19 minutes for isolates on Wormhole (the slower architecture).
+
+**Threshold maturity:**
+- `MATH_ISOLATE`, `UNPACK_ISOLATE`: **Gate-ready** (zero false positives on both Blackhole and Wormhole)
+- `L1_TO_L1`: **Ready on Blackhole**, carries 53 matmul false positives on Wormhole
+- `PACK_ISOLATE`: **Not ready** — blocks on investigation of run-to-run instability (see "The one blocker" below)
 
 ---
 
@@ -14,14 +27,38 @@ The gate compares perf measurements from a PR branch against a baseline from mai
 
 ---
 
-## Why this rule
+## Measured baselines
 
-The thresholds come from five-run noise baselines on both Blackhole and Wormhole architectures:
+We ran identical code five times on one card (Speed of Light off) and measured how much each number moved. Nothing changed between runs, so every difference is noise.
 
-- **2% threshold:** Smallest slow-down we can reliably detect. Across 108,377 identical runs of Blackhole's `L1_TO_L1` (no code change), the worst movement was 1.88% — so 2% sits above all noise and catches real regressions.
-- **30 cycles floor:** Suppresses false positives on small markers. `INIT` and `UNINIT` are ~350 cycles and jitter by ±25 cycles, which looks like ±7% — a catastrophic false-positive rate if we gated on percentage alone. The 30-cycle clause blocks jitter while letting real regressions through. On the big markers (`TILE_LOOP`, `KERNEL`), the worst noise was 5,110 cycles at 1.88%, so the cycle floor is no constraint.
+### Cost: Gate latency (wall clock, cold build)
 
-**Reference:** See `tt_metal/tt-llk/docs/perf_evaluation/results/blackhole-nonsol/README.md` and `wormhole-nonsol/README.md` for full baseline derivation and per-run-type breakdowns.
+| config | Blackhole | Wormhole |
+|---|--:|--:|
+| full — every run type | 19:41 | 30:14 |
+| isolates — unpack, math, pack | 12:40 | 18:45 |
+| L1_TO_L1 only | 6:17 | 9:19 |
+
+The two architectures run on separate CI runners in parallel, so gate latency is the Wormhole figure: about **9 minutes** for `L1_TO_L1`, **19 minutes** for isolates. Compile is 65-79% of every configuration, so build caching on the gate runner would save more than any run-type choice.
+
+### Threshold: How much is noise?
+
+| arch | configuration | measurements | rule fires on unchanged code |
+|---|---|--:|--:|
+| Blackhole | L1_TO_L1 | 108,377 | **0** |
+| Blackhole | MATH_ISOLATE | 101,180 | **0** |
+| Blackhole | UNPACK_ISOLATE | 103,424 | **0** |
+| Blackhole | PACK_ISOLATE | 106,748 | 2 |
+| Wormhole | L1_TO_L1 | 100,971 | 53 |
+| Wormhole | MATH_ISOLATE | 94,692 | **0** |
+| Wormhole | UNPACK_ISOLATE | 96,846 | **0** |
+| Wormhole | PACK_ISOLATE | 99,414 | 1,457 |
+
+Both clauses are necessary:
+- **Percentage clause alone** fails on `INIT`, which is a few hundred cycles and wobbles by 20 — looks like 5-7%, a catastrophic false-positive rate
+- **Cycle count alone** fails on `TILE_LOOP`, which moves thousands of cycles and is still under 2%
+
+**Repeating runs does not help.** Averaging two runs per side does not improve the typical case at all, only the extreme tail. Use one run per side.
 
 ---
 
@@ -100,33 +137,58 @@ Both must hold. Comparison is median-vs-median, per (marker, run_type, sweep con
 
 ---
 
+## What is gate-ready today
+
+| configuration | verdict |
+|---|---|
+| MATH_ISOLATE, UNPACK_ISOLATE | **Ready.** Zero false positives on both architectures |
+| L1_TO_L1 | Ready on Blackhole. On Wormhole it carries 53 matmul points that trigger false positives |
+| PACK_ISOLATE | **Blocked.** See "The one blocker" below |
+
+### The one blocker: the packer
+
+Every failure in the study is the packer path.
+
+- **Wormhole PACK_ISOLATE:** 1,457 failures, up to 24% and 41,091 cycles. 1,246 of them are `perf_matmul`.
+- **Wormhole L1_TO_L1:** 53 failures, all matmul. That path runs unpack, math and pack in sequence, so the instability leaks in.
+- **Blackhole PACK_ISOLATE:** 2 failures, one test configuration (`perf_pack_dest_bank`), bimodal between the first run and the rest.
+
+On Wormhole it is not a first-run artefact: any of the five runs can be the odd one out. It is genuine run-to-run instability.
+
+**No usable threshold can absorb a 24% swing.** This needs an investigation before the packer can be gated.
+
+---
+
 ## Open Questions for Rose & Team
 
-### 1. Baseline Versioning
+### 1. Why is the packer unstable, and worse on Wormhole?
 
-When do we snapshot main as the new baseline? Options:
+One untested hypothesis: the measure phase runs 15 tests concurrently on different Tensix cores, so a long kernel overlaps with its neighbours and sees whatever L1 and NoC contention occurs. The affected points are the largest ones. Measuring serially would confirm or eliminate it.
 
-- **Post-merge (current proposal):** Every PR that merges to main triggers a baseline snapshot. Gate always compares against the absolute latest main.
-  - Pro: Gate is always tight, catches regressions as soon as they land
-  - Con: A PR that lands with a real regression pollutes the baseline, and subsequent PRs inherit it
+**Proposed resolution:** Run one serial L1_TO_L1 noise baseline on Wormhole with `-n 1` to test the hypothesis. ~10 minutes card time.
 
-- **Nightly only:** Baselines update once per day (e.g., 5pm EOD). Gate always compares against the last nightly.
-  - Pro: Baselines are stable within the day, regressions don't propagate
-  - Con: If a regression lands early in the day, it sits in main for hours before the baseline is updated
+### 2. How big are real regressions?
 
-- **Both:** Post-merge captures fast feedback (gate blocks), but nightly is the "official" baseline used for dashboards/reports.
+These threshold numbers constrain the gate from below only (we know noise is below 2% AND 30 cycles on most configs). The upper bound has to come from the commit history: what is the smallest regression that actually mattered, and when did it land on main?
 
-**Recommendation:** Post-merge, with a dashboard showing "since last baseline update" vs "vs yesterday's nightly" — so we catch regressions fast but also know how we stand vs stable state.
+**Proposed resolution:** Team review of recent LLK commits to find examples.
 
-### 2. Measurement Count
+### 3. Cross-machine and cross-day drift
 
-The baseline query returns **one measurement per commit** (the latest run). The current PR run uses **5 iterations** (from perf suite), so the comparison is **1 iteration vs 5 iterations** — the median of 5 beats the median of 1.
+Every run here was one card in one session. A real gate compares different runners on different days. These baseline numbers only apply to one machine on one day.
 
-Is this acceptable, or should we:
+**Decision needed:** Do we:
+- Re-measure monthly to account for hardware drift?
+- Snapshot baselines per machine and per architecture?
+- Build a tolerance band around the measurements?
 
-- Require baseline runs to also be 5 iterations (more expensive, more stable)?
-- Use a single iteration for both (cheaper, noisier)?
-- Use a weighted comparison (current = mean of 5, baseline = single measurement scaled by noise envelope)?
+### 4. Packer blocking
+
+**Decision needed:** Do we:
+- Start with MATH_ISOLATE and UNPACK_ISOLATE only (safe, narrow scope)?
+- Include L1_TO_L1 on Blackhole, skip Wormhole L1_TO_L1 for now?
+- Gate all three (zero false positives on math/unpack, 53 on wormhole L1_TO_L1)?
+- Exclude perf_matmul explicitly, gate the rest?
 
 ---
 

@@ -1,0 +1,172 @@
+name: "LLK perf gate impl"
+# Entry points: workflow_call only. Trigger lives in llk-perf-gate.yaml.
+
+on:
+  workflow_call:
+    inputs:
+      baseline_run_id:
+        description: "The workflow run ID of the perf measurement to gate against"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  llk-perf-gate:
+    name: "Compare perf: current vs main"
+    runs-on: ubuntu-slim
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9e0d6c9882fc7902038978ad1a988142 # v5.0.0
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas
+
+      # Placeholder: Query Snowflake for the latest main baseline
+      # TODO: Replace with actual Snowflake query once credentials are available
+      #
+      # Schema:
+      #   SELECT perf_data
+      #   FROM baselines
+      #   WHERE arch = 'wormhole' | 'blackhole'
+      #     AND commit_sha = (latest main)
+      #   ORDER BY timestamp DESC LIMIT 1
+      #
+      # For now, we assume baseline CSVs are available from the previous nightly run
+      # in a well-known location or downloaded from GCS/SFTP.
+      - name: Download baseline from artifacts
+        run: |
+          echo "TODO: Download baseline perf_data CSVs from Snowflake or previous nightly"
+          echo "Baseline should be the latest measurement for the current commit's branch point on main"
+
+      # Download current run artifacts (perf_data CSVs from the build job)
+      - name: Download current run artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: perf_data
+          path: current_perf
+
+      # Run the comparison
+      - name: Compare regressions
+        id: compare
+        run: |
+          python3 ${{ env.LLK_PATH }}/perf/regression_compare.py \
+            --current 'current_perf/**/*.csv' \
+            --baseline 'baseline_perf/**/*.csv' \
+            --threshold 0.02 \
+            --min-cycles 30 \
+            --report perf_gate_report.md \
+            --test 'LLK perf' \
+            --baseline-sha "${{ github.event.workflow_run.head_commit }}" \
+            --current-sha "${{ github.sha }}" \
+            --baseline-label "main branch point" \
+            --current-label "PR branch"
+          EXIT_CODE=$?
+          echo "gate_exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          exit 0  # Don't fail the step; let the check step decide
+
+      # Post the report as a PR comment
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('perf_gate_report.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            });
+
+      # Check whether the gate passed
+      - name: Gate verdict
+        if: steps.compare.outputs.gate_exit_code != '0'
+        run: |
+          echo "❌ Performance regressions detected"
+          cat perf_gate_report.md
+          exit 1
+
+      - name: Gate passed
+        if: steps.compare.outputs.gate_exit_code == '0'
+        run: |
+          echo "✅ No regressions detected"
+          cat perf_gate_report.md
+
+  upload-baseline-to-snowflake:
+    name: "Upload baseline to Snowflake"
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-slim
+    needs: llk-perf-gate
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9e0d6c9882fc7902038978ad1a988142 # v5.0.0
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas pyarrow
+
+      # Download current run artifacts (perf_data CSVs)
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: perf_data
+          path: perf_data
+
+      # Convert to Parquet using the existing infrastructure
+      - name: Convert to Parquet
+        run: |
+          python3 - <<'PYTHON'
+          import sys
+          sys.path.insert(0, 'tt_metal/tt-llk/tests/python_tests')
+          from helpers.perf.parquet import convert_csvs_to_parquet
+
+          # Placeholder: Use existing perf infrastructure to convert CSVs to Parquet
+          # with proper schema and provenance metadata
+          convert_csvs_to_parquet(
+              csv_dir='perf_data',
+              output_file='baseline.parquet',
+              commit_sha='${{ github.sha }}',
+              arch='wormhole',  # TODO: Detect from CI context
+              run_id='${{ github.run_id }}',
+              pipeline='nightly'
+          )
+          PYTHON
+
+      # Upload to SFTP server for data team ingestion into Snowflake
+      - name: Upload to SFTP
+        run: |
+          echo "TODO: Upload baseline.parquet to SFTP server"
+          echo "Credentials will be provided by data team"
+          echo ""
+          echo "SFTP destination: sftp://data-ingestion.internal/llk-baselines/"
+          echo "File: baseline.parquet"
+          echo "Metadata:"
+          echo "  - commit_sha: ${{ github.sha }}"
+          echo "  - arch: wormhole (TODO: detect)"
+          echo "  - run_id: ${{ github.run_id }}"
+          echo "  - timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
