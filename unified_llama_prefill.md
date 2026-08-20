@@ -636,27 +636,93 @@ source three times, once per descriptor.
 
 `bench_attention.py` puts our kernels next to ttnn's SDPA at one shape. S=128, D=64, causal,
 one head, ONE CORE each -- ttnn's `SDPAProgramConfig` takes the grid size, so pinning it to
-`CoreCoord(1, 1)` is what makes the comparison mean anything:
+`CoreCoord(1, 1)` is what makes the comparison mean anything. ttnn is also pinned to
+`MathFidelity::HiFi2` with `math_approx_mode=True`, so the rows below compare at equal settings
+rather than comparing our defaults against its cheaper ones:
 
 | | device time |
 |---|---|
-| ours: flash, 2 chunks | 81.4 us |
-| ours: flash, 4 chunks | 139.8 us |
-| ttnn SDPA, q32/k128 | 21.0 us |
-| ttnn SDPA, q128/k128 | 19.9 us |
+| ours: flash, 2 chunks, HiFi4 exact (metal defaults) | 69.0 us |
+| ours: flash, 2 chunks, HiFi2 approx | 54.3 us |
+| ours: flash, 4 chunks, HiFi4 exact | 112.7 us |
+| ours: flash, 4 chunks, HiFi2 approx | 95.0 us |
+| ttnn SDPA, q32/k128, HiFi2 approx | 21.0 us |
+| ttnn SDPA, q128/k128, HiFi2 approx | 19.9 us |
 
-**ttnn is about 4x faster on one core at the same shape**, and that is the honest headline. Two
-things it points at:
+**ttnn is about 2.6x faster on one core at the same shape and the same fidelity.** That is down
+from 3.9x, and the way it came down is worth more than the number.
 
-- **Per-pass overhead dominates.** Our kernel runs roughly eleven separate compute passes per
-  chunk, each paying a circular-buffer round trip -- `store()` reserves and pushes, the reader
-  waits and pops. ttnn's SDPA keeps intermediates in DST and fuses far more per acquire. The
-  clearest evidence is that going from 2 chunks to 4 makes us 1.7x SLOWER: the per-chunk fixed
-  cost, not the arithmetic, is what we are paying.
-- **The full grid was never the interesting number.** ttnn on 64 cores is 13.8 us against 21 us
-  on one, because at S=128 with a single head there are only a handful of q-chunks of work and
-  most cores idle. Any per-core figure derived from the full grid is fiction, which is why the
-  table pins both sides to one core.
+### Where the time actually goes
+
+The first diagnosis recorded here was that per-pass circular-buffer overhead dominates, and it
+was wrong. `unified_kernels/passcost.cpp` exists to settle it: `out = in` through N identity
+passes, each `copy` into its own scratch CB, so with the math pinned at zero the slope in N is
+the cost of one L1 round trip plus its CB handshake. It is dead linear at **0.79 us per pass over
+8 tiles, or 0.099 us per tile per pass**.
+
+Against that baseline, running the same one-load-one-pass-one-store structure with real math
+prices each SFPU op directly (8 tiles, one core, metal's default exact mode):
+
+| op | total | math above the copy baseline |
+|---|---|---|
+| copy (zero math) | 3.03 us | -- |
+| exp | 8.38 us | 0.665 us/tile |
+| sqrt | 10.26 us | 0.904 us/tile |
+| rsqrt | 11.29 us | 1.033 us/tile |
+| recip | 12.56 us | 1.192 us/tile |
+
+**The math outweighs the plumbing that carries it by roughly ten to one.** Fusing passes was
+never going to close a 3x gap: every pass removed from the flash kernel is worth 0.8 us, and
+there are not enough passes in it to matter. Two hypotheses died on this measurement:
+
+- **Pass fusion** did work, and its effect was small and in the predicted direction. Folding the
+  Q scale onto the host and normalising `p` straight to the new maximum took the chunk from 15
+  passes to 12, for 81.4 -> 69.1 us.
+- **DST batching was a regression and was reverted.** Each tile paid its own
+  `tile_regs_acquire/commit/wait/release`, a cross-thread sync, where DST holds 8 tiles; batching
+  the whole group into one acquire should have been free money. It made binary-chain 8-tile work
+  27.9 -> 31.4 us and 4-chunk flash 112.6 -> 118.3 us. The handshake is not what costs, and the
+  unrolled group code schedules worse than the simple loop.
+
+### The one that mattered: math_approx_mode was silently dead
+
+`ComputeConfigDescriptor` defaults to `MathFidelity::HiFi4` with `math_approx_mode = false` --
+the most accurate and slowest settings metal offers -- and neither was reachable from our
+harness. Threading them through was worth 3-5% for the fidelity half and almost nothing for
+approx, which is the tell: metal takes `approx` as an explicit **template parameter** defaulting
+to `false`, so `ckernel::exp_tile_init()` hardcoded exact mode and the config flag never reached
+the SFPU at all. Passing metal's generated `APPROX` constant (see `ExpOp` in `math.hpp`) makes
+approx exp **5.8x cheaper: 0.665 -> 0.115 us/tile**, which is what took flash to 54.3 us.
+
+`sqrt_tile_init` already reads `APPROX` internally, and `recip`/`rsqrt` expose no such knob, so
+exp is the only op with a flag to thread. It is also the one flash spends two passes per chunk on.
+
+The accuracy cost is real and is the reason this is a knob and not a new default. Normalised max
+absolute error on flash goes from 0.008 (HiFi4 exact) to 0.031 (HiFi2 approx), and approx exp
+alone takes a single exp from 0.6% to 3.3% max relative error -- which is why
+`test_unified_unary.py`, whose gate is 2% relative error, would fail under it. The default stays
+exact; ttnn's SDPA runs at the cheap settings, so that is what the comparison uses.
+
+### Still unaccounted for
+
+At 54.3 us for 2 chunks, the measured pass plumbing is roughly 14 us and approx exp about 3 us.
+The remaining ~35 us is matmul, reduce and broadcast math that has not been isolated the way the
+unary ops above were. `passcost.cpp` is the tool for it -- the same baseline-subtraction against
+a zero-math pass -- and doing that for `reduce` and `bcast` is the next honest step before any
+further optimisation. Two structural notes on that ~35 us:
+
+- `Strategy<ReduceFusion>` still takes one acquire per output tile. Given that batching hurt the
+  SFPU path, there is no reason to expect it to help here, but it has not been measured.
+- Going from 2 chunks to 4 costs 75%, and the reason is not fixed per-chunk overhead: halving the
+  chunk keeps total score work about constant while doubling how many times the running (m, l, o)
+  state is corrected. That is redundant vector math, and the fix is bigger chunks, which the
+  8-tile DST budget is what currently caps.
+
+### The full grid was never the interesting number
+
+ttnn on 64 cores is 13.8 us against 21 us on one, because at S=128 with a single head there are
+only a handful of q-chunks of work and most cores idle. Any per-core figure derived from the full
+grid is fiction, which is why the table pins both sides to one core.
 
 Not measured, and worth stating: ttnn is solving the general problem -- batches, heads, GQA,
 arbitrary sequence lengths -- while these kernels do one head at one shape, and the shapes our

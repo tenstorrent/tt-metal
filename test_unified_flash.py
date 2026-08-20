@@ -70,13 +70,16 @@ def grid_transpose(k, sk, dt):
     return v.permute(2, 1, 0, 3).reshape(dt * TILE, sk * TILE)
 
 
-def run(device, sq, sk_total, dt, num_chunks, causal, seed=0):
+def run(device, sq, sk_total, dt, num_chunks, causal, seed=0, fidelity=None):
     assert sk_total % num_chunks == 0
     sk = sk_total // num_chunks
     S_q, S_k, D = sq * TILE, sk_total * TILE, dt * TILE
 
     torch.manual_seed(seed)
-    q = (torch.rand([S_q, D]) - 0.5).to(torch.bfloat16)
+    # Q carries the 1/sqrt(d) scale: folding it in on the host costs one multiply here and
+    # saves a broadcast pass per chunk on device.
+    q_raw = torch.rand([S_q, D]) - 0.5
+    q = (q_raw / (D**0.5)).to(torch.bfloat16)
     k = torch.rand([S_k, D]) - 0.5
     v = (torch.rand([S_k, D]) - 0.5).to(torch.bfloat16)
 
@@ -123,7 +126,7 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0):
     ct_args = [sq, sk, dt, num_chunks]
     for t in (tq, tk, tv, tmask, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    rt_args = [t.buffer_address() for t in (tq, tk, tv, tmask, tout)] + [bf16_pair(1.0 / (D**0.5))]
+    rt_args = [t.buffer_address() for t in (tq, tk, tv, tmask, tout)]
 
     scores_pages, out_pages, vec_pages = sq * sk, sq * dt, sq
     cbs = [
@@ -132,18 +135,14 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0):
         make_cb(CB["v"], core_ranges, num_pages=sk * dt),
         make_cb(CB["mask"], core_ranges, num_pages=scores_pages),
         make_cb(CB["one"], core_ranges, num_pages=1),
-        make_cb(CB["scale"], core_ranges, num_pages=1),
         make_cb(CB["scores"], core_ranges, num_pages=scores_pages),
-        make_cb(CB["scaled"], core_ranges, num_pages=scores_pages),
         make_cb(CB["masked"], core_ranges, num_pages=scores_pages),
         make_cb(CB["rowmax"], core_ranges, num_pages=vec_pages),
         make_cb(CB["prob"], core_ranges, num_pages=scores_pages),
-        make_cb(CB["probscaled"], core_ranges, num_pages=scores_pages),
         make_cb(CB["rowsum"], core_ranges, num_pages=vec_pages),
         make_cb(CB["pv"], core_ranges, num_pages=out_pages),
         make_cb(CB["oscaled"], core_ranges, num_pages=out_pages),
         make_cb(CB["corrold"], core_ranges, num_pages=vec_pages),
-        make_cb(CB["corrnew"], core_ranges, num_pages=vec_pages),
         make_cb(CB["recipl"], core_ranges, num_pages=vec_pages),
         make_cb(CB["mnow"], core_ranges, num_pages=vec_pages),
         make_cb(CB["out"], core_ranges, num_pages=out_pages),
@@ -160,11 +159,14 @@ def run(device, sq, sk_total, dt, num_chunks, causal, seed=0):
         cbs=cbs,
         compile_time_args=ct_args,
         runtime_args=rt_args,
+        **(fidelity or {}),
     )
     out = ttnn.generic_op([tq, tk, tv, tmask, tout], program)
     got = ttnn.to_torch(out).to(torch.float32)[0, 0]
 
-    qf, kf, vf = q.to(torch.float32), k.to(torch.float32), v.to(torch.float32)
+    # The reference divides the scores, where the device pre-divided Q: mathematically the same,
+    # and the rounding difference shows up in the error rather than being hidden.
+    qf, kf, vf = q_raw.to(torch.float32), k.to(torch.float32), v.to(torch.float32)
     scores = qf @ kf.T / (D**0.5) + mask
     want = torch.softmax(scores, dim=-1) @ vf
     return got, want
