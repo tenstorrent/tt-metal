@@ -235,7 +235,18 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
 
     # vLLM pads decode to the nearest of these (not always max_num_seqs) so B=1
     # recovers the metal demo SDPA/matmul path (~27 tok/s/user vs ~20 at B=32).
+    #
+    # This is the *candidate* set. ``warmup_model_decode`` narrows it in place to
+    # the buckets it actually captured a decode trace for, because the plugin
+    # treats this attribute as the whole contract: padding to a bucket with no
+    # captured trace leaves the device in an undefined state (on Wormhole a
+    # fast-dispatch hang). Do not publish a wider list than what is warmed.
     tt_supported_decode_batch_sizes = SUPPORTED_PREFILL_BATCH_SIZES
+
+    # Set True once ``warmup_model_decode`` has captured its traces. Previously
+    # the presence of ``tt_warmed_decode_batch_sizes`` doubled as this sentinel;
+    # that attribute is gone, so the signal is now explicit.
+    _decode_warmup_complete = False
 
     # Hybrid vLLM kv-cache groups: env-gated via ``GEMMA4_HYBRID_KV_CACHE_GROUPS``
     # (default OFF). Toggle from the tt-inference-server model-spec env so the KV
@@ -342,8 +353,13 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         sizes = [b for b in sizes if b in supported or b == max_b]
         if not sizes:
             sizes = [max_b]
-        # Expose the warmed set so the plugin pads to a captured bucket.
-        self.tt_warmed_decode_batch_sizes = tuple(sizes)
+        # Narrow the declared buckets to exactly what we warm below, so the
+        # plugin never pads to a bucket without a captured decode trace. This
+        # replaces the previous separate ``tt_warmed_decode_batch_sizes``
+        # attribute — an unwarmed bucket is simply not supported (review on
+        # tenstorrent/vllm#455).
+        self.tt_supported_decode_batch_sizes = tuple(sizes)
+        self._decode_warmup_complete = True
         # Smallest → largest so the final batch leaves sampling traces bound to
         # max_batch logits (sampling capture is skipped for smaller buckets).
         for batch in sorted(sizes):
@@ -1254,7 +1270,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # a prior step is still in flight rebinds buffers the pending read
         # still references (#51186).
         if any(getattr(m, "_invalidate_decode_traces_after_page_table_realloc", False) for m in self.model):
-            after_warmup = bool(getattr(self, "tt_warmed_decode_batch_sizes", None))
+            after_warmup = bool(getattr(self, "_decode_warmup_complete", False))
             self.trace_ids_decode = defaultdict(lambda: None)
             self.trace_inputs_decode = defaultdict(lambda: None)
             self.trace_output_decode = defaultdict(lambda: None)
