@@ -26,28 +26,24 @@
 
 namespace ttnn::prim {
 
-using namespace tt::tt_metal;
-namespace metal2 = tt::tt_metal::experimental;
-
-using FixedPoint = std::int32_t;
 constexpr std::int32_t FIXED_POINT_SHIFT = 16;
 constexpr std::int32_t FIXED_ONE = 1 << FIXED_POINT_SHIFT;
 
-static FixedPoint float_to_fixed(float value) { return static_cast<FixedPoint>(value * FIXED_ONE); }
+static std::int32_t float_to_fixed(float value) { return static_cast<std::int32_t>(value * FIXED_ONE); }
 
 ttnn::device_operation::ProgramArtifacts UpsampleBilinearProgramFactory::create_program_artifacts(
     const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
-    const metal2::KernelSpecName READER{"reader"};
-    const metal2::KernelSpecName WRITER{"writer"};
-    const metal2::KernelSpecName COMPUTE{"compute"};
-    const metal2::DFBSpecName HALO{"halo"};
-    const metal2::DFBSpecName TILIZE_REDUCE0{"tilize_reduce0"};
-    const metal2::DFBSpecName TILIZE_REDUCE1{"tilize_reduce1"};
-    const metal2::DFBSpecName SCALAR0{"scalar0"};
-    const metal2::DFBSpecName SCALAR1{"scalar1"};
-    const metal2::DFBSpecName OUTPUT_DFB{"output"};
-    const metal2::TensorParamName INPUT{"input"};
-    const metal2::TensorParamName OUTPUT{"output"};
+    const tt::tt_metal::experimental::KernelSpecName reader_kernel{"reader"};
+    const tt::tt_metal::experimental::KernelSpecName writer_kernel{"writer"};
+    const tt::tt_metal::experimental::KernelSpecName compute_kernel{"compute"};
+    const tt::tt_metal::experimental::DFBSpecName halo_dfb_name{"halo"};
+    const tt::tt_metal::experimental::DFBSpecName tilize_reduce0_dfb_name{"tilize_reduce0"};
+    const tt::tt_metal::experimental::DFBSpecName tilize_reduce1_dfb_name{"tilize_reduce1"};
+    const tt::tt_metal::experimental::DFBSpecName scalar0_dfb_name{"scalar0"};
+    const tt::tt_metal::experimental::DFBSpecName scalar1_dfb_name{"scalar1"};
+    const tt::tt_metal::experimental::DFBSpecName output_dfb_name{"output"};
+    const tt::tt_metal::experimental::TensorParamName input_param{"input"};
+    const tt::tt_metal::experimental::TensorParamName output_param{"output"};
 
     const Tensor& input = input_tensor;
     Tensor& output = output_tensor;
@@ -74,8 +70,8 @@ ttnn::device_operation::ProgramArtifacts UpsampleBilinearProgramFactory::create_
 
     const Shape& output_shape = output.padded_shape();
     const std::uint32_t out_w = output_shape[2];
-    const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     TT_FATAL(in_channels % 32 == 0, "input channels should be divisible by 32");
     const std::uint32_t input_stick_nbytes = in_channels * input.element_size();
@@ -88,8 +84,8 @@ ttnn::device_operation::ProgramArtifacts UpsampleBilinearProgramFactory::create_
     (void)dst_full_sync_en;
     TT_FATAL(!fp32_dest_acc_en, "fp32_dest_acc_en as true not supported for upsample bilinear");
 
-    const ShardSpec shard_spec = input.shard_spec().value();
-    const CoreRangeSet all_cores = shard_spec.grid;
+    const tt::tt_metal::ShardSpec shard_spec = input.shard_spec().value();
+    const tt::tt_metal::CoreRangeSet all_cores = shard_spec.grid;
     const std::uint32_t ncores = shard_spec.num_cores();
     constexpr std::uint32_t MAX_TILES_PER_REDUCTION = 8;
     const std::uint32_t input_block_size_bytes =
@@ -107,53 +103,53 @@ ttnn::device_operation::ProgramArtifacts UpsampleBilinearProgramFactory::create_
     const std::uint32_t scalar_page_size = tt::tile_size(input_cb_data_format);
     const std::uint32_t output_page_size = tt::constants::TILE_WIDTH * output.element_size();
 
-    metal2::DataflowBufferSpec halo_dfb{
-        .unique_id = HALO,
+    tt::tt_metal::experimental::DataflowBufferSpec halo_dfb_spec{
+        .unique_id = halo_dfb_name,
         .entry_size = halo_page_size,
         .num_entries = halo_shard_shape[0],
         .data_format_metadata = input_cb_data_format,
-        .borrowed_from = INPUT,
+        .borrowed_from = input_param,
     };
-    metal2::DataflowBufferSpec tilize_reduce0_dfb{
-        .unique_id = TILIZE_REDUCE0,
+    tt::tt_metal::experimental::DataflowBufferSpec tilize_reduce0_dfb_spec{
+        .unique_id = tilize_reduce0_dfb_name,
         .entry_size = tilize_reduce0_page_size,
         .num_entries = 4 * BUFFERING_FACTOR,
         .data_format_metadata = input_cb_data_format,
-        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 4, .num_faces = 2},
+        .unpack_face_geometry_metadata = tt::tt_metal::FaceGeometry{.face_r_dim = 4, .num_faces = 2},
     };
-    metal2::DataflowBufferSpec tilize_reduce1_dfb{
-        .unique_id = TILIZE_REDUCE1,
+    tt::tt_metal::experimental::DataflowBufferSpec tilize_reduce1_dfb_spec{
+        .unique_id = tilize_reduce1_dfb_name,
         .entry_size = halo_page_size,
         .num_entries = 4 * BUFFERING_FACTOR,
         .data_format_metadata = input_cb_data_format,
-        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 4, .num_faces = 2},
+        .unpack_face_geometry_metadata = tt::tt_metal::FaceGeometry{.face_r_dim = 4, .num_faces = 2},
     };
-    metal2::DataflowBufferSpec scalar0_dfb{
-        .unique_id = SCALAR0,
+    tt::tt_metal::experimental::DataflowBufferSpec scalar0_dfb_spec{
+        .unique_id = scalar0_dfb_name,
         .entry_size = scalar_page_size,
         .num_entries = BUFFERING_FACTOR,
         .data_format_metadata = input_cb_data_format,
     };
-    metal2::DataflowBufferSpec scalar1_dfb{
-        .unique_id = SCALAR1,
+    tt::tt_metal::experimental::DataflowBufferSpec scalar1_dfb_spec{
+        .unique_id = scalar1_dfb_name,
         .entry_size = scalar_page_size,
         .num_entries = BUFFERING_FACTOR,
         .data_format_metadata = input_cb_data_format,
     };
-    metal2::DataflowBufferSpec output_dfb{
-        .unique_id = OUTPUT_DFB,
+    tt::tt_metal::experimental::DataflowBufferSpec output_dfb_spec{
+        .unique_id = output_dfb_name,
         .entry_size = output_page_size,
         .num_entries = output.shard_spec().value().shape[0] * in_ntiles_c,
         .data_format_metadata = output_cb_data_format,
-        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 2},
-        .borrowed_from = OUTPUT,
+        .unpack_face_geometry_metadata = tt::tt_metal::FaceGeometry{.face_r_dim = 1, .num_faces = 2},
+        .borrowed_from = output_param,
     };
 
-    log_debug(tt::LogOp, "halo_dfb: {}, npages: {}, pagesize: {}", HALO, halo_shard_shape[0], halo_page_size);
+    log_debug(tt::LogOp, "halo_dfb: {}, npages: {}, pagesize: {}", halo_dfb_name, halo_shard_shape[0], halo_page_size);
     log_debug(
         tt::LogOp,
         "output_dfb: {}, npages: {}, pagesize: {}",
-        OUTPUT_DFB,
+        output_dfb_name,
         output.shard_spec().value().shape[0] * in_ntiles_c,
         output_page_size);
     log_debug(tt::LogOp, "input_stick_nbytes: {}, output_stick_nbytes: {}", input_stick_nbytes, output_stick_nbytes);
@@ -161,14 +157,14 @@ ttnn::device_operation::ProgramArtifacts UpsampleBilinearProgramFactory::create_
 
     const float scale_h_inv = 1.0f / static_cast<float>(scale_factor_h);
     const float scale_w_inv = 1.0f / static_cast<float>(scale_factor_w);
-    const FixedPoint scale_h_inv_fixed = float_to_fixed(scale_h_inv);
-    const FixedPoint scale_w_inv_fixed = float_to_fixed(scale_w_inv);
-    const FixedPoint y_index_fixed = float_to_fixed((0.5f * scale_h_inv) + 0.5f);
-    const FixedPoint x_index_fixed = float_to_fixed((0.5f * scale_w_inv) + 0.5f);
+    const std::int32_t scale_h_inv_fixed = float_to_fixed(scale_h_inv);
+    const std::int32_t scale_w_inv_fixed = float_to_fixed(scale_w_inv);
+    const std::int32_t y_index_fixed = float_to_fixed((0.5f * scale_h_inv) + 0.5f);
+    const std::int32_t x_index_fixed = float_to_fixed((0.5f * scale_w_inv) + 0.5f);
     const std::uint32_t num_input_width_blocks = static_cast<std::uint32_t>(
         std::ceil(static_cast<float>(in_channels) / (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH)));
 
-    const metal2::KernelSpec::CompileTimeArgs common_dataflow_cta{
+    const tt::tt_metal::experimental::KernelSpec::CompileTimeArgs common_dataflow_cta{
         {"stick_nbytes", input_stick_nbytes},
         {"scale_h", scale_factor_h},
         {"scale_w", scale_factor_w},
@@ -190,66 +186,66 @@ ttnn::device_operation::ProgramArtifacts UpsampleBilinearProgramFactory::create_
 
     constexpr const char* DATAFLOW_KERNEL =
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_bilinear_multi_core_sharded.cpp";
-    metal2::KernelSpec reader{
-        .unique_id = READER,
+    tt::tt_metal::experimental::KernelSpec reader{
+        .unique_id = reader_kernel,
         .source = DATAFLOW_KERNEL,
         .dfb_bindings =
             {
-                metal2::ProducerOf(HALO, "halo"),
-                metal2::ProducerOf(TILIZE_REDUCE0, "tilize_reduce"),
-                metal2::ProducerOf(SCALAR0, "scalar"),
+                tt::tt_metal::experimental::ProducerOf(halo_dfb_name, "halo"),
+                tt::tt_metal::experimental::ProducerOf(tilize_reduce0_dfb_name, "tilize_reduce"),
+                tt::tt_metal::experimental::ProducerOf(scalar0_dfb_name, "scalar"),
             },
         .compile_time_args = make_dataflow_cta(/*is_reader=*/1),
         .runtime_arg_schema = {.runtime_arg_names = {"start_output_idx", "min_input_offset", "output_shard_height"}},
         .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
     };
-    metal2::KernelSpec writer{
-        .unique_id = WRITER,
+    tt::tt_metal::experimental::KernelSpec writer{
+        .unique_id = writer_kernel,
         .source = DATAFLOW_KERNEL,
         .dfb_bindings =
             {
-                metal2::ConsumerOf(HALO, "halo"),
-                metal2::ProducerOf(TILIZE_REDUCE1, "tilize_reduce"),
-                metal2::ProducerOf(SCALAR1, "scalar"),
+                tt::tt_metal::experimental::ConsumerOf(halo_dfb_name, "halo"),
+                tt::tt_metal::experimental::ProducerOf(tilize_reduce1_dfb_name, "tilize_reduce"),
+                tt::tt_metal::experimental::ProducerOf(scalar1_dfb_name, "scalar"),
             },
         .compile_time_args = make_dataflow_cta(/*is_reader=*/0),
         .runtime_arg_schema = {.runtime_arg_names = {"start_output_idx", "min_input_offset", "output_shard_height"}},
         .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
     };
 
-    constexpr ReduceOpMath REDUCE_OP = ReduceOpMath::SUM;
-    constexpr ReduceOpDim REDUCE_DIM = ReduceOpDim::H;
-    const std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(REDUCE_OP, REDUCE_DIM);
-    const metal2::KernelSpec::CompilerOptions::Defines compute_defines(reduce_defines);
+    constexpr tt::tt_metal::ReduceOpMath reduce_op = tt::tt_metal::ReduceOpMath::SUM;
+    constexpr tt::tt_metal::ReduceOpDim reduce_dim = tt::tt_metal::ReduceOpDim::H;
+    const std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
+    const tt::tt_metal::experimental::KernelSpec::CompilerOptions::Defines compute_defines(reduce_defines);
     const auto sfpu_precision =
         math_approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise;
-    metal2::ComputeHardwareConfig compute_hw_config;
+    tt::tt_metal::experimental::ComputeHardwareConfig compute_hw_config;
     if (input.device()->arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = metal2::ComputeGen2Config{
+        compute_hw_config = tt::tt_metal::experimental::ComputeGen2Config{
             .fpu_math_fidelity = math_fidelity,
             .sfpu_precision_mode = sfpu_precision,
             .enable_32_bit_dest = fp32_dest_acc_en,
         };
     } else {
-        compute_hw_config = metal2::ComputeGen1Config{
+        compute_hw_config = tt::tt_metal::experimental::ComputeGen1Config{
             .fpu_math_fidelity = math_fidelity,
             .sfpu_precision_mode = sfpu_precision,
             .enable_32_bit_dest = fp32_dest_acc_en,
         };
     }
 
-    metal2::KernelSpec compute{
-        .unique_id = COMPUTE,
+    tt::tt_metal::experimental::KernelSpec compute{
+        .unique_id = compute_kernel,
         .source = "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/compute/bilinear.cpp",
-        .compiler_options = {.defines = compute_defines},
+        .compiler_options = {.defines = compute_defines, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
-                metal2::ConsumerOf(TILIZE_REDUCE0, "tilize_reduce0"),
-                metal2::ConsumerOf(TILIZE_REDUCE1, "tilize_reduce1"),
-                metal2::ConsumerOf(SCALAR0, "scalar0"),
-                metal2::ConsumerOf(SCALAR1, "scalar1"),
-                metal2::ProducerOf(OUTPUT_DFB, "output"),
-                metal2::ConsumerOf(OUTPUT_DFB, "output"),
+                tt::tt_metal::experimental::ConsumerOf(tilize_reduce0_dfb_name, "tilize_reduce0"),
+                tt::tt_metal::experimental::ConsumerOf(tilize_reduce1_dfb_name, "tilize_reduce1"),
+                tt::tt_metal::experimental::ConsumerOf(scalar0_dfb_name, "scalar0"),
+                tt::tt_metal::experimental::ConsumerOf(scalar1_dfb_name, "scalar1"),
+                tt::tt_metal::experimental::ProducerOf(output_dfb_name, "output"),
+                tt::tt_metal::experimental::ConsumerOf(output_dfb_name, "output"),
             },
         .compile_time_args =
             {
@@ -264,33 +260,39 @@ ttnn::device_operation::ProgramArtifacts UpsampleBilinearProgramFactory::create_
         .hw_config = std::move(compute_hw_config),
     };
 
-    metal2::ProgramSpec spec{
+    tt::tt_metal::experimental::ProgramSpec spec{
         .name = "upsample_bilinear_multicore",
         .kernels = {reader, writer, compute},
-        .dataflow_buffers = {halo_dfb, tilize_reduce0_dfb, tilize_reduce1_dfb, scalar0_dfb, scalar1_dfb, output_dfb},
+        .dataflow_buffers =
+            {halo_dfb_spec,
+             tilize_reduce0_dfb_spec,
+             tilize_reduce1_dfb_spec,
+             scalar0_dfb_spec,
+             scalar1_dfb_spec,
+             output_dfb_spec},
         .tensor_parameters =
             {
-                {.unique_id = INPUT, .spec = input_mesh.tensor_spec()},
-                {.unique_id = OUTPUT, .spec = output_mesh.tensor_spec()},
+                {.unique_id = input_param, .spec = input_mesh.tensor_spec()},
+                {.unique_id = output_param, .spec = output_mesh.tensor_spec()},
             },
-        .work_units = {metal2::WorkUnitSpec{
+        .work_units = {tt::tt_metal::experimental::WorkUnitSpec{
             .name = "main",
-            .kernels = {READER, WRITER, COMPUTE},
+            .kernels = {reader_kernel, writer_kernel, compute_kernel},
             .target_nodes = all_cores,
         }},
     };
 
-    metal2::KernelRunArgs reader_run{.kernel = READER};
-    metal2::KernelRunArgs writer_run{.kernel = WRITER};
-    metal2::KernelRunArgs compute_run{.kernel = COMPUTE};
+    tt::tt_metal::experimental::KernelRunArgs reader_run{.kernel = reader_kernel};
+    tt::tt_metal::experimental::KernelRunArgs writer_run{.kernel = writer_kernel};
+    tt::tt_metal::experimental::KernelRunArgs compute_run{.kernel = compute_kernel};
     const std::uint32_t total_output_sticks = in_batch_size * output.logical_shape()[1] * output.logical_shape()[2];
     const std::uint32_t max_out_sticks_per_core = tt::div_up(total_output_sticks, ncores);
-    const std::vector<CoreCoord> logical_cores = corerange_to_cores(
+    const std::vector<tt::tt_metal::CoreCoord> logical_cores = tt::tt_metal::corerange_to_cores(
         shard_spec.grid, shard_spec.num_cores(), shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
     std::uint32_t start_output_idx = 0;
     std::uint32_t total_sticks_processed = 0;
-    for (const CoreCoord& core : logical_cores) {
+    for (const tt::tt_metal::CoreCoord& core : logical_cores) {
         const std::uint32_t out_sticks_this_core =
             std::min(max_out_sticks_per_core, total_output_sticks - total_sticks_processed);
         std::uint32_t min_input_offset = 0;
@@ -305,31 +307,31 @@ ttnn::device_operation::ProgramArtifacts UpsampleBilinearProgramFactory::create_
             min_input_offset = op_trace_metadata[min_trace_idx];
         }
 
-        metal2::AddRuntimeArgsForNode(
+        tt::tt_metal::experimental::AddRuntimeArgsForNode(
             reader_run.runtime_arg_values,
             core,
             {{"start_output_idx", start_output_idx},
              {"min_input_offset", min_input_offset},
              {"output_shard_height", out_sticks_this_core}});
-        metal2::AddRuntimeArgsForNode(
+        tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run.runtime_arg_values,
             core,
             {{"start_output_idx", start_output_idx},
              {"min_input_offset", min_input_offset},
              {"output_shard_height", out_sticks_this_core}});
-        metal2::AddRuntimeArgsForNode(
+        tt::tt_metal::experimental::AddRuntimeArgsForNode(
             compute_run.runtime_arg_values, core, {{"nsticks_per_core_by_nblocks", out_sticks_this_core}});
 
         start_output_idx += out_sticks_this_core;
         total_sticks_processed += out_sticks_this_core;
     }
 
-    metal2::ProgramRunArgs run_args{
+    tt::tt_metal::experimental::ProgramRunArgs run_args{
         .kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)},
         .tensor_args =
             {
-                {INPUT, metal2::TensorArgument{input_mesh}},
-                {OUTPUT, metal2::TensorArgument{output_mesh}},
+                {input_param, tt::tt_metal::experimental::TensorArgument{input_mesh}},
+                {output_param, tt::tt_metal::experimental::TensorArgument{output_mesh}},
             },
     };
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
