@@ -9,6 +9,7 @@ derivation is allowed to claim a pass and when it must refuse.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import textwrap
 from pathlib import Path
@@ -312,3 +313,20 @@ def test_results_block_wins_even_when_the_summary_is_truncated(expected):
     verdict, passed, failed = classify(expected, parse_failed(detail), "failure", detail)
     assert verdict == FAILED
     assert [r["filter"] for r in passed] == ["*Alpha*"] and len(failed) == 1
+
+
+def test_evidence_carries_no_test_counts(mapping):
+    """Counts drift whenever a test lands; the map must not assert them.
+
+    Inverted on purpose: strip the numeric forms that are immutable (PR refs,
+    release versions, PR tallies for a closed window) and flag anything left,
+    rather than trying to enumerate every way a count can be phrased.
+    """
+    allowed = re.compile(r"(?:PR\s*)?#\d+|\bPR\s+\d+|\bv\d+(?:\.\d+)+|\b\d+\s+PRs\b", re.IGNORECASE)
+    offenders = []
+    for r in mapping["requirements"]:
+        residue = allowed.sub("", r.get("_evidence", ""))
+        found = re.findall(r"\b\d+\b", residue)
+        if found:
+            offenders.append((r["key"], found))
+    assert not offenders, f"hard-coded counts will go stale: {offenders}"
