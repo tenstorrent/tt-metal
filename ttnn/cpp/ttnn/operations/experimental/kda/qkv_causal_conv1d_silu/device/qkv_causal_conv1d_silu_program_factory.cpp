@@ -42,8 +42,6 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     const uint32_t Kt = attrs.k_width / TILE_WIDTH;
     const uint32_t Vt = attrs.v_width / TILE_WIDTH;
     const uint32_t Ct = Qt + Kt + Vt;
-    const uint32_t channels = attrs.q_width + attrs.k_width + attrs.v_width;
-    const uint32_t row_bytes = channels * sizeof(uint16_t);
     uint32_t block_ct = Ct <= 48 ? Ct : 24u;
     while (Ct % block_ct != 0) {
         --block_ct;
@@ -110,8 +108,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
                 m2::TensorBinding{TAP2, "tap2"},
                 m2::TensorBinding{TAP3, "tap3"},
             },
-        .compile_time_args =
-            {{"block_ct", block_ct}, {"channels", channels}, {"row_bytes", row_bytes}, {"num_blocks", num_blocks}},
+        .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };

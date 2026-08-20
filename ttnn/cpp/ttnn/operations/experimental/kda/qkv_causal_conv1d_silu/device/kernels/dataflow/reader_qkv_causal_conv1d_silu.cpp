@@ -7,10 +7,8 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-template <uint32_t block_ct, uint32_t channels, uint32_t row_bytes, uint32_t num_blocks>
+template <uint32_t block_ct, uint32_t num_blocks>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
-    static_assert(row_bytes == channels * sizeof(uint16_t));
-
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
     const auto tap0 = TensorAccessor(tensor::tap0);
