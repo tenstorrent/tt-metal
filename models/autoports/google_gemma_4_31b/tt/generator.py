@@ -22,6 +22,7 @@ from models.autoports.google_gemma_4_31b.tt.model import (
     Gemma4FullModelConfig,
     _kv_cache_identity,
     _resolve_checkpoint,
+    resolve_eos_token_ids,
 )
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig
 from models.common.readiness_check.contract import Generator, NextInputFn
@@ -297,6 +298,8 @@ class Gemma4Generator(Generator):
         self.tokenizer = tokenizer or AutoTokenizer.from_pretrained(
             checkpoint, local_files_only=True, trust_remote_code=True
         )
+        # The base checkpoint stops on one id, the instruction-tuned one on three.
+        self._eos_token_ids = resolve_eos_token_ids(self.tokenizer, checkpoint)
         self.model = model or Gemma4FullModel.from_pretrained(
             mesh_device=mesh_device,
             model_id_or_path=checkpoint,
@@ -1134,7 +1137,7 @@ class Gemma4Generator(Generator):
                     if max_new_tokens > 2:
                         self.write_teacher_forced_token(forced)
                 for step in range(2, max_new_tokens):
-                    if stop_on_eos and next_input is None and outputs[-1] == self.tokenizer.eos_token_id:
+                    if stop_on_eos and next_input is None and outputs[-1] in self._eos_token_ids:
                         break
                     sampled, _ = self.decode_next_token_traced()
                     predicted = self.read_sampled_token(sampled)

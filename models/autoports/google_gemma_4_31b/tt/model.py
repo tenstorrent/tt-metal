@@ -40,17 +40,52 @@ def _text_config(config):
     return getattr(config, "text_config", config)
 
 
+# The instruction-tuned checkpoint is architecturally identical to the base one
+# (same layer count, dims, head config, vocab and sliding-window pattern), so the
+# same implementation serves both. It differs in weight values, in shipping a
+# chat_template.jinja, and in declaring three EOS ids rather than one.
+SUPPORTED_HF_MODEL_IDS = (HF_MODEL_ID, f"{HF_MODEL_ID}-it")
+
+
 def _resolve_checkpoint(model_id_or_path: str | Path = HF_MODEL_ID) -> Path:
     candidate = Path(model_id_or_path).expanduser()
     if candidate.exists():
         return candidate.resolve()
-    if str(model_id_or_path) != HF_MODEL_ID:
-        raise FileNotFoundError(f"checkpoint is not local: {model_id_or_path}")
-    snapshots = Path.home() / ".cache" / "huggingface" / "hub" / "models--google--gemma-4-31B" / "snapshots"
+    model_id = str(model_id_or_path)
+    if model_id not in SUPPORTED_HF_MODEL_IDS:
+        raise FileNotFoundError(
+            f"checkpoint is not local: {model_id_or_path} (supported ids: {', '.join(SUPPORTED_HF_MODEL_IDS)})"
+        )
+    cache_dir = "models--" + model_id.replace("/", "--")
+    snapshots = Path.home() / ".cache" / "huggingface" / "hub" / cache_dir / "snapshots"
     matches = sorted(path for path in snapshots.glob("*") if (path / "config.json").exists())
     if not matches:
-        raise FileNotFoundError(f"cached {HF_MODEL_ID} checkpoint not found under {snapshots}")
+        raise FileNotFoundError(f"cached {model_id} checkpoint not found under {snapshots}")
     return matches[-1].resolve()
+
+
+def resolve_eos_token_ids(tokenizer, checkpoint: Path | str | None = None) -> frozenset[int]:
+    """Every id that terminates generation for this checkpoint.
+
+    The base checkpoint declares `eos_token_id: 1`; the instruction-tuned one
+    declares `[1, 106, 50]`, so a single-value comparison against
+    `tokenizer.eos_token_id` misses end-of-turn and lets generation run on.
+    """
+    ids: set[int] = set()
+    raw = getattr(tokenizer, "eos_token_id", None)
+    if isinstance(raw, int):
+        ids.add(int(raw))
+    elif raw:
+        ids.update(int(value) for value in raw)
+    if checkpoint is not None:
+        config_path = Path(checkpoint) / "generation_config.json"
+        if config_path.exists():
+            declared = json.loads(config_path.read_text(encoding="utf-8")).get("eos_token_id")
+            if isinstance(declared, int):
+                ids.add(int(declared))
+            elif declared:
+                ids.update(int(value) for value in declared)
+    return frozenset(ids)
 
 
 def _load_checkpoint_state(checkpoint: Path, *, layer_indices: Sequence[int] | None = None) -> dict[str, torch.Tensor]:
