@@ -29,7 +29,7 @@
 
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
-#include "api/llk_operand_members.h"
+#include "internal/llk_metadata.h"
 #include "api/lock.h"
 #include "api/core_local_mem.h"
 #include <type_traits>
@@ -89,7 +89,7 @@ struct DFBBindingToken {
 
     // Compute endpoints additionally bake the operand's LLK format + face grid; see
     // ckernel::experimental::to_llk_mem_descriptor below. DM-only DFBs use the id-only constructor.
-    constexpr DFBBindingToken(uint16_t id, LlkOperandMembers llk) noexcept : id_(id), llk_(llk) {}
+    constexpr DFBBindingToken(uint16_t id, LLKMetadata llk) noexcept : id_(id), llk_metadata_(llk) {}
 
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
 
@@ -105,15 +105,18 @@ struct DFBBindingToken {
     // These metadata are passed in from the host side through the DataflowBufferSpec associated with the DFB binding.
     friend constexpr ckernel::experimental::LLKMemDescriptor to_llk_mem_descriptor(DFBBindingToken token) {
         return {
-            token.llk_.format,
+            token.llk_metadata_.format,
             ckernel::TensorShape{
-                token.llk_.face_r_dim, token.llk_.face_c_dim, token.llk_.num_faces_r_dim, token.llk_.num_faces_c_dim}};
+                token.llk_metadata_.face_r_dim,
+                token.llk_metadata_.face_c_dim,
+                token.llk_metadata_.num_faces_r_dim,
+                token.llk_metadata_.num_faces_c_dim}};
     }
 #endif
 
 private:
     uint16_t id_;
-    LlkOperandMembers llk_{};
+    LLKMetadata llk_metadata_{};
 };
 
 class DataflowBuffer {

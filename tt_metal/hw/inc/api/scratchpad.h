@@ -15,7 +15,7 @@
 
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
-#include "api/llk_operand_members.h"
+#include "internal/llk_metadata.h"
 #include "experimental/kernel_args.h"
 
 template <typename T>
@@ -41,8 +41,8 @@ public:
 
     // A scratchpad used as an LLK operand additionally bakes its format + face grid; see
     // ckernel::experimental::to_llk_mem_descriptor below. Plain working memory uses the two-arg form.
-    constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes, LlkOperandMembers llk) noexcept :
-        crta_offset_(crta_offset), size_in_bytes_(size_in_bytes), llk_(llk) {}
+    constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes, LLKMetadata llk) noexcept :
+        crta_offset_(crta_offset), size_in_bytes_(size_in_bytes), llk_metadata_(llk) {}
 
 #ifdef COMPILE_FOR_TRISC
     // Converts to a LLKMemDescriptor, which contains LLK relevant information about the scratchpad.
@@ -51,10 +51,18 @@ public:
     // the scratchpad binding. When the data format is not provided on the host side, the behavior of this function is
     // undefined.
     friend constexpr ckernel::experimental::LLKMemDescriptor to_llk_mem_descriptor(ScratchpadBindingToken token) {
+        if (token.llk_metadata_.format == LLKMetadata::kNoFormat) {
+            // Needs to call a helper function here to avoid ASSERT macro expanding into inline asm,
+            // inline asm is not supported in constexpr functions in C++17.
+            token.llk_metadata_missing();
+        }
         return {
-            token.llk_.format,
+            token.llk_metadata_.format,
             ckernel::TensorShape{
-                token.llk_.face_r_dim, token.llk_.face_c_dim, token.llk_.num_faces_r_dim, token.llk_.num_faces_c_dim}};
+                token.llk_metadata_.face_r_dim,
+                token.llk_metadata_.face_c_dim,
+                token.llk_metadata_.num_faces_r_dim,
+                token.llk_metadata_.num_faces_c_dim}};
     }
 #endif
 
@@ -62,9 +70,11 @@ private:
     template <typename T>
     friend class Scratchpad;
 
+    void llk_metadata_missing() const { ASSERT(false, "ScratchpadBindingToken with no data format is undefined"); }
+
     uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
     uint32_t size_in_bytes_;  // static per-node size
-    LlkOperandMembers llk_{};
+    LLKMetadata llk_metadata_{};
 };
 
 /**

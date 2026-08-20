@@ -12,7 +12,7 @@
 #include "api/compute/experimental/2_0/llk_mem_descriptor.h"
 #endif
 
-#include "api/llk_operand_members.h"
+#include "internal/llk_metadata.h"
 #include "api/tensor/tensor_accessor_args.h"
 
 namespace tensor_accessor {
@@ -52,7 +52,7 @@ struct TensorBindingToken {
     static constexpr args_t args{};
     static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
 
-    constexpr TensorBindingToken(LlkOperandMembers llk) noexcept : llk_(llk) {}
+    constexpr TensorBindingToken(LLKMetadata llk) noexcept : llk_metadata_(llk) {}
 
 #ifdef COMPILE_FOR_TRISC
     // Converts to a LLKMemDescriptor, which contains LLK relevant information about the tensor.
@@ -61,14 +61,17 @@ struct TensorBindingToken {
     friend constexpr ckernel::experimental::LLKMemDescriptor to_llk_mem_descriptor(TensorBindingToken token) {
         static_assert(!args_t::is_dram, "to_llk_mem_descriptor: DRAM TensorBindingToken has no node-local L1 region");
         return {
-            token.llk_.format,
+            token.llk_metadata_.format,
             ckernel::TensorShape{
-                token.llk_.face_r_dim, token.llk_.face_c_dim, token.llk_.num_faces_r_dim, token.llk_.num_faces_c_dim}};
+                token.llk_metadata_.face_r_dim,
+                token.llk_metadata_.face_c_dim,
+                token.llk_metadata_.num_faces_r_dim,
+                token.llk_metadata_.num_faces_c_dim}};
     }
 #endif
 
 private:
-    LlkOperandMembers llk_;
+    LLKMetadata llk_metadata_;
 };
 
 }  // namespace tensor_accessor

@@ -209,7 +209,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             for (const auto& entry : dfb_entries) {
                 if (entry.facts.present) {
                     content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << ", "
-                            << format_llk_operand_members(entry.facts) << "};\n";
+                            << format_llk_metadata(entry.facts) << "};\n";
                 } else {
                     content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
                 }
@@ -237,8 +237,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             for (const auto& entry : ta_entries) {
                 content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
                         << "u, " << entry.addr_crta_offset << "u>;\n";
-                content << "constexpr " << entry.name << "_t " << entry.name << "{"
-                        << format_llk_operand_members(entry.facts) << "};\n";
+                content << "constexpr " << entry.name << "_t " << entry.name << "{" << format_llk_metadata(entry.facts)
+                        << "};\n";
             }
             content << "}  // namespace tensor\n";
         }
@@ -254,7 +254,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             for (const auto& entry : scratch_entries) {
                 if (entry.facts.present) {
                     content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
-                            << entry.size_bytes << "u, " << format_llk_operand_members(entry.facts) << "};\n";
+                            << entry.size_bytes << "u, " << format_llk_metadata(entry.facts) << "};\n";
                 } else {
                     content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
                             << entry.size_bytes << "u};\n";
