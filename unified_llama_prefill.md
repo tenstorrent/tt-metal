@@ -566,15 +566,61 @@ cover both; either alone has a blind spot.
 
 ## Phase 10 -- Flash chunking / online softmax
 
-The first genuinely new model concept. S=2048 scores are 8MB, far past L1, so real
-prefill must stream K/V in chunks and rescale a running max and running sum across
-them. Nothing in the model is stateful across blocks in that way today --
-`Accumulator` holds a running total, but not a running *statistic* that
-retroactively rescales what came before.
+**DONE.** `unified_kernels/flash_attention.cpp` streams K and V in chunks so the score block
+never exists in full. Ten checks pass, max absolute error 0.0023-0.0029 against torch, and
+the answer is the same at 1, 2 and 4 chunks.
 
-- [ ] Design the running-statistic idiom (an `OnlineSoftmax` alongside `Accumulator`?)
-- [ ] Chunked K/V streaming in the kernel
-- [ ] Test at S large enough that the non-flash path cannot fit
+### The new idiom, and the one library type it needed
+
+`Accumulator` carries a running TOTAL and nothing in it can rescale that total between steps,
+which is exactly what an online softmax does when a chunk raises the maximum. So the state
+lives in circular buffers across the loop, held by `RetainedBlock<S>` -- the obligation moves
+into a slot rather than being discharged, so `~RetainedBlock` asserting empty still catches a
+state that was pushed and never waited on. See unified_flash_outline.md.
+
+One buffer per state variable, sized 2x the block: `release()` waits on the live value,
+`store()` reserves the free half, and the pop lands at the end of the iteration, so the next
+one finds the new value at the front. No parity bookkeeping.
+
+`copy(block)` earned its place twice over -- seeding chunk 0's maximum, and copying the new
+maximum from its scratch buffer into the state slot.
+
+### The formulation, and a correction to the outline
+
+Each chunk is normalised by its OWN row max and the difference folded into two corrections:
+
+    rm = rowmax(s); p = exp(s - rm)
+    m' = max(m, rm);  c_old = exp(m - m');  c_new = exp(rm - m')
+    l' = l * c_old + rowsum(p * c_new)
+    o' = o * c_old + (p * c_new) @ V
+
+The outline claimed this means `m'` is "written as state and never read here". **That was
+wrong** -- both corrections read it. Caught by review before the first run: reading it back
+out of the state buffer would have taken the FRONT, which is the OLD value, and popped it. So
+`m'` goes to a scratch buffer, both corrections read that, and `copy()` moves it into the
+slot. What the formulation does buy is that the Sq x Sk exponential never needs it.
+
+### The gate is chunk invariance, and the first version of it was vacuous
+
+Matching torch is not enough: a single-chunk run never rescales anything, so it passes with
+the correction machinery entirely broken. Every sabotage below leaves the 1-chunk row at
+0.0024 and is caught only by the comparison BETWEEN chunk counts.
+
+But invariance alone was not enough either, because the test data made the corrections
+irrelevant. With uniform random Q and K every chunk's row maximum is nearly identical, so
+`exp(m_old - m_new)` is already 1 -- and forcing it to 1 changed the answer by 0.005 against a
+0.02 tolerance. **It passed.** The keys are now RAMPED along the sequence so later ones score
+far higher and the maxima genuinely jump between chunks. The ramp is a function of position in
+the full sequence, not of the chunk, so every chunk count still sees the same problem.
+
+| sabotage | 1 chunk | invariance 1 vs 4 |
+|---|---|---|
+| `c_old` forced to 1 | 0.0024 ok | **0.201 FAIL** |
+| `c_new` forced to 1 | 0.0024 ok | **0.095 FAIL** |
+| corrections read `rm` instead of `m'` | 0.0024 ok | **0.040 FAIL** |
+
+At the original 5x ramp the first of those measured 0.025 and only just tripped a 0.02
+threshold; at 21x it is a 10x margin.
 
 ## Phase 11 -- Full block orchestration
 
