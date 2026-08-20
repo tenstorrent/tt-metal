@@ -374,7 +374,7 @@ def test_prepare_chunk_recurrence_rejects_host_inputs(
 @pytest.mark.parametrize(
     ("case", "message"),
     [
-        ("g_dtype", "g has wrong dtype"),
+        ("g_dtype", "g must be BFLOAT16, got DataType::FLOAT32"),
         ("layout", "k must use TILE layout"),
         ("rank", "rank 3 production-flat"),
         ("leading", "leading dimension 1"),
@@ -453,7 +453,7 @@ def test_prepare_chunk_recurrence_rejects_invalid_options(device: ttnn.Device, e
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-    with expect_error(RuntimeError, "output memory must be interleaved"):
+    with expect_error(RuntimeError, "output memory layout must be INTERLEAVED, got HEIGHT_SHARDED"):
         _run(inputs, 2, memory_config=sharded)
 
 
