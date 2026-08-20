@@ -400,53 +400,6 @@ if(WITH_PYTHON_BINDINGS)
     # .. set important linker flags
     nanobind_link_options(ttnn)
 
-    # Precompile the headers that dominate parse time in the ~300 *_nanobind.cpp TUs
-    # (nanobind + ttnn operation/tensor headers). The ttnn target cannot REUSE_FROM
-    # TTNN::PCHFull because nanobind_opt_size/nanobind_compile_options alter its flags,
-    # so it gets its own PCH. Since the target is its own PCH provider, Clang+ccache
-    # correctness requires tt_disable_ccache_for_pch on it — which would disable ccache
-    # for ALL of its TUs, a bad trade on warm-cache (CI) builds. So only enable this
-    # PCH when ccache is off: cold/local builds get the PCH win, CI keeps ccache.
-    if(NOT CMAKE_DISABLE_PRECOMPILE_HEADERS AND NOT ENABLE_CCACHE)
-        target_precompile_headers(
-            ttnn
-            PRIVATE
-                <fmt/core.h>
-                <fmt/format.h>
-                <nlohmann/json.hpp>
-                <algorithm>
-                <cstddef>
-                <cstdint>
-                <functional>
-                <map>
-                <memory>
-                <optional>
-                <tuple>
-                <unordered_map>
-                <variant>
-                <vector>
-                <nanobind/nanobind.h>
-                <nanobind/operators.h>
-                <nanobind/stl/array.h>
-                <nanobind/stl/optional.h>
-                <nanobind/stl/shared_ptr.h>
-                <nanobind/stl/string.h>
-                <nanobind/stl/variant.h>
-                <nanobind/stl/vector.h>
-                <ttnn-nanobind/small_vector_caster.hpp>
-                <ttnn-nanobind/span_caster.hpp>
-                <ttnn-nanobind/export_enum.hpp>
-                <ttnn-nanobind/bind_function.hpp>
-                <ttnn/device_operation.hpp>
-                <ttnn/operation.hpp>
-                <ttnn/types.hpp>
-                <ttnn/tensor/tensor.hpp>
-        )
-        if(COMMAND tt_disable_ccache_for_pch)
-            tt_disable_ccache_for_pch(ttnn)
-        endif()
-    endif()
-
     if(TT_INSTALL)
         install(TARGETS ttnn EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime)
     endif()
