@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Checkpoint-free PCC gate for the Qwen3.5 VISION TOWER.
+"""Checkpoint-free PCC gate and device-perf profile for the Qwen3.5 / 3.6 VISION TOWER.
 
 ``test_wrapped_model.py`` is the tower's PCC test, but it needs ``dummy_weights=True``, which routes
 the CONFIG through ``ModelArgs.LOCAL_HF_PARAMS`` -- and that table has no ``Qwen3.5-9B`` entry, so it
@@ -8,40 +8,46 @@ raises ``KeyError: 'Qwen3.5-9B'`` before it reaches the device. That leaves the 
 runnable numerical gate.
 
 This test closes that gap by building the HF reference from ``vision_config`` alone
-(``Qwen3_5VisionModel(vcfg)``, random weights) and comparing the TT tower against it. Weight *values* do not matter to PCC -- only that both sides use the same ones.
+(``Qwen3_5VisionModel(vcfg)``, random weights) and comparing the TT tower against it. Weight *values*
+do not matter to PCC -- only that both sides use the same ones.
 
-THE SHAPE
----------
-``(1, 86, 128)`` / 11008 patches -> 12288 padded: the image ``demo/benchmark_vision.py`` and
-``demo/vision_demo.py`` default to, and therefore the shape whose matmul plans
-(``VisionModelArgs.vision_mm_plan``) the sweep tuned. Depth is capped at 2 because the torch
-reference costs ~0.8 TFLOP per block on the host for this grid.
+TWO CASES, EACH AT THE DEPTH THAT SUITS IT
+------------------------------------------
+``oneblock``  -- ONE block, signpost-bounded, warmed up. This is the profiling case: with a single
+    block every block op appears exactly once, so the perf report needs no dividing and no "read the
+    second instance" caveat. A window is ``head + depth x block + tail``, so window totals are only
+    comparable at equal depth -- keeping the profiled depth pinned at 1 is what makes the numbers in
+    ``../VISION_TOWER_PERF.md`` mean the same thing run to run.
 
-ONE RUN GIVES BOTH PCC AND THE DEVICE-PERF REPORT
--------------------------------------------------
-The measured forward is wrapped in ``start``/``stop`` signposts, with an untimed warmup forward
-before it and the profiler drained in between. So under Tracy this test yields a device-op report for
-exactly the code whose PCC it just asserted, instead of profiling and PCC-gating in two separate runs
-that could disagree::
+``fulldepth`` -- ALL ``vision_config.depth`` blocks, no warmup, no signposts. This is the
+    correctness case. Depth matters for numerics: error compounds block over block, so a shallow
+    check flatters the tower badly -- measured on the 9B: **0.99977 at depth 1, 0.99859 at depth 2,
+    0.98540 at the real depth of 27**. Only full depth gates what actually ships. The host reference
+    costs ~0.8 TFLOP per block, which is ~30 s for the whole tower at this grid.
 
-    python -m tracy -p -v -r --dump-device-data-mid-run -m \\
-        pytest "models/demos/blackhole/qwen36/tests/test_vision_tower_pcc.py::test_vision_tower_pcc[wormhole_b0-patches11008_depth2-mesh_device0-device_params0]"
-    tt-perf-report --start-signpost start --end-signpost stop <ops_perf_results_*.csv>
+Only the perf case emits signposts, so profiling the whole file still yields exactly ONE
+``start``/``stop`` window -- but prefer ``-k oneblock`` so the full-depth reference is not computed just
+to be thrown away.
 
-Note the report then covers ``depth`` blocks, not one, so a per-block figure is the block ops divided
-by ``depth`` (or just read the second instance of each op, which is the cache-warm one).
-
-Run::
+Run the numerical gate (full depth)::
 
     MESH_DEVICE=N300 HF_MODEL=Qwen/Qwen3.5-9B pytest \\
-        models/demos/blackhole/qwen36/tests/test_vision_tower_pcc.py -v -s
+        models/demos/blackhole/qwen36/tests/test_vision_tower_pcc.py -v -s -k fulldepth
+
+Profile one block::
+
+    MESH_DEVICE=N300 HF_MODEL=Qwen/Qwen3.5-9B python -m tracy -p -v -r -m pytest \\
+        models/demos/blackhole/qwen36/tests/test_vision_tower_pcc.py -v -s -k oneblock
+    tt-perf-report --start-signpost start --end-signpost stop <ops_perf_results_*.csv>
 
 For the 27B tower, point ``HF_MODEL`` at the LOCAL config dir -- ``ModelArgs`` takes
 ``CKPT_DIR = HF_MODEL`` and ``model_name`` from its basename, so no checkpoint or hub fetch is
 needed (this tower's reference weights are config-init either way)::
 
     MESH_DEVICE=T3K HF_MODEL=$PWD/models/tt_transformers/model_params/Qwen3.6-27B pytest \\
-        models/demos/blackhole/qwen36/tests/test_vision_tower_pcc.py -v -s
+        models/demos/blackhole/qwen36/tests/test_vision_tower_pcc.py -v -s -k fulldepth
+
+``QWEN36_VISION_MM_TUNING=0`` runs either case with the Wormhole tuning gated off, for A/B.
 """
 
 from __future__ import annotations
@@ -59,11 +65,26 @@ from models.demos.blackhole.qwen36.tt.vision.model import DropInVisionTransforme
 from models.demos.blackhole.qwen36.tt.vision.vision_model_config import VisionModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
-# (grid, depth, pcc). depth=None means the config's full depth.
-# The threshold is set from measured numbers: 0.99853 before this tower's matmuls were tuned,
-# 0.99857 after.
+# (grid, depth, pcc_required, profile). depth=None means the config's full depth.
+#
+# The thresholds are MEASURED values with a little margin, not aspirations. Demo grid:
+#
+#              depth 1    depth 27 (full)
+#   9B  / N300  0.99977    0.99921
+#   27B / T3K   0.99965    0.99897
+#
+# The full-depth number is the one that gates. It used to be ~0.985, and that was NOT bfloat8_b
+# weight error as previously assumed -- it was the sequence padding: the tower ran SDPA with
+# `is_causal=False` and no `attn_mask`, so the pad rows acted as unmasked keys and every real query
+# summed `exp(0)` over each of them. Tightening the pad from a 2048 multiple to the 128 the tower
+# actually requires (see `DropInVisionTransformer.forward`) took the 9B from 0.98540 to 0.99921.
+#
+# Note depth 1 barely moved (0.9997659 -> 0.9997664): that error only appears once compounded over
+# depth, which is why the shallow case cannot be the gate. A drop below these floors means a real
+# numerical regression -- re-measure both meshes before relaxing one.
 CASES = [
-    ((1, 86, 128), 2, 0.99),
+    ((1, 86, 128), 1, 0.999, True),
+    ((1, 86, 128), None, 0.998, False),
 ]
 
 WEIGHT_DTYPE = ttnn.bfloat8_b
@@ -88,11 +109,16 @@ DEVICE_PARAMS = [{"l1_small_size": 24576, **({"fabric_config": ttnn.FabricConfig
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize(
-    "grid, depth, pcc_required",
+    "grid, depth, pcc_required, profile",
     CASES,
-    ids=[f"patches{math.prod(g)}_depth{d or 'full'}" for g, d, _ in CASES],
+    # Selector strings deliberately avoid "pcc" and "vision_tower": `-k` also matches the module and
+    # function names, so `-k pcc` would select BOTH cases.
+    ids=[
+        f"{'oneblock' if prof else 'fulldepth'}_patches{math.prod(g)}_depth{d or 'full'}"
+        for g, d, _, prof in CASES  # noqa: B023
+    ],
 )
-def test_vision_tower_pcc(mesh_device, device_params, grid, depth, pcc_required, tmp_path, reset_seeds):
+def test_vision_tower_pcc(mesh_device, device_params, grid, depth, pcc_required, profile, tmp_path, reset_seeds):
     del device_params
     from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5VisionModel
 
@@ -123,22 +149,28 @@ def test_vision_tower_pcc(mesh_device, device_params, grid, depth, pcc_required,
     grid_thw = torch.tensor([grid], dtype=torch.long)
     pixel_values = torch.randn(n_patches, pixel_dim)
 
-    logger.info(f"reference tower: depth={vcfg.depth}, grid={grid} ({n_patches} patches -> {seq_len} padded)")
+    # `seq_len` above only sizes `max_seq_len`; the tower pads rows to a multiple of 128, so report
+    # what it will actually run at rather than the (larger) buffer bound.
+    tower_rows = -(-n_patches // 128) * 128
+    logger.info(
+        f"{'PROFILE' if profile else 'PCC'} case: depth={vcfg.depth}, grid={grid} "
+        f"({n_patches} patches -> {tower_rows} rows, max_seq_len {seq_len})"
+    )
     reference_output = reference_model(pixel_values, grid_thw).pooler_output
 
-    # Warmup outside the signposts so kernel compilation and first-touch allocation are not measured,
-    # then drain the on-device profiler buffer so those markers neither accumulate nor land in the
-    # report's start..stop window. Both are no-ops without a profiler build.
-    ttnn.deallocate(tt_model(pixel_values, grid_thw))
-    read_profiler = getattr(ttnn, "ReadDeviceProfiler", None)
-    if read_profiler is not None:
-        read_profiler(mesh_device)
-
     signpost = None
-    try:
-        from tracy import signpost
-    except ImportError:
-        logger.info("tracy.signpost unavailable; running without signpost markers.")
+    if profile:
+        # Warm up outside the signposts so kernel compilation and first-touch allocation are not
+        # measured, then drain the on-device profiler buffer so those markers neither accumulate nor
+        # land in the start..stop window. Both are no-ops without a profiler build.
+        ttnn.deallocate(tt_model(pixel_values, grid_thw))
+        read_profiler = getattr(ttnn, "ReadDeviceProfiler", None)
+        if read_profiler is not None:
+            read_profiler(mesh_device)
+        try:
+            from tracy import signpost
+        except ImportError:
+            logger.info("tracy.signpost unavailable; running without signpost markers.")
 
     if signpost is not None:
         signpost("start")
@@ -146,8 +178,10 @@ def test_vision_tower_pcc(mesh_device, device_params, grid, depth, pcc_required,
     ttnn.synchronize_device(mesh_device)
     if signpost is not None:
         signpost("stop")
-    if read_profiler is not None:
-        read_profiler(mesh_device)
+        read_profiler = getattr(ttnn, "ReadDeviceProfiler", None)
+        if read_profiler is not None:
+            read_profiler(mesh_device)
+
     # The merger output is fractured along dim=3 (out_hidden_size/TP per device).
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
     tt_output_torch = tt_output_torch.squeeze(0).squeeze(0)[:, : vcfg.out_hidden_size]

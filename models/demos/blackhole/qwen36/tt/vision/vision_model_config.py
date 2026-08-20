@@ -11,6 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.qwen3_vl.tt.common import nearest_multiple
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import ModelArgs, OpGroup
 
 
@@ -39,6 +40,19 @@ class VisionMatmulPlan(NamedTuple):
     # Where this matmul wants input 0. A matmul cannot relocate its own input, so the caller hands
     # this to whoever PRODUCES it (the LayerNorm, for qkv and mlp_fc1).
     in0_memory_config: Any = None
+
+
+class VisionSdpaPlan(NamedTuple):
+    """The vision tower's SDPA configuration, from `VisionModelArgs.vision_sdpa_plan`.
+
+    ``k_dtype`` is what K should be cast to before the call; the caller must skip the cast when K is
+    already that dtype (the tower's was a BF16 -> BF16 no-op costing 213 us/block).
+    """
+
+    compute_kernel_config: Any
+    program_config: Any
+    k_dtype: Any
+    fidelity: str
 
 
 _L1_PER_CORE = 1499136  # MEM_L1_SIZE, wormhole/dev_mem_map.h
@@ -98,6 +112,41 @@ _VISION_MM_TUNING_BY_DEVICE = {
 # families' table entries are already their pre-sweep values, so they need no untuned override.
 _UNTUNED_FIDELITY_OP = {"qkv": OpGroup.LI_QKV_PREFILL, "wo": OpGroup.LI_O_PREFILL}
 _FIDELITY_NAMES = ("lofi", "hifi2", "hifi2_na", "hifi2_fp16", "hifi2_nol1acc", "hifi4", "hifi4_fp16", "hifi4_fp32")
+
+# SDPA tuning, from tests/perf/test_sweep_vision_sdpa.py. Wormhole-only, same gate as the matmuls.
+#
+# The tower's SDPA is its largest single op (18.1 ms/block on the 9B at 8 heads/device, 6.1 ms on the
+# 27B at 2). Two things were wrong:
+#
+#  - HiFi4 on BFP8 inputs. Isolated at the 9B shape: HiFi4 20.49 ms -> HiFi2 17.07 ms (-16%) at
+#    PCC 0.999899 vs 0.999911. LoFi is only 3% faster than HiFi2 and lands at PCC 0.9656 -- rejected;
+#    the flash softmax accumulates over seq/k_chunk chunks and LoFi cannot carry it.
+#  - K arrived in BF16 (from `kv_cache_dtype`) while Q and V were BFP8. There is no KV *cache* in a
+#    single-pass non-causal tower, so that dtype never applied. Worth ~1% inside SDPA (it is not
+#    K-bandwidth-bound) plus the no-op typecast it deletes.
+#
+# `fp32_dest_acc_en` stays True via compute_kernel_config_hifi2: the softmax sum needs it (a known
+# ~0.94 PCC cliff at False), and unlike a matmul that costs SDPA nothing here.
+#
+# Chunks: q=128 / k=512 on BOTH meshes, so there is no per-device override any more. This was
+# 256/512 (9B) and 128/256 (T3K) while the tower padded rows to a 2048 multiple; re-sweeping at the
+# real 11008 rows moved both to the same answer. The kernel parallelises over heads x q_chunks
+# across 64 cores, and at 11008 rows:
+#
+#   q=256 -> 43 q_chunks -> 8x43 = 344 units, which still needs 6 rounds of 64 (40 idle slots).
+#   q=128 -> 86 q_chunks -> 8x86 = 688 units in 11 rounds (16 idle) -- the balance q=256 lost when
+#            the row count stopped being a multiple of 256x64/heads.
+#
+# Measured, isolated, at the demo shape (seq 11008, head_dim 96), against the HiFi4/bf16-K baseline:
+#
+#   9B  / N300 / 8 heads:  18.27 -> 13.43 ms (1.36x) at 128/512, pcc 0.999909
+#   27B / T3K  / 2 heads:   6.06 ->  3.80 ms (1.59x) at 128/512, pcc 0.999909
+#
+# `exp_approx=True` measured 13.35 vs 13.43 on the 9B -- 0.6%, inside noise, and approximate exp
+# accumulates over SEQ/k_chunk flash chunks across 27 blocks. Not taken.
+# 512/512 is rejected on both: the flash CBs reach 1,949,888 B against L1's 1,499,136 B.
+_VISION_SDPA_TUNING = dict(fidelity="hifi2", k_bf8b=True, q_chunk=128, k_chunk=512, exp_approx=False)
+_VISION_SDPA_TUNING_BY_DEVICE = {}
 
 _TILE_BYTES = {
     ttnn.bfloat16: 2048,
@@ -171,6 +220,7 @@ class VisionModelArgs(ModelArgs):
 
         # One plan per (family, rows): the tower rebuilds them 27 times per image otherwise.
         self._vision_mm_plans = {}
+        self._vision_sdpa_plans = {}
 
         assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
 
@@ -366,6 +416,50 @@ class VisionModelArgs(ModelArgs):
             f"{f' [{self.device_name} override]' if family in _VISION_MM_TUNING_BY_DEVICE.get(self.device_name, {}) else ''}"
         )
         self._vision_mm_plans[cache_key] = plan
+        return plan
+
+    def vision_sdpa_plan(self, seq_len: int, kv_cache_dtype) -> VisionSdpaPlan:
+        """Compute-kernel + program config for the tower's SDPA (see `_VISION_SDPA_TUNING`).
+
+        Args:
+            seq_len: padded sequence length, for the untuned path's program config.
+            kv_cache_dtype: what the caller would otherwise cast K to. Returned unchanged off-arch,
+                so the untuned tower keeps the exact op graph it had before this tuning.
+        """
+        cached = self._vision_sdpa_plans.get((seq_len, kv_cache_dtype))
+        if cached is not None:
+            return cached
+
+        if not self.vision_mm_tuned:
+            plan = VisionSdpaPlan(
+                compute_kernel_config=self.decoders_optimizations.get_math_fidelity(
+                    decoder_id=0, op=OpGroup.SDPA_PREFILL, configuration=self
+                ),
+                program_config=self.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
+                k_dtype=kv_cache_dtype,
+                fidelity="untuned",
+            )
+        else:
+            tune = {**_VISION_SDPA_TUNING, **_VISION_SDPA_TUNING_BY_DEVICE.get(self.device_name, {})}
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            plan = VisionSdpaPlan(
+                compute_kernel_config=getattr(self, f"compute_kernel_config_{tune['fidelity']}"),
+                program_config=ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=(grid.x, grid.y),
+                    exp_approx_mode=tune["exp_approx"],
+                    q_chunk_size=tune["q_chunk"],
+                    k_chunk_size=tune["k_chunk"],
+                ),
+                k_dtype=ttnn.bfloat8_b if tune["k_bf8b"] else kv_cache_dtype,
+                fidelity=tune["fidelity"],
+            )
+            logger.info(
+                f"vision sdpa: seq {seq_len}, grid {grid.x}x{grid.y}, "
+                f"q/k chunk {tune['q_chunk']}/{tune['k_chunk']}, {tune['fidelity']}, "
+                f"K {'bf8b' if tune['k_bf8b'] else str(kv_cache_dtype)}, exp_approx {tune['exp_approx']}"
+                f"{f' [{self.device_name} override]' if self.device_name in _VISION_SDPA_TUNING_BY_DEVICE else ''}"
+            )
+        self._vision_sdpa_plans[(seq_len, kv_cache_dtype)] = plan
         return plan
 
     def prepare_residual_tensor_prefill(self, x_bsh):
