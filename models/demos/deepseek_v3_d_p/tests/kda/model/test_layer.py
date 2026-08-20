@@ -243,9 +243,13 @@ def test_composed_layer_immutable_state_trace_replay(device: ttnn.Device) -> Non
     )
     layer = ttKDA(device, config, random_weights(config))
 
+    # Eager reference for the replay comparison. Reading the traced output between capture and
+    # replay would read a buffer the capture never wrote: trace capture records dispatch commands
+    # without executing them.
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        layer.forward(hidden_tt, layer.allocate_state())
+        eager_output, _ = layer.forward(hidden_tt, layer.allocate_state())
     ttnn.synchronize_device(device)
+    eager_result = ttnn.to_torch(eager_output)
 
     input_state = layer.allocate_state()
     input_state_before = (
@@ -256,7 +260,6 @@ def test_composed_layer_immutable_state_trace_replay(device: ttnn.Device) -> Non
     with ttnn.manage_config("throw_exception_on_fallback", True):
         output, next_state = layer.forward(hidden_tt, input_state)
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    captured_output = ttnn.to_torch(output)
     assert next_state.recurrent is not input_state.recurrent
     assert next_state.convolution is not input_state.convolution
 
@@ -268,6 +271,6 @@ def test_composed_layer_immutable_state_trace_replay(device: ttnn.Device) -> Non
     )
     ttnn.release_trace(device, trace_id)
 
-    assert_bit_identical(captured_output, replayed_output, name="traced layer output")
+    assert_bit_identical(eager_result, replayed_output, name="traced layer output")
     for name, expected, actual in zip(("recurrent", "convolution"), input_state_before, input_state_after):
         assert_bit_identical(expected, actual, name=f"traced input {name} state")
