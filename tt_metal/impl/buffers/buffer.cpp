@@ -427,10 +427,14 @@ std::shared_ptr<Buffer> Buffer::create(
             tt::tt_metal::emule::LiveL1Ranges::add(
                 device->id(),
                 static_cast<uint32_t>(address),
-                static_cast<uint32_t>(address + buffer->aligned_size_per_bank()));
+                static_cast<uint32_t>(address + buffer->aligned_size_per_bank()),
+                buffer->unique_id_);
         } else if (buffer_type == BufferType::DRAM) {
             tt::tt_metal::emule::LiveDramRanges::add(
-                device->id(), static_cast<uint32_t>(address), static_cast<uint32_t>(address + size));
+                device->id(),
+                static_cast<uint32_t>(address),
+                static_cast<uint32_t>(address + size),
+                buffer->unique_id_);
         }
     }
 
@@ -504,10 +508,14 @@ void Buffer::allocate_impl() {
                 tt::tt_metal::emule::LiveL1Ranges::add(
                     device_->id(),
                     static_cast<uint32_t>(address_),
-                    static_cast<uint32_t>(address_ + aligned_size_per_bank()));
+                    static_cast<uint32_t>(address_ + aligned_size_per_bank()),
+                    unique_id_);
             } else if (buffer_type_ == BufferType::DRAM) {
                 tt::tt_metal::emule::LiveDramRanges::add(
-                    device_->id(), static_cast<uint32_t>(address_), static_cast<uint32_t>(address_ + size_));
+                    device_->id(),
+                    static_cast<uint32_t>(address_),
+                    static_cast<uint32_t>(address_ + size_),
+                    unique_id_);
             }
         }
 
@@ -535,9 +543,9 @@ void Buffer::deallocate() {
             // Guard on status: the explicit-call + destructor double-deallocate must remove once.
             if (allocation_status_ == AllocationStatus::ALLOCATED && size_ != 0) {
                 if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
-                    tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), static_cast<uint32_t>(address_));
+                    tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), unique_id_);
                 } else if (buffer_type_ == BufferType::DRAM) {
-                    tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), static_cast<uint32_t>(address_));
+                    tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), unique_id_);
                 }
             }
             allocation_status_ = AllocationStatus::DEALLOCATED;
@@ -569,10 +577,10 @@ void Buffer::deallocate_impl() {
             validate_sub_device_manager_id(sub_device_manager_id_, device_);
             if (is_emule_device(device_)) {
                 if (buffer_type_ == BufferType::L1 || buffer_type_ == BufferType::L1_SMALL) {
-                    tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), static_cast<uint32_t>(address_));
+                    tt::tt_metal::emule::LiveL1Ranges::remove(device_->id(), unique_id_);
                     tt::tt_metal::emule::LiveL1PaddingRanges::clear(device_->id(), static_cast<uint32_t>(address_));
                 } else if (buffer_type_ == BufferType::DRAM) {
-                    tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), static_cast<uint32_t>(address_));
+                    tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), unique_id_);
                 }
             }
             allocator_->deallocate_buffer(this);

@@ -203,6 +203,14 @@ access false-positives (for DRAM, every `__emule_dram_ptr` resolve above
 `allocation_status_` guard so the explicit-call + destructor double-deallocate drops it
 exactly once.
 
+Registrations are keyed by the buffer's `unique_id()`, and removal erases exactly
+that registration — never an address match. Several live buffers routinely share a
+start with different ends (`Buffer::view` subviews, the mesh workload's same-address
+kernel-binary view wrappers), so an address-keyed removal could delete another
+wrapper's still-live extent: the owner's full range vanishes, the dead temporary's
+shorter one lingers, and every later valid access past it aborts as a false-positive
+OOB (guarded by `OOB_Tensor_SameAddressTempBuffer_NoViolation`).
+
 On each access the kernel first **normalizes the address
 to a buffer-relative offset** via `__emule_addr_to_offset`. Under the L1 offset
 model, sharded / CB / `l1_alloc` accesses already arrive as **0-based offsets**
