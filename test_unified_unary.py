@@ -40,11 +40,12 @@ OPS = {
     "recip": (None, lambda x: 1.0 / x),
     "sqrt": ("UN_SQRT", torch.sqrt),
     "rsqrt": ("UN_RSQRT", torch.rsqrt),
+    "exp": ("UN_EXP", torch.exp),
     "chain": ("UN_CHAIN", torch.rsqrt),  # recip(sqrt(x)) == rsqrt(x)
 }
 
 
-def run(device, op, num_blocks=1, tiles_per_block=1, seed=0):
+def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, fidelity=None):
     num_tiles = num_blocks * tiles_per_block
     shape = [1, num_tiles, 32, 32]
 
@@ -79,6 +80,7 @@ def run(device, op, num_blocks=1, tiles_per_block=1, seed=0):
         compile_time_args=ct_args,
         runtime_args=rt_args,
         defines=[(define, "1")] if define else None,
+        **(fidelity or {}),
     )
 
     logger.info(f"running unified unary: op={op} num_blocks={num_blocks} tiles_per_block={tiles_per_block}")

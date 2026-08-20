@@ -103,6 +103,8 @@ def unified_program(
     writer_processor=ttnn.DataMovementProcessor.RISCV_0,
     semaphores=None,
     defines=None,
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
 ):
     """Build a ProgramDescriptor that compiles ONE source for all five threads.
 
@@ -118,6 +120,10 @@ def unified_program(
         semaphores: optional list of ttnn.SemaphoreDescriptor (see make_semaphore).
             Four more are appended for the multicast handshake, above your ids.
         defines: optional extra (name, value) pairs, applied to all three.
+        math_fidelity / math_approx_mode: compute config for the TRISCs.  The
+            metal defaults (HiFi4, exact) are the most accurate and the slowest;
+            HiFi2 halves the FPU passes per bfloat16 matmul and approx mode
+            picks the cheap SFPU transcendentals.
     """
     # Reserve the multicast handshake semaphores: two per DM thread, placed ABOVE
     # any id the caller used so their choices stay unconstrained. Their base goes
@@ -172,7 +178,7 @@ def unified_program(
         ttnn.KernelDescriptor(
             **shared,
             runtime_args=make_runtime_args(cores, runtime_args),
-            config=ttnn.ComputeConfigDescriptor(),
+            config=ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity, math_approx_mode=math_approx_mode),
         ),
     ]
 
