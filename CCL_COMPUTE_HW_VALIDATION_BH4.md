@@ -80,3 +80,27 @@ fabric runs.
 - **rearm()** execution (strided `FUSE_RS_ADDCMUL` via the WH-gated matmul-fused test).
 - First execution of: dim_zero_line kernels (#26572), deepseek + llama kernels (8-dev WH / TG systems).
 - A **routing-plane helper tier** (deepseek's egress) and the **C.3 multi-target egress shape** (llama's writer) — both deliberately deferred, each needing its own design pass against runnable hardware.
+
+## Round 3 — the generated reference examples (same box)
+
+The four pipeline-generated CCL ops are now committed reference examples under
+`ttnn/ttnn/operations/{point_to_point,all_gather,all_reduce,reduce_scatter}` (see the
+PR-review thread: examples in-tree, prompts slimmed to spec + pointers). Each package is
+the exact code that graded on this box (`bh_quietbox_1x4_hw`, FABRIC_1D, fresh JIT):
+
+| Package | Hardware grade | Notes |
+|---|---|---|
+| point_to_point | 383/407 golden | the 24 failures are all `non_tile_aligned` ROW_MAJOR cells, byte-identical before/after the helper consolidation — a pre-existing Phase-0 limitation of this package on Blackhole, not a helper defect |
+| all_gather | 36 pass / 295 xfail-strict / 0 fail | the xfails are correct out-of-SUPPORTED refusals |
+| all_reduce | 11/12 (+1 expected xfail) | |
+| reduce_scatter | **29/29** golden+translated | first generated op composing all three helper families; Ring cells included |
+
+**One helper bug found and fixed by this round** (`c7ba5604b3f`): reduce_scatter's Ring
+refinement ran a fabric contract probe before implementing, and it caught that
+`ccl_dm_route`'s ring wrap branch was unreachable — `fabric_1d_routing_vector` returns an
+ABSOLUTE hop count, but the ring alternative was computed as if it were signed, so it was
+always longer and a Ring route silently degraded to the line route (3 hops instead of 1,
+wrong direction, on the (1,4) wrap pair). The fix reconstructs the signed line distance;
+adjacent pairs and N/2 ties keep the line route, so no previously-green path changes.
+Verified by the probe (route math, wrap connection, 1-page transfer both ways) and by the
+29/29 re-grade.
