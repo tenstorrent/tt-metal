@@ -29,9 +29,9 @@ void kernel_main() {
     constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_2;
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_3;
     constexpr uint32_t dfb_eps_id = tt::CBIndex::c_4;
-    constexpr uint32_t dfb_stats_reduced_id = tt::CBIndex::c_5;
-    constexpr uint32_t dfb_recip_sqrt_var_id = tt::CBIndex::c_6;
-    constexpr uint32_t dfb_intermediate_id = tt::CBIndex::c_7;
+    constexpr uint32_t dfb_stats_reduced_id = tt::CBIndex::c_5;   // [mean, var]
+    constexpr uint32_t dfb_recip_sqrt_var_id = tt::CBIndex::c_6;  // 1/sqrt(var+eps)
+    constexpr uint32_t dfb_intermediate_id = tt::CBIndex::c_7;    // intermediate result
     constexpr uint32_t dfb_out_id = tt::CBIndex::c_8;
 
     constexpr uint32_t stats_tile_stride = 2;
@@ -62,7 +62,7 @@ void kernel_main() {
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_beta(dfb_beta_id);
 
-    dfb_eps.wait_front(1);
+    dfb_eps.wait_front(1);  // broadcast epsilon is ready
 
     for (uint32_t tile_row = 0; tile_row < num_tile_rows; tile_row++) {
         // Calculate global tile row and batch index
@@ -78,6 +78,7 @@ void kernel_main() {
         dfb_stats_reduced.push_back(stats_tile_stride);
         dfb_stats_reduced.wait_front(stats_tile_stride);
 
+        // Compute 1/sqrt(var + eps) into dfb_recip_sqrt_var_id
         // combine_welford_partials stores [mean, variance]; tile 1 supplies variance.
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
@@ -96,14 +97,19 @@ void kernel_main() {
 
         // Process tiles across width in blocks
         for (uint32_t col_tile = 0; col_tile < Wt; col_tile += block_size) {
+            // 1) x_minus_mean
             ckl::sub<
                 ckl::input(dfb_inp_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
                 ckl::input(dfb_stats_reduced_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                 ckl::output(dfb_intermediate_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
                 ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size));
 
+            // 2) normalize: (x-mean) * inv_std
             constexpr uint32_t norm_target_dfb_id = (do_gamma || do_beta) ? dfb_intermediate_id : dfb_out_id;
             dfb_recip_sqrt_var.wait_front(1);
+            // Note that compute and pack are separated because it's possible that
+            // norm_target_dfb_id == dfb_intermediate_id (in the case of no gamma/beta), so this
+            // must be able to support in-place operations.
             ckl::mul<
                 ckl::input(
                     dfb_intermediate_id,
@@ -114,6 +120,7 @@ void kernel_main() {
                 ckl::output(norm_target_dfb_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
                 ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size));
 
+            // 3) optional gamma
             if constexpr (do_gamma) {
                 constexpr uint32_t gamma_out_dfb_id = do_beta ? dfb_intermediate_id : dfb_out_id;
                 dfb_gamma.wait_front(col_tile + block_size);
@@ -140,6 +147,7 @@ void kernel_main() {
 
             // 4) optional beta (only if gamma was provided)
             if constexpr (do_beta) {
+                // Input is always in dfb_intermediate_id, output is always dfb_out_id
                 dfb_beta.wait_front(col_tile + block_size);
                 ckl::eltwise_chain(
                     ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size),

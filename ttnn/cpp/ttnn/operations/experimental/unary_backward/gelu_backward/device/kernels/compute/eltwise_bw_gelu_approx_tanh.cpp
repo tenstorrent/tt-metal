@@ -143,6 +143,8 @@ ALWI void gelu_tanh_chain(uint32_t num_tiles) {
 
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
+
+    // grad_out / input are consumed from the reader; grad_in is produced for the writer.
     constexpr auto grad_format = static_cast<DataFormat>(unpack_src_format[dfb::grad_out]);
     constexpr auto input_format = static_cast<DataFormat>(unpack_src_format[dfb::input]);
     static_assert(grad_format == input_format, "GELU backward requires matching gradient and input data formats");

@@ -113,8 +113,16 @@ void kernel_main() {
                 const auto block_shape = ckl::IterationShape::tiles(block.size())
                                              .block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
                 if constexpr (welford_fp32_alias) {
+                    // Must be done in the compute kernel: on the fuse_pre_add path compute is the
+                    // producer of dfb_x_id via the add_tiles -> pack_tile sequence below; the reader
+                    // never writes dfb_x_id. Push the alias alongside dfb_x_id so Welford's wait_front on
+                    // dfb_x_welford_id sees the tiles.
                     dfb_x_welford_obj.reserve_back(block.full_block_size());
                 }
+                // In/inb come from the reader and need to be
+                // synced on full block size. Keep dfb_x_id aligned
+                // to full block size as well so pre-add/no-pre-add
+                // can be handled the same way.
                 ckl::add<
                     ckl::input(
                         dfb_in_id,
@@ -264,7 +272,8 @@ void kernel_main() {
         dfb_ex_obj.push_back(onetile);
         dfb_ex2_obj.push_back(onetile);
 
-        dfb_ex_obj.wait_front(onetile);
+        // Reuse dfb_x_id since we didn't pop anything from it
+        dfb_ex_obj.wait_front(onetile);  // should have 1 tile
         ckl::sub<
             ckl::input(
                 dfb_x_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
@@ -298,6 +307,9 @@ void kernel_main() {
         // Gamma and beta each contain one row and remain resident across all NCHt rows; tile
         // offsets select the current width block. TODO: wait on gamma/beta only on the first NCHt row.
         // Remainder of the layernorm operation
+        // norm(x) * gamma + beta,
+        // where norm(x) is:
+        // (x - E[x]) / sqrt(E[(x-E[x])^2] + eps)
         dfb_ex2pe_obj.wait_front(onetile);
         for (auto block : generic::blocks(Wt, blk)) {
             const auto block_shape = ckl::IterationShape::tiles(block.size())
@@ -315,6 +327,8 @@ void kernel_main() {
                         ckl::TileAddressing::Offset),
                     ckl::input(dfb_ex2pe_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{
                     block.start(), 0u},
+                // pack either to intermediate (dfb_fusion or out0)
+                // if no gamma/beta are provided, this will be passed on to the writer
                 ckl::PackTile<ckl::output(
                     dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
 
@@ -337,6 +351,7 @@ void kernel_main() {
                             ckl::InputTileMapping::Block,
                             ckl::DataFormatReconfig::Enabled,
                             ckl::TileAddressing::Offset)>{0u, block.start()},
+                    // pack either to intermediate (dfb_fusion or out0)
                     ckl::PackTile<ckl::output(
                         dfb_outg_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
             }

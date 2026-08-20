@@ -35,7 +35,7 @@ void kernel_main() {
         }
 
         for (uint32_t i = 0; i < dim_size; ++i) {
-            constexpr auto dfb_exp_id = dfb::ydy;
+            constexpr auto dfb_exp_id = dfb::ydy;  // the y * dy buffer, reused to hold exp(y)
             exp_tile_to_dfb<dfb::y, dfb_exp_id>();
 
             mul_tiles_to_dfb<dfb::sum, dfb_exp_id, dfb::dy_m_sum>(0, 0, /*pop0=*/0, /*pop1=*/1);
@@ -45,6 +45,7 @@ void kernel_main() {
         }
         dfb_sum_obj.pop_front(onetile);
 #else
+        // compute sum(y * dy)
         for (uint32_t i = 0; i < dim_size; ++i) {
             mul_tiles_to_dfb<dfb::y, dfb::dy, dfb::ydy>();
 
@@ -55,6 +56,7 @@ void kernel_main() {
             }
         }
 
+        // compute final result
         for (uint32_t i = 0; i < dim_size; ++i) {
             // dy - sum
             sub_tiles_to_dfb<dfb::dy, dfb::sum, dfb::dy_m_sum>(

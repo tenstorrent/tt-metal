@@ -29,6 +29,11 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_linear1_id, dfb_dL_dlinear1_id);
 
+    // Input tiles are consumed in blocks:
+    //   linear1(U), gate, dL/dprod
+    // and produce:
+    //   dL/dlinear1, dL/dgate
+    //
     // dL/dgate = dL/dprod * U * sigmoid(U).
     // dL/dlinear1 = dL/dprod * gate * sigmoid(U) * (1 + U*(1-sigmoid(U))).
     ckl::eltwise_chain(
@@ -42,6 +47,7 @@ void kernel_main() {
                 ckl::InputTileMapping::Block),
             ckl::Dst::D0>{},
         ckl::CopyDest<ckl::Dst::D0, ckl::Dst::D1>{},
+        // Computes sigmoid(U) tile-wise and stores it for reuse in both output gradients.
         ckl::Sigmoid<ckl::Dst::D1>{},
         ckl::CopyTile<
             ckl::input(

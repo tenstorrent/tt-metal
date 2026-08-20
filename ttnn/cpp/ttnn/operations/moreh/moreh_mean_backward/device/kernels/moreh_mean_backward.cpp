@@ -49,6 +49,7 @@ void kernel_main() {
         // output * (1 / number_of_elements)
         ckl::mul<
             ckl::input(dfb::intermed),
+            // 1/num_dim bcast scalar
             ckl::input(dfb::scalar, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
             ckl::output(dfb::out)>(ckl::IterationShape::tiles(onetile));
     }

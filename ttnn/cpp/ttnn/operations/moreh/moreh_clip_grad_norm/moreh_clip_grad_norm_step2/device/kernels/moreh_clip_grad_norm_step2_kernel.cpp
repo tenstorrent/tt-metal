@@ -17,17 +17,17 @@ void kernel_main() {
     const auto p = get_arg_val<uint32_t>(i++);
     const bool p_is_negative = get_arg_val<uint32_t>(i++) == 1;
 
-    constexpr uint32_t dfb_input_id = 0;
+    constexpr uint32_t dfb_input_id = 0;  // input(==tmp_pow_sum)
     constexpr uint32_t dfb_decimal_id = 1;
     DataflowBuffer dfb_decimal_obj(dfb_decimal_id);
 
     // x^p * exp(log(x) * decimal)
-    constexpr uint32_t dfb_y_id = 16;
+    constexpr uint32_t dfb_y_id = 16;  // output(==total_norm)
 
-    constexpr uint32_t dfb_x_id = 24;
-    constexpr uint32_t dfb_xpow_id = 25;
-    constexpr uint32_t dfb_logx_id = 26;
-    constexpr uint32_t dfb_exp_lxmd_id = 27;
+    constexpr uint32_t dfb_x_id = 24;         // Sum[tmp_pow_sum](==x)
+    constexpr uint32_t dfb_xpow_id = 25;      // x^p
+    constexpr uint32_t dfb_logx_id = 26;      // log(x)
+    constexpr uint32_t dfb_exp_lxmd_id = 27;  // exp(log(x) * decimal)
 
     constexpr uint32_t onetile = 1;
 
@@ -37,7 +37,7 @@ void kernel_main() {
         compute_kernel_hw_startup(dfb_logx_id, dfb_decimal_id, dfb_y_id);
     }
 
-    dfb_decimal_obj.wait_front(onetile);
+    dfb_decimal_obj.wait_front(onetile);  // comes from the reader
 
     // Compute dfb_x_id
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {

@@ -400,6 +400,7 @@ void kernel_main() {
         // Wait for final welford values in dfb_ex_global_id
         dfb_ex_global.wait_front(2 * num_groups);
         // fp32: dfb_ex_global is fp32 (var), dfb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
+        // Reset both srcs so they match the operands read below. no-op for bf16.
         if constexpr (enable_fp32_reconfig) {
             reconfig_data_format_srca(dfb_ex_global_id);
         }
@@ -458,6 +459,8 @@ void kernel_main() {
 
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
+                        // // Now let us do the actual computation for the current group here
+                        // // a. x-u
                         // fp32: reset both sources after the previous group's multiply; the old two-argument SrcB
                         // transition did not reset SrcA.
                         if constexpr (enable_fp32_reconfig) {
@@ -491,30 +494,41 @@ void kernel_main() {
                                     ckl::BroadcastDim::Scalar)>{0u, g},
                             ckl::PackTile<streaming_output(dfb_xmm_id)>{});
 
-                        // Apply the current group's row selector.
+                        // Apply the current group's row selector and accumulate into dfb_x. The mask
+                        // product stays in DEST and, when a tile spans multiple groups, the running
+                        // dfb_x is added via DEST_TO_SRCB reuse before the single pack — mirroring the
+                        // raw kernel's fused c+d structure (no extra DEST -> L1 -> DEST round trip).
                         const uint32_t mask_offset = g * block_w;
                         const uint32_t mask_index = mask_offset + block_w_index;
                         reconfig_data_format_srcb(dfb_ex2pe_id, dfb_input_mask_id);
-                        ckl::eltwise_chain(
-                            ckl::IterationShape::one_tile(),
-                            ckl::BinaryFpu<
-                                ckl::BinaryFpuOp::Mul,
-                                streaming_input(dfb_xmm_id),
-                                ckl::input(
-                                    offset_scalar_input(dfb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                                    ckl::BroadcastDim::Row)>{0u, mask_index},
-                            ckl::PackTile<streaming_output(dfb_xmm_id)>{});
-
-                        // Accumulate contributions when a tile spans multiple groups.
                         if (group_offset == 0) {
-                            ckl::copy<streaming_input(dfb_xmm_id), streaming_output(dfb_x_id)>(
-                                ckl::IterationShape::one_tile());
+                            ckl::eltwise_chain(
+                                ckl::IterationShape::one_tile(),
+                                ckl::BinaryFpu<
+                                    ckl::BinaryFpuOp::Mul,
+                                    streaming_input(dfb_xmm_id),
+                                    ckl::input(
+                                        offset_scalar_input(
+                                            dfb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                                        ckl::BroadcastDim::Row)>{0u, mask_index},
+                                ckl::PackTile<streaming_output(dfb_x_id)>{});
                         } else {
+                            // Not the first group for this tile: add what is already in dfb_x.
                             reconfig_data_format_srca(dfb_x_id);
-                            reconfig_data_format_srcb(dfb_input_mask_id, dfb_xmm_id);
-                            ckl::
-                                add<streaming_input(dfb_x_id), streaming_input(dfb_xmm_id), streaming_output(dfb_x_id)>(
-                                    ckl::IterationShape::one_tile());
+                            ckl::eltwise_chain(
+                                ckl::IterationShape::one_tile(),
+                                ckl::BinaryFpu<
+                                    ckl::BinaryFpuOp::Mul,
+                                    streaming_input(dfb_xmm_id),
+                                    ckl::input(
+                                        offset_scalar_input(
+                                            dfb_input_mask_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+                                        ckl::BroadcastDim::Row)>{0u, mask_index},
+                                ckl::DestReuseBinary<
+                                    ckl::BinaryFpuOp::Add,
+                                    streaming_input(dfb_x_id),
+                                    ckl::DestReuseType::DEST_TO_SRCB>{},
+                                ckl::PackTile<streaming_output(dfb_x_id)>{});
                         }
 
                         // The blocks after this loop assume srcb still carries cb_xmm's format.
@@ -585,12 +599,15 @@ void kernel_main() {
                             ckl::PackTile<streaming_output(dfb_x_id)>{});
                     }
 
+                    // Write out the final output
                     if constexpr (enable_fp32_reconfig) {
                         reconfig_data_format_srca(dfb_x_id);
                     }
                     reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
 #ifndef UNTILIZE_OUT
                     // The streaming output disables automatic reconfiguration, so select the fp32 output format.
+                    // Packer was last set for bf16 dfb_x; reconfigure to dfb_out_id (may be fp32) before pack, restore
+                    // after. Only needed when out differs from dfb_x (fp32 path); no-op gated out for bf16.
                     if constexpr (enable_fp32_reconfig) {
                         pack_reconfig_data_format(dfb_out_id);
                     }

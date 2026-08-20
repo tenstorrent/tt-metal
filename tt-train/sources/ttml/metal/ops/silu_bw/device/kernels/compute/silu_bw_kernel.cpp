@@ -21,7 +21,7 @@ constexpr uint32_t dfb_dL_out_idx_id = tt::CBIndex::c_1;
 constexpr uint32_t dfb_dL_da_idx_id = tt::CBIndex::c_2;
 void kernel_main() {
     namespace ckl = compute_kernel_lib;
-    constexpr uint32_t one = 0x3F800000;
+    constexpr uint32_t one = 0x3F800000;  // FP32 encoding of 1.0
     constexpr uint32_t padded_Wt = ((Wt + block_size - 1) / block_size) * block_size;
 
     compute_kernel_hw_startup(dfb_input_idx_id, dfb_dL_da_idx_id);
@@ -37,11 +37,15 @@ void kernel_main() {
                 ckl::InputTileMapping::Block),
             ckl::Dst::D0>{},
         ckl::CopyDest<ckl::Dst::D0, ckl::Dst::D1>{},
+        // Compute: sigmoid(x) = 1 / (1 + exp(-x))
         ckl::Sigmoid<ckl::Dst::D1>{},
         ckl::CopyDest<ckl::Dst::D1, ckl::Dst::D2>{},
-        ckl::RsubUnary<ckl::Dst::D2>{one},
+        // Compute: 1 - sigmoid(x)
+        ckl::RsubUnary<ckl::Dst::D2>{one},  // 1.0F is the constant to subtract from.
+        // Compute: (1 - sigmoid(x)) * input + 1
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D2, ckl::Dst::D2>{},
-        ckl::AddUnary<ckl::Dst::D2>{one},
+        ckl::AddUnary<ckl::Dst::D2>{one},  // Add 1.0F to the result.
+        // Compute: ((1 - sigmoid(x)) * input + 1) * sigmoid(x)
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
         ckl::CopyTile<
             ckl::input(
@@ -50,6 +54,8 @@ void kernel_main() {
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block),
             ckl::Dst::D2>{},
+        // Compute: ((1 - sigmoid(x)) * input + 1) * sigmoid(x) * dL_dout
+        // The result is stored in dfb_dL_da_idx_id.
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
             dfb_dL_da_idx_id,

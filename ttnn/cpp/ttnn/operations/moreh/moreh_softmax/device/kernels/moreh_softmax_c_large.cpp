@@ -27,6 +27,8 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
+    // Plain uint32_t (not constexpr) to match legacy get_compile_time_arg_val typing and avoid
+    // force-unrolling the per-dim_size loops (see moreh_softmax_w_large.cpp for the LTO/addrmod rationale).
     uint32_t N = get_arg(args::N);
     uint32_t dim_size = get_arg(args::dim_size);
 
@@ -46,6 +48,7 @@ void kernel_main() {
             }
         }
 
+        // compute exp(x - max(x))
         for (uint32_t i = 0; i < dim_size; ++i) {
 #ifdef SOFTMAX
             sub_tiles_to_dfb<dfb::in0, dfb::max, dfb::tmp>(0, 0, /*pop0=*/1, /*pop1=*/0);
@@ -72,6 +75,7 @@ void kernel_main() {
         recip_tile_to_dfb<dfb::add, dfb::recip_sum_exps>();
 #endif
 
+        // step 3, compute final result
         dfb_recipsumexps_obj.wait_front(onetile);
         for (uint32_t i = 0; i < dim_size; ++i) {
 #ifdef LOG

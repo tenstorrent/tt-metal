@@ -513,6 +513,7 @@ void kernel_main() {
                     }
                 }
 
+                // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(dfb_ex_global_id, dfb_input_mask_id);
                 if constexpr (has_row_mask) {
                     mul_init(dfb_xmm_id, dfb_input_mask_id);
@@ -711,6 +712,7 @@ void kernel_main() {
                     }
                 }
 
+                // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(dfb_ex_global_id, dfb_input_mask_id);
                 ckl::mul<
                     ckl::input(
@@ -748,6 +750,7 @@ void kernel_main() {
                     reconfig_data_format_srca(dfb_x_id);
                     reconfig_data_format_srcb(dfb_ex2pe_id);
                 }
+                // (x - Ex) * 1/[sqrt(Var + eps)]
                 ckl::mul<
                     ckl::input(
                         dfb_x_id,

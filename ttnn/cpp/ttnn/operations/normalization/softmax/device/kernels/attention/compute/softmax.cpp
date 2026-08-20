@@ -40,6 +40,7 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
         ckl::ReduceInputPolicy::WaitUpfrontNoPop,
         ckl::ReduceDataFormatReconfigMode::INPUT>(ckl::ReduceInputBlockShape::row(Wt));
 
+    // calculate x-max(x)
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(Wt).block_size(ndst),
         ckl::BinaryFpu<
@@ -52,6 +53,7 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
                 ckl::DataFormatReconfig::Disabled),
             ckl::input(dfb_max_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{},
         ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
+        // reuse the exps buffer again, this time in a circular manner
         ckl::PackTile<ckl::output(
             dfb_out_id,
             ckl::ReservePolicy::PerBlockSize,
@@ -116,18 +118,20 @@ void kernel_main() {
     DataflowBuffer dfb_sum_scaler_obj(dfb::sum_scaler);
     DataflowBuffer dfb_out0_obj(dfb::out0);
 #if FUSED_SCALE_MASK
+    // fused_scale/fused_attn/scale_mask are bound only on the fused scale-mask path.
     DataflowBuffer dfb_fused_scale_obj(dfb::fused_scale);
     DataflowBuffer dfb_fused_attn_obj(dfb::fused_attn);
 #endif
     compute_kernel_hw_startup(dfb::in0, dfb::max_scaler, dfb::exps);
 #ifdef NUMERIC_STABLE
 #if defined(FUSED_SCALE_MASK) || defined(MASK_PADDED_DATA)
+    // dfb_x is a distinct intermediate (c_10) only on the numeric-stable paths that post-process a masked
+    // buffer; otherwise the reads go straight from dfb::in0 (see the calc_numeric_stable<dfb::in0,...> call).
     constexpr auto dfb_x_id = dfb::x;
-    DataflowBuffer dfb_x_obj(dfb_x_id);
 #endif
 #else
+    // Without numeric_stable, dfb_x aliases dfb_exps (Same-FIFO reuse) so exp results circulate in one buffer.
     constexpr auto dfb_x_id = dfb::exps;
-    DataflowBuffer dfb_x_obj(dfb_x_id);
 #endif
 
     dfb_max_scaler_obj.wait_front(1);  // comes from the reader
@@ -152,10 +156,12 @@ void kernel_main() {
 #endif
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #if FUSED_SCALE_MASK
+        // apply fused scale [*= 1/sqrt(...)]
         ckl::mul<
             ckl::input(
                 dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
             ckl::input(dfb::fused_scale, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
+            // reuse exps buffer
             ckl::output(dfb::scale_mask, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
             ckl::IterationShape::tiles(Wt).block_size(ndst));
 #ifndef CAUSAL_MASK
@@ -177,6 +183,7 @@ void kernel_main() {
                 ckl::input(
                     dfb::fused_attn, mask_bcast, attn_wait, ckl::PopPolicy::None, ckl::InputTileMapping::Block)>{},
             ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
+            // reuse the exps buffer again, this time in a circular manner
             ckl::PackTile<ckl::output(
                 dfb_x_id,
                 ckl::ReservePolicy::PerBlockSize,
@@ -231,6 +238,7 @@ void kernel_main() {
                         ckl::DataFormatReconfig::Disabled)>{});
             }
 
+            // last tile of the row gets the -inf padding mask
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<
@@ -295,6 +303,7 @@ void kernel_main() {
                 recip_tile(0);
             });
 
+        // tile *= 1/(sum(exp(x)))
         ckl::mul<
             ckl::input(dfb::exps, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
             ckl::input(dfb::recip_sum_exps, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),

@@ -196,6 +196,7 @@ void kernel_main() {
         ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_xsum_id, dfb_scaler_id, dfb_ex_id>(ckl::ReduceInputBlockShape::single());
 
         if constexpr (mean_has_value) {
+            // Write on dfb_mean_id.
             copy_tile_to_dfb<dfb_ex_id, dfb_mean_id>(first_tile, 0);
         } else {
             dfb_ex_obj.wait_front(onetile);
@@ -326,6 +327,7 @@ void kernel_main() {
                 dfb_recip_std_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
         if constexpr (rstd_has_value) {
+            // Write on dfb_rstd_id.
             copy_tile_to_dfb<dfb_recip_std_id, dfb_rstd_id>(first_tile, 0);
         } else {
             dfb_recip_std_obj.wait_front(onetile);

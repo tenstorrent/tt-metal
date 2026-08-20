@@ -30,11 +30,12 @@ void kernel_main() {
     const uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     const uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
-    DataflowBuffer dfb_eps_obj(dfb::eps);
+    DataflowBuffer dfb_eps_obj(dfb::eps);  // one tile of eps, filled by the reader
     dfb_eps_obj.wait_front(1);
 
     // out = ((input - batch_mean) / sqrt(batch_var + eps)) * optional(weight) + optional(bias).
     const auto batchnorm_bcast_tiles = [](uint32_t freq, uint32_t tile_start) __attribute__((always_inline)) {
+        // 1/(sqrt(batch_var + eps))
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<
@@ -46,20 +47,26 @@ void kernel_main() {
 
         const uint32_t inner_count = freq - tile_start;
 
+        // The batch mean is the broadcast operand of the subtraction; the input tiles are the other one.
         constexpr auto sub_op = ckl::BinaryFpu<
             ckl::BinaryFpuOp::Sub,
             ckl::input(dfb::input),
+            // batch_mean, broadcast against the input
             ckl::input(dfb::batch_mean, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{};
+        // (input - batch_mean)/(sqrt(batch_var + eps)) = result
         constexpr auto mul_den = ckl::DestReuseBinary<
             ckl::BinaryFpuOp::Mul,
             ckl::input(dfb::den, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::DestReuseType::DEST_TO_SRCA>{};
+        // result = result * weight
         constexpr auto mul_weight = ckl::Optional<
             weight_has_value,
             ckl::DestReuseBinary<
                 ckl::BinaryFpuOp::Mul,
+                // weight tensor
                 ckl::input(dfb::weight, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
                 ckl::DestReuseType::DEST_TO_SRCA>>{};
+        // result = result + bias
         constexpr auto add_bias = ckl::Optional<
             bias_has_value,
             ckl::DestReuseBinary<

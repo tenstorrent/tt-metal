@@ -43,6 +43,7 @@ void kernel_main() {
             ckl::output(dfb_divisor_recip_id)>(ckl::IterationShape::one_tile());
     }
 
+    // multiply weight
     constexpr auto weight_mul = ckl::Optional<
         has_weight,
         ckl::DestReuseBinary<ckl::BinaryFpuOp::Mul, ckl::input(dfb_tmp_weight_id), ckl::DestReuseType::DEST_TO_SRCA>>{};

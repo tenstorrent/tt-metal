@@ -74,7 +74,7 @@ void kernel_main() {
     DataflowBuffer dfb_sin_interm(sin_interm_dfb_id);
     DataflowBuffer dfb_out(out_dfb_id);
 
-    compute_kernel_hw_startup(in_dfb_id, sin_dfb_id, sin_interm_dfb_id);
+    compute_kernel_hw_startup(in_dfb_id, sin_dfb_id, sin_interm_dfb_id);  // General Init for all binary ops
 
     // Wait for the reader kernel (reader_rotary_embedding_hf_sharded.cpp) to
     // write -1.0 into the scalar DFB and push it.
@@ -99,6 +99,7 @@ void kernel_main() {
             dfb_in.push_back(Wt);
             dfb_in.wait_front(Wt);
 
+            // Process second half: multiply by -1 and store in rotated buffer
             ckl::eltwise_chain(
                 ckl::IterationShape::tiles(half_Wt).block_size(/*block_size=*/half_Wt),
                 ckl::BinaryFpu<
@@ -112,6 +113,7 @@ void kernel_main() {
                         ckl::TileAddressing::Offset),
                     ckl::input(scalar_dfb_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{
                     half_Wt, 0u},
+                // Copy first half to second half of rotated buffer
                 ckl::CopyTile<
                     ckl::input(in_dfb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
                     ckl::Dst::D1>{},
@@ -133,6 +135,7 @@ void kernel_main() {
                     ckl::Dst::D1>{half_Wt});
             dfb_rotated_in_interm.push_back(Wt);
 
+            // sin_interim = rotated * sin (broadcast rows)
             mul_bcast_rows_init(rotated_in_interm_dfb_id, sin_dfb_id);
             ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
                 ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
@@ -144,6 +147,7 @@ void kernel_main() {
                 ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, in_input, ckl::input(cos_input, ckl::BroadcastDim::Row)>{},
                 ckl::PackTile<cos_output>{});
 
+            // out = cos_interim + sin_interim
             ckl::add<cos_interm_input, sin_interm_input, rotary_output>(
                 ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
         }

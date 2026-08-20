@@ -11,6 +11,7 @@
 namespace ckl = compute_kernel_lib;
 
 // GELU backward using the exact (non-tanh) piecewise derivative: Sollya-fitted core and corrected negative tail.
+// Uses Sollya-derived minimax polynomials for high accuracy (Max ULP = 1)
 void kernel_main() {
     uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
 
@@ -22,8 +23,11 @@ void kernel_main() {
 
     const auto shape = ckl::IterationShape::tiles(per_core_tile_cnt);
 
+    // Multi-tile batching in dest is not possible here because gelu_derivative_tile
+    // uses additional dest registers as scratch during polynomial evaluation.
     ckl::eltwise_chain(
         shape,
+        // dest[0] = grad_out
         ckl::CopyTile<
             ckl::input(
                 dfb_grad_out_id,
@@ -40,8 +44,8 @@ void kernel_main() {
                 ckl::InputTileMapping::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D1>{},
-        ckl::GeluDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},
-        ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
+        ckl::GeluDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},     // dest[1] = GELU'(input)
+        ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},  // dest[0] = grad_out * GELU'(input)
         ckl::PackTile<ckl::output(
             dfb_grad_in_id,
             ckl::ReservePolicy::PerBlockSize,

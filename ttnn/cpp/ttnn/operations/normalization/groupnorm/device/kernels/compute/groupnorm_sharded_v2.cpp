@@ -554,6 +554,7 @@ void kernel_main() {
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
                     ckl::DataFormatReconfig::Disabled)>{});
+            //  (x - Ex) * 1/[sqrt(Var + eps)]
             // fp32: reset both srcs so fp32 x/rstd aren't read through the (var+eps) bf16 dfb_eps format.
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_x_id);
@@ -730,6 +731,7 @@ void kernel_main() {
                     ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::grid(per_core_M, per_core_N));
             dfb_outgamma.wait_front(per_core_MN);
         } else {
+            // dfb_in has data required for gamma, so we do it inplace
             // fp32: see non-negative-mask branch above.
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_in_id);
@@ -781,6 +783,7 @@ void kernel_main() {
                     ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::grid(per_core_M, per_core_N));
             dfb_outbeta.wait_front(per_core_MN);
         } else {
+            // dfb_in_id has data required for beta, so we do it inplace
             // fp32: see non-negative-mask branch above.
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_in_id);

@@ -99,6 +99,7 @@ void kernel_main() {
         REL();
         rotated_in_interm_dfb_obj.push_back(Wt);
         mul_bcast_rows_init(dfb::rotated_interm, dfb::sin);
+        // sin_interim = rotated * sin
         ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
             ckl::BinaryFpu<
@@ -107,6 +108,7 @@ void kernel_main() {
                 ckl::input(held_block_input(dfb::sin), ckl::BroadcastDim::Row)>{},
             ckl::PackTile<bulk_output(dfb::sin_interm)>{});
 
+        // cos_interim = x * cos
         ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
             ckl::BinaryFpu<
@@ -120,6 +122,7 @@ void kernel_main() {
                 ckl::input(held_block_input(dfb::cos), ckl::BroadcastDim::Row)>{},
             ckl::PackTile<bulk_output(dfb::cos_interm)>{});
 
+        // out = cos_interim + sin_interim
         ckl::add<bulk_block_input(dfb::cos_interm), bulk_block_input(dfb::sin_interm), bulk_output(dfb::out)>(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
     }

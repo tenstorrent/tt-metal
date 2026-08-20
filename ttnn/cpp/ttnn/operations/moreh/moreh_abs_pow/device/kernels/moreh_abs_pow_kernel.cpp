@@ -23,6 +23,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
+    // Input/output roles map to the c_in0 / c_out0 DFBs (input == x, output == y).
     compute_kernel_hw_startup(dfb::x, dfb::x, dfb::y);
 
     DataflowBuffer dfb_one_obj(dfb::one);

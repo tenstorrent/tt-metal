@@ -26,7 +26,7 @@ void kernel_main() {
     constexpr bool is_lastdim_layernorm = get_compile_time_arg_val(7) == 1;
     constexpr bool is_groupnorm = get_compile_time_arg_val(8) == 1;
 
-    constexpr auto dfb_dy_id = tt::CBIndex::c_0;
+    constexpr auto dfb_dy_id = tt::CBIndex::c_0;  // output_grad(==dy)
     constexpr auto dfb_x_id = tt::CBIndex::c_1;
     constexpr auto dfb_mean_id = tt::CBIndex::c_2;
     constexpr auto dfb_rstd_id = tt::CBIndex::c_3;
@@ -38,9 +38,9 @@ void kernel_main() {
     DataflowBuffer dfb_mask_w_obj(dfb_mask_w_id);  // mask_w
 
     // Sum[y * dy]
-    constexpr auto dfb_dgamma_id = tt::CBIndex::c_16;
+    constexpr auto dfb_dgamma_id = tt::CBIndex::c_16;  // gamma_grad(==dgamma)
     // Sum[dy]
-    constexpr auto dfb_dbeta_id = tt::CBIndex::c_17;
+    constexpr auto dfb_dbeta_id = tt::CBIndex::c_17;  // beta_grad(==dbeta)
 
     // y = (x - mean) * rstd
     constexpr auto dfb_y_id = tt::CBIndex::c_24;

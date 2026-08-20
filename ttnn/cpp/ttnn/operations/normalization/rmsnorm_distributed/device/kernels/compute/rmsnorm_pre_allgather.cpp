@@ -50,6 +50,7 @@ void kernel_main() {
     constexpr auto squaring_shape = ckl::IterationShape::grid(Wt / blk, blk);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+        // Fuse pre-add: dfb_inp = dfb::in0 + dfb::res (absent entirely when there is no residual)
 #ifdef FUSE_PRE_ADD
         if constexpr (unpack_fp32_active) {
             ckl::binary_sfpu<
@@ -78,6 +79,7 @@ void kernel_main() {
                 ckl::output(dfb::x2, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(squaring_shape);
         }
 
+        // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
         compute_kernel_lib::reduce<
             reduce_type,
             ReduceDim::REDUCE_ROW,

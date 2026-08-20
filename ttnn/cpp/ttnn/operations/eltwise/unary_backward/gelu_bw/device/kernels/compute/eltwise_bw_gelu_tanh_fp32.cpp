@@ -40,13 +40,18 @@ void kernel_main() {
             ckl::Dst::D2>{},
         ckl::Square<ckl::Dst::D1>{},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
+        // tile[1] = 0.044715 * x^3
         ckl::FillScalar<ckl::Dst::D3>{kKappa},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D3, ckl::Dst::D1>{},
+        // tile[1] = x + 0.044715 * x^3
         ckl::AddBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
+        // tile[1] = sqrt(2/π) * (x + 0.044715 * x^3)
         ckl::FillScalar<ckl::Dst::D3>{kBeta},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D3, ckl::Dst::D1>{},
+        // tile[1] = tanh(sqrt(2/π) * (x + 0.044715 * x^3))
         ckl::Tanh<ckl::Dst::D1>{},
-        ckl::CopyDest<ckl::Dst::D1, ckl::Dst::D0, COPY_DEST_DATA_FORMAT>{},
+        ckl::CopyDest<ckl::Dst::D1, ckl::Dst::D0, COPY_DEST_DATA_FORMAT>{},  // copy tanh result to tile[0]
+        // CDF term: tile[1] = 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
         ckl::FillScalar<ckl::Dst::D3>{1.0f},
         ckl::AddBinary<ckl::Dst::D1, ckl::Dst::D3, ckl::Dst::D1>{},
         ckl::FillScalar<ckl::Dst::D3>{0.5f},
@@ -54,23 +59,29 @@ void kernel_main() {
         ckl::Square<ckl::Dst::D0>{},
         ckl::FillScalar<ckl::Dst::D3>{1.0f},
         ckl::SubBinary<ckl::Dst::D3, ckl::Dst::D0, ckl::Dst::D0>{},
+        // tile[2] = (1 + 0.134145 * x**2)
         ckl::FillScalar<ckl::Dst::D3>{kKappa * 3.0f},
         ckl::Square<ckl::Dst::D2>{},
         ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
         ckl::FillScalar<ckl::Dst::D3>{1.0f},
         ckl::AddBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
+        // PDF term: tile[2] = 0.5 * sqrt(2/π) * (1 + 0.134145 * x^2) * (1 - tanh^2)
         ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D0, ckl::Dst::D2>{},
         ckl::FillScalar<ckl::Dst::D3>{kBeta / 2.0f},
         ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
+        // tile[0] is free now (tanh/sech² no longer needed): load grad_out.
         ckl::CopyTile<
             ckl::input(
                 dfb_grad_out_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
+        // tile[2] = x * pdf term. Re-read x from the CB
         ckl::CopyTile<
             ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D3>{},
         ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
+        // result: tile[1] = cdf_term + x * pdf_term
         ckl::AddBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
+        // tile[0] = grad * (cdf_term + x * pdf_term)
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
             dfb_grad_in_id,

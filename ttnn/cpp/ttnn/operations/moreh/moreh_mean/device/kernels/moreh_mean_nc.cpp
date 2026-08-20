@@ -44,6 +44,7 @@ void kernel_main() {
             enable_reload = true;
         }
 
+        // output * (1 / number_of_elements)
         ckl::mul<
             ckl::input(dfb::intermed0),
             ckl::input(dfb::scalar, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),

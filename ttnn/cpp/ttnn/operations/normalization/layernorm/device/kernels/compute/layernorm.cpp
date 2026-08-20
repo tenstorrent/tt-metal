@@ -96,9 +96,6 @@ void kernel_main() {
     DataflowBuffer dfb_eps_obj(dfb_eps_id);
     DataflowBuffer dfb_in_obj(dfb_in_id);
     DataflowBuffer dfb_out_obj(dfb_out_id);
-    DataflowBuffer dfb_ex_obj(dfb_ex_id);
-    DataflowBuffer dfb_ex2_obj(dfb_ex2_id);
-    DataflowBuffer dfb_xmm2_obj(dfb_xmm2_id);
     DataflowBuffer dfb_ex2pe_obj(dfb_ex2pe_id);
     DataflowBuffer dfb_scaler_obj(dfb_scaler_id);
 
@@ -119,7 +116,6 @@ void kernel_main() {
 #else
     constexpr uint32_t dfb_x_id = dfb_in_id;
 #endif
-    DataflowBuffer dfb_x_obj(dfb_x_id);
 
 #ifdef TILIZE_IN
     compute_kernel_hw_startup(dfb_in_rm_id, dfb_in_rm_id, dfb_in_id);
@@ -158,12 +154,17 @@ void kernel_main() {
         // X + Y
 #ifdef FUSE_PRE_ADD
         // The reader streams block-sized chunks, so waiting for the whole row would deadlock.
+        // In/inb come from the reader and need to be
+        // synced on full block size. Keep dfb_x_id aligned
+        // to full block size as well so pre-add/no-pre-add
+        // can be handled the same way.
         ckl::add<
             ckl::input(
                 dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
             ckl::input(
                 dfb_inb_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
             ckl::output(dfb_x_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(row_shape);
+        // by the end of this loop we should end up with Wt tiles in dfb_x_id
 #ifndef RMSNORM
         reconfig_data_format(dfb_in_id, dfb_x_id, dfb_inb_id, dfb_scaler_id);
 #else
@@ -201,6 +202,7 @@ void kernel_main() {
 #endif
 
         // Preserve dfb_xmm_id for the normalization pass; the variance path consumes only its square.
+        // compute temp = xmm*xmm = (x-E[x])^2
         ckl::square<
             ckl::input(
                 dfb_xmm_id,
@@ -252,7 +254,12 @@ void kernel_main() {
                         ckl::TileAddressing::Offset),
                     ckl::input(dfb_ex2pe_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{
                     block.start(), 0u},
+                // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
+                // activation will be applied after the gamma/beta multiplication/addition.
+                // Otherwise, we can apply the activation here.
                 ckl::Optional<activate_after_normalize, FusedActivation>{},
+                // pack either to intermediate (dfb_fusion or out0)
+                // if no gamma/beta are provided, this will be passed on to the writer
                 ckl::PackTile<ckl::output(
                     dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
 
@@ -285,7 +292,11 @@ void kernel_main() {
                             ckl::InputTileMapping::Block,
                             ckl::DataFormatReconfig::Disabled,
                             ckl::TileAddressing::Offset)>{0u, block.start()},
+                    // Activation must be applied last. If do_beta != 0 then
+                    // activation will be applied after the beta addition.
+                    // Otherwise, we can apply the activation here.
                     ckl::Optional<activate_after_gamma, FusedActivation>{},
+                    // pack either to intermediate (dfb_fusion or out0)
                     ckl::PackTile<ckl::output(
                         dfb_outg_id,
                         ckl::ReservePolicy::PerBlockSize,

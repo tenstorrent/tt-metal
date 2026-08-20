@@ -23,6 +23,8 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
+    // Plain uint32_t (not constexpr) to match legacy get_compile_time_arg_val typing and avoid
+    // force-unrolling the per-Ht loops (see moreh_softmax_w_large.cpp for the LTO/addrmod rationale).
     uint32_t N = get_arg(args::N);
     uint32_t Ht = get_arg(args::Ht);
 
@@ -44,7 +46,7 @@ void kernel_main() {
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
                 ckl::ReduceInputBlockShape::single(),
                 ckl::ReduceInputMemoryLayout::contiguous(),
-                ckl::Accumulate::at(dfb::max, 1));
+                ckl::Accumulate::at(dfb::max, 1));  // iteration=1, reload from dfb::max
         }
 
         for (std::uint32_t h = 0; h < Ht; h += onetile) {
@@ -85,6 +87,7 @@ void kernel_main() {
         }
 
 #ifdef LOG
+        // compute log(sum) - pop tile after reduce
         ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_COL,
@@ -100,6 +103,7 @@ void kernel_main() {
                 log_tile(dst_idx);
             });
 #else
+        // compute 1/sum(exp(x)) - pop tile after reduce
         ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_COL,
@@ -125,6 +129,7 @@ void kernel_main() {
 
             sub_tiles_bcast_rows_to_dfb<dfb::tmp, dfb::recip_sum_exps, dfb::out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
 #else
+            // logsoftmin not implemented
 #endif
 #else
 #ifdef SOFTMAX

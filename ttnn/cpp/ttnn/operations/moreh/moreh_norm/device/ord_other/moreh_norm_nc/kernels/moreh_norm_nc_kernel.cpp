@@ -24,7 +24,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::x, dfb::x, dfb::y);
 
-    dfb_one_obj.wait_front(onetile);
+    dfb_one_obj.wait_front(onetile);  // comes from the reader
 
 #ifdef MINUS_INF
     constexpr bool minus_inf = true;
@@ -36,8 +36,11 @@ void kernel_main() {
 #else
     constexpr bool is_zero = false;
 #endif
+    // Compute-private intermediates (dfb::val, dfb::cal): this kernel is their only toucher, so each is
+    // self-looped on the host (bound PRODUCER and CONSUMER under one accessor name).
     for (uint32_t outer_idx = 0; outer_idx < num_output_tiles_per_core; ++outer_idx) {
         for (uint32_t inner_idx = 0; inner_idx < num_reduced_tiles_along_dim; ++inner_idx) {
+            // x != 0
             ckl::eltwise_chain(
                 ckl::IterationShape::tiles(onetile),
                 ckl::CopyTile<ckl::input(dfb::x)>{},
@@ -46,6 +49,7 @@ void kernel_main() {
                 ckl::Optional<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
                 ckl::PackTile<ckl::output(dfb::val)>{});
 
+            // calculate f(x) over dimensions
             if (inner_idx == 0) {
                 ckl::copy<ckl::input(dfb::val), ckl::output(dfb::cal)>(ckl::IterationShape::tiles(onetile));
             } else {
@@ -59,6 +63,7 @@ void kernel_main() {
             }
         }
 
+        // Compute dfb::y
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),
             ckl::CopyTile<ckl::input(dfb::cal)>{},

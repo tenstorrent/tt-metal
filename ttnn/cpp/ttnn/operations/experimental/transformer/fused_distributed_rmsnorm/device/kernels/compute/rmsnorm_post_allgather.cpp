@@ -121,6 +121,12 @@ void kernel_main() {
             if constexpr (has_weight) {
                 // cumulative wait
                 dfb_weight.wait_front(col_tile + block_size);
+                /**
+                 * The compute loop must be written like this because if rope is fused,
+                 * mul_weight_result_dfb_id == mul_rms_result_dfb_id
+                 * and so this is an in-place operation.
+                 * If rope is not fused, mul_weight_result_dfb_id == output_dfb_id
+                 */
                 ckl::eltwise_chain(
                     ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size),
                     ckl::BinaryFpu<
@@ -223,6 +229,9 @@ void kernel_main() {
                 tile_regs_release();
                 dfb_rotated_input.push_back(block_size);
 
+                /**
+                 * Write cos_interim + sin_interim to output_dfb_id
+                 */
                 ckl::add<
                     ckl::input(
                         intermediate_dfb_id,

@@ -33,12 +33,12 @@ void kernel_main() {
 
     constexpr uint32_t dfb_y_id = 16;
 
-    constexpr uint32_t dfb_xabs_id = 24;
-    constexpr uint32_t dfb_xpow_id = 25;
-    constexpr uint32_t dfb_xpowadd_id = 26;
-    constexpr uint32_t dfb_logx_id = 27;
-    constexpr uint32_t dfb_exp_lxmd_id = 28;
-    constexpr uint32_t dfb_correct_xpow_id = 29;
+    constexpr uint32_t dfb_xabs_id = 24;          // |x|
+    constexpr uint32_t dfb_xpow_id = 25;          // |x|^p
+    constexpr uint32_t dfb_xpowadd_id = 26;       // Add[|x|^p * exp(log(|x|) * decimal)]
+    constexpr uint32_t dfb_logx_id = 27;          // log(|x|)
+    constexpr uint32_t dfb_exp_lxmd_id = 28;      // exp(log(|x|) * decimal)
+    constexpr uint32_t dfb_correct_xpow_id = 29;  // |x|^p * exp(log(|x|) * decimal)
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t mask_w_tile_index = 1;
@@ -73,15 +73,16 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_logx_id, dfb_decimal_id, dfb_y_id);
 
-    dfb_decimal_obj.wait_front(onetile);
-    dfb_one_obj.wait_front(onetile);
+    dfb_decimal_obj.wait_front(onetile);  // comes from the reader
+    dfb_one_obj.wait_front(onetile);      // comes from the reader
 
     if (do_mask_h || do_mask_w) {
-        dfb_mask_h_w_obj.wait_front(2);
+        dfb_mask_h_w_obj.wait_front(2);  // comes from the reader
     }
 
     // Compute dfb_xpowadd_id
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
+        // Comput dfb_xabs_id and mask(optional)
         const bool mh = do_mask_h && need_to_do_mask_h(tile_idx, ht, wt);
         const bool mw = do_mask_w && ((tile_idx + 1) % wt) == 0;
         ckl::eltwise_chain(

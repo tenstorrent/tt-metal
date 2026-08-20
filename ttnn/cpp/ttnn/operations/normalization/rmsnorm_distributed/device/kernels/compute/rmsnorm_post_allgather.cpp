@@ -103,6 +103,7 @@ void kernel_main() {
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
 
         if constexpr (do_gamma) {
+            // x_normed * gamma
             ckl::mul<
                 ckl::input(
                     dfb_x_normed_id,
@@ -119,6 +120,7 @@ void kernel_main() {
                 ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
 
             if constexpr (do_beta) {
+                // x_normed * gamma + beta
                 ckl::add<
                     ckl::input(
                         dfb_times_gamma_out_id,

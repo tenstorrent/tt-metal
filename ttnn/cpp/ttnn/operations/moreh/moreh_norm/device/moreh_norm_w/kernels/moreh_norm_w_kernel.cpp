@@ -34,7 +34,7 @@ void kernel_main() {
     DataflowBuffer dfb_one_obj(dfb_one_id);
     constexpr uint32_t dfb_decimal_id = tt::CBIndex::c_2;
     DataflowBuffer dfb_decimal_obj(dfb_decimal_id);
-    constexpr uint32_t dfb_recip_p_decimal_id = tt::CBIndex::c_3;
+    constexpr uint32_t dfb_recip_p_decimal_id = tt::CBIndex::c_3;  // recip_p_decimal
     DataflowBuffer dfb_recip_p_decimal_obj(dfb_recip_p_decimal_id);
     constexpr uint32_t dfb_mask_w_id = tt::CBIndex::c_4;
     DataflowBuffer dfb_mask_w_obj(dfb_mask_w_id);
@@ -49,28 +49,28 @@ void kernel_main() {
     constexpr uint32_t dfb_tmp5_id = tt::CBIndex::c_29;
     constexpr uint32_t dfb_tmp6_id = tt::CBIndex::c_30;
 
-    constexpr uint32_t dfb_xabs_id = dfb_tmp0_id;
-    constexpr uint32_t dfb_xpow_id = dfb_tmp1_id;
-    constexpr uint32_t dfb_logx_id = dfb_tmp2_id;
-    constexpr uint32_t dfb_exp_lxmd_id = dfb_tmp3_id;
-    constexpr uint32_t dfb_correct_xpow_id = dfb_tmp4_id;
-    constexpr uint32_t dfb_xpowadd_id = dfb_tmp5_id;
-    constexpr uint32_t dfb_xpowsum_id = dfb_tmp6_id;
+    constexpr uint32_t dfb_xabs_id = dfb_tmp0_id;          // |x|
+    constexpr uint32_t dfb_xpow_id = dfb_tmp1_id;          // |x|^p
+    constexpr uint32_t dfb_logx_id = dfb_tmp2_id;          // log(|x|)
+    constexpr uint32_t dfb_exp_lxmd_id = dfb_tmp3_id;      // exp(log(|x|) * decimal)
+    constexpr uint32_t dfb_correct_xpow_id = dfb_tmp4_id;  // |x|^p * exp(log(|x|) * decimal)(==|x + decimal|^p)
+    constexpr uint32_t dfb_xpowadd_id = dfb_tmp5_id;       // Add(|x + decimal|^p)
+    constexpr uint32_t dfb_xpowsum_id = dfb_tmp6_id;       // Sum(|x + decimal|^p)
 
     constexpr uint32_t onetile = 1;
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-    dfb_one_obj.wait_front(onetile);
-    dfb_decimal_obj.wait_front(onetile);
-    dfb_recip_p_decimal_obj.wait_front(onetile);
+    dfb_one_obj.wait_front(onetile);              // comes from the reader
+    dfb_decimal_obj.wait_front(onetile);          // comes from the reader
+    dfb_recip_p_decimal_obj.wait_front(onetile);  // comes from the reader
 
     constexpr uint32_t TILE_W = 32;
     const bool do_mask_w = (origin_w % TILE_W) != 0;
     const auto mask_w = do_mask_w ? (origin_w % TILE_W) : TILE_W;
 
     if (do_mask_w) {
-        dfb_mask_w_obj.wait_front(onetile);
+        dfb_mask_w_obj.wait_front(onetile);  // comes from the reader
     }
 
     for (uint32_t row_idx = 0; row_idx < num_rows_per_core; ++row_idx) {
@@ -98,6 +98,7 @@ void kernel_main() {
                 dfb_exp_lxmd_id,
                 dfb_correct_xpow_id>(p, p_is_negative);
 
+            // Add(|x|^p)
             if (col_idx == 0) {
                 copy_tile_to_dfb<dfb_correct_xpow_id, dfb_xpowadd_id>();
             } else {

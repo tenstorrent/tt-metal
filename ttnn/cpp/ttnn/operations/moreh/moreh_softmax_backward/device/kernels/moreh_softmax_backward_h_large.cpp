@@ -33,6 +33,7 @@ void kernel_main() {
                     mask_tile_to_dfb<dfb::dy, dfb::mask, dfb::add>(
                         /*itile=*/0, /*mtile=*/0, /*pop=*/1, /*popm=*/0);
                 } else {
+                    // The y*dy buffer under a second name; one FIFO, not an extra buffer.
                     constexpr auto dfb_inter0_id = dfb::ydy;
                     mask_tile_to_dfb<dfb::dy, dfb::mask, dfb_inter0_id>(
                         /*itile=*/0, /*mtile=*/0, /*pop=*/1, /*popm=*/0);
@@ -52,7 +53,7 @@ void kernel_main() {
             ckl::ReduceInputBlockShape::single());
 
         for (uint32_t h = 0; h < Ht; ++h) {
-            constexpr auto dfb_exp_id = dfb::ydy;
+            constexpr auto dfb_exp_id = dfb::ydy;  // the y * dy buffer, reused to hold exp(y)
             exp_tile_to_dfb<dfb::y, dfb_exp_id>();
 
             // sum * exp(y)
@@ -65,6 +66,7 @@ void kernel_main() {
         dfb_sum_obj.pop_front(onetile);
 #else
 
+        // step 1, compute y * dy
         for (uint32_t h = 0; h < Ht; ++h) {
             if (h == Ht - 1) {
                 mul_tiles_and_mask_tile_to_dfb<dfb::y, dfb::dy, dfb::mask, dfb::ydy>(
@@ -84,6 +86,7 @@ void kernel_main() {
         ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, dfb::add, dfb::scaler, dfb::sum>(
             ckl::ReduceInputBlockShape::single());
 
+        // step 3, compute final result
         for (uint32_t h = 0; h < Ht; ++h) {
             // dy - sum
             sub_tiles_bcast_rows_to_dfb<dfb::dy, dfb::sum, dfb::dy_m_sum>(0, 0, /*pop0=*/1, /*pop1=*/0);

@@ -26,6 +26,7 @@ void kernel_main() {
 
     ckl::eltwise_chain(
         shape,
+        // dest[0] = grad_out
         ckl::CopyTile<
             ckl::input(
                 dfb_grad_out_id,
@@ -42,8 +43,8 @@ void kernel_main() {
                 ckl::InputTileMapping::Block,
                 ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D1>{},
-        ckl::TanhDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},
-        ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
+        ckl::TanhDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},     // dest[1] = sech²(input)
+        ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},  // dest[0] = grad_out * sech²(input)
         ckl::PackTile<ckl::output(
             dfb_grad_in_id,
             ckl::ReservePolicy::PerBlockSize,

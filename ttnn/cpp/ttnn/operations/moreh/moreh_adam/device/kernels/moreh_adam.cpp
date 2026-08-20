@@ -156,6 +156,7 @@ void kernel_main() {
             ckl::PackTile<ckl::output(
                 dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
+        // dfb_tmp1_id = 1 / (1 - dfb_tmp1_id);
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),
             ckl::BinaryFpu<
@@ -167,6 +168,7 @@ void kernel_main() {
                 dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
 #ifdef AMSGRAD
+        // tmp_dfb_max_exp_avg_sq_id = max(dfb_max_exp_avg_sq_in_id, tmp_dfb_exp_avg_sq_id);
         ckl::binary_sfpu<
             ckl::BinaryMax<>,
             ckl::input(dfb_max_exp_avg_sq_in_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, kDataFormatReconfig),
@@ -175,9 +177,11 @@ void kernel_main() {
                 tmp_dfb_max_exp_avg_sq_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>(
             ckl::IterationShape::tiles(onetile));
 
+        // dfb_max_exp_avg_sq_out_id
         copy_tile_to_dfb<tmp_dfb_max_exp_avg_sq_id, dfb_max_exp_avg_sq_out_id>(first_tile, 0);
 #endif
 
+        // dfb_tmp1_id = sqrt(exp_avg_sq / dfb_tmp1_id);
 #ifdef AMSGRAD
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),
@@ -201,6 +205,7 @@ void kernel_main() {
                 dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 #endif
 
+        // dfb_tmp1_id = 1 / (dfb_tmp1_id + eps)
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),
             ckl::BinaryFpu<

@@ -55,6 +55,8 @@ void kernel_main() {
 
     for (uint32_t nc = 0; nc < NC; nc++) {
         // Input is W-contiguous; each output tile reduces one row of W tiles.
+        // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
+        // in this case we just sequentially add to accumulator all the W-tiles in a row
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             dfb_input_id = dfb::input;
             if constexpr (!is_w_single_tile) {

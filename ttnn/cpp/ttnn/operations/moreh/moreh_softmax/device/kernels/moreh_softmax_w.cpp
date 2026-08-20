@@ -32,6 +32,8 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
+    // Plain uint32_t (not constexpr) to match legacy get_compile_time_arg_val typing and avoid
+    // force-unrolling the per-Wt loops (see moreh_softmax_w_large.cpp for the LTO/addrmod rationale).
     uint32_t N = get_arg(args::N);
     uint32_t Wt = get_arg(args::Wt);
 
@@ -68,6 +70,7 @@ void kernel_main() {
                 compute_kernel_lib::Accumulate::at(dfb::max, /*iter=*/1));
         }
 
+        // compute x - max(x)
         ckl::sub<
             ckl::input(
                 dfb::in0,
@@ -80,6 +83,7 @@ void kernel_main() {
             ckl::output(dfb::x_minus_max, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
             ckl::IterationShape::tiles(Wt));
 
+        // compute exp(x - max(x))
         dfb_x_m_max_obj.wait_front(Wt);
 #ifdef SOFTMAX
         constexpr bool is_softmax = true;
@@ -155,6 +159,7 @@ void kernel_main() {
             });
 #endif
 
+        // compute final result
         dfb_x_m_max_obj.wait_front(Wt);
 #ifdef LOG
         ckl::sub<

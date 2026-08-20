@@ -33,9 +33,13 @@ void kernel_main() {
     constexpr auto dfb_out_id = tt::CBIndex::c_2;
 
 #if WHERE_TTS
+    // TTS: tensor is true value, goes to dst_reg 1
+    // TTS: scalar is false value, goes to dst_reg 2
     constexpr auto kTensorSlot = ckl::Dst::D1;
     constexpr auto kFillSlot = ckl::Dst::D2;
 #else
+    // TST: tensor is false value, goes to dst_reg 2
+    // TST: scalar is true value, goes to dst_reg 1
     constexpr auto kTensorSlot = ckl::Dst::D2;
     constexpr auto kFillSlot = ckl::Dst::D1;
 #endif

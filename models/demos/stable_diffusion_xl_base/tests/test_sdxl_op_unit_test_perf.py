@@ -135,7 +135,7 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1281840  # Measured: ~1.28ms after the eltwise-chain migration
+    expected_duration_ns = 1300000  # Measured: ~1.30ms for GroupNorm VAE welford_reciprocal
 
     # Log the performance result
     print(

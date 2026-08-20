@@ -31,7 +31,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_16);
 
-    constexpr auto dfb_dy_id = tt::CBIndex::c_0;
+    constexpr auto dfb_dy_id = tt::CBIndex::c_0;  // output_grad(==dy)
     constexpr auto dfb_x_id = tt::CBIndex::c_1;
     constexpr auto dfb_mean_id = tt::CBIndex::c_2;
     DataflowBuffer dfb_mean_obj(dfb_mean_id);  // mean
@@ -49,7 +49,7 @@ void kernel_main() {
     constexpr auto dfb_dx_id = tt::CBIndex::c_16;
 
     // y = (x - mean) * rstd
-    constexpr auto dfb_dycopy_id = tt::CBIndex::c_24;
+    constexpr auto dfb_dycopy_id = tt::CBIndex::c_24;  // copy output_grad(==dycopy)
     constexpr auto dfb_y_id = tt::CBIndex::c_25;
     constexpr auto dfb_dysum_id = tt::CBIndex::c_26;
     DataflowBuffer dfb_dysum_obj(dfb_dysum_id);  // Sum[dy]
@@ -95,7 +95,6 @@ void kernel_main() {
             // Compute dfb_xmm_id
             // x - mean
             constexpr auto dfb_xmm_id = dfb_tmp3_id;
-            DataflowBuffer dfb_xmm_obj(dfb_xmm_id);
             ckl::sub<
                 ckl::input(dfb_x_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(
@@ -147,6 +146,8 @@ void kernel_main() {
                 ckl::PackTile<ckl::output(
                     dfb_y_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 
+            // Copy dfb_dy_id to dfb_dycopy_id
+            // Compute dfb_dycopy_id
             // dycopy = dy * gamma and mask(optional)
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
@@ -161,6 +162,7 @@ void kernel_main() {
                             ckl::WaitPolicy::PerTile,
                             ckl::PopPolicy::PerTile,
                             kDataFormatReconfig)>>{},
+                // dycopy = dy and mask(optional)
                 ckl::Optional<
                     !gamma_has_value,
                     ckl::CopyTile<ckl::input(
@@ -211,6 +213,7 @@ void kernel_main() {
 
             // Compute dfb_ydy_id and dfb_ydyadd_id
             constexpr auto dfb_ydy_id = dfb_tmp3_id;
+            // Compute dfb_ydy_id
             ckl::mul<
                 ckl::input(dfb_y_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig),
                 ckl::input(dfb_dycopy_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, kDataFormatReconfig),
@@ -274,6 +277,8 @@ void kernel_main() {
         dfb_ydysum_obj.wait_front(onetile);
         dfb_recip_nrstd_obj.wait_front(onetile);
         for (uint32_t wt = 0; wt < Wt; wt++) {
+            // Copy dfb_dy_id to dfb_dycopy_id
+            // Compute dfb_dycopy_id
             // dycopy = dy * gamma and mask(optional)
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
@@ -288,6 +293,7 @@ void kernel_main() {
                             ckl::WaitPolicy::PerTile,
                             ckl::PopPolicy::PerTile,
                             kDataFormatReconfig)>>{},
+                // dycopy = dy and mask(optional)
                 ckl::Optional<
                     !gamma_has_value,
                     ckl::CopyTile<ckl::input(
@@ -346,7 +352,6 @@ void kernel_main() {
             // Compute dfb_xmm_id
             // x - mean and mask(optional)
             constexpr auto dfb_xmm_id = dfb_tmp1_id;
-            DataflowBuffer dfb_xmm_obj(dfb_xmm_id);
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<

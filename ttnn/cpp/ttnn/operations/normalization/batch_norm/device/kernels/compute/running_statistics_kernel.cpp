@@ -12,6 +12,7 @@
 
 namespace ckl = compute_kernel_lib;
 
+// updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
 template <uint32_t dfb_batch_id, uint32_t dfb_old_id, uint32_t dfb_updated_id, bool AlsoOut0>
 ALWI void update_running_stat() {
     using D = ckl::Dst;
@@ -52,7 +53,7 @@ void kernel_main() {
     DataflowBuffer dfb_batch_mean_obj(dfb::batch_mean);
     DataflowBuffer dfb_batch_var_obj(dfb::batch_var);
     DataflowBuffer dfb_momentum_obj(dfb::momentum);
-    DataflowBuffer dfb_one_obj(dfb::one);
+    DataflowBuffer dfb_one_obj(dfb::one);  // holds 1, for the (1 - momentum) term
     DataflowBuffer dfb_out_obj(dfb::out);
 
     compute_kernel_hw_startup(dfb::batch_mean, dfb::batch_var, dfb::out);
@@ -70,6 +71,9 @@ void kernel_main() {
         dfb_out_obj.reserve_back(onetile);
 
         if constexpr (old_running_mean_has_value) {
+            // If old_running_var_has_value, the var block below will pack to dfb::out.
+            // Otherwise there is no var block — this is the last compute in the tile, so pack
+            // the mean result to both dfb::updated_mean and dfb::out.
             update_running_stat<
                 dfb::batch_mean,
                 dfb::old_running_mean,
@@ -78,6 +82,7 @@ void kernel_main() {
         }
 
         if constexpr (old_running_var_has_value) {
+            // Last compute in the tile — pack to both dfb::updated_var and dfb::out.
             update_running_stat<
                 dfb::batch_var,
                 dfb::old_running_var,

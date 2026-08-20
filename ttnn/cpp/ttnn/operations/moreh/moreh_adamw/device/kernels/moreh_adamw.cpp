@@ -153,6 +153,7 @@ void kernel_main() {
         // bias_correction2 = 1 - pow(beta2, step);
         // dfb_beta2_exponent_id = pow(beta2, step); Calculated from host
 
+        // dfb_tmp1_id = 1 / (1 - dfb_beta2_exponent_id);
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),
             ckl::BinaryFpu<
@@ -188,6 +189,7 @@ void kernel_main() {
         copy_tile_to_dfb<tmp_dfb_max_exp_avg_sq_id, dfb_max_exp_avg_sq_out_id>(first_tile, /*pop=*/0);
 #endif
 
+        // dfb_tmp1_id = sqrt(exp_avg_sq / dfb_tmp1_id);
 #ifdef AMSGRAD
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),
@@ -211,6 +213,7 @@ void kernel_main() {
                 dfb_tmp1_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
 #endif
 
+        // dfb_tmp1_id = 1 / (dfb_tmp1_id + eps)
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),
             ckl::BinaryFpu<

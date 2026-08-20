@@ -15,6 +15,7 @@
 namespace ckl = compute_kernel_lib;
 using D = ckl::Dst;
 
+// updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
 template <uint32_t dfb_batch_id, uint32_t dfb_old_id, uint32_t dfb_updated_id, bool AlsoOut0>
 ALWI void update_running_stat() {
     ckl::eltwise_chain(
@@ -29,6 +30,7 @@ ALWI void update_running_stat() {
         ckl::MulBinary<D::D1, D::D2, D::D1>{},  // D1 = momentum * batch_stat
         ckl::AddBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old + momentum * batch
         ckl::PackTile<ckl::output(dfb_updated_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{},
+        // For the output tensor, return the same values as either of the stats.
         ckl::Optional<
             AlsoOut0,
             ckl::PackTile<ckl::output(dfb::out, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{});
@@ -78,7 +80,7 @@ void kernel_main() {
     DataflowBuffer dfb_batch_mean_obj(dfb::batch_mean);
     DataflowBuffer dfb_batch_var_obj(dfb::batch_var);
     DataflowBuffer dfb_momentum_obj(dfb::momentum);
-    DataflowBuffer dfb_one_obj(dfb::one);
+    DataflowBuffer dfb_one_obj(dfb::one);  // holds 1, for the (1 - momentum) term
     DataflowBuffer dfb_out_obj(dfb::out);
 
     compute_kernel_hw_startup(dfb::batch_mean, dfb::out);

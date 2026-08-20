@@ -15,6 +15,7 @@ namespace ckl = compute_kernel_lib;
 // out = input*cos + rotate_half(input)*sin.
 template <uint32_t in0_dfb_id, uint32_t in1_dfb_id, uint32_t out_dfb_id>
 ALWI void mul_tiles_chain() {
+    // Multiply input by cos or sin
     ckl::mul<
         ckl::input(in0_dfb_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
         ckl::input(in1_dfb_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
@@ -47,21 +48,26 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_rows; ++i) {
         for (uint32_t j = 0; j < Wt; ++j) {
             if (j < half_Wt) {
+                // Multiply half of the rotated input by scalar (-1)
                 ckl::mul<
                     ckl::input(rotated_in_dfb_id),
                     ckl::input(scalar_dfb_id, ckl::BroadcastDim::Scalar, ckl::WaitPolicy::None, ckl::PopPolicy::None),
                     ckl::output(rotated_in_interm_dfb_id)>(ckl::IterationShape::tiles(onetile));
                 reconfig_data_format_srcb(scalar_dfb_id, sin_dfb_id);
                 pack_reconfig_data_format(rotated_in_interm_dfb_id, sin_interm_dfb_id);
+                // Multiply rotated input by sin
                 mul_tiles_chain<rotated_in_interm_dfb_id, sin_dfb_id, sin_interm_dfb_id>();
             } else {
                 reconfig_data_format(rotated_in_dfb_id, sin_dfb_id);
                 pack_reconfig_data_format(out_dfb_id, sin_interm_dfb_id);
+                // Multiply rotated input by sin
                 mul_tiles_chain<rotated_in_dfb_id, sin_dfb_id, sin_interm_dfb_id>();
             }
 
+            // Multiply input by cos
             mul_tiles_chain<in_dfb_id, cos_dfb_id, cos_interm_dfb_id>();
 
+            // Add applied sin/cos tensors
             ckl::add<ckl::input(cos_interm_dfb_id), ckl::input(sin_interm_dfb_id), ckl::output(out_dfb_id)>(
                 ckl::IterationShape::tiles(onetile));
         }

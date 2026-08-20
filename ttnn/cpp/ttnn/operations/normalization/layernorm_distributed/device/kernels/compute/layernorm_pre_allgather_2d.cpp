@@ -57,6 +57,7 @@ void kernel_main() {
     constexpr auto squaring_shape = ckl::IterationShape::tiles(Wt).block_size(blk);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+        // Fuse pre-add: dfb_inp_id = dfb::in0 + dfb::res (absent entirely when there is no residual)
 #ifdef FUSE_PRE_ADD
         if constexpr (unpack_fp32_active) {
             ckl::binary_sfpu<
@@ -101,6 +102,7 @@ void kernel_main() {
                 ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
         }
 
+        // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
         compute_kernel_lib::reduce<
             reduce_type,
             ReduceDim::REDUCE_ROW,
@@ -116,13 +118,17 @@ void kernel_main() {
     // resident tile, so release its single credit only after all rows are complete.
     dfb_reduce.pop_front(1);
 
+    // On a merge core, do a final sum over the column's partial statistics and write the result to
+    // the output buffer.
 #ifdef IS_MERGE_CORE
     // Only merge-core builds bind out_final, so this block must be selected by the preprocessor.
     DataflowBuffer dfb_x2_merge(dfb::x2_merge);
     DataflowBuffer dfb_zero(dfb::zero);
+    // Wait for all num_cores_y tiles
     dfb_x2_merge.wait_front(num_cores_y);
     dfb_zero.wait_front(1);
 
+    // Initialize accumulation
     // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
     // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(dfb::x2_merge, dfb::zero, dfb::out_final);

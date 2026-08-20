@@ -98,6 +98,8 @@ void kernel_main() {
     pack_reconfig_data_format(dfb_in_id, dfb_x2_id);
     reconfig_data_format(dfb_in0_id, dfb_in_id, dfb_in1_id, dfb_in_id);
 #else
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup
+    // full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(dfb_in_id, dfb_in_id, dfb_x2_id);
 #endif
 
@@ -189,6 +191,7 @@ void kernel_main() {
             dfb_stats_obj.pop_front(num_distributed_blocks);
 
             // Reduce distributed E[x^2], then compute 1/sqrt(E[x^2] + eps).
+            // dfb_var_id is dfb_stats_id in case of RMS norm
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<ckl::BinaryFpuOp::Add, ckl::input(dfb_var_id), ckl::input(dfb_eps_id)>{},

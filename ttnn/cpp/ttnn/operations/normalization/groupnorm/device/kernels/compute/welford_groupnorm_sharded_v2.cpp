@@ -350,6 +350,8 @@ void kernel_main() {
             for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                 uint32_t group_offset = 0;
                 for (uint32_t g = min_group; g < num_groups; ++g) {
+                    // // Now let us do the actual computation for the current group here
+                    // // a. x-u
                     reconfig_data_format(dfb_in0_id, dfb_ex_global_id);
                     ckl::eltwise_chain(
                         ckl::IterationShape::one_tile(),
@@ -392,6 +394,7 @@ void kernel_main() {
                         ckl::copy<streaming_input(dfb_xmm_id), streaming_output(dfb_x_id)>(
                             ckl::IterationShape::one_tile());
                     } else {
+                        // Not the first group for this tile: add what is already in dfb_x.
                         reconfig_data_format_srca(dfb_xmm_id, dfb_x_id);
                         reconfig_data_format_srcb(dfb_input_mask_id, dfb_xmm_id);
                         ckl::add<streaming_input(dfb_x_id), streaming_input(dfb_xmm_id), streaming_output(dfb_x_id)>(
@@ -463,17 +466,21 @@ void kernel_main() {
                         ckl::PackTile<streaming_output(dfb_x_id)>{});
                 }
 
+                // Write out the final output
 #ifdef UNTILIZE_OUT
                 constexpr auto write_dfb_id = dfb_untilize_in_id;
 #else
                 constexpr auto write_dfb_id = dfb_out0_id;
 #endif
+                // fp32: reset SrcA to dfb_x (fp32).
                 if constexpr (enable_fp32_reconfig) {
                     reconfig_data_format_srca(dfb_x_id);
                 }
                 reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
 #ifndef UNTILIZE_OUT
                 // The streaming output disables automatic reconfiguration, so select the fp32 output format.
+                // Packer was last set for bf16 dfb_xmm; reconfigure to write_dfb_id (may be fp32) before pack, restore
+                // after. Gated out for bf16 (no format change).
                 if constexpr (enable_fp32_reconfig) {
                     pack_reconfig_data_format(write_dfb_id);
                 }

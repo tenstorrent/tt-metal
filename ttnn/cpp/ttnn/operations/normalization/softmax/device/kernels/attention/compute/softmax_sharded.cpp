@@ -39,6 +39,7 @@ ALWI void calc_numeric_stable() {
         dfb_max_id,
         ckl::ReduceInputPolicy::NoWaitNoPop>(ckl::ReduceInputBlockShape::row(block_w));
 
+    // calculate x-max(x)
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(block_w).block_size(subblock_w),
         ckl::BinaryFpu<
@@ -60,22 +61,18 @@ void kernel_main() {
 #ifdef NUMERIC_STABLE
     constexpr auto dfb_x_id = dfb::x;
 #else
+    // Without numeric_stable, dfb_x aliases dfb_exps (Same-FIFO reuse).
     constexpr auto dfb_x_id = dfb::exps;
 #endif
 
     compute_kernel_hw_startup(dfb::in0, dfb::max_scaler, dfb::exps);
 
-    auto dfb_in0_obj_id = DataflowBuffer(dfb::in0);
-    auto dfb_max_scaler_obj_id = DataflowBuffer(dfb::max_scaler);
     auto dfb_exps_obj_id = DataflowBuffer(dfb::exps);
-    auto dfb_out0_obj_id = DataflowBuffer(dfb::out0);
     auto dfb_x_obj_id = DataflowBuffer(dfb_x_id);
 #if FUSED_SCALE_MASK
-    auto dfb_fused_attn_obj_id = DataflowBuffer(dfb::fused_attn);
-    auto dfb_scale_mask_obj_id = DataflowBuffer(dfb::scale_mask);
+    // fused_scale/fused_attn/scale_mask are bound only on the fused scale-mask path.
 #endif
 #ifdef NUMERIC_STABLE
-    auto dfb_max_obj_id = DataflowBuffer(dfb::max);
 #endif
 
     constexpr int dst0 = 0;

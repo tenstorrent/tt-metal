@@ -41,6 +41,8 @@ void kernel_main() {
     DataflowBuffer dfb_dy_obj(dfb::dy);            // output_grad(==dy), c_2
     DataflowBuffer dfb_decimal_obj(dfb::decimal);  // decimal, c_3
 
+    // dfb::dx: input_grad(==dx), c_16
+
     // Compute-only intermediates (c_24..c_31), each filled and drained by this kernel (self-loop).
 
     constexpr uint32_t onetile = 1;

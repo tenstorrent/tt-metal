@@ -9,7 +9,7 @@ void kernel_main() {
     const auto num_tiles = get_arg_val<uint32_t>(i++);
 
     constexpr uint32_t dfb_x_id = 0;
-    constexpr uint32_t dfb_clip_coef_clamped_id = 1;
+    constexpr uint32_t dfb_clip_coef_clamped_id = 1;  // clip_coef_clamped
     constexpr uint32_t dfb_y_id = 16;
 
     compute_kernel_hw_startup(dfb_x_id, dfb_clip_coef_clamped_id, dfb_y_id);

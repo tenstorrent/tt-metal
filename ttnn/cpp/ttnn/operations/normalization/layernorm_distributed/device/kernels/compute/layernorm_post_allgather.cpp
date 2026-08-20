@@ -2,6 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/*
+ * This kernel computes layernorm or rmsnorm, dependent on the RMSNORM define.
+ * For layernorm it receives E(x**2) and E(x) and computes the remaining normalization based on gamma, beta and epsilon.
+ *   E(x**2) and E(x) are contained in a two tile wide tensor containing E(x**2) and E(x) in the left most columns per
+ * tile. For rmsnorm it receives E(x**2) and computes the remaining normalization based on gamma, beta and epsilon.
+ *   E(x**2) is contained in a one tile wide tensor containing E(x**2) in the left most column.
+ */
+
 #include <cstdint>
 
 #include "api/compute/bcast.h"
@@ -23,12 +31,15 @@ constexpr uint32_t stats_tile_stride = 2;
 constexpr auto Wt_file_scope = get_arg(args::Wt);
 constexpr auto dfb_length_file_scope = get_arg(args::dfb_length);
 
+// The normalized result goes straight to the output unless gamma or beta still has to be applied to
+// it. Only the buffers this build binds have handles, so the choice is made at the preprocessor.
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
 constexpr auto normed_output_dfb = dfb::x_normed;
 #else
 constexpr auto normed_output_dfb = dfb::out;
 #endif
 
+// gamma's product feeds the beta stage when both are applied; otherwise it is already the output.
 #if defined(FUSE_GAMMA) && defined(FUSE_BETA)
 constexpr auto times_gamma_output_dfb = dfb::times_gamma_out;
 #else
@@ -78,6 +89,7 @@ ALWI void normalize_chunk(const uint32_t num_tiles) {
         ckl::output(normed_output_dfb, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(shape);
 
 #ifdef FUSE_GAMMA
+    // x_normed * gamma, then + beta
     ckl::mul<
         ckl::input(
             dfb::x_normed, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
@@ -108,19 +120,25 @@ void kernel_main() {
     DataflowBuffer dfb_stats_reduced(dfb::stats_reduced);
     DataflowBuffer dfb_recip_sqrt_var(dfb::recip_sqrt_var);
 
-    dfb_reduce.wait_front(1);
-    dfb_eps.wait_front(1);
+    dfb_reduce.wait_front(1);  // comes from the reader
+    dfb_eps.wait_front(1);     // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         reconfig_data_format(dfb::reduce, dfb::stats);
         pack_reconfig_data_format(dfb::stats_reduced);
+        /*
+         * Reduce stats input.
+         * RMSNorm packs mean(x**2) into dfb::var. Layernorm just uses dfb::stats_reduced.
+         */
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb::stats, dfb::reduce, dfb::stats_reduced);
         dfb_stats.wait_front(stats_tiles_cols);
 
         tile_regs_acquire();
+        // Reduce sum(x**2) first
         for (uint32_t i = 0; i < stats_tiles_cols; i += stats_tile_stride) {
             reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb::stats, dfb::reduce, i, 0, 0);
         }
+        // Reduce sum(x) next
         for (uint32_t i = 1; i < stats_tiles_cols; i += stats_tile_stride) {
             reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb::stats, dfb::reduce, i, 0, 1);
         }
@@ -181,6 +199,7 @@ void kernel_main() {
             normalize_chunk(leftover_tiles);
         }
 
+        // free up the buffers
         dfb_stats_reduced.pop_front(stats_tile_stride);
         dfb_recip_sqrt_var.pop_front(1);
     }

@@ -27,13 +27,13 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::x, dfb::x, dfb::y);
 
-    dfb_one_obj.wait_front(onetile);
+    dfb_one_obj.wait_front(onetile);  // comes from the reader
 
     constexpr uint32_t TILE_H = 32;
     const bool do_mask_h = (origin_h % TILE_H) != 0;
 
     if (do_mask_h) {
-        dfb_mask_h_obj.wait_front(onetile);
+        dfb_mask_h_obj.wait_front(onetile);  // comes from the reader
     }
 
 #ifdef MINUS_INF
@@ -48,9 +48,12 @@ void kernel_main() {
 #endif
     using MaskOp =
         std::conditional_t<minus_inf, ckl::MaskPosInf<ckl::Dst::D0>, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>>;
+    // Compute-private intermediates (dfb::val, dfb::cal, dfb::reduce): this kernel is their only toucher, so each is
+    // self-looped on the host (bound PRODUCER and CONSUMER under one accessor name).
     for (uint32_t col_idx = 0; col_idx < num_cols_per_core; ++col_idx) {
         for (uint32_t row_idx = 0; row_idx < Ht; ++row_idx) {
             const bool mask_this = do_mask_h && (row_idx == Ht - 1);
+            // f(x)
             ckl::eltwise_chain(
                 ckl::IterationShape::tiles(onetile),
                 ckl::CopyTile<ckl::input(dfb::x)>{},
@@ -63,6 +66,7 @@ void kernel_main() {
                 ckl::Optional<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
                 ckl::PackTile<ckl::output(dfb::val)>{});
 
+            // calculate f(x) over dimension
             if (row_idx == 0) {
                 ckl::copy<ckl::input(dfb::val), ckl::output(dfb::cal)>(ckl::IterationShape::tiles(onetile));
             } else {
@@ -76,6 +80,7 @@ void kernel_main() {
             }
         }
 
+        // reduce f(x)
         ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb::cal, dfb::one, dfb::reduce>(ckl::ReduceInputBlockShape::single());
 
         ckl::eltwise_chain(

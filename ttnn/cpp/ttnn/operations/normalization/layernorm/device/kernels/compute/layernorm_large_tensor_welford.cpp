@@ -471,6 +471,7 @@ void kernel_main() {
                 ckl::PushPolicy::PerTile,
                 ckl::DataFormatReconfig::Disabled)>{});
 
+        // broadcasts the tile since dfb_ex2pe_id is a column vector that contains the important data
         ckl::unary_bcast<ckl::BroadcastDim::Col, ckl::input(dfb_ex2pe_id), ckl::output(dfb_ex2pe_id)>(
             ckl::IterationShape::tiles(onetile));
 
@@ -548,6 +549,7 @@ void kernel_main() {
 
             if constexpr (do_gamma == 1) {
                 constexpr auto dfb_gamma_out_id = do_beta ? dfb_fusion_id : dfb_out_id;
+                // Multiply by gamma
                 ckl::mul<
                     ckl::input(
                         dfb_xmm_id,

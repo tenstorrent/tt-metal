@@ -120,6 +120,7 @@ void kernel_main() {
                 reconfig_data_format(dfb::trans_mat, dfb::rotated_interm, dfb::input, dfb::sin);
                 pack_reconfig_data_format(dfb::rotated_interm, dfb::sin_interm);
                 mul_init(dfb::rotated_interm, dfb::sin);
+                // sin_interim = rotated * sin
                 ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
                     ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
                     ckl::BinaryFpu<
@@ -130,6 +131,7 @@ void kernel_main() {
 
                 reconfig_data_format(dfb::rotated_interm, dfb::input, dfb::sin, dfb::cos);
                 pack_reconfig_data_format(dfb::sin_interm, dfb::cos_interm);
+                // cos_interim = x * cos
                 ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
                     ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
                     ckl::BinaryFpu<
@@ -145,6 +147,7 @@ void kernel_main() {
 
                 reconfig_data_format(dfb::input, dfb::cos_interm, dfb::cos, dfb::sin_interm);
                 pack_reconfig_data_format(dfb::cos_interm, dfb::out);
+                // out = cos_interim + sin_interim
                 ckl::add<bulk_block_input(dfb::cos_interm), bulk_block_input(dfb::sin_interm), bulk_output(dfb::out)>(
                     ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
 

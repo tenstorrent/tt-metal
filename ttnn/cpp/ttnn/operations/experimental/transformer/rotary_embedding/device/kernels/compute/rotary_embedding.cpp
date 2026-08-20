@@ -31,6 +31,7 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
             BinaryFpu<
                 BinaryFpuOp::Mul,
                 input(in0_dfb_id, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled),
+                // We don't pop in1 in decode which is sin/cos since we don't stream
                 input(
                     in1_dfb_id,
                     BroadcastDim::Row,
@@ -118,6 +119,7 @@ void kernel_main() {
         for (uint32_t j = 0; j < Wt; ++j) {
             const uint32_t in1_idx = kDecodeMode ? j : 0;
             if (j < half_Wt) {
+                // Multiply half of the rotated input by scalar (-1)
                 compute_kernel_lib::mul<
                     compute_kernel_lib::input(rotated_in_dfb_id),
                     compute_kernel_lib::input(
@@ -129,15 +131,19 @@ void kernel_main() {
                     compute_kernel_lib::IterationShape::tiles(onetile));
                 reconfig_data_format_srcb(scalar_dfb_id, updated_sin_dfb_id);
                 pack_reconfig_data_format(rotated_in_interm_dfb_id, sin_interm_dfb_id);
+                // Multiply rotated input by sin
                 mul_tiles_chain<rotated_in_interm_dfb_id, updated_sin_dfb_id, sin_interm_dfb_id>(in1_idx);
             } else {
                 reconfig_data_format(rotated_in_dfb_id, updated_sin_dfb_id);
                 pack_reconfig_data_format(out_dfb_id, sin_interm_dfb_id);
+                // Multiply rotated input by sin
                 mul_tiles_chain<rotated_in_dfb_id, updated_sin_dfb_id, sin_interm_dfb_id>(in1_idx);
             }
 
+            // Multiply input by cos
             mul_tiles_chain<in_dfb_id, updated_cos_dfb_id, cos_interm_dfb_id>(in1_idx);
 
+            // Add applied sin/cos tensors
             compute_kernel_lib::add<
                 compute_kernel_lib::input(cos_interm_dfb_id),
                 compute_kernel_lib::input(sin_interm_dfb_id),

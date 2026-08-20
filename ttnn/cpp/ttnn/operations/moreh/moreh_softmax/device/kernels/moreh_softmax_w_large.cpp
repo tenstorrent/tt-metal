@@ -28,6 +28,7 @@ void kernel_main() {
 
     constexpr std::uint32_t onetile = 1;
 
+    // Plain uint32_t (not constexpr) to match legacy get_compile_time_arg_val typing.
     uint32_t N = get_arg(args::N);
     uint32_t Wt = get_arg(args::Wt);
 
@@ -130,6 +131,7 @@ void kernel_main() {
 
             sub_tiles_bcast_cols_to_dfb<dfb::tmp, dfb::recip_sum_exps, dfb::out0>(0, 0, /*pop0=*/1, /*pop1=*/0);
 #else
+            // logsoftmin not implemented
 #endif
 #else
 #ifdef SOFTMAX

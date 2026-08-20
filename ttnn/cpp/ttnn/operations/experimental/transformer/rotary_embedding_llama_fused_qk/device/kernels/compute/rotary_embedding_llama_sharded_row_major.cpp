@@ -25,6 +25,11 @@ ALWI void REL() {
 }
 
 void kernel_main() {
+    // TODO: Add back early return? Currently, running out of code size in TRISC2 by 4B
+    // const bool has_work = get_arg_val<uint32_t>(0);
+    // if (!has_work) {
+    //     return;
+    // }
     const bool is_q = get_arg_val<uint32_t>(0);
 
     // First 6 args for q and k heads
@@ -63,7 +68,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_dfb_id, trans_mat_dfb_id, out_dfb_id);
     matmul_init(in_dfb_id, trans_mat_dfb_id);
-    compute_kernel_hw_startup(rotated_in_interm_dfb_id, sin_dfb_id, sin_interm_dfb_id);
+    compute_kernel_hw_startup(
+        rotated_in_interm_dfb_id, sin_dfb_id, sin_interm_dfb_id);  // General Init for all binary ops
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
         dfb_rotated_in_interm.reserve_back(Wt);
@@ -88,6 +94,7 @@ void kernel_main() {
         REL();
         dfb_rotated_in_interm.push_back(Wt);
 
+        // sin_interim = rotated * sin
         ckl::mul<
             ckl::input(rotated_in_interm_dfb_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::input(sin_dfb_id, ckl::WaitPolicy::None, ckl::PopPolicy::None),

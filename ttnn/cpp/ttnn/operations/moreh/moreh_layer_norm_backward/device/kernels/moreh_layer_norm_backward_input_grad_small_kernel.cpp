@@ -172,6 +172,8 @@ void kernel_main() {
                                      : is_lastdim_layernorm ? ckl::BroadcastDim::Row
                                                             : ckl::BroadcastDim::None;
         for (uint32_t wt = 0; wt < Wt; wt++) {
+            // Compute dfb_dycopy_id
+            // dycopy = dy * gamma and mask(optional)
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::Optional<
@@ -185,6 +187,7 @@ void kernel_main() {
                             ckl::WaitPolicy::PerTile,
                             ckl::PopPolicy::PerTile,
                             kDataFormatReconfig)>>{},
+                // dycopy = dy and mask(optional)
                 ckl::Optional<
                     !gamma_has_value,
                     ckl::CopyTile<ckl::input(
@@ -263,6 +266,7 @@ void kernel_main() {
         constexpr auto dfb_ydyadd_id = dfb_tmp3_id;
         dfb_y_obj.wait_front(Wt);
         for (uint32_t wt = 0; wt < Wt; wt++) {
+            // Compute dfb_ydy_id
             ckl::eltwise_chain(
                 ckl::IterationShape::tiles(onetile),
                 ckl::BinaryFpu<

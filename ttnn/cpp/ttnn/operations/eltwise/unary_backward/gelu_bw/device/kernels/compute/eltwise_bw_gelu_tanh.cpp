@@ -45,33 +45,45 @@ void kernel_main() {
             ckl::Dst::D5>{},
         ckl::Square<ckl::Dst::D1>{},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
+        // tile[1] = kKappa * x³
         ckl::FillScalar<ckl::Dst::D3>{kKappa},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D3, ckl::Dst::D1>{},
+        // tile[1] = x + kKappa * x³
         ckl::AddBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1, BF16_ROUNDING_MODE>{},
+        // tile[1] = kBeta * (x + kKappa * x³) = inner
         ckl::FillScalar<ckl::Dst::D3>{kBeta},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D3, ckl::Dst::D1>{},
+        // tile[1] = tanh(inner)
         ckl::Tanh<ckl::Dst::D1>{},
-        ckl::CopyDest<ckl::Dst::D1, ckl::Dst::D4, COPY_DEST_DATA_FORMAT>{},
+        ckl::CopyDest<ckl::Dst::D1, ckl::Dst::D4, COPY_DEST_DATA_FORMAT>{},  // tile[4] = tanh(inner)
+        // CDF term: tile[1] = 0.5 * (1 + tanh)
         ckl::FillScalar<ckl::Dst::D3>{1.0f},
         ckl::AddBinary<ckl::Dst::D1, ckl::Dst::D3, ckl::Dst::D1, BF16_ROUNDING_MODE>{},
         ckl::FillScalar<ckl::Dst::D3>{0.5f},
-        ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D3, ckl::Dst::D1>{},
+        ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D3, ckl::Dst::D1>{},  // tile[1] = 0.5*(1 + tanh) = CDF term
+        // sech²: tile[4] = 1 - tanh²
         ckl::Square<ckl::Dst::D4>{},
         ckl::FillScalar<ckl::Dst::D3>{1.0f},
         ckl::SubBinary<ckl::Dst::D3, ckl::Dst::D4, ckl::Dst::D3, BF16_ROUNDING_MODE>{},
         ckl::CopyDest<ckl::Dst::D3, ckl::Dst::D4, COPY_DEST_DATA_FORMAT>{},
+        // PDF term: 0.5 * kBeta * x * (1 + 3*kKappa*x²) * sech²
+        // tile[2] still = x, need x²
         ckl::FillScalar<ckl::Dst::D3>{kKappa * 3.0f},
         ckl::Square<ckl::Dst::D2>{},
-        ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
+        ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},  // tile[2] = 3*kKappa * x²
         ckl::FillScalar<ckl::Dst::D3>{1.0f},
-        ckl::AddBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2, BF16_ROUNDING_MODE>{},
+        ckl::AddBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2, BF16_ROUNDING_MODE>{},  // tile[2] = 1 + 3*kKappa*x²
+        // tile[2] = sech² * (1 + 3*kKappa*x²)
         ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D4, ckl::Dst::D2>{},
+        // tile[2] = kBeta/2 * sech² * (1 + 3*kKappa*x²)
         ckl::FillScalar<ckl::Dst::D3>{kBeta / 2.0f},
         ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
-        ckl::CopyDest<ckl::Dst::D5, ckl::Dst::D3, COPY_DEST_DATA_FORMAT>{},
+        // tile[2] = x * kBeta/2 * sech² * (1 + 3*kKappa*x²) = PDF term
+        ckl::CopyDest<ckl::Dst::D5, ckl::Dst::D3, COPY_DEST_DATA_FORMAT>{},  // tile[3] = x (saved in tile[5])
         ckl::MulBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
+        // result = grad * (CDF_term + PDF_term)
         ckl::AddBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1, BF16_ROUNDING_MODE>{},
-        ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
+        ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},  // tile[0] = grad * (CDF + PDF)
         ckl::PackTile<ckl::output(
             dfb_grad_in_id,
             ckl::ReservePolicy::PerTile,

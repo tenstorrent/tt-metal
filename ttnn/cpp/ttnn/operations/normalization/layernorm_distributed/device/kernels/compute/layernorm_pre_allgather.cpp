@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/*
+ * This kernel computes larnorm statistics.
+ * For layernorm it computes E(x**2) and E(x) and returns them as a two tile wide output tensor containing E(x**2) and
+ * E(x) in the left most columns per tile. For rmsnorm it computes E(x**2) and returns it as a one tile wide output
+ * tensor containing E(x**2) in the left most column.
+ */
+
 // Produces two tiles per tile-row in this order: sum(x^2), then sum(x). The per-row statistics
 // occupy column 0 of each tile.
 
@@ -24,7 +31,8 @@
 namespace ckl = compute_kernel_lib;
 
 // The statistics pass reads either the raw input or the fused a + b result, depending on whether a
-// residual was supplied. Only the buffer selected here is bound on this build.
+// residual was supplied. Only the buffer selected here is bound on this build, so the alias is gated
+// at the preprocessor: naming an unbound handle would not compile even on a discarded branch.
 #ifdef FUSE_PRE_ADD
 constexpr auto dfb_inp_id = dfb::fused;
 #else
@@ -50,6 +58,7 @@ void kernel_main() {
     constexpr auto squaring_shape = ckl::IterationShape::tiles(Wt).block_size(blk);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+        // Fuse pre-add: dfb_inp_id = dfb::in0 + dfb::res (absent entirely when there is no residual)
 #ifdef FUSE_PRE_ADD
         if constexpr (unpack_fp32_active) {
             ckl::binary_sfpu<

@@ -15,6 +15,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
 
+    // dfb::in  — the typecast source pages, filled by this factory's reader
     // The writer drains dfb::out on interleaved paths; sharded paths may leave it resident in
     // borrowed output storage.
     constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
