@@ -172,7 +172,7 @@ def test_top32_rm(formats, row_elements, dest_acc):
                 row_elements=row_elements,
                 datum_bytes=4 if is_32bit else 2,
                 top_min=False,
-                mode=0,
+                top32_mode=0,
             )
         ],
         runtimes=[],
@@ -310,7 +310,7 @@ def test_top32_rm_pre_sorted(formats, row_elements):
                 row_elements=row_elements,
                 datum_bytes=4,  # Float32
                 top_min=False,
-                mode=1,
+                top32_mode=1,
             )
         ],
         runtimes=[],
@@ -406,7 +406,9 @@ def test_top32_rm_32bit_partial_chunk(formats, row_elements, request):
         "sources/top32_rm_test.cpp",
         formats,
         templates=[
-            TOP32_RM(row_elements=row_elements, datum_bytes=4, top_min=False, mode=0)
+            TOP32_RM(
+                row_elements=row_elements, datum_bytes=4, top_min=False, top32_mode=0
+            )
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(

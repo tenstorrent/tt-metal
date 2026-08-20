@@ -34,10 +34,26 @@
 // W-stride and restores it afterwards. That mirrors what a real caller does via
 // custom_mm_block_init / _block_uninit.
 //
-// Not covered yet, deliberately: transpose, split_acc /
-// finalize (both ARE forwarded on this family, unlike the compressed one), and the top of
-// the documented kt_dim range. This file establishes the family under test; widening it is
-// cheaper than starting it.
+// CUSTOM_MM_TRANSPOSE / _SPLIT_ACC / _FINALIZE carry the three template flags this family
+// forwards and the compressed one drops. What each one changes, since none of them is
+// observable from the doc tables alone:
+//
+//   transpose   acts on **in1** per the compute API table, which after the operand swap is
+//               the operand in SrcA -- the full 32x32 tiles. Unpack sets Haloize mode (the
+//               within-face 16x16 transpose) and math swaps the SrcA face traversal
+//               (ADDR_MOD_0/1 SrcA increments 32/48 instead of 16/16), so each tile arrives
+//               transposed. The result is per-TILE transposition, not a transpose of the
+//               whole [K, N] operand -- the golden has to be built tile by tile.
+//   split_acc   ADDR_MOD_1's dest increment becomes 1024-8 instead of 1024-16, so the inner
+//               dimension's partials land at rows 8/24 rather than accumulating in place at
+//               0/16.
+//   finalize    replaces the last MOP iteration with the replay sequence that ELWADDs those
+//               partials back together. It is therefore the other half of split_acc: with
+//               split_acc the pair (true, true) must reproduce the plain result exactly,
+//               while finalize alone would merge rows that are not partials.
+//
+// Not covered yet: read_transposed (the unpack-side tile read order, a separate flag from
+// transpose) and the top of the documented kt_dim range.
 
 #include <cstdint>
 
@@ -77,7 +93,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // unpA_dst_format only selects a profiling heuristic (post1 for Bfp4_b), so the
     // unpacker-A destination format is what to hand it.
-    _llk_unpack_AB_custom_mm_init_<false /* transpose */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM);
+    _llk_unpack_AB_custom_mm_init_<CUSTOM_MM_TRANSPOSE>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM);
 
     _llk_unpack_AB_custom_mm_<false /* read_transposed */, true /* clear_src */>(
         L1_ADDRESS(params.buffer_B[0]),
@@ -106,11 +122,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-    _llk_math_custom_mm_init_<false /* transpose */, false /* split_acc */, true /* dense_packing */>(params.in0_face_r_dim, CT_DIM);
+    _llk_math_custom_mm_init_<CUSTOM_MM_TRANSPOSE, CUSTOM_MM_SPLIT_ACC, true /* dense_packing */>(params.in0_face_r_dim, CT_DIM);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
-    _llk_math_custom_mm_<false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM);
+    _llk_math_custom_mm_<CUSTOM_MM_FINALIZE>(params.in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM);
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

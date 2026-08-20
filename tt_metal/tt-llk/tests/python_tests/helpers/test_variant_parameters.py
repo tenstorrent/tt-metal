@@ -983,6 +983,41 @@ class TOPK_XL(TemplateParameter):
 
 
 @dataclass
+class CUSTOM_MM_FLAGS(TemplateParameter):
+    """The three template flags the plain ``custom_mm`` family forwards.
+
+    ``transpose``  acts on in1 -- after the family's operand swap, the full 32x32 tiles in
+                   SrcA. Unpack turns on Haloize (within-face 16x16 transpose) and math swaps
+                   the SrcA face traversal, so each tile arrives transposed. Per-TILE, not a
+                   transpose of the whole operand.
+    ``split_acc``  moves the inner dimension's partials to Dest rows 8/24 instead of
+                   accumulating in place at 0/16 (ADDR_MOD_1 dest increment 1024-8).
+    ``finalize``   replaces the last MOP iteration with the replay that ELWADDs those partials
+                   back together, i.e. the other half of ``split_acc``. ``(True, True)`` must
+                   reproduce the plain result; ``finalize`` without ``split_acc`` would merge
+                   rows that are not partials.
+    """
+
+    transpose: bool = False
+    split_acc: bool = False
+    finalize: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if self.finalize and not self.split_acc:
+            raise ValueError(
+                "finalize merges split_acc partials; finalize=True with split_acc=False "
+                "would ELWADD rows that are not partials"
+            )
+        return "\n".join(
+            [
+                f"constexpr bool CUSTOM_MM_TRANSPOSE = {str(self.transpose).lower()};",
+                f"constexpr bool CUSTOM_MM_SPLIT_ACC = {str(self.split_acc).lower()};",
+                f"constexpr bool CUSTOM_MM_FINALIZE = {str(self.finalize).lower()};",
+            ]
+        )
+
+
+@dataclass
 class TOP32_RM(TemplateParameter):
     """Compile-time knobs for ``top32_rm_test.cpp`` (the DeepSeek top32_rm family).
 
@@ -996,7 +1031,7 @@ class TOP32_RM(TemplateParameter):
                       Must match the format the stimuli are written in.
     ``top_min``       ``_bitonic_top32_merge_``'s template polarity. False (the consumer's
                       value) keeps the max half of each compare-exchange, i.e. a top-32.
-    ``mode``          0 walks the row in 64-element chunks through this family's own unpack
+    ``top32_mode``    0 walks the row in 64-element chunks through this family's own unpack
                       (``top32_rm_dev_compute.cpp``); 1 is the pre-sorted path, which
                       transposes whole 1024-element tiles into Dest and runs
                       ``_bitonic_top32_of_1024_rm_pre_sorted_{prep,combine,final}_``
@@ -1008,18 +1043,21 @@ class TOP32_RM(TemplateParameter):
     row_elements: int = 64
     datum_bytes: int = 2
     top_min: bool = False
-    mode: int = 0
+    # Named for the constant it emits rather than bare `mode`: field names have to be unique
+    # across every parameter class, or two params in one test produce duplicate perf-CSV
+    # columns (test_perf_header_gate.py). `mode` is already taken by GENERALIZED_MOE_GATE.
+    top32_mode: int = 0
 
     def convert_to_cpp(self) -> str:
         if self.row_elements % 32 != 0:
             raise ValueError(
                 f"row_elements must be a multiple of 32, got {self.row_elements}"
             )
-        if self.mode not in (0, 1):
+        if self.top32_mode not in (0, 1):
             raise ValueError(
-                f"mode must be 0 (plain) or 1 (pre-sorted), got {self.mode}"
+                f"top32_mode must be 0 (plain) or 1 (pre-sorted), got {self.top32_mode}"
             )
-        if self.mode == 1 and self.row_elements < 1024:
+        if self.top32_mode == 1 and self.row_elements < 1024:
             raise ValueError(
                 "the pre-sorted mode needs at least one whole 1024-element chunk, got "
                 f"{self.row_elements}"
@@ -1029,7 +1067,7 @@ class TOP32_RM(TemplateParameter):
                 f"constexpr std::uint32_t TOP32_ROW_ELEMENTS = {self.row_elements}u;",
                 f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.datum_bytes}u;",
                 f"constexpr bool TOP32_TOP_MIN = {str(self.top_min).lower()};",
-                f"constexpr std::uint32_t TOP32_MODE = {self.mode}u;",
+                f"constexpr std::uint32_t TOP32_MODE = {self.top32_mode}u;",
             ]
         )
 

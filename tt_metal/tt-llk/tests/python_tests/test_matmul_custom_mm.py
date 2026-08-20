@@ -55,6 +55,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
+    CUSTOM_MM_FLAGS,
     IN_FACE_DIMS,
     NUM_FACES,
 )
@@ -106,13 +107,8 @@ class _PlainStimuli(StimuliConfig):
         write_to_device(location, self.buf_b_addr, self.packed_b)
 
 
-@parametrize(
-    M=SUPPORTED_M,
-    kt=KT_DIMS,
-    ct=CT_DIMS,
-)
-def test_matmul_custom_mm(M, kt, ct):
-    """(M x K) @ (K x N) through the plain custom_mm family, one call per thread."""
+def _run_custom_mm(M, kt, ct, transpose=False, split_acc=False, finalize=False):
+    """Drive one variant and return (golden, device) as (M, N) bf16 tensors."""
     K = kt * DEFAULT_TILE_C_DIM
     N = ct * DEFAULT_TILE_C_DIM
 
@@ -144,9 +140,20 @@ def test_matmul_custom_mm(M, kt, ct):
     # MatmulGolden instantiated directly rather than via get_golden_generator: under
     # --compile-producer the harness swaps in a DummyGoldenGenerator returning zeros(1024),
     # which would break the reshape for narrow M. Same reason as the compressed helper.
+    # transpose acts on in1 -- the full tiles -- and does so per TILE, so the golden operand
+    # is torch_b with each 32x32 tile transposed in place, not torch_b.T.
+    golden_b = torch_b
+    if transpose:
+        golden_b = torch_b.clone()
+        for k in range(kt):
+            for c in range(ct):
+                rows = slice(k * DEFAULT_TILE_C_DIM, (k + 1) * DEFAULT_TILE_C_DIM)
+                cols = slice(c * DEFAULT_TILE_C_DIM, (c + 1) * DEFAULT_TILE_C_DIM)
+                golden_b[rows, cols] = torch_b[rows, cols].transpose(0, 1)
+
     golden = MatmulGolden()(
         torch_a,
-        torch_b,
+        golden_b,
         DataFormat.Float16_b,
         MathFidelity.LoFi,
         input_A_dimensions=[M, K],
@@ -164,6 +171,9 @@ def test_matmul_custom_mm(M, kt, ct):
         ),
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+            CUSTOM_MM_FLAGS(
+                transpose=transpose, split_acc=split_acc, finalize=finalize
+            ),
         ],
         runtimes=[
             NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
@@ -187,6 +197,10 @@ def test_matmul_custom_mm(M, kt, ct):
         .reshape(M, N)
     )
 
+    return golden, res_tensor
+
+
+def _assert_matches(golden, device, kt, label):
     # K-aware absolute floor: the LoFi MVMUL accumulates the K-deep sum in a bf16 dest, so
     # noise grows ~linearly per K-tile. Same calibration as the compressed sibling.
     active = golden.abs()
@@ -196,8 +210,59 @@ def test_matmul_custom_mm(M, kt, ct):
 
     assert passed_test(
         golden,
-        res_tensor,
+        device,
         DataFormat.Float16_b,
         custom_atol=acc_atol,
         print_pcc=True,
-    ), f"plain custom_mm failed for M={M}, kt={kt}, ct={ct} (K={K}, N={N})"
+    ), f"plain custom_mm failed for {label}"
+
+
+@parametrize(
+    M=SUPPORTED_M,
+    kt=KT_DIMS,
+    ct=CT_DIMS,
+)
+def test_matmul_custom_mm(M, kt, ct):
+    """(M x K) @ (K x N) through the plain custom_mm family, one call per thread."""
+    golden, device = _run_custom_mm(M, kt, ct)
+    _assert_matches(golden, device, kt, f"M={M}, kt={kt}, ct={ct}")
+
+
+@parametrize(
+    M=SUPPORTED_M,
+    kt=KT_DIMS,
+    ct=[1, 8],
+)
+def test_matmul_custom_mm_transpose(M, kt, ct):
+    """``transpose=True``: in1's tiles arrive transposed, one tile at a time.
+
+    The golden transposes each 32x32 tile of the full operand in place rather than
+    transposing the whole [K, N] matrix -- the flag acts on what SrcA holds per MVMUL, and
+    getting that wrong is the easy mistake here. ``ct`` is trimmed to its ends because the
+    axis under test is the flag, not the block width, which the main sweep already covers.
+    """
+    golden, device = _run_custom_mm(M, kt, ct, transpose=True)
+    _assert_matches(golden, device, kt, f"transpose, M={M}, kt={kt}, ct={ct}")
+
+
+@parametrize(
+    M=SUPPORTED_M,
+    kt=KT_DIMS,
+    ct=[1, 8],
+)
+def test_matmul_custom_mm_split_acc_finalize(M, kt, ct):
+    """``split_acc`` + ``finalize`` must reproduce the plain result exactly.
+
+    That equality *is* the specification: split_acc scatters the inner dimension's partials
+    to Dest rows 8/24 instead of accumulating them in place, and finalize is the replay that
+    ELWADDs them back. So the same golden as the plain sweep, and a failure here means either
+    the scatter or the merge is wrong -- with no third possibility, since nothing else in the
+    call changes.
+
+    Only the paired form is swept. ``finalize`` without ``split_acc`` would merge rows that
+    are not partials, and ``CUSTOM_MM_FLAGS`` rejects that combination at build time rather
+    than letting a test assert on it; ``split_acc`` without ``finalize`` leaves the partials
+    unmerged in Dest, which no golden describes.
+    """
+    golden, device = _run_custom_mm(M, kt, ct, split_acc=True, finalize=True)
+    _assert_matches(golden, device, kt, f"split_acc+finalize, M={M}, kt={kt}, ct={ct}")
