@@ -7,10 +7,11 @@
 #include "device.hpp"
 #include "dispatch/topology.hpp"
 #include "hal_types.hpp"
-#include "impl/context/context_types.hpp"
 #include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
+
+class MetalContext;
 
 // Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
 struct ReadCoreDataDescriptor {
@@ -19,7 +20,7 @@ struct ReadCoreDataDescriptor {
 };
 
 uint32_t calculate_max_prefetch_data_size_bytes(
-    ContextId context_id, const CoreType& dispatch_core_type, uint32_t num_subdevices);
+    const MetalContext& metal_ctx, const CoreType& dispatch_core_type, uint32_t num_subdevices);
 
 namespace device_dispatch {
 

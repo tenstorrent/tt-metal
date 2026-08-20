@@ -441,7 +441,7 @@ bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer, uint32_t 
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(buffer.device()));
     const CoreType dispatch_core_type = metal_ctx.get_dispatch_core_manager().get_dispatch_core_type();
     const uint32_t max_data_size =
-        calculate_max_prefetch_data_size_bytes(metal_ctx.get_context_id(), dispatch_core_type, num_subdevices);
+        calculate_max_prefetch_data_size_bytes(metal_ctx, dispatch_core_type, num_subdevices);
     return buffer.aligned_page_size() > max_data_size;
 }
 
@@ -476,10 +476,10 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
 }
 
 void update_offset_on_issue_wait_cmd(
-    ContextId context_id, uint32_t& byte_offset, bool issue_wait, uint32_t num_sub_devices) {
+    const MetalContext& metal_ctx, uint32_t& byte_offset, bool issue_wait, uint32_t num_sub_devices) {
     if (issue_wait) {
         // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        byte_offset += (MetalContext::instance(context_id).hal().get_alignment(HalMemType::HOST) * num_sub_devices);
+        byte_offset += (metal_ctx.hal().get_alignment(HalMemType::HOST) * num_sub_devices);
     }
 }
 
@@ -1059,16 +1059,12 @@ void write_interleaved_buffer_to_device(
     TTZoneScopedD(DISPATCH);
     bool use_pinned_memory = dispatch_params.use_pinned_transfer;
 
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(dispatch_params.device));
     // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
-    uint32_t byte_offset_in_cq =
-        MetalContext::instance(extract_context_id(dispatch_params.device)).hal().get_alignment(HalMemType::HOST);
+    uint32_t byte_offset_in_cq = metal_ctx.hal().get_alignment(HalMemType::HOST);
 
     dispatch_params.calculate_issue_wait();
-    update_offset_on_issue_wait_cmd(
-        extract_context_id(dispatch_params.device),
-        byte_offset_in_cq,
-        dispatch_params.issue_wait,
-        sub_device_ids.size());
+    update_offset_on_issue_wait_cmd(metal_ctx, byte_offset_in_cq, dispatch_params.issue_wait, sub_device_ids.size());
 
     if (use_pinned_memory) {
         if (dispatch_params.is_page_offset_out_of_bounds()) {
@@ -1135,7 +1131,7 @@ void write_sharded_buffer_to_core(
         calculator.add_dispatch_write_linear<true, false>(0);
         uint32_t data_offset_bytes = calculator.write_offset_bytes();
         update_offset_on_issue_wait_cmd(
-            extract_context_id(buffer.device()), data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
+            metal_ctx, data_offset_bytes, dispatch_params.issue_wait, sub_device_ids.size());
 
         while (dispatch_params.core_num_pages_remaining_to_write != 0) {
             const int32_t num_pages_available_in_cq =
