@@ -32,7 +32,15 @@ jobs:
   notify:
     runs-on: ubuntu-slim
     # Only act on a real failed push run, or an explicit manual test/replay.
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'push') }}
+    #
+    # _auto-retry-post-commit.yaml automatically re-runs a failed "Sanity tests"
+    # push run up to MAX_ATTEMPTS=3, and workflow_run:completed fires once per
+    # attempt (hours apart) -- so without the run_attempt gate below, a single
+    # real break would post to Slack up to 3 separate times (the concurrency
+    # group only dedupes truly-concurrent deliveries of the same id, not
+    # sequential ones hours apart). Gating on the final attempt mirrors that
+    # retrier's own MAX_ATTEMPTS so we only ever act once retries are exhausted.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'push' && github.event.workflow_run.run_attempt >= 3) }}
     steps:
       - name: Resolve run context
         id: context
@@ -50,6 +58,20 @@ jobs:
               runId = Number(process.env.DISPATCH_RUN_ID);
               dryRun = process.env.DISPATCH_DRY_RUN !== 'false';
               const { data: run } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: runId });
+
+              // A manual replay/test must target a real "Sanity tests" push-on-main
+              // failure -- otherwise this would confidently post a Slack message
+              // built from an unrelated or successful run.
+              const problems = [];
+              if (run.name !== 'Sanity tests') problems.push(`workflow is "${run.name}", not "Sanity tests"`);
+              if (run.event !== 'push') problems.push(`event is "${run.event}", not "push"`);
+              if (run.head_branch !== 'main') problems.push(`head_branch is "${run.head_branch}", not "main"`);
+              if (run.conclusion !== 'failure') problems.push(`conclusion is "${run.conclusion}", not "failure"`);
+              if (problems.length > 0) {
+                core.setFailed(`run_id ${runId} is not a valid target to replay: ${problems.join('; ')}.`);
+                return;
+              }
+
               headSha = run.head_sha;
               runNumber = run.run_number;
               htmlUrl = run.html_url;
@@ -90,34 +112,46 @@ jobs:
               per_page: 100,
             });
 
-            // The run immediately before this one in the push-run sequence (not
-            // necessarily run_number - 1, since schedule/dispatch runs of the same
-            // workflow interleave and also consume run_numbers).
-            const immediatelyPrior = runsResp.workflow_runs
-              .filter(r => r.run_number < currentRunNumber && r.conclusion !== null)
-              .sort((a, b) => b.run_number - a.run_number)[0];
+            // Walk backwards (by run_number, not necessarily run_number - 1, since
+            // schedule/dispatch runs of the same workflow interleave and also
+            // consume run_numbers) to find the most recent MEANINGFUL prior state:
+            //  - a still-in-progress run (e.g. mid auto-retry-attempt) makes the
+            //    true completion order ambiguous -- abstain rather than silently
+            //    skip past it and risk misattributing to the wrong set of authors.
+            //  - cancelled/skipped runs carry no real red/green signal -- skip over
+            //    them and keep looking, so they can't permanently swallow a break.
+            //  - success -> this is a fresh green->red transition; use it as baseline.
+            //  - failure (or any other bad terminal conclusion) -> main was already
+            //    red before us; stay silent to avoid re-notifying / re-blaming.
+            const candidates = runsResp.workflow_runs
+              .filter(r => r.run_number < currentRunNumber)
+              .sort((a, b) => b.run_number - a.run_number);
 
-            if (!immediatelyPrior) {
-              core.warning('No previous completed "Sanity tests" push run found on main within the last 100 runs; skipping.');
+            let prevGood = null;
+            for (const run of candidates) {
+              if (run.status !== 'completed') {
+                core.info(`Push run #${run.run_number} is still in progress; completion order is ambiguous. Abstaining.`);
+                core.setOutput('should_notify', 'false');
+                return;
+              }
+              if (run.conclusion === 'cancelled' || run.conclusion === 'skipped') {
+                core.info(`Push run #${run.run_number} was ${run.conclusion} (no real signal); looking further back.`);
+                continue;
+              }
+              if (run.conclusion === 'success') {
+                prevGood = run;
+              } else {
+                core.info(`Push run #${run.run_number} also did not succeed (${run.conclusion}); ` +
+                  `main is still red from an earlier break. Not re-notifying to avoid repeat/duplicate pings.`);
+              }
+              break;
+            }
+
+            if (!prevGood) {
+              core.warning('No usable previous "Sanity tests" push run found on main (either none within the last 100 runs, or main is still red from an earlier break); skipping.');
               core.setOutput('should_notify', 'false');
               return;
             }
-
-            if (immediatelyPrior.conclusion !== 'success') {
-              // main is still red from an earlier, already-reported break: diffing from
-              // the last GREEN run here would re-list the original culprit every time,
-              // plus every author who has merged on top of the still-broken main since --
-              // none of whom asked to be blamed for someone else's unresolved failure.
-              // Stay silent until a run actually goes green -> red again.
-              core.info(`Previous push run (#${immediatelyPrior.run_number}) also did not succeed (${immediatelyPrior.conclusion}); ` +
-                `main is still red from an earlier break. Not re-notifying to avoid repeat/duplicate pings.`);
-              core.setOutput('should_notify', 'false');
-              return;
-            }
-
-            // immediatelyPrior succeeded, so this is a fresh green->red transition:
-            // it doubles as both the "is this new" signal and the diff baseline.
-            const prevGood = immediatelyPrior;
 
             core.setOutput('should_notify', 'true');
             core.setOutput('prev_run_url', prevGood.html_url);
@@ -129,6 +163,13 @@ jobs:
               base: prevGood.head_sha,
               head: currentHeadSha,
             });
+
+            // PR titles and commit subjects are attacker-controlled (anyone who can
+            // open a PR) and end up inside Slack `<url|label>` mrkdwn links below --
+            // must be entity-escaped the same way notify-slack-on-mention.yaml
+            // escapes user-supplied text, or a crafted title could break out of the
+            // link syntax or smuggle in a broadcast mention like <!subteam^...>.
+            const escapeSlack = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
             const entries = [];
             const seenPrNumbers = new Set();
@@ -148,7 +189,7 @@ jobs:
                     type: 'pr',
                     number: pr.number,
                     url: pr.html_url,
-                    title: pr.title,
+                    title: escapeSlack(pr.title),
                     authorLogin: pr.user ? pr.user.login : null,
                   });
                 }
@@ -159,7 +200,7 @@ jobs:
                   type: 'commit',
                   sha: commit.sha,
                   url: commit.html_url,
-                  title: commit.commit.message.split('\n')[0],
+                  title: escapeSlack(commit.commit.message.split('\n')[0]),
                   authorLogin: commit.author ? commit.author.login : null,
                 });
               }
