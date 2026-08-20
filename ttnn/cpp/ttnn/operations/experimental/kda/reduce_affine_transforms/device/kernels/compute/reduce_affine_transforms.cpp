@@ -110,7 +110,6 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer remote_a(dfb::remote_a);
     DataflowBuffer remote_b(dfb::remote_b);
     DataflowBuffer scratch(dfb::scratch);
-    DataflowBuffer stage_token(dfb::stage_token);
 
     compute_kernel_hw_startup(dfb::initial_a, dfb::initial_b, dfb::stage_a_ping);
     initial_a.wait_front(kk);
@@ -131,7 +130,6 @@ TT_KERNEL void compute(uint32_t group) {
         DataflowBuffer& next_b = ping ? stage_b_ping : stage_b_pong;
         DataflowBuffer& next_send_a = ping ? send_a_ping : send_a_pong;
         DataflowBuffer& next_send_b = ping ? send_b_ping : send_b_pong;
-        stage_token.wait_front(1);
         current_a.wait_front(kk);
         current_b.wait_front(kv);
         remote_a.wait_front(kk);
@@ -143,7 +141,6 @@ TT_KERNEL void compute(uint32_t group) {
         matmul(current_a, remote_b, scratch, nullptr, Kt, Kt, Vt);
         scratch.wait_front(kv);
         add(scratch, current_b, next_b, next_send_b, kv);
-        stage_token.pop_front(1);
         current_a.pop_front(kk);
         current_b.pop_front(kv);
         remote_a.pop_front(kk);

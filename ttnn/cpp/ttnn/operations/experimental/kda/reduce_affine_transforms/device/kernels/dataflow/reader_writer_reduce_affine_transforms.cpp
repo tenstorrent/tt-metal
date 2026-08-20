@@ -29,7 +29,6 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordina
     DataflowBuffer send_b_pong(dfb::send_b_pong);
     DataflowBuffer remote_a(dfb::remote_a);
     DataflowBuffer remote_b(dfb::remote_b);
-    DataflowBuffer stage_token(dfb::stage_token);
     Noc noc;
     Semaphore<> ready(sem::ready);
     Semaphore<> arrival(sem::arrival);
@@ -84,12 +83,6 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordina
         noc.async_write_barrier();
         ready.up(noc, target_x, target_y, 1);
     };
-    auto receive_pair = [&] {
-        remote_a.reserve_back(kk);
-        remote_b.reserve_back(kv);
-        remote_a.push_back(kk);
-        remote_b.push_back(kv);
-    };
 
     uint32_t ready_target = 0;
     bool ping = false;
@@ -104,11 +97,12 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordina
             send_pair(worker_index + distance, current_a, current_b);
         }
         if (group >= distance) {
+            remote_a.reserve_back(kk);
+            remote_b.reserve_back(kv);
             ready_target++;
             ready.wait_min(ready_target);
-            receive_pair();
-            stage_token.reserve_back(1);
-            stage_token.push_back(1);
+            remote_a.push_back(kk);
+            remote_b.push_back(kv);
             next_a.wait_front(kk);
             next_b.wait_front(kv);
             current_a.pop_front(kk);
