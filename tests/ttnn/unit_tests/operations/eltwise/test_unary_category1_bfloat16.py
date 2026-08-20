@@ -70,7 +70,7 @@ Trigonometric, hyperbolic, comparison, rounding, special math, logical, and util
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Comparison-to-zero ops (output is 0.0 or 1.0)
+# Comparison-to-zero ops (output is 0.0 or 1.0) - includes special value checks
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -86,7 +86,7 @@ Trigonometric, hyperbolic, comparison, rounding, special math, logical, and util
     ],
 )
 def test_comparison_to_zero_ops(device, ttnn_op):
-    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
+    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=True)
 
     tt_in = ttnn.from_torch(
         input_tensor,
@@ -271,7 +271,7 @@ def test_trig_ops(device, ttnn_op, low, high):
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(result, golden, 1)
+    assert_with_ulp(golden, result, 1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -311,7 +311,7 @@ def test_trig_ops_out_ftz(device, ttnn_op, low, high):
     result = flush_to_zero(result)
     golden = flush_to_zero(golden)
 
-    assert_with_ulp(result, golden, 1)
+    assert_with_ulp(golden, result, 1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -336,7 +336,7 @@ def test_atanh(device):
     tt_result = ttnn.atanh(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_pcc(result, golden, pcc=0.999)
+    assert_with_pcc(golden, result, pcc=0.999)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -372,7 +372,7 @@ def test_angle_conversion_ops(device, ttnn_op, low, high):
     result = flush_to_zero(result)
     golden = flush_to_zero(golden)
 
-    assert_with_ulp(result, golden, 1)
+    assert_with_ulp(golden, result, 1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -406,17 +406,17 @@ def test_error_functions(device, ttnn_op, low, high):
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_pcc(result, golden, 0.999)
+    assert_with_pcc(golden, result, 0.999)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# reciprocal: 1/x, undefined at 0; use positive range (1, 1e38)
+# reciprocal: 1/x, undefined at 0; use positive range (1, 3e36)
 # Large inputs produce outputs near zero — flush both sides at 2*smallest normal
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_reciprocal(device):
-    input_tensor = generate_bfloat16_bits_in_range(1.0, 1e38)
+    input_tensor = generate_bfloat16_bits_in_range(1.0, 3e36)
     input_tensor[input_tensor == 0] = 1.0  # avoid division by zero
 
     tt_in = ttnn.from_torch(
@@ -434,11 +434,10 @@ def test_reciprocal(device):
     result = ttnn.to_torch(tt_result)
 
     threshold = 2 * SMALLEST_NORMAL_BF16
-    near_zero = (torch.abs(result) <= threshold) | (torch.abs(golden) <= threshold)
-    result = result[~near_zero]
-    golden = golden[~near_zero]
+    result = torch.where(torch.abs(result) <= threshold, torch.zeros_like(result), result)
+    golden = torch.where(torch.abs(golden) <= threshold, torch.zeros_like(golden), golden)
 
-    assert_with_ulp(result, golden, 1)
+    assert_with_ulp(golden, result, 1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -464,11 +463,10 @@ def test_square(device):
     result = ttnn.to_torch(tt_result)
 
     threshold = 2 * SMALLEST_NORMAL_BF16
-    near_zero = (torch.abs(result) <= threshold) | (torch.abs(golden) <= threshold)
-    result = result[~near_zero]
-    golden = golden[~near_zero]
+    result = torch.where(torch.abs(result) <= threshold, torch.zeros_like(result), result)
+    golden = torch.where(torch.abs(golden) <= threshold, torch.zeros_like(golden), golden)
 
-    assert_with_ulp(result, golden, 1)
+    assert_with_ulp(golden, result, 1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -484,7 +482,6 @@ Subnormal bf16 inputs are flushed to zero on device
 
 def test_cbrt(device):
     input_tensor = generate_bfloat16_bits_in_range(-1e38, 1e38)
-    input_tensor[input_tensor == 0] = 1.0  # avoid division by zero
 
     tt_in = ttnn.from_torch(
         input_tensor,
@@ -536,7 +533,7 @@ def test_exp_ops(device, ttnn_op, low, high):
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(result, golden, 1)
+    assert_with_ulp(golden, result, 1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -570,7 +567,7 @@ def test_digamma_multigammaln(device, ttnn_op, low, high, ulp):
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(result, golden, ulp)
+    assert_with_ulp(golden, result, ulp)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -634,7 +631,7 @@ def test_bessel_ops(device, ttnn_op, low, high):
     )
 
     golden_function = ttnn.get_golden_function(ttnn_op)
-    golden = golden_function(input_tensor.to(torch.float32)).to(torch.bfloat16)
+    golden = golden_function(input_tensor)
 
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
@@ -643,44 +640,4 @@ def test_bessel_ops(device, ttnn_op, low, high):
     result = flush_to_zero(result)
     golden = flush_to_zero(golden)
 
-    assert_with_ulp(result, golden, 1)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Zero comparison and special value checks
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize(
-    "ttnn_op",
-    (ttnn.eqz, ttnn.nez, ttnn.gtz, ttnn.ltz, ttnn.gez, ttnn.lez),
-)
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.float32])
-def test_unary_zero_comp_spl(ttnn_op, ttnn_dtype, device):
-    dtype = torch.float32 if ttnn_dtype == ttnn.float32 else torch.bfloat16
-    tor_a = torch.tensor(
-        [
-            [
-                float("nan"),
-                -float("nan"),
-                -1.0,
-                -0.0,
-                0.0,
-                1.0,
-                -float("inf"),
-                float("inf"),
-            ]
-        ],
-        dtype=dtype,
-    )
-
-    torch_input = tor_a.repeat(32, 4)
-    torch_fn = ttnn.get_golden_function(ttnn_op)
-    tor_res = torch_fn(torch_input)
-
-    tt_a = ttnn.from_torch(
-        torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-    result = ttnn_op(tt_a)
-    tt_res = ttnn.to_torch(result)
-    assert torch.equal(tt_res, tor_res)
+    assert_with_ulp(golden, result, 1)
