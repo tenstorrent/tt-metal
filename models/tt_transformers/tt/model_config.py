@@ -817,10 +817,11 @@ class ModelArgs:
                 self.max_columns_per_device_lm_head = self.get_lm_head_max_columns_per_device(
                     self.lm_head_core_grid, self.prefetcher
                 )
-                # FF2 LoFi: A/B 60.8 -> 61.4 tok/s; FF1+FF3 LoFi: 61.4 -> 61.9. EN byte-id, JA Japanese+CJK.
+                # FF2 LoFi: 60.8 -> 61.4; FF1+FF3 LoFi: 61.4 -> 61.9; SDPA HiFi2: 62.1 -> 62.2.
                 for conf in self.optimizations.decoder_optimizations.values():
                     conf.op_fidelity_settings[OpGroup.LI_FF2] = MathFidelitySetting.LOFI
                     conf.op_fidelity_settings[OpGroup.LI_FF1_FF3] = MathFidelitySetting.LOFI
+                    conf.op_fidelity_settings[OpGroup.SDPA_DECODE] = MathFidelitySetting.HIFI2
 
             # ============================================================================
             # Compute kernels Configs
