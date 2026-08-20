@@ -15,11 +15,23 @@ Fix committed as `21557a33763`. Companion prose/methodology:
 |---|---|---|---|---|---|
 | 1 | `rsqrt_compat` / `RsqrtCompat` | changed | `1.470e-03` → `5.012e-06` (**293×**) | **−25.6 … −38.9 %** | none |
 | 2 | `recip()` `legacy_compat=true` (public default) | changed | `3.636e-05` → `5.960e-08` (**610×**) | **−43.2 … −52.6 %** | none |
-| 3 | SDPA `calculate_recip_first_column<true>` | changed + sign fixed | same as #2 (same instantiation) | −16 cyc/slot *(derived)* | none |
+| 3 | SDPA `calculate_recip_first_column<true>` | changed + sign fixed | measured in situ since: see note below | −16 cyc/slot *(derived)* | see note below |
 | 4 | Blackhole `sampling_recip_value<true>` | **bit-identical, untouched** | unchanged | unchanged | n/a |
 
 Accuracy is quoted on `Float32→Float32 / dest_acc=Yes`, the only combination that measures the kernel;
 elsewhere a bf16 pack quantises to ~2⁻⁸ and both kernels land on the same value.
+
+**Note on row 3, added after this record was written.** Row 3 derived SDPA's accuracy from row 2 on the
+grounds that both instantiate the same reciprocal. That derivation has since been replaced by an in-situ
+measurement of the SDPA column itself, in
+[MEASUREMENTS_52930_reciprocal_compat_pole_vs_main.md](MEASUREMENTS_52930_reciprocal_compat_pole_vs_main.md)
+§5, and it does not say quite the same thing. On the fp32-end-to-end pipeline SDPA improves as row 3 implies
+(`7.812e-04` → `6.892e-08`), and every negative input additionally recovers a sign the legacy path dropped.
+But on the two `apxNo` bf16-dest pipelines the max relative error *rises*, `2.686e-03` → `3.143e-03`: both
+kernels are dominated by the bf16 output grid there and land on different sides of it, and the new value is
+exactly what `RecipIter` already measured, which is the intended convergence rather than a loss. "None" in
+row 3's regression column should be read as "none that survives the bf16 grid", and the in-situ record is
+the authority.
 
 ## 2. Option A vs Option B — why A was chosen (`RsqrtCompat`)
 

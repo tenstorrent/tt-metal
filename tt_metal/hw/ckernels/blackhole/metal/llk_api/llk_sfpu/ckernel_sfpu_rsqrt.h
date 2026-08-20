@@ -20,8 +20,10 @@ namespace sfpu {
 // Legacy-compat rsqrt: the compat square-root approximation (_sqrt_compat_, which is what
 // "compat" is actually about) paired with the modern reciprocal. _reciprocal_compat_ is not
 // used: its exponent-difference arithmetic has no pole guard, so 1/sqrt(0) came out as
-// 1.7e38 instead of inf. sfpu_reciprocal_iter builds its scale factor as ~in.Exp precisely
-// so both poles fall out for free. See FIX_PLAN_52930_reciprocal_compat_pole.md.
+// 1.7e38 instead of inf. sfpu_reciprocal_iter delegates to sfpi::approx_recip, which is
+// specified to return +/-inf for +/-0 and +/-0 for +/-inf, so both poles fall out for free.
+// (Wormhole reaches the same guarantee differently, by building a ~in.Exp scale factor.)
+// See FIX_PLAN_52930_reciprocal_compat_pole.md.
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en>
 inline void _calculate_rsqrt_compat_iter_(const int iterations) {
 #pragma GCC unroll 8

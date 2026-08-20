@@ -619,7 +619,9 @@ void call_unary_sfpu_operation_init()
     else if constexpr (OPERATION == SfpuType::rsqrt_compat)
     {
         // The legacy-compat path is no longer self-contained: it runs sfpu_reciprocal_iter, whose
-        // polynomial coefficients rsqrt_init<..., true> programs into vConstFloatPrgm0..2.
+        // constants rsqrt_init<..., true> has to program. Which constants is arch-specific --
+        // Wormhole loads a three-term polynomial into vConstFloatPrgm0..2, Blackhole only the
+        // Newton constant in vConstFloatPrgm0 -- so this file names neither.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(rsqrt_init<APPROX_MODE, true /* legacy_compat */>);
     }
     else if constexpr (OPERATION == SfpuType::sine)
