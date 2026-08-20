@@ -52,8 +52,16 @@
 //               split_acc the pair (true, true) must reproduce the plain result exactly,
 //               while finalize alone would merge rows that are not partials.
 //
-// Not covered yet: read_transposed (the unpack-side tile read order, a separate flag from
-// transpose) and the top of the documented kt_dim range.
+//   read_transposed
+//               transposes nothing -- it changes the ORDER the unpacker reads in1 tiles out of
+//               L1. `_llk_unpack_AB_custom_mm_` sets block_increment = kt_dim * tile_size and a
+//               negative inner_increment, so the MOP walks the ct dimension with a kt stride
+//               and then winds back to the next k row. The caller therefore stores its tiles in
+//               [ct][kt] order rather than [kt][ct]: same operand, same golden, different L1
+//               layout. Easy to conflate with `transpose`, which is why both are swept here.
+//
+// Not covered yet: nothing on the flags. The sweep's kt_dim reaches 32 against doc tables that
+// claim 2..256; the parity constraint above is what actually bounds it.
 
 #include <cstdint>
 
@@ -95,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // unpacker-A destination format is what to hand it.
     _llk_unpack_AB_custom_mm_init_<CUSTOM_MM_TRANSPOSE>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM);
 
-    _llk_unpack_AB_custom_mm_<false /* read_transposed */, true /* clear_src */>(
+    _llk_unpack_AB_custom_mm_<CUSTOM_MM_READ_TRANSPOSED, true /* clear_src */>(
         L1_ADDRESS(params.buffer_B[0]),
         L1_ADDRESS(params.buffer_A[0]),
         0 /* tile_index_a */,

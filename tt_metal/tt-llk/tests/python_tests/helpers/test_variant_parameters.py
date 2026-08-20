@@ -996,11 +996,18 @@ class CUSTOM_MM_FLAGS(TemplateParameter):
                    back together, i.e. the other half of ``split_acc``. ``(True, True)`` must
                    reproduce the plain result; ``finalize`` without ``split_acc`` would merge
                    rows that are not partials.
+    ``read_transposed``
+                   a different flag from ``transpose``, and easy to conflate with it: it
+                   transposes nothing, it changes the ORDER the unpacker reads in1 tiles out of
+                   L1. The MOP steps ``kt_dim * tile_size`` between tiles of a row and then
+                   winds back, so the caller's tiles are expected in ``[ct][kt]`` order instead
+                   of ``[kt][ct]``. Same golden, different L1 layout.
     """
 
     transpose: bool = False
     split_acc: bool = False
     finalize: bool = False
+    read_transposed: bool = False
 
     def convert_to_cpp(self) -> str:
         if self.finalize and not self.split_acc:
@@ -1013,6 +1020,7 @@ class CUSTOM_MM_FLAGS(TemplateParameter):
                 f"constexpr bool CUSTOM_MM_TRANSPOSE = {str(self.transpose).lower()};",
                 f"constexpr bool CUSTOM_MM_SPLIT_ACC = {str(self.split_acc).lower()};",
                 f"constexpr bool CUSTOM_MM_FINALIZE = {str(self.finalize).lower()};",
+                f"constexpr bool CUSTOM_MM_READ_TRANSPOSED = {str(self.read_transposed).lower()};",
             ]
         )
 

@@ -107,7 +107,9 @@ class _PlainStimuli(StimuliConfig):
         write_to_device(location, self.buf_b_addr, self.packed_b)
 
 
-def _run_custom_mm(M, kt, ct, transpose=False, split_acc=False, finalize=False):
+def _run_custom_mm(
+    M, kt, ct, transpose=False, split_acc=False, finalize=False, read_transposed=False
+):
     """Drive one variant and return (golden, device) as (M, N) bf16 tensors."""
     K = kt * DEFAULT_TILE_C_DIM
     N = ct * DEFAULT_TILE_C_DIM
@@ -122,20 +124,26 @@ def _run_custom_mm(M, kt, ct, transpose=False, split_acc=False, finalize=False):
     for i in range(kt * 2):
         packed_a += pack_bfp16(torch_a[:, i * FACE_C_DIM : (i + 1) * FACE_C_DIM])
 
-    # Operand a (full tiles): kt*ct tilized 32x32 tiles, row-major over (k, c).
+    # Operand a (full tiles): kt*ct tilized 32x32 tiles. The ORDER is what read_transposed
+    # changes -- [kt][ct] normally, [ct][kt] when the MOP walks ct with a kt stride -- and the
+    # tiles themselves are identical either way, which is what makes the golden the same.
+    tile_order = (
+        [(k, c) for c in range(ct) for k in range(kt)]
+        if read_transposed
+        else [(k, c) for k in range(kt) for c in range(ct)]
+    )
     packed_b = b""
-    for k in range(kt):
-        for c in range(ct):
-            blk = torch_b[
-                k * DEFAULT_TILE_C_DIM : (k + 1) * DEFAULT_TILE_C_DIM,
-                c * DEFAULT_TILE_C_DIM : (c + 1) * DEFAULT_TILE_C_DIM,
-            ]
-            packed_b += pack_bfp16(
-                tilize(
-                    blk.reshape(-1),
-                    tile_dimensions=[DEFAULT_TILE_C_DIM, DEFAULT_TILE_C_DIM],
-                )
+    for k, c in tile_order:
+        blk = torch_b[
+            k * DEFAULT_TILE_C_DIM : (k + 1) * DEFAULT_TILE_C_DIM,
+            c * DEFAULT_TILE_C_DIM : (c + 1) * DEFAULT_TILE_C_DIM,
+        ]
+        packed_b += pack_bfp16(
+            tilize(
+                blk.reshape(-1),
+                tile_dimensions=[DEFAULT_TILE_C_DIM, DEFAULT_TILE_C_DIM],
             )
+        )
 
     # MatmulGolden instantiated directly rather than via get_golden_generator: under
     # --compile-producer the harness swaps in a DummyGoldenGenerator returning zeros(1024),
@@ -172,7 +180,10 @@ def _run_custom_mm(M, kt, ct, transpose=False, split_acc=False, finalize=False):
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
             CUSTOM_MM_FLAGS(
-                transpose=transpose, split_acc=split_acc, finalize=finalize
+                transpose=transpose,
+                split_acc=split_acc,
+                finalize=finalize,
+                read_transposed=read_transposed,
             ),
         ],
         runtimes=[
@@ -266,3 +277,47 @@ def test_matmul_custom_mm_split_acc_finalize(M, kt, ct):
     """
     golden, device = _run_custom_mm(M, kt, ct, split_acc=True, finalize=True)
     _assert_matches(golden, device, kt, f"split_acc+finalize, M={M}, kt={kt}, ct={ct}")
+
+
+@parametrize(
+    M=SUPPORTED_M,
+    kt=KT_DIMS,
+    ct=[3, 8],
+)
+def test_matmul_custom_mm_read_transposed(M, kt, ct):
+    """``read_transposed=True``: same operand and same golden, tiles stored ``[ct][kt]``.
+
+    This flag transposes nothing -- conflating it with ``transpose`` is the trap. It changes
+    the address walk: ``block_increment`` becomes ``kt_dim * tile_size`` and ``inner_increment``
+    winds back by ``((ct_dim - 1) * kt_dim - 1) * tile_size``, so the MOP reads the ct dimension
+    with a kt stride and the caller is expected to have stored its tiles transposed at TILE
+    granularity. Feeding it that layout must reproduce the plain result exactly.
+
+    ``ct > 1`` is the whole point: at ``ct == 1`` the two layouts are the same bytes in the same
+    order and the flag is unobservable, so the sweep starts at 3.
+    """
+    golden, device = _run_custom_mm(M, kt, ct, read_transposed=True)
+    _assert_matches(golden, device, kt, f"read_transposed, M={M}, kt={kt}, ct={ct}")
+
+
+# The doc tables claim kt_dim 2..256. The sweep above runs 2 and 4; these are the top of what
+# fits in the stimuli region alongside a ct block (kt*ct tiles at 2 KB each), and they are the
+# only evidence anyone has that the range is more than a parity constraint.
+DEEP_KT_DIMS = [16, 32]
+
+
+@parametrize(
+    M=[1, 8],
+    kt=DEEP_KT_DIMS,
+    ct=[1, 3],
+)
+def test_matmul_custom_mm_deep_kt(M, kt, ct):
+    """The K-deep end of the documented range, where the bf16 Dest accumulation is worst.
+
+    Nothing here is a new code path -- the MOP issue count is `TT_MOP(0, (kt_dim / 2) - 1, 0)`
+    either way -- so what this actually pins is that the single-issue walk still addresses
+    correctly at 8x and 16x the swept depth, and that the accumulated error stays inside the
+    kt-scaled floor the shallow cases calibrate.
+    """
+    golden, device = _run_custom_mm(M, kt, ct)
+    _assert_matches(golden, device, kt, f"deep kt, M={M}, kt={kt}, ct={ct}")
