@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include <ranges>
+#include <string>
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/types.hpp"
 
@@ -25,13 +26,19 @@ struct PadSpecDim {
 // use_multicore defaults to true here to match the Python binding's default
 // (pad_nanobind.cpp). Aligned defaults prevent callers from silently routing
 // to a different code path than Python-driven tests cover.
+//
+// `implementation`: "auto" (default) picks codegen when
+// pad_codegen::supported_by_codegen() and !is_demoted() both hold, else
+// native. "native" always uses the native prim. "codegen" forces the
+// codegen prim and TT_FATALs if the shape is not supported.
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<operations::data_movement::PadSpecDim>& padding,
     float value,
     bool use_multicore = true,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::string& implementation = "auto");
 
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
@@ -39,7 +46,8 @@ ttnn::Tensor pad(
     float value,
     bool use_multicore = true,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::string& implementation = "auto");
 
 // legacy API
 ttnn::Tensor pad(
@@ -49,6 +57,7 @@ ttnn::Tensor pad(
     float value,
     bool use_multicore = true,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::string& implementation = "auto");
 
 }  // namespace ttnn
