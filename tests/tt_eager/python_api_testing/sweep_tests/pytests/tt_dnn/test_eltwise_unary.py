@@ -904,7 +904,7 @@ class TestEltwiseUnary:
         output_mem_config,
     ):
         datagen_func = [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-4, high=10), torch.float32)
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-30, high=30), torch.float32)
         ]
         comparison_func = partial(comparison_funcs.comp_pcc)
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
