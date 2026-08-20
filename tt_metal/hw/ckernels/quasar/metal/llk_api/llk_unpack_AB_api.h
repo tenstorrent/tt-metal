@@ -18,6 +18,13 @@
  * @details Sets up MOP for unpacking binary operands
  * operandA will be used for UNPACKER0 -> SRCA
  * operandB will be used for UNPACKER1 -> SRCB
+ *
+ * Each operand gets a BFD id allocated from the unpack partition (operandA on Unp0 / UNPACR0,
+ * operandB on Unp1 / UNPACR1) and its table entry is programmed here; the DFB ids are used only
+ * to fetch buffer info, never as BFD ids. One init burns 2 unpack-partition ids, so the partition
+ * wraps sooner under mixed workloads — the standard wrap contract (re-init before re-execute)
+ * applies.
+ *
  * @tparam BType: Broadcast type for SrcB; one of {NONE, ROW, COL, SCALAR}.
  * @param operandA: The input operand dataflow buffer for source A
  * @param operandB: The input operand dataflow buffer for source B
@@ -40,10 +47,19 @@ inline void llk_unpack_AB_init(
         get_operand_tensor_shape(operandB_id).total_num_faces() == ckernel::MAX_NUM_FACES,
         "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
 
+    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandA_id);
+    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
+
     if constexpr (BType == BroadcastType::NONE) {
-        _llk_unpack_binary_operands_init_(operandA_id, operandB_id, 1);
+        _llk_unpack_binary_operands_init_(
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+            1);
     } else {
-        _llk_unpack_binary_broadcast_operands_init_<BType>(operandA_id, operandB_id, 1);
+        _llk_unpack_binary_broadcast_operands_init_<BType>(
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+            1);
     }
 }
 

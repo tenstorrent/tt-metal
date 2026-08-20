@@ -284,6 +284,22 @@ class SFPU_UNARY_SCALAR(TemplateParameter):
 
 
 @dataclass
+class SFPU_SHIFT_AMOUNT(TemplateParameter):
+    """Shift amount for the *unary* shift ops (LeftShift / RightShift).
+
+    Emitted as a macro rather than a constexpr because sfpu_operations.h selects on
+    ``#ifdef SFPU_SHIFT_AMOUNT``: the header is shared by every unary test, and only the shift
+    sweep sets this, so the others have to keep compiling without it. The binary shift ops take
+    their amount as a second operand and need none of this.
+    """
+
+    shift_amount: int = 3
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SFPU_SHIFT_AMOUNT {self.shift_amount}u"
+
+
+@dataclass
 class DISABLE_SRC_ZERO_FLAG(TemplateParameter):
     disable_src_zero_flag: bool
 
@@ -727,6 +743,8 @@ class TOPK_XL(TemplateParameter):
     fused_reduce: bool = False
     chunk_base_mode: TopKXLChunkBaseMode = TopKXLChunkBaseMode.Static
     chunk_base: int = 0
+    fused_e2e: bool = False
+    seg_base: int = 0
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -742,6 +760,8 @@ class TOPK_XL(TemplateParameter):
             f"constexpr bool TOPK_XL_FUSED_REDUCE = {str(self.fused_reduce).lower()};",
             f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE_MODE = {self.chunk_base_mode.value};",
             f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE = {self.chunk_base};",
+            f"constexpr bool TOPK_XL_FUSED_E2E = {str(self.fused_e2e).lower()};",
+            f"constexpr std::uint32_t TOPK_XL_SEG_BASE = {self.seg_base};",
         ]
         return "\n".join(lines)
 

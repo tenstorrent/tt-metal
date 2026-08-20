@@ -231,9 +231,28 @@ crossed slot→prompt wiring or a slot-index bug in the address table still pass
 `slot_lengths` is keyed by slot, so with `max_requests > num_users` a recycled slot replays the *same*
 prompt; set `max_requests == num_users` for one resident request per slot.
 
-Coverage: `tests/test_producer_slot_prompts.py` (device-free, host logic) and
-`tests/test_producer_runner_e2e.py::test_producer_runner_multiprompt_pcc` (on-device, opt-in via
-`PREFILL_CI_MULTIPROMPT_TRACES`).
+### Multi-turn conversations
+
+`PREFILL_PRODUCER_MULTI_TURN_PROB` (manifest: `workload.multi_turn_prob`, default `0.0`) is the probability
+that a recycled slot **continues** its conversation instead of starting a fresh one. A continued turn
+resumes writing at the previous turn's length **aligned down to 32** and replays the ≤31 dropped tokens as
+part of its first chunk; aligning up instead would leave a permanent unwritten hole mid-sequence, and a
+sub-tile write offset is rejected outright (`update_padded_kv_cache` asserts `kv_actual_global % 32 == 0`,
+and the kernel's staircase disagrees with the host mirror off-tile). The replay is PCC-idempotent because
+the rope table is keyed on absolute position, though it is not bit-idempotent.
+
+Every length the producer reports stays **absolute** — measured from cache position 0, never relative to
+the turn — because `actual_end` is a cache position. When a conversation no longer has room for another
+full chunk the slot restarts from 0 rather than overrunning the per-user cache.
+
+At the default `0.0` nothing draws from the rng and the schedule is byte-for-byte what it was before the
+knob existed, so existing legs are unaffected.
+
+Coverage: the multi-turn scheduling described here has no dedicated automated test yet — a device-free
+host-logic test for turn continuation (align-down/replay and absolute-length bookkeeping) is a TODO. The
+closest existing coverage is the on-device producer/runner PCC gate
+`tests/test_producer_runner_e2e.py::test_producer_runner_pcc`, which drives the producer end to end and
+fails if any resident slot's KV PCC is below threshold, though it is not multi-turn-specific.
 
 ---
 

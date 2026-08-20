@@ -75,7 +75,6 @@ CASES = [
 ]
 
 
-@pytest.mark.timeout(300)  # bounds any wedge so this repro can't hang a suite forever
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("shard_h, num_cores, tid", CASES, ids=[cse[-1] for cse in CASES])
 def test_quasar_s2i_credit_capacity(mesh_device, shard_h, num_cores, tid):

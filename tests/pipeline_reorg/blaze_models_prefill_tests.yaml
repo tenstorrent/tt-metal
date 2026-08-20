@@ -1,7 +1,30 @@
 # This file defines the test matrix for the Blaze Models Prefill tests pipeline.
 
 # Each entry represents a parallel job with the following keys:
-#   name: The display name for the job in GitHub Actions.
+#   name: The display name for the job in GitHub Actions. Naming convention:
+#         "<Model>-<version>-<size> <unit under test> <accuracy|perf|determinism> <shape>"
+#         * Do NOT prefix with "Blaze - ": every job here is a Blaze job, so it carries no information.
+#         * Name the model the test actually runs, with version AND parameter count -- "GLM-5.2-744B",
+#           not "GLM"; "Kimi-K2.6-1T"/"Kimi-K2.7-1T"/"Kimi-K3-2.8T", not "Kimi". Multi-model jobs
+#           follow the "&" rule below. Op-level jobs with no model (CCL, SDPA) name the op.
+#         * Tag what is being gated: "accuracy" (PCC/golden compare), "perf", or "determinism".
+#         * Chunked tests state total ISL and chunk size as <isl>@<chunk>, e.g. "code_debug 55k@5k".
+#         * One separator, one meaning -- a job whose name reads several ways is the bug this
+#           convention exists to prevent:
+#             "+"  the distinct things this one job gates, each carrying its own shape
+#                  -> "MoE accuracy 12.5k + perf 25k"
+#             ","  peers sharing a qualifier; binds tighter than "+". Either direction:
+#                  several shapes under one tag, or several tags under one shape
+#                  -> "MLA accuracy 100k, 128k"      (two shapes, one tag)
+#                  -> "ring MLA chunked 55k@5k perf, accuracy, determinism"  (one shape, three tags)
+#             "&"  two models. At three or more the unit leads and the models move to a trailing
+#                  "(...)" list, so the unit under test is not buried behind the model list
+#                  -> "DeepSeek-V3-671B & Kimi-K2.6-1T MLA chunked accuracy 10k@5k"
+#                  -> "KV cache table accuracy (DeepSeek-V3-671B, Kimi-K2.6-1T, GLM-5.2-744B)"
+#             "/"  components of one pipeline, not a list of gated things
+#                  -> "disaggregated prefill runner/producer"
+#           Never leave a shape whose binding is ambiguous: "MoE accuracy + perf 25k" cannot say
+#           whether 25k covers both tags, so give each tag its own shape or give neither one.
 #   cmd: The exact command to run (env vars must be inlined).
 #   test_type: Test type identifier for filtering (workflow_dispatch test-type selection).
 #   test_group: Group identifier for selecting multiple related tests at once.
@@ -13,7 +36,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 # Blackhole Galaxy DeepSeek Prefill tests
-- name: "Blaze - MoE Gate"
+- name: "DeepSeek-V3-671B MoE gate accuracy"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -35,7 +58,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - MLA"
+- name: "DeepSeek-V3-671B MLA accuracy 100k, 128k"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -58,7 +81,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - MLA Chunked"
+- name: "DeepSeek-V3-671B & Kimi-K2.6-1T MLA chunked accuracy 10k@5k"
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -75,7 +98,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - K3 MLA"
+- name: "Kimi-K3-2.8T MLA chunked accuracy 10k@5k + determinism 5k@5k"
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -92,7 +115,25 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - K3 MLA perf"
+- name: "Kimi-K3-2.8T MLA chunked accuracy 55k@5k (vs golden trace)"
+  cmd: |
+    export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and production-50k+5k and trace and 8x4 and fabric2d and scalar and no_determinism" -vvv --tb=short
+    '
+  test_type: k3_mla_trace
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 6
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  sp_config: sc1
+
+- name: "Kimi-K3-2.8T MLA chunked perf 55k@5k"
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -109,7 +150,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - HCA Chunked"
+- name: "DeepSeek-V4-Flash HCA chunked accuracy 6k@5k"
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -125,7 +166,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - HCA perf"
+- name: "DeepSeek-V4-Flash HCA chunked perf 10k@5k"
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -141,7 +182,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - KV cache table"
+- name: "KV cache table accuracy (DeepSeek-V3-671B, Kimi-K2.6-1T, GLM-5.2-744B)"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -155,6 +196,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kv_cache_table -k "line and pretrained and seq5k" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_kv_cache_mock -k "line" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm52_kv_cache_table -k "8x4" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_dflash_kv_cache_mock -k "seq5k and 1user and 2layers" -vvv --tb=short
     '
   test_type: kv_cache_table
   test_group: module
@@ -165,7 +207,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Prefill Block"
+- name: "DeepSeek-V3-671B prefill block accuracy"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -188,7 +230,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Chunked Kimi Padded Accuracy (15k, no trace)"
+- name: "Kimi-K2.6-1T chunked prefill padded accuracy 15k@5k (no trace)"
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
@@ -215,7 +257,7 @@
 # that the padded forward is captured once as a ttnn trace and replayed per chunk. Run as its own
 # entry (not a second -k term) so a trace-only regression is attributed on the CI dashboard instead
 # of being hidden inside a two-case job.
-- name: "Blaze - Chunked Kimi Padded Accuracy (15k, trace)"
+- name: "Kimi-K2.6-1T chunked prefill padded accuracy 15k@5k (trace)"
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
@@ -237,7 +279,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Kimi MLA"
+- name: "Kimi-K2.6-1T MLA accuracy 5k, 25k"
   cmd: |
     export KIMI_MLA_REF_CACHE=/mnt/models/kimi-prefill-cache/test_mla_output
 
@@ -254,27 +296,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - DSA MLA (V3.2)"
-  cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
-    export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache
-    export DS_SPARSE_FABRIC=fabric2d
-
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "deepseek_v32 and 8x4 and fabric2d" -vvv --tb=short
-    '
-
-  test_type: dsa_mla
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 15
-  owner_id: U07N3CUUN05  # Iva Potkonjak
-  team: models
-  sp_config: sc1
-
-- name: "Blaze - DSA MLA (GLM-5.2)"
+- name: "GLM-5.2-744B sparse MLA accuracy + determinism (incl. chunked 5k@1k)"
   cmd: |
     export MESH_DEVICE=TG
     export GLM52_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_2_mla_ref_cache
@@ -296,7 +318,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - GLM MoE"
+- name: "GLM-5.2-744B MoE accuracy 12.5k + perf 25k"
   cmd: |
     export MESH_DEVICE=TG
     # GLM-5.2 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
@@ -313,7 +335,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - GLM-5.2 Prefill Block"
+- name: "GLM-5.2-744B prefill block accuracy 5k"
   cmd: |
     export MESH_DEVICE=TG
     export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8/
@@ -337,7 +359,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Kimi MoE"
+- name: "Kimi-K2.6-1T MoE accuracy 5k + perf 25k"
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -353,7 +375,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Kimi K3 MoE"
+- name: "Kimi-K3-2.8T MoE accuracy 5k"
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -369,7 +391,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Kimi K3 MoE perf"
+- name: "Kimi-K3-2.8T MoE perf 5k"
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -385,7 +407,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Kimi Prefill Block"
+- name: "Kimi-K2.6-1T prefill block accuracy 5k, 25k"
   cmd: |
     export MESH_DEVICE=TG
     export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
@@ -406,7 +428,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Prefill Block Determinism"
+- name: "DeepSeek-V3-671B prefill block determinism 25k"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -430,7 +452,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Transformer Determinism"
+- name: "DeepSeek-V3-671B prefill transformer determinism 25k"
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
     export DEEPSEEK_V3_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/CI
@@ -452,10 +474,12 @@
   team: models
   sp_config: sc1
 
-# Ring joint SDPA math-utilization perf checks (1 WAN, 1 MLA-100k, 1 Kimi chunked ring_mla).
+# Ring joint SDPA gates, over ModelConfig shape presets on random tensors (not model runs):
+#   joint-attention perf -> wan2_2_1xGLX and mla_100k
+#   ring_mla chunked     -> kimi50k and kimi_k3 for perf; kimi_k3 for accuracy and determinism
 # Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
 # sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
-- name: "Blaze - Ring Joint SDPA checks"
+- name: "Ring joint SDPA perf + ring MLA chunked 55k@5k perf, accuracy, determinism"
   # Run both perf checks unconditionally (so both report numbers) but fail the step if either
   # fails - the harness only propagates the last command's exit code, so aggregate it ourselves.
   cmd: |
@@ -479,7 +503,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - high_bw_all_gather CCL perf and accuracy"
+- name: "high_bw_all_gather CCL perf + accuracy"
   # A full 8x4 Blackhole-Galaxy Fabric2D XY-torus gate. The test initializes
   # the full Fabric, then runs one 8-rank KV ring at 55K and 512K global rows
   # and validates gathered output exactly.
@@ -499,7 +523,7 @@
   team: ttnn
   sp_config: sc1
 
-- name: "Blaze - Chunked Kimi perf (code_debug 55k, no trace)"
+- name: "Kimi-K2.6-1T chunked prefill perf code_debug 55k@5k (no trace)"
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
   # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
@@ -533,7 +557,7 @@
 # Trace twin of the entry above: same 61 layers / 11 chunks / 10 iterations, but the chunk forward
 # is captured once and replayed. Separate entry so the two per-chunk timing tables are attributed
 # independently -- a traced-vs-untraced perf delta is the number this pair exists to surface.
-- name: "Blaze - Chunked Kimi perf (code_debug 55k, trace)"
+- name: "Kimi-K2.6-1T chunked prefill perf code_debug 55k@5k (trace)"
   # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
   # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
   # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
@@ -564,7 +588,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Chunked GLM (code_debug 55k)"
+- name: "GLM-5.2-744B chunked prefill perf code_debug 55k@5k"
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
@@ -584,7 +608,7 @@
   team: models
   sp_config: sc1
 
-- name: "Blaze - Chunked GLM Accuracy (code_debug 55k)"
+- name: "GLM-5.2-744B chunked prefill accuracy code_debug 55k@5k"
   cmd: |
     export MESH_DEVICE=TG
     export LOGURU_LEVEL=INFO
@@ -599,30 +623,31 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 40
+      timeout: 36
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
 
-- name: "Blaze - Kimi DFlash drafter"
+- name: "Kimi-K2.6-1T DFlash drafter accuracy"
   cmd: |
     export MESH_DEVICE=TG
     export DFLASH_HF_MODEL=/mnt/models/Kimi-K2.6-DFlash
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc -k "mesh-8x4 and sliced and pretrained" -vvv --tb=short --timeout=600
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc -k "mesh-8x4 and pretrained and ctx5k-1chunk" -vvv --tb=short --timeout=600
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_multiturn_pcc -k "mesh-8x4 and pretrained and (aligned_min or midchip_straddle or lastchip or rot_partial)" -vvv --tb=short
     '
   test_type: kimi_dflash
   test_group: module
   skus:
     bh_sc1:
-      timeout: 5
+      timeout: 9
   owner_id: U09L76N1MAT
   team: models
   sp_config: sc1
 
-- name: "Blaze - Kimi Prefill Runner (code_debug 55k)"
+- name: "Kimi-K2.6-1T prefill runner accuracy code_debug 55k@5k"
   cmd: |
     export MESH_DEVICE=TG
     export PREFILL_MODEL=kimi_k2_6
@@ -652,7 +677,7 @@
 # 4-galaxy (SC4-blitz) disaggregated prefill: a 4-rank background runner opens the mesh, loads
 # Kimi-2.7, warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less
 # producer then reads it back and PCCs it against the golden KV cache.
-- name: "Disaggregated Prefill Runner + Producer KV PCC (Kimi-2.7 SC4)"
+- name: "Kimi-K2.7-1T disaggregated prefill runner/producer KV accuracy 55k@5k (SC4)"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -822,7 +847,7 @@
 #   PREFILL_TRACE_DIR -> /mnt/models/MiniMaxAI/MiniMax-M3-ref/golden
 #   TT_CACHE_PATH     -> optional; defaults under HF_MODEL. Prefill the tilized
 #                       tensor_cache_bfp8_{MeshShape(8,4)} there or CI will cold-build for hours.
-- name: "Blaze - MiniMax-M3 Prefill KV PCC"
+- name: "MiniMax-M3-428B chunked prefill KV accuracy longbook 55k@5k"
   cmd: |
     export LOGURU_LEVEL=INFO
     export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
@@ -852,7 +877,7 @@
 # Allowed range: ~3825–5175 tok/s (4500 +/- 15%).
 # If this test fails: first check whether it is a true regression or a performance improvement.
 # If neither (CI noise), widen this range or comment out this test due to CI instability.
-- name: "Blaze - MiniMax-M3 Prefill Perf"
+- name: "MiniMax-M3-428B chunked prefill perf longbook 55k@5k"
   cmd: |
     export LOGURU_LEVEL=INFO
     export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
