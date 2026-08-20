@@ -5,6 +5,7 @@
 #include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
 #include "bilinear_weights_lut.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 //
@@ -256,49 +257,24 @@ struct BilinearIndexAdvancer {
 //      - Push data to compute kernel
 //   3. Advance to next pixel (skipping one for reader/writer split)
 //
-void kernel_main() {
-    //
-    // Runtime arguments
-    //
-    uint32_t start_output_idx = get_arg_val<uint32_t>(0);
-    uint32_t min_input_offset = get_arg_val<uint32_t>(1);
-    uint32_t output_shard_height = get_arg_val<uint32_t>(2);
-
-    //
-    // Compile-time arguments: Tensor dimensions and scaling
-    //
-    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(0);
-    constexpr uint32_t scale_h = get_compile_time_arg_val(1);
-    constexpr uint32_t scale_w = get_compile_time_arg_val(2);
-    constexpr uint32_t in_w = get_compile_time_arg_val(3);
-    constexpr uint32_t out_w = get_compile_time_arg_val(4);
-    constexpr uint32_t in_h = get_compile_time_arg_val(5);
-
-    //
-    // Compile-time arguments: Circular buffer IDs
-    //
-    constexpr uint32_t halo_cb_id = get_compile_time_arg_val(6);
-    constexpr uint32_t tilize_reduce_cb_id = get_compile_time_arg_val(7);
-    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(8);
-
-    //
-    // Compile-time arguments: Fixed-point coordinate transforms
-    //
-    constexpr uint32_t scale_h_inv_fixed_u32 = get_compile_time_arg_val(9);
-    constexpr uint32_t scale_w_inv_fixed_u32 = get_compile_time_arg_val(10);
-    constexpr uint32_t y_starting_coordinate_fixed_u32 = get_compile_time_arg_val(11);
-    constexpr uint32_t x_starting_coordinate_fixed_u32 = get_compile_time_arg_val(12);
-
-    //
-    // Compile-time arguments: Threading and blocking
-    //
-    constexpr uint32_t is_reader = get_compile_time_arg_val(13);
-    constexpr uint32_t blocks = get_compile_time_arg_val(14);
-    constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(15);
-
-    DataflowBuffer halo_dfb(halo_cb_id);
-    DataflowBuffer tilize_reduce_dfb(tilize_reduce_cb_id);
-    DataflowBuffer scalar_dfb(in_scalar_cb_id);
+template <
+    uint32_t stick_nbytes,
+    uint32_t scale_h,
+    uint32_t scale_w,
+    uint32_t in_w,
+    uint32_t out_w,
+    uint32_t in_h,
+    uint32_t scale_h_inv_fixed_u32,
+    uint32_t scale_w_inv_fixed_u32,
+    uint32_t y_starting_coordinate_fixed_u32,
+    uint32_t x_starting_coordinate_fixed_u32,
+    uint32_t is_reader,
+    uint32_t blocks,
+    uint32_t input_block_size_bytes>
+TT_KERNEL void bilinear_reader(uint32_t start_output_idx, uint32_t min_input_offset, uint32_t output_shard_height) {
+    DataflowBuffer halo_dfb(dfb::halo);
+    DataflowBuffer tilize_reduce_dfb(dfb::tilize_reduce);
+    DataflowBuffer scalar_dfb(dfb::scalar);
     Noc noc;
     UnicastEndpoint self_ep;
 

@@ -8,15 +8,14 @@
 #include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
-void kernel_main() {
-    constexpr auto is_reader = get_arg(args::is_reader);
-
-    constexpr auto stick_nbytes = get_arg(args::stick_nbytes);
-    constexpr auto in_nsticks_per_core = get_arg(args::in_nsticks_per_core);
-    constexpr auto scale_h = get_arg(args::scale_h);
-    constexpr auto scale_w = get_arg(args::scale_w);
-    constexpr auto elem_per_core = get_arg(args::elem_per_core);
-
+template <
+    uint32_t stick_nbytes,
+    uint32_t in_nsticks_per_core,
+    uint32_t scale_h,
+    uint32_t scale_w,
+    uint32_t elem_per_core,
+    uint32_t is_reader>
+TT_KERNEL void upsample_sharded() {
     constexpr uint32_t elem_per_core_reader = elem_per_core / 2;
 
     constexpr uint32_t out_nsticks_per_core =

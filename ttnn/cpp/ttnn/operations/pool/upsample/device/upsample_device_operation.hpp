@@ -13,7 +13,6 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -23,7 +22,7 @@
 namespace ttnn::prim {
 
 struct UpsampleBilinearProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
 };
 

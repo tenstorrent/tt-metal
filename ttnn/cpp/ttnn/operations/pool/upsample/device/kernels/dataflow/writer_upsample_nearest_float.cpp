@@ -9,14 +9,8 @@
 #include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
-void kernel_main() {
-    // Runtime arguments
-    const auto num_sticks = get_arg(args::num_sticks);          // Number of output sticks for this core
-    const auto start_stick_id = get_arg(args::start_stick_id);  // Starting output stick ID
-
-    // Compile-time arguments
-    constexpr auto aligned_stick_nbytes = get_arg(args::aligned_stick_nbytes);  // Aligned stick size in bytes
-
+template <uint32_t aligned_stick_nbytes>
+TT_KERNEL void writer(uint32_t num_sticks, uint32_t start_stick_id) {
     const auto output_tensor_accessor = TensorAccessor(tensor::output);
 
     DataflowBuffer out_dfb(dfb::out);
