@@ -1158,5 +1158,9 @@ def test_topk_route_mirror_parity(mesh_device, shape, k, expected):
     x = ttnn.from_torch(
         torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device
     )
-    assert topk_would_route_to_large_indices(x, k, mesh_device) is expected
+    # Routing is Blackhole-only: off-BH the predicate short-circuits to False,
+    # so every cell's expectation collapses to False there (still asserted --
+    # this doubles as off-BH never-routes coverage).
+    expected_here = expected and ttnn.device.is_blackhole(mesh_device)
+    assert topk_would_route_to_large_indices(x, k, mesh_device) is expected_here
     ttnn.deallocate(x)
