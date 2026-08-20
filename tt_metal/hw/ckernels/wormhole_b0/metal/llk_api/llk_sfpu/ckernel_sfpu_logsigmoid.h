@@ -1,64 +1,61 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "sfpu/ckernel_sfpu_converter.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_log1p.h"
+#include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_logsigmoid(
-    const std::uint32_t dst_index_in0,  // Index for input (x)
-    const std::uint32_t dst_index_in1,  // Index for exp(-x)
-    const std::uint32_t dst_index_out)  // Index for output
-{
-    // logsigmoid(x) = -softplus(-x)
-    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+// logsigmoid(x) = min(x, 0) - log1p(exp(-|x|))
+//
+// The form this replaces split the domain at +-4 and had no arm for x <= -4, so
+// an input there was returned unchanged, dropping the log1p(exp(x)) residual
+// entirely. Above +4 it returned -exp(-x), a one term series that drops -e^2/2,
+// and it took that exponential from an approximate exp computed by the caller.
+//
+// The identity has no split. The exponential argument is -|x|, so it is never
+// positive and the result lies in (0, 1]: nothing can overflow, and log1p is
+// evaluated exactly where it is accurate. min(x, 0) carries the linear term,
+// which is what the +-4 branches were approximating on either side.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void calculate_logsigmoid() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // Read inputs from destination registers
-        sfpi::vFloat x = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat exp_neg_x = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // Save original x as result; negate x since we compute softplus(-x)
-        sfpi::vFloat result = x;
-        x = -x;
+        sfpi::vFloat t = _sfpu_exp_fp32_accurate_(-sfpi::setsgn(x, 0));
+        sfpi::vFloat r = calculate_log1p_fp32<is_fp32_dest_acc_en>(t);
 
-        v_if(x < -4.0f) {
-            // For very negative: use exp
-            result = -exp_neg_x;
-        }
-        v_elseif(x >= -4.0f && x < 4.0f) {
-            // Polynomial approximation for softplus(-x) in the mid-range
-            result = PolynomialEvaluator::eval(
-                x,
-                0.6924354434013367f,
-                0.49275708198547363f,
-                0.12142381817102432f,
-                0.0031102809589356184f,
-                -0.00330807245336473f,
-                -0.00028794066747650504f,
-                5.3185409342404455e-05f,
-                7.1853546614875086e-06f,
-                7.4961114648886e-08f);
-            result = -result;
-        }
+        sfpi::vFloat lin = x;
+        v_if(x > 0.0f) { lin = 0.0f; }
         v_endif;
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+
+        sfpi::vFloat result = lin - r;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
+
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE>
-void logsigmoid_init() {}
+// log1p reads its polynomial from the program constant registers and an SFPU
+// helper called from another op's kernel does not inherit that op's init, so the
+// coefficients are loaded here. The accurate exponential uses LREG[12..14] and
+// does not collide with them.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void logsigmoid_init() {
+    log1p_init<APPROXIMATION_MODE, /*FAST_APPROX=*/false, is_fp32_dest_acc_en>();
+}
 
 }  // namespace sfpu
 }  // namespace ckernel

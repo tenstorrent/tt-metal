@@ -31,16 +31,12 @@ void kernel_main() {
 
         copy_tile_to_dst_init_short(cb_input);
         copy_tile(cb_input, 0, 0);
-        copy_tile(cb_input, 0, 1);
 
-        negative_tile_init();
-        negative_tile(1);
-
-        exp_tile_init<true>();
-        exp_tile<true>(1);
-
+        // The exponential is computed inside the kernel now, on -|x| rather than
+        // on -x, so the second tile, the negate and the approximate exp_tile are
+        // all gone.
         logsigmoid_tile_init();
-        logsigmoid_tile(0, 1, 0);
+        logsigmoid_tile(0);
 
         tile_regs_commit();
         tile_regs_wait();
