@@ -1446,9 +1446,7 @@
   team: models
 
 - name: YuNet unit tests
-  cmd: |
-    python3 -c "from models.experimental.yunet.common import setup_yunet_reference; setup_yunet_reference()"
-    TT_METAL_WATCHER=30 pytest --timeout 300 models/experimental/yunet/tests/pcc/test_pcc.py
+  cmd: TT_METAL_WATCHER=30 pytest --timeout 300 models/experimental/yunet/tests/pcc/test_pcc.py
   model: yunet
   model_family: YuNet
   skus:

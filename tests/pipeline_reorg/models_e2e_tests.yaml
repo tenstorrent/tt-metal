@@ -1255,7 +1255,6 @@
 
 - name: YuNet e2e tests
   cmd: |
-    python3 -c "from models.experimental.yunet.common import setup_yunet_reference; setup_yunet_reference()"
     pytest --timeout 660 models/experimental/yunet/tests/perf/test_e2e_performant.py
   model: yunet
   model_family: YuNet
