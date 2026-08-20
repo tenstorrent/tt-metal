@@ -43,6 +43,7 @@ from ....layers.module import Module, ModuleList
 from ....layers.normalization import LayerNorm
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
+from ....utils.tensor import local_device_to_torch
 from ..vocoder_ltx import DilatedConv1d
 from .blockings_minimax_h3_audio import register_h3_audio_blockings
 
@@ -405,9 +406,10 @@ class MiniMaxH3AudioEncoder(Module):
         # result: read back one. A bare ``ttnn.to_torch`` asserts ``buffers.size() == 1`` and so
         # only works on a single-device mesh. Same fix as ``MiniMaxH3AudioDecoder.__call__``.
         def read(tensor: ttnn.Tensor) -> torch.Tensor:
-            if self.mesh_device.get_num_devices() > 1:
-                tensor = ttnn.get_device_tensors(tensor)[0]
-            return ttnn.to_torch(tensor).float()
+            # See `MiniMaxH3AudioDecoder.__call__`: a storage slice keeps the parent's distribution
+            # metadata and the converter rejects it on a multi-host mesh. The helper reads a shard this
+            # host owns instead, which for a replicated tensor is the whole answer.
+            return local_device_to_torch(tensor).float()
 
         mean = read(self.mean_proj(projected))
         logs = read(self.logs_proj(projected))

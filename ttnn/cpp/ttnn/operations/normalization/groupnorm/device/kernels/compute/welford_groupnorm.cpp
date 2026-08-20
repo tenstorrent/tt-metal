@@ -448,7 +448,7 @@ void kernel_main() {
 
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
-                        dfb_xmm.reserve_back(2);
+                        dfb_xmm.reserve_back(1);
 
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
@@ -469,69 +469,50 @@ void kernel_main() {
                         tile_regs_wait();
                         pack_tile(dst0, dfb_xmm_id);
                         tile_regs_release();
+                        dfb_xmm.push_back(1);
 
-                        // // b. 1/[sqrt(Var + eps)] * mask
-                        const uint32_t mask_offset = g * block_w;
-                        const uint32_t mask_index = mask_offset + block_w_index;
-
-                        // fp32: reset SrcA to the mask format before reading dfb_input_mask (prior step left it on fp32
-                        // dfb_in0).
-                        mul_bcast_scalar_init(dfb_input_mask_id, dfb_ex2pe_id);
+                        // // b. (x - u) * 1/[sqrt(Var + eps)]
+                        dfb_xmm.wait_front(1);
+                        mul_bcast_scalar_init(dfb_xmm_id, dfb_ex2pe_id);
                         if constexpr (enable_fp32_reconfig) {
-                            reconfig_data_format_srca(dfb_in0_id, dfb_input_mask_id);
+                            reconfig_data_format_srca(dfb_in0_id, dfb_xmm_id);
                         }
                         reconfig_data_format_srcb(dfb_ex_global_id, dfb_ex2pe_id);
                         tile_regs_acquire();
-                        mul_tiles_bcast_scalar(dfb_input_mask_id, dfb_ex2pe_id, mask_index, g, dst0);
+                        mul_tiles_bcast_scalar(dfb_xmm_id, dfb_ex2pe_id, 0, g, dst0);
                         tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile(dst0, dfb_xmm_id);
-                        tile_regs_release();
-                        dfb_xmm.push_back(2);
-
-                        // // c. a * b
-                        dfb_xmm.wait_front(2);
-                        mul_init(dfb_xmm_id, dfb_xmm_id);
-                        // fp32: reset SrcA to dfb_xmm (fp32); step b above left SrcA on the bf16 input mask.
-                        if constexpr (enable_fp32_reconfig) {
-                            reconfig_data_format_srca(dfb_xmm_id);
-                        }
-                        reconfig_data_format_srcb(dfb_ex2pe_id, dfb_xmm_id);
-                        tile_regs_acquire();
-                        mul_tiles(dfb_xmm_id, dfb_xmm_id, 0, 1, dst0);
-                        tile_regs_commit();
-                        dfb_xmm.pop_front(2);
+                        dfb_xmm.pop_front(1);
                         dfb_xmm.reserve_back(1);
                         tile_regs_wait();
                         pack_tile(dst0, dfb_xmm_id);
                         tile_regs_release();
                         dfb_xmm.push_back(1);
 
-                        // // d. Add to cb_xmm_id (accumulate results)
-                        // // First we get the result in dst0
-                        if (group_offset == 0) {
-                            // When group_offset is 0, this is the first group for this tile,
-                            // so we can copy the results to cb_x_id without needing to add them
-                            copy_tile_init(dfb_xmm_id);
+                        // // c. [(x - u) * rsqrt] * mask
+                        const uint32_t mask_offset = g * block_w;
+                        const uint32_t mask_index = mask_offset + block_w_index;
 
-                            dfb_xmm.wait_front(1);
-                            tile_regs_acquire();
-                            copy_tile(dfb_xmm_id, 0, dst0);
-                            tile_regs_commit();
-                            dfb_xmm.pop_front(1);
-                        } else {
-                            // This is not the first group for this tile, so we need to add
-                            // the results over what is already in cb_x_id
-                            add_init(dfb_x_id, dfb_xmm_id);
+                        dfb_xmm.wait_front(1);
+                        mul_bcast_rows_init(dfb_xmm_id, dfb_input_mask_id);
+                        reconfig_data_format_srcb(dfb_ex2pe_id, dfb_input_mask_id);
+                        tile_regs_acquire();
+                        mul_tiles_bcast_rows(dfb_xmm_id, dfb_input_mask_id, 0, mask_index, dst0);
+                        dfb_xmm.pop_front(1);
 
-                            dfb_xmm.wait_front(1);
+                        // // d. Accumulate into cb_x_id.
+                        if (group_offset != 0) {
+                            // Not the first group for this tile: add what is already in cb_x.
+                            reconfig_data_format_srca(dfb_x_id);
+                            binary_dest_reuse_tiles_init<
+                                EltwiseBinaryType::ELWADD,
+                                EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_x_id);
                             dfb_x.wait_front(1);
-                            tile_regs_acquire();
-                            add_tiles(dfb_x_id, dfb_xmm_id, 0, 0, dst0);
-                            tile_regs_commit();
-                            dfb_xmm.pop_front(1);
+                            binary_dest_reuse_tiles<
+                                EltwiseBinaryType::ELWADD,
+                                EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_x_id, 0, dst0);
                             dfb_x.pop_front(1);
                         }
+                        tile_regs_commit();
 
                         // Then we pack the result into cb_x_id
                         dfb_x.reserve_back(1);
@@ -539,6 +520,9 @@ void kernel_main() {
                         pack_tile(dst0, dfb_x_id);
                         tile_regs_release();
                         dfb_x.push_back(1);
+
+                        // The blocks after this loop assume srcb still carries cb_xmm's format.
+                        reconfig_data_format_srcb(dfb_xmm_id);
 
                         uint32_t cols_available = tile_width - group_offset;
                         uint32_t cols_consumed = std::min(cols_available, channels_left);

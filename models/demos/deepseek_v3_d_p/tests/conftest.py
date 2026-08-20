@@ -982,6 +982,24 @@ def random_weights(config_only):
     return config, weights
 
 
+def _load_mla_weights(state_dict, hf_config, prefix: str, layer_idx: int) -> dict:
+    """One layer's MLA weights, read without the rest of the layer: a whole-layer view drags in the
+    MoE experts, which Kimi-K3 packs as MXFP4 and convert_state_dict raises on."""
+    sd = convert_state_dict(sub_state_dict(state_dict, f"{prefix}model.layers.{layer_idx}.self_attn."), hf_config)
+    names = [
+        "q_a_proj.weight",
+        "q_a_layernorm.weight",
+        "q_b_proj.weight",
+        "kv_a_proj_with_mqa.weight",
+        "kv_a_layernorm.weight",
+        "kv_b_proj.weight",
+        "o_proj.weight",
+    ]
+    if getattr(hf_config, "mla_use_output_gate", False):
+        names.append("g_proj.weight")  # Kimi-K3; ttMLA reads it with no default
+    return {name: sd[name] for name in names}
+
+
 @pytest.fixture
 def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, request):
     """
@@ -1038,15 +1056,7 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
 
         layer_dict = {
             "attn_norm_weight": layer_dequant["input_layernorm.weight"],
-            "mla_weights": {
-                "q_a_proj.weight": layer_dequant["self_attn.q_a_proj.weight"],
-                "q_a_layernorm.weight": layer_dequant["self_attn.q_a_layernorm.weight"],
-                "q_b_proj.weight": layer_dequant["self_attn.q_b_proj.weight"],
-                "kv_a_proj_with_mqa.weight": layer_dequant["self_attn.kv_a_proj_with_mqa.weight"],
-                "kv_a_layernorm.weight": layer_dequant["self_attn.kv_a_layernorm.weight"],
-                "kv_b_proj.weight": layer_dequant["self_attn.kv_b_proj.weight"],
-                "o_proj.weight": layer_dequant["self_attn.o_proj.weight"],
-            },
+            "mla_weights": _load_mla_weights(state_dict, hf_config, prefix, i),
             "ffn_norm_weight": layer_dequant["post_attention_layernorm.weight"],
         }
 
@@ -1081,6 +1091,40 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
 
     logger.info(f"Loaded pretrained transformer weights for {num_layers} layers")
     return hf_config, result
+
+
+@pytest.fixture
+def pretrained_mla_layer_weights(variant, model_path, hf_config, state_dict):
+    """Pretrained MLA weights from ``variant.pretrained_mla_layer``, as ``(hf_config, weights)``.
+
+    Same shape ``random_weights`` returns, so an MLA test swaps one fixture for the other. Separate
+    from ``pretrained_transformer_weights`` because that one also loads the embedding, the norms and
+    the full MoE side, which Kimi-K3 cannot do.
+    """
+    if variant.pretrained_mla_layer is None:
+        pytest.skip(f"{variant.name}: no reachable checkpoint, so no MLA weights to load")
+    if not _check_pretrained_available(model_path):
+        pytest.skip(f"{variant.name}: pretrained weights not available. Set {variant.env_var} or download model.")
+    if hf_config is None:
+        pytest.skip(f"{variant.name}: failed to load HF config. Check model path.")
+    if state_dict is None:
+        pytest.skip(f"{variant.name}: failed to load state dict. Check model path and weights.")
+
+    # The torch MLA reference reads all three with no defaults. Kimi-K3's checkpoint config omits the
+    # first two, and for the third transformers synthesizes {'rope_type': 'default'}, on which
+    # _init_rope KeyErrors -- a NoPE model has no scaling, so None is the value it wants.
+    for field, default in (("attention_bias", False), ("attention_dropout", 0.0)):
+        if not hasattr(hf_config, field):
+            setattr(hf_config, field, default)
+    if getattr(hf_config, "mla_use_nope", False):
+        hf_config.rope_scaling = None
+
+    layer_idx = variant.pretrained_mla_layer
+    prefix = detect_language_model_prefix(state_dict)
+    logger.info(f"Loading pretrained MLA weights from layer {layer_idx} of {model_path}")
+    weights = _load_mla_weights(state_dict, hf_config, prefix, layer_idx)
+    logger.info(f"Loaded {len(weights)} MLA weight tensors (layer {layer_idx})")
+    return hf_config, weights
 
 
 # ---------------------------------------------------------------------------

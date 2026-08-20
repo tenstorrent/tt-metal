@@ -48,12 +48,12 @@ void kernel_main() {
     constexpr auto dfb_out_id = get_named_compile_time_arg_val("cb_out");  // output
     constexpr auto dfb_gamma_id = get_named_compile_time_arg_val("cb_gamma");
     constexpr auto dfb_beta_id = get_named_compile_time_arg_val("cb_beta");
-    constexpr uint32_t dfb_xmm_id = get_named_compile_time_arg_val("cb_xmm");   // x minus mean
-    constexpr auto dfb_ex_id = get_named_compile_time_arg_val("cb_ex");         // E[x]
-    constexpr auto dfb_ex2_id = get_named_compile_time_arg_val("cb_ex2");       // E[(x-E[x])^2]
-    constexpr auto dfb_xmm2_id = get_named_compile_time_arg_val("cb_xmm2");     // xmm^2
-    constexpr auto dfb_ex2pe_id = get_named_compile_time_arg_val("cb_ex2pe");   // E[(x-E[x])^2]+eps
-    uint32_t dfb_fusion = get_named_compile_time_arg_val("cb_fusion");          // stream gamma/beta
+    constexpr uint32_t dfb_xmm_id = get_named_compile_time_arg_val("cb_xmm");  // x minus mean
+    constexpr auto dfb_ex_id = get_named_compile_time_arg_val("cb_ex");        // E[x]
+    constexpr auto dfb_ex2_id = get_named_compile_time_arg_val("cb_ex2");      // E[(x-E[x])^2]
+    constexpr auto dfb_xmm2_id = get_named_compile_time_arg_val("cb_xmm2");    // xmm^2
+    constexpr auto dfb_ex2pe_id = get_named_compile_time_arg_val("cb_ex2pe");  // E[(x-E[x])^2]+eps
+    uint32_t dfb_fusion = get_named_compile_time_arg_val("cb_fusion");         // stream gamma/beta
     constexpr auto scaler0 = 0;
     constexpr auto dfb_accumulate_id = get_named_compile_time_arg_val("cb_accumulate");  // For accumulating (x-E[x])^2
 

@@ -238,9 +238,10 @@ class TtPrefillRuntime:
 
     def _embed_tokens(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
         """Embed the SP-sharded tokens into the bf16 hidden state the layers consume, delegating to the
-        model's TtParallelEmbedding. Returns [1, 1, s_local, emb_dim] — full hidden, TP-replicated (the
-        residual-stream contract); bf16 (not bf8) preserves dynamic range. The sharding (2D vocab+hidden
-        by default, or 1D hidden-only) and its CCL live in the module (tt/parallel_embedding.py)."""
+        model's TtParallelEmbedding. Returns [1, 1, s_local, emb_dim] full hidden TP-replicated, or
+        [1, 1, s_local, emb_dim/tp] under M3_SHARDED_RESIDUAL — whichever the residual-stream contract
+        is (tt/residual.py); bf16 (not bf8) preserves dynamic range. The sharding (2D vocab+hidden by
+        default, or 1D hidden-only) and its CCL live in the module (tt/parallel_embedding.py)."""
         x = self.model.embedding(tokens)
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
@@ -363,6 +364,11 @@ class TtPrefillRuntime:
             skip_lm_head=skip_lm_head,  # default: cache-fill only (skip final norm + lm_head)
             indexed_rope=True,
             on_layer_complete=on_layer_complete,
+            # Real tokens in THIS chunk. Only the final chunk of a ragged prompt is short; every other
+            # chunk is full and the MoE's padding config resolves to None. Without this the padded tail
+            # is routed and dispatched as if real: wasted dispatch work that also eats per-expert
+            # dispatch-buffer capacity.
+            actual_isl=actual_end - actual_start,
         )
         if not self.config.is_last_rank:
             # Middle rank: hand the slice's output hidden state to the next rank.

@@ -13,21 +13,21 @@ Some PR titles are truncated with an ellipsis, and PR 49741's title begins with 
 stray "]" -- both are how the titles are stored in GitHub, not transcription errors.
 -->
 
-# Quasar Release Notes — v0.75.0 + v0.76.0
+# Quasar Release Notes - v0.75.0 + v0.76.0
 
 > Combined release notes for **v0.75.0 + v0.76.0**, since **v0.74.0** (through stable / v0.76.0).
 
 ## Summary
-- **AIIPSW-4 — Quasar ResNet Kernel Ops** — 17 PR(s). TTNN kernel ops a ResNet graph exercises on Quasar.
-- **AIIPSW-6 — FD support for dispatch engine** — 7 PR(s). Fast-dispatch command path on the Quasar dispatch engine.
-- **AIIPSW-8 — INT8 Support** — 2 PR(s). INT8 LLK support (core delivered in v0.72.0); this release adds Int8→Int32 reduce.
-- **AIIPSW-12 — PDL related LLK features** — 0 PR(s). No implementing PRs. Quasar PDL (Panoptic-DeepLab) LLK was deprioritized in favor of INT8 (see AIIPSW-8); its op needs are covered by the shared Quasar ResNet conv/pool ops.
-- **AIIPSW-13 — Profiler debug tool support** — 23 PR(s). Profiler bring-up and performance-test coverage on Quasar.
-- **AIIPSW-14 — LLK: Quant/dequant kernels** — 1 PR(s). Quant/requant/dequant int32 SFPU kernels on Quasar.
+- **Quasar ResNet Kernel Ops** - 17 PR(s). TTNN kernel ops required to run a ResNet graph on Quasar.
+- **FD support for dispatch engine** - 7 PR(s). Fast-dispatch command path on the Quasar dispatch engine.
+- **INT8 Support** - 2 PR(s). INT8 LLK support (core delivered in v0.72.0); this release adds Int8→Int32 reduce.
+- **PDL related LLK features** - 0 PR(s). No new PRs this release. The LLKs required for PDL were delivered incrementally across earlier releases; decomposition analysis completed last month confirmed the full set needed to run the model is now in place.
+- **Profiler debug tool support** - 23 PR(s). Profiler bring-up and performance-test coverage on Quasar.
+- **LLK: Quant/dequant kernels** - 1 PR(s). Quant/requant/dequant int32 SFPU kernels on Quasar.
 
 ## 1. Quasar changes
 
-### AIIPSW-4 — Quasar ResNet Kernel Ops  (17)
+### Quasar ResNet Kernel Ops  (17)
 TTNN kernel ops a ResNet graph exercises on Quasar.
 
 **Convolution & pooling**
@@ -65,7 +65,7 @@ TTNN kernel ops a ResNet graph exercises on Quasar.
 - update resnet50/quasar and experimental/quasar ops ([PR 50171](https://github.com/tenstorrent/tt-metal/pull/50171))
 - Update Quasar support for ResNet50 and experimental TTNN operations ([PR 51591](https://github.com/tenstorrent/tt-metal/pull/51591))
 
-### AIIPSW-6 — FD support for dispatch engine  (7)
+### FD support for dispatch engine  (7)
 Fast-dispatch command path on the Quasar dispatch engine.
 
 - Enable usage of dispatch engine in Quasar ([PR 48929](https://github.com/tenstorrent/tt-metal/pull/48929))
@@ -76,16 +76,16 @@ Fast-dispatch command path on the Quasar dispatch engine.
 - Fixing Quasar DE assignment so related FD kernels are always co-located ([PR 51740](https://github.com/tenstorrent/tt-metal/pull/51740))
 - Enable NoC sanitize in FD on QSR ([PR 49613](https://github.com/tenstorrent/tt-metal/pull/49613))
 
-### AIIPSW-8 — INT8 Support  (2)
+### INT8 Support  (2)
 INT8 LLK support (core delivered in v0.72.0); this release adds Int8→Int32 reduce.
 
 - Feature/Testing - Quasar Int8→Int32 reduce support and tests ([PR 49390](https://github.com/tenstorrent/tt-metal/pull/49390))
 - Add missing dest-format configs to stop Quasar tests passing by accident. ([PR 50728](https://github.com/tenstorrent/tt-metal/pull/50728))
 
-### AIIPSW-12 — PDL related LLK features  (0)
-No implementing PRs. Quasar PDL (Panoptic-DeepLab) LLK was deprioritized in favor of INT8 (see AIIPSW-8); its op needs are covered by the shared Quasar ResNet conv/pool ops.
+### PDL related LLK features  (0)
+No new PRs this release. The LLKs required for PDL were delivered incrementally across earlier releases; decomposition analysis completed last month confirmed the full set needed to run the model is now in place.
 
-### AIIPSW-13 — Profiler debug tool support  (23)
+### Profiler debug tool support  (23)
 Profiler bring-up and performance-test coverage on Quasar.
 
 **Profiler bring-up on Quasar**
@@ -117,7 +117,7 @@ Profiler bring-up and performance-test coverage on Quasar.
 - Updating Quasar regression tests to include FD; Enabling more tests to run FD ([PR 51403](https://github.com/tenstorrent/tt-metal/pull/51403))
 - Add back device kernel time columns in perf report on quasar ([PR 51425](https://github.com/tenstorrent/tt-metal/pull/51425))
 
-### AIIPSW-14 — LLK: Quant/dequant kernels  (1)
+### LLK: Quant/dequant kernels  (1)
 Quant/requant/dequant int32 SFPU kernels on Quasar.
 
 - Add quant/requant/dequant int32 SFPU kernels ([PR 48208](https://github.com/tenstorrent/tt-metal/pull/48208))
@@ -126,27 +126,27 @@ Quant/requant/dequant int32 SFPU kernels on Quasar.
 
 > Coverage by feature. Per Filip Vranic, LLK test files are consolidated — one file per op family, extended each time a kernel or mode is added — so a feature maps to test files that grew, not new per-feature files.
 
-### AIIPSW-4 — ResNet Kernel Ops (Borys Bradel)
+### ResNet Kernel Ops
 - Suite: `models/demos/vision/classification/resnet50/quasar/tests/ops/` (45 op tests).
 - Verified passing (per AIIPSW-4): test_untilize_with_unpadding, test_to_memory_config, test_to_layout, test_tilize, test_reshape, test_reshape_tiled, test_slice_write, test_sharded_to_interleaved, test_reallocate, test_padded_slice.
 - Not yet supported: test_conv2d*, test_max_pool2d* / test_avg_pool2d, test_linear.
 - Run config: slow dispatch, TT_METAL_WATCHER=10, TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1, serialized op execution.
 
-### AIIPSW-8 INT8 · AIIPSW-14 Quant/dequant · SFPU LLK (Filip Vranic)
+### INT8 LLK Support · Quant/dequant · SFPU LLK
 - SFPU (unary/binary), consolidated: `test_eltwise_unary_sfpu_quasar.py`, `test_eltwise_binary_sfpu_quasar.py` (+ `eltwise_unary_sfpu_quasar_test.cpp`, `eltwise_binary_sfpu_quasar_test.cpp`) — extended for INT8 add_int/mul_int and quant/requant/dequant (PR 48208).
 - INT8→INT32 reduce: `reduce_quasar_test.cpp` (PR 49390).
 - Shared helpers extended: `helpers/golden_generators.py`, `helpers/include/sfpu_operations_quasar.h`, `helpers/sfpu_domains.py`.
 
-### FPU / tilize — 32-bit dest mode (Filip Vranic)
+### FPU / tilize - 32-bit dest mode
 - Consolidated FPU tests, extended from 16-bit to 32-bit dest: `unpack_tilize_quasar_test.cpp`, `pack_untilize_quasar_test.cpp`, `reduce_quasar_test.cpp`, `transpose_dest_quasar_test.cpp`, `matmul_quasar_test.cpp`, `pack_l1_acc_quasar_test.cpp` (e.g. 32-bit dest TilizeA_B, PR 49579).
 
-### AIIPSW-6 — FD support for dispatch engine (Kevin Stevens)
+### Support for dispatch engine
 - TensixSingleCoreDirectDramReaderDatacopyWriter, 2x3_DISPATCH config, QuasarCRTA* (per milestone table).
 
-### AIIPSW-13 — Profiler
+### Profiler
 - Quasar performance-test suite: eltwise_binary/unary (+broadcast, reuse_dest), pack / pack_l1_acc / pack_untilize, unpack_tilize / unpack_unary_operand, reduce, transpose_dest, datacopy (PRs 50584–50596, 50898).
 
-### Reference — AIIPSW-2 FD support (Jul-15, Kevin Stevens)
+### Reference - FD support
 - DmLoopback, QuasarComputeKernelMultipleThread, MultiDmAddTwoInts.
 
 ## 3. Supporting Quasar work
@@ -270,7 +270,7 @@ Quant/requant/dequant int32 SFPU kernels on Quasar.
 - Add Quasar coverage to LLK perf workflow ([PR 50880](https://github.com/tenstorrent/tt-metal/pull/50880))
 - Change CBReaderWithManualRelease to use page based reading ([PR 51985](https://github.com/tenstorrent/tt-metal/pull/51985))
 
-## 4. All other changes — 961 PRs
+## 4. All other changes - 961 PRs
 _Grouped by code area._
 
 ### LLK (low-level kernels)  (115)

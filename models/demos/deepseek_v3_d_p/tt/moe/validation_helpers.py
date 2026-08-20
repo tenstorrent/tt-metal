@@ -643,11 +643,12 @@ def compare_exact(actual: torch.Tensor, expected: torch.Tensor, _g: int, _c: int
     return False, f"{diff}/{actual.numel()} elements differ"
 
 
-def compare_pcc(threshold: float = 0.99) -> ComposedComparator:
+def compare_pcc(threshold: float = 0.99, label: str = "pcc") -> ComposedComparator:
     """Return a PCC comparator with the given threshold."""
 
     def _compare(actual: torch.Tensor, expected: torch.Tensor, _g: int, _c: int) -> Tuple[bool, Optional[str]]:
         _, pcc = comp_pcc(actual.float(), expected.float())
+        logger.info(f"[{label}] group={_g} chip={_c} PCC={pcc:.4f} (threshold {threshold})")
         return (True, None) if pcc >= threshold else (False, f"PCC={pcc:.4f} < {threshold}")
 
     return _compare

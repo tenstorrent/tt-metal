@@ -107,7 +107,10 @@ private:
     // survives multi-GCB request switching. Layout in
     // tt_metal/impl/buffers/dram_sender_state_block.hpp.
     DeviceAddr sender_state_drisc_l1_base_ = 0;
-    std::vector<std::vector<CoreCoord>> receiver_coords_per_sender_;
+    // Per sender, its receivers' logical coords in row-wise order (see the ctor for why row-wise).
+    // Logical, not physical: the physical worker coord depends on the device being addressed, and
+    // the DRAM-sender flavour spans a mesh whose devices need not agree.
+    std::vector<std::vector<CoreCoord>> receiver_logical_cores_per_sender_;
     // RAII handle for the combined pages_sent + sender-state-block allocation in the
     // per-mesh DriscL1Arena. Held via shared_ptr so copies of the GCB share the same
     // backing range; released when the last GCB copy goes out of scope. Empty for

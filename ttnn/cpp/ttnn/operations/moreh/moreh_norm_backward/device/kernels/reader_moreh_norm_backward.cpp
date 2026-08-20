@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
@@ -33,35 +34,33 @@ inline uint32_t get_output_grad_tile(
 
 void kernel_main() {
     // compile time args
-    constexpr uint32_t input_grad_rank = get_compile_time_arg_val(0);
-    constexpr auto input_args = TensorAccessorArgs<1>();
-    constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto output_grad_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    constexpr auto input_grad_rank = get_arg(args::input_grad_rank);
 
     // runtime args
-    ArgFetcher arg_fetcher;
-    const auto input_addr = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto output_addr = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto output_grad_addr = arg_fetcher.get_next_arg_val<uint32_t>();
+    // input/output/output_grad base addresses are injected by their TensorBindings
+    // (TensorAccessor(tensor::name)); no buffer-address RTA is read here.
+    const auto decimal = get_arg(args::decimal);
 
-    const auto decimal = arg_fetcher.get_next_arg_val<uint32_t>();
+    const auto num_output_tiles = get_arg(args::num_output_tiles);
+    const auto start_id = get_arg(args::start_id);
 
-    const auto num_output_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
-    const auto start_id = arg_fetcher.get_next_arg_val<uint32_t>();
+    // The three per-dimension blocks are read as runtime varargs: their count is
+    // input_grad_rank (a CTA), so the number of reads varies per instantiation.
+    uint32_t vararg_idx = 0;
 
     uint32_t output_grad_dim[MAX_NUM_DIMENSIONS];
     for (uint32_t i = 0; i < input_grad_rank; ++i) {
-        output_grad_dim[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+        output_grad_dim[i] = get_vararg(vararg_idx++);
     }
 
     uint32_t input_grad_dim[MAX_NUM_DIMENSIONS];
     for (uint32_t i = 0; i < input_grad_rank; ++i) {
-        input_grad_dim[i] = arg_fetcher.get_next_arg_val<uint32_t>();
+        input_grad_dim[i] = get_vararg(vararg_idx++);
     }
 
     bool need_bcast_dim[MAX_NUM_DIMENSIONS];
     for (uint32_t i = 0; i < input_grad_rank; ++i) {
-        need_bcast_dim[i] = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
+        need_bcast_dim[i] = (get_vararg(vararg_idx++) == 1);
     }
 
     uint32_t output_grad_stride[MAX_NUM_DIMENSIONS];
@@ -76,31 +75,25 @@ void kernel_main() {
         input_grad_stride[i] = input_grad_stride[i - 1] * input_grad_dim[i - 1];
     }
 
-    uint32_t cb_id{0};
-    const auto cb_id_input = cb_id++;
-    const auto cb_id_output = cb_id++;
-    const auto cb_id_output_grad = cb_id++;
-    const auto cb_id_decimal = cb_id++;
-
     // input
-    const auto input_addrg = TensorAccessor(input_args, input_addr);
+    const auto input_addrg = TensorAccessor(tensor::input);
 
     // output
-    const auto output_addrg = TensorAccessor(output_args, output_addr);
+    const auto output_addrg = TensorAccessor(tensor::output);
 
     // output_grad
-    const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
+    const auto output_grad_addrg = TensorAccessor(tensor::output_grad);
 
-    DataflowBuffer dfb_decimal(cb_id_decimal);
+    DataflowBuffer dfb_decimal(dfb::decimal);
     fill_cb_with_value(dfb_decimal, decimal);
 
     Noc noc;
-    DataflowBuffer dfb_input(cb_id_input);
-    DataflowBuffer dfb_output(cb_id_output);
-    DataflowBuffer dfb_output_grad(cb_id_output_grad);
-    const auto input_tile_bytes = get_tile_size(cb_id_input);
-    const auto output_tile_bytes = get_tile_size(cb_id_output);
-    const auto output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
+    DataflowBuffer dfb_input(dfb::input);
+    DataflowBuffer dfb_output(dfb::output);
+    DataflowBuffer dfb_output_grad(dfb::output_grad);
+    const auto input_tile_bytes = dfb_input.get_tile_size();
+    const auto output_tile_bytes = dfb_output.get_tile_size();
+    const auto output_grad_tile_bytes = dfb_output_grad.get_tile_size();
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
         uint32_t input_tile_id = i;

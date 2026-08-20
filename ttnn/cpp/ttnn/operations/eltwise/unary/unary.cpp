@@ -211,6 +211,7 @@ DEFINE_UNARY_OP_WITH_FLOAT_PARAM(prelu_sfpu, PRELU_SFPU)
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(hardshrink, HARDSHRINK)
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(elu, ELU)
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(softshrink, SOFTSHRINK)
+DEFINE_UNARY_OP_WITH_FLOAT_PARAM(softcap, SOFTCAP)
 
 #undef DEFINE_UNARY_OP_WITH_FLOAT_PARAM
 
@@ -711,7 +712,8 @@ Tensor div_sfpu(
     using namespace operations::unary;
     return operations::unary::detail::unary_impl(
         input_tensor,
-        {EltwiseUnaryWithParam{UnaryOpType::RDIV, param}},
+        // RDIV codegen reads params[1] as the rounding mode; 0 is RoundingMode::None
+        {EltwiseUnaryWithParam{UnaryOpType::RDIV, param, 0.0f}},
         memory_config,
         optional_output_tensor,
         sub_core_grids);

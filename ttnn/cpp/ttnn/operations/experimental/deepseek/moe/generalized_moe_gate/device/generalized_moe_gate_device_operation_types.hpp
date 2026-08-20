@@ -20,7 +20,7 @@ struct operation_attributes_t {
     bool grouped{false};         // false = ungrouped global top-k (the generalized kernel path). true = DeepSeek
                                  // grouped gate (8 groups × 32 → top-2-sum → top-4 groups → top-8): single 256-block,
                                  // forced top-8 + linear renorm (topk/output_softmax ignored). Selects the kernel's
-                                 // grouped `#else` path via the GMG_UNGROUPED_TOP8=0 compile define (see builder).
+                                 // grouped path via the moe_gate_ungrouped_top8=0 named compile-time arg (see builder).
 };
 
 struct tensor_args_t {

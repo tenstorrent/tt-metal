@@ -145,6 +145,7 @@ jobs:
   preflight:
     name: "Calculate Tags"
     needs: [check-harbor]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     outputs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}

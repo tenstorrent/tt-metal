@@ -341,13 +341,13 @@ ALWI void log_with_base_tile_init() {
  * | base_scale      | Bit representation of Inverse of log base e.g. 1/ln(2) to compute log2(x)  | uint32_t | Positive integers                                     | True     |
  */
 // clang-format on
-template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool fast_and_approx = false, bool base_is_two = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_log,
-        (APPROX, fast_and_approx, true /* HAS_BASE_SCALING */, is_fp32_dest_acc_en),
+        (APPROX, fast_and_approx, true /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, 8 /* ITERATIONS */, base_is_two),
         idst,
         VectorMode::RC,
         base_scale));

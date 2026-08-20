@@ -54,3 +54,7 @@ def math_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> 
     if config.quasar_use_dvalid:
         return f"_llk_math_set_dvalid_<p_cleardvalid::FPU, {dest_sync}>();\n"
     return f"_llk_math_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
+
+
+def math_dest_remap_config(required: bool) -> str:
+    return ""

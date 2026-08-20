@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Pytest plugin for the sparse-MLA (DSA) tests — DeepSeek V3.2 & GLM-5.1.
+Pytest plugin for the sparse-MLA (DSA) tests — GLM-5.1.
 
 This is a real plugin module (NOT a conftest), registered via ``pytest_plugins`` in this package's
 conftest (``tests/sparse_mla/conftest.py``). Living under the sparse_mla/ subtree scopes its options
@@ -43,7 +43,7 @@ def pytest_configure(config):
 
 
 def pytest_addoption(parser):
-    """DSA (V3.2 / GLM) MLA/indexer test knobs: weights source + input data."""
+    """DSA (GLM) MLA/indexer test knobs: weights source + input data."""
     g = parser.getgroup("deepseek_dsa")
     g.addoption(
         "--ds-layer",
@@ -59,7 +59,7 @@ def pytest_addoption(parser):
     g.addoption(
         "--ds-repo",
         default=None,
-        help="HF repo for pretrained weights (default: deepseek-ai/DeepSeek-V3.2-Exp).",
+        help="HF repo for pretrained weights.",
     )
     g.addoption(
         "--ds-input",

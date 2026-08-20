@@ -1853,6 +1853,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
     }
 
     this->local_dataflow_buffer_allocation_needed_ = true;
+    this->compile_and_allocate_needed_ = true;
 
     return dfb->id;
 }
@@ -2490,6 +2491,7 @@ void ProgramImpl::invalidate_dataflow_buffer_allocation() {
     // Scratchpads stack on the DFB allocators, so a DFB re-layout invalidates their addresses too.
     // Clear the guard unconditionally (even on the early-return path) so allocate_scratchpads re-runs.
     this->scratchpads_allocated_ = false;
+    this->compile_and_allocate_needed_ = true;
     if (this->local_dataflow_buffer_allocation_needed_) {
         return;
     }
