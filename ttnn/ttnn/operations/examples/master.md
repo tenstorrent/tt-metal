@@ -342,3 +342,14 @@ root tops out at **70** tiles/core on a `1x8` line and **36** on `4x4`, tree red
 reduce-scatter at **224** on both — **3.2×/6.2×** more payload. Past ~200 tiles/core the binding cost is
 the `2*T*P` of the input and output shards, not the reducer. Headroom, not speed, is usually what rules
 the root reducers out first.
+**Push vs pull for the gather is a real fork, measured both ways** (`reduce_scatter_push` vs
+`reduce_scatter_mcast`): **no L1 difference and none required** — the gather buffer's size follows the
+*work* split (each worker holds `G` copies of its own `1/W` slice), not the transfer direction, and both
+top out at 224 tiles/core on `1x8`. Perf has **no universal winner**: push wins below `num_tiles =
+group_size` (1.20× at 1 tile/core — `W < G`, so pull serializes the gather on `W` readers while all `G`
+cores can write) and again once the payload is large relative to the group (1.36–1.44× at 32–48
+tiles/core on `1x8`); pull wins the 4–16 tiles/core mid-band (up to 1.39×) because reading the immutable
+input needs **no handshake at all**, where push must have every contributor bump every worker's semaphore
+(`G*W` atomics per all-reduce). Bigger group pushes the crossover out — on `4x4` push is still behind at
+128 tiles/core, closing monotonically (0.75→0.86→0.94×). Push is far steadier (0.0–0.7% vs 1–8%), and
+contention favors it. **Default to pull**; reach for push for large per-core payload on a small group.
