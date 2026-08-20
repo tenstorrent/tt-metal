@@ -61,19 +61,25 @@ from helpers.tilize_untilize import tilize_block
 from helpers.unpack import unpack_res_tiles
 from helpers.utils import passed_test
 
-# INTERMITTENT DEADLOCK — skipped on all backends. The golden here is fixed (per-face
-# column-0 broadcast, validated on a ttsim run that completed), but the kernel does NOT
-# reliably run to completion: on ttsim it frequently deadlocks (sim reports 0 KHz — no
-# instructions retired — the signature of a sync/handshake deadlock, which ttsim models
-# faithfully). This op reuses SrcB straight out of DEST and is the same family as
-# sdpa_custom_mm_reuse_dest_srcb, which has a CONFIRMED unmatched-semaphore deadlock
-# (consumes UNPACK_MATH_DONE with no SFPU producer). A deadlock wedges the Tensix and
-# cascades timeouts across the whole suite, so it must not run on hardware until fixed.
-# TODO: supply the producer half of the handshake (or confirm it's a ttsim sync artifact
-# on a BH card) and un-skip. Likely a header handshake gap to flag to pmilenkovic.
+# HANGS on ttsim — skipped on all backends. The golden here is fixed (per-face column-0
+# broadcast), but the kernel does NOT run to completion: it reliably TIMES OUT on ttsim
+# (3/3 runs hit the 150s pytest-timeout with no result). NOTE: this is a genuine hang, not
+# the "0.0 KHz" summary line ttsim prints on every run (including passing ones) — the
+# distinguisher is timeout-with-no-summary vs a completing "N passed" line.
+#
+# This op reuses SrcB straight out of DEST (A2D datacopy -> MOVD2B -> SRCB_BCAST_COL). Its
+# header has NO semaphore, so — unlike the sibling sdpa_custom_mm_reuse_dest_srcb, which
+# now PASSES once the PACK thread supplies the UNPACK_MATH_DONE producer — there is no
+# semaphore to balance here; the stall is a SrcB bank-valid / dest-section sequencing hazard
+# that an isolated MATH-only driver could not be made to clear reliably. So the reuse family
+# IS unit-testable in principle (the sibling proves it), this specific op just isn't solved.
+# A hang wedges the Tensix and cascades, so it must not run on hardware until fixed.
+# TODO: work out the SrcB-bank-valid / MOVD2B-from-DEST handshake (srcreg-bank-sync-audit),
+# or accept its coverage via the fused deepseek device tests. Its real intended usage is
+# inside the SDPA pipeline, not standalone.
 pytestmark = pytest.mark.skip(
-    reason="Intermittent sync deadlock (0 KHz on ttsim); would wedge the BH suite. "
-    "Golden is fixed; needs the SrcB-reuse handshake resolved. Un-skip once fixed."
+    reason="Hangs on ttsim (SrcB-reuse-from-DEST bank-valid sequencing); would wedge the "
+    "BH suite. Golden is fixed. Un-skip once the reuse handshake is resolved."
 )
 
 # The op processes exactly 2 faces (configure_mop LLK_ASSERTs num_faces == 2).
