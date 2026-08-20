@@ -755,12 +755,11 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
         // RelayDFBBindingToken. Mirror MakeDataflowBufferBindingHandles and verify the callback
         // genfiles uses sees the PrefetcherPipe slot (not the 0xFF default).
         DataflowBufferBindingHandleMap handles;
-        handles.emplace(
-            "relay_dfb",
-            DataflowBufferBindingHandle{
-                .logical_dfb_id = static_cast<uint16_t>(relay_dfb->device_slot),
-                .is_relay = relay_dfb->config.is_relay,
-                .prefetcher_pipe_id = *prefetcher_pipe_id});
+        handles.push_back(DataflowBufferBindingHandle{
+            .accessor_name = "relay_dfb",
+            .slot = static_cast<uint16_t>(relay_dfb->device_slot),
+            .is_relay = relay_dfb->config.is_relay,
+            .prefetcher_pipe_id = *prefetcher_pipe_id});
         auto kernel = std::make_shared<ComputeKernel>(
             program.impl().get_context_id(),
             KernelSource::from_source("void kernel_main() {}"),
@@ -770,7 +769,16 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
             handles);
         bool saw_binding = false;
         kernel->process_dataflow_buffer_binding_handles(
-            [&](const std::string& name, uint16_t logical_id, bool is_relay, uint8_t prefetcher_pipe_id) {
+            [&](const std::string& name,
+                uint16_t logical_id,
+                bool is_relay,
+                uint8_t prefetcher_pipe_id,
+                uint8_t,
+                uint8_t,
+                uint8_t,
+                uint8_t,
+                uint8_t,
+                bool) {
                 EXPECT_EQ(name, "relay_dfb");
                 EXPECT_EQ(logical_id, expected_slot);
                 EXPECT_TRUE(is_relay);

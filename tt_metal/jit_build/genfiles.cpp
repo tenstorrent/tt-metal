@@ -42,6 +42,7 @@
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel_source.hpp"
+#include "impl/metal2_host_api/llk_operand_facts.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal {
@@ -189,12 +190,27 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         uint16_t id;
         bool is_relay;
         uint8_t prefetcher_pipe_id;
+        LlkOperandFacts facts;
     };
     vector<DfbEntry> dfb_entries;
-    settings.process_dataflow_buffer_binding_handles(
-        [&dfb_entries](const string& name, uint16_t id, bool is_relay, uint8_t prefetcher_pipe_id) {
-            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id});
-        });
+    settings.process_dataflow_buffer_binding_handles([&dfb_entries](
+                                                         const string& name,
+                                                         uint16_t id,
+                                                         bool is_relay,
+                                                         uint8_t prefetcher_pipe_id,
+                                                         uint8_t hw_format,
+                                                         uint8_t face_r_dim,
+                                                         uint8_t face_c_dim,
+                                                         uint8_t num_faces_r_dim,
+                                                         uint8_t num_faces_c_dim,
+                                                         bool present) {
+        dfb_entries.push_back(
+            {name,
+             id,
+             is_relay,
+             prefetcher_pipe_id,
+             LlkOperandFacts{hw_format, face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim, present}});
+    });
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Get the semaphore bindings from the settings callback
@@ -217,12 +233,26 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint32_t cta_offset;
         uint32_t addr_crta_offset;
+        LlkOperandFacts facts;
     };
     vector<TaEntry> ta_entries;
-    settings.process_tensor_binding_handles(
-        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset, uint32_t /*num_rt_words*/) {
-            ta_entries.push_back({name, cta_offset, addr_crta_offset});
-        });
+    settings.process_tensor_binding_handles([&ta_entries](
+                                                const string& name,
+                                                uint32_t cta_offset,
+                                                uint32_t addr_crta_offset,
+                                                uint32_t /*num_rt_words*/,
+                                                uint8_t hw_format,
+                                                uint8_t face_r_dim,
+                                                uint8_t face_c_dim,
+                                                uint8_t num_faces_r_dim,
+                                                uint8_t num_faces_c_dim,
+                                                bool present) {
+        ta_entries.push_back(
+            {name,
+             cta_offset,
+             addr_crta_offset,
+             LlkOperandFacts{hw_format, face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim, present}});
+    });
 
     // Get the scratchpad bindings from the settings callback.
     // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
@@ -231,12 +261,25 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint32_t size_bytes;
         uint32_t addr_crta_word;
+        LlkOperandFacts facts;
     };
     vector<ScratchEntry> scratch_entries;
-    settings.process_scratchpad_binding_handles(
-        [&scratch_entries](const string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
-            scratch_entries.push_back({name, size_bytes, addr_crta_word});
-        });
+    settings.process_scratchpad_binding_handles([&scratch_entries](
+                                                    const string& name,
+                                                    uint32_t size_bytes,
+                                                    uint32_t addr_crta_word,
+                                                    uint8_t hw_format,
+                                                    uint8_t face_r_dim,
+                                                    uint8_t face_c_dim,
+                                                    uint8_t num_faces_r_dim,
+                                                    uint8_t num_faces_c_dim,
+                                                    bool present) {
+        scratch_entries.push_back(
+            {name,
+             size_bytes,
+             addr_crta_word,
+             LlkOperandFacts{hw_format, face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim, present}});
+    });
 
     // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
     struct TensorBindingSequenceEntry {
@@ -269,6 +312,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
+
+    auto emit_llk_members = [](const LlkOperandFacts& f) {
+        return fmt::format(
+            "{{.format = {}u, .face_r_dim = {}u, .face_c_dim = {}u, "
+            ".num_faces_r_dim = {}u, .num_faces_c_dim = {}u}}",
+            f.hw_format,
+            f.face_r_dim,
+            f.face_c_dim,
+            f.num_faces_r_dim,
+            f.num_faces_c_dim);
+    };
 
     // Emit Includes:
     // Support get_token_if_present() helper.
@@ -322,10 +376,18 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // constructor can O(1)-align to the durable checkpoint; CrossNode relays
             // use the single-arg form (NO_PREFETCHER_PIPE default, no align needed).
             content << "constexpr RelayDFBBindingToken " << entry.name << "{" << entry.id;
-            if (entry.prefetcher_pipe_id != 0xFF) {
+            if (entry.facts.present) {
+                content << ", "
+                        << (entry.prefetcher_pipe_id != 0xFF ? std::to_string(static_cast<uint32_t>(entry.prefetcher_pipe_id))
+                                                            : "RelayDFBBindingToken::NO_PREFETCHER_PIPE")
+                        << ", " << emit_llk_members(entry.facts);
+            } else if (entry.prefetcher_pipe_id != 0xFF) {
                 content << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
             }
             content << "};\n";
+        } else if (entry.facts.present) {
+            content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << ", "
+                    << emit_llk_members(entry.facts) << "};\n";
         } else {
             content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
         }
@@ -405,7 +467,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     for (const auto& entry : ta_entries) {
         content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset << "u, "
                 << entry.addr_crta_offset << "u>;\n";
-        content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+        content << "constexpr " << entry.name << "_t " << entry.name << "{" << emit_llk_members(entry.facts)
+                << "};\n";
     }
 
     // Unlike other binding token types, TensorBindingToken has meaningful template parameters associated with it.
@@ -430,8 +493,13 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // The token's members are opaque, so the framework can extend it later without touching
     // kernel source.
     for (const auto& entry : scratch_entries) {
-        content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
-                << entry.size_bytes << "u};\n";
+        if (entry.facts.present) {
+            content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
+                    << entry.size_bytes << "u, " << emit_llk_members(entry.facts) << "};\n";
+        } else {
+            content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
+                    << entry.size_bytes << "u};\n";
+        }
     }
 
     emit_programmatic_binding_token_getter(content, scratch_entries, "ScratchpadBindingToken");
@@ -821,17 +889,7 @@ void emit_formats_array(
         fmt::join(arr, ","));
 }
 
-// Quasar HW DataFormat codes (mirror of the relevant entries in
-// tensix_types.h. A few host DataFormat
-// enumerators use a value that differs from the HW encoding to keep host enum
-// values unique / avoid collisions, so device compilation needs the real HW
-// code. Keep these in sync with tensix_types.h.
 using hw_format_t = std::underlying_type_t<DataFormat>;
-constexpr hw_format_t kHwInt16 = 9;        // host Int16 is 13 (UInt16 owns 9 on host)
-constexpr hw_format_t kHwMxFp4_2x_B = 24;  // host MxFp4_2x_B is 29 (UInt32 owns 24 on host)
-constexpr hw_format_t kHwMxInt8 = 2;       // host MxInt8 is 12 (Bfp8 owns 2 on host)
-constexpr hw_format_t kHwMxInt4 = 3;       // host MxInt4 is 16 (Bfp4 owns 3 on host)
-constexpr hw_format_t kHwMxInt2 = 11;      // host MxInt2 is 17 (Bfp2 owns 11 on host)
 
 void emit_formats_array(
     std::ostream& out,
@@ -839,16 +897,7 @@ void emit_formats_array(
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    auto as_int = [](DataFormat f) -> hw_format_t {
-        switch (f) {
-            case DataFormat::Int16: return kHwInt16;
-            case DataFormat::MxFp4_2x_B: return kHwMxFp4_2x_B;
-            case DataFormat::MxInt8: return kHwMxInt8;
-            case DataFormat::MxInt4: return kHwMxInt4;
-            case DataFormat::MxInt2: return kHwMxInt2;
-            default: return static_cast<hw_format_t>(f);
-        }
-    };
+    auto as_int = [](DataFormat f) -> hw_format_t { return host_data_format_to_hw(f); };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
 
@@ -1048,37 +1097,10 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_num_faces_rc_dim
     std::vector<uint32_t> r_dims(n);
     std::vector<uint32_t> c_dims(n);
     for (size_t i = 0; i < n; ++i) {
-        TT_FATAL(face_r_dim_arr[i] > 0, "face_r_dim must be > 0 at index {}", i);
-        TT_FATAL(num_faces_arr[i] > 0, "num_faces must be > 0 at index {}", i);
-        TT_FATAL(
-            tile_c_dim_arr[i] % constants::FACE_WIDTH == 0,
-            "tile_c_dim ({}) must be a multiple of FACE_WIDTH ({})",
-            tile_c_dim_arr[i],
-            constants::FACE_WIDTH);
-        const uint32_t tile_c_faces = tile_c_dim_arr[i] / constants::FACE_WIDTH;
-        TT_FATAL(tile_c_faces > 0, "tile_c_dim ({}) must include at least one face", tile_c_dim_arr[i]);
-        c_dims[i] = std::min(tile_c_faces, num_faces_arr[i]);
-        TT_FATAL(
-            num_faces_arr[i] % c_dims[i] == 0,
-            "num_faces ({}) must be divisible by num_faces_c_dim ({})",
-            num_faces_arr[i],
-            c_dims[i]);
-        r_dims[i] = num_faces_arr[i] / c_dims[i];
-        // Guard against bogus (face_r_dim, num_faces) combos: the logical face grid must fit
-        // within the tile rows. e.g. (face_r_dim=9, num_faces=8) on a 32x32 tile would produce
-        // r_dims=4 -> 36 rows, overflowing the tile and corrupting downstream face addressing.
-        TT_FATAL(
-            r_dims[i] * face_r_dim_arr[i] <= tile_r_dim_arr[i],
-            "face grid (num_faces_r_dim={} * face_r_dim={} = {} rows) exceeds tile_r_dim ({}) at "
-            "index {} (num_faces={}, num_faces_c_dim={}, tile_c_dim={})",
-            r_dims[i],
-            face_r_dim_arr[i],
-            r_dims[i] * face_r_dim_arr[i],
-            tile_r_dim_arr[i],
-            i,
-            num_faces_arr[i],
-            c_dims[i],
-            tile_c_dim_arr[i]);
+        const FaceGridDims grid =
+            compute_face_grid_dims(tile_r_dim_arr[i], tile_c_dim_arr[i], face_r_dim_arr[i], num_faces_arr[i]);
+        r_dims[i] = grid.num_faces_r_dim;
+        c_dims[i] = grid.num_faces_c_dim;
     }
     return {r_dims, c_dims};
 }

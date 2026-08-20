@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
@@ -21,6 +22,7 @@
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
+#include "impl/metal2_host_api/llk_operand_facts.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_source.hpp"
 #include <enchantum/enchantum.hpp>
@@ -90,16 +92,18 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
 
-// Metal 2.0: DFB accessor names -> device-slot binding (optionally typed as relay).
+// Metal 2.0: per-kernel resolved DFB binding (accessor name, device slot, relay flags, optional LLK facts).
 // prefetcher_pipe_id is 0xFF (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for
 // PrefetcherPipe relays, where it names the persistent slot baked into the token so
 // the TRISC constructor can O(1)-align the borrowed iface to the durable checkpoint.
 struct DataflowBufferBindingHandle {
-    uint16_t logical_dfb_id = 0;
+    std::string accessor_name;
+    uint16_t slot = 0;
     bool is_relay = false;
     uint8_t prefetcher_pipe_id = 0xFF;
+    LlkOperandFacts llk_facts;
 };
-using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
+using DataflowBufferBindingHandleMap = std::vector<DataflowBufferBindingHandle>;
 
 // Metal 2.0: per-binding semaphore handle -> id and the host-baked scope; kernel code sees only a uint32_t id.
 struct SemaphoreBindingHandle {
@@ -132,6 +136,7 @@ struct TensorBindingHandle {
     // distinguish them with a boolean.
     // (We'll need to extend this to something more flexible if additional possibilities are added.)
     bool runtime_field_is_page_size = false;
+    LlkOperandFacts llk_facts;
 };
 
 // Metal 2.0: per-kernel resolved scratchpad binding.
@@ -151,6 +156,7 @@ struct ScratchpadBindingHandle {
     uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
     uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
+    LlkOperandFacts llk_facts;
 };
 
 // Metal 2.0: ordered TensorBinding tokens (KernelAdvancedOptions::tensor_binding_sequences).
@@ -239,10 +245,17 @@ public:
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
-    void process_dataflow_buffer_binding_handles(
-        std::function<
-            void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_relay, uint8_t prefetcher_pipe_id)>)
-        const override;
+    void process_dataflow_buffer_binding_handles(std::function<void(
+                                                     const std::string& accessor_name,
+                                                     uint16_t logical_dfb_id,
+                                                     bool is_relay,
+                                                     uint8_t prefetcher_pipe_id,
+                                                     uint8_t hw_format,
+                                                     uint8_t face_r_dim,
+                                                     uint8_t face_c_dim,
+                                                     uint8_t num_faces_r_dim,
+                                                     uint8_t num_faces_c_dim,
+                                                     bool present)>) const override;
     void process_semaphore_binding_handles(
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
@@ -251,11 +264,24 @@ public:
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,
                                             uint32_t addr_crta_offset,
-                                            uint32_t num_runtime_field_crta_words)>) const override;
+                                            uint32_t num_runtime_field_crta_words,
+                                            uint8_t hw_format,
+                                            uint8_t face_r_dim,
+                                            uint8_t face_c_dim,
+                                            uint8_t num_faces_r_dim,
+                                            uint8_t num_faces_c_dim,
+                                            bool present)>) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
-    void process_scratchpad_binding_handles(
-        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>)
-        const override;
+    void process_scratchpad_binding_handles(std::function<void(
+                                                const std::string& accessor_name,
+                                                uint32_t size_bytes,
+                                                uint32_t addr_crta_word,
+                                                uint8_t hw_format,
+                                                uint8_t face_r_dim,
+                                                uint8_t face_c_dim,
+                                                uint8_t num_faces_r_dim,
+                                                uint8_t num_faces_c_dim,
+                                                bool present)>) const override;
     // Scratchpad binding handles are set post-construction.
     // Non-const accessor lets allocate_scratchpads fill each handle's allocated_address after L1 allocation.
     const std::vector<ScratchpadBindingHandle>& scratchpad_binding_handles() const {

@@ -144,10 +144,18 @@ public:
     //  - Tensor bindings
     // prefetcher_pipe_id is 0xFF unless the binding is a PrefetcherPipe relay, in which case
     // it identifies the persistent slot the relay-token constructor aligns from on TRISC.
-    virtual void process_dataflow_buffer_binding_handles(
-        std::function<
-            void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_relay, uint8_t prefetcher_pipe_id)>)
-        const {}
+    // hw_format / face-grid fields are the optional LLK facts baked onto the binding token.
+    virtual void process_dataflow_buffer_binding_handles(std::function<void(
+                                                             const std::string& accessor_name,
+                                                             uint16_t logical_dfb_id,
+                                                             bool is_relay,
+                                                             uint8_t prefetcher_pipe_id,
+                                                             uint8_t hw_format,
+                                                             uint8_t face_r_dim,
+                                                             uint8_t face_c_dim,
+                                                             uint8_t num_faces_r_dim,
+                                                             uint8_t num_faces_c_dim,
+                                                             bool present)>) const {}
     virtual void process_semaphore_binding_handles(
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
@@ -168,15 +176,29 @@ public:
                                                     const std::string& accessor_name,
                                                     uint32_t cta_offset,
                                                     uint32_t addr_crta_offset,
-                                                    uint32_t num_runtime_field_crta_words)>) const {}
+                                                    uint32_t num_runtime_field_crta_words,
+                                                    uint8_t hw_format,
+                                                    uint8_t face_r_dim,
+                                                    uint8_t face_c_dim,
+                                                    uint8_t num_faces_r_dim,
+                                                    uint8_t num_faces_c_dim,
+                                                    bool present)>) const {}
 
     // Scratchpad binding callback emits the codegen-relevant fields:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `scratch::` namespace
     //  - size_bytes: the scratchpad's per-node size, emitted as the binding token's compile-time size
     //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
     //    scratchpad's (framework-allocated) L1 base address
-    virtual void process_scratchpad_binding_handles(
-        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
+    virtual void process_scratchpad_binding_handles(std::function<void(
+                                                        const std::string& accessor_name,
+                                                        uint32_t size_bytes,
+                                                        uint32_t addr_crta_word,
+                                                        uint8_t hw_format,
+                                                        uint8_t face_r_dim,
+                                                        uint8_t face_c_dim,
+                                                        uint8_t num_faces_r_dim,
+                                                        uint8_t num_faces_c_dim,
+                                                        bool present)>) const {}
 
     // Tensor binding sequence callback: sequence_name + ordered member TensorBinding accessor names.
     // Emitted as constexpr std::tuple tokens in the `tensor::` namespace (user order; no sort).
