@@ -1527,8 +1527,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "buffer_unique_id",
             [](const Tensor& self) -> std::optional<size_t> {
-                if (!is_device_tensor(self) || !self.is_allocated() ||
-                    !self.device_storage().is_root_allocated()) {
+                if (!is_device_tensor(self) || !self.is_allocated()) {
                     return std::nullopt;
                 }
                 auto* backing = self.device_storage().get_root_mesh_buffer().get_backing_buffer();
