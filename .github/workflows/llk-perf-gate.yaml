@@ -17,11 +17,10 @@ name: "LLK perf gate"
 # BASELINE UPDATES: After merge to main, the sanity workflow re-runs perf tests
 # and publishes new baseline to Snowflake. Next PR's gate compares against it.
 #
-# Triggered on LLK PRs after compile and measure complete
+# TRIGGER: Add 'perf-gate' label to PR to run the gate
 on:
-  workflow_run:
-    workflows: ["LLK perf"]
-    types: [completed]
+  pull_request:
+    types: [labeled]
 
 permissions:
   contents: read
@@ -31,8 +30,6 @@ permissions:
 jobs:
   llk-perf-gate:
     name: "LLK perf regression gate"
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event.label.name == 'perf-gate'
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     secrets: inherit
-    with:
-      baseline_run_id: ${{ github.event.workflow_run.id }}
