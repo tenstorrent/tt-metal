@@ -43,7 +43,8 @@ trainer = GRPOTrainer(
         # Logging surface (all optional):
         log_completions=True,
         num_completions_to_print=2,
-        report_to="none",                # or "wandb" (call wandb.init(...) yourself first)
+        report_to="none",                # or "wandb" — the built-in GRPOMonitor calls wandb.init() for you
+        run_name=None,                   # optional wandb run name; project/entity/mode come from WANDB_* env vars
     ),
     reward_func=my_reward,
     optimizer_dict={"type": "MorehAdamW", "lr": 5.0e-6},
@@ -200,7 +201,8 @@ from ttml.trainers import GRPOConfig
 | `logging_steps` | `int` | — | `logging_steps` | Fire `on_step_end` callbacks every *N* optimizer steps (0 or negative to disable). The trainer's only built-in logging is the auto-added `GRPOMonitor` (see [Built-in GRPOMonitor](#built-in-grpomonitor)); everything else is callback-driven. |
 | `log_completions` | `bool` | `False` | `log_completions` | When `True`, the built-in [`GRPOMonitor`](#built-in-grpomonitor) prints a sample of `(prompt, completion, reward)` triples every logging step (and, if `report_to == "wandb"`, logs them as a `wandb.Table`). |
 | `num_completions_to_print` | `int` | `0` | `num_completions_to_print` | Upper bound on how many completions per step the monitor prints when `log_completions=True`. `0` disables the sample dump even when `log_completions` is set (a warning is emitted). |
-| `report_to` | `str` | `"none"` | `report_to` | Where the built-in monitor forwards scalar metrics and the optional completions table. Only `"none"` and `"wandb"` are accepted in this framework (TRL takes a list; here it must be a single string). When `"wandb"` is set the caller must call `wandb.init(...)` themselves before constructing the trainer. |
+| `report_to` | `str` | `"none"` | `report_to` | Where the built-in monitor forwards scalar metrics and the optional completions table. Only `"none"` and `"wandb"` are accepted in this framework (TRL takes a list; here it must be a single string). When `"wandb"` is set, the built-in `GRPOMonitor` calls `wandb.init(...)` itself in `on_train_begin` (matching the TRL / `transformers` `WandbCallback` convention); `project` / `entity` / `mode` come from the `WANDB_PROJECT` / `WANDB_ENTITY` / `WANDB_MODE` env vars, and `name` from `run_name` below. If the caller already opened a wandb run before constructing the trainer, the monitor logs into it and leaves its lifecycle alone. |
+| `run_name` | `str \| None` | `None` | `run_name` | Optional wandb run name, forwarded to `wandb.init` when the monitor opens the run. `None` lets wandb auto-generate one. |
 | `disable_default_monitor` | `bool` | `False` | *(no direct equivalent)* | Opt out of the auto-appended `GRPOMonitor`. Use this if you need a fully custom logging pipeline; you can still pass your own callbacks via the trainer constructor. |
 
 ---
@@ -308,16 +310,23 @@ callback in place and stashes the elapsed times, then merges them into the
 NEXT step's metrics dict. As a result step 1's row has `nan` for every
 `<ClassName>_time_s` column.
 
-When `report_to == "wandb"` and `wandb.init(...)` was called before the
-trainer was constructed, every numeric scalar metric is forwarded to wandb
-under the `grpo/` namespace (`grpo/reward_mean`, `grpo/step_time_s`,
-`grpo/EvalCallback_time_s`, ...). If `log_completions=True` and
-`num_completions_to_print > 0`, the first *K* `(prompt, completion, reward)`
-triples for the step are printed via `logging.info` and, when wandb is on,
-also logged as a `wandb.Table` under `grpo/completions`.
+When `report_to == "wandb"`, the monitor calls `wandb.init(...)` itself in
+`on_train_begin` (matching the TRL / `transformers` `WandbCallback`
+convention). `project` / `entity` / `mode` are read from the `WANDB_PROJECT` /
+`WANDB_ENTITY` / `WANDB_MODE` env vars, `name` comes from `GRPOConfig.run_name`,
+and the `config` payload is the full `GRPOConfig` (plus `model_source` and the
+optimizer dict). If the caller already opened a run before constructing the
+trainer, the monitor logs into that existing run and does **not** call
+`wandb.finish()` at the end — the caller owns the lifecycle.
 
-If the `wandb` package is missing or `wandb.init(...)` was never called, the
-monitor logs a one-time warning and quietly falls back to console + CSV only.
+Every numeric scalar metric is forwarded to wandb under the `grpo/` namespace
+(`grpo/reward_mean`, `grpo/step_time_s`, `grpo/EvalCallback_time_s`, ...). If
+`log_completions=True` and `num_completions_to_print > 0`, the first *K*
+`(prompt, completion, reward)` triples for the step are printed via
+`logging.info` and also logged as a `wandb.Table` under `grpo/completions`.
+
+If the `wandb` package is not installed, the monitor logs a one-time warning
+and quietly falls back to console + CSV only.
 
 ## Callbacks
 
