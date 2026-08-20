@@ -3,7 +3,10 @@
 
 Encodes the silicon protocol as executable policy:
   1. changed-binary classification BEFORE any device job — a byte-identical
-     OFF/ON pair is a recorded refusal, never a device run;
+     sem OFF/ON pair is a recorded refusal, never a device run, EXCEPT on
+     fresh-body rows (fresh_cpp sem arm), where OFF==ON is the expected end
+     state of a good body fix: those measure one physical sem leg that fills
+     both sem cells, mirroring the hand rule 6 (eqz-class rule, laneDO);
   2. paired CRAQ correctness (generic-path libttsim) before silicon;
   3. every device job serialized under BOTH exclusive flocks
      (/tmp/tt-device.lock outer, /tmp/tt-llk-sfpu-silicon.lock inner);
@@ -31,7 +34,10 @@ Post-review hardening (PULL_ANALYSIS-20260817 §4):
     same node/flags (stale-compiler cells re-measure); classify/CRAQ verdicts
     are keyed to the cc1plus (and simulator) sha and re-run on mismatch;
   * weekly per-knob silicon legs run the identical classify -> paired CRAQ ->
-    correctness-then-perf pipeline as the main legs (D3);
+    correctness-then-perf pipeline as the main legs (D3); each knob's leg
+    shape follows its KNOB_MODES mode — solo (OFF vs OFF+flag) or drop-one
+    (reviewed-ON minus the flag vs full reviewed-ON, the only shape that can
+    see a dependent/service pass fire — laneDO);
   * report() is class-aware: baseline rows carry an expected class
     (win/parity/loss/refusal); a prior win row that becomes a byte-identical
     refusal is RED, refusal->changed is a flagged notice (D4;
@@ -379,7 +385,19 @@ ON_FLAGS = (
     # (mop_cfg template-programming dataflow derivation — Lane BC).
 )
 REMOVED_FLAGS = ("-mtt-tensix-emit-loadmacro", "-mtt-tensix-analyze-loadmacro")
-# Weekly per-knob attribution: OFF set plus exactly one positive knob.
+# Weekly per-knob attribution.  Each knob's A/B legs come from its MODE
+# (KNOB_MODES below; default "solo"):
+#   solo:     OFF set vs OFF set plus exactly this knob's flag(s) — the
+#             historical leg shape, right for self-contained passes.
+#   drop-one: reviewed-ON minus this knob's flag(s) vs the FULL reviewed-ON
+#             set.  Required for DEPENDENT/SERVICE passes, whose solo leg is
+#             structurally blind (laneDO, W3 harness gap 1): a pass that only
+#             runs inside another pass's pipeline can never fire on the
+#             all-off base, so its solo knob leg measured an A/A forever and
+#             the weekly recorded an eternal no-fire for a flag that fires in
+#             every reviewed-ON build.
+# In BOTH modes the leg named "knob" is the one CONTAINING the flag, so
+# delta_pct = knob-vs-off keeps one sign convention (the flag's own effect).
 KNOBS = {
     "latency-schedule": "-mtt-tensix-optimize-latency-schedule",
     "dst-iteration-fusion": "-mtt-tensix-optimize-dst-iteration-fusion",
@@ -408,6 +426,14 @@ KNOBS = {
     # block above for the full citation chain).
     "crosscall-hoist": "-mtt-tensix-optimize-crosscall-hoist",
     "crossloop-hoist": "-mtt-tensix-optimize-crossloop-hoist",
+    # init-hoist (lane CA, pin 13/14): first knob row added at the pin-14
+    # lift (laneDO — the flag previously had NO knob row at all, so the
+    # weekly never attributed it).  drop-one mode is MANDATORY, not a
+    # choice: laneCJ's census-timing fact is that solo init-hoist ALWAYS
+    # refuses — the stage-2 init-contract proof needs the macro-planner
+    # formation pipeline that the OFF base disables, so a solo leg is a
+    # permanent A/A.
+    "init-hoist": "-mtt-tensix-optimize-init-hoist",
     # ---- pin-14 NEW default-off flags: knob legs ONLY.  Deliberately
     # NOT in the reviewed ON set — the weekly measures each solo on its
     # target rows (attribution on every changed row; silicon legs on the
@@ -445,6 +471,66 @@ KNOBS = {
     # is the existing replay-hoist knob leg on the typecast row (added
     # to the knob-silicon row list in sweep_2x2.conf).
 }
+# Per-knob leg MODE (see the KNOBS comment).  Every key must be a KNOBS
+# key; absent = "solo".  The three seeded drop-one knobs are the known
+# dependent/service passes whose solo leg is structurally an A/A:
+#   replay-exec-record — its ONLY call site is under replay-hoist, which
+#     the solo OFF base disables;
+#   planner-residency  — the -mtt-tensix-macro-planner-residency flag is
+#     not even in its pass's gate solo (needs the planner pipeline);
+#   init-hoist         — laneCJ census-timing fact: solo ALWAYS refuses
+#     (stage-2 proof needs the planner formation the OFF base disables).
+KNOB_MODES = {
+    "replay-exec-record": "drop-one",
+    "planner-residency": "drop-one",
+    "init-hoist": "drop-one",
+}
+
+
+def knob_mode(knob):
+    """Leg mode for one knob: 'solo' (default) or 'drop-one'."""
+    return KNOB_MODES.get(knob, "solo")
+
+
+def drop_one_flags(flag):
+    """Reviewed-ON minus one knob's flag token(s), token order preserved.
+
+    Every token must be present in ON_FLAGS: a drop-one knob whose flag is
+    outside the reviewed ON set has nothing to drop — its legs would be a
+    silent A/A of the full ON set, the exact blind-leg class the mode
+    exists to kill.  Loud config error instead."""
+    tokens = ON_FLAGS.split()
+    for tok in flag.split():
+        if tok not in tokens:
+            sys.exit(
+                f"drop-one knob flag {tok} is NOT in the reviewed ON set — "
+                "a drop-one leg can only remove a flag the union carries "
+                "(fix KNOB_MODES or promote the flag)"
+            )
+        tokens.remove(tok)
+    return " ".join(tokens)
+
+
+def knob_legs(knob):
+    """The (legname, flags) pair spec for one knob's A/B (KNOBS comment):
+    solo = OFF vs OFF+flag; drop-one = reviewed-ON-minus-flag vs full
+    reviewed-ON.  The 'knob' leg is the one CONTAINING the flag in both
+    modes, so knob-vs-off deltas keep one sign convention."""
+    flag = KNOBS[knob]
+    if knob_mode(knob) == "drop-one":
+        return (("off", drop_one_flags(flag)), ("knob", ON_FLAGS))
+    return (("off", OFF_FLAGS), ("knob", f"{OFF_FLAGS} {flag}"))
+
+
+# Schema validation at import (fail loud at load, not mid-sweep): every
+# KNOB_MODES key is a KNOBS key, and every drop-one knob's flag really is
+# droppable from the reviewed ON set.
+for _k in KNOB_MODES:
+    if _k not in KNOBS:
+        sys.exit(f"KNOB_MODES names an unknown knob: {_k}")
+    if KNOB_MODES[_k] not in ("solo", "drop-one"):
+        sys.exit(f"KNOB_MODES[{_k}] must be 'solo' or 'drop-one'")
+    knob_legs(_k)  # drop-one flags must be in the ON set (exits loudly)
 HARNESS_TOOLCHAIN = TESTS / "sfpi"  # untracked symlink the harness hardcodes
 DEVICE_LOCK = "/tmp/tt-device.lock"
 SILICON_LOCK = "/tmp/tt-llk-sfpu-silicon.lock"
@@ -499,6 +585,60 @@ def check_review_record(record_path, cc1plus_sha256):
             + " (see corpus/REVIEW_RECORD_TEMPLATE.md)"
         )
     return True, "ok"
+
+
+def check_evidence_root_pin(ev, pin_sha):
+    """Sweep-level half of the evidence-root collision guard (laneDO; the
+    wrapper half is sweep_wrapper_lib.sh evidence_root_guard, incident
+    2026-08-20: 15 min of pin-14 classify written into the pin-12
+    weekly-20260820 root).
+
+    Returns (ok, detail).  Refuses when the root RECORDS a different
+    toolchain pin — from EV/PIN_STAMP (written by the wrapper guard or by a
+    previous preflight) or, absent a stamp, from an existing
+    EV/preflight.json's cc1plus_sha256.  A direct sweep_2x2.py invocation
+    must refuse a foreign-pin root exactly like the wrappers do; preflight
+    calls this BEFORE any compiler work (against the claimed --cc1plus-sha
+    pin) and again after cc1plus resolution (against the resolved sha),
+    then stamps the root.  Unknown provenance (non-empty root, no record)
+    stays the WRAPPER's fail-closed job — lane flows legitimately pre-seed
+    fresh roots; the stamp written at first preflight closes that window
+    for every later run."""
+    ev = pathlib.Path(ev)
+    recorded, src = "", ""
+    stamp = ev / "PIN_STAMP"
+    pre = ev / "preflight.json"
+    if stamp.is_file():
+        try:
+            recorded = stamp.read_text().splitlines()[0].strip()
+        except (OSError, IndexError):
+            recorded = ""
+        src = "PIN_STAMP"
+    elif pre.is_file():
+        try:
+            recorded = json.loads(pre.read_text()).get("cc1plus_sha256", "")
+        except (ValueError, OSError):
+            recorded = ""
+        src = "preflight.json"
+    if recorded and recorded != pin_sha:
+        return False, (
+            f"EVIDENCE-ROOT PIN COLLISION: {ev} records toolchain pin "
+            f"{recorded} ({src}) but this run's cc1plus pin is {pin_sha} — "
+            "writing into another pin's evidence root is the 2026-08-20 "
+            "cross-contamination class.  Relaunch under a fresh root, or "
+            "quarantine/rename the old one (append -CONTAMINATED-<why>); "
+            "ONLY if you have hand-verified the root really is this pin's: "
+            f"echo {pin_sha} > {stamp}"
+        )
+    return True, "ok"
+
+
+def stamp_evidence_root_pin(ev, pin_sha):
+    """Record the pin in EV/PIN_STAMP (idempotent; never overwrites — an
+    existing stamp was already checked by check_evidence_root_pin)."""
+    stamp = pathlib.Path(ev) / "PIN_STAMP"
+    if not stamp.is_file():
+        stamp.write_text(pin_sha + "\n")
 
 
 # Fire-and-forget replay launch = TT_OP_REPLAY with execute_while_loading=0
@@ -643,6 +783,28 @@ def row_scope(row):
     if row["kind"] == "pinpair":
         return row["marker"]
     return f"{row['marker']}_{row.get('metric', 'MATH_ISOLATE')}_PER_TILE"
+
+
+def fresh_body_row(row):
+    """True when the row's SEM arm is a fresh C++ body (the fresh_cpp test
+    family / fresh_cpp_impl selector in its sem node ids).
+
+    eqz-class rule (laneDO, W3 harness gap 2 — the eqz incident): a
+    fresh-body row whose sem OFF/ON legs classify byte-identical is NOT the
+    planner-refusal class the sem-perf refusal shortcut was built for.  The
+    row's improvement lives in the SOURCE (a fresh body that already
+    compiles to its best form under OFF), so OFF==ON is the EXPECTED end
+    state of a good body fix — recording a refusal there hides the row's
+    real vs-hand result forever.  Such rows measure ONE physical sem leg
+    and fill both sem cells, mirroring the hand OFF==ON byte-identity rule
+    verbatim; verdict vs hand computes normally.  Non-fresh rows keep the
+    refusal shortcut: their sem arm IS the compiler's engagement vehicle,
+    so byte-identity there means exactly 'planner never fired'."""
+    if row["kind"] == "pinpair":
+        return False
+    return any(
+        "fresh_cpp" in (row["nodes"].get(sel) or "") for sel in ("sem-perf", "sem-corr")
+    )
 
 
 # Perf-cell naming per row kind.  pinpair rows keep the checked-in baseline's
@@ -933,6 +1095,18 @@ class Sweep:
 
     def preflight(self):
         self.ev.mkdir(parents=True, exist_ok=True)
+        # EVIDENCE-ROOT PIN GUARD, claimed-pin half (laneDO): refuse a
+        # foreign-pin root BEFORE any compiler work when the run claims a
+        # pin (--cc1plus-sha, which the wrappers always pass).  The
+        # resolved-sha half below re-checks with the binary's actual sha
+        # and stamps the root — a direct invocation without --cc1plus-sha
+        # is still guarded, just after resolution.
+        if self.a.cc1plus_sha:
+            ok, detail = check_evidence_root_pin(
+                self.ev, self._pin_value(self.a.cc1plus_sha, "cc1plus (--cc1plus-sha)")
+            )
+            if not ok:
+                sys.exit(detail)
         info = {
             "compiler": str(self.compiler),
             "off_flags": OFF_FLAGS,
@@ -994,6 +1168,15 @@ class Sweep:
                 "cc1plus-only changes; rebuild/point the pinned toolchain or "
                 "update the pin through review)"
             )
+        # EVIDENCE-ROOT PIN GUARD, resolved-sha half: the root must not
+        # record a different pin than the binary that will actually compile
+        # (guards direct runs without --cc1plus-sha too); then stamp, so a
+        # later run under a re-pinned toolchain refuses this root.
+        ok, detail = check_evidence_root_pin(self.ev, info["cc1plus_sha256"])
+        if not ok:
+            sys.exit(detail)
+        stamp_evidence_root_pin(self.ev, info["cc1plus_sha256"])
+        info["evidence_root_pin_stamp"] = str(self.ev / "PIN_STAMP")
         ver = subprocess.run(
             [str(self.compiler), "--version"], capture_output=True, text=True
         )
@@ -2257,8 +2440,10 @@ exit $RC
             if c.get("status") == "COMPILE_FAIL":
                 continue
             identical = c.get("all") == "IDENTICAL"
-            if identical and sel == "sem-perf":
+            if identical and sel == "sem-perf" and not fresh_body_row(row):
                 continue  # recorded refusal: zero device jobs
+            # fresh-body sem OFF==ON (eqz-class rule, see fresh_body_row):
+            # one physical leg, mirroring the hand byte-identity fold.
             legs = ["off"] if identical else ["off", "on"]
             for r in range(1, PERF_RUNS + 1):
                 for leg in legs:
@@ -3046,7 +3231,7 @@ exit $RC
                 result["notes"].append(f"{sel}: COMPILE_FAIL — perf blocked")
                 continue
             identical = cls.get("all") == "IDENTICAL"
-            if identical and sel == "sem-perf":
+            if identical and sel == "sem-perf" and not fresh_body_row(row):
                 result["notes"].append(
                     "sem-perf OFF/ON byte-identical: recorded refusal, no device run"
                 )
@@ -3055,7 +3240,18 @@ exit $RC
                 )
                 continue
             legs = ["off"] if identical else ["off", "on"]
-            if identical:
+            if identical and sel == "sem-perf":
+                # eqz-class rule (fresh_body_row): a fresh-body sem pair
+                # that is byte-identical still MEASURES — the improvement
+                # lives in the source, so OFF==ON is the expected end state
+                # of a good body fix, not a planner refusal.  One physical
+                # leg fills both sem cells (the hand OFF==ON rule verbatim);
+                # verdict vs hand computes normally below.
+                result["notes"].append(
+                    "sem-perf OFF==ON byte-identical on a fresh-body row — "
+                    "one physical leg fills both sem cells (eqz-class rule)"
+                )
+            elif identical:
                 result["notes"].append(
                     f"{sel}: OFF==ON byte-identical — one physical leg fills both cells"
                 )
@@ -3100,11 +3296,14 @@ exit $RC
         ):
             return {"op": row["op"], "status": "SKIP_NOT_CHANGED"}
         firing = []
-        for knob, flag in KNOBS.items():
+        for knob in KNOBS:
+            # Leg shape per knob MODE (knob_legs): solo = OFF vs OFF+flag;
+            # drop-one = reviewed-ON-minus-flag vs full reviewed-ON (the
+            # only shape that can see a dependent/service pass fire).
             verdict = self.classify(
                 row,
                 sel,
-                legs=(("off", OFF_FLAGS), ("knob", f"{OFF_FLAGS} {flag}")),
+                legs=knob_legs(knob),
                 tag=f"knobs/{knob}",
             )
             if verdict.get("all") == "CHANGED":
@@ -3140,9 +3339,14 @@ exit $RC
         corr_sel = "sem-corr" if row["nodes"]["sem-corr"] else None
         out = {}
         for knob in attribution.get("firing_knobs", []):
-            knob_flags = f"{OFF_FLAGS} {KNOBS[knob]}"
-            legs_spec = (("off", OFF_FLAGS), ("knob", knob_flags))
-            entry = {"selector": sel, "flags": knob_flags}
+            legs_spec = knob_legs(knob)
+            knob_flags = dict(legs_spec)["knob"]
+            entry = {
+                "selector": sel,
+                "flags": knob_flags,
+                "off_flags": dict(legs_spec)["off"],
+                "mode": knob_mode(knob),
+            }
             out[knob] = entry
             # 1. classification (perf selector; already produced by
             #    attribute_knobs — classify() resumes hash-matched).
@@ -3195,7 +3399,7 @@ exit $RC
             #    pair => one run fills both legs, like the main pipeline).
             tag = f"knobs-silicon/{knob}"
             corr_legs = (
-                [("off", OFF_FLAGS)]
+                [legs_spec[0]]
                 if corr_cls.get("all") == "IDENTICAL"
                 else list(legs_spec)
             )
@@ -3805,17 +4009,15 @@ exit $RC
                 sel = "sem-perf" if row["nodes"]["sem-perf"] else "sem-corr"
                 if not row["nodes"][sel]:
                     continue
-                cached = self._classify_cached(
-                    self.ev / row["op"] / "classify" / sel
-                )
+                cached = self._classify_cached(self.ev / row["op"] / "classify" / sel)
                 if cached is None or cached.get("all") != "CHANGED":
                     continue
-                for knob, flag in KNOBS.items():
+                for knob in KNOBS:
                     knob_specs.append(
                         (
                             row,
                             sel,
-                            (("off", OFF_FLAGS), ("knob", f"{OFF_FLAGS} {flag}")),
+                            knob_legs(knob),  # per-knob mode: solo/drop-one
                             f"knobs/{knob}",
                         )
                     )
