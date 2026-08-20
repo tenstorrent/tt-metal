@@ -113,8 +113,8 @@ struct BfdAllocatorState
     bool initialized;                                                    // lazy init: globals are bss zero-init only, no dynamic init on device
 };
 
-// One instance per TRISC image. thread_local so the host-threaded emulation gives each Neo's
-// TRISC its own allocator, matching the per-TRISC physical partitioning of the BFD table. A
+// One instance per hardware TRISC thread (one per Neo and TRISC role). thread_local gives each Neo's
+// TRISC its own allocator, matching the per-TRISC partitioning of each Neo's BFD table. A
 // single shared instance races the id allocator two ways when num_threads > 1 (see tt-llk#1678):
 // an unfenced read-modify-write on next hands the same id to two threads, and the unfenced lazy
 // init lets one role hand out ids from another role's partition. Mirrors trisc::dest_register_offset:
