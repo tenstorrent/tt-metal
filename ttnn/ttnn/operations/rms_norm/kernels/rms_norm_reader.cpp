@@ -46,10 +46,26 @@
 //    multiply never reads.  GAMMA_INGEST_BLOCK divides every ingest count the
 //    kernel uses, so tilize<GAMMA_INGEST_BLOCK> never over-produces gamma tiles.
 //    (Placing tile row 0 directly with two per-face reads was tried first and is
-//    NOT legal: the second face read starts 32 B into the stick and Blackhole's
-//    DRAM NoC alignment is 64 B.)
+//    NOT legal HERE: the second face read starts 32 B into a stick, so its L1 and
+//    DRAM 64 B RESIDUES differ (32 vs 0) and Blackhole's sanitizer rule fires.
+//    Contrast the TILE-gamma span in #3, whose runs all start 64 B-aligned on both
+//    ends - the rule is a residue match, not a size alignment.)
 //
-// 3. The W-SPLIT COMBINE's N->1 GATHER leg (W_SPLIT=1, `kernel_main`'s combine
+// 3. There is NO helper for "read only the broadcast row of a tile page".  The
+//    TILE-layout gamma read below is a raw `noc_async_read` of a computed byte
+//    SPAN instead of `noc_async_read_tile` / any kernel_lib page reader, because
+//    every reader in the library is page-granular: it takes a page id and moves
+//    `page_size` bytes.  A `BroadcastDim::Row` consumer needs 1/32 of that (bf16:
+//    544 of 2048 B), and expressing it requires knowing the FACE layout of a
+//    tile, which no dataflow helper exposes.  This is a CAPABILITY gap, not an
+//    ergonomic bypass - a helper such as
+//        read_bcast_row_tiles(acc, first_page, n, cb, TileFormat)
+//    that owns the face-layout arithmetic (and the block-format exponent header)
+//    would let this site, and every other Row/Col-broadcast operand read in the
+//    library, drop the hand geometry.  Until it exists the arithmetic lives here,
+//    fenced by static_asserts so an unhandled tile format is a BUILD error.
+//
+// 4. The W-SPLIT COMBINE's N->1 GATHER leg (W_SPLIT=1, `kernel_main`'s combine
 //    block) is raw `noc_async_write` + `noc_semaphore_inc`/`_wait` and NOT
 //    `mcast_pipe`.  CAPABILITY, not ergonomics:
 //      * `SenderPipe::send(src_l1, dst_l1, size)` (mcast_pipe.hpp:189-197) is a
@@ -142,6 +158,64 @@ constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(29);
 // The DRAM tile-row stride.  Under a W split a core owns Wt_core of WT_TOTAL
 // columns, so the stride is the FULL row width, not the per-core slice.
 constexpr uint32_t ROW_STRIDE = W_SPLIT ? WT_TOTAL : Wt_core;
+
+// =====================================================================
+// TILE-layout gamma: ROW-0 SPAN geometry (the only part of a gamma tile read)
+// =====================================================================
+// gamma feeds a `BroadcastDim::Row` multiply (rms_norm_compute.cpp
+// `scale_chunk`), which reads tile ROW 0 of each gamma tile and nothing else -
+// rows 1..31 of a gamma tile are pure tile padding that the datapath never
+// touches.  The reader therefore fetches ONE transaction per gamma tile covering
+// [0, end-of-row-0) of the page instead of the whole page: same transaction
+// COUNT as a whole-page read (this shape is transaction-bound, not byte-bound -
+// the two-run "exactly row 0" variant issues 2x the transactions and measured
+// SLOWER), 3.8x fewer bytes on bf16.  Rows 1..31 of the L1 page are left
+// UNWRITTEN; a NaN-poison probe (fill the CB with NaN bit patterns, then run)
+// confirms the Row broadcast never reads them.
+//
+// RUN GEOMETRY, per supported gamma dtype (page bytes -> span bytes):
+//   bfloat16    2048 -> 544     fp32     4096 -> 1088     bfloat8_b 1088 -> 336
+// A non-block tile is four 16x16 faces stored contiguously: face 0 is rows 0-15
+// / cols 0-15 at page offset 0, face 1 is rows 0-15 / cols 16-31 at offset
+// 256*elem.  Tile row 0 is thus two runs of 16*elem bytes at offsets 0 and
+// 256*elem, and the span is [0, 256*elem + 16*elem).
+// A bfloat8_b tile is 1088 B: a 64 B exponent header (one byte per face-row, 4
+// faces x 16 rows) then four 256 B mantissa faces.  Row 0 of face f needs
+// exponent byte 16*f and mantissa run [64 + 256*f, +16), so run 1 ends at
+// 64 + 256 + 16 = 336.  The whole 64 B header is inside the span, which is why
+// the per-face exponents row 0 needs are always present.
+//
+// NoC LEGALITY (Blackhole).  The sanitizer rule for a DRAM read is a RESIDUE
+// MATCH, not "the transfer size is a multiple of the alignment":
+//     (worker_addr & alignment_mask) == (noc_addr & alignment_mask)
+// with alignment_mask = NOC_DRAM_READ_ALIGNMENT_BYTES - 1 = 63
+// (tt_metal/hw/inc/internal/debug/sanitize.h:602, mask set at :530).  Every
+// DRAM gamma page starts 64 B-aligned (aligned_page_size = align(tile_bytes,64)
+// = 2048 / 4096 / 1088, all multiples of 64) and the cb_gamma_tiles page stride
+// is the same tile size, so src and dst residues are both 0 on every supported
+// gamma dtype.  Only the LENGTH is sub-alignment, which the rule does not
+// constrain.  That is exactly why this span is legal while the ROW_MAJOR-gamma
+// two-face read (substitution #2 above) is NOT: there the second face read
+// starts 32 B into a stick, so the residues are 32 vs 0 and the rule fires.
+constexpr bool GAMMA_IS_BLOCK = (GAMMA_ELEM_SIZE == 0);
+constexpr uint32_t G_FACE_ROW = GAMMA_IS_BLOCK ? 16u : 16u * GAMMA_ELEM_SIZE;
+constexpr uint32_t G_EXP_BYTES = GAMMA_IS_BLOCK ? 64u : 0u;
+constexpr uint32_t G_FACE = GAMMA_IS_BLOCK ? 256u : 256u * GAMMA_ELEM_SIZE;
+// Span end = start of face 1 + row 0 of face 1.
+constexpr uint32_t G_SPAN_LEN = G_EXP_BYTES + G_FACE + G_FACE_ROW;
+static_assert((G_EXP_BYTES + G_FACE) % 64 == 0, "gamma row-0 span: face-1 base must be 64 B-aligned");
+static_assert(!HAS_GAMMA || G_SPAN_LEN <= GAMMA_TILE_BYTES, "gamma row-0 span cannot exceed the page");
+// The block-format geometry above is bfloat8_b-SPECIFIC (64 B header, 256 B
+// faces).  bfloat4_b packs a 32 B header and 128 B faces, so these constants
+// would silently fetch the WRONG bytes.  Fail the BUILD, not the numerics, if a
+// new block gamma dtype ever reaches here.
+static_assert(
+    !HAS_GAMMA || !GAMMA_IS_BLOCK || GAMMA_TILE_BYTES == 1088,
+    "gamma row-0 span: block-format geometry is bfloat8_b-only (1088 B tile)");
+// PRECONDITION, not assertable here (TILE_DIM is declared below): the run
+// geometry assumes the standard 32x32 tile of four 16x16 faces, which is what
+// this op's host plan hard-codes everywhere (TILE_DIM = 32).  A non-32x32 gamma
+// tile would trip the two static_asserts above via GAMMA_TILE_BYTES.
 
 // Lever B5/B6 off-arm: the tile page split into TWO transfers.  The split point
 // must stay NoC-alignment-legal on every dtype - Blackhole's DRAM alignment is
@@ -269,7 +343,13 @@ void kernel_main() {
                 {
                     MaybeDeviceZoneScope("rd_gamma_issue");
                     for (uint32_t i = 0; i < n; ++i) {
-                        noc_async_read_tile(W_OFFSET + w0 + i, g_acc, addr);
+                        // ROW-0 SPAN, not the whole page: the consumer is a
+                        // BroadcastDim::Row multiply, so only tile row 0 of this
+                        // page is ever read.  One transaction, G_SPAN_LEN bytes;
+                        // see the "TILE-layout gamma: ROW-0 SPAN geometry" block
+                        // above for the per-dtype run geometry and the Blackhole
+                        // residue-match legality argument.
+                        noc_async_read(g_acc.get_noc_addr(W_OFFSET + w0 + i), addr, G_SPAN_LEN);
                         addr += GAMMA_TILE_BYTES;
                     }
                 }
