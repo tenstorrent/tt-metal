@@ -86,14 +86,24 @@ inline __attribute__((noinline)) void _apply_default_zero_flag_state_(
     _apply_src_zero_flag_(value);
 }
 
+// A kernel tight on program-config space (e.g. ring-joint SDPA, which reconfigs ~30x) can
+// #define LLK_ZEROFLAG_OUTLINE before its includes to force this configurator out-of-line -- one copy
+// called from each reconfig/init site instead of an inlined fast path at every one, trading a call for
+// code size. Perf-critical kernels (groupnorm welford) leave it inlined (the default). (tt-metal#49924)
+#ifdef LLK_ZEROFLAG_OUTLINE
+#define LLK_ZEROFLAG_DEFAULT_ATTR __attribute__((noinline))
+#else
+#define LLK_ZEROFLAG_DEFAULT_ATTR
+#endif
+
 // FP compute / format reconfig: the flag follows the operand formats. The fast path (inlined at every
-// init call site) computes the operand-driven value and returns if the flag already holds it -- the
-// steady state in hot loops. Only a genuine change pays the out-of-line _apply_ (which also refreshes
-// the cached formats reconfig_srca/srcb reuse).
+// init call site, unless LLK_ZEROFLAG_OUTLINE) computes the operand-driven value and returns if the flag
+// already holds it -- the steady state in hot loops. Only a genuine change pays the out-of-line _apply_
+// (which also refreshes the cached formats reconfig_srca/srcb reuse).
 // TODO(tt-metal#53652): per mcraigheadTT / ttsim#713 the flag must be CLEARED for all FPU compute; once
 // that lands both bodies collapse to _configure_src_zero_flag_(false) and requires_disabled_src_zero_flag()
 // / the format cache are dropped (they are only reachable from here).
-inline void _configure_default_zero_flag_state_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
+inline LLK_ZEROFLAG_DEFAULT_ATTR void _configure_default_zero_flag_state_(const std::uint32_t srca_dst_format, const std::uint32_t srcb_dst_format)
 {
     const std::uint32_t value = requires_disabled_src_zero_flag(srca_dst_format, srcb_dst_format) ? 1u : 0u;
     if (src_zero_flag_hw == value)
