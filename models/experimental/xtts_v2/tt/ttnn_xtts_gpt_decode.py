@@ -29,6 +29,7 @@ from models.experimental.xtts_v2.tt.ttnn_xtts_gpt import TTNNGPTConfig, TTNNGPTC
 
 
 DECODE_IN0_BLOCK_W = 4  # tiles of the K reduction per step; see _decode_matmul_cfg
+DECODE_MAX_SUBBLOCK = 4  # out_subblock_h * w ceiling: fp32_dest_acc_en halves the register budget
 
 
 def _decode_matmul_cfg(device, K, N, fused_activation=None):
@@ -52,7 +53,7 @@ def _decode_matmul_cfg(device, K, N, fused_activation=None):
         compute_with_storage_grid_size=(g.x, rows),
         in0_block_w=DECODE_IN0_BLOCK_W,
         out_subblock_h=1,
-        out_subblock_w=next(w for w in range(min(per_core_N, 8), 0, -1) if per_core_N % w == 0),
+        out_subblock_w=next(w for w in range(min(per_core_N, DECODE_MAX_SUBBLOCK), 0, -1) if per_core_N % w == 0),
         per_core_M=1,
         per_core_N=per_core_N,
         fuse_batch=True,
