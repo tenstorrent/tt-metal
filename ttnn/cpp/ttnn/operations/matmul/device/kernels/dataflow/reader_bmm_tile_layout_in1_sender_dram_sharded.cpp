@@ -49,8 +49,6 @@ void kernel_main() {
     constexpr uint32_t in3_page_size = get_compile_time_arg_val(9);
     constexpr uint32_t in3_num_pages = get_compile_time_arg_val(10);
     constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
-    constexpr uint32_t bias_single_tile_size_bytes = get_tile_size(dfb_id_in3);
-    constexpr DataFormat bias_data_format = get_dataformat(dfb_id_in3);
 #endif
 
     constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
@@ -72,7 +70,6 @@ void kernel_main() {
     //  READER
     uint32_t l1_write_addr_in1;
     uint32_t l1_read_addr_in1 = 0;
-    constexpr DataFormat in1_data_format = get_dataformat(dfb_id_in1);
 
     AllocatorBank<AllocatorBankType::DRAM> dram_bank;
     noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(

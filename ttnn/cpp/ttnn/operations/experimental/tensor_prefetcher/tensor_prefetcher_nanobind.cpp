@@ -20,8 +20,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         mod,
         R"doc(
             Return True if the Tensor prefetcher (DRISC) is supported on `mesh_device`,
-            i.e. programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0
-            and either no harvested DRAM channels or a single device). When this returns False,
+            i.e. programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0).
+            When this returns False,
             start_tensor_prefetcher would raise, so callers can use this to skip instead.
 
             Args:

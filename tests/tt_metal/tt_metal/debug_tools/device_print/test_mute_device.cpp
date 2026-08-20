@@ -51,33 +51,12 @@ protected:
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 void RunTest(DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    // Set up program and command queue
-    constexpr CoreCoord core = {0, 0};  // Print on first core only
-    distributed::MeshWorkload workload;
-    auto device_range =
-        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
-    Program program = Program();
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
-
-    // Create a CB for testing TSLICE, dimensions are 32x32 bfloat16s
-    constexpr uint32_t src0_cb_index = CBIndex::c_0;
-    constexpr uint32_t buffer_size = 32 * 32 * sizeof(bfloat16);
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(buffer_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, buffer_size);
-    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
-
     // This kernel is enough to fill up the print buffer, even though the device is not being
     // printed from, we still need to drain the print buffer to prevent hanging the core.
-    CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/device_print/print_all_argument_sizes.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-
-    // Run the program
-    fixture->RunProgram(mesh_device, workload);
+    //
+    // (There used to be a circular buffer here "for testing TSLICE", but print_all_argument_sizes.cpp
+    // contains nothing but DEVICE_PRINT calls and never touched it, so it was dead weight.)
+    fixture->RunProgram(mesh_device, "tests/tt_metal/tt_metal/test_kernels/device_print/print_all_argument_sizes.cpp");
 
     // Check that the log file is empty.
     std::fstream log_file;
