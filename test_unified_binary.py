@@ -39,6 +39,14 @@ CB_IN0, CB_IN1, CB_OUT = 0, 1, 16
 
 # name -> (kernel define, reference, commutative, max relative error)
 #
+# mul's limit is looser than the others and that is a hardware choice, not slack.
+# add, sub and mul all dispatch to the FPU now (see expr::kind_of), and for add and sub
+# that is free -- as accurate or better than the SFPU forms. The FPU multiply is not:
+# 0.01023 against the SFPU's 0.00380, for 3.4x the speed. The second phase in main()
+# re-runs these three with the FPU disabled and holds THAT path to 0.01, so loosening
+# here cannot hide a regression in the accurate path -- and the gap itself is asserted
+# rather than described.
+#
 # The chain gets its own, looser tolerance, and the reason is arithmetic rather
 # than slack: (a + b) - a cancels, which amplifies bfloat16's relative error by
 # |a + b| / |b|. Over the input range below that factor reaches (2 + 0.5) / 0.5 = 5,
@@ -47,7 +55,7 @@ CB_IN0, CB_IN1, CB_OUT = 0, 1, 16
 OPS = {
     "add": (None, lambda a, b: a + b, True, 0.01),
     "sub": ("BN_SUB", lambda a, b: a - b, False, 0.01),
-    "mul": ("BN_MUL", lambda a, b: a * b, True, 0.01),
+    "mul": ("BN_MUL", lambda a, b: a * b, True, 0.015),  # FPU; the SFPU form is held to 0.01 below
     "div": ("BN_DIV", lambda a, b: a / b, False, 0.01),
     # An elementwise max, which the online softmax of a flash attention folds its running
     # row maxima with. Commutative, so no swapped-reference check applies.
@@ -57,7 +65,7 @@ OPS = {
 }
 
 
-def run(device, op, num_blocks=1, tiles_per_block=1, seed=0):
+def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, force_sfpu=False):
     num_tiles = num_blocks * tiles_per_block
     shape = [1, num_tiles, 32, 32]
 
@@ -94,7 +102,7 @@ def run(device, op, num_blocks=1, tiles_per_block=1, seed=0):
         cbs=cbs,
         compile_time_args=ct_args,
         runtime_args=rt_args,
-        defines=[(define, "1")] if define else None,
+        defines=([(define, "1")] if define else []) + ([("TT_UNIFIED_NO_FPU_ELTWISE", "1")] if force_sfpu else []),
     )
 
     logger.info(f"running unified binary: op={op} num_blocks={num_blocks} tiles_per_block={tiles_per_block}")
@@ -135,6 +143,14 @@ def main(argv=None):
     try:
         for op in ops:
             results[op] = run(device, op, args.num_blocks, args.tiles_per_block, args.seed)
+        # The three ops that exist on both units, run again on the SFPU. This is what
+        # keeps mul's looser limit above honest: the accurate path is still gated at
+        # 0.01, so a regression there cannot hide behind the FPU's allowance.
+        sfpu = {
+            op: run(device, op, args.num_blocks, args.tiles_per_block, args.seed, force_sfpu=True)
+            for op in ops
+            if op in ("add", "sub", "mul")
+        }
     finally:
         ttnn.close_device(device)
 
@@ -154,6 +170,22 @@ def main(argv=None):
         logger.info(f"{line}   {'ok' if ok else 'FAIL'}")
         if not ok:
             failed.append(op)
+
+    for op, (got, want, _) in sfpu.items():
+        rel = max_rel_err(got, want)
+        ok = rel <= 0.01
+        logger.info(f"{op:6s} on the SFPU: max rel err = {rel:.5f} (<= 0.01)   {'ok' if ok else 'FAIL'}")
+        if not ok:
+            failed.append(f"{op}-sfpu")
+    # The FPU multiply really is the less accurate one. Asserting the ORDER, not just
+    # the bounds, is what would catch the two implementations being silently swapped.
+    if "mul" in sfpu and "mul" in results:
+        fpu_err = max_rel_err(results["mul"][0], results["mul"][1])
+        sfpu_err = max_rel_err(sfpu["mul"][0], sfpu["mul"][1])
+        logger.info(f"mul    FPU {fpu_err:.5f} vs SFPU {sfpu_err:.5f}  (FPU is expected to be the looser)")
+        if not fpu_err > sfpu_err:
+            logger.error("the FPU multiply is no longer the less accurate one -- has dispatch changed?")
+            failed.append("mul-order")
 
     if failed:
         logger.error(f"FAIL: {failed}")
