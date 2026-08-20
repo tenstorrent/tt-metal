@@ -106,6 +106,101 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.y);
 }
 
+// Host-side replica of the compute kernel's per-(q_chunk, ring_iter) sparse pre-scan
+// (compute_streaming.hpp sdpa_ring_v2). Produces one uint32 per q_chunk: bit `ring_iter` is set iff
+// that q_chunk processes at least one (non-OOB, attended) K chunk in that ring iter — exactly the
+// "has work" condition compute derives from per_q_valid_kv, and which the compute + writer use to
+// find each q_chunk's first/last work iter. Computed per ring `direction` because exp sequences
+// ring_id from (ring_index, ring_size, direction) via RingIdSequencer (exp_ring_utils.hpp); the two
+// halves of the core grid run opposite directions and therefore need different bitmaps.
+//
+// Mirrors ring_joint_sdpa_program_factory.cpp::compute_q_work_bitmap, adapted for exp's direction-
+// based sequencer and its equal q/kv shard size (q_local_padded_Nt == local_padded_Nt). Returns an
+// all-zero bitmap when sparse is disabled (the dense compute path never reads it).
+std::vector<uint32_t> compute_exp_q_work_bitmap(
+    uint32_t ring_index,
+    uint32_t ring_size,
+    uint32_t direction,
+    uint32_t num_q_chunks,
+    uint32_t num_local_q_chunks,
+    uint32_t Sq_chunk_t,
+    uint32_t Sk_chunk_t,
+    uint32_t local_padded_Nt,
+    uint32_t num_local_k_chunks,
+    uint32_t num_joint_k_chunks,
+    uint32_t logical_nt,
+    uint32_t L,
+    bool sparse_frames_enabled,
+    uint32_t tiles_per_frame,
+    uint32_t sparse_num_frames_padded,
+    const std::vector<uint32_t>& sparse_frame_mask) {
+    std::vector<uint32_t> bitmap(num_q_chunks, 0);
+    if (!sparse_frames_enabled) {
+        return bitmap;
+    }
+    // Tile-space start of this device's Q shard; each chunk's frame is derived from it by division
+    // (matches the kernel), so a shard may hold a fractional number of frames.
+    const uint32_t q_shard_start_tile = ring_index * local_padded_Nt;
+    const int32_t step = (direction == 0) ? 1 : -1;  // 0 = backward (+1), 1 = forward (-1)
+
+    auto mask_allows = [&](uint32_t q_frame, uint32_t k_frame) -> bool {
+        const uint32_t bit_idx = q_frame * sparse_num_frames_padded + k_frame;
+        const uint32_t word_idx = bit_idx >> 5;
+        return word_idx < sparse_frame_mask.size() && ((sparse_frame_mask[word_idx] >> (bit_idx & 31u)) & 1u) != 0u;
+    };
+
+    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        // RingIdSequencer::get_next_ring_id: ring_size*ring_size keeps the value non-negative before
+        // the modulo for any valid (ring_index, step, ring_iter).
+        const uint32_t ring_id = static_cast<uint32_t>(
+            (static_cast<int32_t>(ring_index) + static_cast<int32_t>(ring_iter) * step +
+             static_cast<int32_t>(ring_size * ring_size)) %
+            static_cast<int32_t>(ring_size));
+        const bool do_joint_kv = (ring_id == ring_size - 1) && (num_joint_k_chunks > 0);
+        // Mirror the compute loop's ring_iter_does_work guard: an iter that processes no local KV and
+        // contributes no joint KV leaves every q_chunk with per_q_valid_kv == 0 (bit stays 0).
+        const bool ring_iter_processes_KV = (ring_id * local_padded_Nt) <= logical_nt;
+        if (!ring_iter_processes_KV && !(do_joint_kv && L != 0)) {
+            continue;
+        }
+        const uint32_t num_kv_chunks = do_joint_kv ? (num_local_k_chunks + num_joint_k_chunks) : num_local_k_chunks;
+
+        for (uint32_t q_chunk = 0; q_chunk < num_q_chunks; ++q_chunk) {
+            const bool is_joint_q = (q_chunk >= num_local_q_chunks);
+            if (is_joint_q) {
+                // Joint Q chunks process only joint K (always attended), present only on do_joint_kv.
+                if (do_joint_kv) {
+                    bitmap[q_chunk] |= (1u << ring_iter);
+                }
+                continue;
+            }
+            // Joint K contributes to every spatial q_chunk on the do_joint_kv iter and is always
+            // attended, so the iter always has work regardless of the frame mask.
+            if (do_joint_kv) {
+                bitmap[q_chunk] |= (1u << ring_iter);
+                continue;
+            }
+            const uint32_t q_frame = (q_shard_start_tile + q_chunk * Sq_chunk_t) / tiles_per_frame;
+            for (uint32_t k = 0; k < num_local_k_chunks && k < num_kv_chunks; ++k) {
+                const uint32_t k_local_start = k * Sk_chunk_t;
+                // OOB skip: non-chunked / non-kv-pad kv_chunk_starts_before_logical_end. A k_chunk
+                // whose global tiles fall beyond the logical sequence is never pushed nor processed,
+                // so it must not count toward "has work" (else the writer waits for a save compute
+                // never produces — deadlock).
+                if (k_local_start >= local_padded_Nt || (ring_id * local_padded_Nt + k_local_start) >= logical_nt) {
+                    continue;
+                }
+                const uint32_t k_frame = (ring_id * local_padded_Nt + k_local_start) / tiles_per_frame;
+                if (mask_allows(q_frame, k_frame)) {
+                    bitmap[q_chunk] |= (1u << ring_iter);
+                    break;
+                }
+            }
+        }
+    }
+    return bitmap;
+}
+
 // Per-coord ProgramDescriptor build. Kept inside the anonymous namespace so
 // create_workload_descriptor() below can loop coords and reuse this body verbatim.
 // Op-specific name suffix avoids Unity-build collisions with sibling ring sdpa factories.
@@ -562,6 +657,53 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t sparse_tiles_per_frame =
         sparse_frames_enabled ? (args.tokens_per_frame.value() / tt::constants::TILE_HEIGHT) : 0;
     const uint32_t sparse_num_frames_padded = sparse_frames_enabled ? args.num_frames_padded.value() : 0;
+
+    // The compute kernel reads exactly this many per-q_chunk bitmap words (its own `num_q_chunks`
+    // compile constant, floor division in tiles — NOT the host `num_q_chunks`, which is a div_up over
+    // tokens and can be one larger for a partial trailing chunk). Size and index the bitmap by the
+    // kernel's count so the RT stream and the bitmap[q_chunk] lookups stay aligned in every shape.
+    const uint32_t compute_num_local_q_chunks = local_padded_Nt / Sq_chunk_t;
+    const uint32_t compute_num_q_chunks = compute_num_local_q_chunks + Lt / Sq_chunk_t;
+
+    // Per-q_chunk work bitmap, one per ring direction (the top/bottom halves of the core grid run
+    // opposite ring orders — see `direction` in the per-core loop). Computed once here; the matching
+    // one is appended to each compute core's RT args below. All-zero when sparse is disabled.
+    const std::vector<uint32_t> q_work_bitmap_by_direction[2] = {
+        compute_exp_q_work_bitmap(
+            device_index,
+            args.ring_size,
+            /*direction=*/0,
+            compute_num_q_chunks,
+            compute_num_local_q_chunks,
+            Sq_chunk_t,
+            Sk_chunk_t,
+            local_padded_Nt,
+            num_local_k_chunks,
+            num_joint_k_chunks,
+            logical_nt,
+            L,
+            sparse_frames_enabled,
+            sparse_tiles_per_frame,
+            sparse_num_frames_padded,
+            args.sparse_frame_mask),
+        compute_exp_q_work_bitmap(
+            device_index,
+            args.ring_size,
+            /*direction=*/1,
+            compute_num_q_chunks,
+            compute_num_local_q_chunks,
+            Sq_chunk_t,
+            Sk_chunk_t,
+            local_padded_Nt,
+            num_local_k_chunks,
+            num_joint_k_chunks,
+            logical_nt,
+            L,
+            sparse_frames_enabled,
+            sparse_tiles_per_frame,
+            sparse_num_frames_padded,
+            args.sparse_frame_mask),
+    };
 
     std::vector<uint32_t> compute_compile_time_args = {
         NH,
@@ -1705,6 +1847,18 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         compute_args.push_back(static_cast<uint32_t>(args.ring_size));
         compute_args.push_back(device_index);
         compute_args.push_back(direction);
+        // Sparse frame-block attention: append the 32 packed mask words + this core's direction-matched
+        // per-q_chunk work bitmap. Gated on the compile flag so the dense RT stream is byte-unchanged
+        // (the compute kernel reads these only under `if constexpr (sparse_frames_enabled)`).
+        if (sparse_frames_enabled) {
+            for (uint32_t w = 0; w < 32; ++w) {
+                compute_args.push_back(w < args.sparse_frame_mask.size() ? args.sparse_frame_mask[w] : 0u);
+            }
+            const std::vector<uint32_t>& q_work_bitmap = q_work_bitmap_by_direction[direction];
+            for (uint32_t q = 0; q < compute_num_q_chunks; ++q) {
+                compute_args.push_back(q_work_bitmap[q]);
+            }
+        }
         compute_kernel.emplace_runtime_args(core, compute_args);
     }
 

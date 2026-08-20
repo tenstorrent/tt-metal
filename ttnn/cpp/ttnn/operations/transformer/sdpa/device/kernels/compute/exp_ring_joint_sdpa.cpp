@@ -263,7 +263,10 @@ void kernel_main() {
                 0,           // joint_local_padded_Nt
                 sparse_frames_enabled,
                 tiles_per_frame,
-                num_frames_padded_compile>(
+                num_frames_padded_compile,
+                // Fused all-gather: the exp reader pushes every K/V chunk (it is the gather data
+                // mover), so compute must drain — not skip — the frames this Q shard doesn't attend.
+                /*reader_pushes_all_sparse=*/true>(
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,

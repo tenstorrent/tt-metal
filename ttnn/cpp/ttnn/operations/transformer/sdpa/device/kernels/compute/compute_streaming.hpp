@@ -2272,6 +2272,12 @@ template <
     bool sparse_frames_enabled = false,
     uint32_t tiles_per_frame = 0,
     uint32_t num_frames_padded_compile = 0,
+    // Fused-all-gather variant (exp ring joint): the reader is the all-gather data mover and pushes
+    // EVERY K/V chunk (other devices need them), so it does no per-frame push gating. Compute must
+    // then DRAIN every pushed-but-unattended chunk rather than assume the reader skipped it — i.e.
+    // treat the shard aggregate as always "reader pushed". Leave false for ring_joint, whose reader
+    // gates pushes on the shard aggregate and expects compute to skip (not drain) those chunks.
+    bool reader_pushes_all_sparse = false,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -2494,8 +2500,10 @@ void sdpa_ring_v2(
                         break;
                     }
                 }
-                if (aggregate_allowed || shard_attends_nothing) {
-                    // Reader pushed but this Q chunk doesn't attend so drain it.
+                if (aggregate_allowed || shard_attends_nothing || reader_pushes_all_sparse) {
+                    // Reader pushed but this Q chunk doesn't attend so drain it. Under
+                    // reader_pushes_all_sparse the reader pushes every chunk unconditionally, so we
+                    // always land here (no shard-aggregate gating on the reader side).
                     CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
                     sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
                     if constexpr (!kt_inplace_v) {
@@ -2621,7 +2629,7 @@ void sdpa_ring_v2(
                                 break;
                             }
                         }
-                        if (!aggregate_allowed && !shard_attends_nothing) {
+                        if (!aggregate_allowed && !shard_attends_nothing && !reader_pushes_all_sparse) {
                             continue;  // reader also skipped — nothing to drain
                         }
                     }
