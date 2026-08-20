@@ -2,29 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/compute/common.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/tile_move_copy.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
 void kernel_main() {
     constexpr auto num_tiles = get_arg(args::num_tiles);
-    DataflowBuffer src_dfb(dfb::src);
-    DataflowBuffer dst_dfb(dfb::dst);
-    compute_kernel_hw_startup(dfb::src, dfb::dst);
-    copy_init(dfb::src);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        src_dfb.wait_front(1);
-        tile_regs_acquire();
-        copy_tile(dfb::src, 0, 0);
-        tile_regs_commit();
-        src_dfb.pop_front(1);
 
-        dst_dfb.reserve_back(1);
-        tile_regs_wait();
-        pack_tile(0, dfb::dst, 0);
-        tile_regs_release();
-        dst_dfb.push_back(1);
-    }
+    compute_kernel_hw_startup(dfb::src, dfb::dst);
+
+    compute_kernel_lib::copy<
+        compute_kernel_lib::input(
+            dfb::src,
+            compute_kernel_lib::WaitPolicy::PerTile,
+            compute_kernel_lib::PopPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled),
+        compute_kernel_lib::output(
+            dfb::dst,
+            compute_kernel_lib::ReservePolicy::PerTile,
+            compute_kernel_lib::PushPolicy::PerTile,
+            compute_kernel_lib::DataFormatReconfig::Disabled)>(compute_kernel_lib::IterationShape::tiles(num_tiles));
 }

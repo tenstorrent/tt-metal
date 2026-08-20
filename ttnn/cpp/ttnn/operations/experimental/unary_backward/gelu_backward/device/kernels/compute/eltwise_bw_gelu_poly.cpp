@@ -7,53 +7,49 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/common.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/binary_bitwise_sfpu.h"
-#include "api/compute/binary_shift.h"
-#include "api/compute/compute_kernel_api.h"
-#include "api/compute/eltwise_unary/gelu.h"
-#include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // GeluDerivative
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 
+namespace ckl = compute_kernel_lib;
+
+// GELU backward using the exact (non-tanh) piecewise derivative: Sollya-fitted core and corrected negative tail.
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
 
     // grad_out / input are consumed from the reader; grad_in is produced for the writer.
-    DataflowBuffer dfb_grad_out(dfb::grad_out);
-    DataflowBuffer dfb_input(dfb::input);
-    DataflowBuffer dfb_grad_in(dfb::grad_in);
-
     compute_kernel_hw_startup(dfb::grad_out, dfb::grad_in);
-    copy_init(dfb::grad_out);
-    gelu_derivative_tile_init<false>();
-    mul_binary_tile_init();
 
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        dfb_grad_in.reserve_back(1);
-        dfb_grad_out.wait_front(1);
-        dfb_input.wait_front(1);
+    const auto shape = ckl::IterationShape::tiles(num_tiles);
 
-        tile_regs_acquire();
-
-        copy_tile(dfb::grad_out, 0, 0);  // dest[0] = grad_out
-        copy_tile(dfb::input, 0, 1);     // dest[1] = input
-        gelu_derivative_tile<false>(1);  // dest[1] = GELU'(input)
-        mul_binary_tile(0, 1, 0);        // dest[0] = grad_out * GELU'(input)
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, dfb::grad_in);
-
-        tile_regs_release();
-
-        dfb_grad_out.pop_front(1);
-        dfb_input.pop_front(1);
-        dfb_grad_in.push_back(1);
-    }
+    ckl::eltwise_chain(
+        shape,
+        // dest[0] = grad_out
+        ckl::CopyTile<
+            ckl::input(
+                dfb::grad_out,
+                ckl::WaitPolicy::PerBlockSize,
+                ckl::PopPolicy::PerBlockSize,
+                ckl::InputTileMapping::Block,
+                ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{},
+        // dest[1] = input
+        ckl::CopyTile<
+            ckl::input(
+                dfb::input,
+                ckl::WaitPolicy::PerBlockSize,
+                ckl::PopPolicy::PerBlockSize,
+                ckl::InputTileMapping::Block,
+                ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D1>{},
+        // dest[1] = GELU'(input)
+        ckl::GeluDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},
+        // dest[0] = grad_out * GELU'(input)
+        ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
+        ckl::PackTile<ckl::output(
+            dfb::grad_in,
+            ckl::ReservePolicy::PerBlockSize,
+            ckl::PushPolicy::PerBlockSize,
+            ckl::DataFormatReconfig::Disabled)>{});
 }
