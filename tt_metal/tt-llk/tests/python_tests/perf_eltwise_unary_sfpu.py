@@ -461,6 +461,11 @@ def test_perf_causal_lift_fresh_cpp(
         MathOperation.Celu,
         MathOperation.Elu,
         MathOperation.Selu,
+        # Lane CW wave 3 (rlibm rounding-interval refits of the CR wave-2
+        # honest-outs; provenance in fresh_cpp/*_fitted.h).
+        MathOperation.Threshold,
+        MathOperation.Expm1,
+        MathOperation.Acosh,
     ],
     fresh_cpp_impl=[0, 2],
 )

@@ -77,10 +77,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "fresh_cpp/castfp32tofp16a.h"
 #include "fresh_cpp/celu.h"
 // Canonical per-op semantic bodies (storm contract: fresh_cpp/README.md).
+#include "fresh_cpp/acosh_fitted.h"
 #include "fresh_cpp/celu_fitted.h"
 #include "fresh_cpp/digamma_fitted.h"
 #include "fresh_cpp/elu_fitted.h"
 #include "fresh_cpp/exp_fitted.h"
+#include "fresh_cpp/expm1_fitted.h"
 #include "fresh_cpp/gelu_fitted.h"
 #include "fresh_cpp/i0_fitted.h"
 #include "fresh_cpp/i1_fitted.h"
@@ -103,6 +105,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "fresh_cpp/tanhderivative_fitted.h"
 #include "fresh_cpp/tanhshrink.h"
 #include "fresh_cpp/threshold.h"
+#include "fresh_cpp/threshold_fitted.h"
 #include "fresh_cpp/trigonometry.h"
 #include "fresh_cpp/unarycomp.h"
 #include "fresh_cpp/unarypower.h"
@@ -449,6 +452,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     FRESH_CPP_IMPL != 2 || SFPU_UNARY_OPERATION != SfpuType::selu || (!APPROX_MODE && !is_fp32_dest_acc_en),
                     "fitted selu selector supports only non-approx, bf16 dest");
                 SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_selu_fitted_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 2 && SFPU_UNARY_OPERATION == SfpuType::threshold)
+            {
+                static_assert(
+                    FRESH_CPP_IMPL != 2 || SFPU_UNARY_OPERATION != SfpuType::threshold || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fitted threshold selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_threshold_fitted_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 2 && SFPU_UNARY_OPERATION == SfpuType::expm1)
+            {
+                static_assert(
+                    FRESH_CPP_IMPL != 2 || SFPU_UNARY_OPERATION != SfpuType::expm1 || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fitted expm1 selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_expm1_fitted_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 2 && SFPU_UNARY_OPERATION == SfpuType::acosh)
+            {
+                static_assert(
+                    FRESH_CPP_IMPL != 2 || SFPU_UNARY_OPERATION != SfpuType::acosh || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "fitted acosh selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_acosh_fitted_cpp, (iterations), block_tile, VectorMode::None);
             }
             else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::tanh_derivative_lut)
             {
