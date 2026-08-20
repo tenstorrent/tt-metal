@@ -17,6 +17,7 @@ from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_progra
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
+    collect_accuracy_and_determinism_results,
     assert_equal,
 )
 
@@ -223,46 +224,19 @@ def test_reduce_affine_transforms_is_device_deterministic(device: ttnn.Device, s
     a_tt, b_tt = (_to_device(tensor, device, summary_dtype) for tensor in host)
     expected = _oracle(*host, case.batch_heads, case.groups_per_head)
 
-    reference_outputs = _run(a_tt, b_tt, case.groups_per_head)
-    mismatch_scratch = tuple(
-        ttnn.empty(
-            output.shape,
-            dtype=ttnn.bfloat16,
-            layout=output.layout,
-            device=device,
-            memory_config=output.memory_config(),
-        )
-        for output in reference_outputs
-    )
-    mismatch_markers: list[ttnn.Tensor | None] = [None, None]
-    for _ in range(2):
-        current_outputs = _run(a_tt, b_tt, case.groups_per_head)
-        for index, (reference, current, scratch) in enumerate(
-            zip(reference_outputs, current_outputs, mismatch_scratch, strict=True)
-        ):
-            ttnn.ne(reference, current, dtype=ttnn.bfloat16, output_tensor=scratch)
-            current_marker = ttnn.max(scratch)
-            ttnn.deallocate(current)
-            if mismatch_markers[index] is None:
-                mismatch_markers[index] = current_marker
-            else:
-                updated_marker = ttnn.maximum(mismatch_markers[index], current_marker)
-                ttnn.deallocate(mismatch_markers[index])
-                ttnn.deallocate(current_marker)
-                mismatch_markers[index] = updated_marker
+    def run() -> tuple[ttnn.Tensor, ...]:
+        return _run(a_tt, b_tt, case.groups_per_head)
 
-    for name, golden, output, marker in zip(("A", "B"), expected, reference_outputs, mismatch_markers, strict=True):
-        assert marker is not None
-        marker_host = ttnn.to_torch(marker).clone()
-        assert_equal(
-            torch.zeros_like(marker_host),
-            marker_host,
-            name=f"{summary_dtype} reduced {name} device-side exact-value determinism marker",
-        )
-        assert_accurate(golden, ttnn.to_torch(output), name=f"{summary_dtype} reduced {name}", pcc_threshold=0.999)
-        ttnn.deallocate(marker)
-    for tensor in (*reference_outputs, *mismatch_scratch):
-        ttnn.deallocate(tensor)
+    reference_outputs, outputs, mismatch_marker = collect_accuracy_and_determinism_results(device, run)
+    assert_equal(
+        torch.zeros_like(mismatch_marker),
+        mismatch_marker,
+        name=f"{summary_dtype} reduced outputs device-side exact-value determinism marker",
+    )
+    for name, golden, output in zip(("A", "B"), expected, outputs, strict=True):
+        assert_accurate(golden, output, name=f"{summary_dtype} reduced {name}", pcc_threshold=0.999)
+    for output in reference_outputs:
+        ttnn.deallocate(output)
 
 
 def test_reduce_affine_transforms_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
