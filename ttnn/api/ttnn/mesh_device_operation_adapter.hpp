@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt_stl/small_vector.hpp>
 
 #include <algorithm>
 #include <iterator>
@@ -776,12 +777,12 @@ public:
     // parked in shared_variables so their device allocation outlives the miss and
     // stays at a stable address across dispatches.
     //
-    // On cache hit: the adapter enumerates fresh io tensors, appends the parked
-    // op-owned tensors, rebuilds a TensorArgument for every binding using the
-    // stored indices, and applies via experimental::UpdateTensorArgs — no Program
-    // rebuild. Op-owned tensors are re-patched even though their address is
-    // unchanged, because UpdateTensorArgs is currently all-or-nothing; this
-    // stepping-stone concept accepts that redundancy.
+    // On cache hit: the adapter enumerates fresh io tensors in inline storage,
+    // resolves each stored index directly against either that enumeration or the
+    // parked op-owned tensors, and applies the resulting TensorArguments via
+    // experimental::UpdateTensorArgs — no Program rebuild. Op-owned tensors are
+    // re-patched even though their address is unchanged, because UpdateTensorArgs
+    // is currently all-or-nothing.
     //
     // Contract: every TensorArgument returned by the factory must reference a
     // MeshTensor reachable from tensor_args / tensor_return_value, or one of the
@@ -793,6 +794,7 @@ public:
     struct ProgramSpecMeshWorkloadFactoryAdapter {
         using TensorParamName = tt::tt_metal::experimental::TensorParamName;
         using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
+        using MeshTensorRefs = ttsl::SmallVector<std::reference_wrapper<const tt::tt_metal::MeshTensor>, 8>;
 
         // Stored across cache entries: for each TensorArgument in a program's
         // ProgramRunArgs, which tensor (by index into the deterministic
@@ -820,9 +822,9 @@ public:
         // (reflection-driven, stable across calls), so the resulting indices
         // are stable across calls. Metal 2.0 analog of the descriptor adapter's
         // collect_tensor_buffers, at the MeshTensor level instead of Buffer*.
-        static std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> collect_mesh_tensors(
+        static MeshTensorRefs collect_mesh_tensors(
             const tensor_args_t& tensor_args, const tensor_return_value_t& tensor_return_value) {
-            std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> result;
+            MeshTensorRefs result;
             const auto visit = [&result](const ttnn::Tensor& t) { result.push_back(std::cref(t.mesh_tensor())); };
             ttsl::reflection::visit_object_of_type<ttnn::Tensor>(visit, tensor_args);
             ttsl::reflection::visit_object_of_type<ttnn::Tensor>(visit, tensor_return_value);
@@ -834,16 +836,13 @@ public:
         // Cache-miss path only. TT_FATALs on a TensorArgument that references
         // neither an io tensor nor a factory op-owned tensor.
         //
-        // NOTE on host perf: the index-based binding scheme is what makes a
-        // fast cache-hit path possible, but the current straightforward
-        // implementation isn't there yet — the enumeration returns a heap
-        // std::vector, and apply_descriptor builds a fresh TensorArgument
-        // table each dispatch. Both costs are fixable by mirroring the
-        // descriptor adapter's compile-time-unrolled walker + SmallVector +
-        // cached TensorArgument storage pattern. Deferred pending profiling.
+        // NOTE on host perf: the index-based binding scheme keeps the cache-hit
+        // path allocation-free for the common case (up to eight io tensors).
+        // apply_descriptor resolves io and op-owned indices directly instead of
+        // copying and extending the io enumeration for every coordinate range.
         static std::vector<ResolvedTensorBinding> resolve_bindings(
             const tt::tt_metal::experimental::Table<TensorParamName, TensorArgument>& factory_tensor_args,
-            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& mesh_tensors) {
+            const MeshTensorRefs& mesh_tensors) {
             std::vector<ResolvedTensorBinding> bindings;
             bindings.reserve(factory_tensor_args.size());
             // The name is the Table key; the TensorArgument value carries only the tensor ref.
@@ -935,18 +934,21 @@ public:
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 const auto& sv = cached_workload.shared_variables.at(coordinate_range);
 
-                // Reproduce the cache-miss enumeration: fresh io tensors, then the
-                // parked op-owned tensors (stable addresses, retrieved from the cache).
-                auto mesh_tensors = io_mesh_tensors;
-                if (sv.op_owned_tensors) {
-                    for (const auto& op_owned_tensor : *sv.op_owned_tensors) {
-                        mesh_tensors.push_back(std::cref(op_owned_tensor));
-                    }
-                }
-
                 tt::tt_metal::experimental::Table<TensorParamName, TensorArgument> fresh_tensor_args;
                 for (const auto& b : sv.bindings) {
-                    fresh_tensor_args.emplace(b.tensor_parameter_name, TensorArgument{mesh_tensors[b.tensor_idx]});
+                    if (b.tensor_idx < io_mesh_tensors.size()) {
+                        fresh_tensor_args.emplace(
+                            b.tensor_parameter_name, TensorArgument{io_mesh_tensors[b.tensor_idx]});
+                    } else {
+                        const std::size_t op_owned_idx = b.tensor_idx - io_mesh_tensors.size();
+                        TT_FATAL(
+                            sv.op_owned_tensors && op_owned_idx < sv.op_owned_tensors->size(),
+                            "Cached TensorArgument '{}' has invalid op-owned tensor index {}",
+                            b.tensor_parameter_name,
+                            op_owned_idx);
+                        fresh_tensor_args.emplace(
+                            b.tensor_parameter_name, TensorArgument{std::cref((*sv.op_owned_tensors)[op_owned_idx])});
+                    }
                 }
                 tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args, skip_validation);
             }
