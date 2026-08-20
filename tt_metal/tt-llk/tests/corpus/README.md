@@ -405,6 +405,45 @@ one-for-one.  Self-test: `selftest_batched_silicon.py` (partitioning,
 3-op dry-run layout parity batched==legacy, session splitting, cache
 keying), run by the nightly wrapper with the other gate self-tests.
 
+### Sweep-core pipeline overhaul (laneDC, owner-ordered)
+
+Four speed levers over the batched executor, every trust anchor
+byte-identical in semantics (self-test: `selftest_sweep_core_overhaul.py`,
+run by both wrappers):
+
+* **Classify/silicon pipelining** (default; `--no-pipeline` escape): the
+  phase barrier is gone.  Rows admit to silicon in priority-ordered
+  ROLLING WAVES (`--admit-wave-rows`, first wave = `--priority-ops` else 3
+  rows) as their classify (and CRAQ, when phased) verdicts complete, while
+  a background gating thread keeps classifying later waves — device work
+  begins minutes after launch.  The batch planner re-plans per wave
+  (session dirs `silicon-batches/w<i>/`); the flocked device
+  serialization, per-session provenance, keyed gates (`_gate_rows`) and
+  refusal/STOP semantics are the same code, merely re-scheduled.  Legacy
+  phase-barrier flow retained for `--no-pipeline`, `--serial-legacy`,
+  non-hardware runs and resumes without the classify phase.
+* **Row priority scheduling**: rows whose OFF/ON `.text` is expected to
+  DIFFER classify and measure first; expected byte-identical re-baseline
+  rows last; `--priority-ops` jumps the queue entirely.  The expectation
+  is a queue HINT (prior classify verdicts on this or a `--prev-run` root,
+  else the baseline's refusal class) — a wrong hint costs only position.
+  Results stream by value, not config order.
+* **Cross-pin cell reuse**: `--prev-run` accepts a comma list of evidence
+  roots (newest first) and the resume prober now probes them — a device
+  leg whose jobkey (node/flags/extra_env/tag/mode) matches AND whose
+  archived `.text` hash set equals THIS run's classify hashes adopts the
+  prior silicon instead of re-running (typical cc1plus-only pin bump: the
+  OFF and hand legs are byte-identical and reuse, roughly halving device
+  work).  Adoption copies the evidence into this run's root and is never
+  silent: `REUSED_FROM.txt` beside the cell, a printed `reuse:` line, and
+  `reused_cells` in `scoreboard.json`.  `expected_texts=None`/`--force`
+  never adopt; tampered jobkeys/hashes refuse.
+* **Row verdict streaming**: `<evidence-root>/<op>/ROW-VERDICT.json` lands
+  the moment a row's cells are assembled — cycles per leg, causal/vs_hand
+  %, WIN/PARITY/LOSS band, baseline-drift verdicts and the exact REPORT.md
+  table line — via the same `_row_verdict` computation the final report
+  aggregates (row lines byte-equal).
+
 ### Pin-cycle infrastructure (laneBU)
 
 #### Shared BASE-leg store (`corpus_leg_store.py`)
