@@ -17,6 +17,7 @@ file(
     GLOB_RECURSE kernels
     convert_to_chw/device/kernels/*.cpp
     convert_to_hwc/device/kernels/*.cpp
+    convert_to_hwc/device/kernels/*.hpp
 )
 
 target_sources(
