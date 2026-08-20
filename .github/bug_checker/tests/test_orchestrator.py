@@ -133,7 +133,7 @@ def test_run_bug_check_fails_closed_when_llm_rule_errors(mock_load, mock_select,
     )
 
     with patch("bug_checker.orchestrator.print_failure") as mock_print_failure:
-        with pytest.raises(BugCheckFailed):
+        with pytest.raises(BugCheckFailed):  # allow-pytest.raises: not a device error
             run_bug_check(pr, post_comments=True)
 
     mock_print_failure.assert_called_once_with(

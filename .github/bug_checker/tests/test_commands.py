@@ -18,9 +18,7 @@ from bug_checker.output import RERUN_FOOTER
 from bug_checker.rules import Rule
 
 
-def _rule(
-    id="test-rule", paths=None, labels=None, severity="warning", content="# Test"
-):
+def _rule(id="test-rule", paths=None, labels=None, severity="warning", content="# Test"):
     return Rule(
         id=id,
         file="test.md",
