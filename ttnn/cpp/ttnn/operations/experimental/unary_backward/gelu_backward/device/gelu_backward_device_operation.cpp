@@ -71,6 +71,13 @@ void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
         "GELU_BW operation requires grad_output to be allocated in a buffer on the device. Buffer is null.");
 
     TT_FATAL(
+        grad_output.dtype() == input_tensor.dtype(),
+        "GELU_BW operation requires grad_output and input data types to match. grad_output data type: {}, input data "
+        "type: {}",
+        static_cast<int>(grad_output.dtype()),
+        static_cast<int>(input_tensor.dtype()));
+
+    TT_FATAL(
         grad_output.layout() == Layout::TILE,
         "GELU_BW operation requires grad_output to be in Tile layout. grad_output layout: {}",
         static_cast<int>(grad_output.layout()));

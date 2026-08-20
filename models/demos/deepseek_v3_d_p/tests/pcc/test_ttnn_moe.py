@@ -110,6 +110,7 @@ def run_model(
     rms_norm_eps=1e-5,
     final_output_pcc=0.982,
     routed_activation=ttnn.RoutedExpertActivation.Silu,
+    measure=None,
 ):
     """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
 
@@ -127,6 +128,12 @@ def run_model(
     ``routed_activation`` selects the fused routed-expert kernel's activation and the matching
     torch reference. The shared expert always runs SiLU: no SiTU kernel exists outside the
     routed-expert op, so both sides must stay on SiLU there for the comparison to mean anything.
+
+    ``measure`` wraps the forward for a perf caller: it is called as ``measure(forward)``,
+    must invoke the thunk and return its result, and owns the device sync. The perf gates use
+    it to run the forward inside a real-time-profiler window (see
+    ``tests/perf/test_kimi_k3_moe_perf.py``) so the measured region is the forward alone --
+    the constructor's one-time weight tilize/typecast stays outside it.
     """
     if routed_activation not in _TORCH_ROUTED_ACTIVATION or routed_activation not in _UPSTREAM_ACT:
         raise ValueError(f"no torch reference for {routed_activation}; supported: {list(_TORCH_ROUTED_ACTIVATION)}")
@@ -424,11 +431,18 @@ def run_model(
     logger.debug("Running TtMoe forward pass...")
 
     tt_x = upload_tt_x()
+
+    def forward():
+        return tt_moe(tt_x, return_intermediates=run_pcc_check, actual_isl=actual_isl, padding_side="right")
+
     signpost(header="tt_forward_START")
-    tt_output, tt_intermediates = tt_moe(
-        tt_x, return_intermediates=run_pcc_check, actual_isl=actual_isl, padding_side="right"
-    )
-    ttnn.synchronize_device(mesh_device)
+    if measure is None:
+        tt_output, tt_intermediates = forward()
+        ttnn.synchronize_device(mesh_device)
+    else:
+        # measure() syncs: the real-time profiler stops collecting once the window closes, so
+        # the sync has to happen inside it or the last programs' records are still in flight.
+        tt_output, tt_intermediates = measure(forward)
     signpost(header="tt_forward_END")
 
     profiler.end("tt_forward")
