@@ -2,15 +2,22 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Measure what one pass costs, by running out = in through N identity passes.
+"""Price one compute pass, by op, against a zero-math control.
 
-Not a correctness test of anything interesting -- every pass is a copy, so the
-answer is the input and any deviation means the plumbing is broken.  The point is
-the SLOPE: with the math pinned at zero, runtime against N is the cost of one L1
-round trip of `tiles` tiles plus its CB handshake.  That number decides whether
-fusing passes in a real kernel is worth the implementation cost.
+Not a test of anything interesting -- the point is the SLOPE, which is why every
+mode here has a trivial reference. Runtime against the number of passes cancels
+every fixed cost (program launch, first load, last store), because those are paid
+once whatever the pass count is, so nothing has to be modelled or guessed at.
 
-    python test_unified_passcost.py --tiles 8
+  copy    the control: one L1 round trip and its CB handshake, no math
+  bcast   shape-preserving, so chainable; minus the copy slope it is bcast's math
+  reduce  collapses, so it cannot be chained and is swept by shape instead
+
+Measured on one Wormhole core, the copy control comes out at ~0.10us per tile per
+pass while an exact SFPU op costs 0.67-1.19us per tile, which is what said the
+plumbing was never the thing to optimise. See unified_llama_prefill.md.
+
+    python test_unified_passcost.py
 """
 
 import argparse
@@ -24,29 +31,66 @@ from unified_harness import make_cb, single_core, unified_program
 
 KERNEL = "unified_kernels/passcost.cpp"
 
-CB_IN, CB_OUT = 0, 16
+TILE = 32
+CB_IN, CB_VEC, CB_OUT = 0, 8, 16
 CB_SCRATCH = range(1, 8)
 
+DEFINE = {"copy": None, "bcast": "PC_BCAST", "matmul": "PC_MATMUL", "alt": "PC_ALT", "reduce": "PC_REDUCE"}
 
-def run(device, passes, tiles=8, seed=0):
-    shape = [1, tiles, 32, 32]
 
+def run(device, mode="copy", passes=1, rows=1, cols=8, seed=0):
+    """Returns (got, want). For reduce, `want` is the row fold and got is column 0."""
+    assert mode in DEFINE
+    if mode == "reduce":
+        assert passes == 1, "a reduction cannot be chained"
+    if mode == "matmul":
+        assert rows == cols, "a chained matmul has to be square"
+
+    # Chosen so every partial sum is EXACTLY representable, which lets the checks below
+    # gate on equality instead of on a tolerance. bfloat16 spacing on [1, 2) is 2^-7, so
+    # values built as 1 + k*2^-7 and addends as j*2^-7 add without rounding as long as
+    # the running sum stays under 2: a < 1.5 plus at most 8 passes of at most 8 steps
+    # tops out at 1.5 + 0.5. Anything sloppier drifts about one LSB per pass, one-sided,
+    # which no fixed tolerance can tell apart from a real broadcast bug.
     torch.manual_seed(seed)
-    a = (0.5 + 1.5 * torch.rand(shape)).to(torch.bfloat16)
+    lsb = 2.0**-7
+    a = (1.0 + torch.randint(0, 64, [1, 1, rows * TILE, cols * TILE]) * lsb).to(torch.bfloat16)
+    # Distinct per row, so a broadcast that picked up the wrong row cannot pass.
+    step = (1 + torch.arange(rows * TILE) % 8).reshape(1, 1, -1, 1) * lsb
+    v = step.expand(1, 1, rows * TILE, TILE).to(torch.bfloat16).contiguous()
+    if mode == "matmul":
+        # The identity: every product but one is a zero, so the chain is exact while the
+        # FPU still does the full inner product.
+        v = torch.eye(rows * TILE).reshape(1, 1, rows * TILE, rows * TILE).to(torch.bfloat16)
 
     dram = ttnn.DRAM_MEMORY_CONFIG
     ta = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
-    tout = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
+    tv = ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
+
+    out_cols = 1 if mode == "reduce" else cols
+    out_shape = [1, 1, rows * TILE, out_cols * TILE]
+    tout = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
 
     core_ranges, cores = single_core()
 
-    ct_args = [tiles]
-    for t in (ta, tout):
+    tensors = [ta, tv, tout] if mode in ("bcast", "matmul", "alt") else [ta, tout]
+    ct_args = [rows, cols]
+    for t in tensors:
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+    rt_args = [t.buffer_address() for t in tensors]
 
-    rt_args = [ta.buffer_address(), tout.buffer_address()]
+    # The vector CB holds the broadcast operand, or the 1x1 reduce scaler.
+    vec_pages = rows if mode in ("bcast", "alt") else (rows * cols if mode == "matmul" else 1)
+    cbs = [
+        make_cb(CB_IN, core_ranges, num_pages=2 * rows * cols),
+        make_cb(CB_VEC, core_ranges, num_pages=2 * vec_pages),
+        make_cb(CB_OUT, core_ranges, num_pages=2 * rows * out_cols),
+    ]
+    cbs += [make_cb(cb, core_ranges, num_pages=2 * rows * cols) for cb in CB_SCRATCH]
 
-    cbs = [make_cb(cb, core_ranges, num_pages=2 * tiles) for cb in (CB_IN, CB_OUT, *CB_SCRATCH)]
+    defines = [("PASSES", str(passes))]
+    if DEFINE[mode]:
+        defines.append((DEFINE[mode], "1"))
 
     program = unified_program(
         kernel_source=KERNEL,
@@ -55,45 +99,125 @@ def run(device, passes, tiles=8, seed=0):
         cbs=cbs,
         compile_time_args=ct_args,
         runtime_args=rt_args,
-        defines=[("PASSES", str(passes))],
+        defines=defines,
     )
 
-    out = ttnn.generic_op([ta, tout], program)
-    return ttnn.to_torch(out).to(torch.float32), a.to(torch.float32)
+    out = ttnn.generic_op(tensors, program)
+    got = ttnn.to_torch(out).to(torch.float32)
+    af, vf = a.to(torch.float32), v.to(torch.float32)
+
+    if mode == "reduce":
+        # reduce<Cols> folds every column into one, so the answer is column 0 and the
+        # rest of the tile is the packer's zeroing contract.
+        return got[0, 0, :, 0], af.max(dim=3).values[0, 0]
+    if mode == "bcast":
+        # vec[r] applies to every column of row r, once per pass.
+        return got[0, 0], (af + passes * vf[:, :, :, 0:1])[0, 0]
+    if mode == "matmul":
+        return got[0, 0], af[0, 0]  # a @ I @ ... @ I == a
+    if mode == "alt":
+        # Odd passes add the vector, even passes copy: ceil(passes / 2) additions.
+        return got[0, 0], (af + ((passes + 1) // 2) * vf[:, :, :, 0:1])[0, 0]
+    return got[0, 0], af[0, 0]
+
+
+def slope(points):
+    """Least-squares slope of us against the swept integer, in us per unit."""
+    n = len(points)
+    xs = [float(x) for x, _ in points]
+    ys = [y for _, y in points]
+    mx, my = sum(xs) / n, sum(ys) / n
+    return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sum((x - mx) ** 2 for x in xs)
 
 
 def main(argv=None):
     p = argparse.ArgumentParser()
-    p.add_argument("--tiles", type=int, default=8)
     p.add_argument("--max-passes", type=int, default=8)
+    p.add_argument("--tiles", type=int, default=8, help="block width for the pass sweeps")
     args = p.parse_args(argv)
 
     from unified_bench import bench
 
     device = ttnn.open_device(device_id=0)
-    rows, failed = [], []
+    failed = []
     try:
+
+        def measure(fn):
+            return bench(device, fn, iters=20, warmup=3, match="passcost.cpp")["median_us"]
+
+        def check(name, got, want):
+            # Equality, not a tolerance: the inputs are built so that nothing rounds.
+            diff = (got - want).abs().max().item()
+            if diff != 0.0:
+                logger.error(f"{name}: max |got - want| = {diff} (expected exact)")
+                failed.append(name)
+
+        # ---- pass sweeps: copy (the control) and bcast, same shape, same tile traffic
+        sweeps = {}
+        for mode in ("copy", "bcast", "alt"):
+            points = []
+            for n in range(1, args.max_passes + 1):
+                check(f"{mode} passes={n}", *run(device, mode, passes=n, cols=args.tiles))
+                points.append((n, measure(lambda m=mode, n=n: run(device, m, passes=n, cols=args.tiles))))
+            sweeps[mode] = points
+
+        # ---- matmul: square so it chains, at 2x2 tiles to stay inside the DST budget
+        mm, mm_n = [], 2
         for n in range(1, args.max_passes + 1):
-            got, want = run(device, n, args.tiles)
-            err = (got - want).abs().max().item()
-            if err != 0.0:
-                # A copy chain must be bit-exact; anything else is broken plumbing.
-                logger.error(f"passes={n}: identity chain altered the data, max |diff| = {err}")
-                failed.append(n)
-            st = bench(device, lambda n=n: run(device, n, args.tiles), iters=20, warmup=3, match="passcost.cpp")
-            rows.append((n, st["median_us"]))
+            check(f"matmul passes={n}", *run(device, "matmul", passes=n, rows=mm_n, cols=mm_n))
+            mm.append((n, measure(lambda n=n: run(device, "matmul", passes=n, rows=mm_n, cols=mm_n))))
+
+        # ---- reduce: swept by shape, since it cannot be chained
+        red_cols, red_rows = [], []
+        for c in range(1, args.max_passes + 1):
+            check(f"reduce cols={c}", *run(device, "reduce", rows=1, cols=c))
+            red_cols.append((c, measure(lambda c=c: run(device, "reduce", rows=1, cols=c))))
+        for r in range(1, args.max_passes + 1):
+            check(f"reduce rows={r}", *run(device, "reduce", rows=r, cols=1))
+            red_rows.append((r, measure(lambda r=r: run(device, "reduce", rows=r, cols=1))))
     finally:
         ttnn.close_device(device)
 
-    logger.info(f"identity passes over {args.tiles} tiles:")
-    prev = None
-    for n, us in rows:
-        delta = f"  +{us - prev:6.2f}us" if prev is not None else ""
-        logger.info(f"  passes={n}  median={us:7.2f}us{delta}")
-        prev = us
-    if len(rows) >= 2:
-        slope = (rows[-1][1] - rows[0][1]) / (rows[-1][0] - rows[0][0])
-        logger.info(f"slope = {slope:.2f}us per pass ({slope / args.tiles:.3f}us per tile per pass)")
+    t = args.tiles
+    logger.info(f"pass sweeps over {t} tiles (slope = cost of one pass):")
+    for mode in ("copy", "bcast", "alt"):
+        for n, us in sweeps[mode]:
+            logger.info(f"  {mode:6s} passes={n}  median={us:7.2f}us")
+        s = slope(sweeps[mode])
+        logger.info(f"  {mode:6s} slope = {s:.3f}us/pass ({s / t:.4f}us per tile per pass)")
+
+    copy_s, bcast_s, alt_s = (slope(sweeps[m]) for m in ("copy", "bcast", "alt"))
+    d = bcast_s - copy_s
+    logger.info(f"broadcast math = bcast - copy = {d:.3f}us/pass ({d / t:.4f}us/tile), plumbing cancels")
+    # alt runs the same two kinds in the same proportion, so anything above their mean
+    # is what CHANGING kind costs -- which a homogeneous chain never pays.
+    mean = (copy_s + bcast_s) / 2
+    logger.info(
+        f"switching kinds = alt - mean(copy, bcast) = {alt_s - mean:+.3f}us/pass ({(alt_s - mean) / t:+.4f}us/tile)"
+    )
+
+    for n, us in mm:
+        logger.info(f"  matmul {mm_n}x{mm_n} passes={n}  median={us:7.2f}us")
+    mm_s = slope(mm)
+    # Each pass is mm_n*mm_n output tiles, each an inner product over mm_n tiles.
+    macs = mm_n**3
+    logger.info(f"  matmul slope = {mm_s:.3f}us/pass over {mm_n**2} output tiles, {macs} tile-MACs")
+    logger.info(f"  => {mm_s / mm_n**2:.3f}us per output tile, {mm_s / macs:.3f}us per tile-MAC")
+    logger.info(f"  a copy of the same {mm_n**2} tiles costs {slope(sweeps['copy']) / t * mm_n**2:.3f}us")
+
+    logger.info("reduce<Cols>, one pass, swept by shape:")
+    for c, us in red_cols:
+        logger.info(f"  rows=1 cols={c}  ({c} in -> 1 out)  median={us:7.2f}us")
+    per_in = slope(red_cols)
+    logger.info(f"  slope = {per_in:.3f}us per INPUT tile (unpack + accumulate, no per-tile pack)")
+    for r, us in red_rows:
+        logger.info(f"  rows={r} cols=1  ({r} in -> {r} out)  median={us:7.2f}us")
+    per_both = slope(red_rows)
+    logger.info(f"  slope = {per_both:.3f}us per (input + output) tile (adds acquire and pack)")
+    # The rows sweep grows input and output together, so what it adds over the cols
+    # sweep is the per-OUTPUT-tile part on its own -- which is the price of the one
+    # tile_regs_acquire per output tile that Strategy<ReduceFusion> still does.
+    logger.info(f"  => per OUTPUT tile alone = {per_both - per_in:.3f}us (the acquire and pack)")
 
     if failed:
         logger.error(f"FAIL: {failed}")
