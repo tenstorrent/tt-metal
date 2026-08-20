@@ -1,0 +1,206 @@
+diff --git a/tt_metal/tt-llk/tests/corpus/sfpu_device_baseline_p150_v1.tsv b/tt_metal/tt-llk/tests/corpus/sfpu_device_baseline_p150_v1.tsv
+index 3eb6793cea..6f666c001c 100644
+--- a/tt_metal/tt-llk/tests/corpus/sfpu_device_baseline_p150_v1.tsv
++++ b/tt_metal/tt-llk/tests/corpus/sfpu_device_baseline_p150_v1.tsv
+@@ -62,7 +62,7 @@
+ #      ON set), CD crossloop-hoist, CA drain-backedge/init-hoist, CF residency peel +
+ #      TU value reuse + iadd/divp2 audits).  First silicon = the pin-13 full sweep;
+ #      pre-registered movers in REVIEW_RECORD-8e87fba0e35f.
+-#  14. 01aed0d8d58d… (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — the pin-14
++#  14. 01aed0d8d58d… — the pin-14
+ #      overnight-swarm union (sfpi-gcc staging/pin14 3ca94518817 on the census fix
+ #      e0754714a5b: CG rooting + CJ twins lift the wave-9 quarantine; CI mul24
+ #      admission, CU int-abs, CP bw-witness, CK planner-launch effects, CN repr-prop,
+@@ -70,6 +70,14 @@
+ #      flags default-off, measured as knob legs).  Driver 5d3742f58472….  Installed
+ #      via pin-install-fast (gate-proven binaries, PIN_REVIEW-3ca94518817a).  First
+ #      silicon = the pin-14 full sweep.
++#  15. __CC1PLUS15__ (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — the pin-15
++#      crown-jewel union (sfpi-gcc __SFPIGCC15__: DK census fail-closed, DL latency
++#      audits + capture-rotation widening, DN ccmask/int-abs completions, DM
++#      residency widenings, DS/DT arsenals, DQ list scheduler, DP lreg allocator,
++#      DR bnb-MILP + hygiene + TRUE-DEFAULT leg).  Driver __DRIVER15__.  ON set
++#      UNCHANGED at 25; new flags (list-schedule, lreg-alloc [+dst-layout-32b
++#      harness wiring], pressure-schedule+milp) are Init(0) on-plus knob legs.
++#      First silicon = the pin-15 measurement pass (MEASUREMENT-PLAN-PIN15.md).
+ # SIM PAIRING: from pin 7 onward the CRAQ oracle is the CORRECTED craq-sim 9f324140 pair —
+ # bh 32489dda4fd6… (CURRENT sweep_2x2.conf PINNED_SIM_BH_SHA256), wh 8f0079a9a16c… (CURRENT
+ # sweep_2x2.conf PINNED_SIM_WH_SHA256); conf_lint.sh R6 enforces the bh anchor and
+diff --git a/tt_metal/tt-llk/tests/corpus/sweep_2x2.conf b/tt_metal/tt-llk/tests/corpus/sweep_2x2.conf
+index 2f9bc2e4cc..72fd2707ce 100644
+--- a/tt_metal/tt-llk/tests/corpus/sweep_2x2.conf
++++ b/tt_metal/tt-llk/tests/corpus/sweep_2x2.conf
+@@ -27,16 +27,53 @@
+ # harness hardcodes tests/sfpi/compiler/bin; preflight records the
+ # symlink's realpath and re-verifies the resolved cc1plus at every phase).
+ #
+-# CURRENT PIN (values below): cc1plus 01aed0d8d58d… / driver
+-# 5d3742f58472… — installed 2026-08-20 via pin-install-fast (gate-proven union binaries).  This prose
+-# block and history entry 14 were PREPARED at the pin-14 batch merge
+-# (2026-08-20) so the ceremony after the shared toolchain rebuild only
+-# substitutes the two sha values (here, in history entry 14, in the
++# CURRENT PIN (values below): cc1plus __CC1PLUS15__ / driver
++# __DRIVER15__ — pin 15 (pin cycle 11), the crown-jewel union.  This
++# prose block and history entry 15 were PREPARED by lane DZ (pin-15
++# prep, 2026-08-20) so the ceremony after the union toolchain install
++# only substitutes the sha values (here, in history entry 15, in the
+ # _REVIEWED_{CC1PLUS,COMPILER}_SHA256 assignments below, and in the
+-# baseline TSV header anchor) — conf-lint is DESIGNED-RED until then
+-# (R3 names the placeholder entry), and both sweep wrappers refuse at
+-# conf-lint before anything runs, so no sweep can execute against the
+-# lifted 25-flag ON set with a pre-census-fix binary.
++# baseline TSV header anchor — tools/pin15/apply_pin15.sh does all four)
++# — conf-lint is DESIGNED-RED until then (R1 rejects the placeholders,
++# R3 names the placeholder entry), and both sweep wrappers refuse at
++# conf-lint before anything runs, so no sweep can execute against this
++# conf with a pre-union binary.
++# The pin-15 build is the sfpi build of sfpi-gcc __SFPIGCC15__ =
++# nkapre/sfpi a0ea2fcd9aa (the merged DK+DL+DN+DM+DS+DT+DQ tip) union-
++# merged with DP agent/lreg-allocator (e3e442ff63c lineage) and DR
++# agent/milp-and-hygiene (1dd3bc8d4cd lineage): DK census fail-closed
++# fixes (5 DG2 fail-open holes: slot-caller-unenumerable, stage-2
++# census guard, crossloop-caller-unrooted, planner explicit-issue cap,
++# dst-ownership raw-accessor) + DL latency audits (SFPSTORE/TTINCRWC/
++# SFPLUT) & capture-rotation widening (production exp fire sim-proven)
++# + DN ccmask all-four-directions & int-abs value-function gate + DM
++# const-residency widenings (cc-region reach-scoping, runtime-trip
++# admission) & RECOGNITION-ONLY fused-MAD prgm-const + DS/DT allocator
++# & scheduler acceptance arsenals (tests/tools only) + DQ the real DAG
++# list scheduler (-mtt-tensix-optimize-list-schedule, oracle gap-0) +
++# DP the real DSATUR LREG allocator (-mtt-tensix-optimize-lreg-alloc +
++# the -mtt-tensix-dst-layout-32b integration declaration, wired by the
++# harness from the kernel's dest-accumulation mode — falsely-declared
++# 16-bit = documented silent wrong output, so the wiring is fail-closed)
++# + DR vendored exact B&B MILP backend (always compiled; lp_solve
++# demoted to cross-check — codegen byte-identical across build configs),
++# WH lut-select negative-NaN fail-close, replay raw-capture census,
++# TRUE-DEFAULT gate leg.
++# The reviewed ON set is UNCHANGED at pin 15 (25 flags): every new flag
++# stays Init(0)/default-off until measured — list-schedule, lreg-alloc
++# (+dst-layout-32b via the harness wiring), and the milp pair
++# (-mtt-tensix-optimize-pressure-schedule +
++# -mtt-tensix-pressure-schedule-use-milp) ride as on-plus knob legs
++# only (KNOBS/KNOB_MODES); ON-set promotion is a separate reviewed step
++# carrying its own R9 union fire witness.  Union verification evidence
++# rides the pin-15 union gate record (frozen-9 DejaGnu, corpus
++# flags-off + ON-25 + TRUE-DEFAULT byte-legs via the leg store, DT/DS
++# arsenal gates at the union tip); sim pins UNCHANGED (bh
++# 32489dda4fd6…, wh 8f0079a9a16c…).
++#
++# SUPERSEDED PIN 14 PROSE (audit trail):
++# cc1plus 01aed0d8d58d… / driver
++# 5d3742f58472… — installed 2026-08-20 via pin-install-fast (gate-proven union binaries).
+ # The pin-14 build is the sfpi build of sfpi-gcc staging/pin14
+ # 3ca94518817 = pin cycle 10 ("pin 14"), the overnight-swarm union on
+ # the pin-13 base (8ae4a2d6b01): CG census-rooting fix 8dee5e84029
+@@ -240,7 +277,7 @@
+ #      22 flags (was 25) and their knob entries are removed.  The
+ #      toolchain pin is UNCHANGED — the flags exist in the binary but
+ #      are never passed.  Lift = lane CG census fix at pin 14.
+-#  14. 01aed0d8d58d… (CURRENT) — the pin-14 overnight-swarm union
++#  14. 01aed0d8d58d… — the pin-14 overnight-swarm union
+ #      (sfpi-gcc staging/pin14 3ca94518817 on the pin-13 base
+ #      8ae4a2d6b01: CG census-rooting fix 8dee5e84029 [quarantine lift
+ #      carrier] + CJ census twins e0754714a5b + CI SFPMUL24 commuted
+@@ -254,6 +291,18 @@
+ #      Quarantine LIFTED this pin: ON set back to 25 (see the
+ #      QUARANTINE LIFTED block above for the citation chain); new
+ #      default-off flags ride as knob legs only.
++#  15. __CC1PLUS15__ (CURRENT) — the pin-15 crown-jewel union
++#      (sfpi-gcc __SFPIGCC15__ = nkapre/sfpi a0ea2fcd9aa
++#      [DK fail-closed census + DL latency/rotation + DN ccmask/int-abs
++#      completions + DM residency widenings + DS/DT arsenals + DQ list
++#      scheduler] union-merged with DP lreg allocator + DR bnb-MILP/
++#      hygiene).  Driver __DRIVER15__.  ON set UNCHANGED at 25 — the
++#      new flags (list-schedule, lreg-alloc [+dst-layout-32b harness
++#      wiring], pressure-schedule+milp) are Init(0) knob legs (on-plus)
++#      until measured.  The ceremony substitutes both shas
++#      (tools/pin15/apply_pin15.sh; conf-lint R1/R3 are designed-RED
++#      until it does) and runs witness_preflight on the installed
++#      union binary for the 25 reviewed rows.
+ #
+ # RULE: this prose is part of the pin.  Any commit that changes the
+ # PINNED_* values MUST update this comment block in the SAME commit to
+@@ -279,8 +328,8 @@
+ # --sim-bh-sha/--sim-wh-sha.  A sim re-pin follows the same rule as the
+ # compiler pins: sha values + this prose in the same reviewed commit.
+ 
+-_REVIEWED_CC1PLUS_SHA256=01aed0d8d58dc79459d32eaaba7e1ad3fa02dede5552c1be224c663705c14bb3
+-_REVIEWED_COMPILER_SHA256=5d3742f5847279f59f155b6cdad907f4c2e561b529d60ea2265bffb5ba21d290
++_REVIEWED_CC1PLUS_SHA256=__CC1PLUS15__
++_REVIEWED_COMPILER_SHA256=__DRIVER15__
+ _REVIEWED_SIM_BH_SHA256=32489dda4fd6321262fbc7c18b8f05126ed760073c7030dc529555111967ffd3
+ _REVIEWED_SIM_WH_SHA256=8f0079a9a16c782bf47a56c2e48e0c73d4da32faa69b56a307bc0b921b29dbc5
+ 
+@@ -436,7 +485,14 @@ _QUARANTINED_FIRE_WITNESSES="
+ # kernel WORD-IDENTICAL to the measured 129.3-unit hand-ON kernel (every
+ # instruction word including branch offsets; only the symbol name differs),
+ # so the knob leg's silicon is the booking measurement for hand parity.
+-: "${HEADLINE_ROWS:=sdpa,signbit,minmax-min,minmax-max,addcmul,exp,unarymaxmin-max,sigmoidappx-tree,absint32,hardshrink-fresh,hardsigmoid-fresh,softsign-fresh,tanhderivlut-fresh,typecast,castfp32tofp16a}"
++# Pin-15 additions (lane DZ): welford + lcm-fresh join as the crown-jewel
++# knob-leg TARGET rows — welford is the DQ list scheduler's only corpus ON
++# delta (snapshot TU, 4-insn interleave reorder, CRAQ 16/16 bit-exact) and
++# lcm-fresh's residual (d) is the named scheduler/allocator class (round-
++# chain stalls; 2-chain interleave needs ~10 live LREGs, laneDX).  xielu-
++# fresh joins for the lreg-alloc knob (the loop-held-alphas ICE-victim
++# shape reconstructed in the DS arsenal).
++: "${HEADLINE_ROWS:=sdpa,signbit,minmax-min,minmax-max,addcmul,exp,unarymaxmin-max,sigmoidappx-tree,absint32,hardshrink-fresh,hardsigmoid-fresh,softsign-fresh,tanhderivlut-fresh,typecast,castfp32tofp16a,welford,lcm-fresh,xielu-fresh}"
+ 
+ # Weekly DejaGnu byte-parity suites: a built sfpi-gcc tree (contains gcc/xg++)
+ # and the gcc source dir. Recorded as SKIP when absent.
+diff --git a/tt_metal/tt-llk/tests/corpus/sweep_2x2.py b/tt_metal/tt-llk/tests/corpus/sweep_2x2.py
+index 8ef88c1d74..0feee9aae2 100755
+--- a/tt_metal/tt-llk/tests/corpus/sweep_2x2.py
++++ b/tt_metal/tt-llk/tests/corpus/sweep_2x2.py
+@@ -499,6 +499,37 @@ KNOBS = {
+     # launches (prices-but-refuses at the current calibration).  Its A/B
+     # is the existing replay-hoist knob leg on the typecast row (added
+     # to the knob-silicon row list in sweep_2x2.conf).
++    # ---- pin-15 NEW default-off flags (lane DZ prep): knob legs ONLY,
++    # on-plus mode.  Deliberately NOT in the reviewed ON set — ON-set
++    # promotion is a separate reviewed step carrying its own R9 union
++    # fire witness (owner order: allocator/scheduler/milp measured via
++    # on-plus knob legs first, promotion only after silicon).
++    # DQ (list-scheduler): deterministic DAG list scheduler over typed-
++    # effect dependence graphs of audited straight-line SFPU regions;
++    # oracle gap-0 on all four P/Q arsenal kernels; corpus ON delta
++    # exactly 1 row (welford snapshot TU) CRAQ 16/16 bit-exact.
++    # Target rows: welford, lcm-fresh (round-chain stall class).
++    "list-schedule": "-mtt-tensix-optimize-list-schedule",
++    # DP (lreg-allocator): DSATUR-color the LREG interference graph and
++    # spill selected webs through proven-free 32-bit Dst scratch rows
++    # when pressure exceeds 8; refusals keep lreg-pressure-exceeded
++    # byte-identically.  The companion -mtt-tensix-dst-layout-32b
++    # declaration is NOT part of this token: the harness derives it
++    # per-kernel from the node id's dest-accumulation mode
++    # (dst_layout_flags — falsely declaring it on a 16-bit kernel is
++    # documented SILENT WRONG OUTPUT, so only explicit dest_acc:Yes
++    # nodes get it, fail-closed; see selftest_dst_layout_32b.py).
++    # Target rows: lcm-fresh, xielu-fresh (pressure>8 shapes).
++    "lreg-alloc": "-mtt-tensix-optimize-lreg-alloc",
++    # DR (milp-and-hygiene): the pressure scheduler with the vendored
++    # exact branch-and-bound backend (always compiled; lp_solve is a
++    # cross-check only, so codegen is byte-identical across build
++    # configs).  Both tokens ride together: the milp selector alone is
++    # inert without the pressure-schedule pass flag.  Fires only on
++    # pressure>8 regions — most rows honestly record
++    # REFUSAL_BYTE_IDENTICAL.
++    "milp": "-mtt-tensix-optimize-pressure-schedule "
++    "-mtt-tensix-pressure-schedule-use-milp",
+ }
+ # Per-knob leg MODE (see the KNOBS comment).  Every key must be a KNOBS
+ # key; absent = "solo".  The three seeded drop-one knobs are the known
+@@ -524,6 +555,13 @@ KNOB_MODES = {
+     "int-abs": "on-plus",
+     "lut-select-leaf-ext": "on-plus",
+     "repr-prop": "on-plus",
++    # pin-15 crown-jewel booking flags (lane DZ): shapes only materialize
++    # on the reviewed-ON baseline (the allocator/scheduler act on the
++    # post-ON pipeline's regions), so the booking A/B is (ON + flag) vs
++    # plain ON — the same reasoning as the pin-14 on-plus seeds.
++    "list-schedule": "on-plus",
++    "lreg-alloc": "on-plus",
++    "milp": "on-plus",
+ }
+ 
+ 
