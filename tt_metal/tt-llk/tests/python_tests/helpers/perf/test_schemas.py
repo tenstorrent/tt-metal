@@ -739,7 +739,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
     },
     "perf_eltwise_binary_sfpu_quasar": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "approx_mode",
             "data_copy_type",
@@ -755,7 +755,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
-            "formats.sfpu_math",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
             "implied_math_format",
             "input_format",
             "loop_factor",
@@ -773,7 +774,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpacker_engine_sel",
             "zero_point_bits",
         ],
-        "aliases": {},
+        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
     },
     "perf_eltwise_unary_datacopy_quasar": {
         "version": 3,
@@ -808,7 +809,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
     },
     "perf_eltwise_unary_sfpu_quasar": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "approx_mode",
             "data_copy_type",
@@ -822,7 +823,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
-            "formats.sfpu_math",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
             "implied_math_format",
             "input_format",
             "loop_factor",
@@ -836,7 +838,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpack_to_dest",
             "unpacker_engine_sel",
         ],
-        "aliases": {},
+        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
     },
     "perf_matmul_quasar": {
         "version": 3,
@@ -994,7 +996,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
     },
     "perf_sfpu_exp_parallel_matmul_quasar": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -1006,7 +1008,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.output",
             "formats.register_A",
             "formats.register_B",
-            "formats.sfpu_math",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
             "implied_math_format",
             "k_dimm",
             "loop_factor",
@@ -1020,7 +1023,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpack_to_dest",
             "unpack_transpose_faces",
         ],
-        "aliases": {},
+        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
     },
     "perf_transpose_dest_quasar": {
         "version": 4,
