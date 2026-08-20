@@ -43,6 +43,94 @@ def test_run_average_pool2d(
 
 
 @pytest.mark.parametrize(
+    "act_shape, padded_shape",
+    (
+        ([1, 7, 7, 2048], [1, 7, 32, 2048]),
+        ([1, 1, 32, 64], [1, 1, 32, 64]),
+    ),
+    ids=["resnet50_unpadded", "tile_divisible"],
+)
+@pytest.mark.parametrize("pad_value", [0.0, float("nan")], ids=["pad_zero", "pad_nan"])
+@pytest.mark.parametrize("dtype", (ttnn.bfloat16,), ids=["BFLOAT16"])
+def test_global_avg_pool2d_row_major_pad_to_tile(act_shape, padded_shape, pad_value, dtype, device):
+    """`pad_to_tile` pads the last two dims, which for NHWC is W, so the pad rows sit between the
+    H rows of the buffer rather than after them. A NaN pad makes any read of one visible."""
+    if act_shape == padded_shape and pad_value != 0.0:
+        pytest.skip("shape is already tile-aligned, so there are no pad lanes to poison")
+
+    torch.manual_seed(0)
+
+    act = torch.randn(act_shape, dtype=torch.bfloat16).float()
+    ttact = ttnn.Tensor(act, dtype)
+    if act_shape != padded_shape:
+        ttact = ttact.pad_to_tile(pad_value)
+    ttact = ttact.to(device)
+    assert list(ttact.padded_shape) == padded_shape
+
+    output_tensor = ttnn.to_torch(ttnn.global_avg_pool2d(ttact))
+    assert not output_tensor.isnan().any(), "a pad lane reached the output"
+
+    torch_output_tensor = torch.nn.AdaptiveAvgPool2d((1, 1))(torch.permute(act, (0, 3, 1, 2)))
+    assert_with_pcc(torch_output_tensor, torch.permute(output_tensor, (0, 3, 1, 2)))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16"])
+@pytest.mark.parametrize(
+    "batch, nhw, channels, num_cores, shard_height",
+    [
+        # resnet50 final feature map: 7x7 = 49 rows over 2 shards of 32 rows.
+        (1, 49, 2048, 2, 32),
+    ],
+    ids=["resnet50_49rows_2cores"],
+)
+@pytest.mark.parametrize("fill", ["ones", "random"])
+def test_global_avg_pool2d_height_sharded_row_major_padding(
+    device, dtype, batch, nhw, channels, num_cores, shard_height, fill
+):
+    """Average pool over a row-major height-sharded tensor whose shard spec over-covers the logical
+    rows. The extra rows are L1 capacity in the last shard, not tensor-spec padding — `padded_shape`
+    stays at the logical row count — so the guard is that the divisor and the reads stay logical."""
+    logical_shape = [batch, 1, nhw, channels]
+    padded_rows = num_cores * shard_height
+    assert padded_rows > batch * nhw, "shard spec must over-cover the logical rows"
+
+    torch.manual_seed(0)
+
+    if fill == "ones":
+        torch_input = torch.ones(logical_shape, dtype=torch.bfloat16)
+    else:
+        torch_input = torch.randn(logical_shape, dtype=torch.bfloat16)
+
+    shard_mem_config = ttnn.create_sharded_memory_config(
+        shape=(shard_height, channels),
+        core_grid=ttnn.CoreGrid(y=1, x=num_cores),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=shard_mem_config,
+    )
+    assert list(tt_input.shape) == logical_shape
+    assert tt_input.memory_config().shard_spec.shape == [shard_height, channels]
+
+    tt_output = ttnn.to_torch(ttnn.global_avg_pool2d(tt_input)).float()
+    assert list(tt_output.shape) == [batch, 1, 1, channels]
+
+    if fill == "ones":
+        # Dividing by the shard footprint instead of nhw would give 49/64 = 0.765625, and a read
+        # past the logical rows something arbitrary.
+        torch.testing.assert_close(tt_output, torch.ones_like(tt_output), atol=1e-2, rtol=0)
+    else:
+        assert_with_pcc(torch.mean(torch_input.float(), dim=2, keepdim=True), tt_output, 0.999)
+
+
+@pytest.mark.parametrize(
     "input_shape",
     (
         [1, 144, 7, 7],  # EfficientNet case: 144 channels (not tile-aligned)
