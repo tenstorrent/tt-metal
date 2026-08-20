@@ -2,10 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""PP=4 x (8,1) running CONCURRENTLY on one galaxy, and its measured throughput.
+"""Pipeline parallelism running CONCURRENTLY on one galaxy, and its measured throughput.
+
+The stage geometry is a parameter: `PP` is however many stages of the requested `(sp, tp)` shape tile
+the 32-chip galaxy, so `8x1` gives PP=4 and `8x2` gives PP=2.
 
 The `(8,4)` mesh is 8 rows x 4 columns and the SP axis is axis 0, so **each column is exactly an
-`(8,1)` PP stage**. `create_submeshes(MeshShape(8,1))` carves the four of them, and
+`(8,1)` PP stage** and each column *pair* is an `(8,2)` stage. `create_submeshes` carves them, and
 `pp/probe_submesh.py` verified that the SP-axis collectives ring attention needs work *inside* a
 submesh, and that two submeshes are independently usable. That makes real pipeline parallelism
 reachable in ONE process, without the multi-process rank driver or the D2D socket transport.
@@ -25,16 +28,15 @@ deliberately deferred to the END of the iteration:
 
     iteration t:  stage0(request t)        <- enqueue, submesh 0
                   stage1(h0 from t-1)      <- enqueue, submesh 1
-                  stage2(h1 from t-2)      <- enqueue, submesh 2
-                  stage3(h2 from t-3)      <- enqueue, submesh 3, produces the token
-                  read back h0,h1,h2       <- ONE sync point, after all four are in flight
+                  ...                      <- one per stage, all enqueued before anything blocks
+                  read back h0..h(PP-2)    <- ONE sync point, after all of them are in flight
 
 In steady state one request retires per iteration, so throughput = W / iteration_time, and the
 iteration is bounded by the slowest stage rather than by the sum. Independent requests are used rather
 than chunks of one request: single-shot stages need no chunked KV bookkeeping, and for throughput the
 two are equivalent (the pipeline is full either way).
 
-Knobs: PP_WINDOW (tokens per request, default 5120), PP_ITERS (default 12; the first 4 fill the
+Knobs: PP_WINDOW (tokens per request, default 5120), PP_ITERS (default 12; the first PP fill the
 pipeline and are discarded).
 """
 
@@ -53,22 +55,32 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTran
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
-PP = 4
+GALAXY_CHIPS = 32
 TOTAL_LAYERS = 36
-LAYERS_PER_STAGE = TOTAL_LAYERS // PP
 W = int(os.environ.get("PP_WINDOW", 5120))
 ITERS = int(os.environ.get("PP_ITERS", 12))
 # "host": hand the activation over through the host (D2H + re-shard + H2D). Correct, but the composed
 # activation is [1, 1, W, hidden] = 42 MB at W=5120, so three hops move ~250 MB per iteration and that
 # dominates everything else. "none": skip the hand-off and only sync, isolating the pipeline's own
 # ceiling -- what a real device-to-device transport would approach. The gap between the two IS the
-# value of building that transport.
+# value of building that transport. This is a ceiling for the TRANSPORT only: the downstream ranks
+# replay against a fixed input, which must be seeded with a real activation
+# (_seed_downstream_inputs) or the MoE gate degenerates and the "ceiling" reads far too low.
 HANDOFF = os.environ.get("PP_HANDOFF", "host")
-# Stage geometry: both PP=4 candidates from the parallelisation table. Each is 8 chips, so four of them
-# tile the 32-chip galaxy. (8,1) is Marko's idea (SP=8, TP=1, no TP collectives at all); (4,2) is the
-# alternative he thought might win (SP=4, TP=2 — half the sequence split, but attention compute split
-# two ways). Same weights/dev either way; this is the compute-vs-CCL question, measured.
-SHAPES = {"8x1": (8, 1), "4x2": (4, 2)}
+# Stage geometry -> PP falls out of it, since the stages tile the galaxy. (8,1) is SP=8/TP=1: no TP
+# collectives at all, four stages. (4,2) halves the sequence split to buy TP=2 and is a measured
+# failure (worse than no PP) -- kept only so it cannot be "rediscovered". (8,2) holds SP=8 and halves
+# the TP width rather than deleting it, giving PP=2: half the pipeline fill/drain, and unlike (8,1) it
+# retains collective work, which is what scales with board power.
+SHAPES = {"8x1": (8, 1), "4x2": (4, 2), "8x2": (8, 2)}
+
+
+def _stage_plan(pp_shape):
+    """(sp, tp, PP, layers_per_stage) for a stage shape, from how many stages tile the galaxy."""
+    sp, tp = SHAPES[pp_shape]
+    pp = GALAXY_CHIPS // (sp * tp)
+    assert TOTAL_LAYERS % pp == 0, f"{TOTAL_LAYERS} layers do not divide into {pp} stages"
+    return sp, tp, pp, TOTAL_LAYERS // pp
 
 
 def _compose(sm, sp, tp):
@@ -79,6 +91,37 @@ def _compose(sm, sp, tp):
 def _shard(sm, sp, tp):
     """Re-shard a full [1,1,W,hidden] onto the next stage: seq on the SP axis, hidden on the TP axis."""
     return ttnn.ShardTensor2dMesh(sm, dims=(2, 3), mesh_shape=(sp, tp))
+
+
+def _seed_downstream_inputs(ctrls, outs, inputs, subs, sp, tp, pp):
+    """Put a REAL activation in every downstream rank's input, once, before timing.
+
+    Under HANDOFF != "host" these inputs are never refreshed, so whatever they hold is what every
+    iteration forwards. Zeros are the pathological choice: a zero hidden state gives every token
+    identical gate logits, so top-k selects the SAME experts for all of them and the whole batch lands
+    on one chip (with EP > 1 it must converge across the expert axis too, idling the other group).
+    Measured cost of that artefact: ~1.1x at (8,1) and ~2.5x at (8,2) -- enough to invert a conclusion.
+
+    Stage 0's own traced output is the seed: a genuine activation with realistic per-token variation,
+    so routing spreads the way it does in production. It comes from 9 layers deep rather than each
+    rank's true depth, so magnitudes are approximate; what the gate keys on is that tokens differ from
+    one another, which this has and zeros do not.
+    """
+    ctrls[0].replay(blocking=False)
+    ttnn.synchronize_device(subs[0])
+    seed = ttnn.to_torch(outs[0], mesh_composer=_compose(subs[0], sp, tp)).to(torch.bfloat16)
+    for r in range(1, pp):
+        dev = ttnn.from_torch(
+            seed,
+            device=subs[r],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=_shard(subs[r], sp, tp),
+        )
+        ttnn.copy(dev, inputs[r])
+        ttnn.deallocate(dev)
+        ttnn.synchronize_device(subs[r])
 
 
 @pytest.mark.parametrize("pp_shape", list(SHAPES), ids=list(SHAPES))
@@ -110,7 +153,7 @@ def test_mistral4_pp4_concurrent_throughput(
 ):
     if weight_cache_path is None:
         pytest.skip(f"pretrained TTNN cache unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
-    sp, tp = SHAPES[pp_shape]
+    sp, tp, PP, LAYERS_PER_STAGE = _stage_plan(pp_shape)
     config = config_only
     config.max_seq_len = W
     assert (
@@ -120,7 +163,7 @@ def test_mistral4_pp4_concurrent_throughput(
     subs = mesh_device.create_submeshes(ttnn.MeshShape(sp, tp))
     assert len(subs) == PP, f"expected {PP} ({sp},{tp}) submeshes from {mesh_device.shape}, got {len(subs)}"
     logger.info(
-        f"PP={PP} x ({sp},{tp}): carved {len(subs)} stage submeshes; window={W}, "
+        f"PP={PP} x ({sp},{tp}): carved {len(subs)} stage submeshes of {LAYERS_PER_STAGE} layers; window={W}, "
         f"tokens/chip={W//sp}, hidden/tp={config.hidden_size//tp}, iters={ITERS}"
     )
     cache_path = weight_cache_path / f"{sp}x{tp}"
@@ -215,7 +258,10 @@ def test_mistral4_pp4_concurrent_throughput(
                 f"out {list(out.shape)}"
             )
 
-        # --- pipelined replay: all four in flight, then ONE sync ---
+        if HANDOFF != "host":
+            _seed_downstream_inputs(ctrls, outs, inputs, subs, sp, tp, PP)
+
+        # --- pipelined replay: all stages in flight, then ONE sync ---
         times = []
         for t in range(ITERS):
             t0 = time.perf_counter()
@@ -250,11 +296,11 @@ def test_mistral4_pp4_concurrent_throughput(
         steady = times[PP:]
         best, med = min(steady), sorted(steady)[len(steady) // 2]
         logger.success(
-            f"PP=4 x ({sp},{tp}) TRACED handoff={HANDOFF}, window={W}: steady min {best*1000:.1f} ms, med {med*1000:.1f} ms "
+            f"PP={PP} x ({sp},{tp}) TRACED handoff={HANDOFF}, window={W}: steady min {best*1000:.1f} ms, med {med*1000:.1f} ms "
             f"-> {W/best:,.0f} tok/s (min) / {W/med:,.0f} tok/s (med)"
         )
         print(
-            f"PP4_TRACED shape={pp_shape} handoff={HANDOFF} window={W} min_ms={best*1000:.1f} med_ms={med*1000:.1f} "
+            f"PP{PP}_TRACED shape={pp_shape} handoff={HANDOFF} window={W} min_ms={best*1000:.1f} med_ms={med*1000:.1f} "
             f"tok_s_min={W/best:.0f} tok_s_med={W/med:.0f}"
         )
     finally:
@@ -296,7 +342,7 @@ def _meta1(val, sm=None):
 _MESH_FOR_HOST_META = [None]  # set once per test; host-side from_torch still wants a mapper
 
 
-@pytest.mark.parametrize("pp_shape", ["8x1"], ids=["8x1"])
+@pytest.mark.parametrize("pp_shape", ["8x1", "8x2"], ids=["8x1", "8x2"])
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
@@ -321,7 +367,7 @@ _MESH_FOR_HOST_META = [None]  # set once per test; host-side from_torch still wa
 def test_mistral4_pp4_concurrent_longctx(variant, config_only, mesh_device, device_params, weight_cache_path, pp_shape):
     if weight_cache_path is None:
         pytest.skip(f"pretrained TTNN cache unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
-    sp, tp = SHAPES[pp_shape]
+    sp, tp, PP, LAYERS_PER_STAGE = _stage_plan(pp_shape)
     CHUNK = W
     n_chunks = CONTEXT // CHUNK
     assert CONTEXT % CHUNK == 0, f"PP_CONTEXT {CONTEXT} must be a multiple of CHUNK {CHUNK}"
@@ -334,7 +380,8 @@ def test_mistral4_pp4_concurrent_longctx(variant, config_only, mesh_device, devi
     _MESH_FOR_HOST_META[0] = subs[0]
     cache_path = weight_cache_path / f"{sp}x{tp}"
     logger.info(
-        f"PP={PP} x ({sp},{tp}) CHUNKED: context={CONTEXT}, chunk={CHUNK}, {n_chunks} chunks, "
+        f"PP={PP} x ({sp},{tp}) CHUNKED: {LAYERS_PER_STAGE} layers/stage, context={CONTEXT}, "
+        f"chunk={CHUNK}, {n_chunks} chunks, "
         f"tokens/chip={CHUNK//sp}, handoff={HANDOFF}"
     )
 
@@ -434,6 +481,9 @@ def test_mistral4_pp4_concurrent_longctx(variant, config_only, mesh_device, devi
             ttnn.synchronize_device(sm)
             logger.info(f"  stage {r}: {c.num_segments} segments, {c.trace_bytes()/(1024*1024):.1f} MB")
 
+        if HANDOFF != "host":
+            _seed_downstream_inputs(ctrls, outs, inputs, subs, sp, tp, PP)
+
         # --- pipelined chunk loop: chunk (t-r) is in stage r at iteration t ---
         total, per_iter = 0.0, []
         for t in range(n_chunks + PP - 1):
@@ -476,12 +526,12 @@ def test_mistral4_pp4_concurrent_longctx(variant, config_only, mesh_device, devi
         steady = per_iter[PP - 1 : n_chunks]  # full-pipeline iterations only
         med = sorted(steady)[len(steady) // 2] if steady else float("nan")
         logger.success(
-            f"PP=4 x ({sp},{tp}) CHUNKED, context={CONTEXT}, {n_chunks} chunks, handoff={HANDOFF}: "
+            f"PP={PP} x ({sp},{tp}) CHUNKED, context={CONTEXT}, {n_chunks} chunks, handoff={HANDOFF}: "
             f"total {total:.2f} s -> {CONTEXT/total:,.0f} tok/s; steady-state median {med*1000:.1f} ms/chunk "
             f"-> {CHUNK/med:,.0f} tok/s"
         )
         print(
-            f"PP4_LONGCTX shape={pp_shape} handoff={HANDOFF} context={CONTEXT} chunks={n_chunks} "
+            f"PP{PP}_LONGCTX shape={pp_shape} handoff={HANDOFF} context={CONTEXT} chunks={n_chunks} "
             f"total_s={total:.2f} tok_s_total={CONTEXT/total:.0f} med_ms={med*1000:.1f} "
             f"tok_s_steady={CHUNK/med:.0f}"
         )

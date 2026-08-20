@@ -39,9 +39,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTran
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import PROMPT_1K_PATH, tokenize_prompt_to_isl
 
-PP = 4
 TOTAL_LAYERS = 36
-LAYERS_PER_STAGE = TOTAL_LAYERS // PP
 ISL = 1024
 
 
@@ -117,15 +115,20 @@ def _tokens_to_device(token_ids, mesh_device, sp_factor):
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["mistral_small4"], indirect=True, ids=["mistral4"])
+# Layer slicing is independent of stage geometry -- this runs every stage on the full mesh -- so one
+# row per pipeline depth covers both candidate configurations: PP=4 for (8,1), PP=2 for (8,2).
+@pytest.mark.parametrize("PP", [4, 2], ids=["pp4", "pp2"])
 @pytest.mark.timeout(0)
 def test_mistral4_pp4_stages_single_process(
-    variant, config_only, mesh_device, device_params, weight_cache_path, tokenizer, num_links, topology
+    variant, config_only, mesh_device, device_params, weight_cache_path, tokenizer, num_links, topology, PP
 ):
     if weight_cache_path is None:
         pytest.skip(f"pretrained TTNN cache unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
     # config_only, not hf_config: Mistral's config is hand-built (multimodal wrapper + the transformers 5.x
     # rope rename), so the AutoConfig path behind hf_config does not express it. Matches what
     # test_mistral4_prefill_transformer uses.
+    assert TOTAL_LAYERS % PP == 0, f"{TOTAL_LAYERS} layers do not divide into {PP} stages"
+    LAYERS_PER_STAGE = TOTAL_LAYERS // PP
     config = config_only
     config.max_seq_len = ISL
     mesh_shape = tuple(mesh_device.shape)
@@ -139,7 +142,7 @@ def test_mistral4_pp4_stages_single_process(
     actual_isl = int(attention_mask.sum())
     logger.info(f"PP={PP} x {LAYERS_PER_STAGE} layers, isl={ISL}, real tokens={actual_isl}, mesh={mesh_shape}")
 
-    # --- 4 stages, run in sequence, hidden state handed straight over ---
+    # --- PP stages, run in sequence, hidden state handed straight over ---
     stages, kvs = [], []
     pp_token = None
     try:
