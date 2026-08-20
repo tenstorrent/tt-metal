@@ -112,6 +112,16 @@ struct TensorPrefetcherTensorLayout {
     uint32_t streaming = 0;
 } __attribute__((packed));
 
+// Delivery transport for a request, carried in the page header. Per-request rather than per-tensor
+// because a page names exactly one target (target_state_addr), so every tensor in it is delivered
+// the same way. It also has to be readable before the layout table can be indexed at all: the
+// layout-slot stride depends on the target's max_num_receivers, which lives in the target's DRISC
+// state, whose byte layout is what the transport selects.
+enum TensorPrefetcherTransport : uint8_t {
+    TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB = 0,
+    TENSOR_PREFETCHER_TRANSPORT_PERSISTENT_DFB = 1,
+};
+
 // One prefetched tensor: its bank-local address plus an index into the page's layout
 // table. The kernel resolves the layout via layout_index (see header comment for the
 // offset formula).
@@ -135,10 +145,16 @@ struct TensorPrefetcherBaseCmd {
 // one-byte base (mirrors the pad fields in cq_commands.hpp commands); the resulting
 // 12-byte header then keeps the entry table 4-byte aligned.
 struct TensorPrefetcherPrefetchCmd {
-    uint8_t pad1;
-    uint16_t num_entries;     // number of valid TensorPrefetcherEntry entries
-    uint32_t num_layouts;     // number of valid TensorPrefetcherTensorLayout table entries
-    uint32_t gcb_state_addr;  // DRISC L1 base of the target GCB's sender state block
+    // Occupies what used to be a pure alignment pad, so the header stays 12 bytes.
+    TensorPrefetcherTransport transport;
+    uint16_t num_entries;  // number of valid TensorPrefetcherEntry entries
+    uint32_t num_layouts;  // number of valid TensorPrefetcherTensorLayout table entries
+    // DRISC L1 base of the target's per-sender state, whose meaning follows each tensor's
+    // transport: a DramSenderStateBlock for TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB, or a
+    // PersistentDfbDramSenderState (prefix + config page) for
+    // TENSOR_PREFETCHER_TRANSPORT_PERSISTENT_DFB. One address per request, so all tensors in a
+    // request must target the same object.
+    uint32_t target_state_addr;
 } __attribute__((packed));
 
 // WAIT_CQ payload.

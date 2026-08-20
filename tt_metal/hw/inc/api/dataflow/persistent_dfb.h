@@ -519,6 +519,13 @@ public:
 
     FORCE_INLINE uint32_t get_entry_size() { return interface_.sender.fifo_page_size; }
 
+    // This receiver's local entries_acked counter. entries_sent sits one L1_ALIGNMENT below it --
+    // the relationship wait_front() relies on -- so a consumer can compare the pair to detect a
+    // sender that published more than it consumed. Receiver participants only.
+    FORCE_INLINE volatile tt_l1_ptr uint32_t* local_pages_acked_ptr() {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(interface_.receiver.aligned_pages_acked_ptr);
+    }
+
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
     // -----------------------------------------------------------------------
     // Host-declared relay DFB (DM → compute)

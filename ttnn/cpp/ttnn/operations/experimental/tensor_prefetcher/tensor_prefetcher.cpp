@@ -4,6 +4,8 @@
 
 #include "tensor_prefetcher.hpp"
 
+#include <tt_stl/assert.hpp>
+#include <tt-metalium/experimental/persistent_dfb.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -21,9 +23,19 @@ void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device)
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<TensorPrefetcherQueueTensor>& tensors,
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
+    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<PersistentDFBHandle>& persistent_dfb,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset,
     bool capture_into_trace) {
+    const bool has_gcb = global_cb.has_value();
+    const bool has_pdfb = persistent_dfb.has_value() && persistent_dfb->pdfb != nullptr;
+    TT_FATAL(
+        has_gcb != has_pdfb,
+        "queue_tensor_prefetcher_request needs exactly one delivery target: global_cb {} supplied, "
+        "persistent_dfb {} supplied",
+        has_gcb ? "was" : "was not",
+        has_pdfb ? "was" : "was not");
+
     std::vector<tt::tt_metal::experimental::TensorPrefetcherInput> inputs;
     inputs.reserve(tensors.size());
     for (const auto& item : tensors) {
@@ -42,12 +54,25 @@ void queue_tensor_prefetcher_request(
     // the thread's current one. So the knob left here is whether to consider a queue at all
     // — with capture_into_trace false we hand metal no queue, and the request is sent
     // immediately even mid trace-capture.
-    tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
-        *mesh_device,
-        global_cb,
-        device_subset,
-        inputs,
-        capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr);
+    auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;
+    if (has_pdfb) {
+        tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
+            *mesh_device, *persistent_dfb->pdfb, device_subset, inputs, trace_cq);
+    } else {
+        tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
+            *mesh_device, *global_cb, device_subset, inputs, trace_cq);
+    }
+}
+
+PersistentDFBHandle create_persistent_dfb_for_tensor_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    uint32_t entry_size,
+    uint32_t num_entries,
+    tt::tt_metal::BufferType buffer_type,
+    bool support_multi_receiver_shards) {
+    return PersistentDFBHandle{tt::tt_metal::experimental::CreatePersistentDFBForTensorPrefetcher(
+        *mesh_device, bank_to_receivers, entry_size, num_entries, buffer_type, support_multi_receiver_shards)};
 }
 
 void wait_for_cq_on_tensor_prefetcher(
