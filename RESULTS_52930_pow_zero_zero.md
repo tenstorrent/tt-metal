@@ -159,12 +159,9 @@ Secondary counters, `TILE_LOOP`, median across variants:
 | `hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h` | `calculate_sfpu_binary_power` ends in the `pow(x, 0) == 1` guard |
 | `hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h` | identical hunk, byte for byte |
 | `tt-llk/tests/python_tests/test_sfpu_binary.py` | `SfpuElwpow` removed from `_BINARY_EDGE_COMBINATIONS` (all 6) and `_BINARY_EDGE_REASON`; the "STILL OPEN" block's `0**0` paragraph rewritten as CLOSED, now also recording `0**-0.0` and the SFPSETCC mechanism |
-| `tt-llk/tests/python_tests/test_sfpu_wh_issue52930_probe.py` | `_POW_PAIRS` gains `(-2.0, 0.0)`, `(0.0, -0.0)`, `(2.0, -0.0)` |
 
 The collection-time assertion `set(_BINARY_EDGE_REASON) == set(_BINARY_EDGE_COMBINATIONS)` still passes —
 both entries were removed together, as §5 requires.
-
-`test_sfpu_wh_issue52930_probe.py` remains **not for merge**, same status as before.
 
 ## 6. Still open, deliberately
 
