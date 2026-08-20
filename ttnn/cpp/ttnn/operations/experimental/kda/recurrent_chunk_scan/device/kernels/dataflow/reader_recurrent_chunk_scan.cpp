@@ -27,6 +27,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
     DataflowBuffer kd(dfb::kd);
     DataflowBuffer q_decay(dfb::q_decay);
     DataflowBuffer intra(dfb::intra);
+    DataflowBuffer summary_seed(dfb::summary_seed);
     DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
     DataflowBuffer final_decay(dfb::final_decay);
     Noc noc;
@@ -95,7 +96,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
         noc.async_write_zeros(state, kv * state.get_entry_size());
         noc.write_zeros_l1_barrier();
         state.push_back(kv);
-        seed_identity(q_decay);
+        seed_identity(summary_seed);
     } else {
         const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
         read_value_slice(initial_state_accessor, state, head * Kt * Vt_full, Kt);
