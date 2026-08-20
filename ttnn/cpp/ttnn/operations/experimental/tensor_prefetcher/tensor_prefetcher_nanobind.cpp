@@ -7,7 +7,10 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/vector.h>
+
+#include <tt-metalium/experimental/persistent_dfb.hpp>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "tensor_prefetcher.hpp"
@@ -16,6 +19,21 @@
 namespace ttnn::operations::experimental {
 
 void bind_tensor_prefetcher(nb::module_& mod) {
+    // PersistentDFB is neither copyable nor movable, so Python only ever holds it by shared_ptr —
+    // the same handle create_persistent_dfb_for_tensor_prefetcher returns and
+    // queue_tensor_prefetcher_request / the validator accept.
+    namespace metal_exp = tt::tt_metal::experimental;
+    nb::class_<PersistentDFBHandle>(mod, "PersistentDFB")
+        .def("entry_size", [](const PersistentDFBHandle& h) { return metal_exp::persistent_dfb_entry_size(*h.pdfb); })
+        .def("num_entries", [](const PersistentDFBHandle& h) { return metal_exp::persistent_dfb_num_entries(*h.pdfb); })
+        .def("ring_size", [](const PersistentDFBHandle& h) { return metal_exp::persistent_dfb_ring_size(*h.pdfb); })
+        .def(
+            "receiver_cores",
+            [](const PersistentDFBHandle& h) { return metal_exp::persistent_dfb_receiver_cores(*h.pdfb); })
+        .def("sender_cores", [](const PersistentDFBHandle& h) {
+            return metal_exp::persistent_dfb_sender_cores(*h.pdfb);
+        });
+
     ttnn::bind_function<"is_tensor_prefetcher_supported", "ttnn.experimental.">(
         mod,
         R"doc(
@@ -83,6 +101,11 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     matching order, else it deadlocks.
                 global_cb (GlobalCircularBuffer): a DRAM-sender GCB (created via
                     ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher).
+                    Supply exactly one of global_cb / persistent_dfb.
+                persistent_dfb (PersistentDFB): a DRAM-sender PersistentDFB (created via
+                    ttnn.experimental.create_persistent_dfb_for_tensor_prefetcher) to deliver into
+                    instead of a GCB. Receiver-contiguous batched tensors only, each with a
+                    per-receiver block size equal to the PersistentDFB's entry_size.
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
                     processes this request. Defaults to the full mesh.
                 capture_into_trace (bool): whether this request may be captured into a trace.
@@ -99,8 +122,9 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         &queue_tensor_prefetcher_request,
         nb::arg("mesh_device"),
         nb::arg("tensors"),
-        nb::arg("global_cb"),
+        nb::arg("global_cb") = std::nullopt,
         nb::kw_only(),
+        nb::arg("persistent_dfb") = std::nullopt,
         nb::arg("device_subset") = std::nullopt,
         nb::arg("capture_into_trace") = false);
 
@@ -171,6 +195,39 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("size"),
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
         nb::arg("support_multi_receiver_shards") = true);
+
+    ttnn::bind_function<"create_persistent_dfb_for_tensor_prefetcher", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Create a PersistentDFB whose senders are programmable DRAM cores (Blackhole DRISCs), as
+            an alternative Tensor prefetcher delivery target to a DRAM-sender GlobalCircularBuffer.
+            Sender placement, the dual-sender receiver split, and slab numbering match
+            create_global_circular_buffer_for_tensor_prefetcher, so a tensor laid out for one
+            transport is laid out for the other.
+
+            Consumers Attach the returned object and read it through the device-side PersistentDFB
+            (wait_front / get_read_ptr / pop_front). Keep the returned object alive for as long as
+            any program uses it: destroying it frees the durable ring and its config.
+
+            Args:
+                mesh_device: The mesh device to create the buffer on.
+                bank_to_receivers: List of (bank_id, receivers) pairs.
+                entry_size: Push granularity in bytes. Must equal each streamed tensor's
+                    per-receiver bytes-per-block; this transport does not resize mid-flight.
+                num_entries: Ring depth, in entries, per receiver.
+                buffer_type: Buffer type (L1 or L1_SMALL).
+                support_multi_receiver_shards: If True, a bank's shard may feed multiple receivers,
+                    which forces a single sender per bank. Defaults to False (receiver-contiguous),
+                    letting a bank with two or more receivers split them across two DRISC senders.
+        )doc",
+        &create_persistent_dfb_for_tensor_prefetcher,
+        nb::keep_alive<0, 1>(),
+        nb::arg("mesh_device"),
+        nb::arg("bank_to_receivers"),
+        nb::arg("entry_size"),
+        nb::arg("num_entries"),
+        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
+        nb::arg("support_multi_receiver_shards") = false);
 
     ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d", "ttnn.experimental.">(
         mod,

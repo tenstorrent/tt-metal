@@ -11,6 +11,9 @@
 #include <variant>
 #include <vector>
 
+#include <memory>
+
+#include <tt-metalium/experimental/persistent_dfb.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -20,6 +23,14 @@ class MeshDevice;
 }
 
 namespace ttnn::operations::experimental {
+
+// Python-facing handle for a PersistentDFB. PersistentDFB itself is only forward-declared on the
+// public metal surface (its definition is impl-internal), and nanobind needs a complete type to
+// bind; a struct holding a shared_ptr to the incomplete type is complete, so this is what crosses
+// the language boundary.
+struct PersistentDFBHandle {
+    std::shared_ptr<tt::tt_metal::experimental::PersistentDFB> pdfb;
+};
 
 // One tensor to prefetch: either (tensor, block_count) or (tensor, block_count, rotation).
 // block_count is the number of K-blocks to divide the tensor's K dimension into. rotation
@@ -65,12 +76,26 @@ void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device)
 // and the calling thread's current command queue is mid trace-capture, the request is captured
 // and re-sent on every execute_trace of that trace; when false the request is always sent
 // immediately.
+// Exactly one of `global_cb` / `persistent_dfb` must be supplied; whichever it is selects the
+// delivery transport. See the metal-level QueueTensorPrefetcherRequest overloads for the extra
+// preconditions PersistentDFB delivery imposes (receiver-contiguous, batched, fixed entry size).
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<TensorPrefetcherQueueTensor>& tensors,
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
+    const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt,
+    const std::optional<PersistentDFBHandle>& persistent_dfb = std::nullopt,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt,
     bool capture_into_trace = false);
+
+// Create a PersistentDFB whose senders are programmable DRAM cores, as a delivery target for the
+// Tensor prefetcher. Sender placement matches create_global_circular_buffer_for_tensor_prefetcher.
+PersistentDFBHandle create_persistent_dfb_for_tensor_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    uint32_t entry_size,
+    uint32_t num_entries,
+    tt::tt_metal::BufferType buffer_type = tt::tt_metal::BufferType::L1,
+    bool support_multi_receiver_shards = false);
 
 // Fence the prefetcher against a command queue: every prefetch request queued after this
 // call waits until all work previously enqueued on that queue has completed on device before

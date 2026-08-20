@@ -10,6 +10,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 #include "dram_prefetcher_consumer.hpp"
 #include "dram_prefetcher_validator.hpp"
+#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
 
 namespace ttnn::operations::experimental::test {
 
@@ -76,6 +77,37 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
         nb::arg("global_cb"),
         nb::arg("streaming") = false,
         nb::arg("rotation") = std::vector<uint32_t>{});
+
+    ttnn::bind_function<"test_tensor_prefetcher_pdfb_validator", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Byte-for-byte validator receiver for PersistentDFB delivery: the PersistentDFB
+            counterpart of test_dram_prefetcher_validator. Attaches the PersistentDFB on its
+            receiver cores and, for each delivered entry, reads the expected tile range from
+            source_tensor via TensorAccessor and compares it against the received bytes. On a
+            mismatch it DPRINTs (layer, block, word) plus the diverging bytes and hangs the core;
+            otherwise it DPRINTs progress and a final OK, then polls briefly for an extra entry
+            (sender overshoot) and hangs on overflow.
+
+            Batched delivery only — there is no streaming/rotation parameter. Used for debugging
+            purposes; please avoid in any production code.
+
+            Args:
+                mesh_device: the MeshDevice to enqueue on.
+                source_tensor (ttnn.Tensor): the same receiver-contiguous DRAM tensor the
+                    prefetcher is being driven with.
+                num_layers (int): number of layers the prefetcher will push.
+                print_stride (int): DPRINT every Nth iter; first/last always logged. 0 = first/last only.
+                persistent_dfb (PersistentDFB): the DRAM-sender PersistentDFB being pushed into,
+                    from create_persistent_dfb_for_tensor_prefetcher.
+        )doc",
+        &test_tensor_prefetcher_pdfb_validator,
+        nb::arg("mesh_device"),
+        nb::arg("source_tensor"),
+        nb::arg("num_layers"),
+        nb::arg("print_stride"),
+        nb::kw_only(),
+        nb::arg("persistent_dfb"));
 }
 
 }  // namespace ttnn::operations::experimental::test

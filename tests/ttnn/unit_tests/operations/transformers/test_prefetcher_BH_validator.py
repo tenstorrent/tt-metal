@@ -436,6 +436,165 @@ def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, n
         )
 
 
+def _setup_weight_and_pdfb_recv_contig(
+    device,
+    K,
+    N,
+    dtype,
+    recv_per_bank,
+    dual_senders=False,
+    distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+):
+    """PersistentDFB analogue of _setup_weight_and_gcb_recv_contig.
+
+    Same weight allocation and the same bank->receiver pairing: both DRAM-sender factories share
+    build_dram_sender_mapping, so a tensor laid out for a GCB is laid out for a PersistentDFB. The
+    only difference is the target object, created at entry_size == the per-receiver block size
+    (this transport does not resize mid-flight)."""
+    is_shard_contiguous = distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    tile_bytes = _bytes_per_tile(dtype)
+    num_dram_banks = device.dram_grid_size().x
+    ring_size = num_dram_banks * recv_per_bank
+    ring_cols = _ring_grid_cols(num_dram_banks, ring_size)
+
+    K_padded = _round_up(K, ring_size * ttnn.TILE_SIZE)
+    k_tiles = K_padded // ttnn.TILE_SIZE
+    k_block_w_tiles = k_tiles // ring_size
+    n_per_recv_tiles = N // ring_size // ttnn.TILE_SIZE
+    push_page_size = k_block_w_tiles * n_per_recv_tiles * tile_bytes
+
+    torch.manual_seed(0xC0FFEE)
+    pt_weight = torch.zeros(1, 1, K_padded, N)
+    pt_weight[:, :, :K, :] = torch.randn(1, 1, K, N)
+
+    tt_weight = _make_recv_contig_weight(
+        device, pt_weight, num_dram_banks, ring_size, dtype, distribution_strategy=distribution_strategy
+    )
+
+    if is_shard_contiguous:
+        bank_to_receivers = [
+            (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
+        ]
+    else:
+        bank_to_receivers = [
+            (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
+            for b in range(num_dram_banks)
+        ]
+    pdfb = ttnn.experimental.create_persistent_dfb_for_tensor_prefetcher(
+        device,
+        bank_to_receivers,
+        entry_size=push_page_size,
+        num_entries=_GCB_DEPTH_PAGES,
+        support_multi_receiver_shards=not dual_senders,
+    )
+    return tt_weight, pdfb, push_page_size, ring_size
+
+
+@pytest.mark.parametrize(
+    "K,N,dtype,recv_per_bank,num_layers,dual_senders",
+    [
+        (2048, 3584, ttnn.bfloat8_b, 2, 1, False),  # ring=16, num_shards=16 > num_banks=8
+        (4096, 14336, ttnn.bfloat8_b, 8, 1, False),  # FF1 ring=64
+        (2048, 7168, ttnn.bfloat8_b, 4, 1, False),  # ring=32, single-sender nr=4 (discriminator)
+        (2048, 3584, ttnn.bfloat8_b, 2, 2, False),  # two layers through one ring
+        # Dual-sender: each bank's receivers split ceil/floor across two DRISC cores.
+        (2048, 3584, ttnn.bfloat8_b, 2, 1, True),  # ring=16, even split 1/1 per bank
+        (4096, 14336, ttnn.bfloat8_b, 8, 1, True),  # FF1 ring=64, even split 4/4 per bank
+        (2304, 5376, ttnn.bfloat8_b, 3, 1, True),  # ring=24, odd split 2/1 per bank (ceil/floor)
+    ],
+    ids=["multi_ksub", "ff1", "single_r4", "multi_layer", "multi_ksub_dual", "ff1_dual", "odd_dual"],
+)
+def test_validator_pdfb_recv_contig(device, K, N, dtype, recv_per_bank, num_layers, dual_senders):
+    """Prefetcher -> PersistentDFB delivery, validated byte-for-byte against the source tensor.
+
+    Batched only: PersistentDFB delivery does not support the streaming rotation yet, so FIFO
+    position == physical block."""
+    tt_weight, pdfb, _push_page_size, ring_size = _setup_weight_and_pdfb_recv_contig(
+        device, K, N, dtype, recv_per_bank, dual_senders=dual_senders
+    )
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device, [(tt_weight, ring_size)] * num_layers, persistent_dfb=pdfb
+        )
+        ttnn.experimental.test_tensor_prefetcher_pdfb_validator(
+            device,
+            tt_weight,
+            num_layers=num_layers,
+            print_stride=max(1, ring_size // 4),
+            persistent_dfb=pdfb,
+        )
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
+def test_validator_pdfb_recv_contig_shard_contiguous(device, K, N, dtype, recv_per_bank):
+    """CONTIGUOUS_1D shards paired with contiguous ring arcs, rather than round-robin/strided."""
+    tt_weight, pdfb, _push_page_size, ring_size = _setup_weight_and_pdfb_recv_contig(
+        device,
+        K,
+        N,
+        dtype,
+        recv_per_bank,
+        distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    )
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], persistent_dfb=pdfb)
+        ttnn.experimental.test_tensor_prefetcher_pdfb_validator(
+            device, tt_weight, num_layers=1, print_stride=max(1, ring_size // 4), persistent_dfb=pdfb
+        )
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
+def test_validator_pdfb_cursor_persists_across_requests(device, K, N, dtype, recv_per_bank):
+    """Two separate queue calls of one layer each, drained by one two-layer validator.
+
+    A PersistentDFB sender stores no write cursor: it derives each receiver's position from that
+    receiver's durable credit counter. The second request must therefore resume where the first
+    stopped, which this only detects because the validator expects block b of layer 2 in the slot
+    following layer 1's."""
+    tt_weight, pdfb, _push_page_size, ring_size = _setup_weight_and_pdfb_recv_contig(device, K, N, dtype, recv_per_bank)
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], persistent_dfb=pdfb)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], persistent_dfb=pdfb)
+        ttnn.experimental.test_tensor_prefetcher_pdfb_validator(
+            device, tt_weight, num_layers=2, print_stride=max(1, ring_size // 4), persistent_dfb=pdfb
+        )
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
+def test_validator_pdfb_rejects_mismatched_entry_size(device, K, N, dtype, recv_per_bank, expect_error):
+    """entry_size must equal the tensor's per-receiver block size: this transport never resizes."""
+    tt_weight, _pdfb, push_page_size, ring_size = _setup_weight_and_pdfb_recv_contig(device, K, N, dtype, recv_per_bank)
+    num_dram_banks = device.dram_grid_size().x
+    ring_cols = _ring_grid_cols(num_dram_banks, ring_size)
+    bank_to_receivers = [
+        (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
+        for b in range(num_dram_banks)
+    ]
+    wrong_entry_size = push_page_size * 2
+    bad_pdfb = ttnn.experimental.create_persistent_dfb_for_tensor_prefetcher(
+        device,
+        bank_to_receivers,
+        entry_size=wrong_entry_size,
+        num_entries=_GCB_DEPTH_PAGES,
+        support_multi_receiver_shards=True,
+    )
+    with tensor_prefetcher_session(device):
+        with expect_error(RuntimeError, "entry_size"):
+            ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], persistent_dfb=bad_pdfb)
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
+def test_validator_pdfb_rejects_streaming_rotation(device, K, N, dtype, recv_per_bank, expect_error):
+    """The streaming rotation is not supported over PersistentDFB yet."""
+    tt_weight, pdfb, _push_page_size, ring_size = _setup_weight_and_pdfb_recv_contig(device, K, N, dtype, recv_per_bank)
+    rotation = [(g + 1) % ring_size for g in range(ring_size)]
+    with tensor_prefetcher_session(device):
+        with expect_error(RuntimeError, "streaming rotation"):
+            ttnn.experimental.queue_tensor_prefetcher_request(
+                device, [(tt_weight, ring_size, rotation)], persistent_dfb=pdfb
+            )
+
+
 @pytest.mark.parametrize("K,N,dtype,num_layers", [(448, 1792, ttnn.bfloat16, 2)])
 def test_validator_dram_sender_dual_single_receiver_bank(device, K, N, dtype, num_layers):
     """support_multi_receiver_shards=False (dual senders) with a single receiver per bank (recv_per_bank=1).

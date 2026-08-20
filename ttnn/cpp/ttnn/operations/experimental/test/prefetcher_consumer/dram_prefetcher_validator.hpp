@@ -13,6 +13,7 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -82,5 +83,21 @@ void test_dram_prefetcher_validator(
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
     bool streaming = false,
     const std::vector<uint32_t>& rotation = {});
+
+// Same validation against a PersistentDFB target (bound as
+// `ttnn.experimental.test_tensor_prefetcher_pdfb_validator`). Batched delivery only, so there is no
+// streaming/rotation parameter; the consumer Attaches the PersistentDFB and reads it through the
+// device-side experimental::PersistentDFB.
+//
+// Unlike the GlobalCircularBuffer path this is not a ttnn device operation: it builds and enqueues
+// its program directly. A PersistentDFB cannot live in an operation-attribute struct (it is neither
+// copyable nor movable, and the attribute reflection used for hashing and profiler output cannot
+// format a handle to it), and as a test-only op there is nothing to gain from program caching.
+void test_tensor_prefetcher_pdfb_validator(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const ttnn::Tensor& source_tensor,
+    uint32_t num_layers,
+    uint32_t print_stride,
+    const ttnn::operations::experimental::PersistentDFBHandle& persistent_dfb_handle);
 
 }  // namespace ttnn::operations::experimental::test

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <utility>
@@ -20,10 +21,18 @@
 namespace tt::tt_metal {
 
 class Buffer;
+class DriscL1Allocation;
 class IDevice;
 class Program;
 
 namespace experimental {
+
+// Forward declarations for the DRAM-sender extension defined in
+// tt-metalium/experimental/persistent_dfb.hpp. DRAM-sender mode is opt-in and is not part of
+// the public PersistentDFB API surface; existing callers see the original interface unchanged.
+namespace persistent_dfb_dram_sender {
+struct PersistentDfbDramSenderInternals;
+}  // namespace persistent_dfb_dram_sender
 
 class PersistentDFB {
 public:
@@ -75,10 +84,47 @@ public:
     IDevice* get_device() const { return device_; }
 
 private:
+    // Tag selecting the DRAM-sender constructor. Private so the only way in is
+    // CreatePersistentDFBForTensorPrefetcher, which owns the bank -> sender-core mapping.
+    struct DramSenderTag {};
+
+    friend struct persistent_dfb_dram_sender::PersistentDfbDramSenderInternals;
+
+    /**
+     * DRAM-sender PersistentDFB: senders are programmable DRAM cores (Blackhole DRISCs)
+     * rather than worker cores.
+     *
+     * Differences from the worker-sender ctor above:
+     *   - The data ring and the config buffer are sharded over receivers only. DRAM cores
+     *     hold no ring slice, and their logical coords are not worker coords so they cannot
+     *     share a sharded buffer with them.
+     *   - Each sender's config page lives in DRISC L1 (allocated from the per-mesh
+     *     DriscL1Arena), written directly over NOC, and is never Attached: DRAM cores are
+     *     not dispatched to, so the DRISC kernel builds its sender interface from an
+     *     explicit config-page address instead of a launch-message slot.
+     *   - Credit counters cross L1 address spaces. The sender's remote-counter base and each
+     *     receiver's ack target are page-relative offsets the host computes so that a
+     *     sender's `base + 2*r*L1_ALIGNMENT` lands on receiver r's own page, and a receiver's
+     *     ack lands in DRISC L1.
+     */
+    PersistentDFB(
+        distributed::MeshDevice* mesh_device,
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_mapping,
+        uint32_t entry_size,
+        uint32_t num_entries,
+        BufferType buffer_type,
+        DramSenderTag);
+
     void setup_buffers(BufferType buffer_type);
     void allocate_config_buffer(BufferType config_buffer_type);
     void build_config_pages();
     void write_config_to_device();
+
+    // DRAM-sender only: allocate the DRISC-L1 sender blocks, build the receiver config pages
+    // (whose ack targets point into DRISC L1), and stamp both sides.
+    void setup_dram_sender_buffers(distributed::MeshDevice* mesh_device, BufferType buffer_type);
+    void build_dram_sender_receiver_config_pages();
+    void initialize_dram_sender_state(distributed::MeshDevice* mesh_device);
 
     distributed::AnyBuffer data_buffer_;
     distributed::AnyBuffer config_buffer_;
@@ -95,6 +141,15 @@ private:
     uint32_t credit_reset_size_ = 0;
     uint32_t max_num_receivers_per_sender_ = 0;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> config_pages_;
+
+    // ---- DRAM-sender state (all zero / empty for a worker-sender PersistentDFB) ----
+    uint8_t sender_core_type_value_ = 0;  // experimental::SenderCoreType
+    // Base of this object's block in the DRISC L1 arena. Uniform across banks: every sender
+    // core plants its prefix + config page at the same L1 offset.
+    DeviceAddr sender_state_drisc_l1_base_ = 0;
+    std::shared_ptr<DriscL1Allocation> drisc_sender_state_alloc_;
+    // Physical worker NOC XY of each sender's receivers, in bank-local slab order.
+    std::vector<std::vector<CoreCoord>> receiver_coords_per_sender_;
 };
 
 /**

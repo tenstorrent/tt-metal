@@ -33,6 +33,7 @@ class MeshCoordinateRangeSet;
 namespace experimental {
 
 class GlobalCircularBuffer;
+class PersistentDFB;
 
 // Reserved for future prefetcher-wide options.
 struct TensorPrefetcherConfig {};
@@ -132,6 +133,27 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
+    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
+    const std::vector<TensorPrefetcherInput>& input_tensors,
+    distributed::MeshCommandQueue* trace_capture_cq = nullptr);
+
+// Queue one prefetch request against a PersistentDFB instead of a GlobalCircularBuffer. The target
+// object is what selects the delivery transport; everything else behaves as documented above, and
+// requests against a GCB and a PersistentDFB may be interleaved on one running prefetcher.
+//
+// `persistent_dfb` must come from CreatePersistentDFBForTensorPrefetcher on the same mesh device.
+// Consumers of the delivered pages call AttachPersistentDFB on the receiver cores and read through
+// the device-side experimental::PersistentDFB.
+//
+// Additional preconditions for this transport, all TT_FATAL with the offending values:
+//   - every tensor must resolve to the receiver-contiguous layout (each receiver owning a disjoint
+//     contiguous shard);
+//   - no streaming rotation (pass an empty `rotation`);
+//   - each tensor's per-receiver bytes-per-block must equal the PersistentDFB's `entry_size`, and
+//     the ring must be a whole number of those entries. This transport does not resize mid-flight.
+void QueueTensorPrefetcherRequest(
+    distributed::MeshDevice& mesh_device,
+    const PersistentDFB& persistent_dfb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq = nullptr);
