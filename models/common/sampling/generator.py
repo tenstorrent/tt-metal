@@ -325,9 +325,12 @@ class SamplingGenerator:
     def reset_penalty_counts(self):
         """Zero the output-token penalty counters, if penalties are active.
 
-        Side-effect passes (pre-compile, trace capture) pass ``count_tokens=False`` to _run_sampling
-        instead, so they never add phantom tokens and nothing needs undoing. This remains for callers that
-        genuinely want the counters cleared. In-place, so it allocates nothing.
+        Eager pre-compile passes pass ``count_tokens=False`` to _run_sampling instead, so they never add
+        phantom tokens and nothing needs undoing. Passes inside a trace-capture window must NOT disable
+        counting: capture records rather than executes, so nothing is counted at capture time, and
+        disabling it there would drop the update from every replay -- the real sampled token would never
+        be penalized. This remains for callers that genuinely want the counters cleared. In-place, so it
+        allocates nothing.
         """
         if self._penalties_active:
             self.tt_penalties.reset_output_tokens()
