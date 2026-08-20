@@ -27,12 +27,14 @@ fixtures only — no toolchain, no simulator, no device:
 
 Run by the nightly wrapper with the other gate self-tests; exit 0 green.
 """
+
 import argparse
 import copy
 import hashlib
 import importlib.util
 import json
 import pathlib
+import shutil
 import sys
 import tempfile
 
@@ -186,7 +188,11 @@ CLS_REFUSAL = {
 def mk_sweep(ev, mode, dry_run=True, force=False):
     sw = object.__new__(sweep.Sweep)
     sw.a = argparse.Namespace(
-        force=force, dry_run=dry_run, knob_silicon_rows=None, skip_craq_gate=False
+        force=force,
+        dry_run=dry_run,
+        knob_silicon_rows=None,
+        skip_craq_gate=False,
+        classify_workers=2,
     )
     sw.ev = pathlib.Path(ev)
     sw.ev.mkdir(parents=True, exist_ok=True)
@@ -443,6 +449,248 @@ with tempfile.TemporaryDirectory() as td:
     hf.write_text(f"{rels['minmax-max']}\ttext:{'0'*64}\telf:{'0'*64}\n")
     check("cache: classify .text change re-runs", not sw3._job_cached(job))
 
+# ---------------- 5. producer failure never poisons the group ----------------
+# The storm-first-silicon lesson: the pin-12 counted-row ICE failed 2/117
+# producer compiles and the old rc-gate withheld the WHOLE group (33 rows).
+# A failed producer session must fail ONLY the legs whose classify ELF sets
+# are incomplete in the group build; every fully-covered leg still runs.
+with tempfile.TemporaryDirectory() as td:
+    td = pathlib.Path(td)
+    sw = mk_sweep(td / "ev", "batched", dry_run=False)
+    sw.verify_toolchain = lambda phase: None
+    sw.info = {"cc1plus_sha256": "cc", "tt_metal_head": "head"}
+
+    rt = td / "grt"
+    rel_ok = "sources/b.cpp/v1/elf/math.elf"
+    rel_bad = "sources/b.cpp/v2/elf/math.elf"  # NOT in the group build
+    f = rt / "tt-llk-build" / rel_ok
+    f.parent.mkdir(parents=True)
+    f.write_bytes(b"ELF ok")
+    manifest = {rel_ok: ("t1", "e1")}
+
+    node_ok_c = "test_b.py::test_c[mathop:SfpuBinaryMax]"
+    node_ok_p = "perf_b.py::test_p[mathop:SfpuBinaryMax-impl:1]"
+    node_bad_c = "test_b.py::test_c[mathop:SfpuBinaryMin]"
+    node_bad_p = "perf_b.py::test_p[mathop:SfpuBinaryMin-impl:1]"
+    row_ok = mk_row("cov-ok", "full2x2", {"sem-corr": node_ok_c, "sem-perf": node_ok_p})
+    row_bad = mk_row(
+        "cov-bad", "full2x2", {"sem-corr": node_bad_c, "sem-perf": node_bad_p}
+    )
+    cls = {
+        "sem-corr": {"status": "OK", "all": "CHANGED", "math": "CHANGED"},
+        "sem-perf": {"status": "OK", "all": "CHANGED", "math": "CHANGED"},
+    }
+    for row, rel in ((row_ok, rel_ok), (row_bad, rel_bad)):
+        for sel in ("sem-corr", "sem-perf"):
+            for leg in ("off", "on"):
+                hf = sw.ev / row["op"] / "classify" / sel / f"hashes-{leg}.txt"
+                hf.parent.mkdir(parents=True, exist_ok=True)
+                hf.write_text(f"{rel}\ttext:t\telf:e\n")
+
+    gctx_fail = {"rt": rt, "manifest": manifest, "seeded": False, "producer_rc": 2}
+    sw._group_build = lambda gdir, flags, extra_env, jobs: gctx_fail
+    sessions = []
+
+    def fake_session(gctx, gdir, name, jobs, flags, extra_env):
+        sessions.append((name, sorted({j["op"] for j in jobs})))
+        for j in jobs:  # minimal green evidence so step 3 sees corr PASS
+            j["work"].mkdir(parents=True, exist_ok=True)
+            (j["work"] / "rc.txt").write_text("0\n")
+            (j["work"] / "log.txt").write_text("1 passed\n")
+
+    sw._run_batch_session = fake_session
+    sw._batched_silicon([(row_ok, dict(cls)), (row_bad, dict(cls))])
+
+    bad_legs = [
+        ("sem-corr", "corr-off"),
+        ("sem-corr", "corr-on"),
+        ("sem-perf", "r1-off"),
+        ("sem-perf", "r3-on"),
+    ]
+    bad_all_96 = all(
+        (sw.ev / "cov-bad/silicon" / sel / leg / "rc.txt").read_text().strip() == "96"
+        and "did not compile"
+        in (sw.ev / "cov-bad/silicon" / sel / leg / "log.txt").read_text()
+        for sel, leg in bad_legs
+    )
+    check("coverage: uncovered legs fail INDIVIDUALLY (rc 96, named ELF)", bad_all_96)
+    check(
+        "coverage: covered legs of the same failed group still run",
+        any("cov-ok" in ops for _n, ops in sessions),
+        sessions,
+    )
+    check(
+        "coverage: no session ever carries a withheld leg",
+        all(ops == ["cov-ok"] for _n, ops in sessions),
+        sessions,
+    )
+    check(
+        "coverage: covered rows got corr AND all perf reps",
+        sorted(n for n, _o in sessions)
+        == sorted(["corr", "corr"] + [f"r{r}-p0" for r in (1, 2, 3) for _ in (0, 1)]),
+        sorted(n for n, _o in sessions),
+    )
+
+    # fail-closed: a leg with NO classify map after a failed producer
+    sw2 = mk_sweep(td / "ev2", "batched", dry_run=False)
+    row_nomap = mk_row("cov-nomap", "full2x2", {"sem-corr": node_ok_c})
+    job = sw2._mk_job(row_nomap, "sem-corr", "corr", "off", "-mx", "corr")
+    kept = sw2._producer_coverage([job], gctx_fail, td / "gdir")
+    check(
+        "coverage: no classify map after failed producer -> fail CLOSED",
+        kept == []
+        and (job["work"] / "rc.txt").read_text().strip() == "96"
+        and "failing closed" in (job["work"] / "log.txt").read_text(),
+    )
+
+# ---------------- 6. batched classify sessions ----------------
+with tempfile.TemporaryDirectory() as td:
+    td = pathlib.Path(td)
+    sw = mk_sweep(td / "ev", "batched", dry_run=False)
+    sw.verify_toolchain = lambda phase: None
+    sw.info = {"cc1plus_sha256": "cc", "tt_metal_head": "head"}
+    sw._macro_scan = lambda work, legnames: {"classification": "SELFTEST_STUB"}
+    # objcopy stand-in: emit the ELF's bytes as its .text (arg 4 = elf path)
+    objcopy = td / "objcopy.sh"
+    objcopy.write_text('#!/bin/sh\ncat "$4"\n')
+    objcopy.chmod(0o755)
+    sw.objcopy = objcopy
+
+    def nid(op):
+        return f"perf_c.py::test_c[mathop:{op}]"
+
+    rows = {
+        op: mk_row(f"cls-{op}", "semantic", {"sem-perf": nid(op)})
+        for op in ("changed", "ident", "fail", "dropped", "absent", "cached")
+    }
+    # pre-cached verdict: must never reach a chunk session
+    cw = sw.ev / "cls-cached/classify/sem-perf"
+    cw.mkdir(parents=True)
+    (cw / "verdict.json").write_text(
+        json.dumps(
+            {
+                "selector": "sem-perf",
+                "status": "COMPILE_FAIL",
+                "leg": "off",
+                "cc1plus_sha256": "cc",
+                "tt_metal_head": "head",
+            }
+        )
+    )
+
+    seen_nodes = []
+
+    def fake_chunk(cdir, cjobs, flags, extra_env):
+        rt = cdir / "rt"
+        shutil.rmtree(cdir, ignore_errors=True)
+        rt.mkdir(parents=True)
+        report = {"reports": {}, "variant_files": {}, "deselected": []}
+        for j in cjobs:
+            node, op, leg = j["node"], j["row"]["op"], j["leg"]
+            seen_nodes.append(node)
+            if op == "cls-dropped":
+                report["deselected"].append(node)
+                continue
+            if op == "cls-absent":
+                continue  # session died before this node
+            outcome = "failed" if (op == "cls-fail" and leg == "on") else "passed"
+            report["reports"][node] = {
+                "setup": {"outcome": "passed"},
+                "call": {"outcome": outcome},
+                "teardown": {"outcome": "passed"},
+            }
+            if outcome != "passed":
+                continue
+            vdir = f"test_c/v-{op}-{leg}"
+            elf = rt / "tt-llk-build" / vdir / "elf/math.elf"
+            elf.parent.mkdir(parents=True)
+            content = op if op == "cls-ident" else f"{op}-{leg}"
+            elf.write_bytes(content.encode())
+            (elf.parent.parent / "build.h").write_text(f"// {op} {leg}\n")
+            # a FOREIGN sibling variant under the same parent dirs (the
+            # gcd+rsubint32 finding): file-level attribution must never
+            # sweep it into this node's hashes or archive
+            foreign = rt / "tt-llk-build/test_c/v-foreign/elf/math.elf"
+            if not foreign.is_file():
+                foreign.parent.mkdir(parents=True)
+                foreign.write_bytes(b"foreign")
+            report["variant_files"][node] = [
+                f"{vdir}/elf/math.elf",
+                f"{vdir}/build.h",
+            ]
+        return report
+
+    sw._classify_chunk_session = fake_chunk
+    pending = [(rows[op], "sem-perf", None) for op in rows]
+    sw._batched_classify(pending)
+
+    v_changed = json.loads(
+        (sw.ev / "cls-changed/classify/sem-perf/verdict.json").read_text()
+    )
+    check(
+        "classify batch: OFF!=ON content -> OK/CHANGED verdict with scan + keys",
+        v_changed.get("status") == "OK"
+        and v_changed.get("all") == "CHANGED"
+        and v_changed.get("math") == "CHANGED"
+        and v_changed.get("macro_scan") == {"classification": "SELFTEST_STUB"}
+        and v_changed.get("cc1plus_sha256") == "cc",
+        v_changed,
+    )
+    v_ident = json.loads(
+        (sw.ev / "cls-ident/classify/sem-perf/verdict.json").read_text()
+    )
+    check(
+        "classify batch: OFF==ON content -> IDENTICAL verdict",
+        v_ident.get("all") == "IDENTICAL" and v_ident.get("math") == "IDENTICAL",
+        v_ident,
+    )
+    w = sw.ev / "cls-changed/classify/sem-perf"
+    hash_on = (w / "hashes-on.txt").read_text()
+    check(
+        "classify batch: per-leg evidence layout matches the solo path "
+        "(node.txt, flags, hashes, elf archive, compile log)",
+        (w / "node.txt").read_text().strip() == nid("changed")
+        and (w / "flags-on.txt").is_file()
+        and hash_on.startswith("test_c/v-cls-changed-on/elf/math.elf\ttext:")
+        and f"text:{hashlib.sha256(b'cls-changed-on').hexdigest()}" in hash_on
+        and (w / "elf-on/test_c/v-cls-changed-on/elf/math.elf").is_file()
+        and (w / "elf-on/test_c/v-cls-changed-on/build.h").is_file()
+        and (w / "compile-on.log").is_file(),
+        hash_on,
+    )
+    check(
+        "classify batch: a foreign sibling variant in the shared tree is "
+        "NEVER swept into another node's hashes/archive (file-level "
+        "attribution; the gcd+rsubint32 finding)",
+        "v-foreign" not in hash_on
+        and not (w / "elf-on/test_c/v-foreign").exists()
+        and "v-foreign" not in (w / "hashes-off.txt").read_text(),
+    )
+    v_fail = json.loads((sw.ev / "cls-fail/classify/sem-perf/verdict.json").read_text())
+    check(
+        "classify batch: one node's compile failure -> ITS OWN COMPILE_FAIL "
+        "verdict (leg named), other nodes unaffected",
+        v_fail.get("status") == "COMPILE_FAIL"
+        and v_fail.get("leg") == "on"
+        and any("cls-fail/sem-perf: compile on failed" in r for r in sw.reds),
+        (v_fail, sw.reds),
+    )
+    check(
+        "classify batch: deselected/no-outcome nodes -> NO verdict (solo "
+        "fallback), never a guessed one",
+        not (sw.ev / "cls-dropped/classify/sem-perf/verdict.json").exists()
+        and not (sw.ev / "cls-absent/classify/sem-perf/verdict.json").exists(),
+    )
+    check(
+        "classify batch: cached verdict never re-enters a chunk session",
+        nid("cached") not in seen_nodes,
+        seen_nodes,
+    )
+    check(
+        "classify batch: chunk build trees are removed after extraction",
+        not any((sw.ev / "classify-batches").rglob("tt-llk-build")),
+    )
+
 if FAILS:
     print(f"batched-silicon self-test: FAILED ({len(FAILS)}: {', '.join(FAILS)})")
     sys.exit(1)
@@ -450,5 +698,7 @@ print(
     "batched-silicon self-test: ALL GREEN (partitioning incl. sem/hand "
     "never-share; 3-op dry-run layout parity batched==legacy; session split "
     "back to per-leg evidence with mathop-filtered CSVs and manifest-subset "
-    "TEXT_HASHES; cache keying)"
+    "TEXT_HASHES; cache keying; producer failure attributes per leg, never "
+    "poisons the group; batched classify verdicts match the solo layout "
+    "with per-node attribution and solo fallback)"
 )
