@@ -24,7 +24,7 @@ pattern becomes the main design choice when the input and output are already sha
 | Variant | What it does | Expected mechanism |
 |---|---|---|
 | `reduce_root_mcast` | Non-root cores unicast to one root; the root reduces all blocks and multicasts the result. | Cuts communication, but serializes all reduction work on the root. |
-| `reduce_scatter_mcast` | Up to `min(num_tiles, group_size - 1)` workers gather and reduce disjoint tile indices, write partials to the root, then the root multicasts the assembled result. | Keeps the reduced communication volume while parallelizing the root's compute and reads. |
+| `reduce_scatter_mcast` | All `min(num_tiles, group_size)` workers - the root included - gather and reduce disjoint tile indices, write partials to the root, then the root multicasts the assembled result. The tile split need not divide the group. | Keeps the reduced communication volume while parallelizing the root's compute and reads. |
 | `tree_reduce_mcast` | Hierarchical reduce over the 2-D core grid. Stage 1: within each grid row the `cols` cores gather to their row's leader, which reduces them to a per-row partial. Stage 2: the `rows` row-leaders gather to the group root, which reduces the partials into the group sum. Stage 3: the root multicasts the sum to the whole group. | Splits the reduction across the two grid axes, so each gather stage has a small fan-in (`cols`, then `rows`) instead of one all-to-root fan-in of `rows*cols`, at the cost of one extra communication round. On a 1-D group (one row or one column) there is only one axis to reduce, so it collapses to the single gather-to-root path. |
 | `unicast_all_gather` | Every core unicasts its local block to every other core, then every core reduces the gathered blocks. | Simple but creates quadratic unicast traffic. |
 
@@ -65,6 +65,30 @@ Every variant uses the same reducer: contributors are paired with FPU `add_tiles
 directly in FP32 DST via `acc_to_dest=true`, and packed once after the full reduction. The live
 output batch comes from the JIT-derived `DEST_AUTO_LIMIT`. Odd contributor counts seed DST with one
 copied block first.
+
+### Ragged tile splits are the normal case
+
+`reduce_scatter_mcast` hands worker `i` the tile indices `i, i+W, i+2W, ...`, so any `num_tiles` that
+is not a multiple of the worker count `W` leaves some workers owning one tile more than the rest.
+This is the common situation, not an edge case, and it costs nothing measurable - a ragged
+20-tiles-over-8-workers point lands on the straight line through its even 16- and 24-tile
+neighbours, well inside run-to-run spread (see `report_bh_p150b_1d.md`). Ragged group *widths*
+behave the same: 16 tiles over an 11-, 10- or 5-core line all measure and verify cleanly.
+
+Two properties make that hold, and both transfer to any op distributing a ragged split over a CB:
+
+- **Size the CBs at a uniform quantum, not a per-worker one.** The gather and partial CBs are
+  allocated at `max_assigned = ceil(num_tiles / W)` and *every* worker pushes and pops exactly that,
+  with gather stride `contributor * max_assigned`, whatever its own share is. A CB's capacity must be
+  an exact multiple of its push/pop quantum, so a per-worker quantum would wrap at a different offset
+  on every core and contributors would land on each other's slots; a uniform one pins each
+  contributor's slot to a fixed address. The pad slots a short worker leaves are neither read nor
+  written back, so they cost a little L1 and nothing else.
+- **Put every core to work, the root included.** `W = min(num_tiles, group_size)` - the root takes a
+  worker share and only then multicasts, writing its own partials to itself over NoC loopback so the
+  sender's `wait_min` still counts one increment per worker per iteration. Reserving the root would
+  idle `1/G` of the group for the whole gather/reduce phase *and* leave `W` coprime with power-of-two
+  tile counts, which is the more ragged split rather than the less.
 
 ## CLI - measure your own shapes and parameters
 
@@ -172,7 +196,7 @@ trials, ten in-kernel all-reduces. Comparing the three reducers that make sense 
 **Reading of the result - pick the reducer by regime:**
 - **`reduce_scatter_mcast` wins an isolated group that has real payload** (16 cores, 6 tiles: ~2x
   over root) because it parallelizes the reduction across tile indices. But it needs tiles to
-  parallelize - useless at 1 tile (`min(num_tiles, group_size-1)` = 1 worker, plus a wasted
+  parallelize - useless at 1 tile (`min(num_tiles, group_size)` = 1 worker, plus a wasted
   worker->root handoff, so it is the *worst* there) - and it is **contention-sensitive**: from 1
   group to 5 it goes 2286.8 -> 6443.0 ns and its noise jumps from ~1% to 15-28%.
 - **`tree_reduce_mcast` is the robust default.** Its per-axis traffic is localized (each gather's
