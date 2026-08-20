@@ -328,6 +328,62 @@ def main():
             f"rc={r.returncode} {r.stderr[:300]}",
         )
 
+        # 10. text-only seed (evidence retains only .text payloads) + gate
+        #     via --base-cc1plus (a -B-selected base has no resolving driver)
+        text_root = td / "text-evidence/text"
+        for rel, payload in ELVES.items():
+            p = text_root / (rel + ".text.bin")
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(payload)
+        r = run(
+            SEED,
+            "--arch",
+            "bh",
+            "--flags",
+            "-mno-a -Bsomewhere/",
+            "--cc1plus",
+            cc1plus,
+            "--recorded-cc1plus-sha",
+            base_sha,
+            "--compiler",
+            gxx,
+            "--farm",
+            farm,
+            "--text-root",
+            text_root,
+            "--evidence",
+            "selftest-text-fixture",
+            "--store-root",
+            store_root,
+        )
+        check(
+            "text-only seed publishes",
+            r.returncode == 0 and "SEEDED" in r.stdout,
+            r.stdout + r.stderr,
+        )
+        r = run(
+            GATE,
+            "--arch",
+            "bh",
+            "--flags",
+            "-mno-a -Bsomewhere/",
+            "--base-cc1plus",
+            cc1plus,
+            "--objcopy",
+            gxx.with_name("riscv-tt-elf-objcopy"),
+            "--tt-metal-home",
+            farm,
+            "--store-root",
+            store_root,
+            "--mine",
+            same_leg,
+        )
+        check(
+            "gate via --base-cc1plus on text-only entry exits 0",
+            r.returncode == 0 and "BYTE-IDENTICAL" in r.stdout,
+            f"rc={r.returncode} {r.stdout}{r.stderr}",
+        )
+
         # --list smoke
         r = run(GATE, "--list", "--store-root", store_root)
         check(

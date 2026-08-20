@@ -174,6 +174,13 @@ def main(argv=None):
         "~/sfpi-uplift/sfpi/build/sfpi/compiler/bin/riscv-tt-elf-g++)",
     )
     ap.add_argument(
+        "--base-cc1plus",
+        type=pathlib.Path,
+        help="the BASE cc1plus binary itself, for -B-selected bases where "
+        "the driver resolves a different cc1plus (the binary is hashed "
+        "now; mutually exclusive with --base-compiler)",
+    )
+    ap.add_argument(
         "--mine",
         action="append",
         help="the EDIT leg's compiled tt-llk-build tree " "(repeatable for shards)",
@@ -213,15 +220,31 @@ def main(argv=None):
             ap.error(f"--{req} is required (unless --list)")
     if not args.mine and not args.mine_manifest:
         ap.error("pass the edit leg: --mine <tt-llk-build> (or --mine-manifest)")
+    if args.base_cc1plus is not None and args.base_compiler is not None:
+        ap.error("--base-cc1plus and --base-compiler are mutually exclusive")
     if args.base_compiler is None:
         args.base_compiler = pathlib.Path.home() / (
             "sfpi-uplift/sfpi/build/sfpi/compiler/bin/riscv-tt-elf-g++"
         )
     if args.objcopy is None:
+        # objcopy's .text extraction is toolchain-generic; the installed
+        # pin's binutils serve every base.
         args.objcopy = args.base_compiler.with_name("riscv-tt-elf-objcopy")
+        if not args.objcopy.is_file():
+            args.objcopy = pathlib.Path.home() / (
+                "sfpi-uplift/sfpi/build/sfpi/compiler/bin/riscv-tt-elf-objcopy"
+            )
 
     # --- derive the base identity and verify the entry (fail closed) ---
-    _, cc1_sha = store.resolve_cc1plus(args.base_compiler)
+    if args.base_cc1plus is not None:
+        # -B-selected bases: the driver would resolve the WRONG cc1plus —
+        # the caller names the exact binary its -B option selects, and the
+        # sha is still derived by hashing that binary NOW (never typed in).
+        if not args.base_cc1plus.is_file():
+            refuse(args, f"--base-cc1plus {args.base_cc1plus} does not exist")
+        cc1_sha = store.sha256_file(args.base_cc1plus)
+    else:
+        _, cc1_sha = store.resolve_cc1plus(args.base_compiler)
     entry = (
         pathlib.Path(args.store_root)
         / cc1_sha[:12]

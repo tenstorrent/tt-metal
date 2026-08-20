@@ -128,6 +128,36 @@ def hash_roots(roots, objcopy):
     return entries
 
 
+def hash_text_roots(paths):
+    """Union .text manifest over text/ payload trees (*.elf.text.bin, the
+    sweep's extracted-.text evidence format).  The BYTES are re-hashed;
+    the elf column is '-' (full ELF unavailable).  Overlap must agree."""
+    entries = {}
+    for p in paths:
+        root = pathlib.Path(p).resolve()
+        if not root.is_dir():
+            refuse(f"text root {root} is not a directory")
+        found = False
+        for bin_path in sorted(root.rglob("*.elf.text.bin")):
+            rel = str(bin_path.relative_to(root))[: -len(".text.bin")]
+            if "shared" in pathlib.Path(rel).parts:
+                continue  # brisc bootrom scaffolding, flag-independent
+            found = True
+            row = (
+                hashlib.sha256(bin_path.read_bytes()).hexdigest(),
+                "-",
+            )
+            if rel in entries and entries[rel] != row:
+                refuse(
+                    f"text roots DISAGREE on {rel} — these are not shards "
+                    "of one leg; seed each leg separately"
+                )
+            entries[rel] = row
+    if paths and not found and not entries:
+        refuse("text roots contain no *.elf.text.bin payloads")
+    return entries
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -176,9 +206,17 @@ def main(argv=None):
     ap.add_argument(
         "--build-root",
         action="append",
-        required=True,
         help="compiled tt-llk-build tree(s) of the leg "
         "(repeatable; shards are unioned, disagreement refuses)",
+    )
+    ap.add_argument(
+        "--text-root",
+        action="append",
+        help="alternative to --build-root when the evidence retains only "
+        "extracted .text payloads (the sweep's text/ trees of "
+        "*.elf.text.bin files): the TEXT BYTES are re-hashed; the entry "
+        "is marked text_only and its manifest carries elf:- (full-ELF "
+        "hashes unavailable).  Mutually exclusive with --build-root",
     )
     ap.add_argument(
         "--results-tsv",
@@ -231,7 +269,11 @@ def main(argv=None):
         cand = args.compiler.with_name("riscv-tt-elf-objcopy")
         if cand.is_file():
             args.objcopy = cand
-    if args.objcopy is None or not pathlib.Path(args.objcopy).is_file():
+    if bool(args.build_root) == bool(args.text_root):
+        refuse("pass exactly one of --build-root or --text-root")
+    if args.build_root and (
+        args.objcopy is None or not pathlib.Path(args.objcopy).is_file()
+    ):
         refuse("no usable riscv-tt-elf-objcopy (pass --objcopy)")
     if not (args.farm / ".git").exists():
         refuse(f"--farm {args.farm} is not a git checkout")
@@ -244,10 +286,14 @@ def main(argv=None):
         )
 
     # --- re-hash the completed leg ---
-    roots = find_build_roots(args.build_root)
-    entries = hash_roots(roots, args.objcopy)
+    if args.build_root:
+        roots = find_build_roots(args.build_root)
+        entries = hash_roots(roots, args.objcopy)
+    else:
+        roots = [pathlib.Path(p).resolve() for p in args.text_root]
+        entries = hash_text_roots(args.text_root)
     if not entries:
-        refuse("build roots contain ZERO kernel ELFs — nothing to seed")
+        refuse("roots contain ZERO kernel ELF payloads — nothing to seed")
 
     # Post-walk recheck: same mid-leg-swap rule as the store's compile path.
     got2 = store.sha256_file(args.cc1plus)
@@ -309,6 +355,7 @@ def main(argv=None):
             "tt_metal_head": farm_head,
             "producer": "seeded",
             "seeded_from": [str(r) for r in roots],
+            "text_only": bool(args.text_root),
             "seeded_evidence": args.evidence,
             "seeded_by": f"{getpass.getuser()}@{socket.gethostname()}",
             "has_build": False,
