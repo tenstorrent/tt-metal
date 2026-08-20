@@ -85,12 +85,8 @@ public:
 
     // Unsafe allocation tracking is per trace. Allocation context remains per buffer because a
     // buffer has the same allocation site regardless of how many older traces can corrupt it.
-    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(std::uint32_t trace_id);
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(std::uint32_t trace_id) const;
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
-    static std::vector<size_t> drain_pending_traceback_ids();
-    static std::vector<size_t> drain_retired_traceback_ids();
-    static void push_corruptible_allocation_scope(const std::vector<AllocatorImpl*>& allocators);
-    static void pop_corruptible_allocation_scope();
 
     // See <tt-metalium/experimental/allocation_context.hpp> for the thread-local context stack API.
 
@@ -137,6 +133,7 @@ protected:
 private:
     void verify_safe_allocation() const;
     void record_allocation_if_unsafe(Buffer* buffer);
+    void record_deallocation(size_t buffer_unique_id);
     bool in_corruptible_allocation_scope() const;
 
     mutable std::mutex mutex_;
@@ -178,5 +175,12 @@ private:
     std::unordered_map<std::uint32_t, std::unordered_set<size_t>> unsafe_tracked_ids_by_trace_;
     std::unordered_map<size_t, std::string> unsafe_allocation_contexts_;
 };
+
+// Process-global trace-tracker state shared across allocators: corruptible-allocation scopes
+// and the traceback-id queues drained by the Python diagnostics layer.
+void push_corruptible_allocation_scope(const std::vector<AllocatorImpl*>& allocators);
+void pop_corruptible_allocation_scope();
+std::vector<size_t> drain_pending_traceback_ids();
+std::vector<size_t> drain_retired_traceback_ids();
 
 }  // namespace tt::tt_metal

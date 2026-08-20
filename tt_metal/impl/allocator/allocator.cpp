@@ -234,6 +234,9 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
             l1_manager_->deallocate_buffer(addr, AllocatorID{bank_id + 1});
         }
         allocated_buffers_.erase(buffer);
+        if (tracking_enabled_) [[unlikely]] {
+            this->record_deallocation(buffer->unique_id());
+        }
         return;
     }
 
@@ -247,6 +250,9 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.erase(buffer);
+    if (tracking_enabled_) [[unlikely]] {
+        this->record_deallocation(buffer->unique_id());
+    }
 }
 
 void AllocatorImpl::deallocate_buffers() {

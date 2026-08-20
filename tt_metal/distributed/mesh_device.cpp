@@ -49,7 +49,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
-#include "distributed/trace_allocation_tracker.hpp"
+#include <tt-metalium/experimental/trace_allocation_tracker.hpp>
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
@@ -268,26 +268,6 @@ uint32_t MeshDeviceImpl::dram_size_per_channel() const {
 
 IDevice* MeshDeviceImpl::reference_device() const { return this->get_devices().at(0); }
 
-std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators() const {
-    this->validate_sub_device_manager_tracker();
-    std::vector<AllocatorImpl*> result;
-    std::unordered_set<AllocatorImpl*> seen;
-    const auto append_manager = [&result, &seen](const SubDeviceManager* manager) {
-        if (manager == nullptr) {
-            return;
-        }
-        for (const auto& allocator : manager->allocators()) {
-            if (allocator != nullptr && seen.insert(allocator.get()).second) {
-                result.push_back(allocator.get());
-            }
-        }
-    };
-
-    append_manager(sub_device_manager_tracker_->get_default_sub_device_manager());
-    append_manager(sub_device_manager_tracker_->get_active_sub_device_manager());
-    return result;
-}
-
 std::vector<AllocatorImpl*> MeshDeviceImpl::all_trace_allocators() const {
     this->validate_sub_device_manager_tracker();
     std::vector<AllocatorImpl*> result;
@@ -302,16 +282,15 @@ std::vector<AllocatorImpl*> MeshDeviceImpl::all_trace_allocators() const {
     return result;
 }
 
+// Registration and cleanup walk every manager's allocators, so allocations are tracked and
+// released correctly even when the loaded sub-device manager changes while the trace is live.
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::register_active_trace(const MeshTraceId& trace_id) {
-    for (auto* allocator : this->trace_allocators()) {
+    for (auto* allocator : this->all_trace_allocators()) {
         allocator->register_active_trace(*trace_id);
     }
 }
 
-// Registration touches the allocators that were loaded at capture time; the loaded set may
-// have changed by release time. Cleanup walks every manager's allocators and relies on
-// unregister being a no-op on allocators that never saw the trace.
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::unregister_active_trace(const MeshTraceId& trace_id) {
     for (auto* allocator : this->all_trace_allocators()) {
@@ -332,16 +311,10 @@ void MeshDeviceImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
         allocator->remove_unsafe_tracked_id(buffer_unique_id);
     }
 }
-std::vector<size_t> MeshDeviceImpl::drain_pending_traceback_ids() {
-    return AllocatorImpl::drain_pending_traceback_ids();
-}
-std::vector<size_t> MeshDeviceImpl::drain_retired_traceback_ids() {
-    return AllocatorImpl::drain_retired_traceback_ids();
-}
 void MeshDeviceImpl::push_corruptible_allocation_scope() {
-    AllocatorImpl::push_corruptible_allocation_scope(this->trace_allocators());
+    tt::tt_metal::push_corruptible_allocation_scope(this->all_trace_allocators());
 }
-void MeshDeviceImpl::pop_corruptible_allocation_scope() { AllocatorImpl::pop_corruptible_allocation_scope(); }
+void MeshDeviceImpl::pop_corruptible_allocation_scope() { tt::tt_metal::pop_corruptible_allocation_scope(); }
 
 namespace trace_allocation_tracker {
 
@@ -357,8 +330,8 @@ std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshDevice*
 void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id) {
     device->impl().remove_unsafe_tracked_id(buffer_unique_id);
 }
-std::vector<size_t> drain_pending_traceback_ids() { return MeshDeviceImpl::drain_pending_traceback_ids(); }
-std::vector<size_t> drain_retired_traceback_ids() { return MeshDeviceImpl::drain_retired_traceback_ids(); }
+std::vector<size_t> drain_pending_traceback_ids() { return tt::tt_metal::drain_pending_traceback_ids(); }
+std::vector<size_t> drain_retired_traceback_ids() { return tt::tt_metal::drain_retired_traceback_ids(); }
 void push_corruptible_allocation_scope(MeshDevice* device) { device->impl().push_corruptible_allocation_scope(); }
 void pop_corruptible_allocation_scope(MeshDevice* device) { device->impl().pop_corruptible_allocation_scope(); }
 

@@ -14,10 +14,14 @@ namespace tt::tt_metal {
 // Guards push a context string (e.g. op name + compile args) before dispatching;
 // the allocator records whatever context is on top of the stack at allocation time.
 //
-// Process-start configuration, cached during RunTimeOptions initialization.
+// Process-start configuration, parsed from the environment on first read.
 bool trace_allocation_tracking_enabled();
 bool trace_allocation_diagnostics_enabled();
 bool trace_allocation_skip_program_cache_enabled();
+
+// Contexts with this prefix identify program-cache-owned allocations, which
+// TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE excludes from unsafe-allocation accounting.
+inline constexpr std::string_view kProgramCacheAllocationContextPrefix = "program_cache:";
 
 void push_allocation_context(std::string_view ctx);
 void pop_allocation_context();

@@ -18,7 +18,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.operation_tracer
-from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
+from ttnn.unsafe_allocation_tracker import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
 
 
 def compare_tensors_using_pcc(

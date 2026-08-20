@@ -189,7 +189,6 @@ private:
     // Validates that the sub_device_manager_tracker_ is initialized before accessing it.
     // Throws if the tracker is null (e.g., on remote-only MeshDevices).
     void validate_sub_device_manager_tracker() const;
-    std::vector<AllocatorImpl*> trace_allocators() const;
     std::vector<AllocatorImpl*> all_trace_allocators() const;
 
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
@@ -230,8 +229,6 @@ public:
     // Unsafe allocation tracking
     std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshTraceId& trace_id) const;
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
-    static std::vector<size_t> drain_pending_traceback_ids();
-    static std::vector<size_t> drain_retired_traceback_ids();
     void push_corruptible_allocation_scope();
     void pop_corruptible_allocation_scope();
 

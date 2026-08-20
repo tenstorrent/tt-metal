@@ -379,6 +379,23 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         "Cannot enable both debug printing and profiling");
 }
 
+bool RunTimeOptions::get_trace_allocation_tracking_enabled() {
+    static const bool enabled = is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACKING"));
+    return enabled;
+}
+
+bool RunTimeOptions::get_trace_allocation_diagnostics_enabled() {
+    static const bool enabled =
+        get_trace_allocation_tracking_enabled() && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS"));
+    return enabled;
+}
+
+bool RunTimeOptions::get_trace_allocation_skip_program_cache_enabled() {
+    static const bool enabled = get_trace_allocation_tracking_enabled() &&
+                                is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE"));
+    return enabled;
+}
+
 void RunTimeOptions::set_root_dir(const std::string& root_dir) {
     std::call_once(g_root_once, [&] { g_root_dir = root_dir; });
 }
@@ -1679,19 +1696,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_ALLOCATOR_MODE_HYBRID=1
         case EnvVarID::TT_METAL_ALLOCATOR_MODE_HYBRID: this->allocator_mode_hybrid = is_env_enabled(value); break;
 
-        // Trace-allocation tracker settings are process-start options. Keep their
-        // cached values in RunTimeOptions so runtime hot paths never call getenv.
+        // Trace-allocation tracker settings are parsed lazily in their getters so reads
+        // that precede RunTimeOptions construction (e.g. at Python import) see real values.
         case EnvVarID::TT_METAL_TRACE_ALLOC_TRACKING:
-            trace_allocation_tracking_enabled_ = std::strcmp(value, "1") == 0;
-            break;
         case EnvVarID::TT_METAL_TRACE_ALLOC_TRACEBACKS:
-            trace_allocation_diagnostics_enabled_ =
-                trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
-            break;
-        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE:
-            trace_allocation_skip_program_cache_enabled_ =
-                trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
-            break;
+        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE: break;
 
         // TT_METAL_SHM_TRACKING_DISABLED
         // Disable shared memory tracking for tt-smi.

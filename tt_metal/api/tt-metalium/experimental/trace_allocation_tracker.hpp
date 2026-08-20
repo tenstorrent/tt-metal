@@ -15,6 +15,9 @@ namespace tt::tt_metal::distributed {
 
 class MeshDevice;
 
+// Experimental trace allocation safety tracker. Registration marks a device's allocators as
+// carrying a live trace; with TT_METAL_TRACE_ALLOC_TRACKING=1, allocations made while traces
+// are live are accounted per trace so replay can reject buffers it would corrupt.
 namespace trace_allocation_tracker {
 
 void register_active_trace(MeshDevice* device, const MeshTraceId& trace_id);

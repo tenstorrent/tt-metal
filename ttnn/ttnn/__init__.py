@@ -158,7 +158,7 @@ from ttnn._ttnn.operations.debug import (
     apply_device_delay,
 )
 
-from ttnn.trace_allocation_config import TRACE_ALLOC_TRACKING
+from ttnn.unsafe_allocation_tracker import TRACE_ALLOC_TRACKING
 
 if TRACE_ALLOC_TRACKING:
     from ttnn._ttnn.operations.trace import (

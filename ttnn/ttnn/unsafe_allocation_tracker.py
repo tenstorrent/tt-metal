@@ -22,10 +22,39 @@ See also: ttnn.corruptible_allocation_scope, ttnn.execute_trace.
 from __future__ import annotations
 
 import gc
+import os
 import sys
+import warnings
 from typing import ClassVar
 
-from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_REFERRER_DEPTH
+from ttnn._ttnn.operations.trace import (
+    trace_allocation_diagnostics_enabled,
+    trace_allocation_tracking_enabled,
+)
+
+# Tracking and diagnostics are parsed once by the C++ runtime; Python reads them from there
+# so the two sides can never disagree. The referrer depth is a Python-only knob.
+TRACE_ALLOC_TRACKING = trace_allocation_tracking_enabled()
+TRACE_ALLOC_DIAGNOSTICS = trace_allocation_diagnostics_enabled()
+
+
+def _env_nonnegative_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+        if parsed < 0:
+            raise ValueError
+        return parsed
+    except ValueError:
+        warnings.warn(f"{name} must be a non-negative integer; using {default}", stacklevel=2)
+        return default
+
+
+TRACE_ALLOC_REFERRER_DEPTH = (
+    _env_nonnegative_int("TT_METAL_TRACE_ALLOC_REFERRER_DEPTH", 10) if TRACE_ALLOC_DIAGNOSTICS else 10
+)
 
 
 class UnsafeAllocationTracker:
@@ -74,10 +103,13 @@ class UnsafeAllocationTracker:
         """
         from ttnn._ttnn.operations.trace import drain_retired_traceback_ids, get_unsafe_tracked_ids
 
-        gc.collect()
-
-        # get_unsafe_tracked_ids returns dict[int, str] mapping buffer_id -> allocation context
+        # get_unsafe_tracked_ids returns dict[int, str] mapping buffer_id -> allocation context.
+        # Run the (expensive) collector only when tracked buffers are still alive — dropping the
+        # last Python reference may be all that stands between them and deallocation.
         live_unsafe_map = get_unsafe_tracked_ids(self.mesh_device, trace_id)
+        if live_unsafe_map:
+            gc.collect()
+            live_unsafe_map = get_unsafe_tracked_ids(self.mesh_device, trace_id)
         if self._diagnostics_enabled:
             for buf_id in drain_retired_traceback_ids():
                 self._tracebacks.pop(buf_id, None)

@@ -9,7 +9,7 @@ import typing
 import pytest
 import torch
 import ttnn
-from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS
+from ttnn.unsafe_allocation_tracker import TRACE_ALLOC_DIAGNOSTICS
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import skip_for_slow_dispatch
