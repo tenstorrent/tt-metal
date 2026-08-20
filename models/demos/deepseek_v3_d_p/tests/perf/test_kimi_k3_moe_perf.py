@@ -43,9 +43,10 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import run_model
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.perf_utils import adjust_margin_for_ddr_speed
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
@@ -83,27 +84,23 @@ _IGNORE_POWER = os.environ.get("K3_MOE_PERF_IGNORE_POWER") == "1"
 )
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
+            torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["kimi_k3"])
-def test_kimi_k3_moe_perf_galaxy(variant, config_only, mesh_device, device_params, num_links, topology, request):
+def test_kimi_k3_moe_perf_galaxy(variant, config_only, mesh_device, device_params, num_links, request):
     """896 experts / top-16, 3584 latent: device time of one MoE forward at 5k ISL."""
     require_realtime_profiler("the Kimi-K3 MoE perf gate")
+    topology = per_axis_topology(device_params["fabric_config"])
 
     per_program = {}
 
