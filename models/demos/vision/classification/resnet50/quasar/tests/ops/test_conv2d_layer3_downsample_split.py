@@ -3,21 +3,29 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Standalone repro of the resnet50/quasar layer2_module1 DOWNSAMPLE (the 1x1 shortcut projection).
+Validate the layer3_module1 1x1 stride-2 downsample on the Quasar HEIGHT_SHARDED SPLIT plain-matmul route.
 
-WHY: the full model now clears stem -> maxpool -> ALL of layer1 -> layer2_module1 conv1/conv2/conv3, then
-FATALs at the residual reshard `to_memory_config(ds_out, out.memory_config())`:
-    "Shard width 512 must match physical width 256 for height sharded"
-because the downsample output logged as (1,1,832,256) -- 256 channels -- while conv3 is (1,1,784,512).
-The downsample is configured 256->512 (ds_conv_output_channels = weight.shape[0] = 512) but produced 256ch.
-This isolates that exact op (1x1, 256->512, stride 2, 56x56 input, HEIGHT_SHARDED, verbatim from
-run_downsample_if_req) so we can confirm the conv is dropping the channel expansion (out_ch=256 not 512)
-without a full-model run. layer1's downsample was stride-1 64->256 and matched conv3 fine; this is the first
-stride-2 channel-EXPANDING downsample.
+WHY THIS SHAPE / PIVOT FROM BLOCK
+--------------------------------
+The resnet50 layer3_module1 downsample (in=512, out=1024, 1x1, stride 2, input 28x28) is the ONE downsample
+the model forces BLOCK_SHARDED, historically because the FUSED HEIGHT_SHARDED full-N path N-halves the
+stride-2 1x1 channel-expansion (device out = 512 not 1024). But on the FUSED path a block-sharded 1x1 splits
+K across the GRID columns (in0_num_blocks_w>1 -> nbw2 on the 2-core grid) and deadlocks in the multi-K-block
+accumulate (tt-metal #48679 / tt-llk #48504). A block-sharded SPLIT extension was tried and FAILED: the grid
+splits K regardless of act_block_w, so it can't be made single-K-block. HEIGHT_SHARDED is the only
+single-K-block shape.
 
-RUN (emulator, forced JIT):
-  TT_METAL_QSR_TC_ISOLATE=1 TT_METAL_QSR_CONV_SPLIT_PROGRAM=1 TT_METAL_FORCE_JIT_COMPILE=1 \
-    pytest -q models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer2_downsample.py
+WHAT THIS VALIDATES
+-------------------
+Routing this downsample HEIGHT_SHARDED so `force_1x1_nonmm_split` (conv2d.cpp) engages -> SPLIT path (Program A
+gather+tilize -> Program B quasar matmul::linear, single-K-block). That path EXPLICITLY dodges the fused-HS
+full-N N-halving (its own comment), exactly as it does for the layer2 @56 and layer4 @14 downsamples that
+already pass HS+split. If this passes (all 1024 out channels, PCC ~0.99), the model can route @28 HS too
+(drop the forced-BLOCK) and the last host bypass (_CONV_ON_DEVICE["downsample"]) can be removed.
+
+RUN (emulator, forced JIT; SPLIT env set inside the test):
+  TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FORCE_JIT_COMPILE=1 \
+    pytest -q models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer3_downsample_split.py
 """
 
 import pytest
@@ -30,33 +38,23 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "shard",
-    [ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TensorMemoryLayout.BLOCK_SHARDED],
-    ids=["height", "block"],
-)
-def test_quasar_layer2_module1_downsample(mesh_device, shard, monkeypatch):
-    """layer2_module1 downsample: 1x1, in=256, out=512, stride 2, input 56x56. The output MUST be 512
-    channels; if it comes back 256 the conv is dropping the channel expansion. The model uses HEIGHT here
-    (input_height 56 != 28); the 'block' case tests whether BLOCK sharding gets the channel count right (if
-    so, the fix is to force BLOCK for this stride-2 channel-expanding downsample)."""
-    # Known layer-downsample bugs (same pair xfailed in test_conv2d_resnet_layers): HEIGHT drops the 1x1-stride-2
-    # channel expansion (last-dim 256 vs 512); BLOCK is numerically wrong (PCC ~0.75). Arch-general device bugs;
-    # downsamples are host-fallbacked in the model, so off the on-device path.
+def test_quasar_layer3_module1_downsample_hs_split(mesh_device, monkeypatch):
+    """layer3_module1 downsample: 1x1, in=512, out=1024, stride 2, input 28x28, HEIGHT_SHARDED via the SPLIT
+    plain-matmul route (force_1x1_nonmm_split). Must keep all 1024 out channels (no N-halving) and match a
+    torch golden (PCC ~0.99). If this passes, the model can drop the forced-BLOCK for @28."""
     if is_wormhole_b0():
-        pytest.xfail(
-            "known layer2 downsample bugs: HEIGHT drops the 1x1-s2 channel expansion (256 vs 512); BLOCK PCC ~0.75. "
-            "Same as the test_conv2d_resnet_layers downsample xfails; downsamples host-fallbacked in the model."
-        )
+        pytest.skip("Quasar-only: exercises the force_1x1_nonmm_split BLOCK_SHARDED extension (arch_is_quasar).")
+
     device = mesh_device
     torch.manual_seed(0)
 
+    # Required: force_1x1_nonmm_split only fires under the split env.
     monkeypatch.setenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "1")  # monkeypatch auto-restores after the test
 
     batch = 1
-    in_ch = 256
-    out_ch = 512
-    input_height = input_width = 56  # layer2_module1 downsample input (layer1 output spatial)
+    in_ch = 512
+    out_ch = 1024
+    input_height = input_width = 28  # layer3_module1 downsample input (layer2 output spatial)
     kernel_size = (1, 1)
     stride = (2, 2)
     padding = (0, 0)
@@ -86,10 +84,11 @@ def test_quasar_layer2_module1_downsample(mesh_device, shard, monkeypatch):
     tt_weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat16)
     tt_bias = ttnn.from_torch(torch_bias.reshape(1, 1, 1, out_ch), dtype=ttnn.bfloat16)
 
-    # Verbatim from run_downsample_if_req (input_height 56 != 28 -> HEIGHT_SHARDED).
+    # PROPOSED model routing for @28: HEIGHT_SHARDED (like layer2 @56 / layer4 @14) so force_1x1_nonmm_split
+    # engages and the split's Program B does the full GEMM (no N-halving). The rest mirrors run_downsample_if_req.
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=ttnn.bfloat16,
-        shard_layout=shard,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         deallocate_activation=True,
         reallocate_halo_output=True,
         act_block_h_override=32,
@@ -122,7 +121,7 @@ def test_quasar_layer2_module1_downsample(mesh_device, shard, monkeypatch):
     )
 
     tt_out = ttnn.to_torch(ttnn.from_device(out))
-    # The whole point: assert the op kept all 512 output channels.
+    # The split route must keep all 1024 output channels (the N-halving bug drops half).
     assert tt_out.shape[-1] >= out_ch, f"downsample dropped channels: got last-dim {tt_out.shape[-1]}, want >= {out_ch}"
     tt_out = tt_out.reshape(batch, oh, ow, tt_out.shape[-1])[:, :, :, :out_ch]
     tt_out = torch.permute(tt_out, (0, 3, 1, 2))  # NHWC -> NCHW

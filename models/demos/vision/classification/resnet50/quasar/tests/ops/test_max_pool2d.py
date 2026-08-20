@@ -67,7 +67,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.timeout(300)  # the known pool-reduce dest-sync HANG would otherwise block the suite; cap it
 # @pytest.mark.xfail(
 #    reason="Quasar max_pool2d hangs in the pool-reduce dest handshake in compute_pool_2d.cpp "
 #    "(pack tile_regs_wait / math WFD / unpack UPTW never rendezvous). LLK dest-sync target. "
