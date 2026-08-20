@@ -151,9 +151,9 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
     if constexpr (APPROXIMATION_MODE) {
         // SFPU microcode
-        sfpi::vUInt l0 = l_reg[sfpi::LRegs::LReg0];
-        sfpi::vUInt l1 = l_reg[sfpi::LRegs::LReg1];
-        sfpi::vUInt l2 = l_reg[sfpi::LRegs::LReg2];
+        sfpi::vFloat8Pair l0 = l_reg[sfpi::LRegs::LReg0];
+        sfpi::vFloat8Pair l1 = l_reg[sfpi::LRegs::LReg1];
+        sfpi::vFloat8Pair l2 = l_reg[sfpi::LRegs::LReg2];
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
@@ -206,12 +206,9 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
-        std::uint32_t imm0 = 0x1DFF;  // 0.90625*x
-        std::uint32_t imm1 = 0x481A;  // 0.09375*x + 0.8125
-        std::uint32_t imm2 = 0xFF00;  // 1
-        _sfpu_load_imm16_(0, imm0);
-        _sfpu_load_imm16_(1, imm1);
-        _sfpu_load_imm16_(2, imm2);
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vFloat8Pair(0.90625f, 0.0f);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vFloat8Pair(0.09375f, 0.8125f);
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vFloat8Pair(0.0f, 1.0f);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
             sfpi::vConstFloatPrgm0 = 2.0f * 1.442695f;      // 2 * log2(e) == 2 / ln(2)
