@@ -11,9 +11,11 @@ Needs a host-IOMMU runner, hence requires_host_iommu: on Blackhole the profiler'
 
 import pytest
 
+import ttnn
 from models.common.utility_functions import is_blackhole, skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_p150
 from tests.ttnn.profiling.realtime_profiler_utils import assert_op_duration_merged, require_realtime_profiler
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     _ISL_ALLOCATED_TOKENS,
     _ISL_EXHAUSTIVE_MODELS,
@@ -62,6 +64,37 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
 }
 
 
+# Kimi K3 runs SiTU-GLU at the post-projection dims, so its K axis is ROUTED_EXPERT_HIDDEN_SIZE and
+# it cannot be driven from SINGLE_EXPERT_MODELS (which reads config.EMB_SIZE). Same measurement as
+# _EXPECTED_NS: median of 3 dispatches, x_rm layout, on a BH p150b (2026-08-19), centred over 8
+# sweeps rather than taken from one. Flat to ~256 tokens (the op sits on its DRAM weight-read
+# floor), linear in tokens past that.
+_K3_SITU_EXPECTED_NS: dict[int, int] = {
+    0: 3_820,
+    128: 185_670,
+    256: 187_970,
+    512: 259_000,
+    1024: 390_000,
+    2048: 690_900,
+    4096: 1_359_500,
+    5120: 1_730_500,
+}
+
+# K3's DRAM weight read is 18.58 MB against a ~185 us floor, so its knee sits a token count later
+# than kimi_k26's or glm_51's: 512 is the first case where compute starts to cover the read, and it
+# inherits the long right tail _LOW_ISL_MARGIN exists for (measured 254.0-265.8 us over 12 sweeps,
+# against 1.5% spread at 1024 and above). Everything past the knee holds inside the usual 3%.
+_K3_KNEE_TOKENS = 512
+
+
+def _margin_for(active: int) -> float:
+    return _CEILING_ONLY if active == 0 else _LOW_ISL_MARGIN if active <= 256 else _MARGIN
+
+
+def _margin_for_k3(active: int) -> float:
+    return _CEILING_ONLY if active == 0 else _LOW_ISL_MARGIN if active <= _K3_KNEE_TOKENS else _MARGIN
+
+
 def _perf_params():
     """Baseline and margin per (model, active) over the exhaustive ISL sweep, dims from
     SINGLE_EXPERT_MODELS. No extended_model mark: the markers below already scope where these run."""
@@ -77,7 +110,7 @@ def _perf_params():
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
                     _EXPECTED_NS[(name, active)],
-                    _CEILING_ONLY if active == 0 else _LOW_ISL_MARGIN if active <= 256 else _MARGIN,
+                    _margin_for(active),
                     # "-perf" keeps ids collision-free under -k: "512-perf" is not in "5120-perf".
                     id=f"{name}-isl-{active}-perf",
                 )
@@ -118,6 +151,42 @@ def test_single_routed_expert_perf(
         expected_ns=expected_ns,
         margin=margin,
         label=f'("{model_name}", {active_tokens})',
+        iters=_ITERS,
+        verbose=_VERBOSE,
+    )
+
+
+@pytest.mark.parametrize(
+    "active_tokens, expected_ns, margin",
+    [
+        pytest.param(active, _K3_SITU_EXPECTED_NS[active], _margin_for_k3(active), id=f"k3-isl-{active}-perf")
+        for active in _ISL_EXHAUSTIVE_SWEEP
+    ],
+)
+@pytest.mark.requires_host_iommu
+@pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU is Blackhole-only")
+@pytest.mark.skipif(not is_p150(), reason="perf baselines are P150-specific; skip on any other board")
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_single_routed_expert_k3_perf(device, active_tokens: int, expected_ns: int, margin: float):
+    """Kimi K3 routed expert (SiTU-GLU) device duration over the same ISL sweep as above."""
+    require_realtime_profiler("single routed expert perf checks")
+
+    assert_op_duration_merged(
+        device,
+        lambda: run_single_routed_expert(
+            device,
+            _ISL_ALLOCATED_TOKENS,
+            KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
+            KimiK3Config.MOE_INTERMEDIATE_SIZE,
+            active_tokens=active_tokens,
+            x_row_major=True,
+            activation=ttnn.RoutedExpertActivation.SituGlu,
+        ),
+        _OP_KERNEL_DIR,
+        expected_ns=expected_ns,
+        margin=margin,
+        label=f'("kimi_k3", {active_tokens})',
         iters=_ITERS,
         verbose=_VERBOSE,
     )

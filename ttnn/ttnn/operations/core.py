@@ -440,23 +440,9 @@ def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-doc = """
-Copies the `ttnn.Tensor` :attr:`tensor` to the `tt_lib.device.MeshDevice`.
-
-The tensor may be placed in DRAM or L1 memory.
-
-Currently memory_config must be of an Interleaved tensor (not sharded)
-
-Args:
-    * :attr:`tensor`: the ttnn.Tensor
-    * :attr:`device`: the ttnn.MeshDevice
-    * :attr:`memory_config`: the optional MemoryConfig (DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG). Defaults to DRAM_MEMORY_CONFIG.
-"""
-
 ttnn.register_python_operation(
     name="ttnn.to_device",
     golden_function=_golden_function,
-    doc=doc,
 )(ttnn._ttnn.operations.core.to_device)
 
 
@@ -464,18 +450,9 @@ def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-doc = """
-Copies the `ttnn.Tensor` :attr:`tensor` to the host.
-
-Args:
-    * :attr:`tensor`: the ttnn.Tensor
-"""
-
-
 ttnn.register_python_operation(
     name="ttnn.from_device",
     golden_function=_golden_function,
-    doc=doc,
 )(ttnn._ttnn.operations.core.from_device)
 
 ttnn.register_python_operation(

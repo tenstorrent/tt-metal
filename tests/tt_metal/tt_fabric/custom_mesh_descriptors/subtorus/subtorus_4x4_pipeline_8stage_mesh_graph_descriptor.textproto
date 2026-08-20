@@ -90,18 +90,23 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 #
 # mesh_id_regex expands PER matched mesh (one all-to-all group each). chip_id_regex and tray_id_regex use
 # the same range/list/regex syntax.
+#
+# 2-profile version: every mesh ("[0-9]*") is offered BOTH the Middle column (corners -> asic 3, chip 1 ->
+# tray 1 asic 7) and the Edge column (corners -> asic 2, chip 2 -> tray 4 asic 6). The solver commits
+# whichever profile lands on each assigned physical mesh -- not all must land, but at least one does.
 
 pinnings {
   logical_fabric_node_id { mesh_id_regex: "[0-9]*" chip_id_regex: "0,3,12,15" }
   physical_asic_position { tray_id_regex: "1-4" asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "[0-9]*" chip_id_regex: "0,3,12,15" }
   physical_asic_position { tray_id_regex: "1-4" asic_location: 2 }
 }
-
 pinnings {
   logical_fabric_node_id { mesh_id_regex: "[0-9]*" chip_id: 1 }
   physical_asic_position { tray_id: 1 asic_location: 7 }
 }
-
 pinnings {
   logical_fabric_node_id { mesh_id_regex: "[0-9]*" chip_id: 2 }
   physical_asic_position { tray_id: 4 asic_location: 6 }
