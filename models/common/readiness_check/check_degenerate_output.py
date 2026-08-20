@@ -46,6 +46,10 @@ fuzzy resolution against autoport directory names, then the unscoped
 same machine can neither pass nor fail this check. Unreadable artifacts are
 critical findings (the stage owns its evidence); exit 3 is reserved for
 checker/environment faults.
+
+Broad directory discovery skips artifacts that are explicitly preserved as
+rejected candidate evidence. Pass those files directly when the intent is to
+prove why a rejected candidate failed.
 """
 
 from __future__ import annotations
@@ -359,6 +363,23 @@ def check_autoregressive_meta(report: Report, path: Path) -> None:
         )
 
 
+def is_rejected_evidence(path: Path) -> bool:
+    """Return true for auto-discovered artifacts preserved only as rejected evidence."""
+
+    artifact_dir = path.parent
+    verdict = artifact_dir / "qualitative_verdict.md"
+    if verdict.exists():
+        try:
+            text = verdict.read_text(encoding="utf-8").lower()
+        except OSError:
+            text = ""
+        if re.search(r"^\s*-\s*verdict:\s*rejected\b", text, re.MULTILINE):
+            return True
+
+    name = artifact_dir.name.lower()
+    return name.startswith("rejected_") or "_rejected_" in name or name.endswith("_rejected")
+
+
 def discover(roots: Iterable[Path], scope: str) -> tuple[list[Path], list[Path]]:
     vllm_files: list[Path] = []
     meta_files: list[Path] = []
@@ -370,10 +391,16 @@ def discover(roots: Iterable[Path], scope: str) -> tuple[list[Path], list[Path]]
                 vllm_files.append(root)
             continue
         if scope in ("all", "vllm"):
-            vllm_files.extend(sorted(root.rglob("vllm_qualitative_outputs.json")))
-            vllm_files.extend(sorted(root.rglob("tt_qualitative_outputs.json")))
+            vllm_files.extend(
+                path for path in sorted(root.rglob("vllm_qualitative_outputs.json")) if not is_rejected_evidence(path)
+            )
+            vllm_files.extend(
+                path for path in sorted(root.rglob("tt_qualitative_outputs.json")) if not is_rejected_evidence(path)
+            )
         if scope in ("all", "autoregressive"):
-            meta_files.extend(sorted(root.rglob("autoregressive_meta.json")))
+            meta_files.extend(
+                path for path in sorted(root.rglob("autoregressive_meta.json")) if not is_rejected_evidence(path)
+            )
     return vllm_files, meta_files
 
 

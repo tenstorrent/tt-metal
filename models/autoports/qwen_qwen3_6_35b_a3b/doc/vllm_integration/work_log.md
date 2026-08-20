@@ -167,6 +167,16 @@ Active-ethernet cleanup timeout:
 - Evidence: a post-cleanup smoke attempt hit the recurring active-ethernet timeout; `readiness_vllm/tt_smi_reset_after_cleanup_smoke_timeout.log` records the board reset.
 - Resolution: final `readiness_vllm/mesh_smoke_after_cleanup.log` after reset completed with `MESH_SMOKE_OK`.
 
+Post-completion runner-side `09-vllm.check.sh` failure:
+
+- Reproduced with `MODEL_DIR=models/autoports/qwen_qwen3_6_35b_a3b HF_MODEL=Qwen/Qwen3.6-35B-A3B bash .agents/prompts/model_bringup_multigoal/09-vllm.check.sh`; log: `doc/vllm_integration/check_repro_before_rejected_skip.log`; exit code `2`.
+- Failure signature: six critical repeated-punctuation/token-id-run findings, all from `doc/datatype_sweep/artifacts/qualitative_chat_suite_64_rejected_shared_moe_bfp4_lofi/{vllm_qualitative_outputs.json,tt_qualitative_outputs.json}`.
+- Refutation: those files are intentionally preserved rejected-candidate evidence from the datatype sweep, not the selected precision policy and not the current vLLM serving output. The same directory has `qualitative_verdict.md` with `Verdict: rejected`, `rejected_shared_moe_bfp4_lofi_repetition_report.json`, and `quality_gate_overrides.json` marks `shared_moe_bfp4_lofi` as `fail_quality` and `pass: false`.
+- Fix: `models/common/readiness_check/check_degenerate_output.py` now skips explicitly rejected evidence only during broad directory discovery. Directly passing the rejected files still exits `2`, preserving the rejection-report workflow; evidence: `doc/vllm_integration/check_rejected_explicit_still_fails.log`.
+- Recheck: direct model-directory degeneracy scan exited `0`; log: `doc/vllm_integration/check_model_dir_after_rejected_skip_pre_context.log`.
+- Final runner gate: exact `09-vllm.check.sh` invocation exited `0`; log: `doc/vllm_integration/check_09_vllm_after_rejected_skip.log`. It reports `No degenerate output detected.` and `Context contract OK ... target=262144, supported=262144 (full HF context).`
+- Device note: this runner-side recheck was artifact/context-contract only and did not touch TT devices.
+
 ## Cleanup Audit
 
 - `readiness_vllm/process_cleanup_check.log`: `NO_MATCH` for vLLM server, `EngineCore`, and `run_vllm_server`.
